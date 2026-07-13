@@ -1652,75 +1652,92 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
     }
 
     @Test
-    void testDynamicDiskWriteLimitRatio() throws Exception {
-        // Valid value should succeed
-        admin.alterClusterConfigs(
-                        Collections.singletonList(
-                                new AlterConfig(
-                                        ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO.key(),
-                                        "0.15",
-                                        AlterConfigOpType.SET)))
-                .get();
-        assertConfigEntry(
-                ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO.key(),
-                "0.15",
-                ConfigEntry.ConfigSource.DYNAMIC_SERVER_CONFIG);
+    void testDynamicDiskWriteLimitRatios() throws Exception {
+        try {
+            // Both ratios can be lowered atomically when their relationship remains valid.
+            admin.alterClusterConfigs(
+                            Arrays.asList(
+                                    new AlterConfig(
+                                            ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO.key(),
+                                            "0.95",
+                                            AlterConfigOpType.SET),
+                                    new AlterConfig(
+                                            ConfigOptions.SERVER_DATA_DISK_WRITE_RECOVER_RATIO
+                                                    .key(),
+                                            "0.90",
+                                            AlterConfigOpType.SET)))
+                    .get();
+            assertConfigEntry(
+                    ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO.key(),
+                    "0.95",
+                    ConfigEntry.ConfigSource.DYNAMIC_SERVER_CONFIG);
+            assertConfigEntry(
+                    ConfigOptions.SERVER_DATA_DISK_WRITE_RECOVER_RATIO.key(),
+                    "0.90",
+                    ConfigEntry.ConfigSource.DYNAMIC_SERVER_CONFIG);
 
-        // Invalid value: 0.0 (must be > 0.1)
-        assertThatThrownBy(
-                        () ->
-                                admin.alterClusterConfigs(
-                                                Collections.singletonList(
-                                                        new AlterConfig(
-                                                                ConfigOptions
-                                                                        .SERVER_DATA_DISK_WRITE_LIMIT_RATIO
-                                                                        .key(),
-                                                                "0.0",
-                                                                AlterConfigOpType.SET)))
-                                        .get())
-                .cause()
-                .isInstanceOf(ConfigException.class)
-                .hasMessageContaining("Invalid disk write-limit configuration");
-        // Invalid value: 0.05 (boundary, must be > 0.05)
-        assertThatThrownBy(
-                        () ->
-                                admin.alterClusterConfigs(
-                                                Collections.singletonList(
-                                                        new AlterConfig(
-                                                                ConfigOptions
-                                                                        .SERVER_DATA_DISK_WRITE_LIMIT_RATIO
-                                                                        .key(),
-                                                                "0.05",
-                                                                AlterConfigOpType.SET)))
-                                        .get())
-                .cause()
-                .isInstanceOf(ConfigException.class)
-                .hasMessageContaining("Invalid disk write-limit configuration");
+            // Invalid value: 0.0 (must be greater than the recover ratio).
+            assertThatThrownBy(
+                            () ->
+                                    admin.alterClusterConfigs(
+                                                    Collections.singletonList(
+                                                            new AlterConfig(
+                                                                    ConfigOptions
+                                                                            .SERVER_DATA_DISK_WRITE_LIMIT_RATIO
+                                                                            .key(),
+                                                                    "0.0",
+                                                                    AlterConfigOpType.SET)))
+                                            .get())
+                    .cause()
+                    .isInstanceOf(ConfigException.class)
+                    .hasMessageContaining("Invalid disk write-limit configuration");
+            // Invalid value: 0.90 (must be strictly greater than the recover ratio).
+            assertThatThrownBy(
+                            () ->
+                                    admin.alterClusterConfigs(
+                                                    Collections.singletonList(
+                                                            new AlterConfig(
+                                                                    ConfigOptions
+                                                                            .SERVER_DATA_DISK_WRITE_LIMIT_RATIO
+                                                                            .key(),
+                                                                    "0.90",
+                                                                    AlterConfigOpType.SET)))
+                                            .get())
+                    .cause()
+                    .isInstanceOf(ConfigException.class)
+                    .hasMessageContaining("Invalid disk write-limit configuration");
 
-        // Invalid value: 1.5 (must be <= 1.0)
-        assertThatThrownBy(
-                        () ->
-                                admin.alterClusterConfigs(
-                                                Collections.singletonList(
-                                                        new AlterConfig(
-                                                                ConfigOptions
-                                                                        .SERVER_DATA_DISK_WRITE_LIMIT_RATIO
-                                                                        .key(),
-                                                                "1.5",
-                                                                AlterConfigOpType.SET)))
-                                        .get())
-                .cause()
-                .isInstanceOf(ConfigException.class)
-                .hasMessageContaining("Invalid disk write-limit configuration");
+            // Invalid value: 1.5 (must be <= 1.0)
+            assertThatThrownBy(
+                            () ->
+                                    admin.alterClusterConfigs(
+                                                    Collections.singletonList(
+                                                            new AlterConfig(
+                                                                    ConfigOptions
+                                                                            .SERVER_DATA_DISK_WRITE_LIMIT_RATIO
+                                                                            .key(),
+                                                                    "1.5",
+                                                                    AlterConfigOpType.SET)))
+                                            .get())
+                    .cause()
+                    .isInstanceOf(ConfigException.class)
+                    .hasMessageContaining("Invalid disk write-limit configuration");
 
-        // Reset should succeed (restores default)
-        admin.alterClusterConfigs(
-                        Collections.singletonList(
-                                new AlterConfig(
-                                        ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO.key(),
-                                        null,
-                                        AlterConfigOpType.DELETE)))
-                .get();
+        } finally {
+            // Reset both ratios in one request so the default relationship remains valid.
+            admin.alterClusterConfigs(
+                            Arrays.asList(
+                                    new AlterConfig(
+                                            ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO.key(),
+                                            null,
+                                            AlterConfigOpType.DELETE),
+                                    new AlterConfig(
+                                            ConfigOptions.SERVER_DATA_DISK_WRITE_RECOVER_RATIO
+                                                    .key(),
+                                            null,
+                                            AlterConfigOpType.DELETE)))
+                    .get();
+        }
     }
 
     @Test

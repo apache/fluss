@@ -26,13 +26,12 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.assertj.core.api.Assertions.within;
 
 /** Test for {@link DiskUsageMonitor}. */
 class DiskUsageMonitorTest {
 
     private static final int SERVER_ID = 7;
-    private static final double RECOVER_GAP = 0.05;
+    private static final double WRITE_RECOVER_RATIO = 0.80;
 
     @Test
     void testInvalidLimitConfigRejected() {
@@ -43,7 +42,7 @@ class DiskUsageMonitorTest {
                                         SERVER_ID,
                                         collector,
                                         0.0,
-                                        RECOVER_GAP,
+                                        WRITE_RECOVER_RATIO,
                                         (usage, locked) -> {}))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(
@@ -52,7 +51,7 @@ class DiskUsageMonitorTest {
                                         SERVER_ID,
                                         collector,
                                         1.1,
-                                        RECOVER_GAP,
+                                        WRITE_RECOVER_RATIO,
                                         (usage, locked) -> {}))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(
@@ -113,17 +112,16 @@ class DiskUsageMonitorTest {
         monitor.update(0.90);
         assertThat(monitor.isLocked()).isTrue();
 
-        monitor.update(monitor.getRecoverThreshold());
+        monitor.update(monitor.getWriteRecoverRatio());
         assertThat(monitor.isLocked()).isFalse();
         assertThat(recorder.lastLocked.get()).isFalse();
     }
 
     @Test
-    void testRecoverThresholdUsesConfiguredRecoverGap() {
-        DiskUsageMonitor monitor = newMonitor(0.85, 0.20, new Recorder());
-        assertThat(monitor.getRecoverThreshold()).isCloseTo(0.65, within(1e-9));
+    void testRecoverThresholdUsesConfiguredRecoverRatio() {
+        DiskUsageMonitor monitor = newMonitor(0.85, 0.65, new Recorder());
         assertThat(monitor.getWriteLimitRatio()).isEqualTo(0.85);
-        assertThat(monitor.getRecoverGap()).isEqualTo(0.20);
+        assertThat(monitor.getWriteRecoverRatio()).isEqualTo(0.65);
     }
 
     @Test
@@ -136,7 +134,7 @@ class DiskUsageMonitorTest {
                                 new File("/__fluss_disk_monitor_does_not_exist__/x")));
         Recorder recorder = new Recorder();
         DiskUsageMonitor monitor =
-                new DiskUsageMonitor(SERVER_ID, failing, 0.85, RECOVER_GAP, recorder);
+                new DiskUsageMonitor(SERVER_ID, failing, 0.85, WRITE_RECOVER_RATIO, recorder);
 
         // First put the monitor into the locked state via update().
         monitor.update(0.95);
@@ -159,7 +157,7 @@ class DiskUsageMonitorTest {
         DiskUsageCollector collector = new DiskUsageCollector(Collections.emptyList());
         Recorder recorder = new Recorder();
         DiskUsageMonitor monitor =
-                new DiskUsageMonitor(SERVER_ID, collector, 0.85, RECOVER_GAP, recorder);
+                new DiskUsageMonitor(SERVER_ID, collector, 0.85, WRITE_RECOVER_RATIO, recorder);
 
         monitor.runOnce();
         assertThat(monitor.isLocked()).isFalse();
@@ -169,63 +167,60 @@ class DiskUsageMonitorTest {
     }
 
     private DiskUsageMonitor newMonitor(double limit, DiskUsageMonitor.Listener listener) {
-        return newMonitor(limit, RECOVER_GAP, listener);
+        return newMonitor(limit, WRITE_RECOVER_RATIO, listener);
     }
 
     private DiskUsageMonitor newMonitor(
-            double limit, double recoverGap, DiskUsageMonitor.Listener listener) {
+            double limit, double writeRecoverRatio, DiskUsageMonitor.Listener listener) {
         return new DiskUsageMonitor(
                 SERVER_ID,
                 new DiskUsageCollector(Collections.emptyList()),
                 limit,
-                recoverGap,
+                writeRecoverRatio,
                 listener);
     }
 
     @Test
-    void testUpdateWriteLimitRatioChangesThresholds() {
+    void testUpdateWriteLimitRatioKeepsRecoverRatio() {
         Recorder recorder = new Recorder();
         DiskUsageMonitor monitor = newMonitor(0.85, recorder);
 
         // Initially ratio=0.85, recover=0.80
         assertThat(monitor.getWriteLimitRatio()).isEqualTo(0.85);
-        assertThat(monitor.getRecoverGap()).isEqualTo(RECOVER_GAP);
-        assertThat(monitor.getRecoverThreshold()).isCloseTo(0.80, within(1e-9));
+        assertThat(monitor.getWriteRecoverRatio()).isEqualTo(WRITE_RECOVER_RATIO);
 
         // Simulate usage at 0.82 — should NOT lock (below 0.85)
         monitor.update(0.82);
         assertThat(monitor.isLocked()).isFalse();
 
-        // Lower the limit to 0.80 — now 0.82 exceeds the new limit
-        monitor.updateWriteLimitRatio(0.80);
-        assertThat(monitor.getWriteLimitRatio()).isEqualTo(0.80);
-        assertThat(monitor.getRecoverThreshold()).isCloseTo(0.75, within(1e-9));
+        // Lower the limit to 0.81; the absolute recover ratio remains 0.80.
+        monitor.updateWriteLimitRatio(0.81);
+        assertThat(monitor.getWriteLimitRatio()).isEqualTo(0.81);
+        assertThat(monitor.getWriteRecoverRatio()).isEqualTo(0.80);
 
         // Re-evaluate with same usage — should lock
         monitor.update(0.82);
         assertThat(monitor.isLocked()).isTrue();
         assertThat(recorder.lastLocked.get()).isTrue();
 
-        // Raise the limit to 0.90 and recover threshold becomes 0.85.
-        // 0.86 > 0.85 so should remain locked.
+        // Raise the limit to 0.90; the recover ratio remains 0.80.
         monitor.updateWriteLimitRatio(0.90);
         monitor.update(0.86);
         assertThat(monitor.isLocked()).isTrue();
 
-        // Drop usage to 0.85 — now at the new recover threshold, should unlock.
-        monitor.update(0.85);
+        // Drop usage to 0.80; at the recover ratio, writes should resume.
+        monitor.update(0.80);
         assertThat(monitor.isLocked()).isFalse();
     }
 
     @Test
-    void testUpdateWriteLimitConfigChangesRecoverGap() {
+    void testUpdateWriteLimitConfigChangesRecoverRatio() {
         Recorder recorder = new Recorder();
         DiskUsageMonitor monitor = newMonitor(0.85, recorder);
 
-        monitor.updateWriteLimitConfig(0.85, 0.10);
+        monitor.updateWriteLimitConfig(0.85, 0.75);
         assertThat(monitor.getWriteLimitRatio()).isEqualTo(0.85);
-        assertThat(monitor.getRecoverGap()).isEqualTo(0.10);
-        assertThat(monitor.getRecoverThreshold()).isCloseTo(0.75, within(1e-9));
+        assertThat(monitor.getWriteRecoverRatio()).isEqualTo(0.75);
 
         monitor.update(0.90);
         assertThat(monitor.isLocked()).isTrue();
@@ -246,7 +241,7 @@ class DiskUsageMonitorTest {
         assertThat(recorder.lastLocked.get()).isFalse();
         assertThat(recorder.lastUsage.get()).isEqualTo(1.0);
 
-        DiskUsageMonitor monitor2 = newMonitor(0.80, recorder);
+        DiskUsageMonitor monitor2 = newMonitor(0.85, recorder);
         monitor2.update(0.85);
         assertThat(monitor2.isLocked()).isTrue();
 
@@ -263,7 +258,7 @@ class DiskUsageMonitorTest {
 
         assertThatThrownBy(() -> monitor.updateWriteLimitRatio(0.0))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> monitor.updateWriteLimitRatio(RECOVER_GAP))
+        assertThatThrownBy(() -> monitor.updateWriteLimitRatio(WRITE_RECOVER_RATIO))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> monitor.updateWriteLimitRatio(1.1))
                 .isInstanceOf(IllegalArgumentException.class);

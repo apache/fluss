@@ -102,16 +102,16 @@ public final class LocalDiskManager implements Closeable, ServerReconfigurable {
     /**
      * Configured high-water-mark ratio: writes are rejected once any single backing {@link
      * java.nio.file.FileStore}'s usage ratio reaches this value. Writes resume after the usage
-     * drops below {@code diskWriteLimitRatio - diskWriteLimitRecoverGap}. This field is volatile
-     * because it can be changed at runtime via dynamic reconfiguration.
+     * reaches or drops below {@link #diskWriteRecoverRatio}. This field is volatile because it can
+     * be changed at runtime via dynamic reconfiguration.
      */
     private volatile double diskWriteLimitRatio;
 
     /**
-     * Configured gap between the write-limit ratio and the recover threshold. This field is
-     * volatile because it can be changed at runtime via dynamic reconfiguration.
+     * Configured low-water-mark ratio at which writes resume. This field is volatile because it can
+     * be changed at runtime via dynamic reconfiguration.
      */
-    private volatile double diskWriteLimitRecoverGap;
+    private volatile double diskWriteRecoverRatio;
 
     /**
      * Whether the local tablet server is currently rejecting writes because the data disk usage has
@@ -130,11 +130,10 @@ public final class LocalDiskManager implements Closeable, ServerReconfigurable {
     private LocalDiskManager(Configuration conf) throws IOException {
         this.serverId = conf.getInt(ConfigOptions.TABLET_SERVER_ID);
         this.diskWriteLimitRatio = conf.get(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO);
-        this.diskWriteLimitRecoverGap =
-                conf.get(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RECOVER_GAP);
+        this.diskWriteRecoverRatio = conf.get(ConfigOptions.SERVER_DATA_DISK_WRITE_RECOVER_RATIO);
         String diskWriteLimitValidationError =
                 DiskWriteLimitConfigValidator.getValidationError(
-                        diskWriteLimitRatio, diskWriteLimitRecoverGap);
+                        diskWriteLimitRatio, diskWriteRecoverRatio);
         if (diskWriteLimitValidationError != null) {
             throw new IllegalConfigurationException(diskWriteLimitValidationError);
         }
@@ -162,7 +161,7 @@ public final class LocalDiskManager implements Closeable, ServerReconfigurable {
                         serverId,
                         new DiskUsageCollector(this.dataDirs),
                         diskWriteLimitRatio,
-                        diskWriteLimitRecoverGap,
+                        diskWriteRecoverRatio,
                         (usage, locked) -> {
                             this.lastDiskUsageRatio = usage;
                             this.diskWriteLocked = locked;
@@ -505,10 +504,10 @@ public final class LocalDiskManager implements Closeable, ServerReconfigurable {
     }
 
     /**
-     * @return the configured gap between the write-limit ratio and the recover threshold.
+     * @return the configured low-water-mark ratio at which writes resume.
      */
-    public double getDiskWriteLimitRecoverGap() {
-        return diskWriteLimitRecoverGap;
+    public double getDiskWriteRecoverRatio() {
+        return diskWriteRecoverRatio;
     }
 
     /**
@@ -535,49 +534,47 @@ public final class LocalDiskManager implements Closeable, ServerReconfigurable {
     @Override
     public void validate(Configuration newConfig) throws ConfigException {
         double newRatio = newConfig.get(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO);
-        double newRecoverGap =
-                newConfig.get(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RECOVER_GAP);
-        validateDiskWriteLimitConfig(newRatio, newRecoverGap);
+        double newRecoverRatio = newConfig.get(ConfigOptions.SERVER_DATA_DISK_WRITE_RECOVER_RATIO);
+        validateDiskWriteLimitConfig(newRatio, newRecoverRatio);
     }
 
     @Override
     public void reconfigure(Configuration newConfig) throws ConfigException {
         double newRatio = newConfig.get(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO);
-        double newRecoverGap =
-                newConfig.get(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RECOVER_GAP);
-        validateDiskWriteLimitConfig(newRatio, newRecoverGap);
+        double newRecoverRatio = newConfig.get(ConfigOptions.SERVER_DATA_DISK_WRITE_RECOVER_RATIO);
+        validateDiskWriteLimitConfig(newRatio, newRecoverRatio);
         if (Double.compare(newRatio, diskWriteLimitRatio) == 0
-                && Double.compare(newRecoverGap, diskWriteLimitRecoverGap) == 0) {
+                && Double.compare(newRecoverRatio, diskWriteRecoverRatio) == 0) {
             LOG.debug(
                     "{}/{} unchanged: {}/{}",
                     ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO.key(),
-                    ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RECOVER_GAP.key(),
+                    ConfigOptions.SERVER_DATA_DISK_WRITE_RECOVER_RATIO.key(),
                     newRatio,
-                    newRecoverGap);
+                    newRecoverRatio);
             return;
         }
         double oldRatio = diskWriteLimitRatio;
-        double oldRecoverGap = diskWriteLimitRecoverGap;
+        double oldRecoverRatio = diskWriteRecoverRatio;
         diskWriteLimitRatio = newRatio;
-        diskWriteLimitRecoverGap = newRecoverGap;
-        diskUsageMonitor.updateWriteLimitConfig(newRatio, newRecoverGap);
+        diskWriteRecoverRatio = newRecoverRatio;
+        diskUsageMonitor.updateWriteLimitConfig(newRatio, newRecoverRatio);
         // Trigger an immediate check so the new threshold takes effect without waiting
         // for the next scheduled tick.
         diskUsageMonitor.runOnce();
         LOG.info(
                 "{}/{} reconfigured: {}/{} -> {}/{} (immediate check triggered)",
                 ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO.key(),
-                ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RECOVER_GAP.key(),
+                ConfigOptions.SERVER_DATA_DISK_WRITE_RECOVER_RATIO.key(),
                 oldRatio,
-                oldRecoverGap,
+                oldRecoverRatio,
                 newRatio,
-                newRecoverGap);
+                newRecoverRatio);
     }
 
-    private static void validateDiskWriteLimitConfig(double newRatio, double newRecoverGap)
+    private static void validateDiskWriteLimitConfig(double newRatio, double newRecoverRatio)
             throws ConfigException {
         String validationError =
-                DiskWriteLimitConfigValidator.getValidationError(newRatio, newRecoverGap);
+                DiskWriteLimitConfigValidator.getValidationError(newRatio, newRecoverRatio);
         if (validationError != null) {
             throw new ConfigException(validationError);
         }

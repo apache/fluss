@@ -36,7 +36,7 @@ public class DiskWriteLimitConfigValidator implements ServerReconfigurable {
         String validationError =
                 getValidationError(
                         newConfig.get(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO),
-                        newConfig.get(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RECOVER_GAP));
+                        newConfig.get(ConfigOptions.SERVER_DATA_DISK_WRITE_RECOVER_RATIO));
         if (validationError != null) {
             throw new ConfigException(validationError);
         }
@@ -45,20 +45,21 @@ public class DiskWriteLimitConfigValidator implements ServerReconfigurable {
     @Override
     public void reconfigure(Configuration newConfig) {}
 
-    static String getValidationError(double writeLimitRatio, double recoverGap) {
-        if (recoverGap > 0.0 && recoverGap < writeLimitRatio && writeLimitRatio <= 1.0) {
+    static String getValidationError(double writeLimitRatio, double writeRecoverRatio) {
+        if (writeRecoverRatio > 0.0
+                && writeRecoverRatio < writeLimitRatio
+                && writeLimitRatio <= 1.0) {
             return null;
         }
         return String.format(
-                "Invalid disk write-limit configuration: %s must be greater than %s and no "
-                        + "greater than 1.0, and %s must be within (0.0, %s); %s=%s, %s=%s",
+                "Invalid disk write-limit configuration: %s must be within (0.0, %s), and %s "
+                        + "must be no greater than 1.0; %s=%s, %s=%s",
+                ConfigOptions.SERVER_DATA_DISK_WRITE_RECOVER_RATIO.key(),
                 ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO.key(),
-                ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RECOVER_GAP.key(),
-                ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RECOVER_GAP.key(),
                 ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO.key(),
                 ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO.key(),
                 writeLimitRatio,
-                ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RECOVER_GAP.key(),
-                recoverGap);
+                ConfigOptions.SERVER_DATA_DISK_WRITE_RECOVER_RATIO.key(),
+                writeRecoverRatio);
     }
 }

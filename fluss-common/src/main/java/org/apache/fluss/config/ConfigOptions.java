@@ -386,23 +386,22 @@ public class ConfigOptions {
                     .defaultValue(0.85)
                     .withDescription(
                             "Reject writes when the tablet server data disk usage reaches this ratio. "
-                                    + "Writes resume after the usage drops below "
-                                    + "(server.data-disk.write-limit-ratio - "
-                                    + "server.data-disk.write-limit-recover-gap). "
+                                    + "Writes resume when the usage reaches or drops below "
+                                    + "server.data-disk.write-recover-ratio. "
                                     + "Set to 1.0 to disable the disk-usage protection entirely. "
                                     + "The valid range is "
-                                    + "(server.data-disk.write-limit-recover-gap, 1.0].");
+                                    + "(server.data-disk.write-recover-ratio, 1.0]. When lowering "
+                                    + "both ratios dynamically, update them in the same request or "
+                                    + "lower server.data-disk.write-recover-ratio first.");
 
-    public static final ConfigOption<Double> SERVER_DATA_DISK_WRITE_LIMIT_RECOVER_GAP =
-            key("server.data-disk.write-limit-recover-gap")
+    public static final ConfigOption<Double> SERVER_DATA_DISK_WRITE_RECOVER_RATIO =
+            key("server.data-disk.write-recover-ratio")
                     .doubleType()
-                    .defaultValue(0.05)
+                    .defaultValue(0.80)
                     .withDescription(
-                            "The hysteresis gap between the data disk write-limit ratio and the "
-                                    + "recover threshold. Writes resume after the disk usage drops "
-                                    + "below (server.data-disk.write-limit-ratio - "
-                                    + "server.data-disk.write-limit-recover-gap). The valid range "
-                                    + "is (0, server.data-disk.write-limit-ratio).");
+                            "Resume writes when the tablet server data disk usage reaches or "
+                                    + "drops below this ratio. The valid range is "
+                                    + "(0.0, server.data-disk.write-limit-ratio).");
 
     public static final ConfigOption<Duration> SERVER_DATA_DISK_CHECK_INTERVAL =
             key("server.data-disk.check-interval")

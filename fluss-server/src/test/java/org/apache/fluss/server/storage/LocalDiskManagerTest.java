@@ -34,7 +34,6 @@ import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.assertj.core.api.Assertions.within;
 
 /** Test for {@link LocalDiskManager}. */
 class LocalDiskManagerTest {
@@ -365,9 +364,9 @@ class LocalDiskManagerTest {
 
         try (LocalDiskManager localDiskManager = LocalDiskManager.create(createConf(dataDir))) {
             assertThat(localDiskManager.getDiskWriteLimitRatio()).isEqualTo(0.85);
-            assertThat(localDiskManager.getDiskWriteLimitRecoverGap()).isEqualTo(0.05);
-            assertThat(localDiskManager.getDiskUsageMonitor().getRecoverThreshold())
-                    .isCloseTo(0.80, within(1e-9));
+            assertThat(localDiskManager.getDiskWriteRecoverRatio()).isEqualTo(0.80);
+            assertThat(localDiskManager.getDiskUsageMonitor().getWriteRecoverRatio())
+                    .isEqualTo(0.80);
         }
 
         Configuration disabledRatioConf = createConf(new File(tempDir, "disabled-ratio"));
@@ -382,14 +381,14 @@ class LocalDiskManagerTest {
         assertThatThrownBy(() -> LocalDiskManager.create(invalidRatioConf))
                 .isInstanceOf(IllegalConfigurationException.class);
 
-        Configuration zeroRecoverGapConf = createConf(new File(tempDir, "zero-gap"));
-        zeroRecoverGapConf.set(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RECOVER_GAP, 0.0);
-        assertThatThrownBy(() -> LocalDiskManager.create(zeroRecoverGapConf))
+        Configuration zeroRecoverRatioConf = createConf(new File(tempDir, "zero-recover-ratio"));
+        zeroRecoverRatioConf.set(ConfigOptions.SERVER_DATA_DISK_WRITE_RECOVER_RATIO, 0.0);
+        assertThatThrownBy(() -> LocalDiskManager.create(zeroRecoverRatioConf))
                 .isInstanceOf(IllegalConfigurationException.class);
 
-        Configuration equalRecoverGapConf = createConf(new File(tempDir, "equal-gap"));
-        equalRecoverGapConf.set(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RECOVER_GAP, 0.85);
-        assertThatThrownBy(() -> LocalDiskManager.create(equalRecoverGapConf))
+        Configuration equalRecoverRatioConf = createConf(new File(tempDir, "equal-recover-ratio"));
+        equalRecoverRatioConf.set(ConfigOptions.SERVER_DATA_DISK_WRITE_RECOVER_RATIO, 0.85);
+        assertThatThrownBy(() -> LocalDiskManager.create(equalRecoverRatioConf))
                 .isInstanceOf(IllegalConfigurationException.class);
     }
 

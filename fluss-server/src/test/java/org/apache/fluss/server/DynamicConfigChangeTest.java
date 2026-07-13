@@ -60,7 +60,6 @@ import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.assertj.core.api.Assertions.within;
 
 /** Test for {@link DynamicConfigManager}. */
 public class DynamicConfigChangeTest {
@@ -599,12 +598,12 @@ public class DynamicConfigChangeTest {
     void testCoordinatorValidatesDiskWriteLimitConfigAgainstDefaults() throws Exception {
         DynamicConfigManager dynamicConfigManager = createDiskWriteLimitDynamicConfigManager();
 
-        alterDiskWriteLimitRecoverGap(dynamicConfigManager, "0.10");
+        alterDiskWriteRecoverRatio(dynamicConfigManager, "0.70");
 
-        assertThatThrownBy(() -> alterDiskWriteLimitRecoverGap(dynamicConfigManager, "0.0"))
+        assertThatThrownBy(() -> alterDiskWriteRecoverRatio(dynamicConfigManager, "0.0"))
                 .isInstanceOf(ConfigException.class);
 
-        assertThatThrownBy(() -> alterDiskWriteLimitRatio(dynamicConfigManager, "0.10"))
+        assertThatThrownBy(() -> alterDiskWriteLimitRatio(dynamicConfigManager, "0.70"))
                 .isInstanceOf(ConfigException.class);
 
         alterDiskWriteLimitRatio(dynamicConfigManager, "1.0");
@@ -614,29 +613,28 @@ public class DynamicConfigChangeTest {
 
         assertThat(zookeeperClient.fetchEntityConfig())
                 .containsEntry(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO.key(), "1.0")
-                .containsEntry(
-                        ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RECOVER_GAP.key(), "0.10");
+                .containsEntry(ConfigOptions.SERVER_DATA_DISK_WRITE_RECOVER_RATIO.key(), "0.70");
     }
 
     @Test
-    void testCoordinatorValidatesRecoverGapAfterDiskWriteLimitRatioChanged() throws Exception {
+    void testCoordinatorValidatesRecoverRatioWhenLoweringDiskWriteLimitRatio() throws Exception {
         DynamicConfigManager dynamicConfigManager = createDiskWriteLimitDynamicConfigManager();
 
+        assertThatThrownBy(() -> alterDiskWriteLimitRatio(dynamicConfigManager, "0.70"))
+                .isInstanceOf(ConfigException.class);
+
+        assertThat(zookeeperClient.fetchEntityConfig())
+                .doesNotContainKey(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO.key());
+
+        alterDiskWriteRecoverRatio(dynamicConfigManager, "0.60");
         alterDiskWriteLimitRatio(dynamicConfigManager, "0.70");
 
-        assertThatThrownBy(() -> alterDiskWriteLimitRecoverGap(dynamicConfigManager, "0.70"))
+        assertThatThrownBy(() -> alterDiskWriteRecoverRatio(dynamicConfigManager, "0.70"))
                 .isInstanceOf(ConfigException.class);
 
         assertThat(zookeeperClient.fetchEntityConfig())
                 .containsEntry(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO.key(), "0.70")
-                .doesNotContainKey(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RECOVER_GAP.key());
-
-        alterDiskWriteLimitRecoverGap(dynamicConfigManager, "0.10");
-
-        assertThat(zookeeperClient.fetchEntityConfig())
-                .containsEntry(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO.key(), "0.70")
-                .containsEntry(
-                        ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RECOVER_GAP.key(), "0.10");
+                .containsEntry(ConfigOptions.SERVER_DATA_DISK_WRITE_RECOVER_RATIO.key(), "0.60");
     }
 
     @Test
@@ -659,59 +657,57 @@ public class DynamicConfigChangeTest {
 
             // Verify initial state
             assertThat(localDiskManager.getDiskWriteLimitRatio()).isEqualTo(0.85);
-            assertThat(localDiskManager.getDiskWriteLimitRecoverGap()).isEqualTo(0.05);
+            assertThat(localDiskManager.getDiskWriteRecoverRatio()).isEqualTo(0.80);
             assertThat(localDiskManager.getDiskUsageMonitor().getWriteLimitRatio()).isEqualTo(0.85);
-            assertThat(localDiskManager.getDiskUsageMonitor().getRecoverGap()).isEqualTo(0.05);
-            assertThat(localDiskManager.getDiskUsageMonitor().getRecoverThreshold())
-                    .isCloseTo(0.80, within(1e-9));
+            assertThat(localDiskManager.getDiskUsageMonitor().getWriteRecoverRatio())
+                    .isEqualTo(0.80);
 
-            // Lower the limit to 0.70 via dynamic config
+            // Lower the recover ratio before lowering the limit.
+            alterDiskWriteRecoverRatio(dynamicConfigManager, "0.60");
             alterDiskWriteLimitRatio(dynamicConfigManager, "0.70");
 
-            // Verify the new ratio took effect immediately (reconfigure triggers runOnce)
+            // Verify both ratios took effect immediately (reconfigure triggers runOnce).
             assertThat(localDiskManager.getDiskWriteLimitRatio()).isEqualTo(0.70);
-            assertThat(localDiskManager.getDiskWriteLimitRecoverGap()).isEqualTo(0.05);
+            assertThat(localDiskManager.getDiskWriteRecoverRatio()).isEqualTo(0.60);
             assertThat(localDiskManager.getDiskUsageMonitor().getWriteLimitRatio()).isEqualTo(0.70);
-            assertThat(localDiskManager.getDiskUsageMonitor().getRecoverGap()).isEqualTo(0.05);
-            assertThat(localDiskManager.getDiskUsageMonitor().getRecoverThreshold())
-                    .isCloseTo(0.65, within(1e-9));
+            assertThat(localDiskManager.getDiskUsageMonitor().getWriteRecoverRatio())
+                    .isEqualTo(0.60);
 
-            // Increase the recover gap via dynamic config
-            alterDiskWriteLimitRecoverGap(dynamicConfigManager, "0.10");
+            alterDiskWriteRecoverRatio(dynamicConfigManager, "0.65");
 
             assertThat(localDiskManager.getDiskWriteLimitRatio()).isEqualTo(0.70);
-            assertThat(localDiskManager.getDiskWriteLimitRecoverGap()).isEqualTo(0.10);
+            assertThat(localDiskManager.getDiskWriteRecoverRatio()).isEqualTo(0.65);
             assertThat(localDiskManager.getDiskUsageMonitor().getWriteLimitRatio()).isEqualTo(0.70);
-            assertThat(localDiskManager.getDiskUsageMonitor().getRecoverGap()).isEqualTo(0.10);
-            assertThat(localDiskManager.getDiskUsageMonitor().getRecoverThreshold())
-                    .isCloseTo(0.60, within(1e-9));
+            assertThat(localDiskManager.getDiskUsageMonitor().getWriteRecoverRatio())
+                    .isEqualTo(0.65);
 
             // Verify config was persisted to ZK
             Map<String, String> zkConfig = zookeeperClient.fetchEntityConfig();
             assertThat(zkConfig.get(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO.key()))
                     .isEqualTo("0.70");
-            assertThat(zkConfig.get(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RECOVER_GAP.key()))
-                    .isEqualTo("0.10");
+            assertThat(zkConfig.get(ConfigOptions.SERVER_DATA_DISK_WRITE_RECOVER_RATIO.key()))
+                    .isEqualTo("0.65");
 
             assertThatThrownBy(() -> alterDiskWriteLimitRatio(dynamicConfigManager, "0.0"))
                     .isInstanceOf(ConfigException.class);
 
-            assertThatThrownBy(() -> alterDiskWriteLimitRecoverGap(dynamicConfigManager, "0.0"))
+            assertThatThrownBy(() -> alterDiskWriteRecoverRatio(dynamicConfigManager, "0.0"))
                     .isInstanceOf(ConfigException.class);
 
-            assertThatThrownBy(() -> alterDiskWriteLimitRecoverGap(dynamicConfigManager, "0.70"))
+            assertThatThrownBy(() -> alterDiskWriteRecoverRatio(dynamicConfigManager, "0.70"))
                     .isInstanceOf(ConfigException.class);
 
             Configuration invalidReconfigure = new Configuration(configuration);
-            invalidReconfigure.set(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO, 0.10);
-            invalidReconfigure.set(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RECOVER_GAP, 0.10);
+            invalidReconfigure.set(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO, 0.65);
+            invalidReconfigure.set(ConfigOptions.SERVER_DATA_DISK_WRITE_RECOVER_RATIO, 0.65);
             assertThatThrownBy(() -> localDiskManager.reconfigure(invalidReconfigure))
                     .isInstanceOf(ConfigException.class);
 
             assertThat(localDiskManager.getDiskWriteLimitRatio()).isEqualTo(0.70);
-            assertThat(localDiskManager.getDiskWriteLimitRecoverGap()).isEqualTo(0.10);
+            assertThat(localDiskManager.getDiskWriteRecoverRatio()).isEqualTo(0.65);
             assertThat(localDiskManager.getDiskUsageMonitor().getWriteLimitRatio()).isEqualTo(0.70);
-            assertThat(localDiskManager.getDiskUsageMonitor().getRecoverGap()).isEqualTo(0.10);
+            assertThat(localDiskManager.getDiskUsageMonitor().getWriteRecoverRatio())
+                    .isEqualTo(0.65);
         }
     }
 
@@ -732,11 +728,11 @@ public class DynamicConfigChangeTest {
                 value);
     }
 
-    private static void alterDiskWriteLimitRecoverGap(
+    private static void alterDiskWriteRecoverRatio(
             DynamicConfigManager dynamicConfigManager, String value) throws Exception {
         alterConfig(
                 dynamicConfigManager,
-                ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RECOVER_GAP.key(),
+                ConfigOptions.SERVER_DATA_DISK_WRITE_RECOVER_RATIO.key(),
                 value);
     }
 

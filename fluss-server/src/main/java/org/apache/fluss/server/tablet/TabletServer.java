@@ -323,7 +323,7 @@ public class TabletServer extends ServerBase {
             dynamicConfigManager.register(replicaManager.getKvSnapshotContext());
             // Register replicaManager to dynamicConfigManager for dynamic config
             dynamicConfigManager.register(replicaManager);
-            // Register localDiskManager for dynamic server.data-disk.write-limit-ratio
+            // Register localDiskManager for dynamic disk write-limit and recover ratios.
             dynamicConfigManager.register(localDiskManager);
             rpcServer.getServerReconfigurables().forEach(dynamicConfigManager::register);
 

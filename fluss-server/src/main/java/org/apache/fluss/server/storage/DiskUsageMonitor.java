@@ -31,8 +31,9 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 /**
  * Periodically samples the local data disk usage ratio and toggles the tablet server write-lock
  * state with a configurable hysteresis: writes are locked when the usage reaches the configured
- * write-limit ratio and resume only after the usage drops below {@code (limit - recoverGap)}. The
- * monitor is single-state and intended to be driven by a scheduler thread; it never blocks.
+ * write-limit ratio and resume only after the usage reaches or drops below the configured
+ * write-recover ratio. The monitor is single-state and intended to be driven by a scheduler thread;
+ * it never blocks.
  */
 @Internal
 public final class DiskUsageMonitor {
@@ -42,8 +43,7 @@ public final class DiskUsageMonitor {
     private final int serverId;
     private final DiskUsageCollector collector;
     private volatile double writeLimitRatio;
-    private volatile double recoverGap;
-    private volatile double recoverThreshold;
+    private volatile double writeRecoverRatio;
     private final Listener listener;
 
     private volatile boolean locked;
@@ -53,14 +53,13 @@ public final class DiskUsageMonitor {
             int serverId,
             DiskUsageCollector collector,
             double writeLimitRatio,
-            double recoverGap,
+            double writeRecoverRatio,
             Listener listener) {
-        checkValidWriteLimitConfig(writeLimitRatio, recoverGap);
+        checkValidWriteLimitConfig(writeLimitRatio, writeRecoverRatio);
         this.serverId = serverId;
         this.collector = checkNotNull(collector, "collector");
         this.writeLimitRatio = writeLimitRatio;
-        this.recoverGap = recoverGap;
-        this.recoverThreshold = writeLimitRatio - recoverGap;
+        this.writeRecoverRatio = writeRecoverRatio;
         this.listener = checkNotNull(listener, "listener");
     }
 
@@ -84,7 +83,7 @@ public final class DiskUsageMonitor {
                     serverId,
                     String.format("%.4f", usage * 100),
                     String.format("%.2f", writeLimitRatio * 100),
-                    String.format("%.2f", recoverThreshold * 100),
+                    String.format("%.2f", writeRecoverRatio * 100),
                     locked);
         }
         update(usage);
@@ -107,19 +106,19 @@ public final class DiskUsageMonitor {
             locked = true;
             LOG.warn(
                     "TabletServer {} disk usage reached {}% (limit {}%); rejecting writes "
-                            + "until usage drops below {}%.",
+                            + "until usage reaches or drops below {}%.",
                     serverId,
                     String.format("%.2f", usage * 100),
                     String.format("%.2f", writeLimitRatio * 100),
-                    String.format("%.2f", recoverThreshold * 100));
-        } else if (wasLocked && usage <= recoverThreshold) {
+                    String.format("%.2f", writeRecoverRatio * 100));
+        } else if (wasLocked && usage <= writeRecoverRatio) {
             locked = false;
             LOG.info(
                     "TabletServer {} disk usage dropped to {}% (recover threshold {}%); "
                             + "resuming writes.",
                     serverId,
                     String.format("%.2f", usage * 100),
-                    String.format("%.2f", recoverThreshold * 100));
+                    String.format("%.2f", writeRecoverRatio * 100));
         }
         listener.onSample(lastUsageRatio, locked);
     }
@@ -136,42 +135,38 @@ public final class DiskUsageMonitor {
         return writeLimitRatio;
     }
 
-    public double getRecoverGap() {
-        return recoverGap;
-    }
-
-    public double getRecoverThreshold() {
-        return recoverThreshold;
+    public double getWriteRecoverRatio() {
+        return writeRecoverRatio;
     }
 
     /**
-     * Dynamically updates the write-limit ratio, recover gap and the derived recover threshold. The
-     * new values take effect on the next {@link #runOnce()} invocation or {@link #update(double)}
-     * call.
+     * Dynamically updates the write-limit and write-recover ratios. The new values take effect on
+     * the next {@link #runOnce()} invocation or {@link #update(double)} call.
      *
-     * @param newRatio the new write-limit ratio, must be within (recoverGap, 1.0]
-     * @param newRecoverGap the new recover gap, must be within (0.0, newRatio)
+     * @param newRatio the new write-limit ratio, must be within (newRecoverRatio, 1.0]
+     * @param newRecoverRatio the new write-recover ratio, must be within (0.0, newRatio)
      */
-    public void updateWriteLimitConfig(double newRatio, double newRecoverGap) {
-        checkValidWriteLimitConfig(newRatio, newRecoverGap);
+    public void updateWriteLimitConfig(double newRatio, double newRecoverRatio) {
+        checkValidWriteLimitConfig(newRatio, newRecoverRatio);
         this.writeLimitRatio = newRatio;
-        this.recoverGap = newRecoverGap;
-        this.recoverThreshold = newRatio - newRecoverGap;
+        this.writeRecoverRatio = newRecoverRatio;
     }
 
     /**
-     * Dynamically updates the write-limit ratio while keeping the current recover gap.
+     * Dynamically updates the write-limit ratio while keeping the current write-recover ratio.
      *
-     * @param newRatio the new write-limit ratio, must be greater than the current recover gap and
-     *     no greater than 1.0
+     * @param newRatio the new write-limit ratio, must be greater than the current write-recover
+     *     ratio and no greater than 1.0
      */
     public void updateWriteLimitRatio(double newRatio) {
-        updateWriteLimitConfig(newRatio, recoverGap);
+        updateWriteLimitConfig(newRatio, writeRecoverRatio);
     }
 
-    private static void checkValidWriteLimitConfig(double writeLimitRatio, double recoverGap) {
+    private static void checkValidWriteLimitConfig(
+            double writeLimitRatio, double writeRecoverRatio) {
         String validationError =
-                DiskWriteLimitConfigValidator.getValidationError(writeLimitRatio, recoverGap);
+                DiskWriteLimitConfigValidator.getValidationError(
+                        writeLimitRatio, writeRecoverRatio);
         checkArgument(validationError == null, validationError);
     }
 
