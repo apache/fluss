@@ -118,32 +118,31 @@ public class PaimonLakeCatalog implements LakeCatalog {
         try {
             Table table = paimonCatalog.getTable(toPaimon(tablePath));
             FileStoreTable fileStoreTable = (FileStoreTable) table;
-            Path location = fileStoreTable.location();
+            Path currentLocation = fileStoreTable.location();
             List<TableChange> changesToApply = new ArrayList<>(tableChanges.size());
+
+            // `paimon.path` is create-time-only because changing it does not migrate existing data.
+            // It may be repeated after table creation when enabling lake in the same ALTER. Treat
+            // an equivalent path as a no-op, but reject any actual path change.
             for (TableChange tableChange : tableChanges) {
-                boolean tablePathSet =
-                        tableChange instanceof TableChange.SetOption
-                                && PAIMON_PATH_KEY.equals(
-                                        ((TableChange.SetOption) tableChange).getKey());
-                // Skip dup location change
-                if (tablePathSet
-                        && location.equals(
-                                new Path(((TableChange.SetOption) tableChange).getValue()))) {
-                    continue;
-                }
-                boolean tablePathReset =
-                        tableChange instanceof TableChange.ResetOption
-                                && PAIMON_PATH_KEY.equals(
-                                        ((TableChange.ResetOption) tableChange).getKey());
-                if (tablePathSet || tablePathReset) {
-                    throw new InvalidAlterTableException(
-                            String.format(
-                                    "'%s' can only be altered before the Paimon table is created.",
-                                    PAIMON_PATH_KEY));
+                if (tableChange instanceof TableChange.SetOption) {
+                    TableChange.SetOption setOption = (TableChange.SetOption) tableChange;
+                    if (PAIMON_PATH_KEY.equals(setOption.getKey())) {
+                        if (currentLocation.equals(new Path(setOption.getValue()))) {
+                            continue;
+                        }
+                        throw invalidPaimonPathChangeException();
+                    }
+                } else if (tableChange instanceof TableChange.ResetOption) {
+                    TableChange.ResetOption resetOption = (TableChange.ResetOption) tableChange;
+                    if (PAIMON_PATH_KEY.equals(resetOption.getKey())) {
+                        throw invalidPaimonPathChangeException();
+                    }
                 }
                 changesToApply.add(tableChange);
             }
 
+            // Avoid creating a new Paimon schema version for a path-only no-op.
             if (changesToApply.isEmpty()) {
                 return;
             }
@@ -188,6 +187,13 @@ public class PaimonLakeCatalog implements LakeCatalog {
         } catch (Catalog.TableNotExistException e) {
             throw new TableNotExistException("Table " + tablePath + " does not exist.");
         }
+    }
+
+    private static InvalidAlterTableException invalidPaimonPathChangeException() {
+        return new InvalidAlterTableException(
+                String.format(
+                        "'%s' can only be altered before the Paimon table is created.",
+                        PAIMON_PATH_KEY));
     }
 
     private void createTable(TablePath tablePath, Schema schema, boolean isCreatingFlussTable)
