@@ -118,29 +118,8 @@ public class PaimonLakeCatalog implements LakeCatalog {
         try {
             Table table = paimonCatalog.getTable(toPaimon(tablePath));
             FileStoreTable fileStoreTable = (FileStoreTable) table;
-            Path currentLocation = fileStoreTable.location();
-            List<TableChange> changesToApply = new ArrayList<>(tableChanges.size());
-
-            // `paimon.path` is create-time-only because changing it does not migrate existing data.
-            // It may be repeated after table creation when enabling lake in the same ALTER. Treat
-            // an equivalent path as a no-op, but reject any actual path change.
-            for (TableChange tableChange : tableChanges) {
-                if (tableChange instanceof TableChange.SetOption) {
-                    TableChange.SetOption setOption = (TableChange.SetOption) tableChange;
-                    if (PAIMON_PATH_KEY.equals(setOption.getKey())) {
-                        if (currentLocation.equals(new Path(setOption.getValue()))) {
-                            continue;
-                        }
-                        throw invalidPaimonPathChangeException();
-                    }
-                } else if (tableChange instanceof TableChange.ResetOption) {
-                    TableChange.ResetOption resetOption = (TableChange.ResetOption) tableChange;
-                    if (PAIMON_PATH_KEY.equals(resetOption.getKey())) {
-                        throw invalidPaimonPathChangeException();
-                    }
-                }
-                changesToApply.add(tableChange);
-            }
+            List<TableChange> changesToApply =
+                    validateAndFilterPaimonPathChanges(fileStoreTable.location(), tableChanges);
 
             // Avoid creating a new Paimon schema version for a path-only no-op.
             if (changesToApply.isEmpty()) {
@@ -187,6 +166,34 @@ public class PaimonLakeCatalog implements LakeCatalog {
         } catch (Catalog.TableNotExistException e) {
             throw new TableNotExistException("Table " + tablePath + " does not exist.");
         }
+    }
+
+    private static List<TableChange> validateAndFilterPaimonPathChanges(
+            Path currentLocation, List<TableChange> tableChanges) {
+        List<TableChange> changesToApply = new ArrayList<>(tableChanges.size());
+
+        // `paimon.path` is create-time-only because changing it does not migrate existing data.
+        // It may be repeated after table creation when enabling lake in the same ALTER. Treat an
+        // equivalent path as a no-op, but reject any actual path change.
+        for (TableChange tableChange : tableChanges) {
+            if (tableChange instanceof TableChange.SetOption) {
+                TableChange.SetOption setOption = (TableChange.SetOption) tableChange;
+                if (PAIMON_PATH_KEY.equals(setOption.getKey())) {
+                    if (currentLocation.equals(new Path(setOption.getValue()))) {
+                        continue;
+                    }
+                    throw invalidPaimonPathChangeException();
+                }
+            } else if (tableChange instanceof TableChange.ResetOption) {
+                TableChange.ResetOption resetOption = (TableChange.ResetOption) tableChange;
+                if (PAIMON_PATH_KEY.equals(resetOption.getKey())) {
+                    throw invalidPaimonPathChangeException();
+                }
+            }
+            changesToApply.add(tableChange);
+        }
+
+        return changesToApply;
     }
 
     private static InvalidAlterTableException invalidPaimonPathChangeException() {
