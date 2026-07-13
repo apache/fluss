@@ -26,7 +26,9 @@ import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.lake.writer.LakeWriter;
+import org.apache.fluss.lake.writer.TieringTableValidator;
 import org.apache.fluss.lake.writer.WriterInitContext;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.record.LogRecord;
 
 import javax.annotation.Nullable;
@@ -38,7 +40,8 @@ import java.util.Map;
 
 /** An implementation of {@link LakeTieringFactory} for testing purpose. */
 public class TestingLakeTieringFactory
-        implements LakeTieringFactory<TestingWriteResult, TestingCommittable> {
+        implements LakeTieringFactory<TestingWriteResult, TestingCommittable>,
+                TieringTableValidator {
 
     @Nullable private TestingLakeCommitter testingLakeCommitter;
 
@@ -49,6 +52,9 @@ public class TestingLakeTieringFactory
     public TestingLakeTieringFactory() {
         this(null);
     }
+
+    @Override
+    public void validateTable(TableInfo tableInfo) throws IOException {}
 
     @Override
     public LakeWriter<TestingWriteResult> createLakeWriter(WriterInitContext writerInitContext)

@@ -31,6 +31,8 @@ import org.apache.fluss.flink.tiering.source.split.TieringSplit;
 import org.apache.fluss.flink.tiering.source.split.TieringSplitGenerator;
 import org.apache.fluss.flink.tiering.source.state.TieringSourceEnumeratorState;
 import org.apache.fluss.lake.committer.TieringStats;
+import org.apache.fluss.lake.writer.LakeTieringFactory;
+import org.apache.fluss.lake.writer.TieringTableValidator;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.GatewayClientProxy;
@@ -99,6 +101,7 @@ public class TieringSourceEnumerator
 
     private final Configuration flussConf;
     private final SplitEnumeratorContext<TieringSplit> context;
+    private final LakeTieringFactory<?, ?> lakeTieringFactory;
     private final ScheduledExecutorService timerService;
     private final SplitEnumeratorMetricGroup enumeratorMetricGroup;
     private final long pollTieringTableIntervalMs;
@@ -125,9 +128,11 @@ public class TieringSourceEnumerator
     public TieringSourceEnumerator(
             Configuration flussConf,
             SplitEnumeratorContext<TieringSplit> context,
+            LakeTieringFactory<?, ?> lakeTieringFactory,
             long pollTieringTableIntervalMs) {
         this.flussConf = flussConf;
         this.context = context;
+        this.lakeTieringFactory = lakeTieringFactory;
         this.timerService =
                 Executors.newSingleThreadScheduledExecutor(
                         r -> new Thread(r, "Tiering-Timer-Thread"));
@@ -449,6 +454,9 @@ public class TieringSourceEnumerator
         try {
             TablePath tablePath = tieringTable.f2;
             final TableInfo tableInfo = flussAdmin.getTableInfo(tablePath).get();
+            if (lakeTieringFactory instanceof TieringTableValidator) {
+                ((TieringTableValidator) lakeTieringFactory).validateTable(tableInfo);
+            }
             List<TieringSplit> tieringSplits = splitGenerator.generateTableSplits(tableInfo);
             // shuffle tiering split to avoid splits tiering skew
             // after introduce tiering max duration

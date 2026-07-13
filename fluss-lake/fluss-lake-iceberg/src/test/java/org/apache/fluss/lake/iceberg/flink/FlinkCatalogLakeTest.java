@@ -41,7 +41,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_ENABLED;
-import static org.apache.fluss.lake.iceberg.IcebergLakeCatalog.SYSTEM_COLUMNS;
+import static org.apache.fluss.lake.iceberg.IcebergSchemaUtils.SYSTEM_COLUMNS;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test class for {@link FlinkCatalog}. */
