@@ -47,6 +47,7 @@ import org.apache.paimon.data.GenericRow;
 import org.apache.paimon.data.Timestamp;
 import org.apache.paimon.options.Options;
 import org.apache.paimon.schema.SchemaChange;
+import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.table.Table;
 import org.apache.paimon.table.sink.BatchTableCommit;
 import org.apache.paimon.table.sink.BatchTableWrite;
@@ -472,6 +473,34 @@ class LakeEnabledTableCreateITCase {
                         .build();
         TablePath lakeEnabledTablePath = TablePath.of(DATABASE, "alter_paimon_path_enabled");
         admin.createTable(lakeEnabledTablePath, lakeEnabledTable, false).get();
+
+        Identifier lakeEnabledPaimonPath =
+                Identifier.create(DATABASE, lakeEnabledTablePath.getTableName());
+        FileStoreTable paimonTable = (FileStoreTable) paimonCatalog.getTable(lakeEnabledPaimonPath);
+        String paimonPath = paimonTable.location().toString();
+
+        admin.alterTable(
+                        lakeEnabledTablePath,
+                        Arrays.asList(
+                                TableChange.set("paimon.path", paimonPath + "/"),
+                                TableChange.set("key", "value")),
+                        false)
+                .get();
+
+        paimonTable = (FileStoreTable) paimonCatalog.getTable(lakeEnabledPaimonPath);
+        assertThat(paimonTable.location().toString()).isEqualTo(paimonPath);
+        assertThat(paimonTable.options()).containsEntry("fluss.key", "value");
+        long schemaId = paimonTable.schema().id();
+
+        admin.alterTable(
+                        lakeEnabledTablePath,
+                        Collections.singletonList(TableChange.set("paimon.path", paimonPath)),
+                        false)
+                .get();
+
+        paimonTable = (FileStoreTable) paimonCatalog.getTable(lakeEnabledPaimonPath);
+        assertThat(paimonTable.location().toString()).isEqualTo(paimonPath);
+        assertThat(paimonTable.schema().id()).isEqualTo(schemaId);
 
         assertThatThrownBy(
                         () ->

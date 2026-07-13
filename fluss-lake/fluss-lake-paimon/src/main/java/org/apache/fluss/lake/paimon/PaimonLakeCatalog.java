@@ -32,6 +32,7 @@ import org.apache.paimon.catalog.Catalog;
 import org.apache.paimon.catalog.CatalogContext;
 import org.apache.paimon.catalog.CatalogFactory;
 import org.apache.paimon.catalog.Identifier;
+import org.apache.paimon.fs.Path;
 import org.apache.paimon.options.Options;
 import org.apache.paimon.schema.Schema;
 import org.apache.paimon.schema.SchemaChange;
@@ -42,6 +43,7 @@ import org.apache.paimon.types.DataTypes;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -115,23 +117,37 @@ public class PaimonLakeCatalog implements LakeCatalog {
             throws TableNotExistException {
         try {
             Table table = paimonCatalog.getTable(toPaimon(tablePath));
-            if (tableChanges.stream()
-                    .anyMatch(
-                            tableChange ->
-                                    (tableChange instanceof TableChange.SetOption
-                                                    && PAIMON_PATH_KEY.equals(
-                                                            ((TableChange.SetOption) tableChange)
-                                                                    .getKey()))
-                                            || (tableChange instanceof TableChange.ResetOption
-                                                    && PAIMON_PATH_KEY.equals(
-                                                            ((TableChange.ResetOption) tableChange)
-                                                                    .getKey())))) {
-                throw new InvalidAlterTableException(
-                        String.format(
-                                "'%s' can only be altered before the Paimon table is created.",
-                                PAIMON_PATH_KEY));
-            }
             FileStoreTable fileStoreTable = (FileStoreTable) table;
+            Path location = fileStoreTable.location();
+            List<TableChange> changesToApply = new ArrayList<>(tableChanges.size());
+            for (TableChange tableChange : tableChanges) {
+                boolean tablePathSet =
+                        tableChange instanceof TableChange.SetOption
+                                && PAIMON_PATH_KEY.equals(
+                                        ((TableChange.SetOption) tableChange).getKey());
+                // Skip dup location change
+                if (tablePathSet
+                        && location.equals(
+                                new Path(((TableChange.SetOption) tableChange).getValue()))) {
+                    continue;
+                }
+                boolean tablePathReset =
+                        tableChange instanceof TableChange.ResetOption
+                                && PAIMON_PATH_KEY.equals(
+                                        ((TableChange.ResetOption) tableChange).getKey());
+                if (tablePathSet || tablePathReset) {
+                    throw new InvalidAlterTableException(
+                            String.format(
+                                    "'%s' can only be altered before the Paimon table is created.",
+                                    PAIMON_PATH_KEY));
+                }
+                changesToApply.add(tableChange);
+            }
+
+            if (changesToApply.isEmpty()) {
+                return;
+            }
+
             Schema currentPaimonSchema = fileStoreTable.schema().toSchema();
 
             List<SchemaChange> paimonSchemaChanges;
@@ -139,13 +155,13 @@ public class PaimonLakeCatalog implements LakeCatalog {
                     currentPaimonSchema, toPaimonSchema(context.getCurrentTable()))) {
                 // if the paimon schema is same as current fluss schema, directly apply all the
                 // changes.
-                paimonSchemaChanges = toPaimonSchemaChanges(tableChanges);
+                paimonSchemaChanges = toPaimonSchemaChanges(changesToApply);
             } else if (isPaimonSchemaCompatible(
                     currentPaimonSchema, toPaimonSchema(context.getExpectedTable()))) {
                 // if the schema is same as applied fluss schema , skip adding columns.
                 paimonSchemaChanges =
                         toPaimonSchemaChanges(
-                                tableChanges.stream()
+                                changesToApply.stream()
                                         .filter(
                                                 tableChange ->
                                                         !(tableChange
