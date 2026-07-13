@@ -414,7 +414,8 @@ public class RecoveryOffsetManager {
         Set<TableBucket> buckets = new HashSet<>();
         if (isPartitioned) {
             for (PartitionInfo partition : getPartitionInfos()) {
-                for (int bucketId = 0; bucketId < numBuckets; bucketId++) {
+                int partitionBucketCount = partition.getBucketCount();
+                for (int bucketId = 0; bucketId < partitionBucketCount; bucketId++) {
                     buckets.add(new TableBucket(tableId, partition.getPartitionId(), bucketId));
                 }
             }
@@ -561,10 +562,13 @@ public class RecoveryOffsetManager {
         if (isPartitioned) {
             for (PartitionInfo partition : getPartitionInfos()) {
                 fetchPartitionOffsets(
-                        partition.getPartitionName(), partition.getPartitionId(), offsets);
+                        partition.getPartitionName(),
+                        partition.getPartitionId(),
+                        partition.getBucketCount(),
+                        offsets);
             }
         } else {
-            fetchPartitionOffsets(null, null, offsets);
+            fetchPartitionOffsets(null, null, numBuckets, offsets);
         }
         return offsets;
     }
@@ -572,10 +576,11 @@ public class RecoveryOffsetManager {
     private void fetchPartitionOffsets(
             @Nullable String partitionName,
             @Nullable Long partitionId,
+            int bucketCount,
             Map<TableBucket, Long> offsets)
             throws Exception {
-        List<Integer> bucketIds = new ArrayList<>(numBuckets);
-        for (int i = 0; i < numBuckets; i++) {
+        List<Integer> bucketIds = new ArrayList<>(bucketCount);
+        for (int i = 0; i < bucketCount; i++) {
             bucketIds.add(i);
         }
         ListOffsetsResult result = listOffsets(partitionName, bucketIds);

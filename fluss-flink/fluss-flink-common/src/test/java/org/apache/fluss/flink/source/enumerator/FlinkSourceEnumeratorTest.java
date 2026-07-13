@@ -247,7 +247,10 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                         DEFAULT_BUCKET_NUM,
                         Collections.singletonList(
                                 new PartitionInfo(
-                                        partitionId, partitionSpec, DEFAULT_REMOTE_DATA_DIR)));
+                                        partitionId,
+                                        partitionSpec,
+                                        DEFAULT_REMOTE_DATA_DIR,
+                                        DEFAULT_BUCKET_NUM)));
 
         SourceEnumeratorState checkpointState;
         try (MockSplitEnumeratorContext<SourceSplitBase> context =
@@ -1172,14 +1175,22 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             Collections.singletonList(isPrimaryKeyTable ? "date" : "name"),
                             partitionName);
             lakePartitionInfos.add(
-                    new PartitionInfo(partitionId, partitionSpec, DEFAULT_REMOTE_DATA_DIR));
+                    new PartitionInfo(
+                            partitionId,
+                            partitionSpec,
+                            DEFAULT_REMOTE_DATA_DIR,
+                            DEFAULT_BUCKET_NUM));
         }
         ResolvedPartitionSpec partitionSpec =
                 ResolvedPartitionSpec.fromPartitionName(
                         Collections.singletonList(isPrimaryKeyTable ? "date" : "name"),
                         hybridPartitionName);
         lakePartitionInfos.add(
-                new PartitionInfo(hybridPartitionId, partitionSpec, DEFAULT_REMOTE_DATA_DIR));
+                new PartitionInfo(
+                        hybridPartitionId,
+                        partitionSpec,
+                        DEFAULT_REMOTE_DATA_DIR,
+                        DEFAULT_BUCKET_NUM));
 
         LakeSource<LakeSplit> lakeSource =
                 new TestingLakeSource(DEFAULT_BUCKET_NUM, lakePartitionInfos);

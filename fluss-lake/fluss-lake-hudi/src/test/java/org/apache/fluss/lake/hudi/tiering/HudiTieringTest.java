@@ -445,6 +445,11 @@ class HudiTieringTest {
         public long tieringRoundTimestamp() {
             return tieringRoundTimestamp;
         }
+
+        @Override
+        public int bucketCount() {
+            return tableInfo.getNumBuckets();
+        }
     }
 
     private static class TestingCommitterInitContext implements CommitterInitContext {

@@ -44,6 +44,7 @@ impl LookupRequest {
                     bucket_id,
                     keys,
                     original_partition_name: None,
+                    bucket_count: None,
                 },
             )
             .collect();

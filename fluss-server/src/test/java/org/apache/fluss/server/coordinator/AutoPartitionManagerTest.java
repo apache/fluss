@@ -66,6 +66,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReadWriteLock;
 import java.util.function.Function;
 import java.util.stream.Stream;
 
@@ -73,6 +75,12 @@ import static org.apache.fluss.metadata.ResolvedPartitionSpec.fromPartitionName;
 import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
 import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /** Test for {@link AutoPartitionManager}. */
 class AutoPartitionManagerTest {
@@ -370,7 +378,8 @@ class AutoPartitionManagerTest {
                     remoteDataDir,
                     partitionAssignment,
                     fromPartitionName(table.getPartitionKeys(), partitionName),
-                    false);
+                    false,
+                    table.getNumBuckets());
             // mock the partition is created in zk.
             autoPartitionManager.addPartition(tableId, partitionName);
         }
@@ -454,7 +463,8 @@ class AutoPartitionManagerTest {
                 remoteDataDir,
                 partitionAssignment,
                 fromPartitionName(table.getPartitionKeys(), "2024-09-15"),
-                false);
+                false,
+                table.getNumBuckets());
         autoPartitionManager.addPartition(table.getTableId(), "2024-09-15");
 
         metadataManager.dropPartition(
@@ -551,7 +561,8 @@ class AutoPartitionManagerTest {
                     remoteDataDir,
                     partitionAssignment,
                     fromPartitionName(table.getPartitionKeys(), i + ""),
-                    false);
+                    false,
+                    table.getNumBuckets());
             // mock the partition is created in zk.
             autoPartitionManager.addPartition(tableId, i + "");
         }
@@ -734,6 +745,117 @@ class AutoPartitionManagerTest {
         assertThat(partitionsNum).isEqualTo(5);
     }
 
+    /**
+     * Verifies that after {@code ALTER TABLE ... SET ('bucket.num' = ...)} refreshes the cached
+     * {@link TableInfo} (via {@link AutoPartitionManager#updateAutoPartitionTables}), auto-created
+     * new partitions use the new bucket count while already-existing partitions keep their original
+     * bucket count. This guards the {@code CoordinatorEventProcessor.postAlterTableProperties}
+     * refresh path for bucket.num-only changes.
+     */
+    @Test
+    void testAutoCreatedPartitionUsesUpdatedBucketCount() throws Exception {
+        ZonedDateTime startTime =
+                LocalDateTime.parse("2024-09-10T00:00:00").atZone(ZoneId.systemDefault());
+        long startMs = startTime.toInstant().toEpochMilli();
+        ManualClock clock = new ManualClock(startMs);
+        ManuallyTriggeredScheduledExecutorService periodicExecutor =
+                new ManuallyTriggeredScheduledExecutorService();
+
+        AutoPartitionManager autoPartitionManager =
+                new AutoPartitionManager(
+                        new TestingServerMetadataCache(3),
+                        metadataManager,
+                        remoteDirDynamicLoader,
+                        new Configuration(),
+                        disabledCapacityController(),
+                        clock,
+                        periodicExecutor);
+        autoPartitionManager.start();
+
+        // DAY-partitioned table with 4 buckets per partition, never auto-drop, pre-create 4
+        TableInfo table = createPartitionedTableWithBuckets(-1, 4, AutoPartitionTimeUnit.DAY, 4);
+        TablePath tablePath = table.getTablePath();
+        autoPartitionManager.addAutoPartitionTable(table, true);
+        periodicExecutor.triggerNonPeriodicScheduledTask();
+
+        Map<String, PartitionRegistration> partitions =
+                zookeeperClient.getPartitionRegistrations(tablePath);
+        assertThat(partitions.keySet())
+                .containsExactlyInAnyOrder("20240910", "20240911", "20240912", "20240913");
+        // all pre-created partitions carry the original bucket count 4
+        for (PartitionRegistration reg : partitions.values()) {
+            assertThat(reg.getBucketCount()).isEqualTo(4);
+        }
+
+        // simulate ALTER bucket.num 4 -> 8: a real ALTER first persists the new table-level bucket
+        // count to ZK (the authoritative source auto-partition reads), then the coordinator
+        // refreshes the cached TableInfo.
+        TableRegistration reg = zookeeperClient.getTable(tablePath).get();
+        zookeeperClient.updateTable(tablePath, reg.withBucketCount(8));
+        TableInfo updatedTable = createUpdatedBucketCountTableInfo(table, 8);
+        autoPartitionManager.updateAutoPartitionTables(updatedTable);
+        // drain the immediate task scheduled by updateAutoPartitionTables (no new partition yet,
+        // current partition 20240910 and its 4 pre-created partitions already exist)
+        periodicExecutor.triggerNonPeriodicScheduledTask();
+
+        // advance one day to trigger creation of a new partition under the new bucket count
+        clock.advanceTime(Duration.ofDays(1).plusHours(23));
+        periodicExecutor.triggerPeriodicScheduledTasks();
+
+        partitions = zookeeperClient.getPartitionRegistrations(tablePath);
+        assertThat(partitions.keySet()).contains("20240914");
+        // old partition keeps its original bucket count, new partition uses the updated one
+        assertThat(partitions.get("20240910").getBucketCount()).isEqualTo(4);
+        assertThat(partitions.get("20240914").getBucketCount()).isEqualTo(8);
+    }
+
+    /**
+     * Auto-partition creation must acquire the per-table rescale read lock (serializing against
+     * ALTER bucket.num). The lock is swapped for a mock via a spied {@link MetadataManager};
+     * removing the production {@code readLock.lock()} call fails this test deterministically.
+     */
+    @Test
+    void testAutoPartitionCreationAcquiresRescaleReadLock() throws Exception {
+        ManualClock clock =
+                new ManualClock(
+                        LocalDateTime.parse("2024-09-10T00:00:00")
+                                .atZone(ZoneId.systemDefault())
+                                .toInstant()
+                                .toEpochMilli());
+        ManuallyTriggeredScheduledExecutorService periodicExecutor =
+                new ManuallyTriggeredScheduledExecutorService();
+
+        TableInfo table = createPartitionedTableWithBuckets(-1, 4, AutoPartitionTimeUnit.DAY, 4);
+        TablePath tablePath = table.getTablePath();
+
+        // Spy: only the rescale lock is mocked; everything else hits the real ZK-backed manager.
+        MetadataManager spyMetadataManager = spy(metadataManager);
+        ReadWriteLock mockRescaleLock = mock(ReadWriteLock.class);
+        Lock mockReadLock = mock(Lock.class);
+        when(mockRescaleLock.readLock()).thenReturn(mockReadLock);
+        doReturn(mockRescaleLock).when(spyMetadataManager).getBucketRescaleLock(tablePath);
+
+        AutoPartitionManager autoPartitionManager =
+                new AutoPartitionManager(
+                        new TestingServerMetadataCache(3),
+                        spyMetadataManager,
+                        remoteDirDynamicLoader,
+                        new Configuration(),
+                        disabledCapacityController(),
+                        clock,
+                        periodicExecutor);
+        autoPartitionManager.start();
+
+        autoPartitionManager.addAutoPartitionTable(table, true);
+        periodicExecutor.triggerNonPeriodicScheduledTask();
+
+        // Sanity: the create path actually ran, so it reached the lock.
+        assertThat(zookeeperClient.getPartitionNumber(tablePath)).isGreaterThan(0);
+
+        verify(mockReadLock, atLeastOnce()).lock();
+        verify(mockReadLock, atLeastOnce()).unlock();
+    }
+
     @Test
     void testAutoCreatePartitionChecksCapacityWithoutReservation() throws Exception {
         ZonedDateTime startTime =
@@ -795,14 +917,16 @@ class AutoPartitionManagerTest {
                 remoteDataDir,
                 partitionAssignment,
                 fromPartitionName(table.getPartitionKeys(), "2025042600"),
-                false);
+                false,
+                table.getNumBuckets());
         metadataManager.createPartition(
                 tablePath,
                 table.getTableId(),
                 remoteDataDir,
                 partitionAssignment,
                 fromPartitionName(table.getPartitionKeys(), "2025042601"),
-                false);
+                false,
+                table.getNumBuckets());
         autoPartitionManager.addPartition(table.getTableId(), "2025042600");
         autoPartitionManager.addPartition(table.getTableId(), "2025042601");
         capacityController.updateObservedKvLeaderReplicaCount((long) table.getNumBuckets() * 2);
@@ -1218,7 +1342,8 @@ class AutoPartitionManagerTest {
                 remoteDataDir,
                 partitionAssignment,
                 fromPartitionName(tableInfo.getPartitionKeys(), partitionName),
-                false);
+                false,
+                bucketAssignments.size());
         autoPartitionManager.addPartition(tableInfo.getTableId(), partitionName);
     }
 
@@ -1418,6 +1543,24 @@ class AutoPartitionManagerTest {
                 ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED,
                 historicalPartitionEnabled);
         return createUpdatedTableInfo(original, newProperties);
+    }
+
+    /** Creates a new TableInfo with an updated table-level bucket count, reusing the original. */
+    private TableInfo createUpdatedBucketCountTableInfo(TableInfo original, int newNumBuckets) {
+        return new TableInfo(
+                original.getTablePath(),
+                original.getTableId(),
+                original.getSchemaId(),
+                original.getSchema(),
+                original.getBucketKeys(),
+                original.getPartitionKeys(),
+                newNumBuckets,
+                original.getProperties(),
+                original.getCustomProperties(),
+                original.getRemoteDataDir(),
+                original.getComment().orElse(null),
+                original.getCreatedTime(),
+                System.currentTimeMillis());
     }
 
     private TableInfo createUpdatedTableInfo(TableInfo original, Configuration newProperties) {

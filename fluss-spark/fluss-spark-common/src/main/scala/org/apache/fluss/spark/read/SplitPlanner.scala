@@ -85,6 +85,32 @@ sealed trait SplitPlanner extends AutoCloseable {
   def logTailPredicate: Option[FlussPredicate]
 }
 
+object SplitPlanner {
+
+  /**
+   * Fail loud if the lake snapshot of a partition contains any bucket id outside the enumerated
+   * range [0, enumeratedBucketCount). Union-read planning pairs lake splits by walking that range,
+   * so an out-of-range lake bucket would otherwise be silently dropped from the result. Such a
+   * mismatch means the partition's recorded bucket count disagrees with its tiered layout, which
+   * must surface as an error rather than as missing rows. Extracted for unit testing.
+   */
+  private[read] def checkLakeBucketsWithinEnumeratedRange(
+      tablePath: TablePath,
+      partitionName: String,
+      lakeBucketIds: Set[Int],
+      enumeratedBucketCount: Int): Unit = {
+    val outOfRange = lakeBucketIds.filter(_ >= enumeratedBucketCount)
+    if (outOfRange.nonEmpty) {
+      val rendered = outOfRange.toSeq.sorted.mkString("[", ", ", "]")
+      throw new IllegalStateException(
+        s"Lake snapshot of table $tablePath partition $partitionName contains buckets " +
+          s"$rendered outside the enumerated range " +
+          s"[0, $enumeratedBucketCount); refusing to generate union-read " +
+          "partitions that would silently drop lake data.")
+    }
+  }
+}
+
 /** Marker: planner yields partitions consumable by an append (log-table) reader factory. */
 sealed trait AppendSplitPlanner extends SplitPlanner
 
@@ -285,7 +311,13 @@ class AppendPlanner(
       case Some(_) => new BucketOffsetsRetrieverImpl(admin, tablePath, true)
       case _ => new BucketOffsetsRetrieverImpl(admin, tablePath)
     }
-    val buckets = (0 until tableInfo.getNumBuckets).toSeq
+    // bucket ids of a partition: the partition carries its resolved bucket count
+    // (bucket.num.actual); non-partitioned tables (null partitionInfo) use the table-level count
+    def bucketsFor(partitionInfo: PartitionInfo): Seq[Int] = {
+      val bucketCount =
+        if (partitionInfo != null) partitionInfo.getBucketCount else tableInfo.getNumBuckets
+      0 until bucketCount
+    }
 
     def splitOffsetRange(
         tableBucket: TableBucket,
@@ -313,6 +345,7 @@ class AppendPlanner(
 
     def createPartitions(
         partitionId: Option[Long],
+        buckets: Seq[Int],
         startBucketOffsets: Map[Integer, Long],
         stoppingBucketOffsets: Map[Integer, Long]): Array[InputPartition] = {
       buckets.flatMap {
@@ -338,28 +371,32 @@ class AppendPlanner(
       matching
         .map {
           partitionInfo =>
+            val partitionBuckets = bucketsFor(partitionInfo)
             val startBucketOffsets = startOffsetsInitializer.getBucketOffsets(
               partitionInfo.getPartitionName,
-              buckets.map(Integer.valueOf).asJava,
+              partitionBuckets.map(Integer.valueOf).asJava,
               bucketOffsetsRetrieverImpl)
             val stoppingBucketOffsets = stoppingOffsetsInitializer.getBucketOffsets(
               partitionInfo.getPartitionName,
-              buckets.map(Integer.valueOf).asJava,
+              partitionBuckets.map(Integer.valueOf).asJava,
               bucketOffsetsRetrieverImpl)
             (
               partitionInfo.getPartitionId,
+              partitionBuckets,
               startBucketOffsets.asScala.map(e => (e._1, Long2long(e._2))),
               stoppingBucketOffsets.asScala.map(e => (e._1, Long2long(e._2))))
         }
         .flatMap {
-          case (partitionId, startBucketOffsets, stoppingBucketOffsets) =>
+          case (partitionId, partitionBuckets, startBucketOffsets, stoppingBucketOffsets) =>
             createPartitions(
               Some(partitionId),
+              partitionBuckets,
               startBucketOffsets.toMap,
               stoppingBucketOffsets.toMap)
         }
         .toArray
     } else {
+      val buckets = bucketsFor(null)
       val startBucketOffsets = startOffsetsInitializer.getBucketOffsets(
         null,
         buckets.map(Integer.valueOf).asJava,
@@ -370,6 +407,7 @@ class AppendPlanner(
         bucketOffsetsRetrieverImpl)
       createPartitions(
         None,
+        buckets,
         startBucketOffsets.asScala.map(e => (e._1, Long2long(e._2))).toMap,
         stoppingBucketOffsets.asScala.map(e => (e._1, Long2long(e._2))).toMap)
     }
@@ -396,11 +434,7 @@ class AppendPlanner(
     val bucketOffsetsRetriever = new BucketOffsetsRetrieverImpl(admin, tablePath)
 
     if (tableInfo.isPartitioned) {
-      planLakePartitionedTable(
-        lakeSplits.asScala.toSeq,
-        tableBucketsOffset,
-        buckets,
-        bucketOffsetsRetriever)
+      planLakePartitionedTable(lakeSplits.asScala.toSeq, tableBucketsOffset, bucketOffsetsRetriever)
     } else {
       planLakeNonPartitionedTable(
         lakeSplits.asScala.toSeq,
@@ -433,7 +467,6 @@ class AppendPlanner(
   private def planLakePartitionedTable(
       lakeSplits: Seq[LakeSplit],
       tableBucketsOffset: java.util.Map[TableBucket, java.lang.Long],
-      buckets: Seq[Int],
       bucketOffsetsRetriever: BucketOffsetsRetrieverImpl): Array[InputPartition] = {
     val tableId = tableInfo.getTableId
 
@@ -442,9 +475,13 @@ class AppendPlanner(
       partitionInfos.asScala.toSeq,
       partitionPredicate)
 
+    // Build a lookup for per-partition bucket count
+    val partitionBucketCounts = mutable.LinkedHashMap.empty[String, Int]
     val flussPartitionIdByName = mutable.LinkedHashMap.empty[String, Long]
     filteredPartitionInfos.foreach {
-      pi => flussPartitionIdByName(pi.getPartitionName) = pi.getPartitionId
+      pi =>
+        flussPartitionIdByName(pi.getPartitionName) = pi.getPartitionId
+        partitionBucketCounts(pi.getPartitionName) = pi.getBucketCount
     }
 
     val lakeSplitsByPartition = groupLakeSplitsByPartitionBuffered(lakeSplits)
@@ -457,6 +494,7 @@ class AppendPlanner(
             val lakePartitions =
               createLakePartitions(splits.toSeq, tableId, Some(partitionId))
 
+            val buckets = (0 until partitionBucketCounts(partitionName)).toSeq
             val stoppingOffsets = getBucketOffsets(
               stoppingOffsetsInitializer,
               partitionName,
@@ -486,6 +524,7 @@ class AppendPlanner(
 
     val flussOnlyPartitions = flussPartitionIdByName.flatMap {
       case (partitionName, partitionId) =>
+        val buckets = (0 until partitionBucketCounts(partitionName)).toSeq
         val stoppingOffsets = getBucketOffsets(
           stoppingOffsetsInitializer,
           partitionName,
@@ -721,16 +760,19 @@ class UpsertPlanner(
       tableBucketsOffset: java.util.Map[TableBucket, java.lang.Long],
       bucketOffsetsRetriever: BucketOffsetsRetrieverImpl): Array[InputPartition] = {
     val tableId = tableInfo.getTableId
-    val buckets = (0 until tableInfo.getNumBuckets).toSeq
 
     val filteredPartitionInfos = SparkPartitionPredicate.filterPartitions(
       tableInfo,
       partitionInfos.asScala.toSeq,
       partitionPredicate)
 
+    // Build a lookup for per-partition bucket count
+    val partitionBucketCounts = mutable.LinkedHashMap.empty[String, Int]
     val flussPartitionIdByName = mutable.LinkedHashMap.empty[String, Long]
     filteredPartitionInfos.foreach {
-      pi => flussPartitionIdByName(pi.getPartitionName) = pi.getPartitionId
+      pi =>
+        flussPartitionIdByName(pi.getPartitionName) = pi.getPartitionId
+        partitionBucketCounts(pi.getPartitionName) = pi.getBucketCount
     }
 
     val lakeSplitsByPartition = groupLakeSplitsByPartition(lakeSplits)
@@ -739,6 +781,12 @@ class UpsertPlanner(
       case (partitionName, (partitionValues, splitsByBucket)) =>
         flussPartitionIdByName.remove(partitionName) match {
           case Some(partitionId) =>
+            val buckets = (0 until partitionBucketCounts(partitionName)).toSeq
+            SplitPlanner.checkLakeBucketsWithinEnumeratedRange(
+              tablePath,
+              partitionName,
+              splitsByBucket.keySet.toSet,
+              buckets.size)
             val stoppingOffsets = getBucketOffsets(
               stoppingOffsetsInitializer,
               partitionName,
@@ -763,12 +811,12 @@ class UpsertPlanner(
               SparkPartitionPredicate
                 .matchesPartition(tableInfo, partitionValues, partitionPredicate)
             ) {
-              buckets.flatMap {
-                bucketId =>
+              // Lake-only partition has no recorded bucket count; enumerating the table-level
+              // count instead would silently drop a wider lake layout.
+              splitsByBucket.toSeq.sortBy(_._1).flatMap {
+                case (bucketId, splits) =>
                   val tableBucket = new TableBucket(tableId, -1, bucketId)
-                  splitsByBucket.getOrElse(bucketId, Seq.empty).map {
-                    lakeSplit => FlussLakeInputPartition(tableBucket, lakeSplit)
-                  }
+                  splits.map(lakeSplit => FlussLakeInputPartition(tableBucket, lakeSplit))
               }
             } else {
               Seq.empty
@@ -778,6 +826,7 @@ class UpsertPlanner(
 
     val flussOnlyPartitions = flussPartitionIdByName.flatMap {
       case (partitionName, partitionId) =>
+        val buckets = (0 until partitionBucketCounts(partitionName)).toSeq
         val stoppingOffsets = getBucketOffsets(
           stoppingOffsetsInitializer,
           partitionName,

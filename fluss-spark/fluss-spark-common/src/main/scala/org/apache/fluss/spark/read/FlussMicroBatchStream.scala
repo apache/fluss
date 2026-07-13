@@ -115,7 +115,6 @@ abstract class FlussMicroBatchStream(
 
   private def fetchLatestOffsets(): Option[TableBucketOffsets] = {
     try {
-      val buckets = (0 until tableInfo.getNumBuckets).toSeq
       val offsetsInitializer = OffsetsInitializer.latest()
       if (tableInfo.isPartitioned) {
         val partitionOffsets = partitionInfos.asScala.map(
@@ -124,7 +123,7 @@ abstract class FlussMicroBatchStream(
               tableInfo,
               offsetsInitializer,
               bucketOffsetsRetriever,
-              buckets,
+              bucketsFor(Some(partitionInfo)),
               Some(partitionInfo)))
         val mergedOffsets = partitionOffsets
           .map(_.getOffsets)
@@ -133,7 +132,12 @@ abstract class FlussMicroBatchStream(
       } else {
         Some(
           FlussMicroBatchStream
-            .getLatestOffsets(tableInfo, offsetsInitializer, bucketOffsetsRetriever, buckets, None))
+            .getLatestOffsets(
+              tableInfo,
+              offsetsInitializer,
+              bucketOffsetsRetriever,
+              bucketsFor(None),
+              None))
       }
     } catch {
       case e: FlussRuntimeException =>
@@ -199,13 +203,24 @@ abstract class FlussMicroBatchStream(
   }
 
   private def getLogSplit(partitionInfo: Option[PartitionInfo]): TableBucketOffsets = {
-    val buckets = (0 until tableInfo.getNumBuckets).toSeq
     FlussMicroBatchStream.getLatestOffsets(
       tableInfo,
       startOffsetsInitializer,
       bucketOffsetsRetriever,
-      buckets,
+      bucketsFor(partitionInfo),
       partitionInfo)
+  }
+
+  /**
+   * Bucket ids of a partition: the partition carries its resolved bucket count (bucket.num.actual);
+   * non-partitioned tables use the table-level count.
+   */
+  private def bucketsFor(partitionInfo: Option[PartitionInfo]): Seq[Int] = {
+    val bucketCount = partitionInfo match {
+      case Some(info) => info.getBucketCount
+      case _ => tableInfo.getNumBuckets
+    }
+    0 until bucketCount
   }
 }
 

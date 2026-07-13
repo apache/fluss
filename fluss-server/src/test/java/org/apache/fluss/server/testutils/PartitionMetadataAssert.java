@@ -41,6 +41,11 @@ public class PartitionMetadataAssert
 
     public PartitionMetadataAssert isEqualTo(PartitionMetadata expected) {
         assertThat(expected.getPartitionName()).isEqualTo(actual.getPartitionName());
+        // actual bucketCount is always non-null (falls back to bucketMetadataList size), so only
+        // compare when expected sets it — otherwise legacy callers passing null fail spuriously.
+        if (expected.getBucketCount() != null) {
+            assertThat(actual.getBucketCount()).isEqualTo(expected.getBucketCount());
+        }
         List<BucketMetadata> bucketMetadataList = expected.getBucketMetadataList();
         List<BucketMetadata> actualBucketMetadataList = actual.getBucketMetadataList();
         assertThat(bucketMetadataList)

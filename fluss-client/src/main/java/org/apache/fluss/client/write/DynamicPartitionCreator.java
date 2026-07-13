@@ -33,7 +33,9 @@ import org.slf4j.LoggerFactory;
 
 import javax.annotation.concurrent.ThreadSafe;
 
+import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -54,20 +56,31 @@ public class DynamicPartitionCreator {
     private final Consumer<Throwable> fatalErrorHandler;
 
     private final Set<PhysicalTablePath> inflightPartitionsToCreate = ConcurrentHashMap.newKeySet();
+    private final Map<PhysicalTablePath, Throwable> partitionCreationFailures =
+            new ConcurrentHashMap<>();
+    private final Duration metadataWaitTimeout;
 
     public DynamicPartitionCreator(
             MetadataUpdater metadataUpdater,
             Admin admin,
             boolean dynamicPartitionEnabled,
+            Duration metadataWaitTimeout,
             Consumer<Throwable> fatalErrorHandler) {
         this.metadataUpdater = metadataUpdater;
         this.admin = admin;
         this.dynamicPartitionEnabled = dynamicPartitionEnabled;
+        this.metadataWaitTimeout = metadataWaitTimeout;
         this.fatalErrorHandler = fatalErrorHandler;
     }
 
-    public void checkAndCreatePartitionAsync(
-            PhysicalTablePath physicalTablePath, TableInfo tableInfo) {
+    /**
+     * Ensures the partition of the given path exists and its metadata (partition id and actual
+     * bucket count) is present in the client cluster metadata before returning, creating the
+     * partition dynamically if enabled. Bucket assignment must never run before the partition
+     * metadata is available: the partition's actual bucket count is only known from the partition
+     * metadata, and routing by any other value can silently place records in the wrong bucket.
+     */
+    public void checkAndCreatePartition(PhysicalTablePath physicalTablePath, TableInfo tableInfo) {
         String partitionName = physicalTablePath.getPartitionName();
         if (partitionName == null) {
             // no need to check and create partition
@@ -79,12 +92,12 @@ public class DynamicPartitionCreator {
         boolean idExist = partitionIdOpt.isPresent();
         if (!idExist) {
             if (inflightPartitionsToCreate.contains(physicalTablePath)) {
-                // if the partition is already in inflightPartitionsToCreate, we should skip
-                // creating it.
-                LOG.debug("Partition {} is already being created, skipping.", physicalTablePath);
+                // another thread is creating the partition; wait for its metadata below.
+                LOG.debug("Partition {} is already being created, waiting.", physicalTablePath);
             } else if (forceCheckPartitionExist(physicalTablePath)) {
-                // if the partition exists, we should skip creating it.
+                // the partition exists and its metadata has been refreshed synchronously.
                 LOG.debug("Partition {} already exists, skipping.", physicalTablePath);
+                return;
             } else {
                 // Validate early, before touching any state. The strategy is only resolved here,
                 // on the partition-creation path, not on the common "already exists" path.
@@ -104,14 +117,51 @@ public class DynamicPartitionCreator {
                     // if the partition is not in inflightPartitionsToCreate, we should create it.
                     // this means that the partition is not being created by other threads.
                     LOG.info("Dynamically creating partition for {}", physicalTablePath);
+                    partitionCreationFailures.remove(physicalTablePath);
                     createPartition(physicalTablePath, partitionKeys);
                 } else {
-                    // if the partition is already in inflightPartitionsToCreate, we should skip
-                    // creating it.
-                    LOG.debug(
-                            "Partition {} is already being created, skipping.", physicalTablePath);
+                    LOG.debug("Partition {} is already being created, waiting.", physicalTablePath);
                 }
             }
+            waitForPartitionMetadata(physicalTablePath);
+        }
+    }
+
+    /**
+     * Polls with backoff until the partition metadata is visible in the client cluster metadata, or
+     * fails when the creation failed or the bounded wait times out.
+     */
+    private void waitForPartitionMetadata(PhysicalTablePath physicalTablePath) {
+        long deadlineNanos = System.nanoTime() + metadataWaitTimeout.toNanos();
+        long backoffMs = 100;
+        while (true) {
+            Throwable creationFailure = partitionCreationFailures.remove(physicalTablePath);
+            if (creationFailure != null) {
+                throw new FlussRuntimeException(
+                        "Failed to dynamically create partition " + physicalTablePath,
+                        creationFailure);
+            }
+            if (metadataUpdater.getPartitionId(physicalTablePath).isPresent()
+                    || forceCheckPartitionExist(physicalTablePath)) {
+                return;
+            }
+            if (System.nanoTime() >= deadlineNanos) {
+                throw new FlussRuntimeException(
+                        String.format(
+                                "Timed out after %s waiting for metadata of partition %s. The "
+                                        + "record is not written; retry once the partition "
+                                        + "metadata is available.",
+                                metadataWaitTimeout, physicalTablePath));
+            }
+            try {
+                Thread.sleep(backoffMs);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new FlussRuntimeException(
+                        "Interrupted while waiting for metadata of partition " + physicalTablePath,
+                        e);
+            }
+            backoffMs = Math.min(backoffMs * 2, 1000);
         }
     }
 
@@ -159,13 +209,13 @@ public class DynamicPartitionCreator {
 
     private void onPartitionCreationSuccess(PhysicalTablePath physicalTablePath) {
         inflightPartitionsToCreate.remove(physicalTablePath);
-        // TODO: trigger to update metadata here when metadataUpdater supports async update
-        // metadataUpdater.checkAndUpdatePartitionMetadata(physicalTablePath);
+        // waiters in waitForPartitionMetadata poll and refresh the metadata themselves.
         LOG.info("Successfully created partition {}", physicalTablePath);
     }
 
     private void onPartitionCreationFailed(
             PhysicalTablePath physicalTablePath, Throwable throwable) {
+        partitionCreationFailures.put(physicalTablePath, stripCompletionException(throwable));
         inflightPartitionsToCreate.remove(physicalTablePath);
         fatalErrorHandler.accept(
                 new FlussRuntimeException(

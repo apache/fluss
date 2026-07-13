@@ -263,6 +263,7 @@ When using SET to modify [Storage Options](engine-flink/options.md#storage-optio
 
 **Supported Options to modify**
 - All [Read Options](engine-flink/options.md#read-options), [Write Options](engine-flink/options.md#write-options), [Lookup Options](engine-flink/options.md#lookup-options) and [Other Options](engine-flink/options.md#other-options) except `bootstrap.servers`.
+- `bucket.num`: Set the target number of buckets. For partitioned tables, the new value applies to newly created partitions; existing partitions retain their original bucket count. Not supported on non-partitioned tables, and among lake-enabled tables only Paimon is supported.
 - The following [Storage Options](engine-flink/options.md#storage-options):
   - `table.datalake.enabled`: Enable or disable lakehouse storage for the table.
   - `table.datalake.historical-partition.enabled`: Enable or disable historical partition lookup.
@@ -272,6 +273,9 @@ When using SET to modify [Storage Options](engine-flink/options.md#storage-optio
   - `table.auto-partition.num-precreate`: Set the number of future partitions to pre-create for auto partitioning.
 
 ```sql title="Flink SQL"
+-- Change the bucket count for a partitioned table (applies to new partitions only)
+ALTER TABLE my_table SET ('bucket.num' = '8');
+
 -- Enable lakehouse storage for the table
 ALTER TABLE my_table SET ('table.datalake.enabled' = 'true');
 

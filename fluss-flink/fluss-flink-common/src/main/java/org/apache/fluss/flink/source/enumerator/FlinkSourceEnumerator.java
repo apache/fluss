@@ -774,7 +774,12 @@ public class FlinkSourceEnumerator
             Set<PartitionInfo> fetchedPartitionInfos, boolean initialDiscovery) {
         final Set<Partition> allNewPartitions =
                 fetchedPartitionInfos.stream()
-                        .map(p -> new Partition(p.getPartitionId(), p.getPartitionName()))
+                        .map(
+                                p ->
+                                        new Partition(
+                                                p.getPartitionId(),
+                                                p.getPartitionName(),
+                                                p.getBucketCount()))
                         .collect(Collectors.toSet());
         final Set<Partition> removedPartitions = new HashSet<>();
 
@@ -865,7 +870,8 @@ public class FlinkSourceEnumerator
                     getLogSplit(
                             partition.getPartitionId(),
                             partition.getPartitionName(),
-                            effectiveOffsetsInitializer));
+                            effectiveOffsetsInitializer,
+                            partition.getBucketCount()));
         }
         return splits;
     }
@@ -1015,17 +1021,19 @@ public class FlinkSourceEnumerator
 
     private List<SourceSplitBase> getLogSplit(
             @Nullable Long partitionId, @Nullable String partitionName) {
-        return getLogSplit(partitionId, partitionName, startingOffsetsInitializer);
+        return getLogSplit(
+                partitionId, partitionName, startingOffsetsInitializer, tableInfo.getNumBuckets());
     }
 
     private List<SourceSplitBase> getLogSplit(
             @Nullable Long partitionId,
             @Nullable String partitionName,
-            OffsetsInitializer effectiveStartingOffsetsInitializer) {
+            OffsetsInitializer effectiveStartingOffsetsInitializer,
+            int bucketCount) {
         // always assume the bucket is from 0 to bucket num
         List<SourceSplitBase> splits = new ArrayList<>();
         List<Integer> bucketsNeedInitOffset = new ArrayList<>();
-        for (int bucketId = 0; bucketId < tableInfo.getNumBuckets(); bucketId++) {
+        for (int bucketId = 0; bucketId < bucketCount; bucketId++) {
             TableBucket tableBucket =
                     new TableBucket(tableInfo.getTableId(), partitionId, bucketId);
             if (ignoreTableBucket(tableBucket)) {
@@ -1618,12 +1626,27 @@ public class FlinkSourceEnumerator
 
     /** A container class to hold the partition id and partition name. */
     private static class Partition {
+        /** Marks comparison-only instances that do not carry a bucket count. */
+        private static final int NO_BUCKET_COUNT = -1;
+
         final long partitionId;
         final String partitionName;
 
+        /**
+         * The actual bucket count of this partition (i.e. bucket.num.actual), already resolved by
+         * {@link PartitionInfo}. It is {@link #NO_BUCKET_COUNT} only for instances created for diff
+         * comparison or removal handling, which never generate splits.
+         */
+        final int bucketCount;
+
         Partition(long partitionId, String partitionName) {
+            this(partitionId, partitionName, NO_BUCKET_COUNT);
+        }
+
+        Partition(long partitionId, String partitionName, int bucketCount) {
             this.partitionId = partitionId;
             this.partitionName = partitionName;
+            this.bucketCount = bucketCount;
         }
 
         public long getPartitionId() {
@@ -1632,6 +1655,16 @@ public class FlinkSourceEnumerator
 
         public String getPartitionName() {
             return partitionName;
+        }
+
+        public int getBucketCount() {
+            checkState(
+                    bucketCount != NO_BUCKET_COUNT,
+                    "Partition %s (id %s) does not carry a bucket count; comparison-only "
+                            + "instances must not be used to generate splits.",
+                    partitionName,
+                    partitionId);
+            return bucketCount;
         }
 
         @Override

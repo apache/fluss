@@ -39,6 +39,7 @@ import org.apache.fluss.rpc.messages.PbValueList;
 import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.messages.PrefixLookupResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.utils.ExponentialBackoff;
 import org.apache.fluss.utils.types.Tuple2;
 
@@ -221,7 +222,7 @@ class LookupSender implements Runnable {
             LookupBatchKey batchKey = new LookupBatchKey(tb, lookup.originalPartitionName());
             lookupByTableId
                     .computeIfAbsent(tableId, k -> new LinkedHashMap<>())
-                    .computeIfAbsent(batchKey, k -> new LookupBatch(batchKey))
+                    .computeIfAbsent(batchKey, k -> new LookupBatch(batchKey, lookup.bucketCount()))
                     .addLookup(lookup);
         }
 
@@ -299,7 +300,7 @@ class LookupSender implements Runnable {
             long tableId = tb.getTableId();
             lookupByTableId
                     .computeIfAbsent(tableId, k -> new HashMap<>())
-                    .computeIfAbsent(tb, k -> new PrefixLookupBatch(tb))
+                    .computeIfAbsent(tb, k -> new PrefixLookupBatch(tb, prefixLookup.bucketCount()))
                     .addLookup(prefixLookup);
         }
 
@@ -563,6 +564,13 @@ class LookupSender implements Runnable {
                                         new TablePartition(tableId, tableBucket.getPartitionId())));
             }
             invalidTableOrPartitions(tableOrPartitions);
+        }
+
+        if (error.error() == Errors.STALE_METADATA) {
+            for (AbstractLookupQuery<?> lookup : lookups) {
+                lookup.future().completeExceptionally(exception);
+            }
+            return;
         }
 
         for (AbstractLookupQuery<?> lookup : lookups) {

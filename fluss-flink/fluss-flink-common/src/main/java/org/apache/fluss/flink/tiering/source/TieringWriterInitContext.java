@@ -24,6 +24,8 @@ import org.apache.fluss.metadata.TablePath;
 
 import javax.annotation.Nullable;
 
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
+
 /** The implementation of {@link WriterInitContext}. */
 public class TieringWriterInitContext implements WriterInitContext {
 
@@ -33,6 +35,7 @@ public class TieringWriterInitContext implements WriterInitContext {
     private final TableInfo tableInfo;
     private final int splitIndex;
     private final long tieringRoundTimestamp;
+    private final int bucketCount;
     @Nullable private final String[] ioTmpDirs;
 
     public TieringWriterInitContext(
@@ -47,7 +50,8 @@ public class TieringWriterInitContext implements WriterInitContext {
                 tableInfo,
                 UNKNOWN_SPLIT_INDEX,
                 UNKNOWN_TIERING_ROUND_TIMESTAMP,
-                (String[]) null);
+                null,
+                null);
     }
 
     public TieringWriterInitContext(
@@ -64,7 +68,8 @@ public class TieringWriterInitContext implements WriterInitContext {
                 tableInfo,
                 splitIndex,
                 tieringRoundTimestamp,
-                (String[]) null);
+                null,
+                null);
     }
 
     public TieringWriterInitContext(
@@ -74,6 +79,7 @@ public class TieringWriterInitContext implements WriterInitContext {
             TableInfo tableInfo,
             int splitIndex,
             long tieringRoundTimestamp,
+            @Nullable Integer partitionBucketCount,
             @Nullable String[] ioTmpDirs) {
         this.tablePath = tablePath;
         this.tableBucket = tableBucket;
@@ -82,6 +88,19 @@ public class TieringWriterInitContext implements WriterInitContext {
         this.splitIndex = splitIndex;
         this.tieringRoundTimestamp = tieringRoundTimestamp;
         this.ioTmpDirs = ioTmpDirs;
+        if (tableBucket.getPartitionId() == null) {
+            this.bucketCount = tableInfo.getNumBuckets();
+        } else {
+            // Writing with a wrong bucket count would silently corrupt the lake table's bucket
+            // layout metadata, so a missing per-partition count must fail here.
+            this.bucketCount =
+                    checkNotNull(
+                            partitionBucketCount,
+                            "No actual bucket count known for partition %s (id %s) of table %s.",
+                            partition,
+                            tableBucket.getPartitionId(),
+                            tablePath);
+        }
     }
 
     @Override
@@ -119,5 +138,10 @@ public class TieringWriterInitContext implements WriterInitContext {
     @Override
     public String[] ioTmpDirs() {
         return ioTmpDirs;
+    }
+
+    @Override
+    public int bucketCount() {
+        return bucketCount;
     }
 }

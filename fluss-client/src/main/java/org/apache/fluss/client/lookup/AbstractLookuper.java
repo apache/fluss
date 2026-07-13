@@ -23,6 +23,7 @@ import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.decode.FixedSchemaDecoder;
 import org.apache.fluss.utils.CopyOnWriteMap;
@@ -73,6 +74,19 @@ abstract class AbstractLookuper implements Lookuper {
                 targetSchemaId,
                 new FixedSchemaDecoder(
                         tableInfo.getTableConfig().getKvFormat(), tableInfo.getSchema()));
+    }
+
+    /**
+     * Resolves the effective bucket count for the target partition: the per-partition bucket count
+     * ({@code bucket.num.actual}) when the cluster metadata has it, falling back to the table-level
+     * bucket count otherwise (non-partitioned tables or partitions created by older versions).
+     */
+    protected int resolvePartitionBucketCount(
+            TablePartition tablePartition, int tableLevelNumBuckets) {
+        return metadataUpdater
+                .getCluster()
+                .getBucketCount(tablePartition)
+                .orElse(tableLevelNumBuckets);
     }
 
     protected void handleLookupResponse(

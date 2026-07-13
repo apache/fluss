@@ -51,6 +51,10 @@ public abstract class WriteBatch {
     private final WriteFormat writeFormat;
     private final int bucketId;
 
+    // The bucket count used to calculate this batch's bucketId; carried into the request
+    // so the TabletServer can validate it against the actual count (STALE_METADATA on mismatch).
+    private int bucketCount;
+
     protected final List<WriteCallback> callbacks = new ArrayList<>();
     private final AtomicReference<FinalState> finalState = new AtomicReference<>(null);
     private final AtomicInteger attempts = new AtomicInteger(0);
@@ -175,6 +179,14 @@ public abstract class WriteBatch {
 
     public int bucketId() {
         return bucketId;
+    }
+
+    public int getBucketCount() {
+        return bucketCount;
+    }
+
+    public void setBucketCount(int bucketCount) {
+        this.bucketCount = bucketCount;
     }
 
     public long tableId() {

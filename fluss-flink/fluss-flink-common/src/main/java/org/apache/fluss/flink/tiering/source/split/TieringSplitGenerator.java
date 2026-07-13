@@ -86,15 +86,9 @@ public class TieringSplitGenerator {
         if (tableInfo.isPartitioned()) {
             List<PartitionInfo> partitionInfos =
                     flussAdmin.listPartitionInfos(tableInfo.getTablePath()).get();
-            Map<Long, String> partitionNameById =
-                    partitionInfos.stream()
-                            .collect(
-                                    Collectors.toMap(
-                                            PartitionInfo::getPartitionId,
-                                            PartitionInfo::getPartitionName));
 
             return generatePartitionTableSplit(
-                    tableInfo, partitionNameById, bucketOffsetsRetriever, lakeSnapshotInfo);
+                    tableInfo, partitionInfos, bucketOffsetsRetriever, lakeSnapshotInfo);
         } else {
             // non-partitioned table
             return generateNonPartitionedTableSplit(
@@ -105,17 +99,18 @@ public class TieringSplitGenerator {
     /** Generates all splits for partitioned table. */
     private List<TieringSplit> generatePartitionTableSplit(
             TableInfo tableInfo,
-            Map<Long, String> partitionNameById,
+            List<PartitionInfo> partitionInfos,
             BucketOffsetsRetriever bucketOffsetsRetriever,
             @Nullable LakeSnapshot lakeSnapshotInfo) {
         List<TieringSplit> splits = new ArrayList<>();
-        for (Map.Entry<Long, String> partitionNameByIdEntry : partitionNameById.entrySet()) {
-            long partitionId = partitionNameByIdEntry.getKey();
-            String partitionName = partitionNameByIdEntry.getValue();
+        for (PartitionInfo partitionInfo : partitionInfos) {
+            long partitionId = partitionInfo.getPartitionId();
+            String partitionName = partitionInfo.getPartitionName();
+            int partitionBucketCount = partitionInfo.getBucketCount();
             Map<Integer, Long> latestBucketsOffset =
                     bucketOffsetsRetriever.latestOffsets(
                             partitionName,
-                            IntStream.range(0, tableInfo.getNumBuckets())
+                            IntStream.range(0, partitionBucketCount)
                                     .boxed()
                                     .collect(Collectors.toList()));
             KvSnapshots latestKvSnapshots = null;
@@ -140,6 +135,7 @@ public class TieringSplitGenerator {
                             tableInfo,
                             partitionId,
                             partitionName,
+                            partitionBucketCount,
                             lakeSnapshotInfo,
                             latestKvSnapshots,
                             latestBucketsOffset));
@@ -172,13 +168,20 @@ public class TieringSplitGenerator {
         }
 
         return generateTableSplit(
-                tableInfo, null, null, lakeSnapshotInfo, latestKvSnapshots, latestBucketsOffset);
+                tableInfo,
+                null,
+                null,
+                tableInfo.getNumBuckets(),
+                lakeSnapshotInfo,
+                latestKvSnapshots,
+                latestBucketsOffset);
     }
 
     private List<TieringSplit> generateTableSplit(
             TableInfo tableInfo,
             @Nullable Long partitionId,
             @Nullable String partitionName,
+            int numBuckets,
             @Nullable LakeSnapshot lakeSnapshotInfo,
             @Nullable KvSnapshots latestKvSnapshots,
             Map<Integer, Long> latestBucketsOffset) {
@@ -187,7 +190,7 @@ public class TieringSplitGenerator {
         if (tableInfo.hasPrimaryKey()) {
             // it's primary key table
             checkState(latestKvSnapshots != null);
-            for (int bucket = 0; bucket < tableInfo.getNumBuckets(); bucket++) {
+            for (int bucket = 0; bucket < numBuckets; bucket++) {
                 TableBucket tableBucket =
                         new TableBucket(tableInfo.getTableId(), partitionId, bucket);
                 Long lastCommittedBucketOffset =
@@ -217,7 +220,7 @@ public class TieringSplitGenerator {
 
         } else {
             // it's log table
-            for (int bucket = 0; bucket < tableInfo.getNumBuckets(); bucket++) {
+            for (int bucket = 0; bucket < numBuckets; bucket++) {
                 TableBucket tableBucket =
                         new TableBucket(tableInfo.getTableId(), partitionId, bucket);
                 Long lastCommittedOffset =

@@ -222,6 +222,18 @@ public class ZooKeeperClient implements AutoCloseable {
         }
     }
 
+    /**
+     * Reads the znode data and captures its {@link Stat} (hence the ZK version) atomically. Used by
+     * compare-and-set callers that must write back with the exact version they read.
+     */
+    private Optional<byte[]> getDataWithStat(String path, Stat stat) throws Exception {
+        try {
+            return Optional.of(zkClient.getData().storingStatIn(stat).forPath(path));
+        } catch (KeeperException.NoNodeException e) {
+            return Optional.empty();
+        }
+    }
+
     public String getDefaultRemoteDataDir() {
         return defaultRemoteDataDir;
     }
@@ -801,6 +813,19 @@ public class ZooKeeperClient implements AutoCloseable {
                 t -> t.remoteDataDir == null ? t.newRemoteDataDir(defaultRemoteDataDir) : t);
     }
 
+    /**
+     * Get the table registration together with the ZK version of its znode, so callers can perform
+     * a compare-and-set write (see {@link #updateTableWithPartitionBucketCountBackfill}).
+     */
+    public Optional<VersionedData<TableRegistration>> getTableWithVersion(TablePath tablePath)
+            throws Exception {
+        Stat stat = new Stat();
+        Optional<byte[]> bytes = getDataWithStat(TableZNode.path(tablePath), stat);
+        return bytes.map(TableZNode::decode)
+                .map(t -> t.remoteDataDir == null ? t.newRemoteDataDir(defaultRemoteDataDir) : t)
+                .map(t -> new VersionedData<>(t, stat.getVersion()));
+    }
+
     /** Get the tables in ZK. */
     public Map<TablePath, TableRegistration> getTables(Collection<TablePath> tablePaths)
             throws Exception {
@@ -1033,6 +1058,91 @@ public class ZooKeeperClient implements AutoCloseable {
                 p -> p.getRemoteDataDir() == null ? p.newRemoteDataDir(defaultRemoteDataDir) : p);
     }
 
+    /**
+     * Get a partition registration together with the ZK version of its znode, so callers can
+     * perform a compare-and-set backfill (see {@link
+     * #updateTableWithPartitionBucketCountBackfill}).
+     */
+    public Optional<VersionedData<PartitionRegistration>> getPartitionWithVersion(
+            TablePath tablePath, String partitionName) throws Exception {
+        String path = PartitionZNode.path(tablePath, partitionName);
+        Stat stat = new Stat();
+        return getDataWithStat(path, stat)
+                .map(PartitionZNode::decode)
+                .map(
+                        p ->
+                                p.getRemoteDataDir() == null
+                                        ? p.newRemoteDataDir(defaultRemoteDataDir)
+                                        : p)
+                .map(p -> new VersionedData<>(p, stat.getVersion()));
+    }
+
+    /**
+     * Overwrites a partition's registration znode without a version check. NOT used in production
+     * (the ALTER bucket.num backfill goes through {@link
+     * #updateTableWithPartitionBucketCountBackfill}); this is a test-only backdoor for constructing
+     * legacy partition znodes, e.g. one with a null per-partition bucket count (v1 data) or a stale
+     * znode version.
+     */
+    @VisibleForTesting
+    public void updatePartitionRegistration(
+            TablePath tablePath, String partitionName, PartitionRegistration registration)
+            throws Exception {
+        String path = PartitionZNode.path(tablePath, partitionName);
+        byte[] data = PartitionZNode.encode(registration);
+        zkClient.setData().forPath(path, data);
+    }
+
+    /**
+     * Updates the table registration and the given partition registrations in one atomic ZooKeeper
+     * transaction. Every {@code setData} is CAS-guarded by its expected ZK version and the whole
+     * transaction is fenced on the coordinator epoch znode ({@link ZkVersion#MATCH_ANY_VERSION}
+     * skips the fence), so a stale snapshot or a deposed coordinator fails with {@link
+     * KeeperException.BadVersionException} instead of committing.
+     *
+     * @param tablePath the table to update
+     * @param tableRegistration the new table-level registration
+     * @param expectedTableZkVersion the expected ZK version of the table znode
+     * @param partitionBackfills partition name -&gt; (updated registration + expected ZK version)
+     * @param expectedCoordinatorEpochZkVersion the coordinator epoch znode version to fence on
+     */
+    public void updateTableWithPartitionBucketCountBackfill(
+            TablePath tablePath,
+            TableRegistration tableRegistration,
+            int expectedTableZkVersion,
+            Map<String, VersionedData<PartitionRegistration>> partitionBackfills,
+            int expectedCoordinatorEpochZkVersion)
+            throws Exception {
+        List<CuratorOp> ops = new ArrayList<>(partitionBackfills.size() + 1);
+        for (Map.Entry<String, VersionedData<PartitionRegistration>> entry :
+                partitionBackfills.entrySet()) {
+            String partitionPath = PartitionZNode.path(tablePath, entry.getKey());
+            byte[] partitionData = PartitionZNode.encode(entry.getValue().data());
+            ops.add(
+                    zkClient.transactionOp()
+                            .setData()
+                            .withVersion(entry.getValue().zkVersion())
+                            .forPath(partitionPath, partitionData));
+        }
+        String tablePathStr = TableZNode.path(tablePath);
+        byte[] tableData = TableZNode.encode(tableRegistration);
+        ops.add(
+                zkClient.transactionOp()
+                        .setData()
+                        .withVersion(expectedTableZkVersion)
+                        .forPath(tablePathStr, tableData));
+
+        List<CuratorOp> fencedOps =
+                wrapRequestsWithEpochCheck(ops, expectedCoordinatorEpochZkVersion);
+        zkClient.transaction().forOperations(fencedOps);
+        LOG.info(
+                "Atomically backfilled bucket count for {} partition(s) and updated table {} in one "
+                        + "transaction (CAS + epoch fence {}).",
+                partitionBackfills.size(),
+                tablePath,
+                expectedCoordinatorEpochZkVersion);
+    }
+
     /** Get partition id and table id for each partition in a batch async way. */
     public Map<PhysicalTablePath, TablePartition> getPartitionIds(
             Collection<PhysicalTablePath> partitionPaths) throws Exception {
@@ -1077,7 +1187,8 @@ public class ZooKeeperClient implements AutoCloseable {
             PartitionAssignment partitionAssignment,
             String remoteDataDir,
             TablePath tablePath,
-            long tableId)
+            long tableId,
+            int bucketCount)
             throws Exception {
         // Merge "registerPartitionAssignment()" and "registerPartition()"
         // into one transaction. This is to avoid the case that the partition assignment is
@@ -1123,7 +1234,7 @@ public class ZooKeeperClient implements AutoCloseable {
                                 metadataPath,
                                 PartitionZNode.encode(
                                         new PartitionRegistration(
-                                                tableId, partitionId, remoteDataDir)));
+                                                tableId, partitionId, remoteDataDir, bucketCount)));
 
         ops.add(tabletServerPartitionNode);
         ops.add(metadataPartitionNode);
@@ -1398,6 +1509,28 @@ public class ZooKeeperClient implements AutoCloseable {
             handle.ifPresent(h -> result.add(new TableBucketAndManifest(tb, h)));
         }
         return result;
+    }
+
+    /**
+     * A decoded znode value together with the ZK version of its znode. Used to carry the version
+     * captured at read time so a later write can compare-and-set against it.
+     */
+    public static final class VersionedData<T> {
+        private final T data;
+        private final int zkVersion;
+
+        public VersionedData(T data, int zkVersion) {
+            this.data = data;
+            this.zkVersion = zkVersion;
+        }
+
+        public T data() {
+            return data;
+        }
+
+        public int zkVersion() {
+            return zkVersion;
+        }
     }
 
     /** Tuple of a table bucket and its current remote log manifest handle. */

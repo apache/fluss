@@ -38,6 +38,7 @@ impl BucketStatsRequest {
         PbTableStatsReqForBucket {
             partition_id: self.partition_id,
             bucket_id: self.bucket_id,
+            bucket_count: None,
         }
     }
 

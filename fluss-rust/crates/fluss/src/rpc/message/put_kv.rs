@@ -51,6 +51,7 @@ impl PutKvRequest {
                 partition_id: ready_batch.table_bucket.partition_id(),
                 bucket_id: ready_batch.table_bucket.bucket_id(),
                 records: ready_batch.write_batch.build()?,
+                bucket_count: None,
             })
         }
 

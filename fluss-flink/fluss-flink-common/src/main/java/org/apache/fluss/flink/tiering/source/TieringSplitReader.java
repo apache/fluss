@@ -19,12 +19,14 @@ package org.apache.fluss.flink.tiering.source;
 
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.Connection;
+import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.scanner.log.ArrowScanRecords;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.scanner.log.LogScannerImpl;
 import org.apache.fluss.client.table.scanner.log.ScanRecords;
+import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.flink.source.reader.BoundedSplitReader;
 import org.apache.fluss.flink.source.reader.RecordAndPos;
 import org.apache.fluss.flink.tiering.source.metrics.TieringMetrics;
@@ -37,6 +39,7 @@ import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.lake.writer.SupportsRecordBatchWrite;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.LogFormat;
+import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -115,6 +118,9 @@ public class TieringSplitReader<WriteResult>
     // map from table bucket to split id
     private final Map<TableBucket, TieringSplit> currentTableSplitsByBucket;
     private final Map<TableBucket, Long> currentTableStoppingOffsets;
+
+    // partition id -> actual bucket count (bucket.num.actual) for the current table's partitions
+    private final Map<Long, Integer> currentTablePartitionBucketCounts = new HashMap<>();
 
     private final Map<TableBucket, LogOffsetAndTimestamp> currentTableTieredOffsetAndTimestamp;
 
@@ -334,6 +340,21 @@ public class TieringSplitReader<WriteResult>
                     currentTableInfo.getTableId(),
                     tablePath,
                     split.getTableBucket().getTableId());
+            // Snapshot each partition's actual bucket count (bucket.num.actual) so lake writers
+            // can stamp per-partition bucket layouts correctly after an ALTER bucket.num.
+            if (currentTableInfo.isPartitioned()) {
+                try {
+                    // the admin is a shared per-connection instance, so it must not be closed here
+                    Admin admin = connection.getAdmin();
+                    for (PartitionInfo partitionInfo : admin.listPartitionInfos(tablePath).get()) {
+                        currentTablePartitionBucketCounts.put(
+                                partitionInfo.getPartitionId(), partitionInfo.getBucketCount());
+                    }
+                } catch (Exception e) {
+                    throw new FlussRuntimeException(
+                            "Failed to list partition infos for table " + tablePath, e);
+                }
+            }
             LOG.info("Start to tier table {} with table id {}.", currentTablePath, currentTableId);
         }
         return currentTable;
@@ -620,6 +641,10 @@ public class TieringSplitReader<WriteResult>
             throws IOException {
         LakeWriter<WriteResult> lakeWriter = lakeWriters.get(bucket);
         if (lakeWriter == null) {
+            Integer partitionBucketCount =
+                    bucket.getPartitionId() != null
+                            ? currentTablePartitionBucketCounts.get(bucket.getPartitionId())
+                            : null;
             lakeWriter =
                     lakeTieringFactory.createLakeWriter(
                             new TieringWriterInitContext(
@@ -629,6 +654,7 @@ public class TieringSplitReader<WriteResult>
                                     currentTable.getTableInfo(),
                                     splitIndex,
                                     tieringRoundTimestamp,
+                                    partitionBucketCount,
                                     ioTmpDirs));
             lakeWriters.put(bucket, lakeWriter);
         }
@@ -782,6 +808,7 @@ public class TieringSplitReader<WriteResult>
         currentTableStoppingOffsets.clear();
         currentTableTieredOffsetAndTimestamp.clear();
         currentTableSplitsByBucket.clear();
+        currentTablePartitionBucketCounts.clear();
     }
 
     /**

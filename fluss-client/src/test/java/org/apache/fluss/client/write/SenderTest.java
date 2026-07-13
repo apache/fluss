@@ -24,6 +24,7 @@ import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
+import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.exception.TimeoutException;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -58,6 +59,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
 import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
@@ -991,6 +993,53 @@ final class SenderTest {
         assertThat(future2.get()).isNull();
     }
 
+    @Test
+    void testStaleMetadataFailsBatchAndInvalidatesBucketAssigner() throws Exception {
+        // Recreate sender with a tracking bucketAssignerInvalidator.
+        IdempotenceManager idempotenceManager = createIdempotenceManager(false);
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE, new MemorySize(TOTAL_MEMORY_SIZE));
+        conf.set(ConfigOptions.CLIENT_WRITER_BATCH_SIZE, new MemorySize(BATCH_SIZE));
+        conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_PAGE_SIZE, new MemorySize(PAGE_SIZE));
+        conf.set(ConfigOptions.CLIENT_WRITER_BATCH_TIMEOUT, Duration.ofMillis(0));
+        accumulator =
+                new RecordAccumulator(
+                        conf, idempotenceManager, writerMetricGroup, SystemClock.getInstance());
+        AtomicReference<TableBucket> invalidatedBucket = new AtomicReference<>();
+        Sender staleSender =
+                new Sender(
+                        accumulator,
+                        REQUEST_TIMEOUT,
+                        MAX_REQUEST_SIZE,
+                        ACKS_ALL,
+                        Integer.MAX_VALUE,
+                        metadataUpdater,
+                        idempotenceManager,
+                        writerMetricGroup,
+                        invalidatedBucket::set);
+
+        // Append one record and send it.
+        CompletableFuture<Exception> future = new CompletableFuture<>();
+        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future.complete(e));
+        staleSender.runOnce();
+        assertThat(staleSender.numOfInFlightBatches(tb1)).isEqualTo(1);
+
+        // Server rejects with STALE_METADATA — the bucketId was computed with a stale count.
+        finishRequest(tb1, 0, createProduceLogResponse(tb1, Errors.STALE_METADATA));
+
+        // The batch is failed (not re-enqueued for retry — the bucketId is stale and must not be
+        // reused).
+        assertThat(staleSender.numOfInFlightBatches(tb1)).isEqualTo(0);
+
+        // The BucketAssigner for this bucket was invalidated so the next send rebuilds it with
+        // the refreshed bucket count.
+        assertThat(invalidatedBucket.get()).isEqualTo(tb1);
+
+        // The write callback receives the StaleMetadataException.
+        Exception exception = future.get();
+        assertThat(exception).isInstanceOf(StaleMetadataException.class);
+    }
+
     private TestingMetadataUpdater initializeMetadataUpdater() {
         Map<TablePath, TableInfo> tableInfos = new HashMap<>();
         tableInfos.put(DATA1_TABLE_PATH, DATA1_TABLE_INFO);
@@ -1123,7 +1172,8 @@ final class SenderTest {
                 reties,
                 metadataUpdater,
                 idempotenceManager,
-                writerMetricGroup);
+                writerMetricGroup,
+                tb -> {});
     }
 
     private IdempotenceManager createIdempotenceManager(boolean idempotenceEnabled) {

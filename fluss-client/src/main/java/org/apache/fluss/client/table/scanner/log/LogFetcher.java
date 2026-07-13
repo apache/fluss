@@ -598,6 +598,16 @@ public class LogFetcher implements Closeable {
                                 .setMaxFetchBytes(maxBucketFetchBytes);
                 if (tb.getPartitionId() != null) {
                     fetchLogReqForBucket.setPartitionId(tb.getPartitionId());
+                    metadataUpdater
+                            .getCluster()
+                            .getBucketCount(
+                                    new TablePartition(tb.getTableId(), tb.getPartitionId()))
+                            .ifPresent(fetchLogReqForBucket::setBucketCount);
+                } else {
+                    metadataUpdater
+                            .getCluster()
+                            .getBucketCountForTable(tb.getTableId())
+                            .ifPresent(fetchLogReqForBucket::setBucketCount);
                 }
                 fetchReqsByLeaderAndTable
                         .computeIfAbsent(leader, k -> new HashMap<>())

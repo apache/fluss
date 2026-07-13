@@ -33,8 +33,10 @@ import org.apache.paimon.catalog.Catalog;
 import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.table.sink.CommitMessage;
 
+import javax.annotation.Nullable;
+
 import java.io.IOException;
-import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -50,10 +52,18 @@ public class PaimonLakeWriter implements LakeWriter<PaimonWriteResult>, Supports
             PaimonCatalogProvider paimonCatalogProvider, WriterInitContext writerInitContext)
             throws IOException {
         this.paimonCatalog = paimonCatalogProvider.get();
+        // Only Fixed Bucket tables (bucket keys non-empty) carry a positive BUCKET in Paimon.
+        // Overriding on an Unaware Bucket table (BUCKET = -1) would change its bucket mode.
+        // The context always resolves the actual bucket count.
+        Integer bucketOverride =
+                !writerInitContext.tableInfo().getBucketKeys().isEmpty()
+                        ? writerInitContext.bucketCount()
+                        : null;
         FileStoreTable fileStoreTable =
                 getTable(
                         writerInitContext.tablePath(),
-                        writerInitContext.tableInfo().getTableConfig().isDataLakeAutoCompaction());
+                        writerInitContext.tableInfo().getTableConfig().isDataLakeAutoCompaction(),
+                        bucketOverride);
 
         List<String> partitionKeys = fileStoreTable.partitionKeys();
         RowType flussRowType = writerInitContext.tableInfo().getRowType();
@@ -128,15 +138,23 @@ public class PaimonLakeWriter implements LakeWriter<PaimonWriteResult>, Supports
         }
     }
 
-    private FileStoreTable getTable(TablePath tablePath, boolean isAutoCompaction)
+    private FileStoreTable getTable(
+            TablePath tablePath, boolean isAutoCompaction, @Nullable Integer bucketOverride)
             throws IOException {
         try {
             FileStoreTable table = (FileStoreTable) paimonCatalog.getTable(toPaimon(tablePath));
-            Map<String, String> compactionOptions =
-                    Collections.singletonMap(
-                            CoreOptions.WRITE_ONLY.key(),
-                            isAutoCompaction ? Boolean.FALSE.toString() : Boolean.TRUE.toString());
-            return table.copy(compactionOptions);
+            if (bucketOverride != null) {
+                // copy(Map) rejects BUCKET as immutable, so swap it in via a schema copy,
+                // which only rebuilds the in-memory table view.
+                Map<String, String> schemaOptions = new HashMap<>(table.schema().options());
+                schemaOptions.put(CoreOptions.BUCKET.key(), String.valueOf(bucketOverride));
+                table = table.copy(table.schema().copy(schemaOptions));
+            }
+            Map<String, String> dynamicOptions = new HashMap<>();
+            dynamicOptions.put(
+                    CoreOptions.WRITE_ONLY.key(),
+                    isAutoCompaction ? Boolean.FALSE.toString() : Boolean.TRUE.toString());
+            return table.copy(dynamicOptions);
         } catch (Exception e) {
             throw new IOException("Failed to get table " + tablePath + " in Paimon.", e);
         }

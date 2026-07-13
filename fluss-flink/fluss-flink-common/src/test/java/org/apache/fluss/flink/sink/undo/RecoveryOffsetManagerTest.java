@@ -91,7 +91,8 @@ public class RecoveryOffsetManagerTest {
 
     private static PartitionInfo createPartitionInfo(long partitionId, String partitionName) {
         ResolvedPartitionSpec spec = ResolvedPartitionSpec.fromPartitionValue("pt", partitionName);
-        return new PartitionInfo(partitionId, spec, DEFAULT_REMOTE_DATA_DIR);
+        // matches the 1-bucket table used by the tests calling this helper
+        return new PartitionInfo(partitionId, spec, DEFAULT_REMOTE_DATA_DIR, 1);
     }
 
     // ==================== FRESH_START Tests ====================
@@ -676,6 +677,116 @@ public class RecoveryOffsetManagerTest {
 
         // Verify: non-Task0 should NOT call deleteProducerOffsets
         assertThat(admin.wasDeleteCalled()).isFalse();
+    }
+
+    @Test
+    void testCheckpointRecoveryEnumeratesPerPartitionBucketCount() throws Exception {
+        // Two partitions with different bucketCount: partition 1 has 2 buckets (old, pre-ALTER),
+        // partition 2 has 4 buckets (new, post-ALTER). If getAllBuckets used the table-level
+        // count for both, the old partition would spuriously enumerate buckets 2/3 or the new
+        // partition would be truncated.
+        long oldPartitionId = 1L;
+        long newPartitionId = 2L;
+        int oldBucketCount = 2;
+        int newBucketCount = 4;
+
+        Map<TableBucket, Long> currentOffsets = new HashMap<>();
+        for (int b = 0; b < oldBucketCount; b++) {
+            currentOffsets.put(new TableBucket(TABLE_ID, oldPartitionId, b), 200L);
+        }
+        for (int b = 0; b < newBucketCount; b++) {
+            currentOffsets.put(new TableBucket(TABLE_ID, newPartitionId, b), 200L);
+        }
+
+        RecoveryTestAdmin admin = new RecoveryTestAdmin(currentOffsets);
+        admin.setPartitions(
+                Arrays.asList(
+                        createPartitionInfoWithBucketCount(oldPartitionId, "old", oldBucketCount),
+                        createPartitionInfoWithBucketCount(newPartitionId, "new", newBucketCount)));
+        // Table-level bucket count is 4 (post-ALTER). Old partition must be enumerated at 2.
+        TableInfo tableInfo = createTableInfo(4, true);
+        RecoveryOffsetManager manager =
+                new RecoveryOffsetManager(
+                        admin, PRODUCER_ID, 0, 1, 10L, 5000L, TABLE_PATH, tableInfo);
+
+        Map<TableBucket, Long> chkOffsets = new HashMap<>();
+        for (Map.Entry<TableBucket, Long> e : currentOffsets.entrySet()) {
+            chkOffsets.put(e.getKey(), 100L);
+        }
+        WriterState state = new WriterState(chkOffsets);
+
+        RecoveryOffsetManager.RecoveryDecision decision =
+                manager.determineRecoveryStrategy(Collections.singleton(state));
+
+        assertThat(decision.getStrategy())
+                .isEqualTo(RecoveryOffsetManager.RecoveryStrategy.CHECKPOINT_RECOVERY);
+        assertThat(decision.getUndoOffsets()).hasSize(oldBucketCount + newBucketCount);
+        for (int b = 0; b < oldBucketCount; b++) {
+            assertThat(decision.getUndoOffsets())
+                    .as("old partition bucket %d must be in decision", b)
+                    .containsKey(new TableBucket(TABLE_ID, oldPartitionId, b));
+        }
+        for (int b = 0; b < newBucketCount; b++) {
+            assertThat(decision.getUndoOffsets())
+                    .as("new partition bucket %d must be in decision", b)
+                    .containsKey(new TableBucket(TABLE_ID, newPartitionId, b));
+        }
+        assertThat(decision.getUndoOffsets())
+                .doesNotContainKey(new TableBucket(TABLE_ID, oldPartitionId, 2))
+                .doesNotContainKey(new TableBucket(TABLE_ID, oldPartitionId, 3));
+    }
+
+    @Test
+    void testProducerOffsetRegistrationUsesPerPartitionBucketCount() throws Exception {
+        // Empty checkpoint on Task0 → registerCurrentOffsets writes ALL buckets it enumerates.
+        // fetchAllBucketOffsets must enumerate each partition using its own bucketCount so the
+        // registered set is exactly the union of per-partition [0, bucketCount) ranges.
+        long oldPartitionId = 1L;
+        long newPartitionId = 2L;
+        int oldBucketCount = 2;
+        int newBucketCount = 4;
+
+        Map<TableBucket, Long> currentOffsets = new HashMap<>();
+        long offset = 100L;
+        for (int b = 0; b < oldBucketCount; b++) {
+            currentOffsets.put(new TableBucket(TABLE_ID, oldPartitionId, b), offset++);
+        }
+        for (int b = 0; b < newBucketCount; b++) {
+            currentOffsets.put(new TableBucket(TABLE_ID, newPartitionId, b), offset++);
+        }
+
+        RecoveryTestAdmin admin = new RecoveryTestAdmin(currentOffsets);
+        admin.setPartitions(
+                Arrays.asList(
+                        createPartitionInfoWithBucketCount(oldPartitionId, "old", oldBucketCount),
+                        createPartitionInfoWithBucketCount(newPartitionId, "new", newBucketCount)));
+        admin.setInitialOffsetsForRegistration(currentOffsets);
+        TableInfo tableInfo = createTableInfo(4, true);
+        RecoveryOffsetManager manager =
+                new RecoveryOffsetManager(
+                        admin, PRODUCER_ID, 0, 1, 10L, 5000L, TABLE_PATH, tableInfo);
+
+        // null recoveredState triggers producer-offset recovery on Task0, which internally calls
+        // fetchAllBucketOffsets to build the registration map.
+        manager.determineRecoveryStrategy(null);
+
+        Map<TableBucket, Long> registered = admin.registeredOffsets;
+        assertThat(registered).hasSize(oldBucketCount + newBucketCount);
+        for (int b = 0; b < oldBucketCount; b++) {
+            assertThat(registered).containsKey(new TableBucket(TABLE_ID, oldPartitionId, b));
+        }
+        for (int b = 0; b < newBucketCount; b++) {
+            assertThat(registered).containsKey(new TableBucket(TABLE_ID, newPartitionId, b));
+        }
+        assertThat(registered)
+                .doesNotContainKey(new TableBucket(TABLE_ID, oldPartitionId, 2))
+                .doesNotContainKey(new TableBucket(TABLE_ID, oldPartitionId, 3));
+    }
+
+    private static PartitionInfo createPartitionInfoWithBucketCount(
+            long partitionId, String partitionName, int bucketCount) {
+        ResolvedPartitionSpec spec = ResolvedPartitionSpec.fromPartitionValue("pt", partitionName);
+        return new PartitionInfo(partitionId, spec, DEFAULT_REMOTE_DATA_DIR, bucketCount);
     }
 
     // ==================== Test Admin Implementation ====================

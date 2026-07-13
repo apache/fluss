@@ -18,11 +18,13 @@
 package org.apache.fluss.client.table.scanner.batch;
 
 import org.apache.fluss.client.metadata.MetadataUpdater;
+import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.record.DefaultValueRecordBatch;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.record.LogRecordBatch;
@@ -97,6 +99,7 @@ public class LimitBatchScanner implements BatchScanner {
             this.fieldGetters[i] = InternalRow.createDeepFieldGetter(rowType.getTypeAt(i), i);
         }
 
+        Cluster cluster = metadataUpdater.getCluster();
         LimitScanRequest limitScanRequest =
                 new LimitScanRequest()
                         .setTableId(tableBucket.getTableId())
@@ -105,7 +108,14 @@ public class LimitBatchScanner implements BatchScanner {
 
         if (tableBucket.getPartitionId() != null) {
             limitScanRequest.setPartitionId(tableBucket.getPartitionId());
+            cluster.getBucketCount(
+                            new TablePartition(
+                                    tableBucket.getTableId(), tableBucket.getPartitionId()))
+                    .ifPresent(limitScanRequest::setBucketCount);
             metadataUpdater.checkAndUpdateMetadata(tableInfo.getTablePath(), tableBucket);
+        } else {
+            cluster.getBucketCountForTable(tableBucket.getTableId())
+                    .ifPresent(limitScanRequest::setBucketCount);
         }
 
         // because that rocksdb is not suitable to projection, thus do it in client.

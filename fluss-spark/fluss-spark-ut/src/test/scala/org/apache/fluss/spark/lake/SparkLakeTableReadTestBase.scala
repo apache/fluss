@@ -17,6 +17,7 @@
 
 package org.apache.fluss.spark.lake
 
+import org.apache.fluss.client.initializer.BucketOffsetsRetrieverImpl
 import org.apache.fluss.config.Configuration
 import org.apache.fluss.flink.tiering.LakeTieringJobBuilder
 import org.apache.fluss.flink.tiering.source.TieringSourceOptions
@@ -80,17 +81,31 @@ abstract class SparkLakeTableReadTestBase extends FlussSparkTestBase {
       .build()
 
     try {
-      // Collect all buckets to wait for sync
+      // Enumerate each partition by its own bucket count (they diverge after ALTER bucket.num)
+      // and wait only on buckets with data — empty buckets never receive a tiering split.
+      val bucketOffsetsRetriever = new BucketOffsetsRetrieverImpl(admin, tablePath)
+
+      def bucketsWithData(partitionName: String, bucketCount: Int): Seq[Int] = {
+        val buckets = (0 until bucketCount).map(Int.box)
+        val offsets = bucketOffsetsRetriever.latestOffsets(partitionName, buckets.asJava)
+        (0 until bucketCount).filter {
+          bucket =>
+            val offset = offsets.get(bucket)
+            offset != null && offset > 0
+        }
+      }
+
       val tableBuckets = if (tableInfo.isPartitioned) {
         val partitionInfos = admin.listPartitionInfos(tablePath).get()
         partitionInfos.asScala.flatMap {
           partitionInfo =>
-            (0 until numBuckets).map {
+            val partitionBuckets = partitionInfo.getBucketCount
+            bucketsWithData(partitionInfo.getPartitionName, partitionBuckets).map {
               bucket => new TableBucket(tableId, partitionInfo.getPartitionId, bucket)
             }
         }.toSet
       } else {
-        (0 until numBuckets).map(bucket => new TableBucket(tableId, bucket)).toSet
+        bucketsWithData(null, numBuckets).map(bucket => new TableBucket(tableId, bucket)).toSet
       }
 
       val deadline = System.currentTimeMillis() + SYNC_TIMEOUT.toMillis

@@ -68,6 +68,7 @@ public final class TableInfo {
 
     private final long createdTime;
     private final long modifiedTime;
+    private final long bucketLayoutEpoch;
 
     private int[] cachedStatsIndexMapping = null;
 
@@ -85,6 +86,38 @@ public final class TableInfo {
             @Nullable String comment,
             long createdTime,
             long modifiedTime) {
+        this(
+                tablePath,
+                tableId,
+                schemaId,
+                schema,
+                bucketKeys,
+                partitionKeys,
+                numBuckets,
+                properties,
+                customProperties,
+                remoteDataDir,
+                comment,
+                createdTime,
+                modifiedTime,
+                0L);
+    }
+
+    public TableInfo(
+            TablePath tablePath,
+            long tableId,
+            int schemaId,
+            Schema schema,
+            List<String> bucketKeys,
+            List<String> partitionKeys,
+            int numBuckets,
+            Configuration properties,
+            Configuration customProperties,
+            @Nullable String remoteDataDir,
+            @Nullable String comment,
+            long createdTime,
+            long modifiedTime,
+            long bucketLayoutEpoch) {
         this.tablePath = tablePath;
         this.tableId = tableId;
         this.schemaId = schemaId;
@@ -102,6 +135,7 @@ public final class TableInfo {
         this.comment = comment;
         this.createdTime = createdTime;
         this.modifiedTime = modifiedTime;
+        this.bucketLayoutEpoch = bucketLayoutEpoch;
     }
 
     /**
@@ -393,6 +427,14 @@ public final class TableInfo {
     }
 
     /**
+     * Returns the bucket layout epoch of the table. New tables start at 0; every committed
+     * bucket.num change increments it (see {@code TableRegistration#newBucketLayout(int)}).
+     */
+    public long getBucketLayoutEpoch() {
+        return bucketLayoutEpoch;
+    }
+
+    /**
      * Converts this table info to a {@link TableDescriptor}.
      *
      * <p>NOTE: It is not recommended to use this method to get metadata of a table, such as bucket
@@ -420,6 +462,30 @@ public final class TableInfo {
             String remoteDataDir,
             long createdTime,
             long modifiedTime) {
+        return of(
+                tablePath,
+                tableId,
+                schemaId,
+                tableDescriptor,
+                remoteDataDir,
+                createdTime,
+                modifiedTime,
+                0L);
+    }
+
+    /**
+     * Creates a {@link TableInfo} from a {@link TableDescriptor} and other metadata, including the
+     * bucket layout epoch.
+     */
+    public static TableInfo of(
+            TablePath tablePath,
+            long tableId,
+            int schemaId,
+            TableDescriptor tableDescriptor,
+            String remoteDataDir,
+            long createdTime,
+            long modifiedTime,
+            long bucketLayoutEpoch) {
         Schema schema = tableDescriptor.getSchema();
         int numBuckets =
                 tableDescriptor
@@ -442,7 +508,8 @@ public final class TableInfo {
                 remoteDataDir,
                 tableDescriptor.getComment().orElse(null),
                 createdTime,
-                modifiedTime);
+                modifiedTime,
+                bucketLayoutEpoch);
     }
 
     @Override
@@ -455,6 +522,7 @@ public final class TableInfo {
         return tableId == that.tableId
                 && schemaId == that.schemaId
                 && numBuckets == that.numBuckets
+                && bucketLayoutEpoch == that.bucketLayoutEpoch
                 && Objects.equals(tablePath, that.tablePath)
                 && Objects.equals(rowType, that.rowType)
                 && Objects.equals(primaryKeys, that.primaryKeys)
@@ -483,7 +551,8 @@ public final class TableInfo {
                 properties,
                 customProperties,
                 remoteDataDir,
-                comment);
+                comment,
+                bucketLayoutEpoch);
     }
 
     @Override
@@ -518,6 +587,8 @@ public final class TableInfo {
                 + createdTime
                 + ", modifiedTime="
                 + modifiedTime
+                + ", bucketLayoutEpoch="
+                + bucketLayoutEpoch
                 + '}';
     }
 

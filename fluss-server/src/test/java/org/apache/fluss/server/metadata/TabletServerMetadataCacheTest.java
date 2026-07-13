@@ -26,11 +26,15 @@ import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import java.util.Arrays;
 import java.util.Collections;
@@ -39,6 +43,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Stream;
 
 import static org.apache.fluss.record.TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
@@ -47,6 +52,7 @@ import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_ID;
+import static org.apache.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_NAME;
 import static org.apache.fluss.server.metadata.TableMetadata.DELETED_TABLE_ID;
 import static org.apache.fluss.server.zk.data.LeaderAndIsr.NO_LEADER;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -319,6 +325,145 @@ public class TabletServerMetadataCacheTest {
                 .hasSameElementsAs(expectedBucketMetadataList);
     }
 
+    @Test
+    void testPartitionBucketCountRemovedOnDelete() {
+        // Seed both partitions with explicit per-partition bucket counts.
+        int explicitBucketCount = 8;
+        serverMetadataCache.updateClusterMetadata(
+                new ClusterMetadata(
+                        coordinatorServer,
+                        aliveTableServers,
+                        tableMetadataList,
+                        Arrays.asList(
+                                new PartitionMetadata(
+                                        partitionTableId,
+                                        partitionName1,
+                                        partitionId1,
+                                        initialBucketMetadata,
+                                        explicitBucketCount),
+                                new PartitionMetadata(
+                                        partitionTableId,
+                                        partitionName2,
+                                        partitionId2,
+                                        initialBucketMetadata,
+                                        explicitBucketCount))));
+        // The explicit count must be exposed via the updateClusterMetadata path (not the
+        // merged bucket-metadata-list size); the delete/re-add asserts below build on this.
+        assertThat(
+                        serverMetadataCache
+                                .getPartitionMetadata(
+                                        PhysicalTablePath.of(partitionedTablePath, partitionName1))
+                                .get()
+                                .getBucketCount())
+                .isEqualTo(explicitBucketCount);
+
+        // Delete partition1 via DELETED_PARTITION_ID (partitionId marks deletion).
+        serverMetadataCache.updateClusterMetadata(
+                new ClusterMetadata(
+                        coordinatorServer,
+                        aliveTableServers,
+                        Collections.emptyList(),
+                        Collections.singletonList(
+                                new PartitionMetadata(
+                                        partitionTableId,
+                                        partitionName1,
+                                        DELETED_PARTITION_ID,
+                                        Collections.emptyList()))));
+        assertThat(
+                        serverMetadataCache.getPartitionMetadata(
+                                PhysicalTablePath.of(partitionedTablePath, partitionName1)))
+                .isEmpty();
+
+        // Re-add partition1 WITHOUT an explicit bucketCount. The cache must NOT return the
+        // stale 8; the DELETED_PARTITION_ID path must have removed the prior entry from the
+        // partitionBucketCounts map so the fallback (bucketMetadataList.size()) applies.
+        serverMetadataCache.updateClusterMetadata(
+                new ClusterMetadata(
+                        coordinatorServer,
+                        aliveTableServers,
+                        Collections.emptyList(),
+                        Collections.singletonList(
+                                new PartitionMetadata(
+                                        partitionTableId,
+                                        partitionName1,
+                                        partitionId1,
+                                        initialBucketMetadata))));
+        assertThat(
+                        serverMetadataCache
+                                .getPartitionMetadata(
+                                        PhysicalTablePath.of(partitionedTablePath, partitionName1))
+                                .get()
+                                .getBucketCount())
+                .isEqualTo(initialBucketMetadata.size());
+
+        // Delete partition2 via DELETED_PARTITION_NAME (partitionName marks deletion).
+        serverMetadataCache.updateClusterMetadata(
+                new ClusterMetadata(
+                        coordinatorServer,
+                        aliveTableServers,
+                        Collections.emptyList(),
+                        Collections.singletonList(
+                                new PartitionMetadata(
+                                        partitionTableId,
+                                        DELETED_PARTITION_NAME,
+                                        partitionId2,
+                                        Collections.emptyList()))));
+        assertThat(
+                        serverMetadataCache.getPartitionMetadata(
+                                PhysicalTablePath.of(partitionedTablePath, partitionName2)))
+                .isEmpty();
+
+        // Re-add partition2 WITHOUT explicit; the DELETED_PARTITION_NAME path must have also
+        // cleared partitionBucketCounts, so fallback (list size) applies rather than stale 8.
+        serverMetadataCache.updateClusterMetadata(
+                new ClusterMetadata(
+                        coordinatorServer,
+                        aliveTableServers,
+                        Collections.emptyList(),
+                        Collections.singletonList(
+                                new PartitionMetadata(
+                                        partitionTableId,
+                                        partitionName2,
+                                        partitionId2,
+                                        initialBucketMetadata))));
+        assertThat(
+                        serverMetadataCache
+                                .getPartitionMetadata(
+                                        PhysicalTablePath.of(partitionedTablePath, partitionName2))
+                                .get()
+                                .getBucketCount())
+                .isEqualTo(initialBucketMetadata.size());
+    }
+
+    @Test
+    void testUpdatePartitionMetadataPropagatesExplicitBucketCount() {
+        // Seed table metadata: updatePartitionMetadata bails out if the tableId is unknown.
+        serverMetadataCache.updateClusterMetadata(
+                new ClusterMetadata(
+                        coordinatorServer,
+                        aliveTableServers,
+                        tableMetadataList,
+                        Collections.emptyList()));
+
+        // Route via the single-partition updatePartitionMetadata path (distinct from
+        // updateClusterMetadata). The explicit bucketCount must be applied to the cache.
+        int explicitBucketCount = 8;
+        serverMetadataCache.updatePartitionMetadata(
+                new PartitionMetadata(
+                        partitionTableId,
+                        partitionName1,
+                        partitionId1,
+                        initialBucketMetadata,
+                        explicitBucketCount));
+        assertThat(
+                        serverMetadataCache
+                                .getPartitionMetadata(
+                                        PhysicalTablePath.of(partitionedTablePath, partitionName1))
+                                .get()
+                                .getBucketCount())
+                .isEqualTo(explicitBucketCount);
+    }
+
     private void assertPartitionMetadataEquals(
             long partitionId,
             long expectedTableId,
@@ -527,6 +672,94 @@ public class TabletServerMetadataCacheTest {
         assertThat(serverMetadataCache.getTableMetadata(partitionedTablePath)).isEmpty();
         assertThat(serverMetadataCache.getPhysicalTablePath(partitionId)).isEmpty();
         assertThat(serverMetadataCache.getPartitionMetadata(partitionPath)).isEmpty();
+    }
+
+    @ParameterizedTest
+    @MethodSource("validateBucketCountCases")
+    void testValidateBucketCount(
+            long epoch, boolean isPartitioned, int requestBucketCount, Errors expectedError) {
+        setupCacheForValidation(epoch, isPartitioned);
+        long tableId = isPartitioned ? partitionTableId : DATA1_TABLE_ID;
+        Long partitionId = isPartitioned ? partitionId1 : null;
+        assertThat(
+                        serverMetadataCache.validateBucketCount(
+                                tableId, partitionId, requestBucketCount))
+                .isEqualTo(expectedError);
+    }
+
+    static Stream<Arguments> validateBucketCountCases() {
+        int nonPartitionedActual = 2; // initialBucketMetadata.size()
+        int partitionedActual = 8; // explicitBucketCount
+        return Stream.of(
+                // epoch=0 (never ALTERed): legacy client allowed, correct/wrong validated normally
+                Arguments.of(0L, false, 0, Errors.NONE),
+                Arguments.of(0L, false, nonPartitionedActual, Errors.NONE),
+                Arguments.of(0L, false, nonPartitionedActual + 1, Errors.STALE_METADATA),
+                Arguments.of(0L, true, 0, Errors.NONE),
+                Arguments.of(0L, true, partitionedActual, Errors.NONE),
+                Arguments.of(0L, true, partitionedActual + 1, Errors.STALE_METADATA),
+                // epoch>0 (ALTERed): legacy client rejected, correct/wrong validated normally
+                Arguments.of(1L, false, 0, Errors.STALE_METADATA),
+                Arguments.of(1L, false, nonPartitionedActual, Errors.NONE),
+                Arguments.of(1L, false, nonPartitionedActual + 1, Errors.STALE_METADATA),
+                Arguments.of(2L, true, 0, Errors.STALE_METADATA),
+                Arguments.of(2L, true, partitionedActual, Errors.NONE),
+                Arguments.of(2L, true, partitionedActual + 1, Errors.STALE_METADATA));
+    }
+
+    private void setupCacheForValidation(long epoch, boolean isPartitioned) {
+        if (isPartitioned) {
+            TableInfo tableInfo =
+                    TableInfo.of(
+                            partitionedTablePath,
+                            partitionTableId,
+                            0,
+                            DATA1_PARTITIONED_TABLE_DESCRIPTOR,
+                            DEFAULT_REMOTE_DATA_DIR,
+                            100L,
+                            100L,
+                            epoch);
+            serverMetadataCache.updateClusterMetadata(
+                    new ClusterMetadata(
+                            coordinatorServer,
+                            aliveTableServers,
+                            Collections.singletonList(
+                                    new TableMetadata(tableInfo, initialBucketMetadata)),
+                            Collections.singletonList(
+                                    new PartitionMetadata(
+                                            partitionTableId,
+                                            partitionName1,
+                                            partitionId1,
+                                            initialBucketMetadata,
+                                            8))));
+        } else {
+            TableInfo tableInfo =
+                    TableInfo.of(
+                            DATA1_TABLE_PATH,
+                            DATA1_TABLE_ID,
+                            1,
+                            DATA1_TABLE_DESCRIPTOR,
+                            DEFAULT_REMOTE_DATA_DIR,
+                            100L,
+                            100L,
+                            epoch);
+            serverMetadataCache.updateClusterMetadata(
+                    new ClusterMetadata(
+                            coordinatorServer,
+                            aliveTableServers,
+                            Collections.singletonList(
+                                    new TableMetadata(tableInfo, initialBucketMetadata)),
+                            Collections.emptyList()));
+        }
+    }
+
+    @Test
+    void testValidateBucketCountBeforeInitialMetadataApplied() {
+        // no updateClusterMetadata called yet → initialMetadataApplied=false
+        assertThat(serverMetadataCache.validateBucketCount(DATA1_TABLE_ID, null, 3))
+                .isEqualTo(Errors.STALE_METADATA);
+        assertThat(serverMetadataCache.validateBucketCount(DATA1_TABLE_ID, null, 0))
+                .isEqualTo(Errors.STALE_METADATA);
     }
 
     private static final class TestingMetadataManager extends MetadataManager {

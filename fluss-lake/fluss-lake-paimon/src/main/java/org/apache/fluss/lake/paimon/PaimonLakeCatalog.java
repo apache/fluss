@@ -28,6 +28,7 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.utils.IOUtils;
 
+import org.apache.paimon.CoreOptions;
 import org.apache.paimon.catalog.Catalog;
 import org.apache.paimon.catalog.CatalogContext;
 import org.apache.paimon.catalog.CatalogFactory;
@@ -44,6 +45,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -62,6 +64,10 @@ public class PaimonLakeCatalog implements LakeCatalog {
 
     private static final Logger LOG = LoggerFactory.getLogger(PaimonLakeCatalog.class);
     private static final String PAIMON_PATH_KEY = "paimon.path";
+
+    /** The Fluss table property carrying a bucket count rescale, see {@link #alterTable}. */
+    private static final String BUCKET_NUM_PROPERTY = "bucket.num";
+
     public static final LinkedHashMap<String, DataType> SYSTEM_COLUMNS = new LinkedHashMap<>();
 
     static {
@@ -115,11 +121,29 @@ public class PaimonLakeCatalog implements LakeCatalog {
     @Override
     public void alterTable(TablePath tablePath, List<TableChange> tableChanges, Context context)
             throws TableNotExistException {
+        // Apply the bucket count rescale separately so the schema-compat branches below cannot
+        // swallow it.
+        Integer newBucketCount = null;
+        List<TableChange> remainingChanges = new ArrayList<>(tableChanges.size());
+        for (TableChange tableChange : tableChanges) {
+            if (tableChange instanceof TableChange.SetOption
+                    && BUCKET_NUM_PROPERTY.equals(((TableChange.SetOption) tableChange).getKey())) {
+                newBucketCount = Integer.parseInt(((TableChange.SetOption) tableChange).getValue());
+            } else {
+                remainingChanges.add(tableChange);
+            }
+        }
+        if (newBucketCount != null) {
+            applyBucketCountChange(tablePath, newBucketCount);
+        }
+        if (remainingChanges.isEmpty()) {
+            return;
+        }
         try {
             Table table = paimonCatalog.getTable(toPaimon(tablePath));
             FileStoreTable fileStoreTable = (FileStoreTable) table;
             List<TableChange> changesToApply =
-                    validateAndFilterPaimonPathChanges(fileStoreTable.location(), tableChanges);
+                    validateAndFilterPaimonPathChanges(fileStoreTable.location(), remainingChanges);
 
             // Avoid creating a new Paimon schema version for a path-only no-op.
             if (changesToApply.isEmpty()) {
@@ -154,7 +178,7 @@ public class PaimonLakeCatalog implements LakeCatalog {
                                         + "rather than applying other table changes: %s.",
                                 currentPaimonSchema,
                                 context.getCurrentTable().getSchema(),
-                                tableChanges));
+                                remainingChanges));
             }
 
             if (!paimonSchemaChanges.isEmpty()) {
@@ -245,6 +269,23 @@ public class PaimonLakeCatalog implements LakeCatalog {
             paimonCatalog.createDatabase(databaseName, true);
         } catch (Catalog.DatabaseAlreadyExistException e) {
             // do nothing, shouldn't throw since ignoreIfExists
+        }
+    }
+
+    private void applyBucketCountChange(TablePath tablePath, int newBucketCount)
+            throws TableNotExistException {
+        // Bypass toPaimonSchemaChanges (which rejects Paimon's own BUCKET key via
+        // PAIMON_UNSETTABLE_OPTIONS) and set BUCKET directly.
+        List<SchemaChange> changes =
+                Collections.singletonList(
+                        SchemaChange.setOption(
+                                CoreOptions.BUCKET.key(), String.valueOf(newBucketCount)));
+        try {
+            paimonCatalog.alterTable(toPaimon(tablePath), changes, false);
+        } catch (Catalog.TableNotExistException e) {
+            throw new TableNotExistException("Table " + tablePath + " does not exist.");
+        } catch (Catalog.ColumnAlreadyExistException | Catalog.ColumnNotExistException e) {
+            throw new InvalidAlterTableException(e.getMessage(), e);
         }
     }
 

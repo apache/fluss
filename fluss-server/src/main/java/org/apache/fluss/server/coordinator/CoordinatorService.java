@@ -58,6 +58,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.AcquireKvSnapshotLeaseRequest;
@@ -206,6 +207,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.locks.Lock;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
@@ -249,6 +251,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     private final boolean kvTableAllowCreation;
     private final Supplier<EventManager> eventManagerSupplier;
     private final Supplier<Integer> coordinatorEpochSupplier;
+    private final Supplier<Integer> coordinatorEpochZkVersionSupplier;
     private final CoordinatorMetadataCache metadataCache;
 
     private final Supplier<CompletedSnapshotStoreManager> snapshotStoreManagerSupplier;
@@ -294,6 +297,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 () -> coordinatorEventProcessorSupplier.get().getCoordinatorEventManager();
         this.coordinatorEpochSupplier =
                 () -> coordinatorEventProcessorSupplier.get().getCoordinatorEpoch();
+        this.coordinatorEpochZkVersionSupplier =
+                () -> coordinatorEventProcessorSupplier.get().getCoordinatorZkVersion();
         this.snapshotStoreManagerSupplier =
                 () -> coordinatorEventProcessorSupplier.get().completedSnapshotStoreManager();
         this.lakeTableTieringManager = lakeTableTieringManager;
@@ -596,7 +601,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                     request.isIgnoreIfNotExists(),
                     currentSession().getPrincipal(),
                     this::beforeTablePropertiesUpdate,
-                    this::afterTablePropertiesUpdate);
+                    this::afterTablePropertiesUpdate,
+                    coordinatorEpochZkVersionSupplier.get());
         }
 
         return CompletableFuture.completedFuture(new AlterTableResponse());
@@ -635,9 +641,9 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             TablePath tablePath, long tableId, TableDescriptor tableDescriptor) {
         int replicaFactor = tableDescriptor.getReplicationFactor();
         TabletServerInfo[] servers = metadataCache.getLiveServers();
+        int bucketCount = getBucketCount(tableDescriptor);
         Map<Integer, BucketAssignment> bucketAssignments =
-                generateAssignment(getBucketCount(tableDescriptor), replicaFactor, servers)
-                        .getBucketAssignments();
+                generateAssignment(bucketCount, replicaFactor, servers).getBucketAssignments();
         PartitionAssignment partitionAssignment =
                 new PartitionAssignment(tableId, bucketAssignments);
         String remoteDataDir = remoteDirDynamicLoader.getRemoteDirSelector().nextDataDir();
@@ -648,7 +654,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 remoteDataDir,
                 partitionAssignment,
                 historicalPartitionSpec(tableDescriptor),
-                true);
+                true,
+                bucketCount);
     }
 
     private static ResolvedPartitionSpec historicalPartitionSpec(TableDescriptor tableDescriptor) {
@@ -863,55 +870,66 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         authorizeTable(OperationType.WRITE, tablePath);
 
         CreatePartitionResponse response = new CreatePartitionResponse();
-        TableInfo tableInfo = metadataManager.getTable(tablePath);
-        if (!tableInfo.isPartitioned()) {
-            throw new TableNotPartitionedException(
-                    "Only partitioned table support create partition.");
+        // Take the per-table read lock so reading the table-level bucket.num and registering the
+        // new partition cannot overlap a concurrent ALTER bucket.num (which takes the write lock).
+        // Concurrent partition creations still run in parallel under the shared read lock.
+        Lock readLock = metadataManager.getBucketRescaleLock(tablePath).readLock();
+        readLock.lock();
+        try {
+            TableInfo tableInfo = metadataManager.getTable(tablePath);
+            if (!tableInfo.isPartitioned()) {
+                throw new TableNotPartitionedException(
+                        "Only partitioned table support create partition.");
+            }
+
+            // first, validate the partition spec, and get resolved partition spec.
+            PartitionSpec partitionSpec = getPartitionSpec(request.getPartitionSpec());
+            validatePartitionSpec(tablePath, tableInfo.getPartitionKeys(), partitionSpec, true);
+
+            // second, check whether the partition is out-of-date.
+            validateAutoPartitionTime(
+                    partitionSpec,
+                    tableInfo.getPartitionKeys(),
+                    tableInfo.getTableConfig().getAutoPartitionStrategy());
+
+            ResolvedPartitionSpec partitionToCreate =
+                    ResolvedPartitionSpec.fromPartitionSpec(
+                            tableInfo.getPartitionKeys(), partitionSpec);
+            if (request.isIgnoreIfNotExists()
+                    && metadataManager
+                            .getOptionalPartitionRegistration(
+                                    tablePath, partitionToCreate.getPartitionName())
+                            .isPresent()) {
+                return CompletableFuture.completedFuture(response);
+            }
+
+            long newKvLeaderReplicaCount =
+                    tableInfo.hasPrimaryKey() ? tableInfo.getNumBuckets() : 0;
+            replicaCapacityController.checkCanCreateKvLeaderReplicas(newKvLeaderReplicaCount);
+
+            // third, generate the PartitionAssignment.
+            int replicaFactor = tableInfo.getTableConfig().getReplicationFactor();
+            TabletServerInfo[] servers = metadataCache.getLiveServers();
+            Map<Integer, BucketAssignment> bucketAssignments =
+                    generateAssignment(tableInfo.getNumBuckets(), replicaFactor, servers)
+                            .getBucketAssignments();
+            PartitionAssignment partitionAssignment =
+                    new PartitionAssignment(tableInfo.getTableId(), bucketAssignments);
+
+            // select remote data dir for partition
+            String remoteDataDir = remoteDirDynamicLoader.getRemoteDirSelector().nextDataDir();
+
+            metadataManager.createPartition(
+                    tablePath,
+                    tableInfo.getTableId(),
+                    remoteDataDir,
+                    partitionAssignment,
+                    partitionToCreate,
+                    request.isIgnoreIfNotExists(),
+                    tableInfo.getNumBuckets());
+        } finally {
+            readLock.unlock();
         }
-
-        // first, validate the partition spec, and get resolved partition spec.
-        PartitionSpec partitionSpec = getPartitionSpec(request.getPartitionSpec());
-        validatePartitionSpec(tablePath, tableInfo.getPartitionKeys(), partitionSpec, true);
-
-        // second, check whether the partition is out-of-date.
-        validateAutoPartitionTime(
-                partitionSpec,
-                tableInfo.getPartitionKeys(),
-                tableInfo.getTableConfig().getAutoPartitionStrategy());
-
-        ResolvedPartitionSpec partitionToCreate =
-                ResolvedPartitionSpec.fromPartitionSpec(
-                        tableInfo.getPartitionKeys(), partitionSpec);
-        if (request.isIgnoreIfNotExists()
-                && metadataManager
-                        .getOptionalPartitionRegistration(
-                                tablePath, partitionToCreate.getPartitionName())
-                        .isPresent()) {
-            return CompletableFuture.completedFuture(response);
-        }
-
-        long newKvLeaderReplicaCount = tableInfo.hasPrimaryKey() ? tableInfo.getNumBuckets() : 0;
-        replicaCapacityController.checkCanCreateKvLeaderReplicas(newKvLeaderReplicaCount);
-
-        // third, generate the PartitionAssignment.
-        int replicaFactor = tableInfo.getTableConfig().getReplicationFactor();
-        TabletServerInfo[] servers = metadataCache.getLiveServers();
-        Map<Integer, BucketAssignment> bucketAssignments =
-                generateAssignment(tableInfo.getNumBuckets(), replicaFactor, servers)
-                        .getBucketAssignments();
-        PartitionAssignment partitionAssignment =
-                new PartitionAssignment(tableInfo.getTableId(), bucketAssignments);
-
-        // select remote data dir for partition
-        String remoteDataDir = remoteDirDynamicLoader.getRemoteDirSelector().nextDataDir();
-
-        metadataManager.createPartition(
-                tablePath,
-                tableInfo.getTableId(),
-                remoteDataDir,
-                partitionAssignment,
-                partitionToCreate,
-                request.isIgnoreIfNotExists());
         return CompletableFuture.completedFuture(response);
     }
 
@@ -921,25 +939,36 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         authorizeTable(OperationType.WRITE, tablePath);
 
         DropPartitionResponse response = new DropPartitionResponse();
-        TableRegistration table = metadataManager.getTableRegistration(tablePath);
-        if (!table.isPartitioned()) {
-            throw new TableNotPartitionedException(
-                    "Only partitioned table support drop partition.");
+        // Take the read lock so a concurrent drop cannot overlap ALTER bucket.num
+        // (write lock) and cause its backfill to observe a vanished partition,
+        // which would spuriously fail the ALTER.
+        Lock readLock = metadataManager.getBucketRescaleLock(tablePath).readLock();
+        readLock.lock();
+        try {
+            TableRegistration table = metadataManager.getTableRegistration(tablePath);
+            if (!table.isPartitioned()) {
+                throw new TableNotPartitionedException(
+                        "Only partitioned table support drop partition.");
+            }
+
+            // first, validate the partition spec.
+            PartitionSpec partitionSpec = getPartitionSpec(request.getPartitionSpec());
+            validatePartitionSpec(tablePath, table.partitionKeys, partitionSpec, false);
+            ResolvedPartitionSpec partitionToDrop =
+                    ResolvedPartitionSpec.fromPartitionSpec(table.partitionKeys, partitionSpec);
+            if (table.getTableConfig().isHistoricalPartitionEnabled()
+                    && HISTORICAL_PARTITION_VALUE.equals(partitionToDrop.getPartitionName())) {
+                throw new InvalidPartitionException(
+                        "Historical system partition is managed by the coordinator and cannot be "
+                                + "dropped manually.");
+            }
+
+            metadataManager.dropPartition(
+                    tablePath, partitionToDrop, request.isIgnoreIfNotExists());
+        } finally {
+            readLock.unlock();
         }
 
-        // first, validate the partition spec.
-        PartitionSpec partitionSpec = getPartitionSpec(request.getPartitionSpec());
-        validatePartitionSpec(tablePath, table.partitionKeys, partitionSpec, false);
-        ResolvedPartitionSpec partitionToDrop =
-                ResolvedPartitionSpec.fromPartitionSpec(table.partitionKeys, partitionSpec);
-        if (table.getTableConfig().isHistoricalPartitionEnabled()
-                && HISTORICAL_PARTITION_VALUE.equals(partitionToDrop.getPartitionName())) {
-            throw new InvalidPartitionException(
-                    "Historical system partition is managed by the coordinator and cannot be "
-                            + "dropped manually.");
-        }
-
-        metadataManager.dropPartition(tablePath, partitionToDrop, request.isIgnoreIfNotExists());
         return CompletableFuture.completedFuture(response);
     }
 
@@ -1047,6 +1076,17 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         AccessContextEvent<Integer> event =
                 new AccessContextEvent<>(
                         ctx -> {
+                            if (partitionId != null) {
+                                // for partitions, the table-level bucket count may differ from
+                                // the partition's actual bucket count (bucket.num.actual) after
+                                // ALTER bucket.num; use the partition assignment size instead
+                                Map<Integer, List<Integer>> partitionAssignment =
+                                        ctx.getPartitionAssignment(
+                                                new TablePartition(tableId, partitionId));
+                                return partitionAssignment.isEmpty()
+                                        ? null
+                                        : partitionAssignment.size();
+                            }
                             TablePath tablePath = ctx.getTablePathById(tableId);
                             if (tablePath != null) {
                                 TableInfo tableInfo = ctx.getTableInfoById(tableId);
