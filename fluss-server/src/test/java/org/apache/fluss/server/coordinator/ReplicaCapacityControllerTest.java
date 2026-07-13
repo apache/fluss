@@ -23,7 +23,6 @@ import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
-import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.exception.DatabaseNotExistException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InsufficientKvLeaderReplicaCapacityException;
@@ -34,9 +33,13 @@ import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.metrics.Gauge;
+import org.apache.fluss.metrics.MetricNames;
+import org.apache.fluss.metrics.registry.NOPMetricRegistry;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.metadata.TabletServerResource;
+import org.apache.fluss.server.metrics.group.CoordinatorMetricGroup;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
@@ -62,8 +65,8 @@ import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** Test for {@link KvLeaderReplicaCapacityManager}. */
-class KvLeaderReplicaCapacityManagerTest {
+/** Test for {@link ReplicaCapacityController}. */
+class ReplicaCapacityControllerTest {
 
     @RegisterExtension
     public static final AllCallbackWrapper<ZooKeeperExtension> ZOO_KEEPER_EXTENSION_WRAPPER =
@@ -97,10 +100,37 @@ class KvLeaderReplicaCapacityManagerTest {
                                 tabletServer(3, 10000L))),
                 Collections.singletonMap(3, ServerTag.PERMANENT_OFFLINE));
 
-        KvLeaderReplicaCapacityManager manager =
-                new KvLeaderReplicaCapacityManager(configWithMemoryReserved(10), metadataCache);
+        ReplicaCapacityController controller =
+                new ReplicaCapacityController(configWithMemoryReserved(10), metadataCache);
 
-        assertThat(manager.getKvLeaderReplicaCapacity()).isEqualTo(30);
+        assertThat(controller.getKvLeaderReplicaCapacity()).isEqualTo(30);
+    }
+
+    @Test
+    void testRegistersKvLeaderReplicaMetrics() {
+        CoordinatorMetadataCache metadataCache = new CoordinatorMetadataCache();
+        metadataCache.updateMetadata(
+                null,
+                new HashSet<>(Arrays.asList(tabletServer(0, 100L), tabletServer(1, 100L))),
+                Collections.emptyMap());
+        CoordinatorMetricGroup metricGroup =
+                new CoordinatorMetricGroup(NOPMetricRegistry.INSTANCE, "cluster", "localhost", "0");
+
+        try {
+            ReplicaCapacityController controller =
+                    new ReplicaCapacityController(
+                            configWithMemoryReserved(10), metadataCache, metricGroup);
+            controller.checkAndIncreaseKvLeaderReplicaCount(3);
+
+            Gauge<?> countGauge =
+                    (Gauge<?>) metricGroup.getMetrics().get(MetricNames.KV_LEADER_REPLICA_COUNT);
+            Gauge<?> capacityGauge =
+                    (Gauge<?>) metricGroup.getMetrics().get(MetricNames.KV_LEADER_REPLICA_CAPACITY);
+            assertThat(countGauge.getValue()).isEqualTo(3L);
+            assertThat(capacityGauge.getValue()).isEqualTo(20L);
+        } finally {
+            metricGroup.close();
+        }
     }
 
     @Test
@@ -115,15 +145,32 @@ class KvLeaderReplicaCapacityManagerTest {
                                 unknownMemoryTabletServer(2))),
                 Collections.emptyMap());
 
-        KvLeaderReplicaCapacityManager manager =
-                new KvLeaderReplicaCapacityManager(configWithMemoryReserved(10), metadataCache);
+        ReplicaCapacityController controller =
+                new ReplicaCapacityController(configWithMemoryReserved(10), metadataCache);
 
-        assertThat(manager.getKvLeaderReplicaCapacity())
-                .isEqualTo(KvLeaderReplicaCapacityManager.CAPACITY_LIMIT_DISABLED);
+        assertThat(controller.getKvLeaderReplicaCapacity())
+                .isEqualTo(ReplicaCapacityController.CAPACITY_LIMIT_DISABLED);
     }
 
     @Test
-    void testCheckAndIncreaseAndDecrease() {
+    void testZeroMemoryReservedDisablesCapacityControl() {
+        CoordinatorMetadataCache metadataCache = new CoordinatorMetadataCache();
+        metadataCache.updateMetadata(
+                null,
+                new HashSet<>(Arrays.asList(tabletServer(0, 100L), tabletServer(1, 100L))),
+                Collections.emptyMap());
+
+        ReplicaCapacityController controller =
+                new ReplicaCapacityController(configWithMemoryReserved(0), metadataCache);
+
+        assertThat(controller.getKvLeaderReplicaCapacity())
+                .isEqualTo(ReplicaCapacityController.CAPACITY_LIMIT_DISABLED);
+        controller.checkAndIncreaseKvLeaderReplicaCount(201);
+        assertThat(controller.getKvLeaderReplicaCount()).isEqualTo(201);
+    }
+
+    @Test
+    void testCheckAndIncreaseAndDecreaseKvLeaderReplicaCount() {
         CoordinatorMetadataCache metadataCache = new CoordinatorMetadataCache();
         metadataCache.updateMetadata(
                 null,
@@ -134,21 +181,21 @@ class KvLeaderReplicaCapacityManagerTest {
                                 unknownMemoryTabletServer(2))),
                 Collections.emptyMap());
 
-        KvLeaderReplicaCapacityManager manager =
-                new KvLeaderReplicaCapacityManager(configWithMemoryReserved(10), metadataCache);
-        manager.checkAndIncrease(20);
+        ReplicaCapacityController controller =
+                new ReplicaCapacityController(configWithMemoryReserved(10), metadataCache);
+        controller.checkAndIncreaseKvLeaderReplicaCount(20);
 
-        assertThat(manager.getKvLeaderReplicaCount()).isEqualTo(20);
-        assertThatThrownBy(() -> manager.checkAndIncrease(11))
+        assertThat(controller.getKvLeaderReplicaCount()).isEqualTo(20);
+        assertThatThrownBy(() -> controller.checkAndIncreaseKvLeaderReplicaCount(11))
                 .isInstanceOf(InsufficientKvLeaderReplicaCapacityException.class)
                 .hasMessageContaining("currentKvLeaderReplicaCount=20")
                 .hasMessageContaining("newKvLeaderReplicaCount=11")
                 .hasMessageContaining("kvLeaderReplicaCapacity=30");
-        assertThat(manager.getKvLeaderReplicaCount()).isEqualTo(20);
+        assertThat(controller.getKvLeaderReplicaCount()).isEqualTo(20);
 
-        manager.decrease(5);
+        controller.decreaseKvLeaderReplicaCount(5);
 
-        assertThat(manager.getKvLeaderReplicaCount()).isEqualTo(15);
+        assertThat(controller.getKvLeaderReplicaCount()).isEqualTo(15);
     }
 
     @Test
@@ -158,18 +205,23 @@ class KvLeaderReplicaCapacityManagerTest {
                 null,
                 new HashSet<>(Arrays.asList(tabletServer(0, 100L), tabletServer(1, 100L))),
                 Collections.emptyMap());
-        KvLeaderReplicaCapacityManager manager =
-                new KvLeaderReplicaCapacityManager(configWithMemoryReserved(10), metadataCache);
+        ReplicaCapacityController controller =
+                new ReplicaCapacityController(configWithMemoryReserved(10), metadataCache);
 
-        manager.reconfigure(configWithMemoryReserved(20));
+        controller.reconfigure(configWithMemoryReserved(20));
 
-        assertThat(manager.getLeaderReplicaMemoryReservedBytes()).isEqualTo(20);
-        assertThat(manager.getKvLeaderReplicaCapacity()).isEqualTo(10);
+        assertThat(controller.getKvLeaderReplicaMemoryReservedBytes()).isEqualTo(20);
+        assertThat(controller.getKvLeaderReplicaCapacity()).isEqualTo(10);
 
-        Configuration invalidConfig = configWithMemoryReserved(0);
-        assertThatThrownBy(() -> manager.validate(invalidConfig))
-                .isInstanceOf(ConfigException.class)
-                .hasMessageContaining(ConfigOptions.KV_LEADER_REPLICA_MEMORY_RESERVED.key());
+        Configuration disabledConfig = configWithMemoryReserved(0);
+        controller.validate(disabledConfig);
+        controller.reconfigure(disabledConfig);
+        assertThat(controller.getKvLeaderReplicaMemoryReservedBytes()).isZero();
+        assertThat(controller.getKvLeaderReplicaCapacity())
+                .isEqualTo(ReplicaCapacityController.CAPACITY_LIMIT_DISABLED);
+
+        controller.reconfigure(configWithMemoryReserved(10));
+        assertThat(controller.getKvLeaderReplicaCapacity()).isEqualTo(20);
     }
 
     @Test
@@ -210,13 +262,13 @@ class KvLeaderReplicaCapacityManagerTest {
                         Collections.singletonList("dt"), "20260708"),
                 false);
 
-        KvLeaderReplicaCapacityManager manager =
-                new KvLeaderReplicaCapacityManager(
+        ReplicaCapacityController controller =
+                new ReplicaCapacityController(
                         configWithMemoryReserved(1), new CoordinatorMetadataCache());
 
-        manager.rebuildCurrentCount(metadataManager);
+        controller.rebuildCurrentKvLeaderReplicaCount(metadataManager);
 
-        assertThat(manager.getKvLeaderReplicaCount()).isEqualTo(11);
+        assertThat(controller.getKvLeaderReplicaCount()).isEqualTo(11);
     }
 
     @Test
@@ -229,14 +281,14 @@ class KvLeaderReplicaCapacityManagerTest {
                                 new DatabaseNotExistException(
                                         "Database dropped_db does not exist."),
                                 false);
-        KvLeaderReplicaCapacityManager manager =
-                new KvLeaderReplicaCapacityManager(
+        ReplicaCapacityController controller =
+                new ReplicaCapacityController(
                         configWithMemoryReserved(1), new CoordinatorMetadataCache());
-        manager.checkAndIncrease(5);
+        controller.checkAndIncreaseKvLeaderReplicaCount(5);
 
-        manager.rebuildCurrentCount(metadataManager);
+        controller.rebuildCurrentKvLeaderReplicaCount(metadataManager);
 
-        assertThat(manager.getKvLeaderReplicaCount()).isEqualTo(0);
+        assertThat(controller.getKvLeaderReplicaCount()).isEqualTo(0);
     }
 
     @Test
@@ -249,14 +301,14 @@ class KvLeaderReplicaCapacityManagerTest {
                                 new FlussRuntimeException(
                                         "Fail to list tables for database:dropped_db"),
                                 false);
-        KvLeaderReplicaCapacityManager manager =
-                new KvLeaderReplicaCapacityManager(
+        ReplicaCapacityController controller =
+                new ReplicaCapacityController(
                         configWithMemoryReserved(1), new CoordinatorMetadataCache());
-        manager.checkAndIncrease(5);
+        controller.checkAndIncreaseKvLeaderReplicaCount(5);
 
-        manager.rebuildCurrentCount(metadataManager);
+        controller.rebuildCurrentKvLeaderReplicaCount(metadataManager);
 
-        assertThat(manager.getKvLeaderReplicaCount()).isEqualTo(0);
+        assertThat(controller.getKvLeaderReplicaCount()).isEqualTo(0);
     }
 
     @Test
@@ -268,11 +320,11 @@ class KvLeaderReplicaCapacityManagerTest {
                                 "db",
                                 new FlussRuntimeException("Fail to list tables for database:db"),
                                 true);
-        KvLeaderReplicaCapacityManager manager =
-                new KvLeaderReplicaCapacityManager(
+        ReplicaCapacityController controller =
+                new ReplicaCapacityController(
                         configWithMemoryReserved(1), new CoordinatorMetadataCache());
 
-        assertThatThrownBy(() -> manager.rebuildCurrentCount(metadataManager))
+        assertThatThrownBy(() -> controller.rebuildCurrentKvLeaderReplicaCount(metadataManager))
                 .isInstanceOf(FlussRuntimeException.class)
                 .hasMessageContaining("Fail to list tables for database:db");
     }
@@ -289,14 +341,14 @@ class KvLeaderReplicaCapacityManagerTest {
                                 new TableNotExistException(
                                         "Table 'db.dropped_table' does not exist."),
                                 false);
-        KvLeaderReplicaCapacityManager manager =
-                new KvLeaderReplicaCapacityManager(
+        ReplicaCapacityController controller =
+                new ReplicaCapacityController(
                         configWithMemoryReserved(1), new CoordinatorMetadataCache());
-        manager.checkAndIncrease(5);
+        controller.checkAndIncreaseKvLeaderReplicaCount(5);
 
-        manager.rebuildCurrentCount(metadataManager);
+        controller.rebuildCurrentKvLeaderReplicaCount(metadataManager);
 
-        assertThat(manager.getKvLeaderReplicaCount()).isEqualTo(0);
+        assertThat(controller.getKvLeaderReplicaCount()).isEqualTo(0);
     }
 
     @Test
@@ -311,14 +363,14 @@ class KvLeaderReplicaCapacityManagerTest {
                                 new FlussRuntimeException(
                                         "Failed to get table 'db.dropped_table'."),
                                 false);
-        KvLeaderReplicaCapacityManager manager =
-                new KvLeaderReplicaCapacityManager(
+        ReplicaCapacityController controller =
+                new ReplicaCapacityController(
                         configWithMemoryReserved(1), new CoordinatorMetadataCache());
-        manager.checkAndIncrease(5);
+        controller.checkAndIncreaseKvLeaderReplicaCount(5);
 
-        manager.rebuildCurrentCount(metadataManager);
+        controller.rebuildCurrentKvLeaderReplicaCount(metadataManager);
 
-        assertThat(manager.getKvLeaderReplicaCount()).isEqualTo(0);
+        assertThat(controller.getKvLeaderReplicaCount()).isEqualTo(0);
     }
 
     @Test
@@ -332,11 +384,11 @@ class KvLeaderReplicaCapacityManagerTest {
                                 tablePath,
                                 new FlussRuntimeException("Failed to get table 'db.table'."),
                                 true);
-        KvLeaderReplicaCapacityManager manager =
-                new KvLeaderReplicaCapacityManager(
+        ReplicaCapacityController controller =
+                new ReplicaCapacityController(
                         configWithMemoryReserved(1), new CoordinatorMetadataCache());
 
-        assertThatThrownBy(() -> manager.rebuildCurrentCount(metadataManager))
+        assertThatThrownBy(() -> controller.rebuildCurrentKvLeaderReplicaCount(metadataManager))
                 .isInstanceOf(FlussRuntimeException.class)
                 .hasMessageContaining("Failed to get table 'db.table'.");
     }
@@ -358,14 +410,14 @@ class KvLeaderReplicaCapacityManagerTest {
                         .withGetPartitionsFailure(
                                 droppedTablePath,
                                 new FlussRuntimeException("Failed to get partitions."));
-        KvLeaderReplicaCapacityManager manager =
-                new KvLeaderReplicaCapacityManager(
+        ReplicaCapacityController controller =
+                new ReplicaCapacityController(
                         configWithMemoryReserved(1), new CoordinatorMetadataCache());
-        manager.checkAndIncrease(5);
+        controller.checkAndIncreaseKvLeaderReplicaCount(5);
 
-        manager.rebuildCurrentCount(metadataManager);
+        controller.rebuildCurrentKvLeaderReplicaCount(metadataManager);
 
-        assertThat(manager.getKvLeaderReplicaCount()).isEqualTo(0);
+        assertThat(controller.getKvLeaderReplicaCount()).isEqualTo(0);
     }
 
     @Test
@@ -384,11 +436,11 @@ class KvLeaderReplicaCapacityManagerTest {
                                 true)
                         .withGetPartitionsFailure(
                                 tablePath, new FlussRuntimeException("Failed to get partitions."));
-        KvLeaderReplicaCapacityManager manager =
-                new KvLeaderReplicaCapacityManager(
+        ReplicaCapacityController controller =
+                new ReplicaCapacityController(
                         configWithMemoryReserved(1), new CoordinatorMetadataCache());
 
-        assertThatThrownBy(() -> manager.rebuildCurrentCount(metadataManager))
+        assertThatThrownBy(() -> controller.rebuildCurrentKvLeaderReplicaCount(metadataManager))
                 .isInstanceOf(FlussRuntimeException.class)
                 .hasMessageContaining("Failed to get partitions.");
     }

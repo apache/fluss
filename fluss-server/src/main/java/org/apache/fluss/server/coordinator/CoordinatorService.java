@@ -257,7 +257,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     private final KvSnapshotLeaseManager kvSnapshotLeaseManager;
     private final CoordinatorLeaderElection coordinatorLeaderElection;
     private final RemoteDirDynamicLoader remoteDirDynamicLoader;
-    private final KvLeaderReplicaCapacityManager kvLeaderReplicaCapacityManager;
+    private final ReplicaCapacityController replicaCapacityController;
 
     public CoordinatorService(
             Configuration conf,
@@ -274,7 +274,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             ExecutorService ioExecutor,
             KvSnapshotLeaseManager kvSnapshotLeaseManager,
             CoordinatorLeaderElection coordinatorLeaderElection,
-            KvLeaderReplicaCapacityManager kvLeaderReplicaCapacityManager) {
+            ReplicaCapacityController replicaCapacityController) {
         super(
                 remoteFileSystem,
                 ServerType.COORDINATOR,
@@ -307,7 +307,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
         this.kvSnapshotLeaseManager = kvSnapshotLeaseManager;
         this.coordinatorLeaderElection = coordinatorLeaderElection;
-        this.kvLeaderReplicaCapacityManager = kvLeaderReplicaCapacityManager;
+        this.replicaCapacityController = replicaCapacityController;
     }
 
     @Override
@@ -451,7 +451,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         metadataManager.dropDatabase(
                 request.getDatabaseName(), request.isIgnoreIfNotExists(), request.isCascade());
         if (request.isCascade()) {
-            kvLeaderReplicaCapacityManager.rebuildCurrentCount(metadataManager);
+            replicaCapacityController.rebuildCurrentKvLeaderReplicaCount(metadataManager);
         }
         return CompletableFuture.completedFuture(response);
     }
@@ -509,7 +509,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
         boolean capacityIncreased = false;
         try {
-            kvLeaderReplicaCapacityManager.checkAndIncrease(newKvLeaderReplicaCount);
+            replicaCapacityController.checkAndIncreaseKvLeaderReplicaCount(newKvLeaderReplicaCount);
             capacityIncreased = newKvLeaderReplicaCount > 0;
 
             createLakeTableIfNeeded(tablePath, tableDescriptor, lakeCatalogContainer);
@@ -528,11 +528,11 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                             tableAssignment,
                             request.isIgnoreIfExists());
             if (tableId < 0 && capacityIncreased) {
-                kvLeaderReplicaCapacityManager.decrease(newKvLeaderReplicaCount);
+                replicaCapacityController.decreaseKvLeaderReplicaCount(newKvLeaderReplicaCount);
             }
         } catch (RuntimeException | Error e) {
             if (capacityIncreased) {
-                kvLeaderReplicaCapacityManager.decrease(newKvLeaderReplicaCount);
+                replicaCapacityController.decreaseKvLeaderReplicaCount(newKvLeaderReplicaCount);
             }
             throw e;
         }
@@ -778,13 +778,17 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         authorizeTable(OperationType.DROP, tablePath);
 
         DropTableResponse response = new DropTableResponse();
-        if (!metadataManager.tableExists(tablePath)) {
-            metadataManager.dropTable(tablePath, request.isIgnoreIfNotExists());
-            return CompletableFuture.completedFuture(response);
+        TableInfo tableInfo;
+        try {
+            tableInfo = metadataManager.getTable(tablePath);
+        } catch (TableNotExistException e) {
+            if (request.isIgnoreIfNotExists()) {
+                return CompletableFuture.completedFuture(response);
+            }
+            throw new TableNotExistException("Table " + tablePath + " does not exist.");
         }
 
-        long removedKvLeaderReplicaCount =
-                getExistingKvLeaderReplicaCount(metadataManager.getTable(tablePath));
+        long removedKvLeaderReplicaCount = getExistingKvLeaderReplicaCount(tableInfo);
         try {
             metadataManager.dropTable(tablePath, false);
         } catch (TableNotExistException e) {
@@ -793,7 +797,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             }
             throw e;
         }
-        kvLeaderReplicaCapacityManager.decrease(removedKvLeaderReplicaCount);
+        replicaCapacityController.decreaseKvLeaderReplicaCount(removedKvLeaderReplicaCount);
         return CompletableFuture.completedFuture(response);
     }
 
@@ -834,7 +838,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         long newKvLeaderReplicaCount = tableInfo.hasPrimaryKey() ? tableInfo.getNumBuckets() : 0;
         boolean capacityIncreased = false;
         try {
-            kvLeaderReplicaCapacityManager.checkAndIncrease(newKvLeaderReplicaCount);
+            replicaCapacityController.checkAndIncreaseKvLeaderReplicaCount(newKvLeaderReplicaCount);
             capacityIncreased = newKvLeaderReplicaCount > 0;
 
             // third, generate the PartitionAssignment.
@@ -858,7 +862,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                     false);
         } catch (PartitionAlreadyExistsException e) {
             if (capacityIncreased) {
-                kvLeaderReplicaCapacityManager.decrease(newKvLeaderReplicaCount);
+                replicaCapacityController.decreaseKvLeaderReplicaCount(newKvLeaderReplicaCount);
             }
             if (request.isIgnoreIfNotExists()) {
                 return CompletableFuture.completedFuture(response);
@@ -866,7 +870,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             throw e;
         } catch (RuntimeException | Error e) {
             if (capacityIncreased) {
-                kvLeaderReplicaCapacityManager.decrease(newKvLeaderReplicaCount);
+                replicaCapacityController.decreaseKvLeaderReplicaCount(newKvLeaderReplicaCount);
             }
             throw e;
         }
@@ -908,7 +912,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             throw e;
         }
         if (tableInfo.hasPrimaryKey()) {
-            kvLeaderReplicaCapacityManager.decrease(tableInfo.getNumBuckets());
+            replicaCapacityController.decreaseKvLeaderReplicaCount(tableInfo.getNumBuckets());
         }
         return CompletableFuture.completedFuture(response);
     }

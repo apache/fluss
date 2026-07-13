@@ -928,7 +928,7 @@ class TableManagerITCase {
     void testKvLeaderReplicaCapacityRestriction() throws Exception {
         Configuration conf = initConf();
         conf.set(ConfigOptions.KV_LEADER_REPLICA_MEMORY_RESERVED, new MemorySize(1));
-        conf.set(ConfigOptions.TABLET_SERVER_RESOURCE_MEMORY_SIZE, new MemorySize(3));
+        conf.set(ConfigOptions.TABLET_SERVER_ADVERTISED_RESOURCE_MEMORY_SIZE, new MemorySize(3));
         FlussClusterExtension limitedCluster =
                 FlussClusterExtension.builder()
                         .setNumOfTabletServers(1)
@@ -974,7 +974,7 @@ class TableManagerITCase {
     void testKvLeaderReplicaCapacityRestrictionForPartitionedTable() throws Exception {
         Configuration conf = initConf();
         conf.set(ConfigOptions.KV_LEADER_REPLICA_MEMORY_RESERVED, new MemorySize(1));
-        conf.set(ConfigOptions.TABLET_SERVER_RESOURCE_MEMORY_SIZE, new MemorySize(3));
+        conf.set(ConfigOptions.TABLET_SERVER_ADVERTISED_RESOURCE_MEMORY_SIZE, new MemorySize(3));
         FlussClusterExtension limitedCluster =
                 FlussClusterExtension.builder()
                         .setNumOfTabletServers(1)

@@ -33,6 +33,7 @@ import org.apache.fluss.server.coordinator.CoordinatorTestUtils;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.LakeTableTieringManager;
 import org.apache.fluss.server.coordinator.MetadataManager;
+import org.apache.fluss.server.coordinator.ReplicaCapacityController;
 import org.apache.fluss.server.coordinator.TestCoordinatorChannelManager;
 import org.apache.fluss.server.coordinator.event.CoordinatorEventManager;
 import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseManager;
@@ -132,7 +133,11 @@ class TableBucketStateMachineTest {
                                 new Configuration(),
                                 new LakeCatalogDynamicLoader(new Configuration(), null, true)),
                         new RemoteDirDynamicLoader(conf),
-                        new Configuration());
+                        conf,
+                        new ReplicaCapacityController(
+                                conf,
+                                serverMetadataCache,
+                                TestingMetricGroups.COORDINATOR_METRICS));
         lakeTableTieringManager =
                 new LakeTableTieringManager(TestingMetricGroups.LAKE_TIERING_METRICS);
 

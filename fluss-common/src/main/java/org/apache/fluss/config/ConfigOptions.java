@@ -324,8 +324,11 @@ public class ConfigOptions {
                     .memoryType()
                     .defaultValue(MemorySize.parse("8mb"))
                     .withDescription(
-                            "The reserved memory for one KV leader replica. Coordinator uses this "
-                                    + "value to calculate the cluster-level KV leader replica capacity.");
+                            "The estimated memory consumption of each KV leader replica, "
+                                    + "used by the CoordinatorServer to calculate the cluster-level "
+                                    + "KV leader replica capacity. This value does not reserve or "
+                                    + "enforce memory on the tablet server. A value of 0 disables "
+                                    + "memory-based KV leader replica capacity control.");
 
     /**
      * The network address and port the server binds to for accepting connections.
@@ -598,21 +601,29 @@ public class ConfigOptions {
                             "The rack for the tabletServer. This will be used in rack aware bucket assignment "
                                     + "for fault tolerance. Examples: `RACK1`, `cn-hangzhou-server10`");
 
-    public static final ConfigOption<Double> TABLET_SERVER_RESOURCE_CPU_CORES =
-            key("tablet-server.resource.cpu-cores")
+    public static final ConfigOption<Double> TABLET_SERVER_ADVERTISED_RESOURCE_CPU_CORES =
+            key("tablet-server.advertised-resource.cpu-cores")
                     .doubleType()
                     .noDefaultValue()
+                    .withDeprecatedKeys("tablet-server.resource.cpu-cores")
                     .withDescription(
-                            "The CPU cores of this tablet server. If not configured, the tablet server "
-                                    + "will try to detect it from cgroup or JVM runtime.");
+                            "The CPU capacity, in cores, that this tablet server advertises to the "
+                                    + "CoordinatorServer for resource reporting. This option does not limit "
+                                    + "CPU usage or configure a cgroup CPU quota. If not configured, the tablet "
+                                    + "server detects the value from cgroup CPU quota or the JVM runtime.");
 
-    public static final ConfigOption<MemorySize> TABLET_SERVER_RESOURCE_MEMORY_SIZE =
-            key("tablet-server.resource.memory-size")
+    public static final ConfigOption<MemorySize> TABLET_SERVER_ADVERTISED_RESOURCE_MEMORY_SIZE =
+            key("tablet-server.advertised-resource.memory-size")
                     .memoryType()
                     .noDefaultValue()
+                    .withDeprecatedKeys("tablet-server.resource.memory-size")
                     .withDescription(
-                            "The memory size of this tablet server. If not configured, the tablet server "
-                                    + "will try to detect it from cgroup or operating system information.");
+                            "The memory capacity that this tablet server advertises to the CoordinatorServer "
+                                    + "for resource reporting and cluster-level KV leader replica capacity "
+                                    + "estimation. This option does not configure JVM heap size, reserve memory, "
+                                    + "or enforce a process or container memory limit. It represents total usable "
+                                    + "capacity, not current memory usage or free memory. If not configured, the "
+                                    + "tablet server detects the value from cgroup or operating system information.");
 
     public static final ConfigOption<String> DATA_DIR =
             key("data.dir")

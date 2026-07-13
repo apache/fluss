@@ -221,7 +221,8 @@ class CoordinatorEventProcessorTest {
                         serverMetadataCache,
                         metadataManager,
                         new RemoteDirDynamicLoader(conf),
-                        new Configuration());
+                        conf,
+                        new ReplicaCapacityController(conf, serverMetadataCache));
         kvSnapshotLeaseManager =
                 new KvSnapshotLeaseManager(
                         Duration.ofMinutes(10).toMillis(),

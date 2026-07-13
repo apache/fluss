@@ -28,16 +28,23 @@ import org.apache.fluss.exception.InsufficientKvLeaderReplicaCapacityException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
 import org.apache.fluss.server.metadata.ServerInfo;
+import org.apache.fluss.server.metrics.group.CoordinatorMetricGroup;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.List;
 import java.util.Set;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
-/** Manages the in-memory cluster capacity for KV leader replicas. */
-public class KvLeaderReplicaCapacityManager implements ServerReconfigurable {
+/** Controls replica creation admission based on in-memory cluster capacity. */
+public class ReplicaCapacityController implements ServerReconfigurable {
+
+    private static final Logger LOG = LoggerFactory.getLogger(ReplicaCapacityController.class);
 
     /** Negative capacity means the automatic capacity limit is disabled. */
     public static final long CAPACITY_LIMIT_DISABLED = -1L;
@@ -45,37 +52,45 @@ public class KvLeaderReplicaCapacityManager implements ServerReconfigurable {
     private final Object lock = new Object();
     private final CoordinatorMetadataCache metadataCache;
 
-    private long leaderReplicaMemoryReservedBytes;
+    private long kvLeaderReplicaMemoryReservedBytes;
     private long currentKvLeaderReplicaCount;
 
-    public KvLeaderReplicaCapacityManager(
-            Configuration conf, CoordinatorMetadataCache metadataCache) {
+    public ReplicaCapacityController(
+            Configuration conf,
+            CoordinatorMetadataCache metadataCache,
+            CoordinatorMetricGroup coordinatorMetricGroup) {
+        this(conf, metadataCache);
+        registerMetrics(
+                checkNotNull(coordinatorMetricGroup, "coordinatorMetricGroup should not be null."));
+    }
+
+    @VisibleForTesting
+    ReplicaCapacityController(Configuration conf, CoordinatorMetadataCache metadataCache) {
         this.metadataCache = checkNotNull(metadataCache, "metadataCache should not be null.");
-        this.leaderReplicaMemoryReservedBytes = getLeaderReplicaMemoryReservedBytes(conf);
+        long memoryReservedBytes = getKvLeaderReplicaMemoryReservedBytes(conf);
+        validateKvLeaderReplicaMemoryReservedBytes(memoryReservedBytes);
+        this.kvLeaderReplicaMemoryReservedBytes = memoryReservedBytes;
     }
 
     @Override
     public void validate(Configuration newConfig) throws ConfigException {
-        long memoryReservedBytes = getLeaderReplicaMemoryReservedBytes(newConfig);
-        if (memoryReservedBytes <= 0) {
-            throw new ConfigException(
-                    ConfigOptions.KV_LEADER_REPLICA_MEMORY_RESERVED.key()
-                            + " must be greater than 0.");
-        }
+        long memoryReservedBytes = getKvLeaderReplicaMemoryReservedBytes(newConfig);
+        validateKvLeaderReplicaMemoryReservedBytes(memoryReservedBytes);
     }
 
     @Override
     public void reconfigure(Configuration newConfig) throws ConfigException {
-        long memoryReservedBytes = getLeaderReplicaMemoryReservedBytes(newConfig);
+        long memoryReservedBytes = getKvLeaderReplicaMemoryReservedBytes(newConfig);
         synchronized (lock) {
-            leaderReplicaMemoryReservedBytes = memoryReservedBytes;
+            kvLeaderReplicaMemoryReservedBytes = memoryReservedBytes;
         }
     }
 
     /**
-     * Checks whether the requested replicas fit the current capacity and reserves them if they do.
+     * Checks whether the requested KV leader replicas fit the current capacity and reserves them if
+     * they do.
      */
-    public void checkAndIncrease(long newKvLeaderReplicaCount) {
+    public void checkAndIncreaseKvLeaderReplicaCount(long newKvLeaderReplicaCount) {
         if (newKvLeaderReplicaCount <= 0) {
             return;
         }
@@ -97,8 +112,8 @@ public class KvLeaderReplicaCapacityManager implements ServerReconfigurable {
         }
     }
 
-    /** Releases replicas that were removed from metadata or reserved by a failed creation. */
-    public void decrease(long removedKvLeaderReplicaCount) {
+    /** Releases KV leader replicas removed from metadata or reserved by a failed creation. */
+    public void decreaseKvLeaderReplicaCount(long removedKvLeaderReplicaCount) {
         if (removedKvLeaderReplicaCount <= 0) {
             return;
         }
@@ -110,7 +125,7 @@ public class KvLeaderReplicaCapacityManager implements ServerReconfigurable {
     }
 
     /** Rebuilds the current KV leader replica count from metadata. */
-    public void rebuildCurrentCount(MetadataManager metadataManager) {
+    public void rebuildCurrentKvLeaderReplicaCount(MetadataManager metadataManager) {
         long rebuiltCount = 0;
         List<String> databases = metadataManager.listDatabases();
         for (String database : databases) {
@@ -162,13 +177,24 @@ public class KvLeaderReplicaCapacityManager implements ServerReconfigurable {
     }
 
     @VisibleForTesting
-    long getLeaderReplicaMemoryReservedBytes() {
+    long getKvLeaderReplicaMemoryReservedBytes() {
         synchronized (lock) {
-            return leaderReplicaMemoryReservedBytes;
+            return kvLeaderReplicaMemoryReservedBytes;
         }
     }
 
+    private void registerMetrics(CoordinatorMetricGroup coordinatorMetricGroup) {
+        coordinatorMetricGroup.gauge(
+                MetricNames.KV_LEADER_REPLICA_COUNT, this::getKvLeaderReplicaCount);
+        coordinatorMetricGroup.gauge(
+                MetricNames.KV_LEADER_REPLICA_CAPACITY, this::getKvLeaderReplicaCapacity);
+    }
+
     private long getKvLeaderReplicaCapacityLocked() {
+        if (kvLeaderReplicaMemoryReservedBytes == 0) {
+            return CAPACITY_LIMIT_DISABLED;
+        }
+
         Set<ServerInfo> liveTabletServers = metadataCache.getLiveTabletServerInfos();
         int liveTabletServerCount = liveTabletServers.size();
         if (liveTabletServerCount == 0) {
@@ -193,11 +219,32 @@ public class KvLeaderReplicaCapacityManager implements ServerReconfigurable {
                 knownMemoryBytes
                         + averageKnownMemoryBytes
                                 * (liveTabletServerCount - knownMemoryTabletServerCount);
-        return totalMemoryBytes / leaderReplicaMemoryReservedBytes;
+        long capacity = totalMemoryBytes / kvLeaderReplicaMemoryReservedBytes;
+        LOG.debug(
+                "Calculated KV leader replica capacity: liveTabletServerCount={}, "
+                        + "knownMemoryTabletServerCount={}, knownMemoryBytes={}, "
+                        + "averageKnownMemoryBytes={}, estimatedTotalMemoryBytes={}, "
+                        + "kvLeaderReplicaMemoryReservedBytes={}, kvLeaderReplicaCapacity={}.",
+                liveTabletServerCount,
+                knownMemoryTabletServerCount,
+                knownMemoryBytes,
+                averageKnownMemoryBytes,
+                totalMemoryBytes,
+                kvLeaderReplicaMemoryReservedBytes,
+                capacity);
+        return capacity;
     }
 
-    private static long getLeaderReplicaMemoryReservedBytes(Configuration conf) {
+    private static long getKvLeaderReplicaMemoryReservedBytes(Configuration conf) {
         return conf.get(ConfigOptions.KV_LEADER_REPLICA_MEMORY_RESERVED).getBytes();
+    }
+
+    private static void validateKvLeaderReplicaMemoryReservedBytes(long memoryReservedBytes) {
+        if (memoryReservedBytes < 0) {
+            throw new ConfigException(
+                    ConfigOptions.KV_LEADER_REPLICA_MEMORY_RESERVED.key()
+                            + " must be greater than or equal to 0.");
+        }
     }
 
     private static long getKvLeaderReplicaCount(

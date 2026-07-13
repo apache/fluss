@@ -328,6 +328,7 @@ class AutoPartitionManagerTest {
                                 new LakeCatalogDynamicLoader(new Configuration(), null, true)),
                         remoteDirDynamicLoader,
                         new Configuration(),
+                        disabledCapacityController(),
                         clock,
                         periodicExecutor);
         autoPartitionManager.start();
@@ -424,6 +425,7 @@ class AutoPartitionManagerTest {
                         metadataManager,
                         remoteDirDynamicLoader,
                         new Configuration(),
+                        disabledCapacityController(),
                         clock,
                         periodicExecutor);
         autoPartitionManager.start();
@@ -503,6 +505,7 @@ class AutoPartitionManagerTest {
                         metadataManager,
                         remoteDirDynamicLoader,
                         new Configuration(),
+                        disabledCapacityController(),
                         clock,
                         periodicExecutor);
         autoPartitionManager.start();
@@ -552,6 +555,7 @@ class AutoPartitionManagerTest {
                         metadataManager,
                         remoteDirDynamicLoader,
                         new Configuration(),
+                        disabledCapacityController(),
                         clock,
                         periodicExecutor);
         autoPartitionManager.start();
@@ -619,6 +623,7 @@ class AutoPartitionManagerTest {
                         metadataManager,
                         remoteDirDynamicLoader,
                         config,
+                        disabledCapacityController(),
                         clock,
                         periodicExecutor);
         autoPartitionManager.start();
@@ -651,14 +656,14 @@ class AutoPartitionManagerTest {
         ManualClock clock = new ManualClock(startTime.toInstant().toEpochMilli());
         ManuallyTriggeredScheduledExecutorService periodicExecutor =
                 new ManuallyTriggeredScheduledExecutorService();
-        KvLeaderReplicaCapacityManager capacityManager = capacityManagerWithCapacity(16);
+        ReplicaCapacityController capacityController = capacityControllerWithCapacity(16);
         AutoPartitionManager autoPartitionManager =
                 new AutoPartitionManager(
                         new TestingServerMetadataCache(3),
                         metadataManager,
                         remoteDirDynamicLoader,
                         new Configuration(),
-                        capacityManager,
+                        capacityController,
                         clock,
                         periodicExecutor);
         autoPartitionManager.start();
@@ -671,7 +676,7 @@ class AutoPartitionManagerTest {
         Map<String, PartitionRegistration> partitions =
                 zookeeperClient.getPartitionRegistrations(tablePath);
         assertThat(partitions.keySet()).containsExactly("2025042600");
-        assertThat(capacityManager.getKvLeaderReplicaCount()).isEqualTo(table.getNumBuckets());
+        assertThat(capacityController.getKvLeaderReplicaCount()).isEqualTo(table.getNumBuckets());
     }
 
     @Test
@@ -681,14 +686,14 @@ class AutoPartitionManagerTest {
         ManualClock clock = new ManualClock(startTime.toInstant().toEpochMilli());
         ManuallyTriggeredScheduledExecutorService periodicExecutor =
                 new ManuallyTriggeredScheduledExecutorService();
-        KvLeaderReplicaCapacityManager capacityManager = capacityManagerWithCapacity(64);
+        ReplicaCapacityController capacityController = capacityControllerWithCapacity(64);
         AutoPartitionManager autoPartitionManager =
                 new AutoPartitionManager(
                         new TestingServerMetadataCache(3),
                         metadataManager,
                         remoteDirDynamicLoader,
                         new Configuration(),
-                        capacityManager,
+                        capacityController,
                         clock,
                         periodicExecutor);
         autoPartitionManager.start();
@@ -713,7 +718,7 @@ class AutoPartitionManagerTest {
                 false);
         autoPartitionManager.addPartition(table.getTableId(), "2025042600");
         autoPartitionManager.addPartition(table.getTableId(), "2025042601");
-        capacityManager.checkAndIncrease((long) table.getNumBuckets() * 2);
+        capacityController.checkAndIncreaseKvLeaderReplicaCount((long) table.getNumBuckets() * 2);
 
         clock.advanceTime(Duration.ofHours(2));
         periodicExecutor.triggerPeriodicScheduledTasks();
@@ -721,7 +726,7 @@ class AutoPartitionManagerTest {
         Map<String, PartitionRegistration> partitions =
                 zookeeperClient.getPartitionRegistrations(tablePath);
         assertThat(partitions.keySet()).containsExactly("2025042601");
-        assertThat(capacityManager.getKvLeaderReplicaCount()).isEqualTo(table.getNumBuckets());
+        assertThat(capacityController.getKvLeaderReplicaCount()).isEqualTo(table.getNumBuckets());
     }
 
     @Test
@@ -740,6 +745,7 @@ class AutoPartitionManagerTest {
                         metadataManager,
                         remoteDirDynamicLoader,
                         new Configuration(),
+                        disabledCapacityController(),
                         clock,
                         periodicExecutor);
         autoPartitionManager.start();
@@ -787,6 +793,7 @@ class AutoPartitionManagerTest {
                         metadataManager,
                         remoteDirDynamicLoader,
                         new Configuration(),
+                        disabledCapacityController(),
                         clock,
                         periodicExecutor);
         autoPartitionManager.start();
@@ -847,6 +854,7 @@ class AutoPartitionManagerTest {
                         metadataManager,
                         remoteDirDynamicLoader,
                         new Configuration(),
+                        disabledCapacityController(),
                         clock,
                         periodicExecutor);
         autoPartitionManager.start();
@@ -1207,7 +1215,7 @@ class AutoPartitionManagerTest {
                 System.currentTimeMillis());
     }
 
-    private static KvLeaderReplicaCapacityManager capacityManagerWithCapacity(long capacity) {
+    private static ReplicaCapacityController capacityControllerWithCapacity(long capacity) {
         CoordinatorMetadataCache metadataCache = new CoordinatorMetadataCache();
         metadataCache.updateMetadata(
                 null,
@@ -1221,7 +1229,13 @@ class AutoPartitionManagerTest {
                 Collections.emptyMap());
         Configuration conf = new Configuration();
         conf.set(ConfigOptions.KV_LEADER_REPLICA_MEMORY_RESERVED, new MemorySize(1));
-        return new KvLeaderReplicaCapacityManager(conf, metadataCache);
+        return new ReplicaCapacityController(conf, metadataCache);
+    }
+
+    private static ReplicaCapacityController disabledCapacityController() {
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.KV_LEADER_REPLICA_MEMORY_RESERVED, MemorySize.ZERO);
+        return new ReplicaCapacityController(conf, new CoordinatorMetadataCache());
     }
 
     private static PartitionAssignment partitionAssignment(TableInfo table) {

@@ -23,7 +23,6 @@ import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.DatabaseDescriptor;
-import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.metrics.registry.MetricRegistry;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.RpcServer;
@@ -167,7 +166,7 @@ public class CoordinatorServer extends ServerBase {
     private KvSnapshotLeaseManager kvSnapshotLeaseManager;
 
     @GuardedBy("lock")
-    private KvLeaderReplicaCapacityManager kvLeaderReplicaCapacityManager;
+    private ReplicaCapacityController replicaCapacityController;
 
     public CoordinatorServer(Configuration conf) {
         this(conf, SystemClock.getInstance());
@@ -245,14 +244,8 @@ public class CoordinatorServer extends ServerBase {
             this.lakeCatalogDynamicLoader = new LakeCatalogDynamicLoader(conf, pluginManager, true);
             this.remoteDirDynamicLoader = new RemoteDirDynamicLoader(conf);
             this.metadataCache = new CoordinatorMetadataCache();
-            this.kvLeaderReplicaCapacityManager =
-                    new KvLeaderReplicaCapacityManager(conf, metadataCache);
-            serverMetricGroup.gauge(
-                    MetricNames.KV_LEADER_REPLICA_COUNT,
-                    kvLeaderReplicaCapacityManager::getKvLeaderReplicaCount);
-            serverMetricGroup.gauge(
-                    MetricNames.KV_LEADER_REPLICA_CAPACITY,
-                    kvLeaderReplicaCapacityManager::getKvLeaderReplicaCapacity);
+            this.replicaCapacityController =
+                    new ReplicaCapacityController(conf, metadataCache, serverMetricGroup);
 
             this.dynamicConfigManager = new DynamicConfigManager(zkClient, conf);
             this.metadataCache = new CoordinatorMetadataCache();
@@ -299,7 +292,7 @@ public class CoordinatorServer extends ServerBase {
                             ioExecutor,
                             kvSnapshotLeaseManager,
                             coordinatorLeaderElection,
-                            kvLeaderReplicaCapacityManager);
+                            replicaCapacityController);
 
             this.rpcServer =
                     RpcServer.create(
@@ -312,7 +305,7 @@ public class CoordinatorServer extends ServerBase {
             // Register server reconfigurable components
             dynamicConfigManager.register(lakeCatalogDynamicLoader);
             dynamicConfigManager.register(remoteDirDynamicLoader);
-            dynamicConfigManager.register(kvLeaderReplicaCapacityManager);
+            dynamicConfigManager.register(replicaCapacityController);
             // Register stateless validators for coordinator-side upfront validation
             dynamicConfigManager.register(new DiskWriteLimitConfigValidator());
             rpcServer.getServerReconfigurables().forEach(dynamicConfigManager::register);
@@ -337,7 +330,7 @@ public class CoordinatorServer extends ServerBase {
 
             this.coordinatorChannelManager = new CoordinatorChannelManager(rpcClient);
 
-            kvLeaderReplicaCapacityManager.rebuildCurrentCount(metadataManager);
+            replicaCapacityController.rebuildCurrentKvLeaderReplicaCount(metadataManager);
 
             this.autoPartitionManager =
                     new AutoPartitionManager(
@@ -345,7 +338,7 @@ public class CoordinatorServer extends ServerBase {
                             metadataManager,
                             remoteDirDynamicLoader,
                             conf,
-                            kvLeaderReplicaCapacityManager);
+                            replicaCapacityController);
             autoPartitionManager.start();
 
             // start coordinator event processor after we register coordinator leader to zk

@@ -31,7 +31,6 @@ import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.coordinator.remote.RemoteDirDynamicLoader;
-import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
 import org.apache.fluss.server.metadata.ServerMetadataCache;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
@@ -93,7 +92,7 @@ public class AutoPartitionManager implements AutoCloseable {
     private final ServerMetadataCache metadataCache;
     private final MetadataManager metadataManager;
     private final RemoteDirDynamicLoader remoteDirDynamicLoader;
-    private final KvLeaderReplicaCapacityManager kvLeaderReplicaCapacityManager;
+    private final ReplicaCapacityController replicaCapacityController;
     private final Clock clock;
 
     private final long periodicInterval;
@@ -118,27 +117,14 @@ public class AutoPartitionManager implements AutoCloseable {
             ServerMetadataCache metadataCache,
             MetadataManager metadataManager,
             RemoteDirDynamicLoader remoteDirDynamicLoader,
-            Configuration conf) {
-        this(
-                metadataCache,
-                metadataManager,
-                remoteDirDynamicLoader,
-                conf,
-                new KvLeaderReplicaCapacityManager(conf, new CoordinatorMetadataCache()));
-    }
-
-    public AutoPartitionManager(
-            ServerMetadataCache metadataCache,
-            MetadataManager metadataManager,
-            RemoteDirDynamicLoader remoteDirDynamicLoader,
             Configuration conf,
-            KvLeaderReplicaCapacityManager kvLeaderReplicaCapacityManager) {
+            ReplicaCapacityController replicaCapacityController) {
         this(
                 metadataCache,
                 metadataManager,
                 remoteDirDynamicLoader,
                 conf,
-                kvLeaderReplicaCapacityManager,
+                replicaCapacityController,
                 SystemClock.getInstance(),
                 // TODO: Reuse the CoordinatorServer shared scheduler for this lightweight
                 // coordinator periodic task instead of creating a component-owned scheduler.
@@ -152,31 +138,13 @@ public class AutoPartitionManager implements AutoCloseable {
             MetadataManager metadataManager,
             RemoteDirDynamicLoader remoteDirDynamicLoader,
             Configuration conf,
-            Clock clock,
-            ScheduledExecutorService periodicExecutor) {
-        this(
-                metadataCache,
-                metadataManager,
-                remoteDirDynamicLoader,
-                conf,
-                new KvLeaderReplicaCapacityManager(conf, new CoordinatorMetadataCache()),
-                clock,
-                periodicExecutor);
-    }
-
-    @VisibleForTesting
-    AutoPartitionManager(
-            ServerMetadataCache metadataCache,
-            MetadataManager metadataManager,
-            RemoteDirDynamicLoader remoteDirDynamicLoader,
-            Configuration conf,
-            KvLeaderReplicaCapacityManager kvLeaderReplicaCapacityManager,
+            ReplicaCapacityController replicaCapacityController,
             Clock clock,
             ScheduledExecutorService periodicExecutor) {
         this.metadataCache = metadataCache;
         this.metadataManager = metadataManager;
         this.remoteDirDynamicLoader = remoteDirDynamicLoader;
-        this.kvLeaderReplicaCapacityManager = kvLeaderReplicaCapacityManager;
+        this.replicaCapacityController = replicaCapacityController;
         this.clock = clock;
         this.periodicExecutor = periodicExecutor;
         this.periodicInterval = conf.get(ConfigOptions.AUTO_PARTITION_CHECK_INTERVAL).toMillis();
@@ -453,7 +421,8 @@ public class AutoPartitionManager implements AutoCloseable {
                     tableInfo.hasPrimaryKey() ? tableInfo.getNumBuckets() : 0;
             boolean capacityIncreased = false;
             try {
-                kvLeaderReplicaCapacityManager.checkAndIncrease(newKvLeaderReplicaCount);
+                replicaCapacityController.checkAndIncreaseKvLeaderReplicaCount(
+                        newKvLeaderReplicaCount);
                 capacityIncreased = newKvLeaderReplicaCount > 0;
 
                 Map<Integer, BucketAssignment> bucketAssignments =
@@ -513,7 +482,7 @@ public class AutoPartitionManager implements AutoCloseable {
     private void rollbackKvLeaderReplicaCapacity(
             boolean capacityIncreased, long kvLeaderReplicaCount) {
         if (capacityIncreased) {
-            kvLeaderReplicaCapacityManager.decrease(kvLeaderReplicaCount);
+            replicaCapacityController.decreaseKvLeaderReplicaCount(kvLeaderReplicaCount);
         }
     }
 
@@ -604,7 +573,8 @@ public class AutoPartitionManager implements AutoCloseable {
                             tablePath);
                 }
                 if (partitionDropped && tableInfo.hasPrimaryKey()) {
-                    kvLeaderReplicaCapacityManager.decrease(tableInfo.getNumBuckets());
+                    replicaCapacityController.decreaseKvLeaderReplicaCount(
+                            tableInfo.getNumBuckets());
                 }
 
                 // only remove when zk success, this reflects to the partitionsByTable

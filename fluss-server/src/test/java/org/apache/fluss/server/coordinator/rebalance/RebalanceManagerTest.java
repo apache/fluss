@@ -29,6 +29,7 @@ import org.apache.fluss.server.coordinator.CoordinatorEventProcessor;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.LakeTableTieringManager;
 import org.apache.fluss.server.coordinator.MetadataManager;
+import org.apache.fluss.server.coordinator.ReplicaCapacityController;
 import org.apache.fluss.server.coordinator.TestCoordinatorChannelManager;
 import org.apache.fluss.server.coordinator.event.CoordinatorEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
@@ -122,7 +123,11 @@ public class RebalanceManagerTest {
                         serverMetadataCache,
                         metadataManager,
                         new RemoteDirDynamicLoader(conf),
-                        conf);
+                        conf,
+                        new ReplicaCapacityController(
+                                conf,
+                                serverMetadataCache,
+                                TestingMetricGroups.COORDINATOR_METRICS));
         lakeTableTieringManager =
                 new LakeTableTieringManager(TestingMetricGroups.LAKE_TIERING_METRICS);
         CoordinatorEventProcessor eventProcessor = buildCoordinatorEventProcessor(conf);

@@ -40,13 +40,25 @@ class TabletServerResourceProbeTest {
     @Test
     void testProbeFromExplicitConfig() {
         Configuration conf = new Configuration();
-        conf.set(ConfigOptions.TABLET_SERVER_RESOURCE_CPU_CORES, 8.0);
-        conf.set(ConfigOptions.TABLET_SERVER_RESOURCE_MEMORY_SIZE, new MemorySize(1024));
+        conf.set(ConfigOptions.TABLET_SERVER_ADVERTISED_RESOURCE_CPU_CORES, 8.0);
+        conf.set(ConfigOptions.TABLET_SERVER_ADVERTISED_RESOURCE_MEMORY_SIZE, new MemorySize(1024));
 
         TabletServerResource resource = new TabletServerResourceProbe(conf, tempDir).probe();
 
         assertThat(resource.getCpuCores()).isEqualTo(8.0);
         assertThat(resource.getMemoryBytes()).isEqualTo(1024);
+    }
+
+    @Test
+    void testProbeFromDeprecatedResourceConfig() {
+        Configuration conf = new Configuration();
+        conf.setString("tablet-server.resource.cpu-cores", "4.0");
+        conf.setString("tablet-server.resource.memory-size", "2kb");
+
+        TabletServerResource resource = new TabletServerResourceProbe(conf, tempDir).probe();
+
+        assertThat(resource.getCpuCores()).isEqualTo(4.0);
+        assertThat(resource.getMemoryBytes()).isEqualTo(2048);
     }
 
     @Test
@@ -96,8 +108,8 @@ class TabletServerResourceProbeTest {
     @Test
     void testProbeFallsBackToCgroupWhenExplicitConfigIsNonPositive() throws Exception {
         Configuration conf = new Configuration();
-        conf.set(ConfigOptions.TABLET_SERVER_RESOURCE_CPU_CORES, 0.0);
-        conf.set(ConfigOptions.TABLET_SERVER_RESOURCE_MEMORY_SIZE, new MemorySize(0));
+        conf.set(ConfigOptions.TABLET_SERVER_ADVERTISED_RESOURCE_CPU_CORES, 0.0);
+        conf.set(ConfigOptions.TABLET_SERVER_ADVERTISED_RESOURCE_MEMORY_SIZE, new MemorySize(0));
         write(tempDir.resolve("cpu.max"), "400000 100000");
         write(tempDir.resolve("memory.max"), "8192");
 

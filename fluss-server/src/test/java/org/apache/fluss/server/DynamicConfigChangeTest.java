@@ -606,6 +606,23 @@ public class DynamicConfigChangeTest {
         assertThat(zkConfig.get(ConfigOptions.KV_LEADER_REPLICA_MEMORY_RESERVED.key()))
                 .isEqualTo("16mb");
         assertThat(reconfiguredMemoryReserved.get()).isEqualTo(MemorySize.parse("16mb"));
+
+        assertThatCode(
+                        () ->
+                                dynamicConfigManager.alterConfigs(
+                                        Collections.singletonList(
+                                                new AlterConfig(
+                                                        ConfigOptions
+                                                                .KV_LEADER_REPLICA_MEMORY_RESERVED
+                                                                .key(),
+                                                        "0b",
+                                                        AlterConfigOpType.SET))))
+                .doesNotThrowAnyException();
+
+        zkConfig = zookeeperClient.fetchEntityConfig();
+        assertThat(zkConfig.get(ConfigOptions.KV_LEADER_REPLICA_MEMORY_RESERVED.key()))
+                .isEqualTo("0b");
+        assertThat(reconfiguredMemoryReserved.get()).isEqualTo(MemorySize.ZERO);
     }
 
     @Test

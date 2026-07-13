@@ -59,7 +59,7 @@ public class TabletServerResourceProbe {
 
     private Optional<Double> probeCpuCores() {
         Optional<Double> configuredCpuCores =
-                conf.getOptional(ConfigOptions.TABLET_SERVER_RESOURCE_CPU_CORES);
+                conf.getOptional(ConfigOptions.TABLET_SERVER_ADVERTISED_RESOURCE_CPU_CORES);
         if (configuredCpuCores.isPresent()) {
             Optional<Double> validConfiguredCpuCores = positiveDouble(configuredCpuCores.get());
             if (validConfiguredCpuCores.isPresent()) {
@@ -77,7 +77,7 @@ public class TabletServerResourceProbe {
 
     private Optional<Long> probeMemoryBytes() {
         Optional<MemorySize> configuredMemory =
-                conf.getOptional(ConfigOptions.TABLET_SERVER_RESOURCE_MEMORY_SIZE);
+                conf.getOptional(ConfigOptions.TABLET_SERVER_ADVERTISED_RESOURCE_MEMORY_SIZE);
         if (configuredMemory.isPresent()) {
             Optional<Long> validConfiguredMemory = positiveLong(configuredMemory.get().getBytes());
             if (validConfiguredMemory.isPresent()) {
