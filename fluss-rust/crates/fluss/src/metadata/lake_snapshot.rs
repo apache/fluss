@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::proto::{GetLakeSnapshotResponse, PbLakeSnapshotForBucket};
-use crate::{BucketId, PartitionId, TableId};
+use crate::{BucketId, PartitionId, SnapshotId, TableId};
 
 /// One bucket's slice of a lake snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,7 +44,7 @@ impl LakeBucketSnapshot {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LakeSnapshotInfo {
     pub table_id: TableId,
-    pub snapshot_id: i64,
+    pub snapshot_id: SnapshotId,
     pub bucket_snapshots: Vec<LakeBucketSnapshot>,
 }
 

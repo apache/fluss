@@ -145,6 +145,7 @@ mod test_utils;
 pub type TableId = i64;
 pub type PartitionId = i64;
 pub type BucketId = i32;
+pub type SnapshotId = i64;
 
 pub(crate) mod proto {
     // Generated from the canonical proto; not every 1.x message is wired up to a
