@@ -1020,6 +1020,46 @@ class TableManagerITCase {
         }
     }
 
+    @Test
+    void testKvLeaderReplicaCapacityRecomputedOnTabletServerReRegistration() throws Exception {
+        Configuration conf = initConf();
+        conf.set(ConfigOptions.KV_LEADER_REPLICA_MEMORY_RESERVED, new MemorySize(1));
+        conf.set(ConfigOptions.TABLET_SERVER_ADVERTISED_RESOURCE_MEMORY_SIZE, new MemorySize(3));
+        FlussClusterExtension cluster =
+                FlussClusterExtension.builder()
+                        .setNumOfTabletServers(3)
+                        .setClusterConf(conf)
+                        .build();
+
+        try {
+            cluster.start();
+
+            AdminGateway gateway = cluster.newCoordinatorClient();
+            // 3 live tablet servers, each advertising 3 bytes with 1 byte reserved -> capacity 9.
+            waitForKvLeaderReplicaCapacity(cluster, 9);
+
+            TablePath tablePath = TablePath.of("fluss", "kv_capacity_reregister");
+            gateway.createTable(newCreateTableRequest(tablePath, newPkTable(), false)).get();
+            // newPkTable() has 3 buckets -> 3 observed KV leader replicas.
+            waitForKvLeaderReplicaCount(cluster, 3);
+
+            // Bring one tablet server down: capacity shrinks to reflect the live servers, while the
+            // observed KV leader count is unaffected by tablet server churn (leaders may migrate,
+            // but the number of KV buckets tracked by the coordinator stays the same).
+            cluster.stopTabletServer(1);
+            waitForKvLeaderReplicaCapacity(cluster, 6);
+            waitForKvLeaderReplicaCount(cluster, 3);
+
+            // Re-register the tablet server: capacity is recomputed from the live servers again and
+            // the observed KV leader count remains stable.
+            cluster.startTabletServer(1);
+            waitForKvLeaderReplicaCapacity(cluster, 9);
+            waitForKvLeaderReplicaCount(cluster, 3);
+        } finally {
+            cluster.close();
+        }
+    }
+
     private static void waitForKvLeaderReplicaCount(
             FlussClusterExtension cluster, long expectedCount) {
         retry(
@@ -1030,6 +1070,18 @@ class TableManagerITCase {
                                                 .getReplicaCapacityController()
                                                 .getKvLeaderReplicaCount())
                                 .isEqualTo(expectedCount));
+    }
+
+    private static void waitForKvLeaderReplicaCapacity(
+            FlussClusterExtension cluster, long expectedCapacity) {
+        retry(
+                Duration.ofSeconds(30),
+                () ->
+                        assertThat(
+                                        cluster.getCoordinatorServer()
+                                                .getReplicaCapacityController()
+                                                .getKvLeaderReplicaCapacity())
+                                .isEqualTo(expectedCapacity));
     }
 
     @Test
