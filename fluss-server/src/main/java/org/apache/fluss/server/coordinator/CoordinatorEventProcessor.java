@@ -268,7 +268,11 @@ public class CoordinatorEventProcessor implements EventProcessor {
         this.internalListenerName = conf.getString(ConfigOptions.INTERNAL_LISTENER_NAME);
         this.rebalanceManager =
                 new RebalanceManager(
-                        this, zooKeeperClient, coordinatorEventManager, SystemClock.getInstance());
+                        this,
+                        zooKeeperClient,
+                        coordinatorEventManager,
+                        SystemClock.getInstance(),
+                        conf);
         this.offlineLeaderRetryDelayMs =
                 conf.get(ConfigOptions.COORDINATOR_OFFLINE_LEADER_RETRY_DELAY).toMillis();
         if (offlineLeaderRetryDelayMs <= 0) {
@@ -1499,25 +1503,9 @@ public class CoordinatorEventProcessor implements EventProcessor {
                             rebalanceManager.getRebalanceId()));
         }
 
-        RebalanceTask rebalanceTask;
         long startTime = System.currentTimeMillis();
-        try {
-            // 1. generate rebalance plan.
-            rebalanceTask =
-                    rebalanceManager.generateRebalanceTask(rebalanceEvent.getGoalsByPriority());
-
-            // 2. execute rebalance plan.
-            Map<TableBucket, RebalancePlanForBucket> executePlan = rebalanceTask.getExecutePlan();
-            zooKeeperClient.registerRebalanceTask(rebalanceTask);
-            rebalanceManager.registerRebalance(
-                    rebalanceTask.getRebalanceId(), executePlan, RebalanceStatus.NOT_STARTED);
-        } catch (Exception e) {
-            throw new RebalanceFailureException(
-                    String.format(
-                            "Failed to generate plan and execute rebalance. The root cause: %s",
-                            e.getMessage()),
-                    e);
-        }
+        RebalanceTask rebalanceTask =
+                rebalanceManager.generateAndRegisterRebalance(rebalanceEvent.getGoalsByPriority());
 
         LOG.info(
                 "Generate Rebalance plan rebalance id {} with {} ms.",

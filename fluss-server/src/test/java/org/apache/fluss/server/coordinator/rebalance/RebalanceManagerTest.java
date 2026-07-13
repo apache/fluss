@@ -18,6 +18,7 @@
 package org.apache.fluss.server.coordinator.rebalance;
 
 import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
+import org.apache.fluss.cluster.rebalance.RebalanceProgress;
 import org.apache.fluss.cluster.rebalance.RebalanceResultForBucket;
 import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.config.ConfigOptions;
@@ -41,6 +42,8 @@ import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZkEpoch;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
+import org.apache.fluss.server.zk.data.RebalanceExecution;
+import org.apache.fluss.server.zk.data.RebalanceRound;
 import org.apache.fluss.server.zk.data.RebalanceTask;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.utils.clock.ManualClock;
@@ -59,15 +62,23 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.atomic.AtomicBoolean;
 
+import static org.apache.fluss.cluster.rebalance.RebalanceStatus.CANCELED;
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.COMPLETED;
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.NOT_STARTED;
+import static org.apache.fluss.cluster.rebalance.RebalanceStatus.REBALANCING;
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.TIMEOUT;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.spy;
 
 /** Test for {@link RebalanceManager}. */
 public class RebalanceManagerTest {
@@ -169,6 +180,231 @@ public class RebalanceManagerTest {
         assertThat(status).isEqualTo(COMPLETED);
         assertThat(zookeeperClient.getRebalanceTask())
                 .hasValue(new RebalanceTask(rebalanceId, COMPLETED, new HashMap<>()));
+    }
+
+    @Test
+    void testRegisterGeneratedRebalanceTaskSplitsIntoRoundsAndCompletes() throws Exception {
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.COORDINATOR_REBALANCE_MAX_BUCKETS_PER_ROUND, 2);
+        RebalanceManager manager = createTestingRebalanceManager(conf);
+
+        Map<TableBucket, RebalancePlanForBucket> plan = createRebalancePlan(5);
+        RebalanceTask firstRoundTask =
+                manager.registerGeneratedRebalanceTask(
+                        new RebalanceTask("round-test", NOT_STARTED, plan));
+
+        assertThat(firstRoundTask.getExecutePlan()).hasSize(2);
+        assertThat(zookeeperClient.getRebalanceTask().get().getExecutePlan()).hasSize(2);
+        assertThat(zookeeperClient.getRebalanceRounds()).hasSize(3);
+        assertThat(zookeeperClient.getRebalanceExecution())
+                .hasValue(new RebalanceExecution("round-test", REBALANCING, 2, 0, 3));
+        assertThat(manager.listRebalanceProgress(null).progressForBucketMap()).hasSize(5);
+
+        finishCurrentRound(manager, COMPLETED);
+        assertThat(zookeeperClient.getRebalanceExecution())
+                .hasValue(new RebalanceExecution("round-test", REBALANCING, 2, 1, 3));
+        assertThat(zookeeperClient.getRebalanceTask().get().getExecutePlan()).hasSize(2);
+
+        finishCurrentRound(manager, COMPLETED);
+        assertThat(zookeeperClient.getRebalanceExecution())
+                .hasValue(new RebalanceExecution("round-test", REBALANCING, 2, 2, 3));
+        assertThat(zookeeperClient.getRebalanceTask().get().getExecutePlan()).hasSize(1);
+
+        finishCurrentRound(manager, COMPLETED);
+        assertThat(zookeeperClient.getRebalanceExecution())
+                .hasValue(new RebalanceExecution("round-test", COMPLETED, 2, 2, 3));
+        assertThat(zookeeperClient.getRebalanceTask().get().getRebalanceStatus())
+                .isEqualTo(COMPLETED);
+        assertThat(manager.hasInProgressRebalance()).isFalse();
+        RebalanceProgress progress = manager.listRebalanceProgress(null);
+        assertThat(progress.status()).isEqualTo(COMPLETED);
+        assertThat(progress.progressForBucketMap()).hasSize(5);
+        assertThat(progress.progressForBucketMap().values())
+                .allSatisfy(result -> assertThat(result.status()).isEqualTo(COMPLETED));
+
+        manager.close();
+    }
+
+    @Test
+    void testRoundBasedRebalanceContinuesWhenBucketProgressUpdateFails() throws Exception {
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.COORDINATOR_REBALANCE_MAX_BUCKETS_PER_ROUND, 2);
+        ZooKeeperClient flakyZkClient = spy(zookeeperClient);
+        RebalanceManager manager =
+                new RebalanceManager(
+                        buildCoordinatorEventProcessor(conf),
+                        flakyZkClient,
+                        new RecordingEventManager(),
+                        SystemClock.getInstance(),
+                        new NoOpScheduledExecutor(),
+                        conf);
+        manager.startup();
+
+        Map<TableBucket, RebalancePlanForBucket> plan = createRebalancePlan(3);
+        manager.registerGeneratedRebalanceTask(
+                new RebalanceTask("round-update-failure-test", NOT_STARTED, plan));
+        AtomicBoolean failNextRoundUpdate = new AtomicBoolean(true);
+        doAnswer(
+                        invocation -> {
+                            RebalanceRound rebalanceRound = invocation.getArgument(0);
+                            if (failNextRoundUpdate.getAndSet(false)
+                                    && rebalanceRound.getRoundIndex() == 0) {
+                                throw new Exception("Injected round progress update failure.");
+                            }
+                            invocation.callRealMethod();
+                            return null;
+                        })
+                .when(flakyZkClient)
+                .registerRebalanceRound(any(RebalanceRound.class));
+
+        List<TableBucket> firstRoundBuckets =
+                new ArrayList<>(flakyZkClient.getRebalanceTask().get().getExecutePlan().keySet());
+        for (TableBucket tableBucket : firstRoundBuckets) {
+            manager.finishRebalanceTask(tableBucket, COMPLETED);
+        }
+
+        assertThat(flakyZkClient.getRebalanceExecution())
+                .hasValue(
+                        new RebalanceExecution("round-update-failure-test", REBALANCING, 2, 1, 2));
+        assertThat(flakyZkClient.getRebalanceTask().get().getExecutePlan()).hasSize(1);
+        assertThat(flakyZkClient.getRebalanceRound(0)).isPresent();
+        assertThat(flakyZkClient.getRebalanceRound(0).get().getProgressForBucketMap().values())
+                .allSatisfy(result -> assertThat(result.status()).isEqualTo(COMPLETED));
+
+        manager.close();
+    }
+
+    @Test
+    void testRegisterGeneratedRebalanceTaskKeepsLegacyTaskWhenRoundLimitDisabled()
+            throws Exception {
+        RebalanceManager manager = createTestingRebalanceManager(new Configuration());
+
+        Map<TableBucket, RebalancePlanForBucket> plan = createRebalancePlan(3);
+        RebalanceTask rebalanceTask =
+                manager.registerGeneratedRebalanceTask(
+                        new RebalanceTask("legacy-test", NOT_STARTED, plan));
+
+        assertThat(rebalanceTask.getExecutePlan()).hasSize(3);
+        assertThat(zookeeperClient.getRebalanceTask()).isPresent();
+        RebalanceTask persistedTask = zookeeperClient.getRebalanceTask().get();
+        assertThat(persistedTask.getRebalanceId()).isEqualTo("legacy-test");
+        assertThat(persistedTask.getRebalanceStatus()).isEqualTo(NOT_STARTED);
+        assertThat(persistedTask.getExecutePlan()).isEqualTo(plan);
+        assertThat(zookeeperClient.getRebalanceExecution()).isEmpty();
+        assertThat(manager.listRebalanceProgress(null).progressForBucketMap()).hasSize(3);
+
+        manager.close();
+    }
+
+    @Test
+    void testRegisterGeneratedRebalanceTaskKeepsLegacyTaskWhenPlanFitsRoundLimit()
+            throws Exception {
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.COORDINATOR_REBALANCE_MAX_BUCKETS_PER_ROUND, 3);
+        RebalanceManager manager = createTestingRebalanceManager(conf);
+
+        Map<TableBucket, RebalancePlanForBucket> plan = createRebalancePlan(3);
+        RebalanceTask rebalanceTask =
+                manager.registerGeneratedRebalanceTask(
+                        new RebalanceTask("small-plan-test", NOT_STARTED, plan));
+
+        assertThat(rebalanceTask.getExecutePlan()).hasSize(3);
+        assertThat(zookeeperClient.getRebalanceTask()).isPresent();
+        RebalanceTask persistedTask = zookeeperClient.getRebalanceTask().get();
+        assertThat(persistedTask.getRebalanceId()).isEqualTo("small-plan-test");
+        assertThat(persistedTask.getRebalanceStatus()).isEqualTo(NOT_STARTED);
+        assertThat(persistedTask.getExecutePlan()).isEqualTo(plan);
+        assertThat(zookeeperClient.getRebalanceExecution()).isEmpty();
+        assertThat(manager.listRebalanceProgress(null).progressForBucketMap()).hasSize(3);
+
+        manager.close();
+    }
+
+    @Test
+    void testRoundBasedRebalanceHandlesPartitionedBuckets() throws Exception {
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.COORDINATOR_REBALANCE_MAX_BUCKETS_PER_ROUND, 2);
+        RebalanceManager manager = createTestingRebalanceManager(conf);
+
+        Map<TableBucket, RebalancePlanForBucket> plan = createPartitionedRebalancePlan(3);
+        manager.registerGeneratedRebalanceTask(
+                new RebalanceTask("partitioned-round-test", NOT_STARTED, plan));
+
+        assertThat(zookeeperClient.getRebalanceRounds()).hasSize(2);
+        assertThat(zookeeperClient.getRebalanceExecution())
+                .hasValue(new RebalanceExecution("partitioned-round-test", REBALANCING, 2, 0, 2));
+        assertThat(manager.listRebalanceProgress(null).progressForBucketMap())
+                .containsOnlyKeys(plan.keySet());
+
+        finishCurrentRound(manager, COMPLETED);
+        assertThat(zookeeperClient.getRebalanceTask().get().getExecutePlan())
+                .containsOnlyKeys(new TableBucket(1L, 10L, 2));
+
+        finishCurrentRound(manager, COMPLETED);
+        assertThat(zookeeperClient.getRebalanceExecution())
+                .hasValue(new RebalanceExecution("partitioned-round-test", COMPLETED, 2, 1, 2));
+        assertThat(manager.listRebalanceProgress(null).progressForBucketMap().values())
+                .allSatisfy(result -> assertThat(result.status()).isEqualTo(COMPLETED));
+
+        manager.close();
+    }
+
+    @Test
+    void testRoundBasedRebalanceRestoresFromZooKeeper() throws Exception {
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.COORDINATOR_REBALANCE_MAX_BUCKETS_PER_ROUND, 2);
+        RebalanceManager manager = createTestingRebalanceManager(conf);
+
+        Map<TableBucket, RebalancePlanForBucket> plan = createRebalancePlan(3);
+        manager.registerGeneratedRebalanceTask(
+                new RebalanceTask("restore-test", NOT_STARTED, plan));
+        finishCurrentRound(manager, COMPLETED);
+        manager.close();
+
+        RebalanceManager restoredManager = createTestingRebalanceManager(conf);
+        assertThat(restoredManager.hasInProgressRebalance()).isTrue();
+        assertThat(zookeeperClient.getRebalanceExecution())
+                .hasValue(new RebalanceExecution("restore-test", REBALANCING, 2, 1, 2));
+        assertThat(restoredManager.listRebalanceProgress(null).progressForBucketMap()).hasSize(3);
+
+        finishCurrentRound(restoredManager, COMPLETED);
+        assertThat(zookeeperClient.getRebalanceExecution())
+                .hasValue(new RebalanceExecution("restore-test", COMPLETED, 2, 1, 2));
+        assertThat(restoredManager.listRebalanceProgress(null).progressForBucketMap()).hasSize(3);
+
+        restoredManager.close();
+    }
+
+    @Test
+    void testCancelRoundBasedRebalanceMarksAllUnfinishedBuckets() throws Exception {
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.COORDINATOR_REBALANCE_MAX_BUCKETS_PER_ROUND, 2);
+        RebalanceManager manager = createTestingRebalanceManager(conf);
+
+        Map<TableBucket, RebalancePlanForBucket> plan = createRebalancePlan(3);
+        manager.registerGeneratedRebalanceTask(new RebalanceTask("cancel-test", NOT_STARTED, plan));
+        TableBucket firstBucket =
+                zookeeperClient
+                        .getRebalanceTask()
+                        .get()
+                        .getExecutePlan()
+                        .keySet()
+                        .iterator()
+                        .next();
+        manager.finishRebalanceTask(firstBucket, COMPLETED);
+        manager.cancelRebalance("cancel-test");
+
+        Optional<RebalanceExecution> rebalanceExecution = zookeeperClient.getRebalanceExecution();
+        assertThat(rebalanceExecution)
+                .hasValue(new RebalanceExecution("cancel-test", CANCELED, 2, 0, 2));
+        RebalanceProgress progress = manager.listRebalanceProgress(null);
+        assertThat(progress.status()).isEqualTo(CANCELED);
+        assertThat(progress.progressForBucketMap()).hasSize(3);
+        assertThat(progress.progressForBucketMap().get(firstBucket).status()).isEqualTo(COMPLETED);
+        assertThat(progress.progressForBucketMap().values())
+                .allSatisfy(result -> assertThat(result.status()).isIn(COMPLETED, CANCELED));
+
+        manager.close();
     }
 
     @Test
@@ -323,6 +559,58 @@ public class RebalanceManagerTest {
                 kvSnapshotLeaseManager,
                 scheduler,
                 SystemClock.getInstance());
+    }
+
+    private RebalanceManager createTestingRebalanceManager(Configuration conf) {
+        return createTestingRebalanceManager(conf, SystemClock.getInstance());
+    }
+
+    private RebalanceManager createTestingRebalanceManager(
+            Configuration conf, org.apache.fluss.utils.clock.Clock clock) {
+        RebalanceManager manager =
+                new RebalanceManager(
+                        buildCoordinatorEventProcessor(conf),
+                        zookeeperClient,
+                        new RecordingEventManager(),
+                        clock,
+                        new NoOpScheduledExecutor(),
+                        conf);
+        manager.startup();
+        return manager;
+    }
+
+    private Map<TableBucket, RebalancePlanForBucket> createRebalancePlan(int bucketCount) {
+        Map<TableBucket, RebalancePlanForBucket> plan = new LinkedHashMap<>();
+        for (int bucketId = 0; bucketId < bucketCount; bucketId++) {
+            TableBucket tableBucket = new TableBucket(1L, bucketId);
+            plan.put(
+                    tableBucket,
+                    new RebalancePlanForBucket(
+                            tableBucket, 0, 0, Arrays.asList(0, 1, 2), Arrays.asList(0, 1, 2)));
+        }
+        return plan;
+    }
+
+    private Map<TableBucket, RebalancePlanForBucket> createPartitionedRebalancePlan(
+            int bucketCount) {
+        Map<TableBucket, RebalancePlanForBucket> plan = new LinkedHashMap<>();
+        for (int bucketId = 0; bucketId < bucketCount; bucketId++) {
+            TableBucket tableBucket = new TableBucket(1L, 10L, bucketId);
+            plan.put(
+                    tableBucket,
+                    new RebalancePlanForBucket(
+                            tableBucket, 0, 0, Arrays.asList(0, 1, 2), Arrays.asList(0, 1, 2)));
+        }
+        return plan;
+    }
+
+    private void finishCurrentRound(RebalanceManager manager, RebalanceStatus status)
+            throws Exception {
+        List<TableBucket> currentRoundBuckets =
+                new ArrayList<>(zookeeperClient.getRebalanceTask().get().getExecutePlan().keySet());
+        for (TableBucket tableBucket : currentRoundBuckets) {
+            manager.finishRebalanceTask(tableBucket, status);
+        }
     }
 
     /** Records events put into the coordinator event queue. */
