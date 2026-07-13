@@ -825,6 +825,75 @@ class FlinkCatalogTest {
     }
 
     @Test
+    void testVirtualTablePartitionsAndExistence() throws Exception {
+        // Create a partitioned PK table
+        ObjectPath basePath = new ObjectPath(DEFAULT_DB, "partitioned_virtual_t");
+        ResolvedSchema resolvedSchema = this.createSchema();
+        CatalogTable partitionedTable =
+                new ResolvedCatalogTable(
+                        toCatalogTable(
+                                Schema.newBuilder().fromResolvedSchema(resolvedSchema).build(),
+                                "test comment",
+                                Collections.singletonList("first"),
+                                Collections.emptyMap()),
+                        resolvedSchema);
+        catalog.createTable(basePath, partitionedTable, false);
+
+        // Create a partition on the base table
+        CatalogPartitionSpec partSpec =
+                new CatalogPartitionSpec(Collections.singletonMap("first", "1"));
+        catalog.createPartition(basePath, partSpec, null, false);
+
+        // Verify base table partitions
+        List<CatalogPartitionSpec> basePartitions = catalog.listPartitions(basePath);
+        assertThat(basePartitions).hasSize(1);
+        assertThat(basePartitions.get(0).getPartitionSpec()).containsEntry("first", "1");
+
+        // Test tableExists on $changelog virtual table — should return true (base table exists)
+        ObjectPath changelogPath =
+                new ObjectPath(
+                        DEFAULT_DB, "partitioned_virtual_t" + FlinkCatalog.CHANGELOG_TABLE_SUFFIX);
+        assertThat(catalog.tableExists(changelogPath)).isTrue();
+
+        // Test listPartitions on $changelog virtual table — should return same partitions as base
+        List<CatalogPartitionSpec> changelogPartitions = catalog.listPartitions(changelogPath);
+        assertThat(changelogPartitions).hasSize(1);
+        assertThat(changelogPartitions.get(0).getPartitionSpec()).containsEntry("first", "1");
+
+        // Test listPartitions with spec on $changelog virtual table
+        List<CatalogPartitionSpec> changelogPartitionsWithSpec =
+                catalog.listPartitions(changelogPath, partSpec);
+        assertThat(changelogPartitionsWithSpec).hasSize(1);
+        assertThat(changelogPartitionsWithSpec.get(0).getPartitionSpec())
+                .containsEntry("first", "1");
+
+        // Test tableExists on $binlog virtual table — should return true (base table exists)
+        ObjectPath binlogPath =
+                new ObjectPath(
+                        DEFAULT_DB, "partitioned_virtual_t" + FlinkCatalog.BINLOG_TABLE_SUFFIX);
+        assertThat(catalog.tableExists(binlogPath)).isTrue();
+
+        // Test listPartitions on $binlog virtual table — should return same partitions as base
+        List<CatalogPartitionSpec> binlogPartitions = catalog.listPartitions(binlogPath);
+        assertThat(binlogPartitions).hasSize(1);
+        assertThat(binlogPartitions.get(0).getPartitionSpec()).containsEntry("first", "1");
+
+        // Test createPartition on $changelog virtual table — should work on base table
+        CatalogPartitionSpec partSpec2 =
+                new CatalogPartitionSpec(Collections.singletonMap("first", "2"));
+        catalog.createPartition(changelogPath, partSpec2, null, false);
+        assertThat(catalog.listPartitions(basePath)).hasSize(2);
+
+        // Test dropPartition on $binlog virtual table — should work on base table
+        catalog.dropPartition(binlogPath, partSpec2, false);
+        assertThat(catalog.listPartitions(basePath)).hasSize(1);
+
+        // Clean up
+        catalog.dropPartition(basePath, partSpec, false);
+        catalog.dropTable(basePath, false);
+    }
+
+    @Test
     void testCreatePartitions() throws Exception {
         ObjectPath nonPartitionedPath = new ObjectPath(DEFAULT_DB, "non_partitioned_table1");
         ResolvedSchema resolvedSchema = this.createSchema();
