@@ -484,7 +484,12 @@ public class FlussAdmin implements Admin {
 
     @Override
     public KvSnapshotLease createKvSnapshotLease(String leaseId, long leaseDurationMs) {
-        return new KvSnapshotLeaseImpl(leaseId, leaseDurationMs, gateway);
+        return new KvSnapshotLeaseImpl(
+                leaseId,
+                leaseDurationMs,
+                gateway,
+                metadataUpdater::refreshClusterUntilAvailable,
+                refreshExecutor);
     }
 
     @Override

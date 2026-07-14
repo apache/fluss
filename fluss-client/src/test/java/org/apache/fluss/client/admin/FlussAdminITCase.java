@@ -1150,6 +1150,46 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
     }
 
     @Test
+    void testKvSnapshotLeaseAfterCoordinatorServerRestart() throws Exception {
+        long tableId = admin.getTableInfo(DEFAULT_TABLE_PATH).get().getTableId();
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+        Map<TableBucket, Long> snapshots = Collections.singletonMap(tableBucket, 0L);
+        KvSnapshotLease lease = admin.createKvSnapshotLease("test-retry-kv-snapshot-lease", 60000L);
+        ZooKeeperClient zkClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
+
+        // Restart the coordinator server so that the lease uses a stale cached address.
+        restartCoordinatorServer(zkClient);
+
+        lease.acquireSnapshots(snapshots).get();
+        assertThat(zkClient.getKvSnapshotLeaseMetadata(lease.leaseId())).isPresent();
+
+        // Verify that release also refreshes metadata and retries against the new coordinator.
+        restartCoordinatorServer(zkClient);
+
+        lease.releaseSnapshots(Collections.singleton(tableBucket)).get();
+        assertThat(zkClient.getKvSnapshotLeaseMetadata(lease.leaseId())).isNotPresent();
+
+        // Recreate the lease before verifying drop with another stale coordinator address.
+        lease.acquireSnapshots(snapshots).get();
+        assertThat(zkClient.getKvSnapshotLeaseMetadata(lease.leaseId())).isPresent();
+
+        restartCoordinatorServer(zkClient);
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
+
+        lease.dropLease().get();
+        assertThat(zkClient.getKvSnapshotLeaseMetadata(lease.leaseId())).isNotPresent();
+    }
+
+    private void restartCoordinatorServer(ZooKeeperClient zkClient) throws Exception {
+        FLUSS_CLUSTER_EXTENSION.stopCoordinatorServer();
+        waitUntil(
+                () -> !zkClient.getCoordinatorLeaderAddress().isPresent(),
+                Duration.ofMinutes(1),
+                "Coordinator server node still exists in ZooKeeper");
+        FLUSS_CLUSTER_EXTENSION.startCoordinatorServer();
+    }
+
+    @Test
     void testListPartitionInfosByPartitionSpec() throws Exception {
         String dbName = DEFAULT_TABLE_PATH.getDatabaseName();
 

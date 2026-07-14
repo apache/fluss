@@ -295,6 +295,7 @@ public final class FlussClusterExtension
 
     public void stopCoordinatorServer() throws Exception {
         coordinatorServer.close();
+        coordinatorServer = null;
     }
 
     private void startTabletServers() throws Exception {
