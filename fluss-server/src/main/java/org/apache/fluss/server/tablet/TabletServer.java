@@ -542,6 +542,7 @@ public class TabletServer extends ServerBase {
     }
 
     private void controlledShutDown() {
+        long startTime = System.currentTimeMillis();
         LOG.info("Starting controlled shutdown.");
 
         // We request the CoordinatorServer to do a controlled shutdown. On failure, we backoff for
@@ -597,6 +598,11 @@ public class TabletServer extends ServerBase {
             LOG.warn(
                     "Proceeding to do an unclean shutdown as all the controlled shutdown attempts failed.");
         }
+
+        LOG.info(
+                "Controlled shutdown attempts finished in {} ms, succeeded: {}.",
+                System.currentTimeMillis() - startTime,
+                shutdownSucceeded);
     }
 
     @Override
