@@ -23,7 +23,7 @@ mod table_test {
         create_table, dt_array_int, dt_map_string_int, dt_row_seq_label, extract_ids_from_batches,
         get_shared_cluster, make_int_array, make_string_array, map_dt_basics_columns,
         poll_until_count, poll_until_nonempty, row_dt_basics_columns, scalar_dt_columns,
-        wait_for_partitions_ready, wait_for_table_ready,
+        wait_for_partitions_ready, wait_for_table_buckets_ready, wait_for_table_ready,
     };
     use arrow::array::record_batch;
     use fluss::client::{EARLIEST_OFFSET, FlussTable, TableScan};
@@ -2180,5 +2180,169 @@ mod table_test {
             .drop_table(&table_path, false)
             .await
             .expect("Failed to drop table");
+    }
+
+    #[tokio::test]
+    async fn append_hash_distributes_by_declared_bucket_key() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("admin");
+
+        let table_path = TablePath::new("fluss", "test_log_append_bucket_key_spread");
+        let descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("c1", DataTypes::int())
+                    .column("c2", DataTypes::string())
+                    .build()
+                    .expect("schema"),
+            )
+            .distributed_by(Some(3), vec!["c1".to_string()])
+            .build()
+            .expect("descriptor");
+        create_table(&admin, &table_path, &descriptor).await;
+        wait_for_table_buckets_ready(&admin, &table_path, &[0, 1, 2]).await;
+
+        let table = connection.get_table(&table_path).await.expect("table");
+        let writer = table
+            .new_append()
+            .expect("append")
+            .create_writer()
+            .expect("writer");
+
+        let row_count: i32 = 30;
+        for id in 1..=row_count {
+            let mut row = GenericRow::new(2);
+            row.set_field(0, id);
+            row.set_field(1, "x");
+            writer.append(&row).expect("append row");
+        }
+        writer.flush().await.expect("flush");
+
+        let offsets = admin
+            .list_offsets(&table_path, &[0, 1, 2], OffsetSpec::Latest)
+            .await
+            .expect("list offsets");
+
+        let total: i64 = offsets.values().sum();
+        assert_eq!(
+            total, row_count as i64,
+            "every appended row must be persisted, got per-bucket offsets {offsets:?}"
+        );
+
+        let non_empty = offsets.values().filter(|&&o| o > 0).count();
+        assert!(
+            non_empty >= 2,
+            "rows must hash-distribute across buckets, got per-bucket offsets {offsets:?}"
+        );
+
+        admin.drop_table(&table_path, false).await.expect("drop");
+    }
+
+    #[tokio::test]
+    async fn append_same_bucket_key_lands_in_one_bucket() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("admin");
+
+        let table_path = TablePath::new("fluss", "test_log_append_bucket_key_colocate");
+        let descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("c1", DataTypes::int())
+                    .column("c2", DataTypes::string())
+                    .build()
+                    .expect("schema"),
+            )
+            .distributed_by(Some(3), vec!["c1".to_string()])
+            .build()
+            .expect("descriptor");
+        create_table(&admin, &table_path, &descriptor).await;
+        wait_for_table_buckets_ready(&admin, &table_path, &[0, 1, 2]).await;
+
+        let table = connection.get_table(&table_path).await.expect("table");
+        let writer = table
+            .new_append()
+            .expect("append")
+            .create_writer()
+            .expect("writer");
+
+        for _ in 0..5 {
+            let mut row = GenericRow::new(2);
+            row.set_field(0, 42);
+            row.set_field(1, "x");
+            writer.append(&row).expect("append row");
+        }
+        writer.flush().await.expect("flush");
+
+        let offsets = admin
+            .list_offsets(&table_path, &[0, 1, 2], OffsetSpec::Latest)
+            .await
+            .expect("list offsets");
+
+        let non_empty: Vec<_> = offsets.iter().filter(|&(_, &o)| o > 0).collect();
+        assert_eq!(
+            non_empty.len(),
+            1,
+            "all rows with the same bucket key must land in one bucket, got {offsets:?}"
+        );
+        assert_eq!(
+            *non_empty[0].1, 5,
+            "that bucket must hold all five rows, got {offsets:?}"
+        );
+
+        admin.drop_table(&table_path, false).await.expect("drop");
+    }
+
+    #[tokio::test]
+    async fn append_arrow_batch_splits_mixed_keys_across_buckets() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("admin");
+
+        let table_path = TablePath::new("fluss", "test_log_append_arrow_split");
+        let descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("c1", DataTypes::int())
+                    .column("c2", DataTypes::string())
+                    .build()
+                    .expect("schema"),
+            )
+            .distributed_by(Some(3), vec!["c1".to_string()])
+            .build()
+            .expect("descriptor");
+        create_table(&admin, &table_path, &descriptor).await;
+        wait_for_table_buckets_ready(&admin, &table_path, &[0, 1, 2]).await;
+
+        let table = connection.get_table(&table_path).await.expect("table");
+        let writer = table
+            .new_append()
+            .expect("append")
+            .create_writer()
+            .expect("writer");
+
+        let batch = record_batch!(
+            ("c1", Int32, [1, 2, 3, 4, 5, 6, 7, 8, 9]),
+            ("c2", Utf8, ["a", "b", "c", "d", "e", "f", "g", "h", "i"])
+        )
+        .unwrap();
+        writer.append_arrow_batch(batch).expect("append batch");
+        writer.flush().await.expect("flush");
+
+        let offsets = admin
+            .list_offsets(&table_path, &[0, 1, 2], OffsetSpec::Latest)
+            .await
+            .expect("list offsets");
+
+        let total: i64 = offsets.values().sum();
+        assert_eq!(total, 9, "all rows must be persisted, got {offsets:?}");
+        let non_empty = offsets.values().filter(|&&o| o > 0).count();
+        assert!(
+            non_empty >= 2,
+            "a mixed-key batch must be split across buckets, got {offsets:?}"
+        );
+
+        admin.drop_table(&table_path, false).await.expect("drop");
     }
 }

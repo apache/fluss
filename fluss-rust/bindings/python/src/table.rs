@@ -1032,7 +1032,10 @@ pub struct AppendWriter {
 
 #[pymethods]
 impl AppendWriter {
-    /// Write Arrow table data (fire-and-forget, use flush() to ensure delivery)
+    /// Write Arrow table data (fire-and-forget, use flush() to ensure delivery).
+    ///
+    /// For a partitioned table, every batch must contain rows of a single partition
+    /// (see `write_arrow_batch`).
     pub fn write_arrow(&self, py: Python, table: Py<PyAny>) -> PyResult<()> {
         // Convert Arrow Table to batches and write each batch
         let batches = table.call_method0(py, "to_batches")?;
@@ -1046,6 +1049,10 @@ impl AppendWriter {
     }
 
     /// Write Arrow batch data.
+    ///
+    /// For a partitioned table the partition is derived from the first row, so all
+    /// rows must belong to the same partition. Rows are distributed across buckets
+    /// by their bucket key automatically.
     ///
     /// Returns:
     ///     WriteResultHandle that can be ignored (fire-and-forget) or
