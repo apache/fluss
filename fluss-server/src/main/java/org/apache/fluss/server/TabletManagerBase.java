@@ -43,14 +43,17 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.utils.FlussPaths.KV_TABLET_DIR_PREFIX;
@@ -147,6 +150,40 @@ public abstract class TabletManagerBase {
 
     protected ExecutorService createThreadPool(String poolName) {
         return Executors.newFixedThreadPool(recoveryThreads, new ExecutorThreadFactory(poolName));
+    }
+
+    /**
+     * Closes the given tablets concurrently and returns a future that completes after all close
+     * operations have finished.
+     *
+     * <p>The closing thread pool is shut down automatically after all close operations complete.
+     * The caller is responsible for handling exceptions inside the close action if one failed
+     * tablet should not prevent the remaining shutdown steps from running.
+     *
+     * @param tablets tablets to close
+     * @param poolName name of the closing thread pool
+     * @param closeAction action that closes a tablet
+     * @param <T> type of tablet
+     * @return a future that completes after all tablets have been closed
+     */
+    protected <T> CompletableFuture<Void> closeTabletsConcurrently(
+            Collection<T> tablets, String poolName, Consumer<T> closeAction) {
+        LOG.info(
+                "Closing {} tablets with up to {} threads in pool {}.",
+                tablets.size(),
+                recoveryThreads,
+                poolName);
+        ExecutorService closingPool = createThreadPool(poolName);
+        List<CompletableFuture<Void>> closingFutures = new ArrayList<>(tablets.size());
+        for (T tablet : tablets) {
+            closingFutures.add(
+                    CompletableFuture.runAsync(() -> closeAction.accept(tablet), closingPool));
+        }
+
+        CompletableFuture<Void> closingFuture =
+                CompletableFuture.allOf(
+                        closingFutures.toArray(new CompletableFuture<?>[closingFutures.size()]));
+        return closingFuture.whenComplete((ignored, throwable) -> closingPool.shutdown());
     }
 
     /**
