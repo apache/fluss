@@ -34,6 +34,7 @@ class KvSharedSstRuleTest {
     private static final long NOW = 1_700_000_000_000L;
     private static final long DAY_MS = 24L * 60L * 60L * 1000L;
     private static final long CUTOFF_MS = NOW - DAY_MS;
+    private static final String SHARED_UUID = "83cc543d-5050-4f75-b15d-3f8a466cf107";
 
     private final KvSharedSstRule rule = new KvSharedSstRule();
 
@@ -68,6 +69,38 @@ class KvSharedSstRuleTest {
         FileMeta file = file("/kv/db/t-1/0/shared/abc-001.sst", NOW - 2 * DAY_MS);
 
         assertThat(rule.evaluate(file, sharedSstActiveRefs("abc-001.sst"), CUTOFF_MS))
+                .isEqualTo(Decision.KEEP_ACTIVE);
+    }
+
+    @Test
+    void deletesExpiredUnreferencedSharedUuid() {
+        FileMeta file = file("/kv/db/t-1/0/shared/" + SHARED_UUID, NOW - 2 * DAY_MS);
+
+        assertThat(rule.evaluate(file, sharedSstActiveRefs("other-file"), CUTOFF_MS))
+                .isEqualTo(Decision.DELETE);
+    }
+
+    @Test
+    void defersYoungUnreferencedSharedUuid() {
+        FileMeta file = file("/kv/db/t-1/0/shared/" + SHARED_UUID, NOW - DAY_MS / 2);
+
+        assertThat(rule.evaluate(file, sharedSstActiveRefs("other-file"), CUTOFF_MS))
+                .isEqualTo(Decision.DEFER);
+    }
+
+    @Test
+    void keepsReferencedSharedUuid() {
+        FileMeta file = file("/kv/db/t-1/0/shared/" + SHARED_UUID, NOW - 2 * DAY_MS);
+
+        assertThat(rule.evaluate(file, sharedSstActiveRefs(SHARED_UUID), CUTOFF_MS))
+                .isEqualTo(Decision.KEEP_ACTIVE);
+    }
+
+    @Test
+    void keepsSharedUuidWhenActiveSetIsEmpty() {
+        FileMeta file = file("/kv/db/t-1/0/shared/" + SHARED_UUID, NOW - 2 * DAY_MS);
+
+        assertThat(rule.evaluate(file, BucketActiveRefs.empty(), CUTOFF_MS))
                 .isEqualTo(Decision.KEEP_ACTIVE);
     }
 

@@ -21,6 +21,8 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.utils.FlussPaths;
 
+import java.util.regex.Pattern;
+
 /**
  * Rule for shared SST files under the {@code shared/} KV directory.
  *
@@ -35,6 +37,10 @@ import org.apache.fluss.utils.FlussPaths;
 @Internal
 public final class KvSharedSstRule implements FileRule {
 
+    private static final Pattern REMOTE_FILE_UUID =
+            Pattern.compile(
+                    "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}");
+
     @Override
     public RuleId id() {
         return RuleId.KV_SHARED_SST;
@@ -46,11 +52,11 @@ public final class KvSharedSstRule implements FileRule {
         if (parent == null || !FlussPaths.REMOTE_KV_SNAPSHOT_SHARED_DIR.equals(parent.getName())) {
             return Decision.SKIP_UNKNOWN;
         }
-        if (!file.path().getName().endsWith(".sst")) {
+        String fileName = file.path().getName();
+        if (!fileName.endsWith(".sst") && !REMOTE_FILE_UUID.matcher(fileName).matches()) {
             return Decision.SKIP_UNKNOWN;
         }
 
-        String fileName = file.path().getName();
         if (activeRefs.kvSharedSstFileNames().contains(fileName)) {
             return Decision.KEEP_ACTIVE;
         }
