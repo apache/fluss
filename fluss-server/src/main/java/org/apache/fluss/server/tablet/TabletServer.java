@@ -178,6 +178,14 @@ public class TabletServer extends ServerBase {
     @GuardedBy("lock")
     private ExecutorService ioExecutor;
 
+    /**
+     * Runs replica state changes outside RPC worker threads to prevent potentially slow state
+     * transitions from blocking other RPCs. A single thread is sufficient because replica state
+     * changes are serialized by the replica state change lock.
+     */
+    @GuardedBy("lock")
+    private ExecutorService replicaStateChangeExecutor;
+
     public TabletServer(Configuration conf) {
         this(conf, SystemClock.getInstance());
     }
@@ -266,6 +274,9 @@ public class TabletServer extends ServerBase {
                     Executors.newFixedThreadPool(
                             conf.get(ConfigOptions.SERVER_IO_POOL_SIZE),
                             new ExecutorThreadFactory("tablet-server-io"));
+            this.replicaStateChangeExecutor =
+                    Executors.newSingleThreadExecutor(
+                            new ExecutorThreadFactory("tablet-server-replica-state-change"));
 
             this.scannerManager = new ScannerManager(conf, scheduler);
 
@@ -302,6 +313,7 @@ public class TabletServer extends ServerBase {
                             authorizer,
                             dynamicConfigManager,
                             ioExecutor,
+                            replicaStateChangeExecutor,
                             scannerManager,
                             coordinatorGateway,
                             interListenerName);
@@ -434,6 +446,14 @@ public class TabletServer extends ServerBase {
             try {
                 if (tabletService != null) {
                     tabletService.shutdown();
+                }
+            } catch (Throwable t) {
+                exception = ExceptionUtils.firstOrSuppressed(t, exception);
+            }
+
+            try {
+                if (replicaStateChangeExecutor != null) {
+                    ExecutorUtils.gracefulShutdown(5, TimeUnit.SECONDS, replicaStateChangeExecutor);
                 }
             } catch (Throwable t) {
                 exception = ExceptionUtils.firstOrSuppressed(t, exception);

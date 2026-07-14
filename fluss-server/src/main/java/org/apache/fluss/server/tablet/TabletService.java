@@ -154,6 +154,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     private final ScannerManager scannerManager;
     private final CoordinatorGateway coordinatorGateway;
     private final String interListenerName;
+    private final ExecutorService replicaStateChangeExecutor;
 
     public TabletService(
             int serverId,
@@ -165,6 +166,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
             @Nullable Authorizer authorizer,
             DynamicConfigManager dynamicConfigManager,
             ExecutorService ioExecutor,
+            ExecutorService replicaStateChangeExecutor,
             ScannerManager scannerManager,
             CoordinatorGateway coordinatorGateway,
             String interListenerName) {
@@ -184,6 +186,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         this.scannerManager = scannerManager;
         this.coordinatorGateway = coordinatorGateway;
         this.interListenerName = interListenerName;
+        this.replicaStateChangeExecutor = replicaStateChangeExecutor;
     }
 
     @Override
@@ -359,12 +362,26 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     public CompletableFuture<NotifyLeaderAndIsrResponse> notifyLeaderAndIsr(
             NotifyLeaderAndIsrRequest notifyLeaderAndIsrRequest) {
         CompletableFuture<NotifyLeaderAndIsrResponse> response = new CompletableFuture<>();
+        int coordinatorEpoch = notifyLeaderAndIsrRequest.getCoordinatorEpoch();
         List<NotifyLeaderAndIsrData> notifyLeaderAndIsrRequestData =
                 getNotifyLeaderAndIsrRequestData(notifyLeaderAndIsrRequest);
-        replicaManager.becomeLeaderOrFollower(
-                notifyLeaderAndIsrRequest.getCoordinatorEpoch(),
-                notifyLeaderAndIsrRequestData,
-                result -> response.complete(makeNotifyLeaderAndIsrResponse(result)));
+        try {
+            replicaStateChangeExecutor.execute(
+                    () -> {
+                        try {
+                            replicaManager.becomeLeaderOrFollower(
+                                    coordinatorEpoch,
+                                    notifyLeaderAndIsrRequestData,
+                                    result ->
+                                            response.complete(
+                                                    makeNotifyLeaderAndIsrResponse(result)));
+                        } catch (Throwable t) {
+                            response.completeExceptionally(t);
+                        }
+                    });
+        } catch (Throwable t) {
+            response.completeExceptionally(t);
+        }
         return response;
     }
 
