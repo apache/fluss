@@ -226,7 +226,7 @@ public class TabletServer extends ServerBase {
                     new LakeCatalogDynamicLoader(conf, pluginManager, false);
             MetadataManager metadataManager =
                     new MetadataManager(zkClient, conf, lakeCatalogDynamicLoader);
-            this.dynamicConfigManager = new DynamicConfigManager(zkClient, conf, false);
+            this.dynamicConfigManager = new DynamicConfigManager(zkClient, conf);
 
             this.metadataCache = new TabletServerMetadataCache(metadataManager);
 

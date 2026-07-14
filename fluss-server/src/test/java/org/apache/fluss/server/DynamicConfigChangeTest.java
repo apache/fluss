@@ -34,7 +34,8 @@ import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.ZooKeeperUtils;
-import org.apache.fluss.server.zk.data.ZkData.ConfigEntityZNode;
+import org.apache.fluss.server.zk.data.ZkData.ConfigZNode;
+import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 
 import org.junit.jupiter.api.AfterAll;
@@ -46,9 +47,11 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -70,6 +73,13 @@ public class DynamicConfigChangeTest {
 
     protected static ZooKeeperClient zookeeperClient;
 
+    /**
+     * Managers created during a test. Each one starts a ZooKeeper notification watcher on {@link
+     * DynamicConfigManager#startup()}, so they must be closed after the test to stop reacting to
+     * config changes written by later tests that share the same static {@link #zookeeperClient}.
+     */
+    private final List<DynamicConfigManager> managers = new ArrayList<>();
+
     @BeforeAll
     static void beforeAll() {
         final Configuration configuration = new Configuration();
@@ -90,15 +100,38 @@ public class DynamicConfigChangeTest {
 
     @AfterEach
     void after() throws Exception {
-        zookeeperClient.deletePath(ConfigEntityZNode.path());
+        for (DynamicConfigManager manager : managers) {
+            manager.close();
+        }
+        managers.clear();
+        // Recursively delete /config so both the entity config (/config/server/global) and the
+        // change notifications (/config/changes/...) are removed for the next test.
+        try {
+            zookeeperClient
+                    .getCuratorClient()
+                    .delete()
+                    .deletingChildrenIfNeeded()
+                    .forPath(ConfigZNode.path());
+        } catch (KeeperException.NoNodeException ignored) {
+            // Nothing was written in this test.
+        }
+    }
+
+    /**
+     * Creates a manager and tracks it so {@link #after()} closes it. Prefer this over calling the
+     * constructor directly so the manager's notification watcher is stopped after the test.
+     */
+    private DynamicConfigManager createManager(Configuration configuration) {
+        DynamicConfigManager manager = new DynamicConfigManager(zookeeperClient, configuration);
+        managers.add(manager);
+        return manager;
     }
 
     @Test
     void testAlterLakehouseConfigs() throws Exception {
         try (LakeCatalogDynamicLoader lakeCatalogDynamicLoader =
                 new LakeCatalogDynamicLoader(new Configuration(), null, true)) {
-            DynamicConfigManager dynamicConfigManager =
-                    new DynamicConfigManager(zookeeperClient, new Configuration(), true);
+            DynamicConfigManager dynamicConfigManager = createManager(new Configuration());
             dynamicConfigManager.register(lakeCatalogDynamicLoader);
             dynamicConfigManager.startup();
             assertThatThrownBy(
@@ -149,8 +182,7 @@ public class DynamicConfigChangeTest {
         configuration.setString(DATALAKE_FORMAT.key(), "paimon");
         try (LakeCatalogDynamicLoader lakeCatalogDynamicLoader =
                 new LakeCatalogDynamicLoader(configuration, null, true)) {
-            DynamicConfigManager dynamicConfigManager =
-                    new DynamicConfigManager(zookeeperClient, configuration, true);
+            DynamicConfigManager dynamicConfigManager = createManager(configuration);
             dynamicConfigManager.register(lakeCatalogDynamicLoader);
             dynamicConfigManager.startup();
             assertThat(lakeCatalogDynamicLoader.getLakeCatalogContainer().getDataLakeFormat())
@@ -174,8 +206,7 @@ public class DynamicConfigChangeTest {
         Configuration configuration = new Configuration();
         try (LakeCatalogDynamicLoader lakeCatalogDynamicLoader =
                 new LakeCatalogDynamicLoader(configuration, null, true)) {
-            DynamicConfigManager dynamicConfigManager =
-                    new DynamicConfigManager(zookeeperClient, configuration, true);
+            DynamicConfigManager dynamicConfigManager = createManager(configuration);
             dynamicConfigManager.register(lakeCatalogDynamicLoader);
             dynamicConfigManager.startup();
             assertThatThrownBy(
@@ -199,8 +230,7 @@ public class DynamicConfigChangeTest {
         Configuration configuration = new Configuration();
         try (LakeCatalogDynamicLoader lakeCatalogDynamicLoader =
                 new LakeCatalogDynamicLoader(configuration, null, true)) {
-            DynamicConfigManager dynamicConfigManager =
-                    new DynamicConfigManager(zookeeperClient, configuration, true);
+            DynamicConfigManager dynamicConfigManager = createManager(configuration);
             dynamicConfigManager.register(lakeCatalogDynamicLoader);
             dynamicConfigManager.startup();
 
@@ -235,8 +265,7 @@ public class DynamicConfigChangeTest {
         Configuration configuration = new Configuration();
         try (LakeCatalogDynamicLoader lakeCatalogDynamicLoader =
                 new LakeCatalogDynamicLoader(configuration, null, true)) {
-            DynamicConfigManager dynamicConfigManager =
-                    new DynamicConfigManager(zookeeperClient, configuration, true);
+            DynamicConfigManager dynamicConfigManager = createManager(configuration);
             dynamicConfigManager.register(lakeCatalogDynamicLoader);
             dynamicConfigManager.startup();
             assertThatThrownBy(
@@ -264,8 +293,7 @@ public class DynamicConfigChangeTest {
         Configuration configuration = new Configuration();
         try (LakeCatalogDynamicLoader lakeCatalogDynamicLoader =
                 new LakeCatalogDynamicLoader(configuration, null, false)) {
-            DynamicConfigManager dynamicConfigManager =
-                    new DynamicConfigManager(zookeeperClient, configuration, false);
+            DynamicConfigManager dynamicConfigManager = createManager(configuration);
             dynamicConfigManager.register(lakeCatalogDynamicLoader);
             dynamicConfigManager.startup();
             assertThat(lakeCatalogDynamicLoader.getLakeCatalogContainer().getDataLakeFormat())
@@ -285,6 +313,41 @@ public class DynamicConfigChangeTest {
         }
     }
 
+    /**
+     * Regression test for #3625: a {@link DynamicConfigManager} must keep applying config-change
+     * notifications pushed to ZooKeeper by another writer. This is what lets a standby
+     * CoordinatorServer stay current so that, once promoted, it does not run with stale config.
+     */
+    @Test
+    void testTracksConfigChangeNotificationsFromOtherWriter() throws Exception {
+        Configuration configuration = new Configuration();
+        configuration.set(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER, 1);
+
+        DynamicConfigManager dynamicConfigManager = createManager(configuration);
+        AtomicInteger reconfiguredValue = new AtomicInteger();
+        dynamicConfigManager.register(
+                new ServerReconfigurable() {
+                    @Override
+                    public void validate(Configuration newConfig) throws ConfigException {}
+
+                    @Override
+                    public void reconfigure(Configuration newConfig) {
+                        reconfiguredValue.set(
+                                newConfig.get(
+                                        ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER));
+                    }
+                });
+        dynamicConfigManager.startup();
+
+        // Simulate another server (e.g. the active leader) persisting a config change to ZK,
+        // which inserts a change notification the manager under test must react to.
+        Map<String, String> config = new HashMap<>();
+        config.put(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER.key(), "3");
+        zookeeperClient.upsertServerEntityConfig(config);
+
+        retry(Duration.ofMinutes(1), () -> assertThat(reconfiguredValue.get()).isEqualTo(3));
+    }
+
     @Test
     void testReStartupContainsNoMatchedDynamicConfig() throws Exception {
         Configuration configuration = new Configuration();
@@ -297,8 +360,7 @@ public class DynamicConfigChangeTest {
 
         try (LakeCatalogDynamicLoader lakeCatalogDynamicLoader =
                 new LakeCatalogDynamicLoader(configuration, null, true)) {
-            DynamicConfigManager dynamicConfigManager =
-                    new DynamicConfigManager(zookeeperClient, configuration, true);
+            DynamicConfigManager dynamicConfigManager = createManager(configuration);
             dynamicConfigManager.register(lakeCatalogDynamicLoader);
             // Startup dynamic manager even is not matched now.
             dynamicConfigManager.startup();
@@ -313,8 +375,7 @@ public class DynamicConfigChangeTest {
         Configuration configuration = new Configuration();
         configuration.setString(ConfigOptions.KV_SHARED_RATE_LIMITER_BYTES_PER_SEC.key(), "100MB");
 
-        DynamicConfigManager dynamicConfigManager =
-                new DynamicConfigManager(zookeeperClient, configuration, true);
+        DynamicConfigManager dynamicConfigManager = createManager(configuration);
         dynamicConfigManager.startup();
 
         // Try to set rate limiter to an invalid value - should be rejected by generic type
@@ -340,8 +401,7 @@ public class DynamicConfigChangeTest {
         Configuration configuration = new Configuration();
         configuration.setString(ConfigOptions.KV_SHARED_RATE_LIMITER_BYTES_PER_SEC.key(), "100MB");
 
-        DynamicConfigManager dynamicConfigManager =
-                new DynamicConfigManager(zookeeperClient, configuration, true);
+        DynamicConfigManager dynamicConfigManager = createManager(configuration);
         dynamicConfigManager.startup();
 
         // Adjust rate limiter value - should succeed
@@ -365,8 +425,7 @@ public class DynamicConfigChangeTest {
 
         try (LakeCatalogDynamicLoader lakeCatalogDynamicLoader =
                 new LakeCatalogDynamicLoader(configuration, null, true)) {
-            DynamicConfigManager dynamicConfigManager =
-                    new DynamicConfigManager(zookeeperClient, configuration, true);
+            DynamicConfigManager dynamicConfigManager = createManager(configuration);
 
             // Register reconfigurables - generic type validation works automatically
             dynamicConfigManager.register(lakeCatalogDynamicLoader);
@@ -397,8 +456,7 @@ public class DynamicConfigChangeTest {
         Configuration configuration = new Configuration();
         configuration.set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofMinutes(10));
 
-        DynamicConfigManager dynamicConfigManager =
-                new DynamicConfigManager(zookeeperClient, configuration, true);
+        DynamicConfigManager dynamicConfigManager = createManager(configuration);
         dynamicConfigManager.startup();
 
         // Try to set snapshot interval to an invalid value - should be rejected by type validation
@@ -420,8 +478,7 @@ public class DynamicConfigChangeTest {
         Configuration configuration = new Configuration();
         configuration.set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofMinutes(10));
 
-        DynamicConfigManager dynamicConfigManager =
-                new DynamicConfigManager(zookeeperClient, configuration, true);
+        DynamicConfigManager dynamicConfigManager = createManager(configuration);
 
         AtomicReference<Duration> reconfiguredInterval = new AtomicReference<>();
         dynamicConfigManager.register(
@@ -461,8 +518,7 @@ public class DynamicConfigChangeTest {
 
         try (RemoteDirDynamicLoader remoteDirDynamicLoader =
                 new RemoteDirDynamicLoader(configuration)) {
-            DynamicConfigManager dynamicConfigManager =
-                    new DynamicConfigManager(zookeeperClient, configuration, true);
+            DynamicConfigManager dynamicConfigManager = createManager(configuration);
             dynamicConfigManager.register(remoteDirDynamicLoader);
             dynamicConfigManager.startup();
 
@@ -509,8 +565,7 @@ public class DynamicConfigChangeTest {
         Configuration configuration = new Configuration();
         configuration.setInt(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER, 1);
 
-        DynamicConfigManager dynamicConfigManager =
-                new DynamicConfigManager(zookeeperClient, configuration, true);
+        DynamicConfigManager dynamicConfigManager = createManager(configuration);
         dynamicConfigManager.startup();
 
         // Try to set min-in-sync-replicas to an invalid value - should be rejected by type
@@ -536,8 +591,7 @@ public class DynamicConfigChangeTest {
         Configuration configuration = new Configuration();
         configuration.setInt(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER, 1);
 
-        DynamicConfigManager dynamicConfigManager =
-                new DynamicConfigManager(zookeeperClient, configuration, true);
+        DynamicConfigManager dynamicConfigManager = createManager(configuration);
 
         AtomicInteger reconfiguredValue = new AtomicInteger();
         dynamicConfigManager.register(
@@ -575,8 +629,7 @@ public class DynamicConfigChangeTest {
     void testExplicitDataLakeEnabledRequiresDataLakeFormat() throws Exception {
         try (LakeCatalogDynamicLoader lakeCatalogDynamicLoader =
                 new LakeCatalogDynamicLoader(new Configuration(), null, true)) {
-            DynamicConfigManager dynamicConfigManager =
-                    new DynamicConfigManager(zookeeperClient, new Configuration(), true);
+            DynamicConfigManager dynamicConfigManager = createManager(new Configuration());
             dynamicConfigManager.register(lakeCatalogDynamicLoader);
             dynamicConfigManager.startup();
 
@@ -647,8 +700,7 @@ public class DynamicConfigChangeTest {
         configuration.setString(ConfigOptions.DATA_DIR, dataDir.getAbsolutePath());
         configuration.set(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO, 0.85);
 
-        DynamicConfigManager dynamicConfigManager =
-                new DynamicConfigManager(zookeeperClient, configuration, true);
+        DynamicConfigManager dynamicConfigManager = createManager(configuration);
 
         // Create LocalDiskManager and register it
         try (LocalDiskManager localDiskManager = LocalDiskManager.create(configuration)) {
@@ -711,10 +763,8 @@ public class DynamicConfigChangeTest {
         }
     }
 
-    private static DynamicConfigManager createDiskWriteLimitDynamicConfigManager()
-            throws Exception {
-        DynamicConfigManager dynamicConfigManager =
-                new DynamicConfigManager(zookeeperClient, new Configuration(), true);
+    private DynamicConfigManager createDiskWriteLimitDynamicConfigManager() throws Exception {
+        DynamicConfigManager dynamicConfigManager = createManager(new Configuration());
         dynamicConfigManager.register(new DiskWriteLimitConfigValidator());
         dynamicConfigManager.startup();
         return dynamicConfigManager;
@@ -745,8 +795,7 @@ public class DynamicConfigChangeTest {
     @Test
     void testAppendAndSubtractOnMapConfig() throws Exception {
         Configuration configuration = new Configuration();
-        DynamicConfigManager dynamicConfigManager =
-                new DynamicConfigManager(zookeeperClient, configuration, true);
+        DynamicConfigManager dynamicConfigManager = createManager(configuration);
 
         AtomicReference<Map<String, String>> reconfiguredUsers = new AtomicReference<>();
         dynamicConfigManager.register(
@@ -821,8 +870,7 @@ public class DynamicConfigChangeTest {
     @Test
     void testAppendOnNonListOrMapConfigIsRejected() throws Exception {
         Configuration configuration = new Configuration();
-        DynamicConfigManager dynamicConfigManager =
-                new DynamicConfigManager(zookeeperClient, configuration, true);
+        DynamicConfigManager dynamicConfigManager = createManager(configuration);
         dynamicConfigManager.startup();
 
         // APPEND on a non-list/non-map config (kv.snapshot.interval is Duration type)
@@ -862,8 +910,7 @@ public class DynamicConfigChangeTest {
                 "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required "
                         + "user_admin=\"admin-secret\";");
 
-        DynamicConfigManager dynamicConfigManager =
-                new DynamicConfigManager(zookeeperClient, configuration, true);
+        DynamicConfigManager dynamicConfigManager = createManager(configuration);
         dynamicConfigManager.startup();
 
         assertThat(dynamicConfigManager.describeConfigs())
@@ -884,8 +931,7 @@ public class DynamicConfigChangeTest {
         // Pre-configure a static user in server.yaml equivalent
         configuration.setString(ConfigOptions.SERVER_SASL_CREDENTIALS.key(), "admin:admin-secret");
 
-        DynamicConfigManager dynamicConfigManager =
-                new DynamicConfigManager(zookeeperClient, configuration, true);
+        DynamicConfigManager dynamicConfigManager = createManager(configuration);
 
         AtomicReference<Map<String, String>> reconfiguredUsers = new AtomicReference<>();
         dynamicConfigManager.register(
@@ -922,8 +968,7 @@ public class DynamicConfigChangeTest {
         // Pre-configure a static user in server.yaml equivalent
         configuration.setString(ConfigOptions.SERVER_SASL_CREDENTIALS.key(), "admin:admin-secret");
 
-        DynamicConfigManager dynamicConfigManager =
-                new DynamicConfigManager(zookeeperClient, configuration, true);
+        DynamicConfigManager dynamicConfigManager = createManager(configuration);
 
         AtomicReference<Map<String, String>> reconfiguredUsers = new AtomicReference<>();
         dynamicConfigManager.register(
@@ -955,8 +1000,7 @@ public class DynamicConfigChangeTest {
     @Test
     void testSubtractTrimsWhitespaceAndRemovesByKey() throws Exception {
         Configuration configuration = new Configuration();
-        DynamicConfigManager dynamicConfigManager =
-                new DynamicConfigManager(zookeeperClient, configuration, true);
+        DynamicConfigManager dynamicConfigManager = createManager(configuration);
         dynamicConfigManager.startup();
 
         // Set up a config with whitespace around entries

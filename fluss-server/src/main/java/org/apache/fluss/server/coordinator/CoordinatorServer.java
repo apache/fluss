@@ -241,7 +241,7 @@ public class CoordinatorServer extends ServerBase {
             this.lakeCatalogDynamicLoader = new LakeCatalogDynamicLoader(conf, pluginManager, true);
             this.remoteDirDynamicLoader = new RemoteDirDynamicLoader(conf);
 
-            this.dynamicConfigManager = new DynamicConfigManager(zkClient, conf, true);
+            this.dynamicConfigManager = new DynamicConfigManager(zkClient, conf);
             this.metadataCache = new CoordinatorMetadataCache();
 
             this.authorizer = AuthorizerLoader.createAuthorizer(conf, zkClient, pluginManager);

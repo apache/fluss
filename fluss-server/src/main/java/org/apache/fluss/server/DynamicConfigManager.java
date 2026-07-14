@@ -40,7 +40,15 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
-/** Manager for dynamic configurations. */
+/**
+ * Manager for dynamic configurations.
+ *
+ * <p>Used by both the CoordinatorServer and the TabletServer. Every instance, regardless of server
+ * role or leadership status, continuously applies dynamic config-change notifications from
+ * ZooKeeper. In particular a standby CoordinatorServer keeps tracking changes so that, once it is
+ * promoted to leader, its components (e.g. SASL credentials) already reflect the latest config
+ * rather than a stale snapshot taken at startup.
+ */
 public class DynamicConfigManager {
     private static final Logger LOG = LoggerFactory.getLogger(DynamicConfigManager.class);
     private static final long CHANGE_NOTIFICATION_EXPIRATION_MS = 15 * 60 * 1000L;
@@ -48,13 +56,10 @@ public class DynamicConfigManager {
     private final DynamicServerConfig dynamicServerConfig;
     private final ZooKeeperClient zooKeeperClient;
     private final ZkNodeChangeNotificationWatcher configChangeListener;
-    private final boolean isCoordinator;
 
-    public DynamicConfigManager(
-            ZooKeeperClient zooKeeperClient, Configuration configuration, boolean isCoordinator) {
+    public DynamicConfigManager(ZooKeeperClient zooKeeperClient, Configuration configuration) {
         this.dynamicServerConfig = new DynamicServerConfig(configuration);
         this.zooKeeperClient = zooKeeperClient;
-        this.isCoordinator = isCoordinator;
         this.configChangeListener =
                 new ZkNodeChangeNotificationWatcher(
                         zooKeeperClient,
@@ -68,8 +73,7 @@ public class DynamicConfigManager {
     public void startup() throws Exception {
         try {
             configChangeListener.start();
-            Map<String, String> entityConfigs = zooKeeperClient.fetchEntityConfig();
-            dynamicServerConfig.updateDynamicConfig(entityConfigs, true);
+            dynamicServerConfig.refreshDynamicConfig(zooKeeperClient::fetchEntityConfig, true);
         } catch (Exception e) {
             LOG.error("Failed to update dynamic configs from zookeeper", e);
         }
@@ -312,10 +316,10 @@ public class DynamicConfigManager {
 
     @VisibleForTesting
     protected void alterServerConfigs(Map<String, String> configsProps) throws Exception {
-        dynamicServerConfig.updateDynamicConfig(configsProps, false);
-
-        // Apply to zookeeper only after verification.
-        zooKeeperClient.upsertServerEntityConfig(configsProps);
+        // Apply locally and persist to zookeeper atomically, so a concurrent change notification
+        // (this server may also be listening) cannot interleave and revert the change.
+        dynamicServerConfig.updateAndPersistDynamicConfig(
+                configsProps, () -> zooKeeperClient.upsertServerEntityConfig(configsProps));
     }
 
     private static void validateListOrMapType(String configKey) {
@@ -340,17 +344,14 @@ public class DynamicConfigManager {
 
         @Override
         public void processNotification(byte[] notification) throws Exception {
-            if (isCoordinator) {
-                return;
-            }
-
             if (notification.length != 0) {
                 throw new ConfigException(
                         "Config change notification of this version is only empty");
             }
 
-            Map<String, String> entityConfig = zooKeeperClient.fetchEntityConfig();
-            dynamicServerConfig.updateDynamicConfig(entityConfig, true);
+            // Fetch and apply atomically so we never apply a stale snapshot on top of a config
+            // change this server itself just made and persisted (see alterServerConfigs).
+            dynamicServerConfig.refreshDynamicConfig(zooKeeperClient::fetchEntityConfig, true);
         }
     }
 }
