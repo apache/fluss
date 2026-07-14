@@ -183,8 +183,8 @@ class DynamicServerConfig {
 
     /**
      * Applies {@code newDynamicConfigs} to the registered {@link ServerReconfigurable}s and then
-     * runs {@code persistAction} (which writes the new config to the config store), atomically under
-     * the write lock.
+     * runs {@code persistAction} (which writes the new config to the config store), atomically
+     * under the write lock.
      *
      * <p>Persisting under the same lock guarantees that a concurrent {@link #refreshDynamicConfig}
      * triggered by a change notification observes either the fully-applied-and-persisted state or
