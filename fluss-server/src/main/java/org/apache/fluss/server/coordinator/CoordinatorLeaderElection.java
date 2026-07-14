@@ -64,6 +64,8 @@ public class CoordinatorLeaderElection implements AutoCloseable {
     private final AtomicReference<CompletableFuture<Void>> pendingCleanup =
             new AtomicReference<>(CompletableFuture.completedFuture(null));
 
+    private volatile Consumer<Throwable> cleanupLeaderServices;
+
     public CoordinatorLeaderElection(ZooKeeperClient zkClient, String serverId) {
         this.serverId = serverId;
         this.leaderLatch =
@@ -76,7 +78,7 @@ public class CoordinatorLeaderElection implements AutoCloseable {
                         r -> {
                             Thread t = new Thread(r, "coordinator-leader-callback-" + serverId);
                             // Daemon threads ensure the JVM can exit even if close() is not
-                            // called. Orderly shutdown is handled by close() -> shutdownNow().
+                            // called. Orderly shutdown is handled by close().
                             t.setDaemon(true);
                             return t;
                         });
@@ -93,6 +95,7 @@ public class CoordinatorLeaderElection implements AutoCloseable {
      */
     public void startElectLeaderAsync(
             Runnable initLeaderServices, Consumer<Throwable> cleanupLeaderServices) {
+        this.cleanupLeaderServices = cleanupLeaderServices;
         leaderLatch.addListener(
                 new LeaderLatchListener() {
                     @Override
@@ -145,32 +148,7 @@ public class CoordinatorLeaderElection implements AutoCloseable {
 
                     @Override
                     public void notLeader() {
-                        if (isLeader.compareAndSet(true, false)) {
-                            LOG.warn(
-                                    "Coordinator server {} has lost the leadership, cleaning up leader services.",
-                                    serverId);
-                            // Submit cleanup to leaderCallbackExecutor. The cached thread
-                            // pool can spawn a new thread even if init is still running.
-                            // The cleanup completion is tracked via pendingCleanup so
-                            // that subsequent init waits for it.
-                            CompletableFuture<Void> cleanupFuture = new CompletableFuture<>();
-                            pendingCleanup.set(cleanupFuture);
-                            leaderCallbackExecutor.execute(
-                                    () -> {
-                                        try {
-                                            if (cleanupLeaderServices != null) {
-                                                cleanupLeaderServices.accept(null);
-                                            }
-                                        } catch (Exception e) {
-                                            LOG.error(
-                                                    "Failed to cleanup leader services for server {}",
-                                                    serverId,
-                                                    e);
-                                        } finally {
-                                            cleanupFuture.complete(null);
-                                        }
-                                    });
-                        }
+                        triggerCleanupLeaderServices();
                     }
                 });
 
@@ -194,10 +172,51 @@ public class CoordinatorLeaderElection implements AutoCloseable {
             }
         }
 
-        leaderCallbackExecutor.shutdownNow();
+        // LeaderLatch notifications are asynchronous. Explicitly trigger the same idempotent
+        // cleanup path to guarantee a clean shutdown even if notLeader() has not arrived yet.
+        triggerCleanupLeaderServices();
+
+        leaderCallbackExecutor.shutdown();
+        try {
+            if (!leaderCallbackExecutor.awaitTermination(60, TimeUnit.SECONDS)) {
+                LOG.warn(
+                        "Coordinator leader callbacks for server {} did not terminate within 60s.",
+                        serverId);
+                leaderCallbackExecutor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            leaderCallbackExecutor.shutdownNow();
+        }
     }
 
     public boolean isLeader() {
         return this.isLeader.get();
+    }
+
+    private void triggerCleanupLeaderServices() {
+        if (isLeader.compareAndSet(true, false)) {
+            LOG.warn(
+                    "Coordinator server {} has lost the leadership, cleaning up leader services.",
+                    serverId);
+            // Submit cleanup to leaderCallbackExecutor. The cached thread pool can spawn a new
+            // thread even if init is still running. The cleanup completion is tracked via
+            // pendingCleanup so that subsequent init and close wait for it.
+            CompletableFuture<Void> cleanupFuture = new CompletableFuture<>();
+            pendingCleanup.set(cleanupFuture);
+            leaderCallbackExecutor.execute(
+                    () -> {
+                        try {
+                            if (cleanupLeaderServices != null) {
+                                cleanupLeaderServices.accept(null);
+                            }
+                        } catch (Exception e) {
+                            LOG.error(
+                                    "Failed to cleanup leader services for server {}", serverId, e);
+                        } finally {
+                            cleanupFuture.complete(null);
+                        }
+                    });
+        }
     }
 }

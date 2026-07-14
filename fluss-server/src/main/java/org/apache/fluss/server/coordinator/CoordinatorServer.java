@@ -545,8 +545,20 @@ public class CoordinatorServer extends ServerBase {
     }
 
     CompletableFuture<Void> stopServices() {
+        // Closing the leader election may wait for cleanupCoordinatorLeader(), which acquires
+        // lock. Close it before entering the synchronized shutdown section to avoid deadlock.
+        Throwable leaderElectionException = null;
+        try {
+            if (coordinatorLeaderElection != null) {
+                coordinatorLeaderElection.close();
+                coordinatorLeaderElection = null;
+            }
+        } catch (Throwable t) {
+            leaderElectionException = t;
+        }
+
         synchronized (lock) {
-            Throwable exception = null;
+            Throwable exception = leaderElectionException;
 
             try {
                 // We must shut down the scheduler early because otherwise, the scheduler could
@@ -658,14 +670,6 @@ public class CoordinatorServer extends ServerBase {
                     kvSnapshotLeaseManager.close();
                 }
 
-            } catch (Throwable t) {
-                exception = ExceptionUtils.firstOrSuppressed(t, exception);
-            }
-
-            try {
-                if (coordinatorLeaderElection != null) {
-                    coordinatorLeaderElection.close();
-                }
             } catch (Throwable t) {
                 exception = ExceptionUtils.firstOrSuppressed(t, exception);
             }
