@@ -43,6 +43,7 @@ import org.apache.flink.table.api.config.TableConfigOptions;
 import org.apache.flink.table.catalog.Catalog;
 import org.apache.flink.table.catalog.CatalogBaseTable;
 import org.apache.flink.table.catalog.CatalogDatabase;
+import org.apache.flink.table.catalog.CatalogPartitionSpec;
 import org.apache.flink.table.catalog.CatalogTable;
 import org.apache.flink.table.catalog.ObjectPath;
 import org.apache.flink.table.catalog.exceptions.CatalogException;
@@ -1083,6 +1084,31 @@ abstract class FlinkCatalogITCase {
                         .build();
 
         assertThat(logChangelogTable.getUnresolvedSchema()).isEqualTo(expectedLogSchema);
+    }
+
+    @Test
+    void testListPartitionsOnChangelogVirtualTableForPlannerStats() throws Exception {
+        // Flink's planner asks Catalog#listPartitions(ObjectPath) when recomputing statistics for
+        // partitioned tables. For a $changelog virtual table, the catalog should transparently list
+        // the base table's partitions instead of looking up a physical table named
+        // '<base>$changelog'.
+        tEnv.executeSql(
+                "CREATE TABLE partitioned_changelog_for_stats ("
+                        + "  id INT NOT NULL,"
+                        + "  name STRING,"
+                        + "  region STRING NOT NULL,"
+                        + "  PRIMARY KEY (id, region) NOT ENFORCED"
+                        + ") PARTITIONED BY (region) "
+                        + "WITH ('bucket.num' = '1')");
+
+        ObjectPath basePath = new ObjectPath(DEFAULT_DB, "partitioned_changelog_for_stats");
+        CatalogPartitionSpec partitionSpec =
+                new CatalogPartitionSpec(Collections.singletonMap("region", "us"));
+        catalog.createPartition(basePath, partitionSpec, null, false);
+
+        ObjectPath changelogPath =
+                new ObjectPath(DEFAULT_DB, "partitioned_changelog_for_stats$changelog");
+        assertThat(catalog.listPartitions(changelogPath)).containsExactly(partitionSpec);
     }
 
     @Test
