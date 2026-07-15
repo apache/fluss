@@ -27,8 +27,6 @@ import org.apache.fluss.config.cluster.ServerReconfigurable;
 import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.server.config.ConfigRedactor;
 import org.apache.fluss.server.config.ConfigRedactors;
-import org.apache.fluss.utils.function.SupplierWithException;
-import org.apache.fluss.utils.function.ThrowingRunnable;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -166,39 +164,12 @@ class DynamicServerConfig {
     }
 
     /**
-     * Fetches the latest dynamic config through {@code configSupplier} and applies it to the
-     * registered {@link ServerReconfigurable}s, atomically under the write lock.
-     *
-     * <p>The fetch happens inside the lock so that a server which both edits configs (via {@link
-     * #updateAndPersistDynamicConfig}) and listens for change notifications cannot read a stale
-     * snapshot from the config store and apply it on top of a newer, already-applied change. If
-     * skipping error config, only the invalid entries are ignored.
+     * Update the dynamic configuration and apply to registered ServerReconfigurable. If skipping
+     * error config, only the error one will be ignored.
      */
-    void refreshDynamicConfig(
-            SupplierWithException<Map<String, String>, Exception> configSupplier,
-            boolean skipErrorConfig)
+    void updateDynamicConfig(Map<String, String> newDynamicConfigs, boolean skipErrorConfig)
             throws Exception {
-        inWriteLock(lock, () -> updateCurrentConfig(configSupplier.get(), skipErrorConfig));
-    }
-
-    /**
-     * Applies {@code newDynamicConfigs} to the registered {@link ServerReconfigurable}s and then
-     * runs {@code persistAction} (which writes the new config to the config store), atomically
-     * under the write lock.
-     *
-     * <p>Persisting under the same lock guarantees that a concurrent {@link #refreshDynamicConfig}
-     * triggered by a change notification observes either the fully-applied-and-persisted state or
-     * the pre-change state, never a torn state where local config and the store disagree.
-     */
-    void updateAndPersistDynamicConfig(
-            Map<String, String> newDynamicConfigs, ThrowingRunnable<Exception> persistAction)
-            throws Exception {
-        inWriteLock(
-                lock,
-                () -> {
-                    updateCurrentConfig(newDynamicConfigs, false);
-                    persistAction.run();
-                });
+        inWriteLock(lock, () -> updateCurrentConfig(newDynamicConfigs, skipErrorConfig));
     }
 
     Map<String, String> getDynamicConfigs() {

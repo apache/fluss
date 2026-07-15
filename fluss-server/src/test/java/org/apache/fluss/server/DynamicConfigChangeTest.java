@@ -118,10 +118,23 @@ public class DynamicConfigChangeTest {
     }
 
     /**
-     * Creates a manager and tracks it so {@link #after()} closes it. Prefer this over calling the
-     * constructor directly so the manager's notification watcher is stopped after the test.
+     * Creates a manager that does not consume change notifications, modelling a coordinator leader
+     * (the sole writer via {@code alterConfigs}). This is the default because most tests exercise
+     * the write path, and a self-consumed notification could roll back a value the test just set.
+     * Use {@link #createListeningManager} for tests that verify notification tracking. The manager
+     * is tracked so {@link #after()} closes it.
      */
     private DynamicConfigManager createManager(Configuration configuration) {
+        DynamicConfigManager manager = createListeningManager(configuration);
+        manager.pauseListening();
+        return manager;
+    }
+
+    /**
+     * Creates a manager that consumes change notifications, modelling a standby coordinator or a
+     * tablet server. The manager is tracked so {@link #after()} closes it (stopping its watcher).
+     */
+    private DynamicConfigManager createListeningManager(Configuration configuration) {
         DynamicConfigManager manager = new DynamicConfigManager(zookeeperClient, configuration);
         managers.add(manager);
         return manager;
@@ -293,7 +306,7 @@ public class DynamicConfigChangeTest {
         Configuration configuration = new Configuration();
         try (LakeCatalogDynamicLoader lakeCatalogDynamicLoader =
                 new LakeCatalogDynamicLoader(configuration, null, false)) {
-            DynamicConfigManager dynamicConfigManager = createManager(configuration);
+            DynamicConfigManager dynamicConfigManager = createListeningManager(configuration);
             dynamicConfigManager.register(lakeCatalogDynamicLoader);
             dynamicConfigManager.startup();
             assertThat(lakeCatalogDynamicLoader.getLakeCatalogContainer().getDataLakeFormat())
@@ -323,7 +336,7 @@ public class DynamicConfigChangeTest {
         Configuration configuration = new Configuration();
         configuration.set(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER, 1);
 
-        DynamicConfigManager dynamicConfigManager = createManager(configuration);
+        DynamicConfigManager dynamicConfigManager = createListeningManager(configuration);
         AtomicInteger reconfiguredValue = new AtomicInteger();
         dynamicConfigManager.register(
                 new ServerReconfigurable() {
@@ -346,6 +359,51 @@ public class DynamicConfigChangeTest {
         zookeeperClient.upsertServerEntityConfig(config);
 
         retry(Duration.ofMinutes(1), () -> assertThat(reconfiguredValue.get()).isEqualTo(3));
+    }
+
+    /**
+     * Regression test for #3645 review: an active leader ({@link
+     * DynamicConfigManager#pauseListening()}) must ignore change notifications so it cannot roll a
+     * value it just set back to an older one (A to B to A). On losing leadership ({@link
+     * DynamicConfigManager#resumeListening()}) it re-syncs from ZooKeeper.
+     */
+    @Test
+    void testPausedManagerIgnoresNotificationsAndResumeReSyncs() throws Exception {
+        Configuration configuration = new Configuration();
+        configuration.set(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER, 1);
+
+        DynamicConfigManager dynamicConfigManager = createListeningManager(configuration);
+        // Seed with the initial value; reconfigure() is only invoked on an effective change.
+        AtomicInteger reconfiguredValue = new AtomicInteger(1);
+        dynamicConfigManager.register(
+                new ServerReconfigurable() {
+                    @Override
+                    public void validate(Configuration newConfig) throws ConfigException {}
+
+                    @Override
+                    public void reconfigure(Configuration newConfig) {
+                        reconfiguredValue.set(
+                                newConfig.get(
+                                        ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER));
+                    }
+                });
+        dynamicConfigManager.startup();
+
+        // Become leader: stop consuming notifications.
+        dynamicConfigManager.pauseListening();
+
+        // Another writer changes the config in ZooKeeper. A paused manager must not apply it.
+        Map<String, String> config = new HashMap<>();
+        config.put(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER.key(), "3");
+        zookeeperClient.upsertServerEntityConfig(config);
+
+        // Give the notification a chance to be (wrongly) applied, then assert it was ignored.
+        Thread.sleep(2000);
+        assertThat(reconfiguredValue.get()).isEqualTo(1);
+
+        // Lose leadership: resume and re-sync from ZooKeeper picks up the missed change.
+        dynamicConfigManager.resumeListening();
+        assertThat(reconfiguredValue.get()).isEqualTo(3);
     }
 
     @Test

@@ -272,6 +272,13 @@ class CoordinatorHighAvailabilityITCase {
         assertThat(dynamicConfigValue(standby, configKey))
                 .as("Newly promoted leader should use the dynamic config it tracked while standby")
                 .isEqualTo("3");
+
+        // As the new leader it is now the sole writer: a further alter must take effect and stick.
+        standby.getDynamicConfigManager()
+                .alterConfigs(
+                        Collections.singletonList(
+                                new AlterConfig(configKey, "5", AlterConfigOpType.SET)));
+        assertThat(dynamicConfigValue(standby, configKey)).isEqualTo("5");
     }
 
     /** Reads the effective value of a config key from a server's DynamicConfigManager. */

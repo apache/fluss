@@ -349,6 +349,10 @@ public class CoordinatorServer extends ServerBase {
                             clock);
             coordinatorEventProcessor.startup();
 
+            // As the active leader, this server is the sole writer of dynamic configs and holds the
+            // latest values, so stop consuming change notifications to avoid rolling a value back.
+            dynamicConfigManager.pauseListening();
+
             createDefaultDatabase();
         }
     }
@@ -418,6 +422,14 @@ public class CoordinatorServer extends ServerBase {
                 }
             } catch (Throwable t) {
                 LOG.warn("Failed to close client metric group", t);
+            }
+
+            try {
+                // Back to standby: resume consuming config-change notifications and re-sync from
+                // ZooKeeper to pick up any changes the new leader made while we were not listening.
+                dynamicConfigManager.resumeListening();
+            } catch (Throwable t) {
+                LOG.warn("Failed to resume dynamic config listening", t);
             }
 
             LOG.info("Coordinator leader services cleaned up successfully.");
