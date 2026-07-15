@@ -43,6 +43,11 @@ class TableDescriptorValidationTest {
                         .property(ConfigOptions.TABLE_KV_MAX_WRITE_BUFFER_NUMBER.key(), "4")
                         .property(ConfigOptions.TABLE_KV_WRITE_BATCH_SIZE.key(), "16mb")
                         .property(ConfigOptions.TABLE_KV_MAX_BACKGROUND_THREADS.key(), "8")
+                        .property(ConfigOptions.TABLE_KV_MAX_OPEN_FILES.key(), "32")
+                        .property(ConfigOptions.TABLE_KV_LOG_LEVEL.key(), "warn_level")
+                        .property(ConfigOptions.TABLE_KV_COMPRESSION_PER_LEVEL.key(), "lz4,zstd")
+                        .property(ConfigOptions.TABLE_KV_BLOCK_CACHE_SIZE.key(), "64mb")
+                        .property(ConfigOptions.TABLE_KV_USE_BLOOM_FILTER.key(), "true")
                         .build();
 
         TableDescriptorValidation.validateTableDescriptor(tableDescriptor, 1, null);

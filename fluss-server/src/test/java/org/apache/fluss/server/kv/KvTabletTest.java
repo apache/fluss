@@ -207,7 +207,6 @@ class KvTabletTest {
                 tableBucket,
                 logTablet,
                 tmpKvDir,
-                conf,
                 tableConf,
                 TestingMetricGroups.TABLET_SERVER_METRICS,
                 new RootAllocator(Long.MAX_VALUE),

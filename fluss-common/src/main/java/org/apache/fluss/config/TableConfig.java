@@ -88,6 +88,111 @@ public class TableConfig {
         return config.get(ConfigOptions.TABLE_KV_MAX_WRITE_BUFFER_NUMBER);
     }
 
+    /** Gets the RocksDB maximum number of open files of the table. */
+    public int getKvMaxOpenFiles() {
+        return config.get(ConfigOptions.TABLE_KV_MAX_OPEN_FILES);
+    }
+
+    /** Gets the RocksDB information log maximum file size of the table. */
+    public MemorySize getKvLogMaxFileSize() {
+        return config.get(ConfigOptions.TABLE_KV_LOG_MAX_FILE_SIZE);
+    }
+
+    /** Gets the RocksDB information log file count of the table. */
+    public int getKvLogFileNum() {
+        return config.get(ConfigOptions.TABLE_KV_LOG_FILE_NUM);
+    }
+
+    /** Gets the RocksDB information log directory of the table. */
+    public String getKvLogDir() {
+        return config.get(ConfigOptions.TABLE_KV_LOG_DIR);
+    }
+
+    /** Gets the RocksDB information log level of the table. */
+    public ConfigOptions.InfoLogLevel getKvLogLevel() {
+        return config.get(ConfigOptions.TABLE_KV_LOG_LEVEL);
+    }
+
+    /** Gets the RocksDB compaction style of the table. */
+    public ConfigOptions.CompactionStyle getKvCompactionStyle() {
+        return config.get(ConfigOptions.TABLE_KV_COMPACTION_STYLE);
+    }
+
+    /** Returns whether RocksDB dynamic level sizing is enabled for the table. */
+    public boolean isKvDynamicLevelSizeEnabled() {
+        return config.get(ConfigOptions.TABLE_KV_USE_DYNAMIC_LEVEL_SIZE);
+    }
+
+    /** Gets the RocksDB compression types per level of the table. */
+    public List<ConfigOptions.KvCompressionType> getKvCompressionPerLevel() {
+        return config.get(ConfigOptions.TABLE_KV_COMPRESSION_PER_LEVEL);
+    }
+
+    /** Gets the RocksDB target file size base of the table. */
+    public MemorySize getKvTargetFileSizeBase() {
+        return config.get(ConfigOptions.TABLE_KV_TARGET_FILE_SIZE_BASE);
+    }
+
+    /** Gets the RocksDB maximum size of the base level of the table. */
+    public MemorySize getKvMaxSizeLevelBase() {
+        return config.get(ConfigOptions.TABLE_KV_MAX_SIZE_LEVEL_BASE);
+    }
+
+    /** Gets the minimum number of RocksDB write buffers to merge for the table. */
+    public int getKvMinWriteBufferNumberToMerge() {
+        return config.get(ConfigOptions.TABLE_KV_MIN_WRITE_BUFFER_NUMBER_TO_MERGE);
+    }
+
+    /** Gets the RocksDB data block size of the table. */
+    public MemorySize getKvBlockSize() {
+        return config.get(ConfigOptions.TABLE_KV_BLOCK_SIZE);
+    }
+
+    /** Gets the RocksDB metadata block size of the table. */
+    public MemorySize getKvMetadataBlockSize() {
+        return config.get(ConfigOptions.TABLE_KV_METADATA_BLOCK_SIZE);
+    }
+
+    /** Gets the RocksDB block cache size of the table. */
+    public MemorySize getKvBlockCacheSize() {
+        return config.get(ConfigOptions.TABLE_KV_BLOCK_CACHE_SIZE);
+    }
+
+    /** Returns whether RocksDB Bloom filters are enabled for the table. */
+    public boolean isKvBloomFilterEnabled() {
+        return config.get(ConfigOptions.TABLE_KV_USE_BLOOM_FILTER);
+    }
+
+    /** Gets the number of RocksDB Bloom filter bits per key of the table. */
+    public double getKvBloomFilterBitsPerKey() {
+        return config.get(ConfigOptions.TABLE_KV_BLOOM_FILTER_BITS_PER_KEY);
+    }
+
+    /** Returns whether RocksDB uses block-based Bloom filters for the table. */
+    public boolean isKvBloomFilterBlockBasedMode() {
+        return config.get(ConfigOptions.TABLE_KV_BLOOM_FILTER_BLOCK_BASED_MODE);
+    }
+
+    /** Returns whether RocksDB caches index and filter blocks for the table. */
+    public boolean isKvCacheIndexAndFilterBlocks() {
+        return config.get(ConfigOptions.TABLE_KV_CACHE_INDEX_AND_FILTER_BLOCKS);
+    }
+
+    /** Returns whether RocksDB caches index and filter blocks with high priority for the table. */
+    public boolean isKvCacheIndexAndFilterBlocksWithHighPriority() {
+        return config.get(ConfigOptions.TABLE_KV_CACHE_INDEX_AND_FILTER_BLOCKS_WITH_HIGH_PRIORITY);
+    }
+
+    /** Returns whether RocksDB pins L0 filter and index blocks for the table. */
+    public boolean isKvPinL0FilterAndIndexBlocksInCache() {
+        return config.get(ConfigOptions.TABLE_KV_PIN_L0_FILTER_AND_INDEX_BLOCKS_IN_CACHE);
+    }
+
+    /** Returns whether RocksDB pins the top-level index and filter for the table. */
+    public boolean isKvPinTopLevelIndexAndFilter() {
+        return config.get(ConfigOptions.TABLE_KV_PIN_TOP_LEVEL_INDEX_AND_FILTER);
+    }
+
     /** Gets the replication factor of the table. */
     public int getReplicationFactor() {
         return config.get(ConfigOptions.TABLE_REPLICATION_FACTOR);

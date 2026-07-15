@@ -150,7 +150,6 @@ class KvTabletMergeModeTest {
                         tableBucket,
                         logTablet,
                         tmpKvDir,
-                        conf,
                         tableConf,
                         TestingMetricGroups.TABLET_SERVER_METRICS,
                         new RootAllocator(Long.MAX_VALUE),

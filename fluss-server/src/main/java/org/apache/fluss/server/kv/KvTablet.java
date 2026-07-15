@@ -19,7 +19,6 @@ package org.apache.fluss.server.kv;
 
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.compression.ArrowCompressionInfo;
-import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.DeletionDisabledException;
 import org.apache.fluss.exception.InvalidTableException;
@@ -200,7 +199,6 @@ public final class KvTablet {
             TableBucket tableBucket,
             LogTablet logTablet,
             File kvTabletDir,
-            Configuration serverConf,
             TableConfig tableConfig,
             TabletServerMetricGroup serverMetricGroup,
             BufferAllocator arrowBufferAllocator,
@@ -213,7 +211,7 @@ public final class KvTablet {
             RateLimiter sharedRateLimiter,
             AutoIncrementManager autoIncrementManager)
             throws IOException {
-        RocksDBKv kv = buildRocksDBKv(serverConf, tableConfig, kvTabletDir, sharedRateLimiter);
+        RocksDBKv kv = buildRocksDBKv(tableConfig, kvTabletDir, sharedRateLimiter);
 
         // Create RocksDB statistics accessor (will be registered to TableMetricGroup by Replica)
         // Pass ResourceGuard to ensure thread-safe access during concurrent close operations
@@ -248,15 +246,10 @@ public final class KvTablet {
     }
 
     private static RocksDBKv buildRocksDBKv(
-            Configuration configuration,
-            TableConfig tableConfig,
-            File kvDir,
-            RateLimiter sharedRateLimiter)
-            throws IOException {
+            TableConfig tableConfig, File kvDir, RateLimiter sharedRateLimiter) throws IOException {
         // Enable statistics to support RocksDB statistics collection
         RocksDBResourceContainer rocksDBResourceContainer =
-                new RocksDBResourceContainer(
-                        configuration, kvDir, true, sharedRateLimiter, tableConfig);
+                new RocksDBResourceContainer(kvDir, true, sharedRateLimiter, tableConfig);
         RocksDBKvBuilder rocksDBKvBuilder =
                 new RocksDBKvBuilder(
                         kvDir,

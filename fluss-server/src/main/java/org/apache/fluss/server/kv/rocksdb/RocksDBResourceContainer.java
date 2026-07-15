@@ -18,10 +18,8 @@
 package org.apache.fluss.server.kv.rocksdb;
 
 import org.apache.fluss.annotation.VisibleForTesting;
-import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.config.ReadableConfig;
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.server.config.ResolvedTableConfig;
 import org.apache.fluss.server.kv.KvManager;
@@ -76,9 +74,6 @@ public class RocksDBResourceContainer implements AutoCloseable {
 
     @Nullable private final File instanceRocksDBPath;
 
-    /** The configurations from file. */
-    private final ReadableConfig configuration;
-
     private final TableConfig tableConfig;
 
     private final boolean enableStatistics;
@@ -97,40 +92,27 @@ public class RocksDBResourceContainer implements AutoCloseable {
 
     @VisibleForTesting
     RocksDBResourceContainer() {
-        this(new Configuration(), null, false, KvManager.getDefaultRateLimiter());
-    }
-
-    public RocksDBResourceContainer(ReadableConfig configuration, @Nullable File instanceBasePath) {
-        this(configuration, instanceBasePath, false, KvManager.getDefaultRateLimiter());
-    }
-
-    public RocksDBResourceContainer(
-            ReadableConfig configuration,
-            @Nullable File instanceBasePath,
-            boolean enableStatistics) {
-        this(configuration, instanceBasePath, enableStatistics, KvManager.getDefaultRateLimiter());
-    }
-
-    public RocksDBResourceContainer(
-            ReadableConfig configuration,
-            @Nullable File instanceBasePath,
-            boolean enableStatistics,
-            RateLimiter sharedRateLimiter) {
         this(
-                configuration,
-                instanceBasePath,
-                enableStatistics,
-                sharedRateLimiter,
-                resolveTableConfig(configuration));
+                null,
+                false,
+                KvManager.getDefaultRateLimiter(),
+                new ResolvedTableConfig(new Configuration(), new Configuration()));
+    }
+
+    public RocksDBResourceContainer(TableConfig tableConfig, @Nullable File instanceBasePath) {
+        this(instanceBasePath, false, KvManager.getDefaultRateLimiter(), tableConfig);
     }
 
     public RocksDBResourceContainer(
-            ReadableConfig configuration,
+            TableConfig tableConfig, @Nullable File instanceBasePath, boolean enableStatistics) {
+        this(instanceBasePath, enableStatistics, KvManager.getDefaultRateLimiter(), tableConfig);
+    }
+
+    public RocksDBResourceContainer(
             @Nullable File instanceBasePath,
             boolean enableStatistics,
             RateLimiter sharedRateLimiter,
             TableConfig tableConfig) {
-        this.configuration = configuration;
         this.tableConfig = checkNotNull(tableConfig, "tableConfig must not be null.");
 
         this.instanceRocksDBPath =
@@ -142,28 +124,6 @@ public class RocksDBResourceContainer implements AutoCloseable {
                 checkNotNull(sharedRateLimiter, "sharedRateLimiter must not be null");
 
         this.handlesToClose = new ArrayList<>();
-    }
-
-    private static TableConfig resolveTableConfig(ReadableConfig configuration) {
-        if (configuration instanceof Configuration) {
-            return new ResolvedTableConfig(
-                    new Configuration(), new Configuration((Configuration) configuration));
-        }
-
-        Configuration serverConfig = new Configuration();
-        serverConfig.set(
-                ConfigOptions.KV_MAX_BACKGROUND_THREADS,
-                configuration.get(ConfigOptions.KV_MAX_BACKGROUND_THREADS));
-        serverConfig.set(
-                ConfigOptions.KV_WRITE_BUFFER_SIZE,
-                configuration.get(ConfigOptions.KV_WRITE_BUFFER_SIZE));
-        serverConfig.set(
-                ConfigOptions.KV_MAX_WRITE_BUFFER_NUMBER,
-                configuration.get(ConfigOptions.KV_MAX_WRITE_BUFFER_NUMBER));
-        serverConfig.set(
-                ConfigOptions.KV_WRITE_BATCH_SIZE,
-                configuration.get(ConfigOptions.KV_WRITE_BATCH_SIZE));
-        return new ResolvedTableConfig(new Configuration(), serverConfig);
     }
 
     /** Gets the RocksDB {@link DBOptions} to be used for RocksDB instances. */
@@ -252,21 +212,16 @@ public class RocksDBResourceContainer implements AutoCloseable {
         return new ColumnFamilyOptions();
     }
 
-    private <T> T internalGetOption(ConfigOption<T> option) {
-        return configuration.get(option);
-    }
-
     @SuppressWarnings("ConstantConditions")
     private DBOptions setDBOptionsFromConfigurableOptions(DBOptions currentOptions)
             throws IOException {
         currentOptions.setMaxBackgroundJobs(tableConfig.getKvMaxBackgroundThreads());
 
-        currentOptions.setMaxOpenFiles(internalGetOption(ConfigOptions.KV_MAX_OPEN_FILES));
+        currentOptions.setMaxOpenFiles(tableConfig.getKvMaxOpenFiles());
 
-        currentOptions.setInfoLogLevel(
-                toRocksDbInfoLogLevel(internalGetOption(ConfigOptions.KV_LOG_LEVEL)));
+        currentOptions.setInfoLogLevel(toRocksDbInfoLogLevel(tableConfig.getKvLogLevel()));
 
-        String logDir = internalGetOption(ConfigOptions.KV_LOG_DIR);
+        String logDir = tableConfig.getKvLogDir();
         if (logDir == null || logDir.isEmpty()) {
             if (instanceRocksDBPath == null
                     || instanceRocksDBPath.getAbsolutePath().length()
@@ -283,10 +238,9 @@ public class RocksDBResourceContainer implements AutoCloseable {
             currentOptions.setDbLogDir(logDir);
         }
 
-        currentOptions.setMaxLogFileSize(
-                internalGetOption(ConfigOptions.KV_LOG_MAX_FILE_SIZE).getBytes());
+        currentOptions.setMaxLogFileSize(tableConfig.getKvLogMaxFileSize().getBytes());
 
-        currentOptions.setKeepLogFileNum(internalGetOption(ConfigOptions.KV_LOG_FILE_NUM));
+        currentOptions.setKeepLogFileNum(tableConfig.getKvLogFileNum());
 
         return currentOptions;
     }
@@ -296,27 +250,24 @@ public class RocksDBResourceContainer implements AutoCloseable {
             ColumnFamilyOptions currentOptions, Collection<AutoCloseable> handlesToClose) {
 
         currentOptions.setCompactionStyle(
-                toRocksDbCompactionStyle(internalGetOption(ConfigOptions.KV_COMPACTION_STYLE)));
+                toRocksDbCompactionStyle(tableConfig.getKvCompactionStyle()));
 
         currentOptions.setCompressionPerLevel(
-                toRocksDbCompressionTypes(
-                        internalGetOption(ConfigOptions.KV_COMPRESSION_PER_LEVEL)));
+                toRocksDbCompressionTypes(tableConfig.getKvCompressionPerLevel()));
 
         currentOptions.setLevelCompactionDynamicLevelBytes(
-                internalGetOption(ConfigOptions.KV_USE_DYNAMIC_LEVEL_SIZE));
+                tableConfig.isKvDynamicLevelSizeEnabled());
 
-        currentOptions.setTargetFileSizeBase(
-                internalGetOption(ConfigOptions.KV_TARGET_FILE_SIZE_BASE).getBytes());
+        currentOptions.setTargetFileSizeBase(tableConfig.getKvTargetFileSizeBase().getBytes());
 
-        currentOptions.setMaxBytesForLevelBase(
-                internalGetOption(ConfigOptions.KV_MAX_SIZE_LEVEL_BASE).getBytes());
+        currentOptions.setMaxBytesForLevelBase(tableConfig.getKvMaxSizeLevelBase().getBytes());
 
         currentOptions.setWriteBufferSize(tableConfig.getKvWriteBufferSize().getBytes());
 
         currentOptions.setMaxWriteBufferNumber(tableConfig.getKvMaxWriteBufferNumber());
 
         currentOptions.setMinWriteBufferNumberToMerge(
-                internalGetOption(ConfigOptions.KV_MIN_WRITE_BUFFER_NUMBER_TO_MERGE));
+                tableConfig.getKvMinWriteBufferNumberToMerge());
 
         TableFormatConfig tableFormatConfig = currentOptions.tableFormatConfig();
 
@@ -333,33 +284,29 @@ public class RocksDBResourceContainer implements AutoCloseable {
             }
         }
 
-        blockBasedTableConfig.setBlockSize(
-                internalGetOption(ConfigOptions.KV_BLOCK_SIZE).getBytes());
+        blockBasedTableConfig.setBlockSize(tableConfig.getKvBlockSize().getBytes());
 
-        blockBasedTableConfig.setMetadataBlockSize(
-                internalGetOption(ConfigOptions.KV_METADATA_BLOCK_SIZE).getBytes());
+        blockBasedTableConfig.setMetadataBlockSize(tableConfig.getKvMetadataBlockSize().getBytes());
 
         // Create explicit LRUCache for accurate memory tracking
-        long blockCacheSize = internalGetOption(ConfigOptions.KV_BLOCK_CACHE_SIZE).getBytes();
+        long blockCacheSize = tableConfig.getKvBlockCacheSize().getBytes();
         blockCache = new LRUCache(blockCacheSize);
         handlesToClose.add(blockCache);
         blockBasedTableConfig.setBlockCache(blockCache);
 
         // Configure index and filter blocks caching
         blockBasedTableConfig.setCacheIndexAndFilterBlocks(
-                internalGetOption(ConfigOptions.KV_CACHE_INDEX_AND_FILTER_BLOCKS));
+                tableConfig.isKvCacheIndexAndFilterBlocks());
         blockBasedTableConfig.setCacheIndexAndFilterBlocksWithHighPriority(
-                internalGetOption(
-                        ConfigOptions.KV_CACHE_INDEX_AND_FILTER_BLOCKS_WITH_HIGH_PRIORITY));
+                tableConfig.isKvCacheIndexAndFilterBlocksWithHighPriority());
         blockBasedTableConfig.setPinL0FilterAndIndexBlocksInCache(
-                internalGetOption(ConfigOptions.KV_PIN_L0_FILTER_AND_INDEX_BLOCKS_IN_CACHE));
+                tableConfig.isKvPinL0FilterAndIndexBlocksInCache());
         blockBasedTableConfig.setPinTopLevelIndexAndFilter(
-                internalGetOption(ConfigOptions.KV_PIN_TOP_LEVEL_INDEX_AND_FILTER));
+                tableConfig.isKvPinTopLevelIndexAndFilter());
 
-        if (internalGetOption(ConfigOptions.KV_USE_BLOOM_FILTER)) {
-            final double bitsPerKey = internalGetOption(ConfigOptions.KV_BLOOM_FILTER_BITS_PER_KEY);
-            final boolean blockBasedMode =
-                    internalGetOption(ConfigOptions.KV_BLOOM_FILTER_BLOCK_BASED_MODE);
+        if (tableConfig.isKvBloomFilterEnabled()) {
+            final double bitsPerKey = tableConfig.getKvBloomFilterBitsPerKey();
+            final boolean blockBasedMode = tableConfig.isKvBloomFilterBlockBasedMode();
             BloomFilter bloomFilter = new BloomFilter(bitsPerKey, blockBasedMode);
             handlesToClose.add(bloomFilter);
             blockBasedTableConfig.setFilterPolicy(bloomFilter);

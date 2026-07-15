@@ -2196,6 +2196,223 @@ public class ConfigOptions {
                                     + "The default value is `false`.");
 
     // ------------------------------------------------------------------------
+    //  Table-level RocksDB options
+    // ------------------------------------------------------------------------
+
+    public static final ConfigOption<Integer> TABLE_KV_MAX_OPEN_FILES =
+            key("table.kv.rocksdb.files.open")
+                    .intType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The maximum number of open files for each table bucket. "
+                                    + "If not configured, the table falls back to the server-level `"
+                                    + KV_MAX_OPEN_FILES.key()
+                                    + "` configuration.");
+
+    public static final ConfigOption<MemorySize> TABLE_KV_LOG_MAX_FILE_SIZE =
+            key("table.kv.rocksdb.log.max-file-size")
+                    .memoryType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The maximum size of each RocksDB information log file for the table. "
+                                    + "If not configured, the table falls back to the server-level `"
+                                    + KV_LOG_MAX_FILE_SIZE.key()
+                                    + "` configuration.");
+
+    public static final ConfigOption<Integer> TABLE_KV_LOG_FILE_NUM =
+            key("table.kv.rocksdb.log.file-num")
+                    .intType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The maximum number of RocksDB information log files to keep for the table. "
+                                    + "If not configured, the table falls back to the server-level `"
+                                    + KV_LOG_FILE_NUM.key()
+                                    + "` configuration.");
+
+    public static final ConfigOption<String> TABLE_KV_LOG_DIR =
+            key("table.kv.rocksdb.log.dir")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The RocksDB information log directory for the table. "
+                                    + "If not configured, the table falls back to the server-level `"
+                                    + KV_LOG_DIR.key()
+                                    + "` configuration.");
+
+    public static final ConfigOption<InfoLogLevel> TABLE_KV_LOG_LEVEL =
+            key("table.kv.rocksdb.log.level")
+                    .enumType(InfoLogLevel.class)
+                    .noDefaultValue()
+                    .withDescription(
+                            "The RocksDB information log level for the table. "
+                                    + "If not configured, the table falls back to the server-level `"
+                                    + KV_LOG_LEVEL.key()
+                                    + "` configuration.");
+
+    public static final ConfigOption<CompactionStyle> TABLE_KV_COMPACTION_STYLE =
+            key("table.kv.rocksdb.compaction.style")
+                    .enumType(CompactionStyle.class)
+                    .noDefaultValue()
+                    .withDescription(
+                            "The RocksDB compaction style for the table. "
+                                    + "If not configured, the table falls back to the server-level `"
+                                    + KV_COMPACTION_STYLE.key()
+                                    + "` configuration.");
+
+    public static final ConfigOption<Boolean> TABLE_KV_USE_DYNAMIC_LEVEL_SIZE =
+            key("table.kv.rocksdb.compaction.level.use-dynamic-size")
+                    .booleanType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Whether RocksDB dynamically determines level sizes for the table. "
+                                    + "If not configured, the table falls back to the server-level `"
+                                    + KV_USE_DYNAMIC_LEVEL_SIZE.key()
+                                    + "` configuration.");
+
+    public static final ConfigOption<List<KvCompressionType>> TABLE_KV_COMPRESSION_PER_LEVEL =
+            key("table.kv.rocksdb.compression.per.level")
+                    .enumType(KvCompressionType.class)
+                    .asList()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The RocksDB compression types per level for the table. "
+                                    + "If not configured, the table falls back to the server-level `"
+                                    + KV_COMPRESSION_PER_LEVEL.key()
+                                    + "` configuration.");
+
+    public static final ConfigOption<MemorySize> TABLE_KV_TARGET_FILE_SIZE_BASE =
+            key("table.kv.rocksdb.compaction.level.target-file-size-base")
+                    .memoryType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The RocksDB target file size base for the table. "
+                                    + "If not configured, the table falls back to the server-level `"
+                                    + KV_TARGET_FILE_SIZE_BASE.key()
+                                    + "` configuration.");
+
+    public static final ConfigOption<MemorySize> TABLE_KV_MAX_SIZE_LEVEL_BASE =
+            key("table.kv.rocksdb.compaction.level.max-size-level-base")
+                    .memoryType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The RocksDB maximum size of the base level for the table. "
+                                    + "If not configured, the table falls back to the server-level `"
+                                    + KV_MAX_SIZE_LEVEL_BASE.key()
+                                    + "` configuration.");
+
+    public static final ConfigOption<Integer> TABLE_KV_MIN_WRITE_BUFFER_NUMBER_TO_MERGE =
+            key("table.kv.rocksdb.writebuffer.number-to-merge")
+                    .intType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The minimum number of RocksDB write buffers to merge for the table. "
+                                    + "If not configured, the table falls back to the server-level `"
+                                    + KV_MIN_WRITE_BUFFER_NUMBER_TO_MERGE.key()
+                                    + "` configuration.");
+
+    public static final ConfigOption<MemorySize> TABLE_KV_BLOCK_SIZE =
+            key("table.kv.rocksdb.block.blocksize")
+                    .memoryType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The RocksDB data block size for the table. "
+                                    + "If not configured, the table falls back to the server-level `"
+                                    + KV_BLOCK_SIZE.key()
+                                    + "` configuration.");
+
+    public static final ConfigOption<MemorySize> TABLE_KV_METADATA_BLOCK_SIZE =
+            key("table.kv.rocksdb.block.metadata-blocksize")
+                    .memoryType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The RocksDB metadata block size for the table. "
+                                    + "If not configured, the table falls back to the server-level `"
+                                    + KV_METADATA_BLOCK_SIZE.key()
+                                    + "` configuration.");
+
+    public static final ConfigOption<MemorySize> TABLE_KV_BLOCK_CACHE_SIZE =
+            key("table.kv.rocksdb.block.cache-size")
+                    .memoryType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The RocksDB block cache size for the table. "
+                                    + "If not configured, the table falls back to the server-level `"
+                                    + KV_BLOCK_CACHE_SIZE.key()
+                                    + "` configuration.");
+
+    public static final ConfigOption<Boolean> TABLE_KV_USE_BLOOM_FILTER =
+            key("table.kv.rocksdb.use-bloom-filter")
+                    .booleanType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Whether RocksDB Bloom filters are enabled for the table. "
+                                    + "If not configured, the table falls back to the server-level `"
+                                    + KV_USE_BLOOM_FILTER.key()
+                                    + "` configuration.");
+
+    public static final ConfigOption<Double> TABLE_KV_BLOOM_FILTER_BITS_PER_KEY =
+            key("table.kv.rocksdb.bloom-filter.bits-per-key")
+                    .doubleType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The number of RocksDB Bloom filter bits per key for the table. "
+                                    + "If not configured, the table falls back to the server-level `"
+                                    + KV_BLOOM_FILTER_BITS_PER_KEY.key()
+                                    + "` configuration.");
+
+    public static final ConfigOption<Boolean> TABLE_KV_BLOOM_FILTER_BLOCK_BASED_MODE =
+            key("table.kv.rocksdb.bloom-filter.block-based-mode")
+                    .booleanType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Whether RocksDB uses block-based Bloom filters for the table. "
+                                    + "If not configured, the table falls back to the server-level `"
+                                    + KV_BLOOM_FILTER_BLOCK_BASED_MODE.key()
+                                    + "` configuration.");
+
+    public static final ConfigOption<Boolean> TABLE_KV_CACHE_INDEX_AND_FILTER_BLOCKS =
+            key("table.kv.rocksdb.block.cache-index-and-filter-blocks")
+                    .booleanType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Whether RocksDB caches index and filter blocks for the table. "
+                                    + "If not configured, the table falls back to the server-level `"
+                                    + KV_CACHE_INDEX_AND_FILTER_BLOCKS.key()
+                                    + "` configuration.");
+
+    public static final ConfigOption<Boolean>
+            TABLE_KV_CACHE_INDEX_AND_FILTER_BLOCKS_WITH_HIGH_PRIORITY =
+                    key("table.kv.rocksdb.block.cache-index-and-filter-blocks-with-high-priority")
+                            .booleanType()
+                            .noDefaultValue()
+                            .withDescription(
+                                    "Whether RocksDB caches index and filter blocks with high priority for the table. "
+                                            + "If not configured, the table falls back to the server-level `"
+                                            + KV_CACHE_INDEX_AND_FILTER_BLOCKS_WITH_HIGH_PRIORITY
+                                                    .key()
+                                            + "` configuration.");
+
+    public static final ConfigOption<Boolean> TABLE_KV_PIN_L0_FILTER_AND_INDEX_BLOCKS_IN_CACHE =
+            key("table.kv.rocksdb.block.pin-l0-filter-and-index-blocks-in-cache")
+                    .booleanType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Whether RocksDB pins L0 filter and index blocks for the table. "
+                                    + "If not configured, the table falls back to the server-level `"
+                                    + KV_PIN_L0_FILTER_AND_INDEX_BLOCKS_IN_CACHE.key()
+                                    + "` configuration.");
+
+    public static final ConfigOption<Boolean> TABLE_KV_PIN_TOP_LEVEL_INDEX_AND_FILTER =
+            key("table.kv.rocksdb.block.pin-top-level-index-and-filter")
+                    .booleanType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Whether RocksDB pins the top-level index and filter for the table. "
+                                    + "If not configured, the table falls back to the server-level `"
+                                    + KV_PIN_TOP_LEVEL_INDEX_AND_FILTER.key()
+                                    + "` configuration.");
+
+    // ------------------------------------------------------------------------
     //  ConfigOptions for Kv recovering
     // ------------------------------------------------------------------------
     public static final ConfigOption<MemorySize> KV_RECOVER_LOG_RECORD_BATCH_MAX_SIZE =
