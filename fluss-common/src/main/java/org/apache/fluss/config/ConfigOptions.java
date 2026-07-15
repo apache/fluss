@@ -71,6 +71,24 @@ public class ConfigOptions {
     // ------------------------------------------------------------------------
     //  ConfigOptions for Fluss Cluster
     // ------------------------------------------------------------------------
+    public static final ConfigOption<List<String>> CONFIG_PROVIDERS =
+            key("config.providers")
+                    .stringType()
+                    .asList()
+                    .defaultValues()
+                    .withDescription(
+                            "A comma-separated list of config provider identifiers to enable, e.g. "
+                                    + "'directory,env'. Config providers resolve indirection markers of the "
+                                    + "form ${provider:[path:]key} in configuration values at load time, so "
+                                    + "secrets can be kept out of the configuration file (e.g. in a mounted "
+                                    + "Kubernetes Secret or an environment variable). Built-in providers: "
+                                    + "'directory' (${directory:/dir:file}, reads the file content), 'env' "
+                                    + "(${env:VAR}, reads an environment variable) and 'file' "
+                                    + "(${file:/path/to/file.properties:key}, reads a single property). "
+                                    + "Providers are configured via config.providers.<identifier>.param.<param> "
+                                    + "keys; the filesystem-reading providers require the 'allowed.paths' "
+                                    + "parameter restricting which paths they may read.");
+
     public static final ConfigOption<Integer> DEFAULT_BUCKET_NUMBER =
             key("default.bucket.number")
                     .intType()

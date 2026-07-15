@@ -118,6 +118,11 @@ class DynamicServerConfig {
         this.initialConfigMap = flussConfig.toMap();
         this.currentConfigMap = flussConfig.toMap();
         registerDefaultRedactors();
+        // never expose provider-resolved values through the describe config APIs
+        Set<String> resolvedSecretKeys = flussConfig.getSensitiveKeys();
+        if (!resolvedSecretKeys.isEmpty()) {
+            configRedactors.add(ConfigRedactors.value(resolvedSecretKeys::contains));
+        }
     }
 
     void register(ServerReconfigurable serverReconfigurable) {

@@ -25,6 +25,7 @@ import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.config.cluster.ConfigValidator;
 import org.apache.fluss.config.cluster.ServerReconfigurable;
+import org.apache.fluss.config.provider.ConfigProviders;
 import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.server.authorizer.ZkNodeChangeNotificationWatcher;
 import org.apache.fluss.server.zk.ZooKeeperClient;
@@ -145,6 +146,13 @@ public class DynamicConfigManager {
                     }
 
                     String configValue = alterConfigOp.value();
+                    if (configValue != null && ConfigProviders.isMarker(configValue)) {
+                        throw new ConfigException(
+                                String.format(
+                                        "Config provider markers are resolved at startup only and "
+                                                + "are not supported in dynamic configuration: key '%s'.",
+                                        configKey));
+                    }
                     switch (alterConfigOp.opType()) {
                         case SET:
                             configsProps.put(configKey, configValue);
