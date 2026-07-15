@@ -31,13 +31,16 @@ import org.apache.fluss.row.decode.FixedSchemaDecoder;
 import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
+import java.util.concurrent.atomic.AtomicInteger;
 
+import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_2;
 import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_3;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static org.apache.fluss.testutils.DataTestUtils.compactedRow;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for the versioned KV value layout. */
 class KvValueLayoutTest {
@@ -47,18 +50,22 @@ class KvValueLayoutTest {
         BinaryRow row = compactedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
         long valueTag = 1234567890123L;
         KvValueLayout kvValueLayout = KvValueLayout.forKvFormatVersion(KV_FORMAT_VERSION_3);
+        AtomicInteger providerCalls = new AtomicInteger();
 
-        BinaryValue value =
-                ValueEncoder.forKvFormatVersion(KV_FORMAT_VERSION_3, ignored -> valueTag)
-                        .createValue(DEFAULT_SCHEMA_ID, row);
-        byte[] encoded = value.encodeValue();
+        ValueEncoder encoder =
+                ValueEncoder.forKvFormatVersion(
+                        KV_FORMAT_VERSION_3,
+                        ignored -> {
+                            providerCalls.incrementAndGet();
+                            return valueTag;
+                        });
+        byte[] encoded = encoder.encodeValue(new BinaryValue(DEFAULT_SCHEMA_ID, row));
         MemorySegment segment = MemorySegment.wrap(encoded);
 
         assertThat(encoded).hasSize(kvValueLayout.rowPayloadOffset() + row.getSizeInBytes());
         assertThat(kvValueLayout.readSchemaId(segment)).isEqualTo(DEFAULT_SCHEMA_ID);
         assertThat(kvValueLayout.readValueTag(segment)).isEqualTo(valueTag);
-        assertThat(value.hasValueTag()).isTrue();
-        assertThat(value.getValueTag()).isEqualTo(valueTag);
+        assertThat(providerCalls).hasValue(1);
 
         byte[] expectedRowBytes = new byte[row.getSizeInBytes()];
         row.copyTo(expectedRowBytes, 0);
@@ -72,7 +79,6 @@ class KvValueLayoutTest {
                                 KV_FORMAT_VERSION_3)
                         .decodeValue(encoded);
         assertThat(decoded.schemaId).isEqualTo(DEFAULT_SCHEMA_ID);
-        assertThat(decoded.getValueTag()).isEqualTo(valueTag);
         assertThat(decoded.row.getInt(0)).isEqualTo(1);
         assertThat(decoded.row.getString(1).toString()).isEqualTo("a");
     }
@@ -83,19 +89,42 @@ class KvValueLayoutTest {
         ValueEncoder writeEncoder =
                 ValueEncoder.forKvFormatVersion(KV_FORMAT_VERSION_3, ignored -> 100L);
 
-        BinaryValue recoveredValue =
+        byte[] recoveredValue =
                 writeEncoder
                         .withValueTagProvider(ignored -> 200L)
-                        .createValue(DEFAULT_SCHEMA_ID, row);
+                        .encodeValue(new BinaryValue(DEFAULT_SCHEMA_ID, row));
+        byte[] writtenValue = writeEncoder.encodeValue(new BinaryValue(DEFAULT_SCHEMA_ID, row));
+        KvValueLayout layout = KvValueLayout.forKvFormatVersion(KV_FORMAT_VERSION_3);
 
-        assertThat(recoveredValue.getValueTag()).isEqualTo(200L);
-        assertThat(writeEncoder.createValue(DEFAULT_SCHEMA_ID, row).getValueTag()).isEqualTo(100L);
+        assertThat(layout.readValueTag(MemorySegment.wrap(recoveredValue))).isEqualTo(200L);
+        assertThat(layout.readValueTag(MemorySegment.wrap(writtenValue))).isEqualTo(100L);
+    }
+
+    @Test
+    void testValueTagProviderMustMatchKvValueLayout() {
+        assertThatThrownBy(
+                        () -> ValueEncoder.forKvFormatVersion(KV_FORMAT_VERSION_2, ignored -> 100L))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("must be null");
+        assertThatThrownBy(() -> ValueEncoder.forKvFormatVersion(KV_FORMAT_VERSION_3, null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("must be non-null");
+    }
+
+    @Test
+    void testValueTagWriteRejectsOutOfBoundsTarget() {
+        KvValueLayout layout = KvValueLayout.forKvFormatVersion(KV_FORMAT_VERSION_3);
+
+        assertThatThrownBy(() -> layout.writeValueTag(new byte[layout.rowPayloadOffset() - 1], 1L))
+                .isInstanceOf(IndexOutOfBoundsException.class);
+        assertThatThrownBy(() -> layout.writeValueTag(new byte[layout.rowPayloadOffset()], -3, 1L))
+                .isInstanceOf(IndexOutOfBoundsException.class);
     }
 
     @Test
     void testVersion3ValueRecordBatchDecodesThroughKvValueLayout() throws Exception {
         BinaryRow row = compactedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
-        byte[] encodedValue = ValueEncoder.encodeValueWithTag(DEFAULT_SCHEMA_ID, 100L, row);
+        byte[] encodedValue = encodeVersion3Value(row, 100L);
         DefaultValueRecordBatch.Builder builder = DefaultValueRecordBatch.builder();
         builder.append(encodedValue);
         DefaultValueRecordBatch recordBatch = builder.build();
@@ -118,7 +147,7 @@ class KvValueLayoutTest {
     @Test
     void testFixedSchemaDecoderDecodesVersion3ValueThroughKvValueLayout() {
         BinaryRow row = compactedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
-        byte[] encodedValue = ValueEncoder.encodeValueWithTag(DEFAULT_SCHEMA_ID, 100L, row);
+        byte[] encodedValue = encodeVersion3Value(row, 100L);
         FixedSchemaDecoder decoder =
                 new FixedSchemaDecoder(
                         KvFormat.COMPACTED,
@@ -129,5 +158,10 @@ class KvValueLayoutTest {
 
         assertThat(decoded.getInt(0)).isEqualTo(1);
         assertThat(decoded.getString(1).toString()).isEqualTo("a");
+    }
+
+    private static byte[] encodeVersion3Value(BinaryRow row, long valueTag) {
+        return ValueEncoder.forKvFormatVersion(KV_FORMAT_VERSION_3, ignored -> valueTag)
+                .encodeValue(new BinaryValue(DEFAULT_SCHEMA_ID, row));
     }
 }

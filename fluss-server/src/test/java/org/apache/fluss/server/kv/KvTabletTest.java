@@ -23,6 +23,7 @@ import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.InvalidTargetColumnException;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
+import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.memory.TestingMemorySegmentPool;
 import org.apache.fluss.metadata.AggFunctions;
 import org.apache.fluss.metadata.KvFormat;
@@ -50,6 +51,7 @@ import org.apache.fluss.record.TestData;
 import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.record.bytesview.MultiBytesView;
 import org.apache.fluss.row.BinaryRow;
+import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.row.encode.ValueDecoder;
 import org.apache.fluss.row.encode.ValueEncoder;
 import org.apache.fluss.server.kv.autoinc.AutoIncrementManager;
@@ -288,7 +290,7 @@ class KvTabletTest {
                                 schemaGetter, KvFormat.COMPACTED, ConfigOptions.KV_FORMAT_VERSION_3)
                         .decodeValue(value);
 
-        assertThat(decoded.getValueTag()).isEqualTo(writeTimestampMs);
+        assertThat(readVersion3ValueTag(value)).isEqualTo(writeTimestampMs);
         assertThat(decoded.row.getInt(0)).isEqualTo(1);
         assertThat(decoded.row.getString(1).toString()).isEqualTo("a");
     }
@@ -308,9 +310,10 @@ class KvTabletTest {
                 kvRecordBatchFactory.ofRecords(Collections.singletonList(record)), null);
         kvTablet.flush(Long.MAX_VALUE, NOPErrorHandler.INSTANCE);
 
-        BinaryValue decoded = decodeVersion3Value("k1");
+        byte[] value = readValue("k1");
+        BinaryValue decoded = decodeVersion3Value(value);
 
-        assertThat(decoded.getValueTag()).isEqualTo(1234L);
+        assertThat(readVersion3ValueTag(value)).isEqualTo(1234L);
         assertThat(decoded.row.getInt(0)).isEqualTo(1);
         assertThat(decoded.row.getLong(1)).isEqualTo(1234L);
         assertThat(decoded.row.getString(2).toString()).isEqualTo("event-time-row");
@@ -331,9 +334,10 @@ class KvTabletTest {
                 kvRecordBatchFactory.ofRecords(Collections.singletonList(record)), null);
         kvTablet.flush(Long.MAX_VALUE, NOPErrorHandler.INSTANCE);
 
-        BinaryValue decoded = decodeVersion3Value("k1");
+        byte[] value = readValue("k1");
+        BinaryValue decoded = decodeVersion3Value(value);
 
-        assertThat(decoded.getValueTag())
+        assertThat(readVersion3ValueTag(value))
                 .isEqualTo(RowTtlTimestampProvider.NEVER_EXPIRE_TIMESTAMP_MS);
         assertThat(decoded.row.getInt(0)).isEqualTo(1);
         assertThat(decoded.row.isNullAt(1)).isTrue();
@@ -366,8 +370,9 @@ class KvTabletTest {
                 new int[] {0, 1});
         kvTablet.flush(Long.MAX_VALUE, NOPErrorHandler.INSTANCE);
 
-        BinaryValue updatedValue = decodeVersion3Value(key);
-        assertThat(updatedValue.getValueTag()).isEqualTo(eventTimestampMs);
+        byte[] value = readValue(key);
+        BinaryValue updatedValue = decodeVersion3Value(value);
+        assertThat(readVersion3ValueTag(value)).isEqualTo(eventTimestampMs);
         assertThat(updatedValue.row.getLong(1)).isEqualTo(eventTimestampMs);
         assertThat(updatedValue.row.getString(2).toString()).isEqualTo("retained-name");
 
@@ -1977,10 +1982,18 @@ class KvTabletTest {
         kvTablet.close();
     }
 
-    private BinaryValue decodeVersion3Value(String key) throws Exception {
-        byte[] value = kvTablet.multiGet(Collections.singletonList(key.getBytes())).get(0);
+    private byte[] readValue(String key) throws Exception {
+        return kvTablet.multiGet(Collections.singletonList(key.getBytes())).get(0);
+    }
+
+    private BinaryValue decodeVersion3Value(byte[] value) {
         return new ValueDecoder(schemaGetter, KvFormat.COMPACTED, ConfigOptions.KV_FORMAT_VERSION_3)
                 .decodeValue(value);
+    }
+
+    private static long readVersion3ValueTag(byte[] value) {
+        return KvValueLayout.forKvFormatVersion(ConfigOptions.KV_FORMAT_VERSION_3)
+                .readValueTag(MemorySegment.wrap(value));
     }
 
     private static Schema eventTimeSchema() {

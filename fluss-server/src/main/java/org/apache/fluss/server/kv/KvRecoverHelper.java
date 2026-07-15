@@ -77,7 +77,6 @@ public class KvRecoverHelper {
 
     private KeyEncoder keyEncoder;
     private RowEncoder rowEncoder;
-    private final ValueEncoder valueEncoder;
     private final ValueEncoder recoveryValueEncoder;
     @Nullable private final RowTtlTimestampProvider recoveryTimestampProvider;
     private final SchemaGetter schemaGetter;
@@ -105,7 +104,7 @@ public class KvRecoverHelper {
         this.kvFormat = kvFormat;
         this.logFormat = logFormat;
         this.schemaGetter = schemaGetter;
-        this.valueEncoder = kvTablet.getValueEncoder();
+        ValueEncoder valueEncoder = kvTablet.getValueEncoder();
         this.recoveryTimestampProvider =
                 valueEncoder.hasValueTag()
                         ? RowTtlTimestampProvider.forRecovery(tableConfig, schemaGetter)
@@ -285,13 +284,12 @@ public class KvRecoverHelper {
                         // e.g, arrow vs. compacted, thus needs a conversion here.
                         BinaryRow row = toKvRow(logRow);
                         value =
-                                createRecoveredValue(
-                                                recoveryValueEncoder,
-                                                recoveryTimestampProvider,
-                                                currentSchemaId.shortValue(),
-                                                row,
-                                                logRecord.timestamp())
-                                        .encodeValue();
+                                encodeRecoveredValue(
+                                        recoveryValueEncoder,
+                                        recoveryTimestampProvider,
+                                        currentSchemaId.shortValue(),
+                                        row,
+                                        logRecord.timestamp());
                     }
                     resumeRecordConsumer.accept(
                             new KeyValueAndLogOffset(
@@ -337,7 +335,7 @@ public class KvRecoverHelper {
     }
 
     @VisibleForTesting
-    static BinaryValue createRecoveredValue(
+    static byte[] encodeRecoveredValue(
             ValueEncoder valueEncoder,
             @Nullable RowTtlTimestampProvider timestampProvider,
             short schemaId,
@@ -346,7 +344,7 @@ public class KvRecoverHelper {
         if (timestampProvider != null) {
             timestampProvider.setLogRecordTimestampMs(logRecordTimestamp);
         }
-        return valueEncoder.createValue(schemaId, row);
+        return valueEncoder.encodeValue(new BinaryValue(schemaId, row));
     }
 
     private void initSchema(int schemaId) throws Exception {

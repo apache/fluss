@@ -680,8 +680,7 @@ public final class KvTablet {
             byte[] keyBytes = BytesUtils.toArray(kvRecord.getKey());
             KvPreWriteBuffer.Key key = KvPreWriteBuffer.Key.of(keyBytes);
             BinaryRow row = kvRecord.getRow();
-            BinaryValue currentValue =
-                    row == null ? null : valueEncoder.createValue(schemaIdOfNewData, row);
+            BinaryValue currentValue = row == null ? null : new BinaryValue(schemaIdOfNewData, row);
 
             if (currentValue == null) {
                 logOffset =
@@ -808,9 +807,8 @@ public final class KvTablet {
             AutoIncrementUpdater autoIncrementUpdater)
             throws Exception {
         BinaryValue newValue = autoIncrementUpdater.updateAutoIncrementColumns(currentValue);
-        newValue = refreshValueTag(newValue);
         walBuilder.append(ChangeType.INSERT, latestSchemaRow.replaceRow(newValue.row));
-        kvPreWriteBuffer.insert(key, newValue.encodeValue(), logOffset);
+        kvPreWriteBuffer.insert(key, valueEncoder.encodeValue(newValue), logOffset);
         return logOffset + 1;
     }
 
@@ -822,23 +820,16 @@ public final class KvTablet {
             PaddingRow latestSchemaRow,
             long logOffset)
             throws Exception {
-        newValue = refreshValueTag(newValue);
         if (changelogImage == ChangelogImage.WAL) {
             walBuilder.append(ChangeType.UPDATE_AFTER, latestSchemaRow.replaceRow(newValue.row));
-            kvPreWriteBuffer.update(key, newValue.encodeValue(), logOffset);
+            kvPreWriteBuffer.update(key, valueEncoder.encodeValue(newValue), logOffset);
             return logOffset + 1;
         } else {
             walBuilder.append(ChangeType.UPDATE_BEFORE, latestSchemaRow.replaceRow(oldValue.row));
             walBuilder.append(ChangeType.UPDATE_AFTER, latestSchemaRow.replaceRow(newValue.row));
-            kvPreWriteBuffer.update(key, newValue.encodeValue(), logOffset + 1);
+            kvPreWriteBuffer.update(key, valueEncoder.encodeValue(newValue), logOffset + 1);
             return logOffset + 2;
         }
-    }
-
-    private BinaryValue refreshValueTag(BinaryValue value) {
-        return valueEncoder.hasValueTag()
-                ? valueEncoder.createValue(value.schemaId, value.row)
-                : value;
     }
 
     private WalBuilder createWalBuilder(int schemaId, RowType rowType) throws Exception {

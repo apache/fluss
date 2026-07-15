@@ -105,7 +105,7 @@ public class AggregateRowMerger implements RowMerger {
                 oldValue.row, newValue.row, oldContext, newContext, targetContext, encoder);
         BinaryRow mergedRow = encoder.finishRow();
 
-        return newValue.withRow(targetSchemaId, mergedRow);
+        return new BinaryValue(targetSchemaId, mergedRow);
     }
 
     @Override
@@ -294,7 +294,7 @@ public class AggregateRowMerger implements RowMerger {
                     encoder);
             BinaryRow mergedRow = encoder.finishRow();
 
-            return newValue.withRow(targetSchemaId, mergedRow);
+            return new BinaryValue(targetSchemaId, mergedRow);
         }
 
         @Override
@@ -318,7 +318,7 @@ public class AggregateRowMerger implements RowMerger {
                 AggregateFieldsProcessor.encodePartialDeleteWithSameSchema(
                         oldValue.row, context, targetPosBitSet, pkPosBitSet, encoder);
                 BinaryRow deletedRow = encoder.finishRow();
-                return oldValue.withRow(targetSchemaId, deletedRow);
+                return new BinaryValue(targetSchemaId, deletedRow);
             }
 
             // Schema evolution path: oldValue uses different schema
@@ -344,7 +344,7 @@ public class AggregateRowMerger implements RowMerger {
                     targetPkPosBitSet,
                     encoder);
             BinaryRow deletedRow = encoder.finishRow();
-            return oldValue.withRow(targetSchemaId, deletedRow);
+            return new BinaryValue(targetSchemaId, deletedRow);
         }
 
         @Override

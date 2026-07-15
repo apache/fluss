@@ -31,10 +31,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_2;
 
-/**
- * A decoder to decode a schema id and {@link BinaryRow} from a byte array value which is encoded by
- * {@link ValueEncoder#encodeValue(short, BinaryRow)}.
- */
+/** Decodes a schema id and {@link BinaryRow} from bytes described by a {@link KvValueLayout}. */
 public class ValueDecoder {
 
     private final Map<Short, RowDecoder> rowDecoders;
@@ -77,9 +74,6 @@ public class ValueDecoder {
                         memorySegment,
                         kvValueLayout.rowPayloadOffset(),
                         kvValueLayout.rowPayloadLength(valueBytes.length));
-        if (kvValueLayout.hasValueTag()) {
-            return new BinaryValue(schemaId, kvValueLayout.readValueTag(memorySegment), row);
-        }
         return new BinaryValue(schemaId, row);
     }
 }

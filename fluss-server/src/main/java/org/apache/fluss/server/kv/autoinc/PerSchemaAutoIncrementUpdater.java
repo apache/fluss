@@ -95,7 +95,7 @@ public class PerSchemaAutoIncrementUpdater implements AutoIncrementUpdater {
                 rowEncoder.encodeField(i, flussFieldGetters[i].getFieldOrNull(rowValue.row));
             }
         }
-        return rowValue.withRow(schemaId, rowEncoder.finishRow());
+        return new BinaryValue(schemaId, rowEncoder.finishRow());
     }
 
     @Override

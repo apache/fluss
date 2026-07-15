@@ -2223,6 +2223,10 @@ public class ReplicaManager implements ServerReconfigurable {
     /** Validates whether a client API version can access this primary-key table. */
     public static void validateClientVersionForPkTable(
             ApiKeys apiKey, int apiVersion, TableInfo tableInfo) {
+        if (canSkipClientVersionValidation(apiKey, apiVersion)) {
+            return;
+        }
+
         TableConfig tableConfig = tableInfo.getTableConfig();
         Optional<Integer> kvFormatVersion = tableConfig.getKvFormatVersion();
         if (apiVersion < 1
