@@ -19,7 +19,6 @@ package org.apache.fluss.server.kv;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaGetter;
@@ -382,7 +381,7 @@ final class KvManagerTest {
                 logTablet,
                 KvFormat.COMPACTED,
                 schemaGetter,
-                new TableConfig(new Configuration()),
+                new ResolvedTableConfig(new Configuration(), conf),
                 DEFAULT_COMPRESSION);
     }
 

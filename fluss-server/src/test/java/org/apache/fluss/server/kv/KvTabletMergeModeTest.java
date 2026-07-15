@@ -135,7 +135,7 @@ class KvTabletMergeModeTest {
                         true);
 
         TableBucket tableBucket = logTablet.getTableBucket();
-        TableConfig tableConf = new TableConfig(Configuration.fromMap(config));
+        TableConfig tableConf = new ResolvedTableConfig(Configuration.fromMap(config), conf);
         RowMerger rowMerger = RowMerger.create(tableConf, KvFormat.COMPACTED, schemaGetter);
         AutoIncrementManager autoIncrementManager =
                 new AutoIncrementManager(

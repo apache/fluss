@@ -123,7 +123,7 @@ class KvTabletSchemaEvolutionTest {
                         true);
 
         TableBucket tableBucket = logTablet.getTableBucket();
-        TableConfig tableConf = new TableConfig(new Configuration());
+        TableConfig tableConf = new ResolvedTableConfig(new Configuration(), conf);
         RowMerger rowMerger = RowMerger.create(tableConf, KvFormat.COMPACTED, schemaGetter);
         AutoIncrementManager autoIncrementManager =
                 new AutoIncrementManager(

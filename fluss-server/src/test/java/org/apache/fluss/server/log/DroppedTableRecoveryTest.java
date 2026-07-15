@@ -272,7 +272,8 @@ final class DroppedTableRecoveryTest extends LogTestBase {
 
         // Create KV tablets
         TableConfig tableConfig =
-                new TableConfig(Configuration.fromMap(DATA1_TABLE_DESCRIPTOR.getProperties()));
+                new ResolvedTableConfig(
+                        Configuration.fromMap(DATA1_TABLE_DESCRIPTOR.getProperties()), conf);
         KvTablet kvTablet1 =
                 kvManager.getOrCreateKv(
                         PhysicalTablePath.of(tablePath),
@@ -361,7 +362,8 @@ final class DroppedTableRecoveryTest extends LogTestBase {
 
         // Create KV tablet
         TableConfig tableConfig =
-                new TableConfig(Configuration.fromMap(DATA1_TABLE_DESCRIPTOR.getProperties()));
+                new ResolvedTableConfig(
+                        Configuration.fromMap(DATA1_TABLE_DESCRIPTOR.getProperties()), conf);
         KvTablet kvTablet =
                 kvManager.getOrCreateKv(
                         partitionedTablePath,

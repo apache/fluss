@@ -19,7 +19,6 @@ package org.apache.fluss.server.kv;
 
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.compression.ArrowCompressionInfo;
-import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.DeletionDisabledException;
@@ -235,7 +234,7 @@ public final class KvTablet {
                 kvTabletDir,
                 serverMetricGroup,
                 kv,
-                getKvWriteBatchSize(serverConf, tableConfig),
+                tableConfig.getKvWriteBatchSize().getBytes(),
                 logTablet.getLogFormat(),
                 arrowBufferAllocator,
                 memorySegmentPool,
@@ -264,13 +263,6 @@ public final class KvTablet {
                         rocksDBResourceContainer,
                         rocksDBResourceContainer.getColumnOptions());
         return rocksDBKvBuilder.build();
-    }
-
-    private static long getKvWriteBatchSize(Configuration serverConf, TableConfig tableConfig) {
-        return tableConfig
-                .getOptional(ConfigOptions.TABLE_KV_WRITE_BATCH_SIZE)
-                .orElseGet(() -> serverConf.get(ConfigOptions.KV_WRITE_BATCH_SIZE))
-                .getBytes();
     }
 
     public TableBucket getTableBucket() {

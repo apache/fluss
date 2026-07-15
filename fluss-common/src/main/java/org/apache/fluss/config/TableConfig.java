@@ -58,11 +58,6 @@ public class TableConfig {
         return config.contains(option);
     }
 
-    /** Gets the optional configured value for the given table config option. */
-    public <T> Optional<T> getOptional(ConfigOption<T> option) {
-        return config.getOptional(option);
-    }
-
     /** Gets the log segment file size of the table. */
     public MemorySize getLogSegmentSize() {
         return config.get(ConfigOptions.TABLE_LOG_SEGMENT_FILE_SIZE);
@@ -71,6 +66,26 @@ public class TableConfig {
     /** Gets the log index file size of the table. */
     public MemorySize getLogIndexFileSize() {
         return config.get(ConfigOptions.TABLE_LOG_INDEX_FILE_SIZE);
+    }
+
+    /** Gets the RocksDB write batch size of the table. */
+    public MemorySize getKvWriteBatchSize() {
+        return config.get(ConfigOptions.TABLE_KV_WRITE_BATCH_SIZE);
+    }
+
+    /** Gets the RocksDB background thread count of the table. */
+    public int getKvMaxBackgroundThreads() {
+        return config.get(ConfigOptions.TABLE_KV_MAX_BACKGROUND_THREADS);
+    }
+
+    /** Gets the RocksDB write buffer size of the table. */
+    public MemorySize getKvWriteBufferSize() {
+        return config.get(ConfigOptions.TABLE_KV_WRITE_BUFFER_SIZE);
+    }
+
+    /** Gets the RocksDB write buffer count of the table. */
+    public int getKvMaxWriteBufferNumber() {
+        return config.get(ConfigOptions.TABLE_KV_MAX_WRITE_BUFFER_NUMBER);
     }
 
     /** Gets the replication factor of the table. */

@@ -58,12 +58,14 @@ public final class ResolvedTableConfig extends TableConfig {
     }
 
     /** Gets the RocksDB write batch size resolved from table properties or server configuration. */
+    @Override
     public MemorySize getKvWriteBatchSize() {
         return getResolved(
                 ConfigOptions.TABLE_KV_WRITE_BATCH_SIZE, ConfigOptions.KV_WRITE_BATCH_SIZE);
     }
 
     /** Gets the RocksDB background thread count resolved from table or server configuration. */
+    @Override
     public int getKvMaxBackgroundThreads() {
         return getResolved(
                 ConfigOptions.TABLE_KV_MAX_BACKGROUND_THREADS,
@@ -73,6 +75,7 @@ public final class ResolvedTableConfig extends TableConfig {
     /**
      * Gets the RocksDB write buffer size resolved from table properties or server configuration.
      */
+    @Override
     public MemorySize getKvWriteBufferSize() {
         return getResolved(
                 ConfigOptions.TABLE_KV_WRITE_BUFFER_SIZE, ConfigOptions.KV_WRITE_BUFFER_SIZE);
@@ -81,6 +84,7 @@ public final class ResolvedTableConfig extends TableConfig {
     /**
      * Gets the RocksDB write buffer count resolved from table properties or server configuration.
      */
+    @Override
     public int getKvMaxWriteBufferNumber() {
         return getResolved(
                 ConfigOptions.TABLE_KV_MAX_WRITE_BUFFER_NUMBER,

@@ -193,7 +193,7 @@ class KvTabletTest {
             SchemaGetter schemaGetter,
             Map<String, String> tableConfig)
             throws Exception {
-        TableConfig tableConf = new TableConfig(Configuration.fromMap(tableConfig));
+        TableConfig tableConf = new ResolvedTableConfig(Configuration.fromMap(tableConfig), conf);
         RowMerger rowMerger = RowMerger.create(tableConf, KvFormat.COMPACTED, schemaGetter);
         AutoIncrementManager autoIncrementManager =
                 new AutoIncrementManager(
