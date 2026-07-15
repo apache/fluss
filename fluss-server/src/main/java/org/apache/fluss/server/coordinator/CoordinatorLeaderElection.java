@@ -30,10 +30,9 @@ import org.slf4j.LoggerFactory;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 /**
@@ -47,22 +46,42 @@ import java.util.function.Consumer;
  *   <li>When losing leadership, clean up leader resources but continue participating in election
  *   <li>Can be re-elected as leader multiple times
  * </ul>
+ *
+ * <p>Leadership callbacks and state transitions are serialized by {@code leaderCallbackExecutor}.
+ * The state machine is:
+ *
+ * <pre>
+ *                         leadership granted + initialization succeeds
+ *        +----------------------------------------------------------------+
+ *        |                                                                v
+ * +-----------+  leadership revoked  +-----------+  grant + init  +----------+
+ * |  INITIAL  | -------------------> |  STANDBY  | -------------> |  LEADER  |
+ * +-----------+                      +-----------+                +----------+
+ *                                         ^                           |
+ *                                         +---- revoke + cleanup -----+
+ *
+ *        INITIAL / STANDBY / LEADER -- close + optional cleanup --> CLOSED
+ *        initialization failure -------- cleanup -----------------> STANDBY
+ * </pre>
+ *
+ * <p>If leader initialization fails, any partially initialized leader resources are cleaned up and
+ * the state becomes {@code STANDBY}. The {@code CLOSED} state is terminal.
  */
 public class CoordinatorLeaderElection implements AutoCloseable {
     private static final Logger LOG = LoggerFactory.getLogger(CoordinatorLeaderElection.class);
 
     private final String serverId;
     private final LeaderLatch leaderLatch;
-    private final AtomicBoolean isLeader = new AtomicBoolean(false);
-    // Cached thread pool to run leader init/cleanup callbacks outside Curator's EventThread.
+    // Single-threaded executor to run leader init/cleanup callbacks outside Curator's EventThread.
     // Curator's LeaderLatchListener callbacks run on its internal EventThread; performing
     // synchronous ZK operations there causes deadlock because ZK response dispatch also
-    // needs that same thread. A cached pool is used because these callbacks are transient
-    // (only run during leadership transitions), so idle threads can be reclaimed.
+    // needs that same thread. Serial execution also guarantees that leader initialization,
+    // cleanup, and state transitions never overlap.
     private final ExecutorService leaderCallbackExecutor;
-    // Tracks the pending cleanup task so that init can wait for it to complete.
-    private final AtomicReference<CompletableFuture<Void>> pendingCleanup =
-            new AtomicReference<>(CompletableFuture.completedFuture(null));
+    private final CompletableFuture<Void> closeFuture = new CompletableFuture<>();
+
+    private final AtomicBoolean closing = new AtomicBoolean(false);
+    private volatile State state = State.INITIAL;
 
     private volatile Consumer<Throwable> cleanupLeaderServices;
 
@@ -74,7 +93,7 @@ public class CoordinatorLeaderElection implements AutoCloseable {
                         ZkData.CoordinatorElectionZNode.path(),
                         String.valueOf(serverId));
         this.leaderCallbackExecutor =
-                Executors.newCachedThreadPool(
+                Executors.newSingleThreadExecutor(
                         r -> {
                             Thread t = new Thread(r, "coordinator-leader-callback-" + serverId);
                             // Daemon threads ensure the JVM can exit even if close() is not
@@ -100,55 +119,12 @@ public class CoordinatorLeaderElection implements AutoCloseable {
                 new LeaderLatchListener() {
                     @Override
                     public void isLeader() {
-                        // return if already marked as leader to avoid duplicate init calls
-                        if (isLeader.get()) {
-                            return;
-                        }
-                        LOG.info("Coordinator server {} has become the leader.", serverId);
-                        // Capture the pending cleanup future at this point so that
-                        // init waits for it before proceeding.
-                        CompletableFuture<Void> cleanup = pendingCleanup.get();
-                        // Run init on a separate thread to avoid deadlock with
-                        // Curator's EventThread when performing ZK operations.
-
-                        leaderCallbackExecutor.execute(
-                                () -> {
-                                    // Wait for any pending cleanup to finish first.
-                                    try {
-                                        cleanup.get(60, TimeUnit.SECONDS);
-                                    } catch (TimeoutException e) {
-                                        LOG.warn(
-                                                "Pending cleanup for server {} did not complete within 60s, proceeding with init.",
-                                                serverId);
-                                    } catch (Exception e) {
-                                        LOG.warn(
-                                                "Error waiting for pending cleanup for server {}",
-                                                serverId,
-                                                e);
-                                    }
-                                    try {
-                                        initLeaderServices.run();
-                                        // Set leader flag after init completes, so when zk found
-                                        // this leader, the leader can accept requests
-                                        isLeader.set(true);
-                                    } catch (CoordinatorEpochFencedException e) {
-                                        LOG.warn(
-                                                "Coordinator server {} has been fenced and not become leader successfully.",
-                                                serverId);
-                                        notLeader();
-                                    } catch (Exception e) {
-                                        LOG.error(
-                                                "Failed to initialize leader services for server {}",
-                                                serverId,
-                                                e);
-                                        notLeader();
-                                    }
-                                });
+                        submitLeadershipEvent(true, initLeaderServices);
                     }
 
                     @Override
                     public void notLeader() {
-                        triggerCleanupLeaderServices();
+                        submitLeadershipEvent(false, initLeaderServices);
                     }
                 });
 
@@ -164,59 +140,138 @@ public class CoordinatorLeaderElection implements AutoCloseable {
     public void close() {
         LOG.info("Closing LeaderLatch for server {}.", serverId);
 
-        if (leaderLatch != null) {
+        if (closing.compareAndSet(false, true)) {
             try {
                 leaderLatch.close();
             } catch (Exception e) {
                 LOG.error("Failed to close LeaderLatch for server {}.", serverId, e);
             }
-        }
 
-        // LeaderLatch notifications are asynchronous. Explicitly trigger the same idempotent
-        // cleanup path to guarantee a clean shutdown even if notLeader() has not arrived yet.
-        triggerCleanupLeaderServices();
-
-        leaderCallbackExecutor.shutdown();
-        try {
-            if (!leaderCallbackExecutor.awaitTermination(60, TimeUnit.SECONDS)) {
-                LOG.warn(
-                        "Coordinator leader callbacks for server {} did not terminate within 60s.",
-                        serverId);
-                leaderCallbackExecutor.shutdownNow();
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            leaderCallbackExecutor.shutdownNow();
-        }
-    }
-
-    public boolean isLeader() {
-        return this.isLeader.get();
-    }
-
-    private void triggerCleanupLeaderServices() {
-        if (isLeader.compareAndSet(true, false)) {
-            LOG.warn(
-                    "Coordinator server {} has lost the leadership, cleaning up leader services.",
-                    serverId);
-            // Submit cleanup to leaderCallbackExecutor. The cached thread pool can spawn a new
-            // thread even if init is still running. The cleanup completion is tracked via
-            // pendingCleanup so that subsequent init and close wait for it.
-            CompletableFuture<Void> cleanupFuture = new CompletableFuture<>();
-            pendingCleanup.set(cleanupFuture);
+            // Events submitted after closing starts are ignored by their executor-side check.
+            // Since the executor is single-threaded, this task runs after all leadership work
+            // already queued before close and completes only after leader cleanup has finished.
             leaderCallbackExecutor.execute(
                     () -> {
                         try {
-                            if (cleanupLeaderServices != null) {
-                                cleanupLeaderServices.accept(null);
+                            boolean cleanupRequired = state == State.LEADER;
+                            state = State.CLOSED;
+                            if (cleanupRequired) {
+                                cleanupLeaderServices(null);
                             }
-                        } catch (Exception e) {
-                            LOG.error(
-                                    "Failed to cleanup leader services for server {}", serverId, e);
                         } finally {
-                            cleanupFuture.complete(null);
+                            closeFuture.complete(null);
                         }
                     });
         }
+
+        closeFuture.join();
+        leaderCallbackExecutor.shutdown();
+        awaitCallbackExecutorTermination();
+    }
+
+    public boolean isLeader() {
+        return !closing.get() && state == State.LEADER;
+    }
+
+    private void submitLeadershipEvent(boolean leader, Runnable initLeaderServices) {
+        if (closing.get()) {
+            return;
+        }
+        try {
+            leaderCallbackExecutor.execute(
+                    () -> {
+                        if (closing.get() || state == State.CLOSED) {
+                            return;
+                        }
+                        if (leader) {
+                            becomeLeader(initLeaderServices);
+                        } else {
+                            becomeStandby();
+                        }
+                    });
+        } catch (RejectedExecutionException e) {
+            if (!closing.get()) {
+                throw e;
+            }
+        }
+    }
+
+    private void becomeLeader(Runnable initLeaderServices) {
+        if (closing.get() || state == State.LEADER || state == State.CLOSED) {
+            return;
+        }
+
+        LOG.info("Coordinator server {} has become the leader.", serverId);
+        Throwable initializationFailure = null;
+        try {
+            initLeaderServices.run();
+        } catch (CoordinatorEpochFencedException e) {
+            LOG.warn(
+                    "Coordinator server {} has been fenced and not become leader successfully.",
+                    serverId);
+            initializationFailure = e;
+        } catch (Exception e) {
+            LOG.error("Failed to initialize leader services for server {}", serverId, e);
+            initializationFailure = e;
+        }
+
+        if (initializationFailure == null && !closing.get()) {
+            state = State.LEADER;
+        } else {
+            cleanupLeaderServices(initializationFailure);
+            state = State.STANDBY;
+        }
+    }
+
+    private void becomeStandby() {
+        if (state == State.CLOSED) {
+            return;
+        }
+
+        boolean cleanupRequired = state == State.LEADER;
+        state = State.STANDBY;
+        if (cleanupRequired) {
+            cleanupLeaderServices(null);
+        }
+    }
+
+    private void cleanupLeaderServices(Throwable cause) {
+        LOG.warn(
+                "Coordinator server {} has lost the leadership, cleaning up leader services.",
+                serverId);
+        try {
+            if (cleanupLeaderServices != null) {
+                cleanupLeaderServices.accept(cause);
+            }
+        } catch (Exception e) {
+            LOG.error("Failed to cleanup leader services for server {}", serverId, e);
+        }
+    }
+
+    private void awaitCallbackExecutorTermination() {
+        boolean interrupted = false;
+        while (true) {
+            try {
+                if (leaderCallbackExecutor.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS)) {
+                    break;
+                }
+            } catch (InterruptedException e) {
+                interrupted = true;
+            }
+        }
+
+        if (interrupted) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /**
+     * Internal lifecycle states. All transitions are performed by {@code leaderCallbackExecutor}.
+     */
+    private enum State {
+        INITIAL,
+        LEADER,
+        STANDBY,
+        CLOSED
     }
 }

@@ -87,4 +87,45 @@ class CoordinatorLeaderElectionTest {
         assertThat(cleanupFinished.getCount()).isEqualTo(0);
         assertThat(cleanupCount).hasValue(1);
     }
+
+    @Test
+    void testCloseDuringLeaderInitializationCleansUp() throws Exception {
+        CoordinatorLeaderElection election =
+                new CoordinatorLeaderElection(zooKeeperClient, "coordinator-2");
+        CountDownLatch initializationStarted = new CountDownLatch(1);
+        CountDownLatch allowInitialization = new CountDownLatch(1);
+        CountDownLatch closeStarted = new CountDownLatch(1);
+        AtomicInteger cleanupCount = new AtomicInteger();
+
+        election.startElectLeaderAsync(
+                () -> {
+                    initializationStarted.countDown();
+                    try {
+                        allowInitialization.await();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                },
+                ignored -> cleanupCount.incrementAndGet());
+        assertThat(initializationStarted.await(30, TimeUnit.SECONDS)).isTrue();
+
+        CompletableFuture<Void> closeFuture =
+                CompletableFuture.runAsync(
+                        () -> {
+                            closeStarted.countDown();
+                            election.close();
+                        });
+        assertThat(closeStarted.await(30, TimeUnit.SECONDS)).isTrue();
+        try {
+            assertThat(closeFuture).isNotDone();
+            assertThat(cleanupCount).hasValue(0);
+        } finally {
+            // allow to continue to initialize as leader after the election is close.
+            allowInitialization.countDown();
+        }
+
+        closeFuture.get(30, TimeUnit.SECONDS);
+        assertThat(cleanupCount).hasValue(1);
+        assertThat(election.isLeader()).isFalse();
+    }
 }
