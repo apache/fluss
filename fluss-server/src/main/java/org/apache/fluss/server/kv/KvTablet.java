@@ -670,37 +670,47 @@ public final class KvTablet {
     public void flush(long exclusiveUpToLogOffset, FatalErrorHandler fatalErrorHandler) {
         // todo: need to introduce a backpressure mechanism
         // to avoid too much records in kvPreWriteBuffer
-        inWriteLock(
-                kvLock,
-                () -> {
-                    // when kv manager is closed which means kv tablet is already closed,
-                    // but the tablet server may still handle fetch log request from follower
-                    // as the tablet rpc service is closed asynchronously, then update the watermark
-                    // and then flush the pre-write buffer.
+        Throwable flushError =
+                inWriteLock(
+                        kvLock,
+                        () -> {
+                            // when kv manager is closed which means kv tablet is already closed,
+                            // but the tablet server may still handle fetch log request from
+                            // follower
+                            // as the tablet rpc service is closed asynchronously, then update the
+                            // watermark and then flush the pre-write buffer.
 
-                    // In such case, if the tablet is already closed, we won't flush pre-write
-                    // buffer, just warning it.
-                    if (isClosed) {
-                        LOG.warn(
-                                "The kv tablet for {} is already closed, ignore flushing kv pre-write buffer.",
-                                tableBucket);
-                    } else {
-                        try {
-                            int rowCountDiff = kvPreWriteBuffer.flush(exclusiveUpToLogOffset);
-                            if (exclusiveUpToLogOffset > flushedLogOffset) {
-                                flushedLogOffset = exclusiveUpToLogOffset;
+                            // In such case, if the tablet is already closed, we won't flush
+                            // pre-write buffer, just warning it.
+                            if (isClosed) {
+                                LOG.warn(
+                                        "The kv tablet for {} is already closed, ignore flushing kv pre-write buffer.",
+                                        tableBucket);
+                                return null;
                             }
-                            if (rowCount != ROW_COUNT_DISABLED) {
-                                // row count is enabled, we update the row count after flush.
-                                long currentRowCount = rowCount;
-                                rowCount = currentRowCount + rowCountDiff;
+
+                            try {
+                                int rowCountDiff = kvPreWriteBuffer.flush(exclusiveUpToLogOffset);
+                                if (exclusiveUpToLogOffset > flushedLogOffset) {
+                                    flushedLogOffset = exclusiveUpToLogOffset;
+                                }
+                                if (rowCount != ROW_COUNT_DISABLED) {
+                                    // row count is enabled, we update the row count after flush.
+                                    long currentRowCount = rowCount;
+                                    rowCount = currentRowCount + rowCountDiff;
+                                }
+                                return null;
+                            } catch (Throwable t) {
+                                return t;
                             }
-                        } catch (Throwable t) {
-                            fatalErrorHandler.onFatalError(
-                                    new KvStorageException("Failed to flush kv pre-write buffer."));
-                        }
-                    }
-                });
+                        });
+
+        if (flushError != null) {
+            // The fatal error handler may synchronously shut down the server, which closes this
+            // tablet from another thread. Invoke it after releasing kvLock to avoid deadlock.
+            fatalErrorHandler.onFatalError(
+                    new KvStorageException("Failed to flush kv pre-write buffer.", flushError));
+        }
     }
 
     /** put key,value,logOffset into pre-write buffer directly. */
