@@ -69,6 +69,7 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -414,7 +415,7 @@ public class TabletServer extends ServerBase {
                 exception = ExceptionUtils.firstOrSuppressed(t, exception);
             }
 
-            final Collection<CompletableFuture<Void>> terminationFutures = new ArrayList<>(2);
+            final Collection<CompletableFuture<Void>> terminationFutures = new ArrayList<>(1);
             try {
                 if (metricRegistry != null) {
                     terminationFutures.add(metricRegistry.closeAsync());
@@ -423,12 +424,24 @@ public class TabletServer extends ServerBase {
                 exception = ExceptionUtils.firstOrSuppressed(t, exception);
             }
 
+            CompletableFuture<Void> rpcServerTerminationFuture =
+                    CompletableFuture.completedFuture(null);
             try {
-                if (rpcServer != null) {
-                    terminationFutures.add(rpcServer.closeAsync());
-                }
+                rpcServerTerminationFuture = shutdownRpcServer();
             } catch (Throwable t) {
                 exception = ExceptionUtils.firstOrSuppressed(t, exception);
+            }
+
+            // Stop dispatching new RPC calls and drain the request processors before shutting down
+            // the components that can access tablets. RPC calls may leave delayed operations
+            // behind; ReplicaManager is shut down below before the tablet managers to stop those
+            // operations as well as snapshot and replica-fetcher activity.
+            try {
+                rpcServerTerminationFuture.join();
+            } catch (Throwable t) {
+                exception =
+                        ExceptionUtils.firstOrSuppressed(
+                                ExceptionUtils.stripCompletionException(t), exception);
             }
 
             try {
@@ -465,21 +478,8 @@ public class TabletServer extends ServerBase {
                     scannerManager.close();
                 }
 
-                if (kvManager != null) {
-                    kvManager.shutdown();
-                }
-
-                if (remoteLogManager != null) {
-                    remoteLogManager.close();
-                }
-
-                if (logManager != null) {
-                    logManager.shutdown();
-                }
-
-                if (replicaManager != null) {
-                    replicaManager.shutdown();
-                }
+                shutdownReplicaManager();
+                shutdownTabletManagers();
 
                 if (localDiskManager != null) {
                     localDiskManager.close();
@@ -513,6 +513,36 @@ public class TabletServer extends ServerBase {
                 terminationFutures.add(FutureUtils.completedExceptionally(exception));
             }
             return FutureUtils.completeAll(terminationFutures);
+        }
+    }
+
+    @VisibleForTesting
+    CompletableFuture<Void> shutdownRpcServer() {
+        if (rpcServer != null) {
+            return rpcServer.closeAsync();
+        }
+        return CompletableFuture.completedFuture(null);
+    }
+
+    @VisibleForTesting
+    void shutdownReplicaManager() throws InterruptedException {
+        if (replicaManager != null) {
+            replicaManager.shutdown();
+        }
+    }
+
+    @VisibleForTesting
+    void shutdownTabletManagers() throws IOException {
+        if (kvManager != null) {
+            kvManager.shutdown();
+        }
+
+        if (remoteLogManager != null) {
+            remoteLogManager.close();
+        }
+
+        if (logManager != null) {
+            logManager.shutdown();
         }
     }
 

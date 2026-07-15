@@ -502,7 +502,11 @@ public final class LogManager extends TabletManagerBase {
             logTablet.flush(true);
             logTablet.close();
         } catch (IOException e) {
+            LOG.warn("Exception while closing log tablet {}.", logTablet.getTableBucket(), e);
             throw new FlussRuntimeException(e);
+        } catch (RuntimeException | Error e) {
+            LOG.warn("Exception while closing log tablet {}.", logTablet.getTableBucket(), e);
+            throw e;
         }
     }
 
@@ -514,7 +518,9 @@ public final class LogManager extends TabletManagerBase {
             closeSucceeded = true;
         } catch (CompletionException e) {
             closeSucceeded = false;
-            LOG.warn("There was an error in one of the threads during LogManager shutdown", e);
+            LOG.warn(
+                    "One or more log tablets in directory {} failed to close. See preceding warnings for details.",
+                    dataDir);
         }
 
         checkpointRecoveryOffsets(dataDir, logs);
