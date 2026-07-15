@@ -69,7 +69,8 @@ public enum ApiKeys {
     NOTIFY_KV_SNAPSHOT_OFFSET(1029, 0, 0, PRIVATE),
     COMMIT_LAKE_TABLE_SNAPSHOT(1030, 0, 0, PRIVATE),
     NOTIFY_LAKE_TABLE_OFFSET(1031, 0, 0, PRIVATE),
-    GET_LAKE_SNAPSHOT(1032, 0, 0, PUBLIC),
+    // Version 1: response may carry the opaque tiering_state_json (for capability detection).
+    GET_LAKE_SNAPSHOT(1032, 0, 1, PUBLIC),
     LIMIT_SCAN(1033, 0, 0, PUBLIC),
 
     // Version 0: Uses lake's encoder for prefix key encoding (legacy behavior).
@@ -94,7 +95,8 @@ public enum ApiKeys {
     REBALANCE(1049, 0, 0, PUBLIC),
     LIST_REBALANCE_PROGRESS(1050, 0, 0, PUBLIC),
     CANCEL_REBALANCE(1051, 0, 0, PUBLIC),
-    PREPARE_LAKE_TABLE_SNAPSHOT(1052, 0, 0, PRIVATE),
+    // Version 1: request may carry the opaque tiering_state_json (for capability detection).
+    PREPARE_LAKE_TABLE_SNAPSHOT(1052, 0, 1, PRIVATE),
     REGISTER_PRODUCER_OFFSETS(1053, 0, 0, PUBLIC),
     GET_PRODUCER_OFFSETS(1054, 0, 0, PUBLIC),
     DELETE_PRODUCER_OFFSETS(1055, 0, 0, PUBLIC),

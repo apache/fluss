@@ -23,6 +23,7 @@ import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -70,8 +71,10 @@ public class TableBucketOffsetsJsonSerde
     private static final String BUCKET_OFFSETS_KEY = "bucket_offsets";
     private static final String PARTITION_OFFSETS_KEY = "partition_offsets";
     private static final String PARTITION_ID_KEY = "partition_id";
+    private static final String TIERING_STATE_KEY = "tiering_state";
 
-    private static final int VERSION = 1;
+    private static final int VERSION_1 = 1;
+    private static final int CURRENT_VERSION = VERSION_1;
     private static final long UNKNOWN_OFFSET = -1;
 
     /**
@@ -94,7 +97,7 @@ public class TableBucketOffsetsJsonSerde
             throws IOException {
         generator.writeStartObject();
         long expectedTableId = tableBucketOffsets.getTableId();
-        generator.writeNumberField(VERSION_KEY, VERSION);
+        generator.writeNumberField(VERSION_KEY, CURRENT_VERSION);
         generator.writeNumberField(TABLE_ID_KEY, expectedTableId);
 
         Map<TableBucket, Long> offsets = tableBucketOffsets.getOffsets();
@@ -149,6 +152,23 @@ public class TableBucketOffsetsJsonSerde
             }
         }
 
+        // embed the opaque tiering-state payload (optional); require a JSON object, content not
+        // parsed.
+        byte[] tieringStateJson = tableBucketOffsets.getTieringStateJson();
+        if (tieringStateJson != null) {
+            JsonNode tieringStateNode;
+            try {
+                tieringStateNode = JsonSerdeUtils.OBJECT_MAPPER_INSTANCE.readTree(tieringStateJson);
+            } catch (IOException e) {
+                throw new IllegalArgumentException("tiering_state payload is not valid JSON", e);
+            }
+            if (tieringStateNode == null || !tieringStateNode.isObject()) {
+                throw new IllegalArgumentException("tiering_state payload must be a JSON object");
+            }
+            generator.writeFieldName(TIERING_STATE_KEY);
+            generator.writeRawValue(tieringStateNode.toString());
+        }
+
         generator.writeEndObject();
     }
 
@@ -165,7 +185,7 @@ public class TableBucketOffsetsJsonSerde
     @Override
     public TableBucketOffsets deserialize(JsonNode node) {
         int version = node.get(VERSION_KEY).asInt();
-        if (version != VERSION) {
+        if (version != CURRENT_VERSION) {
             throw new IllegalArgumentException("Unsupported version: " + version);
         }
 
@@ -211,7 +231,14 @@ public class TableBucketOffsetsJsonSerde
             }
         }
 
-        return new TableBucketOffsets(tableId, offsets);
+        // read the opaque tiering-state payload (optional) as raw JSON bytes; absent yields null.
+        byte[] tieringStateJson = null;
+        JsonNode tieringStateNode = node.get(TIERING_STATE_KEY);
+        if (tieringStateNode != null && !tieringStateNode.isNull()) {
+            tieringStateJson = tieringStateNode.toString().getBytes(StandardCharsets.UTF_8);
+        }
+
+        return new TableBucketOffsets(tableId, offsets, tieringStateJson);
     }
 
     private void serializeBucketLogEndOffset(

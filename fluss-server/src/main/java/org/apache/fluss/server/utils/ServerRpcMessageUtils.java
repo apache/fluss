@@ -1822,7 +1822,11 @@ public class ServerRpcMessageUtils {
                             pbBucketOffset.getBucketId());
             bucketOffsets.put(tableBucket, pbBucketOffset.getLogEndOffset());
         }
-        return new TableBucketOffsets(tableId, bucketOffsets);
+
+        // pass through the opaque tiering-state payload
+        byte[] tieringStateJson =
+                pbTableOffsets.hasTieringStateJson() ? pbTableOffsets.getTieringStateJson() : null;
+        return new TableBucketOffsets(tableId, bucketOffsets, tieringStateJson);
     }
 
     /**
@@ -1958,6 +1962,12 @@ public class ServerRpcMessageUtils {
             if (tableBucket.getPartitionId() != null) {
                 pbLakeSnapshotForBucket.setPartitionId(tableBucket.getPartitionId());
             }
+        }
+
+        // pass through the opaque tiering-state payload
+        if (lakeTableSnapshot.getTieringStateJson() != null) {
+            getLakeTableSnapshotResponse.setTieringStateJson(
+                    lakeTableSnapshot.getTieringStateJson());
         }
 
         return getLakeTableSnapshotResponse;

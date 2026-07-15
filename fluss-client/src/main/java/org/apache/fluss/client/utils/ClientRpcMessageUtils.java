@@ -286,7 +286,11 @@ public class ClientRpcMessageUtils {
                     new TableBucket(tableId, partitionId, pbLakeSnapshotForBucket.getBucketId());
             tableBucketsOffset.put(tableBucket, pbLakeSnapshotForBucket.getLogOffset());
         }
-        return new LakeSnapshot(snapshotId, tableBucketsOffset);
+
+        // pass through the opaque tiering-state bytes (parsed lazily by LakeSnapshot).
+        byte[] lakeTieringTableStateJson =
+                response.hasTieringStateJson() ? response.getTieringStateJson() : null;
+        return new LakeSnapshot(snapshotId, tableBucketsOffset, lakeTieringTableStateJson);
     }
 
     public static List<FsPathAndFileName> toFsPathAndFileName(
