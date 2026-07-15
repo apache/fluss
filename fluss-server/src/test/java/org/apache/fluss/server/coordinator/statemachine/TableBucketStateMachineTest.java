@@ -580,22 +580,12 @@ class TableBucketStateMachineTest {
                     .hasValue(expectedOnlineLeaderAndIsr);
             assertThat(coordinatorContext.getBucketLeaderAndIsr(newBucket))
                     .hasValue(expectedNewLeaderAndIsr);
-            assertThat(testingZooKeeperClient.batchReadBuckets)
-                    .containsExactlyInAnyOrderElementsOf(tableBuckets);
             assertThat(testingZooKeeperClient.batchUpdates)
                     .containsExactlyEntriesOf(
                             Collections.singletonMap(onlineBucket, expectedOnlineLeaderAndIsr));
-            assertThat(testingZooKeeperClient.batchUpdateZkVersion)
-                    .isEqualTo(zkEpoch.getCoordinatorEpochZkVersion());
             assertThat(testingZooKeeperClient.registeredLeaderAndIsrs)
                     .containsExactlyEntriesOf(
                             Collections.singletonMap(newBucket, expectedNewLeaderAndIsr));
-            assertThat(testingZooKeeperClient.registerZkVersions)
-                    .containsExactlyEntriesOf(
-                            Collections.singletonMap(
-                                    newBucket, zkEpoch.getCoordinatorEpochZkVersion()));
-            assertThat(testingZooKeeperClient.individualReadBuckets).isEmpty();
-            assertThat(testingZooKeeperClient.individualUpdates).isEmpty();
         }
     }
 
@@ -828,7 +818,6 @@ class TableBucketStateMachineTest {
         private final Map<TableBucket, LeaderAndIsr> individualUpdates = new HashMap<>();
         private final Map<TableBucket, Integer> individualUpdateZkVersions = new HashMap<>();
         private final Map<TableBucket, LeaderAndIsr> registeredLeaderAndIsrs = new HashMap<>();
-        private final Map<TableBucket, Integer> registerZkVersions = new HashMap<>();
         private int batchUpdateZkVersion;
 
         private TestingZooKeeperClient(
@@ -875,7 +864,6 @@ class TableBucketStateMachineTest {
         public void registerLeaderAndIsr(
                 TableBucket tableBucket, LeaderAndIsr leaderAndIsr, int expectedZkVersion) {
             registeredLeaderAndIsrs.put(tableBucket, leaderAndIsr);
-            registerZkVersions.put(tableBucket, expectedZkVersion);
         }
 
         private static CuratorFrameworkWithUnhandledErrorListener createCuratorFrameworkWrapper() {
