@@ -158,7 +158,7 @@ public class TableBucketOffsetsJsonSerde
         if (tieringStateJson != null) {
             JsonNode tieringStateNode;
             try {
-                tieringStateNode = JsonSerdeUtils.OBJECT_MAPPER_INSTANCE.readTree(tieringStateJson);
+                tieringStateNode = JsonSerdeUtils.readTree(tieringStateJson);
             } catch (IOException e) {
                 throw new IllegalArgumentException("tiering_state payload is not valid JSON", e);
             }
@@ -166,7 +166,7 @@ public class TableBucketOffsetsJsonSerde
                 throw new IllegalArgumentException("tiering_state payload must be a JSON object");
             }
             generator.writeFieldName(TIERING_STATE_KEY);
-            generator.writeRawValue(tieringStateNode.toString());
+            generator.writeTree(tieringStateNode);
         }
 
         generator.writeEndObject();

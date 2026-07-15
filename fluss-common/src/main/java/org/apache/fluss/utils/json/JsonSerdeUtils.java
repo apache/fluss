@@ -73,5 +73,13 @@ public class JsonSerdeUtils {
         }
     }
 
+    /**
+     * Parse the given JSON bytes into a tree node using the shared object mapper. Useful for
+     * opaque/pass-through JSON payloads whose concrete type is not known to the caller.
+     */
+    public static JsonNode readTree(byte[] json) throws IOException {
+        return OBJECT_MAPPER_INSTANCE.readTree(json);
+    }
+
     private JsonSerdeUtils() {}
 }

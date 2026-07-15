@@ -51,10 +51,8 @@ import java.util.Objects;
 @PublicEvolving
 public class LakeTieringTableState {
 
-    /** The tiering-state format version 1. */
     public static final int VERSION_1 = 1;
 
-    /** The current tiering-state format version written by this build. */
     public static final int CURRENT_VERSION = VERSION_1;
 
     private final int version;
@@ -76,35 +74,22 @@ public class LakeTieringTableState {
                         : new HashMap<>(partitionUpdateTimes);
     }
 
-    /** Returns the tiering-state format version. */
     public int getVersion() {
         return version;
     }
 
-    /** Returns whether the full-table cold-start back-fill has completed. */
     public boolean isPartitionDoneInitialized() {
         return partitionDoneInitialized;
     }
 
-    /** Returns the last update time of the not-yet-done partitions, keyed by partitionId. */
     public Map<Long, Long> getPartitionUpdateTimes() {
         return Collections.unmodifiableMap(partitionUpdateTimes);
     }
 
-    /**
-     * Serialize to a JSON byte array.
-     *
-     * @see LakeTieringTableStateJsonSerde
-     */
     public byte[] toJsonBytes() {
         return JsonSerdeUtils.writeValueAsBytes(this, LakeTieringTableStateJsonSerde.INSTANCE);
     }
 
-    /**
-     * Deserialize from a JSON byte array.
-     *
-     * @see LakeTieringTableStateJsonSerde
-     */
     public static LakeTieringTableState fromJsonBytes(byte[] json) {
         return JsonSerdeUtils.readValue(json, LakeTieringTableStateJsonSerde.INSTANCE);
     }

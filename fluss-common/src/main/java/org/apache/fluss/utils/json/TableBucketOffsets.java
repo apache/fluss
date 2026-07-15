@@ -143,7 +143,7 @@ public class TableBucketOffsets {
 
     @Override
     public int hashCode() {
-        return 31 * Objects.hash(tableId, offsets) + Arrays.hashCode(tieringStateJson);
+        return Objects.hash(tableId, offsets, Arrays.hashCode(tieringStateJson));
     }
 
     @Override

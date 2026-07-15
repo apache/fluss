@@ -88,8 +88,7 @@ public class LakeTableSnapshot {
 
     @Override
     public int hashCode() {
-        return 31 * Objects.hash(snapshotId, bucketLogEndOffset)
-                + Arrays.hashCode(tieringStateJson);
+        return Objects.hash(snapshotId, bucketLogEndOffset, Arrays.hashCode(tieringStateJson));
     }
 
     @Override
