@@ -501,16 +501,19 @@ public final class LogManager extends TabletManagerBase {
         try {
             logTablet.flush(true);
             logTablet.close();
-        } catch (Exception e) {
-            LOG.warn("Exception while closing log tablet {}.", logTablet.getTableBucket(), e);
+        } catch (IOException e) {
+            throw new FlussRuntimeException(e);
         }
     }
 
     private void waitForShutdownLogsInDir(
             File dataDir, List<LogTablet> logs, CompletableFuture<Void> closingFuture) {
+        boolean closeSucceeded;
         try {
             closingFuture.join();
+            closeSucceeded = true;
         } catch (CompletionException e) {
+            closeSucceeded = false;
             LOG.warn("There was an error in one of the threads during LogManager shutdown", e);
         }
 
@@ -518,13 +521,17 @@ public final class LogManager extends TabletManagerBase {
 
         // mark that the shutdown was clean by creating marker file for log dirs that all logs have
         // been recovered at startup time.
-        if (loadLogsCompletedFlag) {
+        if (loadLogsCompletedFlag && closeSucceeded) {
             try {
                 LOG.debug("Writing clean shutdown marker for directory {}.", dataDir);
                 Files.createFile(new File(dataDir, CLEAN_SHUTDOWN_FILE).toPath());
             } catch (IOException e) {
                 LOG.warn("Failed to write clean shutdown marker for directory {}.", dataDir, e);
             }
+        } else if (!closeSucceeded) {
+            LOG.warn(
+                    "Skipping clean shutdown marker for directory {} because not all logs closed successfully.",
+                    dataDir);
         }
     }
 
