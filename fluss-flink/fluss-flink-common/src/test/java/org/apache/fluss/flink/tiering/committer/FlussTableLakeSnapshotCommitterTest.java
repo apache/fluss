@@ -23,6 +23,7 @@ import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
 import org.apache.fluss.flink.utils.FlinkTestBase;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.lake.committer.LakeCommitResult;
+import org.apache.fluss.lake.committer.LakeTieringTableState;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
@@ -241,6 +242,69 @@ class FlussTableLakeSnapshotCommitterTest extends FlinkTestBase {
                 .hasMessageContaining("Fail to prepare commit table lake snapshot")
                 .rootCause()
                 .isInstanceOf(ApiException.class);
+    }
+
+    /**
+     * Verifies the empty-round light-weight commit ({@link
+     * FlussTableLakeSnapshotCommitter#commitPartitionMarkDoneOnly}) at the coordinator level:
+     * reusing the previous snapshot id with empty bucket offsets and only a new tiering_state must
+     * (a) not create a new snapshot, (b) not overwrite the existing bucket offsets, and it must
+     * update+persist the tiering_state so the client can read it back.
+     */
+    @Test
+    void testCommitPartitionMarkDoneOnlyReusesSnapshot() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "test_mark_done_only_reuse");
+        Tuple2<Long, Collection<Long>> tableIdAndPartitions = createTable(tablePath, true);
+        long tableId = tableIdAndPartitions.f0;
+        Collection<Long> partitions = tableIdAndPartitions.f1;
+        long partitionId = partitions.iterator().next();
+
+        Map<TableBucket, Long> expectedOffsets = mockLogEndOffsets(tableId, partitions);
+
+        // ---- Round 1: a normal commit carrying bucket offsets + a tiering state ----
+        long snapshotId = 1L;
+        byte[] state1 =
+                new LakeTieringTableState(true, Collections.singletonMap(partitionId, 1000L))
+                        .toJsonBytes();
+        String file1 =
+                flussTableLakeSnapshotCommitter.prepareLakeSnapshot(
+                        tableId, tablePath, expectedOffsets, state1);
+        flussTableLakeSnapshotCommitter.commit(
+                tableId,
+                snapshotId,
+                file1,
+                null,
+                Collections.emptyMap(),
+                Collections.emptyMap(),
+                LakeCommitResult.KEEP_ALL_PREVIOUS);
+
+        LakeSnapshot afterRound1 = admin.getLatestLakeSnapshot(tablePath).get();
+        assertThat(afterRound1.getSnapshotId()).isEqualTo(snapshotId);
+        assertThat(afterRound1.getTableBucketsOffset()).isEqualTo(expectedOffsets);
+        assertThat(afterRound1.getLakeTieringTableState()).isNotNull();
+        assertThat(afterRound1.getLakeTieringTableState().getPartitionUpdateTimes())
+                .containsEntry(partitionId, 1000L);
+
+        // ---- Round 2: empty round (no bucket data), reuse the previous snapshot id and only
+        // update the tiering state (delete-on-done: the partition is now done and dropped) ----
+        byte[] state2 = new LakeTieringTableState(true, Collections.emptyMap()).toJsonBytes();
+        flussTableLakeSnapshotCommitter.commitPartitionMarkDoneOnly(
+                tableId, tablePath, snapshotId, state2);
+
+        LakeSnapshot afterRound2 = admin.getLatestLakeSnapshot(tablePath).get();
+        // (a) no new snapshot created: the snapshot id is reused
+        assertThat(afterRound2.getSnapshotId()).isEqualTo(snapshotId);
+        // (b) existing bucket offsets preserved (not overwritten by the empty round)
+        assertThat(afterRound2.getTableBucketsOffset()).isEqualTo(expectedOffsets);
+        // the tiering state is updated to the new (empty) one and persisted
+        assertThat(afterRound2.getLakeTieringTableState()).isNotNull();
+        assertThat(afterRound2.getLakeTieringTableState().isPartitionDoneInitialized()).isTrue();
+        assertThat(afterRound2.getLakeTieringTableState().getPartitionUpdateTimes()).isEmpty();
+
+        // no snapshot with id 2 was ever created
+        assertThatThrownBy(() -> admin.getLakeSnapshot(tablePath, snapshotId + 1).get())
+                .rootCause()
+                .isInstanceOf(LakeTableSnapshotNotExistException.class);
     }
 
     private Map<TableBucket, Long> mockLogEndOffsets(long tableId, Collection<Long> partitionsIds) {

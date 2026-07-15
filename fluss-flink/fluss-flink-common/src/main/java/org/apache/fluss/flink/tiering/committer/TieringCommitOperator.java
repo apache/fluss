@@ -30,9 +30,13 @@ import org.apache.fluss.flink.tiering.source.TieringSource;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
 import org.apache.fluss.lake.committer.LakeCommitResult;
 import org.apache.fluss.lake.committer.LakeCommitter;
+import org.apache.fluss.lake.committer.LakeTieringTableState;
+import org.apache.fluss.lake.committer.PartitionDoneCandidate;
+import org.apache.fluss.lake.committer.PartitionDoneHandler;
 import org.apache.fluss.lake.committer.TieringStats;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.lake.writer.LakeWriter;
+import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -94,6 +98,14 @@ public class TieringCommitOperator<WriteResult, Committable>
     // tableid -> write results
     private final Map<Long, List<TableBucketWriteResult<WriteResult>>>
             collectedTableBucketWriteResults;
+
+    // tableId -> cached PartitionDoneHandler; NO_OP_HANDLER means the table does not support
+    // mark-done (checked once to avoid recreating the handler every round).
+    private final Map<Long, PartitionDoneHandler> partitionDoneHandlers = new HashMap<>();
+
+    // sentinel meaning the table has been checked and does not support partition mark-done
+    private static final PartitionDoneHandler NO_OP_HANDLER =
+            (candidates, currentTime) -> Collections.emptyList();
 
     /**
      * The result of one table's commit round, holding the lake committable (nullable for empty
@@ -199,20 +211,100 @@ public class TieringCommitOperator<WriteResult, Committable>
                         .filter(r -> r.writeResult() != null)
                         .collect(Collectors.toList());
 
+        // fetch current table info once; used both for the drop/recreate check and for deciding
+        // whether partition mark-done is enabled.
+        TableInfo currentTableInfo = admin.getTableInfo(tablePath).get();
+        boolean tableIdMatches = currentTableInfo.getTableId() == tableId;
+
+        // ========== Mark Done: read (getLakeSnapshot) -> judge -> execute action ==========
+        // null handler means the lake has no partition mark-done for this table.
+        PartitionDoneHandler handler =
+                tableIdMatches ? getOrCreateHandler(tableId, tablePath, currentTableInfo) : null;
+        boolean markDoneEnabled = handler != null;
+
+        LakeSnapshot prevSnapshot = null;
+        byte[] newTieringStateJson = null;
+        boolean tieringStateChanged = false;
+        if (markDoneEnabled) {
+            prevSnapshot = getLatestLakeSnapshot(tablePath);
+            long now = System.currentTimeMillis();
+            Map<Long, String> partitionIdToName = listPartitionIdToName(tablePath);
+            LakeTieringTableState prevState =
+                    prevSnapshot != null ? prevSnapshot.getLakeTieringTableState() : null;
+
+            // not-yet-done partitions' last update time: previous state MAX this round's per-bucket
+            // maxTimestamp. Done partitions are absent (delete-on-done).
+            Map<Long, Long> partitionUpdateTimes =
+                    aggregatePartitionUpdateTimes(committableWriteResults, prevState);
+
+            // Cold start (uninitialized): judge every existing partition by partitionEndTime;
+            // otherwise only the not-yet-done partitions in the state.
+            boolean initialized = prevState != null && prevState.isPartitionDoneInitialized();
+            Set<Long> candidateIds =
+                    initialized ? partitionUpdateTimes.keySet() : partitionIdToName.keySet();
+            List<PartitionDoneCandidate> candidates =
+                    buildCandidates(candidateIds, partitionUpdateTimes, partitionIdToName);
+
+            // Safe to mark done before the data commit below: candidates exclude this round's
+            // active partitions (their lastUpdateTime is ~now, never idle), so the two sets are
+            // disjoint.
+            List<String> newlyDone;
+            boolean judged = true;
+            try {
+                newlyDone = handler.markDoneIfReady(candidates, now);
+            } catch (Exception e) {
+                // mark-done action failure must not fail the tiering main path; retry next round.
+                LOG.warn(
+                        "Mark done action failed for table {}, will retry next round.",
+                        tablePath,
+                        e);
+                newlyDone = Collections.emptyList();
+                judged = false;
+            }
+
+            // delete-on-done: drop the newly-done partitions from the state.
+            if (!newlyDone.isEmpty()) {
+                Map<String, Long> nameToId = new HashMap<>();
+                for (Map.Entry<Long, String> e : partitionIdToName.entrySet()) {
+                    nameToId.put(e.getValue(), e.getKey());
+                }
+                for (String name : newlyDone) {
+                    Long id = nameToId.get(name);
+                    if (id != null) {
+                        partitionUpdateTimes.remove(id);
+                    }
+                }
+            }
+
+            // Keep initialized once set; on cold start only flip to true when the judgement ran
+            // (not when the action threw), so a failed cold start retries next round.
+            boolean newInitialized = initialized || judged;
+            LakeTieringTableState newState =
+                    new LakeTieringTableState(newInitialized, partitionUpdateTimes);
+            tieringStateChanged = !newState.equals(prevState);
+            newTieringStateJson = newState.toJsonBytes();
+        }
+
         // all buckets were empty — nothing to commit to the lake
         if (nonEmptyResults.isEmpty()) {
-            LOG.info(
-                    "Commit tiering write results is empty for table {}, table path {}",
-                    tableId,
-                    tablePath);
+            // empty round with a changed tiering state: persist it via a light-weight commit that
+            // reuses the previous lake snapshot id (no lake data written).
+            if (markDoneEnabled && prevSnapshot != null && tieringStateChanged) {
+                flussTableLakeSnapshotCommitter.commitPartitionMarkDoneOnly(
+                        tableId, tablePath, prevSnapshot.getSnapshotId(), newTieringStateJson);
+            } else {
+                LOG.info(
+                        "Commit tiering write results is empty for table {}, table path {}",
+                        tableId,
+                        tablePath);
+            }
             return new CommitResult(null, null);
         }
 
         // Check if the table was dropped and recreated during tiering.
         // If the current table id differs from the committable's table id, fail this commit
         // to avoid dirty commit to a newly created table.
-        TableInfo currentTableInfo = admin.getTableInfo(tablePath).get();
-        if (currentTableInfo.getTableId() != tableId) {
+        if (!tableIdMatches) {
             throw new IllegalStateException(
                     String.format(
                             "The current table id %s for table path %s is different from the table id %s in the committable. "
@@ -241,7 +333,9 @@ public class TieringCommitOperator<WriteResult, Committable>
             // to committable
             Committable committable = lakeCommitter.toCommittable(writeResults);
             // before commit to lake, check fluss not missing any lake snapshot committed by fluss
-            LakeSnapshot flussCurrentLakeSnapshot = getLatestLakeSnapshot(tablePath);
+            // reuse prevSnapshot fetched for mark-done to avoid an extra RPC when possible.
+            LakeSnapshot flussCurrentLakeSnapshot =
+                    markDoneEnabled ? prevSnapshot : getLatestLakeSnapshot(tablePath);
             checkFlussNotMissingLakeSnapshot(
                     tablePath,
                     tableId,
@@ -251,10 +345,11 @@ public class TieringCommitOperator<WriteResult, Committable>
                             ? null
                             : flussCurrentLakeSnapshot.getSnapshotId());
 
-            // get the lake bucket offsets file storing the log end offsets
+            // get the lake bucket offsets file storing the log end offsets, carrying the opaque
+            // tiering state so that it is persisted together with the offsets in this same commit.
             String lakeBucketTieredOffsetsFile =
                     flussTableLakeSnapshotCommitter.prepareLakeSnapshot(
-                            tableId, tablePath, logEndOffsets);
+                            tableId, tablePath, logEndOffsets, newTieringStateJson);
 
             // record the lake snapshot bucket offsets file to snapshot property
             Map<String, String> snapshotProperties =
@@ -272,6 +367,81 @@ public class TieringCommitOperator<WriteResult, Committable>
                     logMaxTieredTimestamps);
             return new CommitResult(committable, lakeCommitResult.getTieringStats());
         }
+    }
+
+    /**
+     * Gets or creates the {@link PartitionDoneHandler} for the table, caching the result. Returns
+     * {@code null} if the lake does not support partition mark-done for this table.
+     */
+    private PartitionDoneHandler getOrCreateHandler(
+            long tableId, TablePath tablePath, TableInfo tableInfo) {
+        PartitionDoneHandler cached = partitionDoneHandlers.get(tableId);
+        if (cached != null) {
+            return cached == NO_OP_HANDLER ? null : cached;
+        }
+        PartitionDoneHandler handler =
+                lakeTieringFactory
+                        .createPartitionDoneHandler(
+                                new TieringCommitterInitContext(
+                                        tablePath, tableInfo, lakeTieringConfig, flussConfig))
+                        .orElse(null);
+        partitionDoneHandlers.put(tableId, handler == null ? NO_OP_HANDLER : handler);
+        return handler;
+    }
+
+    /** Lists the partitionId -> partitionName mapping for a partitioned table at runtime. */
+    private Map<Long, String> listPartitionIdToName(TablePath tablePath) throws Exception {
+        Map<Long, String> result = new HashMap<>();
+        for (PartitionInfo partitionInfo : admin.listPartitionInfos(tablePath).get()) {
+            result.put(partitionInfo.getPartitionId(), partitionInfo.getPartitionName());
+        }
+        return result;
+    }
+
+    /**
+     * Aggregates the partition-level last update time (processing-time mode): starts from the
+     * previous persisted tiering state and merges this round's per-bucket maxTimestamp by MAX per
+     * partition. Buckets with maxTimestamp &lt;= 0 (empty / snapshot splits) are ignored.
+     */
+    private Map<Long, Long> aggregatePartitionUpdateTimes(
+            List<TableBucketWriteResult<WriteResult>> writeResults,
+            @Nullable LakeTieringTableState prevState) {
+        Map<Long, Long> result = new HashMap<>();
+        if (prevState != null) {
+            result.putAll(prevState.getPartitionUpdateTimes());
+        }
+        for (TableBucketWriteResult<WriteResult> wr : writeResults) {
+            Long partitionId = wr.tableBucket().getPartitionId();
+            if (wr.maxTimestamp() > 0 && partitionId != null) {
+                result.merge(partitionId, wr.maxTimestamp(), Math::max);
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Builds the candidate partitions to be judged by the handler for the given partition ids. Each
+     * candidate carries its last update time from {@code partitionUpdateTimes} (or {@code 0} when
+     * absent, e.g. a cold-start partition that has no data this round, so the handler judges it
+     * purely by its partitionEndTime). Partitions whose name cannot be resolved are skipped.
+     */
+    private List<PartitionDoneCandidate> buildCandidates(
+            Set<Long> partitionIds,
+            Map<Long, Long> partitionUpdateTimes,
+            Map<Long, String> partitionIdToName) {
+        List<PartitionDoneCandidate> candidates = new ArrayList<>();
+        for (Long partitionId : partitionIds) {
+            String partitionName = partitionIdToName.get(partitionId);
+            if (partitionName == null) {
+                LOG.warn(
+                        "Cannot find partition name for partition id {}, skip mark-done check.",
+                        partitionId);
+                continue;
+            }
+            long lastUpdateTime = partitionUpdateTimes.getOrDefault(partitionId, 0L);
+            candidates.add(new PartitionDoneCandidate(partitionName, lastUpdateTime));
+        }
+        return candidates;
     }
 
     @Nullable
@@ -411,6 +581,16 @@ public class TieringCommitOperator<WriteResult, Committable>
 
     @Override
     public void close() throws Exception {
+        for (PartitionDoneHandler handler : partitionDoneHandlers.values()) {
+            if (handler != NO_OP_HANDLER) {
+                try {
+                    handler.close();
+                } catch (Exception e) {
+                    LOG.warn("Failed to close partition done handler.", e);
+                }
+            }
+        }
+        partitionDoneHandlers.clear();
         flussTableLakeSnapshotCommitter.close();
         if (admin != null) {
             admin.close();

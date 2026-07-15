@@ -20,10 +20,13 @@ package org.apache.fluss.lake.writer;
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.lake.committer.CommitterInitContext;
 import org.apache.fluss.lake.committer.LakeCommitter;
+import org.apache.fluss.lake.committer.PartitionDoneHandler;
+import org.apache.fluss.lake.committer.PartitionDoneInitContext;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 
 import java.io.IOException;
 import java.io.Serializable;
+import java.util.Optional;
 
 /**
  * The LakeTieringFactory interface defines how to create lake writers and committers. It provides
@@ -71,4 +74,18 @@ public interface LakeTieringFactory<WriteResult, CommittableT> extends Serializa
      * @return the serializer for committable objects
      */
     SimpleVersionedSerializer<CommittableT> getCommittableSerializer();
+
+    /**
+     * Creates a {@link PartitionDoneHandler} for lake partition mark-done, if the lake supports it.
+     *
+     * <p>The default implementation returns {@link Optional#empty()}, meaning the lake does not
+     * support partition mark-done. Lakes that support it (e.g. Paimon) should override this method.
+     *
+     * @param partitionDoneInitContext the context for initializing the handler
+     * @return an optional partition done handler; empty if not supported
+     */
+    default Optional<PartitionDoneHandler> createPartitionDoneHandler(
+            PartitionDoneInitContext partitionDoneInitContext) {
+        return Optional.empty();
+    }
 }

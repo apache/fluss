@@ -21,16 +21,21 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.Admin;
+import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
 import org.apache.fluss.flink.metrics.FlinkMetricRegistry;
 import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
 import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
 import org.apache.fluss.flink.tiering.event.TieringReachMaxDurationEvent;
+import org.apache.fluss.flink.tiering.source.split.TieringLogSplit;
 import org.apache.fluss.flink.tiering.source.split.TieringSplit;
 import org.apache.fluss.flink.tiering.source.split.TieringSplitGenerator;
 import org.apache.fluss.flink.tiering.source.state.TieringSourceEnumeratorState;
+import org.apache.fluss.lake.committer.LakeTieringTableState;
 import org.apache.fluss.lake.committer.TieringStats;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.GatewayClientProxy;
@@ -96,6 +101,11 @@ public class TieringSourceEnumerator
         implements SplitEnumerator<TieringSplit, TieringSourceEnumeratorState> {
 
     private static final Logger LOG = LoggerFactory.getLogger(TieringSourceEnumerator.class);
+
+    // Paimon-native property enabling lake partition mark-done (currently only Paimon). Checked
+    // inline to avoid depending on the concrete lake module.
+    private static final String PARTITION_IDLE_TIME_TO_DONE_KEY =
+            "paimon.partition.idle-time-to-done";
 
     private final Configuration flussConf;
     private final SplitEnumeratorContext<TieringSplit> context;
@@ -461,11 +471,35 @@ public class TieringSourceEnumerator
                     tieringTable.f2,
                     System.currentTimeMillis() - start);
             if (tieringSplits.isEmpty()) {
-                LOG.info(
-                        "Generate Tiering splits for table {} is empty, no need to tier data.",
-                        tieringTable.f2.getTableName());
-                tieringTableEpochs.remove(tieringTable.f0);
-                finishedTables.put(tieringTable.f0, TieringFinishInfo.from(tieringTable.f1));
+                if (tableInfo.isPartitioned()
+                        && tableInfo
+                                .getCustomProperties()
+                                .containsKey(PARTITION_IDLE_TIME_TO_DONE_KEY)
+                        && hasPendingMarkDonePartitions(tablePath)) {
+                    // No data this round, but mark-done is enabled and there is pending work (or a
+                    // cold-start back-fill). Emit a heartbeat split so the commit operator runs one
+                    // mark-done round instead of finishing the table.
+                    TieringSplit heartbeatSplit =
+                            new TieringLogSplit(
+                                    tablePath,
+                                    new TableBucket(tieringTable.f0, 0),
+                                    null,
+                                    0,
+                                    0,
+                                    1,
+                                    true);
+                    // epoch was already registered when the table was requested; keep it active.
+                    pendingSplits.add(heartbeatSplit);
+                    LOG.info(
+                            "Generate a heartbeat split for idle mark-done table {}.",
+                            tieringTable.f2.getTableName());
+                } else {
+                    LOG.info(
+                            "Generate Tiering splits for table {} is empty, no need to tier data.",
+                            tieringTable.f2.getTableName());
+                    tieringTableEpochs.remove(tieringTable.f0);
+                    finishedTables.put(tieringTable.f0, TieringFinishInfo.from(tieringTable.f1));
+                }
             } else {
                 pendingSplits.addAll(tieringSplits);
 
@@ -486,6 +520,31 @@ public class TieringSourceEnumerator
             LOG.warn("Fail to generate Tiering splits for table {}.", tieringTable.f2, e);
             failedTableEpochs.put(tieringTable.f0, tieringTable.f1);
             tieringTableEpochs.remove(tieringTable.f0);
+        }
+    }
+
+    /**
+     * Returns whether a mark-done table still has pending work this round: cold start not yet run
+     * ({@code !partition_done_initialized}, or no snapshot), or not-yet-done partitions remain.
+     * When all partitions are done, an empty round is a no-op, so no heartbeat is needed.
+     */
+    private boolean hasPendingMarkDonePartitions(TablePath tablePath) {
+        try {
+            LakeSnapshot lakeSnapshot = flussAdmin.getLatestLakeSnapshot(tablePath).get();
+            LakeTieringTableState state = lakeSnapshot.getLakeTieringTableState();
+            if (state == null || !state.isPartitionDoneInitialized()) {
+                // cold-start back-fill still needed
+                return true;
+            }
+            return !state.getPartitionUpdateTimes().isEmpty();
+        } catch (Exception e) {
+            if (e.getCause() instanceof LakeTableSnapshotNotExistException) {
+                // no snapshot yet -> first (cold-start) round still needed
+                return true;
+            }
+            // on any other error, be conservative and emit the heartbeat
+            LOG.warn("Failed to read tiering state for table {}, emit a heartbeat.", tablePath, e);
+            return true;
         }
     }
 

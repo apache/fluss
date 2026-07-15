@@ -496,6 +496,9 @@
                                             org.apache.fluss.flink.tiering.LakeTieringJobBuilder
                                         </exclude>
                                         <exclude>org.apache.fluss.lake.committer.LakeCommitResult*</exclude>
+                                        <!-- trivial value object / no-op default-method interface -->
+                                        <exclude>org.apache.fluss.lake.committer.PartitionDoneCandidate</exclude>
+                                        <exclude>org.apache.fluss.lake.committer.PartitionDoneHandler</exclude>
                                         <exclude>org.apache.fluss.flink.tiering.FlussLakeTieringEntrypoint</exclude>
                                         <exclude>org.apache.fluss.flink.tiering.FlussLakeTiering</exclude>
                                         <!-- end exclude for flink tiering service -->

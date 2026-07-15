@@ -94,10 +94,24 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
     public String prepareLakeSnapshot(
             long tableId, TablePath tablePath, Map<TableBucket, Long> logEndOffsets)
             throws IOException {
+        return prepareLakeSnapshot(tableId, tablePath, logEndOffsets, null);
+    }
+
+    /**
+     * Prepares a lake snapshot carrying the opaque table-level tiering state. The {@code
+     * tieringStateJson} is passed through as-is (JSON bytes) and only written when non-null.
+     */
+    public String prepareLakeSnapshot(
+            long tableId,
+            TablePath tablePath,
+            Map<TableBucket, Long> logEndOffsets,
+            @Nullable byte[] tieringStateJson)
+            throws IOException {
         PbPrepareLakeTableRespForTable prepareResp;
         try {
             PrepareLakeTableSnapshotRequest prepareLakeTableSnapshotRequest =
-                    toPrepareLakeTableSnapshotRequest(tableId, tablePath, logEndOffsets);
+                    toPrepareLakeTableSnapshotRequest(
+                            tableId, tablePath, logEndOffsets, tieringStateJson);
             PrepareLakeTableSnapshotResponse prepareLakeTableSnapshotResponse =
                     coordinatorGateway
                             .prepareLakeTableSnapshot(prepareLakeTableSnapshotRequest)
@@ -123,6 +137,30 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
                             tablePath),
                     ExceptionUtils.stripExecutionException(e));
         }
+    }
+
+    /**
+     * Persists only the table-level tiering state (e.g. mark-done progress) in an empty tiering
+     * round where no lake data is written. It reuses the previous lake snapshot id: PREPARE writes
+     * a new offsets file (bucket offsets unchanged, only tiering_state updated) and COMMIT
+     * registers it under the previous snapshot id with KEEP_ALL_PREVIOUS retention.
+     */
+    public void commitPartitionMarkDoneOnly(
+            long tableId,
+            TablePath tablePath,
+            long previousSnapshotId,
+            @Nullable byte[] tieringStateJson)
+            throws IOException {
+        String offsetsFile =
+                prepareLakeSnapshot(tableId, tablePath, Collections.emptyMap(), tieringStateJson);
+        commit(
+                tableId,
+                previousSnapshotId,
+                offsetsFile,
+                offsetsFile,
+                Collections.emptyMap(),
+                Collections.emptyMap(),
+                LakeCommitResult.KEEP_ALL_PREVIOUS);
     }
 
     public void commit(
@@ -242,7 +280,10 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
      * @return the prepared commit request
      */
     private PrepareLakeTableSnapshotRequest toPrepareLakeTableSnapshotRequest(
-            long tableId, TablePath tablePath, Map<TableBucket, Long> logEndOffsets) {
+            long tableId,
+            TablePath tablePath,
+            Map<TableBucket, Long> logEndOffsets,
+            @Nullable byte[] tieringStateJson) {
         PrepareLakeTableSnapshotRequest prepareLakeTableSnapshotRequest =
                 new PrepareLakeTableSnapshotRequest();
         PbTableOffsets pbTableOffsets = prepareLakeTableSnapshotRequest.addBucketOffset();
@@ -260,6 +301,11 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
             }
             pbBucketOffset.setBucketId(tableBucket.getBucket());
             pbBucketOffset.setLogEndOffset(logEndOffsetEntry.getValue());
+        }
+
+        // pass through the opaque tiering state (JSON bytes), only when present.
+        if (tieringStateJson != null) {
+            pbTableOffsets.setTieringStateJson(tieringStateJson);
         }
         return prepareLakeTableSnapshotRequest;
     }
