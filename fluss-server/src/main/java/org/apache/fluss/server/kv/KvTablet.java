@@ -313,7 +313,7 @@ public final class KvTablet {
                 autoIncrementManager,
                 SystemClock.getInstance(),
                 ConfigOptions.KV_FORMAT_VERSION_2,
-                tableConfigWithRowTTL(Optional.empty()));
+                new TableConfig(new Configuration()));
     }
 
     public static KvTablet create(
@@ -452,87 +452,6 @@ public final class KvTablet {
             ChangelogImage changelogImage,
             RateLimiter sharedRateLimiter,
             AutoIncrementManager autoIncrementManager,
-            int kvFormatVersion,
-            Optional<Duration> rowTtl)
-            throws IOException {
-        return create(
-                tablePath,
-                tableBucket,
-                logTablet,
-                kvTabletDir,
-                serverConf,
-                serverMetricGroup,
-                arrowBufferAllocator,
-                memorySegmentPool,
-                kvFormat,
-                rowMerger,
-                arrowCompressionInfo,
-                schemaGetter,
-                changelogImage,
-                sharedRateLimiter,
-                autoIncrementManager,
-                SystemClock.getInstance(),
-                kvFormatVersion,
-                tableConfigWithRowTTL(rowTtl));
-    }
-
-    public static KvTablet create(
-            PhysicalTablePath tablePath,
-            TableBucket tableBucket,
-            LogTablet logTablet,
-            File kvTabletDir,
-            Configuration serverConf,
-            TabletServerMetricGroup serverMetricGroup,
-            BufferAllocator arrowBufferAllocator,
-            MemorySegmentPool memorySegmentPool,
-            KvFormat kvFormat,
-            RowMerger rowMerger,
-            ArrowCompressionInfo arrowCompressionInfo,
-            SchemaGetter schemaGetter,
-            ChangelogImage changelogImage,
-            RateLimiter sharedRateLimiter,
-            AutoIncrementManager autoIncrementManager,
-            Clock clock,
-            int kvFormatVersion,
-            Optional<Duration> rowTtl)
-            throws IOException {
-        return create(
-                tablePath,
-                tableBucket,
-                logTablet,
-                kvTabletDir,
-                serverConf,
-                serverMetricGroup,
-                arrowBufferAllocator,
-                memorySegmentPool,
-                kvFormat,
-                rowMerger,
-                arrowCompressionInfo,
-                schemaGetter,
-                changelogImage,
-                sharedRateLimiter,
-                autoIncrementManager,
-                clock,
-                kvFormatVersion,
-                tableConfigWithRowTTL(rowTtl));
-    }
-
-    public static KvTablet create(
-            PhysicalTablePath tablePath,
-            TableBucket tableBucket,
-            LogTablet logTablet,
-            File kvTabletDir,
-            Configuration serverConf,
-            TabletServerMetricGroup serverMetricGroup,
-            BufferAllocator arrowBufferAllocator,
-            MemorySegmentPool memorySegmentPool,
-            KvFormat kvFormat,
-            RowMerger rowMerger,
-            ArrowCompressionInfo arrowCompressionInfo,
-            SchemaGetter schemaGetter,
-            ChangelogImage changelogImage,
-            RateLimiter sharedRateLimiter,
-            AutoIncrementManager autoIncrementManager,
             Clock clock,
             int kvFormatVersion,
             TableConfig tableConfig)
@@ -559,15 +478,6 @@ public final class KvTablet {
                 clock,
                 kvFormatVersion,
                 tableConfig);
-    }
-
-    private static TableConfig tableConfigWithRowTTL(Optional<Duration> rowTtl) {
-        checkNotNull(rowTtl, "rowTtl must not be null.");
-        Configuration configuration = new Configuration();
-        if (rowTtl.isPresent()) {
-            configuration.set(ConfigOptions.TABLE_KV_ROW_TTL, rowTtl.get());
-        }
-        return new TableConfig(configuration);
     }
 
     private static RocksDBKv buildRocksDBKv(

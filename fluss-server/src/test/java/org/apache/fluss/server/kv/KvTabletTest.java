@@ -203,11 +203,6 @@ class KvTabletTest {
                         clock);
     }
 
-    private LogTablet createLogTablet(File tempLogDir, long tableId, PhysicalTablePath tablePath)
-            throws Exception {
-        return createLogTablet(tempLogDir, tableId, tablePath, SystemClock.getInstance());
-    }
-
     private LogTablet createLogTablet(
             File tempLogDir, long tableId, PhysicalTablePath tablePath, Clock clock)
             throws Exception {
