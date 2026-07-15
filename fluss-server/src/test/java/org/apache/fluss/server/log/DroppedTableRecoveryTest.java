@@ -28,6 +28,7 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.LogTestBase;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.record.TestingSchemaGetter;
+import org.apache.fluss.server.config.ResolvedTableConfig;
 import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.server.kv.KvTablet;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
@@ -147,14 +148,14 @@ final class DroppedTableRecoveryTest extends LogTestBase {
                         tempDir,
                         PhysicalTablePath.of(tablePath),
                         tableBucket1,
-                        new TableConfig(new Configuration()),
+                        new ResolvedTableConfig(new Configuration(), conf),
                         false);
         LogTablet log2 =
                 logManager.getOrCreateLog(
                         tempDir,
                         PhysicalTablePath.of(tablePath),
                         tableBucket2,
-                        new TableConfig(new Configuration()),
+                        new ResolvedTableConfig(new Configuration(), conf),
                         false);
 
         // Write some data to both logs
@@ -206,7 +207,7 @@ final class DroppedTableRecoveryTest extends LogTestBase {
                         tempDir,
                         partitionedTablePath,
                         partitionedTableBucket,
-                        new TableConfig(new Configuration()),
+                        new ResolvedTableConfig(new Configuration(), conf),
                         false);
 
         // Write some data to the log
@@ -252,14 +253,14 @@ final class DroppedTableRecoveryTest extends LogTestBase {
                         tempDir,
                         PhysicalTablePath.of(tablePath),
                         tableBucket1,
-                        new TableConfig(new Configuration()),
+                        new ResolvedTableConfig(new Configuration(), conf),
                         false);
         LogTablet log2 =
                 logManager.getOrCreateLog(
                         tempDir,
                         PhysicalTablePath.of(tablePath),
                         tableBucket2,
-                        new TableConfig(new Configuration()),
+                        new ResolvedTableConfig(new Configuration(), conf),
                         false);
 
         // Write some data to both logs
@@ -350,7 +351,7 @@ final class DroppedTableRecoveryTest extends LogTestBase {
                         tempDir,
                         partitionedTablePath,
                         partitionedTableBucket,
-                        new TableConfig(new Configuration()),
+                        new ResolvedTableConfig(new Configuration(), conf),
                         false);
 
         // Write some data to the log

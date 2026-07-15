@@ -33,13 +33,44 @@ class ResolvedTableConfigTest {
         Configuration tableConf = new Configuration();
         Configuration serverConf = new Configuration();
         serverConf.set(ConfigOptions.LOG_SEGMENT_FILE_SIZE, MemorySize.parse("8kb"));
+        serverConf.set(ConfigOptions.LOG_INDEX_FILE_SIZE, MemorySize.parse("2kb"));
 
         ResolvedTableConfig tableConfig = new ResolvedTableConfig(tableConf, serverConf);
 
         assertThat(tableConfig.getLogSegmentSize()).isEqualTo(MemorySize.parse("8kb"));
+        assertThat(tableConfig.getLogIndexFileSize()).isEqualTo(MemorySize.parse("2kb"));
 
-        tableConf.set(ConfigOptions.LOG_SEGMENT_FILE_SIZE, MemorySize.parse("4kb"));
+        tableConf.set(ConfigOptions.TABLE_LOG_SEGMENT_FILE_SIZE, MemorySize.parse("4kb"));
+        tableConf.set(ConfigOptions.TABLE_LOG_INDEX_FILE_SIZE, MemorySize.parse("1kb"));
 
         assertThat(tableConfig.getLogSegmentSize()).isEqualTo(MemorySize.parse("4kb"));
+        assertThat(tableConfig.getLogIndexFileSize()).isEqualTo(MemorySize.parse("1kb"));
+    }
+
+    @Test
+    void testKvOptionsFallBackToServerConfig() {
+        Configuration tableConf = new Configuration();
+        Configuration serverConf = new Configuration();
+        serverConf.set(ConfigOptions.KV_WRITE_BATCH_SIZE, MemorySize.parse("16mb"));
+        serverConf.set(ConfigOptions.KV_MAX_BACKGROUND_THREADS, 8);
+        serverConf.set(ConfigOptions.KV_WRITE_BUFFER_SIZE, MemorySize.parse("256mb"));
+        serverConf.set(ConfigOptions.KV_MAX_WRITE_BUFFER_NUMBER, 4);
+
+        ResolvedTableConfig tableConfig = new ResolvedTableConfig(tableConf, serverConf);
+
+        assertThat(tableConfig.getKvWriteBatchSize()).isEqualTo(MemorySize.parse("16mb"));
+        assertThat(tableConfig.getKvMaxBackgroundThreads()).isEqualTo(8);
+        assertThat(tableConfig.getKvWriteBufferSize()).isEqualTo(MemorySize.parse("256mb"));
+        assertThat(tableConfig.getKvMaxWriteBufferNumber()).isEqualTo(4);
+
+        tableConf.set(ConfigOptions.TABLE_KV_WRITE_BATCH_SIZE, MemorySize.parse("8mb"));
+        tableConf.set(ConfigOptions.TABLE_KV_MAX_BACKGROUND_THREADS, 3);
+        tableConf.set(ConfigOptions.TABLE_KV_WRITE_BUFFER_SIZE, MemorySize.parse("128mb"));
+        tableConf.set(ConfigOptions.TABLE_KV_MAX_WRITE_BUFFER_NUMBER, 2);
+
+        assertThat(tableConfig.getKvWriteBatchSize()).isEqualTo(MemorySize.parse("8mb"));
+        assertThat(tableConfig.getKvMaxBackgroundThreads()).isEqualTo(3);
+        assertThat(tableConfig.getKvWriteBufferSize()).isEqualTo(MemorySize.parse("128mb"));
+        assertThat(tableConfig.getKvMaxWriteBufferNumber()).isEqualTo(2);
     }
 }

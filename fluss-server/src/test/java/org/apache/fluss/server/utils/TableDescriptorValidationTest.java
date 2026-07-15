@@ -37,7 +37,12 @@ class TableDescriptorValidationTest {
                         .schema(Schema.newBuilder().column("id", DataTypes.INT()).build())
                         .distributedBy(1)
                         .property(ConfigOptions.TABLE_REPLICATION_FACTOR.key(), "1")
-                        .property(ConfigOptions.LOG_SEGMENT_FILE_SIZE.key(), "1kb")
+                        .property(ConfigOptions.TABLE_LOG_SEGMENT_FILE_SIZE.key(), "1kb")
+                        .property(ConfigOptions.TABLE_LOG_INDEX_FILE_SIZE.key(), "1kb")
+                        .property(ConfigOptions.TABLE_KV_WRITE_BUFFER_SIZE.key(), "256mb")
+                        .property(ConfigOptions.TABLE_KV_MAX_WRITE_BUFFER_NUMBER.key(), "4")
+                        .property(ConfigOptions.TABLE_KV_WRITE_BATCH_SIZE.key(), "16mb")
+                        .property(ConfigOptions.TABLE_KV_MAX_BACKGROUND_THREADS.key(), "8")
                         .build();
 
         TableDescriptorValidation.validateTableDescriptor(tableDescriptor, 1, null);
@@ -50,7 +55,7 @@ class TableDescriptorValidationTest {
                         .schema(Schema.newBuilder().column("id", DataTypes.INT()).build())
                         .distributedBy(1)
                         .property(ConfigOptions.TABLE_REPLICATION_FACTOR.key(), "1")
-                        .property(ConfigOptions.LOG_SEGMENT_FILE_SIZE.key(), "3g")
+                        .property(ConfigOptions.TABLE_LOG_SEGMENT_FILE_SIZE.key(), "3g")
                         .build();
 
         assertThatThrownBy(
@@ -59,6 +64,24 @@ class TableDescriptorValidationTest {
                                         tableDescriptor, 1, null))
                 .isInstanceOf(InvalidConfigException.class)
                 .hasMessageContaining(
-                        "Invalid configuration for log.segment.file-size, it must be less than or equal");
+                        "Invalid configuration for table.log.segment.file-size, it must be less than or equal");
+    }
+
+    @Test
+    void testValidateUnknownTableOption() {
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(Schema.newBuilder().column("id", DataTypes.INT()).build())
+                        .distributedBy(1)
+                        .property(ConfigOptions.TABLE_REPLICATION_FACTOR.key(), "1")
+                        .property("table.future.option", "value")
+                        .build();
+
+        assertThatThrownBy(
+                        () ->
+                                TableDescriptorValidation.validateTableDescriptor(
+                                        tableDescriptor, 1, null))
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining("not a recognized Fluss table property");
     }
 }

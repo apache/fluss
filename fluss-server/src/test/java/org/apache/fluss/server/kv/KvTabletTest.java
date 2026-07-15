@@ -50,6 +50,7 @@ import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.record.bytesview.MultiBytesView;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.encode.ValueEncoder;
+import org.apache.fluss.server.config.ResolvedTableConfig;
 import org.apache.fluss.server.kv.autoinc.AutoIncrementManager;
 import org.apache.fluss.server.kv.autoinc.TestingSequenceGeneratorFactory;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.Key;
@@ -175,7 +176,7 @@ class KvTabletTest {
                 tablePath,
                 logTabletDir,
                 conf,
-                new TableConfig(conf),
+                new ResolvedTableConfig(new Configuration(), conf),
                 TestingMetricGroups.TABLET_SERVER_METRICS,
                 0,
                 new FlussScheduler(1),
@@ -207,6 +208,7 @@ class KvTabletTest {
                 logTablet,
                 tmpKvDir,
                 conf,
+                tableConf,
                 TestingMetricGroups.TABLET_SERVER_METRICS,
                 new RootAllocator(Long.MAX_VALUE),
                 new TestingMemorySegmentPool(10 * 1024),

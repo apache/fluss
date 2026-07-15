@@ -367,6 +367,7 @@ public final class LogTablet {
                                 conf,
                                 segments,
                                 recoveryPoint,
+                                tableConfig,
                                 logFormat,
                                 writerStateManager,
                                 isCleanShutdown)
@@ -381,6 +382,7 @@ public final class LogTablet {
                         recoveryPoint,
                         offsets.getNextOffsetMetadata(),
                         tableBucket,
+                        tableConfig,
                         logFormat);
 
         return new LogTablet(

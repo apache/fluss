@@ -20,6 +20,7 @@ package org.apache.fluss.server.log;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.CorruptMessageException;
 import org.apache.fluss.exception.CorruptRecordException;
 import org.apache.fluss.exception.InvalidColumnProjectionException;
@@ -144,11 +145,53 @@ public final class LogSegment {
             File dir,
             long baseOffset,
             Configuration logConfig,
+            TableConfig tableConfig,
+            LogFormat logFormat)
+            throws IOException {
+
+        int initFileSize = 0;
+        if (logConfig.getBoolean(ConfigOptions.LOG_FILE_PREALLOCATE)) {
+            initFileSize = (int) tableConfig.getLogSegmentSize().getBytes();
+        }
+
+        return open(dir, baseOffset, logConfig, false, initFileSize, tableConfig, logFormat);
+    }
+
+    public static LogSegment open(
+            File dir,
+            long baseOffset,
+            Configuration logConfig,
             boolean fileAlreadyExists,
             int initFileSize,
             LogFormat logFormat)
             throws IOException {
         int maxIndexSize = (int) logConfig.get(ConfigOptions.LOG_INDEX_FILE_SIZE).getBytes();
+
+        return new LogSegment(
+                logFormat,
+                FileLogRecords.open(
+                        FlussPaths.logFile(dir, baseOffset),
+                        fileAlreadyExists,
+                        initFileSize,
+                        logConfig.getBoolean(ConfigOptions.LOG_FILE_PREALLOCATE)),
+                LazyIndex.forOffset(
+                        FlussPaths.offsetIndexFile(dir, baseOffset), baseOffset, maxIndexSize),
+                LazyIndex.forTime(
+                        FlussPaths.timeIndexFile(dir, baseOffset), baseOffset, maxIndexSize),
+                baseOffset,
+                (int) logConfig.get(ConfigOptions.LOG_INDEX_INTERVAL_SIZE).getBytes());
+    }
+
+    public static LogSegment open(
+            File dir,
+            long baseOffset,
+            Configuration logConfig,
+            boolean fileAlreadyExists,
+            int initFileSize,
+            TableConfig tableConfig,
+            LogFormat logFormat)
+            throws IOException {
+        int maxIndexSize = (int) tableConfig.getLogIndexFileSize().getBytes();
 
         return new LogSegment(
                 logFormat,

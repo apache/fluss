@@ -22,6 +22,7 @@ import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.ReadableConfig;
+import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.IOUtils;
@@ -51,6 +52,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
@@ -76,6 +78,8 @@ public class RocksDBResourceContainer implements AutoCloseable {
 
     /** The configurations from file. */
     private final ReadableConfig configuration;
+
+    @Nullable private final TableConfig tableConfig;
 
     private final boolean enableStatistics;
 
@@ -112,7 +116,17 @@ public class RocksDBResourceContainer implements AutoCloseable {
             @Nullable File instanceBasePath,
             boolean enableStatistics,
             RateLimiter sharedRateLimiter) {
+        this(configuration, instanceBasePath, enableStatistics, sharedRateLimiter, null);
+    }
+
+    public RocksDBResourceContainer(
+            ReadableConfig configuration,
+            @Nullable File instanceBasePath,
+            boolean enableStatistics,
+            RateLimiter sharedRateLimiter,
+            @Nullable TableConfig tableConfig) {
         this.configuration = configuration;
+        this.tableConfig = tableConfig;
 
         this.instanceRocksDBPath =
                 instanceBasePath != null
@@ -216,11 +230,24 @@ public class RocksDBResourceContainer implements AutoCloseable {
         return configuration.get(option);
     }
 
+    private <T> T getTableOptionOrDefault(
+            ConfigOption<T> tableOption, ConfigOption<T> defaultOption) {
+        if (tableConfig != null) {
+            Optional<T> tableValue = tableConfig.getOptional(tableOption);
+            if (tableValue.isPresent()) {
+                return tableValue.get();
+            }
+        }
+        return internalGetOption(defaultOption);
+    }
+
     @SuppressWarnings("ConstantConditions")
     private DBOptions setDBOptionsFromConfigurableOptions(DBOptions currentOptions)
             throws IOException {
         currentOptions.setMaxBackgroundJobs(
-                internalGetOption(ConfigOptions.KV_MAX_BACKGROUND_THREADS));
+                getTableOptionOrDefault(
+                        ConfigOptions.TABLE_KV_MAX_BACKGROUND_THREADS,
+                        ConfigOptions.KV_MAX_BACKGROUND_THREADS));
 
         currentOptions.setMaxOpenFiles(internalGetOption(ConfigOptions.KV_MAX_OPEN_FILES));
 
@@ -273,10 +300,15 @@ public class RocksDBResourceContainer implements AutoCloseable {
                 internalGetOption(ConfigOptions.KV_MAX_SIZE_LEVEL_BASE).getBytes());
 
         currentOptions.setWriteBufferSize(
-                internalGetOption(ConfigOptions.KV_WRITE_BUFFER_SIZE).getBytes());
+                getTableOptionOrDefault(
+                                ConfigOptions.TABLE_KV_WRITE_BUFFER_SIZE,
+                                ConfigOptions.KV_WRITE_BUFFER_SIZE)
+                        .getBytes());
 
         currentOptions.setMaxWriteBufferNumber(
-                internalGetOption(ConfigOptions.KV_MAX_WRITE_BUFFER_NUMBER));
+                getTableOptionOrDefault(
+                        ConfigOptions.TABLE_KV_MAX_WRITE_BUFFER_NUMBER,
+                        ConfigOptions.KV_MAX_WRITE_BUFFER_NUMBER));
 
         currentOptions.setMinWriteBufferNumberToMerge(
                 internalGetOption(ConfigOptions.KV_MIN_WRITE_BUFFER_NUMBER_TO_MERGE));

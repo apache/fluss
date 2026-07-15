@@ -459,13 +459,13 @@ public class TableDescriptorValidation {
     }
 
     private static void checkLogSegmentFileSize(Configuration tableConf) {
-        if (tableConf.contains(ConfigOptions.LOG_SEGMENT_FILE_SIZE)
-                && tableConf.get(ConfigOptions.LOG_SEGMENT_FILE_SIZE).getBytes()
+        if (tableConf.contains(ConfigOptions.TABLE_LOG_SEGMENT_FILE_SIZE)
+                && tableConf.get(ConfigOptions.TABLE_LOG_SEGMENT_FILE_SIZE).getBytes()
                         > Integer.MAX_VALUE) {
             throw new InvalidConfigException(
                     String.format(
                             "Invalid configuration for %s, it must be less than or equal %d bytes.",
-                            ConfigOptions.LOG_SEGMENT_FILE_SIZE.key(), Integer.MAX_VALUE));
+                            ConfigOptions.TABLE_LOG_SEGMENT_FILE_SIZE.key(), Integer.MAX_VALUE));
         }
     }
 

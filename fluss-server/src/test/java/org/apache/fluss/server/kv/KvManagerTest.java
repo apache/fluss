@@ -32,6 +32,7 @@ import org.apache.fluss.record.KvRecordTestUtils;
 import org.apache.fluss.record.TestData;
 import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.row.encode.ValueEncoder;
+import org.apache.fluss.server.config.ResolvedTableConfig;
 import org.apache.fluss.server.log.LogManager;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
@@ -373,7 +374,7 @@ final class KvManagerTest {
                         tempDir,
                         physicalTablePath,
                         tableBucket,
-                        new TableConfig(new Configuration()),
+                        new ResolvedTableConfig(new Configuration(), conf),
                         true);
         return kvManager.getOrCreateKv(
                 physicalTablePath,

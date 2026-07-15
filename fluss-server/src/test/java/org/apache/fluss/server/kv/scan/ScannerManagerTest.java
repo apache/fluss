@@ -31,6 +31,7 @@ import org.apache.fluss.record.KvRecord;
 import org.apache.fluss.record.KvRecordTestUtils;
 import org.apache.fluss.record.TestData;
 import org.apache.fluss.record.TestingSchemaGetter;
+import org.apache.fluss.server.config.ResolvedTableConfig;
 import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.server.kv.KvTablet;
 import org.apache.fluss.server.kv.autoinc.AutoIncrementManager;
@@ -102,7 +103,7 @@ class ScannerManagerTest {
                         physicalTablePath,
                         logTabletDir,
                         conf,
-                        new TableConfig(conf),
+                        new ResolvedTableConfig(new Configuration(), conf),
                         TestingMetricGroups.TABLET_SERVER_METRICS,
                         0,
                         new FlussScheduler(1),
@@ -127,6 +128,7 @@ class ScannerManagerTest {
                         logTablet,
                         tmpKvDir,
                         conf,
+                        tableConf,
                         TestingMetricGroups.TABLET_SERVER_METRICS,
                         new RootAllocator(Long.MAX_VALUE),
                         new TestingMemorySegmentPool(10 * 1024),

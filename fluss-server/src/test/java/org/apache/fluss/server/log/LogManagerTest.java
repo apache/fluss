@@ -195,7 +195,7 @@ final class LogManagerTest extends LogTestBase {
         MemoryLogRecords records = genMemoryLogRecordsByObject(DATA1);
         Configuration tableProperties = new Configuration();
         tableProperties.set(
-                ConfigOptions.LOG_SEGMENT_FILE_SIZE,
+                ConfigOptions.TABLE_LOG_SEGMENT_FILE_SIZE,
                 new MemorySize(records.sizeInBytes() * 2L - 1));
 
         LogTablet log =

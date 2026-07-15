@@ -33,6 +33,7 @@ import org.apache.fluss.record.KvRecordTestUtils;
 import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.record.TestingSchemaGetter;
+import org.apache.fluss.server.config.ResolvedTableConfig;
 import org.apache.fluss.server.kv.autoinc.AutoIncrementManager;
 import org.apache.fluss.server.kv.autoinc.TestingSequenceGeneratorFactory;
 import org.apache.fluss.server.kv.rowmerger.RowMerger;
@@ -113,7 +114,7 @@ class KvTabletSchemaEvolutionTest {
                         physicalTablePath,
                         logTabletDir,
                         conf,
-                        new TableConfig(conf),
+                        new ResolvedTableConfig(new Configuration(), conf),
                         TestingMetricGroups.TABLET_SERVER_METRICS,
                         0,
                         new FlussScheduler(1),
@@ -135,6 +136,7 @@ class KvTabletSchemaEvolutionTest {
                         logTablet,
                         tmpKvDir,
                         conf,
+                        tableConf,
                         TestingMetricGroups.TABLET_SERVER_METRICS,
                         new RootAllocator(Long.MAX_VALUE),
                         new TestingMemorySegmentPool(10 * 1024),

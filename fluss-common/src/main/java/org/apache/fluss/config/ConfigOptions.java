@@ -1695,6 +1695,26 @@ public class ConfigOptions {
                                     + "we will retain a log before we will delete old segments to free up "
                                     + "space. If set to -1, the log will not be deleted.");
 
+    public static final ConfigOption<MemorySize> TABLE_LOG_SEGMENT_FILE_SIZE =
+            key("table.log.segment.file-size")
+                    .memoryType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "This configuration controls the segment file size for the table log. "
+                                    + "If not configured, the table falls back to the server-level `"
+                                    + LOG_SEGMENT_FILE_SIZE.key()
+                                    + "` configuration.");
+
+    public static final ConfigOption<MemorySize> TABLE_LOG_INDEX_FILE_SIZE =
+            key("table.log.index.file-size")
+                    .memoryType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "This configuration controls the size of the index that maps offsets to file positions for the table log. "
+                                    + "If not configured, the table falls back to the server-level `"
+                                    + LOG_INDEX_FILE_SIZE.key()
+                                    + "` configuration.");
+
     public static final ConfigOption<Integer> TABLE_TIERED_LOG_LOCAL_SEGMENTS =
             key("table.log.tiered.local-segments")
                     .intType()
@@ -2038,6 +2058,46 @@ public class ConfigOptions {
                     .withDescription(
                             "The maximum number of write buffers that are built up in memory. "
                                     + "The default value is `2`.");
+
+    public static final ConfigOption<MemorySize> TABLE_KV_WRITE_BUFFER_SIZE =
+            key("table.kv.rocksdb.writebuffer.size")
+                    .memoryType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The amount of data built up in memory for each table before converting to sorted on-disk files. "
+                                    + "If not configured, the table falls back to the server-level `"
+                                    + KV_WRITE_BUFFER_SIZE.key()
+                                    + "` configuration.");
+
+    public static final ConfigOption<Integer> TABLE_KV_MAX_WRITE_BUFFER_NUMBER =
+            key("table.kv.rocksdb.writebuffer.count")
+                    .intType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The maximum number of write buffers that are built up in memory for each table. "
+                                    + "If not configured, the table falls back to the server-level `"
+                                    + KV_MAX_WRITE_BUFFER_NUMBER.key()
+                                    + "` configuration.");
+
+    public static final ConfigOption<MemorySize> TABLE_KV_WRITE_BATCH_SIZE =
+            key("table.kv.rocksdb.write-batch-size")
+                    .memoryType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The max size of the consumed memory for RocksDB batch write for each table. "
+                                    + "If not configured, the table falls back to the server-level `"
+                                    + KV_WRITE_BATCH_SIZE.key()
+                                    + "` configuration.");
+
+    public static final ConfigOption<Integer> TABLE_KV_MAX_BACKGROUND_THREADS =
+            key("table.kv.rocksdb.thread.num")
+                    .intType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The maximum number of concurrent background flush and compaction jobs for each table bucket. "
+                                    + "If not configured, the table falls back to the server-level `"
+                                    + KV_MAX_BACKGROUND_THREADS.key()
+                                    + "` configuration.");
 
     public static final ConfigOption<Integer> KV_MIN_WRITE_BUFFER_NUMBER_TO_MERGE =
             key("kv.rocksdb.writebuffer.number-to-merge")

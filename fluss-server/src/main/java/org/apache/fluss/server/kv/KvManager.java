@@ -36,6 +36,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.TabletManagerBase;
+import org.apache.fluss.server.config.ResolvedTableConfig;
 import org.apache.fluss.server.kv.autoinc.AutoIncrementManager;
 import org.apache.fluss.server.kv.autoinc.ZkSequenceGeneratorFactory;
 import org.apache.fluss.server.kv.rowmerger.RowMerger;
@@ -267,6 +268,7 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
                                     logTablet,
                                     tabletDir,
                                     conf,
+                                    tableConfig,
                                     serverMetricGroup,
                                     arrowBufferAllocator,
                                     memorySegmentPool,
@@ -369,7 +371,7 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
         TablePath tablePath = physicalTablePath.getTablePath();
         TableInfo tableInfo = getTableInfo(zkClient, tablePath);
 
-        TableConfig tableConfig = tableInfo.getTableConfig();
+        TableConfig tableConfig = new ResolvedTableConfig(tableInfo.getProperties(), conf);
         RowMerger rowMerger =
                 RowMerger.create(tableConfig, tableConfig.getKvFormat(), schemaGetter);
         AutoIncrementManager autoIncrementManager =
@@ -385,6 +387,7 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
                         logTablet,
                         tabletDir,
                         conf,
+                        tableConfig,
                         serverMetricGroup,
                         arrowBufferAllocator,
                         memorySegmentPool,

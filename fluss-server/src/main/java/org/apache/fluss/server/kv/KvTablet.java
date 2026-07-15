@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.compression.ArrowCompressionInfo;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.DeletionDisabledException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.KvStorageException;
@@ -201,6 +202,7 @@ public final class KvTablet {
             LogTablet logTablet,
             File kvTabletDir,
             Configuration serverConf,
+            TableConfig tableConfig,
             TabletServerMetricGroup serverMetricGroup,
             BufferAllocator arrowBufferAllocator,
             MemorySegmentPool memorySegmentPool,
@@ -212,7 +214,7 @@ public final class KvTablet {
             RateLimiter sharedRateLimiter,
             AutoIncrementManager autoIncrementManager)
             throws IOException {
-        RocksDBKv kv = buildRocksDBKv(serverConf, kvTabletDir, sharedRateLimiter);
+        RocksDBKv kv = buildRocksDBKv(serverConf, tableConfig, kvTabletDir, sharedRateLimiter);
 
         // Create RocksDB statistics accessor (will be registered to TableMetricGroup by Replica)
         // Pass ResourceGuard to ensure thread-safe access during concurrent close operations
@@ -233,7 +235,7 @@ public final class KvTablet {
                 kvTabletDir,
                 serverMetricGroup,
                 kv,
-                serverConf.get(ConfigOptions.KV_WRITE_BATCH_SIZE).getBytes(),
+                getKvWriteBatchSize(serverConf, tableConfig),
                 logTablet.getLogFormat(),
                 arrowBufferAllocator,
                 memorySegmentPool,
@@ -247,17 +249,28 @@ public final class KvTablet {
     }
 
     private static RocksDBKv buildRocksDBKv(
-            Configuration configuration, File kvDir, RateLimiter sharedRateLimiter)
+            Configuration configuration,
+            TableConfig tableConfig,
+            File kvDir,
+            RateLimiter sharedRateLimiter)
             throws IOException {
         // Enable statistics to support RocksDB statistics collection
         RocksDBResourceContainer rocksDBResourceContainer =
-                new RocksDBResourceContainer(configuration, kvDir, true, sharedRateLimiter);
+                new RocksDBResourceContainer(
+                        configuration, kvDir, true, sharedRateLimiter, tableConfig);
         RocksDBKvBuilder rocksDBKvBuilder =
                 new RocksDBKvBuilder(
                         kvDir,
                         rocksDBResourceContainer,
                         rocksDBResourceContainer.getColumnOptions());
         return rocksDBKvBuilder.build();
+    }
+
+    private static long getKvWriteBatchSize(Configuration serverConf, TableConfig tableConfig) {
+        return tableConfig
+                .getOptional(ConfigOptions.TABLE_KV_WRITE_BATCH_SIZE)
+                .orElseGet(() -> serverConf.get(ConfigOptions.KV_WRITE_BATCH_SIZE))
+                .getBytes();
     }
 
     public TableBucket getTableBucket() {

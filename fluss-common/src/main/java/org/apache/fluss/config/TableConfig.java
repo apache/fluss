@@ -53,9 +53,24 @@ public class TableConfig {
         this.config = config;
     }
 
+    /** Returns whether the table config contains the given option. */
+    public boolean contains(ConfigOption<?> option) {
+        return config.contains(option);
+    }
+
+    /** Gets the optional configured value for the given table config option. */
+    public <T> Optional<T> getOptional(ConfigOption<T> option) {
+        return config.getOptional(option);
+    }
+
     /** Gets the log segment file size of the table. */
     public MemorySize getLogSegmentSize() {
-        return config.get(ConfigOptions.LOG_SEGMENT_FILE_SIZE);
+        return config.get(ConfigOptions.TABLE_LOG_SEGMENT_FILE_SIZE);
+    }
+
+    /** Gets the log index file size of the table. */
+    public MemorySize getLogIndexFileSize() {
+        return config.get(ConfigOptions.TABLE_LOG_INDEX_FILE_SIZE);
     }
 
     /** Gets the replication factor of the table. */

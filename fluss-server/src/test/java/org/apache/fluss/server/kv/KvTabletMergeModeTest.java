@@ -36,6 +36,7 @@ import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.rpc.protocol.MergeMode;
+import org.apache.fluss.server.config.ResolvedTableConfig;
 import org.apache.fluss.server.kv.autoinc.AutoIncrementManager;
 import org.apache.fluss.server.kv.autoinc.TestingSequenceGeneratorFactory;
 import org.apache.fluss.server.kv.rowmerger.RowMerger;
@@ -125,7 +126,7 @@ class KvTabletMergeModeTest {
                         physicalTablePath,
                         logTabletDir,
                         conf,
-                        new TableConfig(conf),
+                        new ResolvedTableConfig(new Configuration(), conf),
                         TestingMetricGroups.TABLET_SERVER_METRICS,
                         0,
                         new FlussScheduler(1),
@@ -150,6 +151,7 @@ class KvTabletMergeModeTest {
                         logTablet,
                         tmpKvDir,
                         conf,
+                        tableConf,
                         TestingMetricGroups.TABLET_SERVER_METRICS,
                         new RootAllocator(Long.MAX_VALUE),
                         new TestingMemorySegmentPool(10 * 1024),

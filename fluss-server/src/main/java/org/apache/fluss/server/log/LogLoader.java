@@ -17,8 +17,8 @@
 
 package org.apache.fluss.server.log;
 
-import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.InvalidOffsetException;
 import org.apache.fluss.exception.LogSegmentOffsetOverflowException;
 import org.apache.fluss.exception.LogStorageException;
@@ -52,6 +52,7 @@ final class LogLoader {
     private final Configuration conf;
     private final LogSegments logSegments;
     private final long recoveryPointCheckpoint;
+    private final TableConfig tableConfig;
     private final LogFormat logFormat;
     private final WriterStateManager writerStateManager;
     private final boolean isCleanShutdown;
@@ -61,6 +62,7 @@ final class LogLoader {
             Configuration conf,
             LogSegments logSegments,
             long recoveryPointCheckpoint,
+            TableConfig tableConfig,
             LogFormat logFormat,
             WriterStateManager writerStateManager,
             boolean isCleanShutdown) {
@@ -68,6 +70,7 @@ final class LogLoader {
         this.conf = conf;
         this.logSegments = logSegments;
         this.recoveryPointCheckpoint = recoveryPointCheckpoint;
+        this.tableConfig = tableConfig;
         this.logFormat = logFormat;
         this.writerStateManager = writerStateManager;
         this.isCleanShutdown = isCleanShutdown;
@@ -116,7 +119,7 @@ final class LogLoader {
                 writerStateManager, logSegments, 0, nextOffset, isCleanShutdown);
 
         LogSegment activeSegment = logSegments.lastSegment().get();
-        activeSegment.resizeIndexes((int) conf.get(ConfigOptions.LOG_INDEX_FILE_SIZE).getBytes());
+        activeSegment.resizeIndexes((int) tableConfig.getLogIndexFileSize().getBytes());
         return new LoadedLogOffsets(
                 newRecoveryPoint,
                 new LogOffsetMetadata(
@@ -188,7 +191,7 @@ final class LogLoader {
 
         if (logSegments.isEmpty()) {
             // TODO: use logStartOffset if issue https://github.com/apache/fluss/issues/744 ready
-            logSegments.add(LogSegment.open(logTabletDir, 0L, conf, logFormat));
+            logSegments.add(LogSegment.open(logTabletDir, 0L, conf, tableConfig, logFormat));
         }
 
         long logEndOffset = logSegments.lastSegment().get().readNextOffset();
@@ -300,7 +303,14 @@ final class LogLoader {
                     } else if (LocalLog.isLogFile(file)) {
                         long baseOffset = FlussPaths.offsetFromFile(file);
                         LogSegment segment =
-                                LogSegment.open(logTabletDir, baseOffset, conf, true, 0, logFormat);
+                                LogSegment.open(
+                                        logTabletDir,
+                                        baseOffset,
+                                        conf,
+                                        true,
+                                        0,
+                                        tableConfig,
+                                        logFormat);
 
                         try {
                             segment.sanityCheck();
