@@ -30,6 +30,7 @@ mod lookup;
 
 mod log_fetch_buffer;
 mod partition_getter;
+mod read_context_resolver;
 mod reader;
 mod remote_log;
 mod scanner;

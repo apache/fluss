@@ -503,6 +503,13 @@ class TableScan:
             Self for method chaining.
         """
         ...
+    def with_fixed_schema(self, fixed_schema: bool) -> "TableScan":
+        """Control whether schema-evolved batches are aligned to the scanner schema.
+
+        When enabled, older-schema batches are padded/projected to the scanner
+        creation schema. When disabled, batches keep their write-time schema.
+        """
+        ...
     def limit(self, n: int) -> "TableScan":
         """Set a positive row limit for the scan.
 
