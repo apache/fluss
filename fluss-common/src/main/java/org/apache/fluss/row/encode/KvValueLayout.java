@@ -21,8 +21,8 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.utils.UnsafeUtils;
 
+import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_2;
 import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_3;
-import static org.apache.fluss.config.ConfigOptions.MAX_KV_FORMAT_VERSION;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
@@ -35,6 +35,9 @@ public final class KvValueLayout {
     private static final int SCHEMA_ID_LENGTH = 2;
     private static final int VALUE_TAG_OFFSET = SCHEMA_ID_OFFSET + SCHEMA_ID_LENGTH;
     private static final int VALUE_TAG_LENGTH = 8;
+    private static final KvValueLayout KV_FORMAT_VERSION_1_LAYOUT = new KvValueLayout(false);
+    private static final KvValueLayout KV_FORMAT_VERSION_2_LAYOUT = new KvValueLayout(false);
+    private static final KvValueLayout KV_FORMAT_VERSION_3_LAYOUT = new KvValueLayout(true);
 
     private final boolean hasValueTag;
 
@@ -44,17 +47,17 @@ public final class KvValueLayout {
 
     /** Returns the KV value layout for the table KV format version. */
     public static KvValueLayout forKvFormatVersion(int kvFormatVersion) {
-        checkArgument(
-                kvFormatVersion >= MIN_KV_FORMAT_VERSION,
-                "kvFormatVersion must be at least %s, but was %s.",
-                MIN_KV_FORMAT_VERSION,
-                kvFormatVersion);
-        checkArgument(
-                kvFormatVersion <= MAX_KV_FORMAT_VERSION,
-                "kvFormatVersion must not exceed %s, but was %s.",
-                MAX_KV_FORMAT_VERSION,
-                kvFormatVersion);
-        return new KvValueLayout(kvFormatVersion >= KV_FORMAT_VERSION_3);
+        switch (kvFormatVersion) {
+            case MIN_KV_FORMAT_VERSION:
+                return KV_FORMAT_VERSION_1_LAYOUT;
+            case KV_FORMAT_VERSION_2:
+                return KV_FORMAT_VERSION_2_LAYOUT;
+            case KV_FORMAT_VERSION_3:
+                return KV_FORMAT_VERSION_3_LAYOUT;
+            default:
+                throw new IllegalArgumentException(
+                        "Unsupported KV format version " + kvFormatVersion + ".");
+        }
     }
 
     /** Returns the byte offset of schema id in a raw KV value. */
