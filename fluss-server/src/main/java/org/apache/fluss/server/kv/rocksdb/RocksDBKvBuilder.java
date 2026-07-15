@@ -98,10 +98,22 @@ public class RocksDBKvBuilder {
         return this;
     }
 
+    /**
+     * Sets the compaction filter factory and transfers its ownership to this builder.
+     *
+     * <p>The factory is closed with the built {@link RocksDBKv}, or when setup or building fails.
+     */
     @SuppressWarnings("rawtypes")
     public RocksDBKvBuilder setCompactionFilterFactory(
             AbstractCompactionFilterFactory<? extends AbstractCompactionFilter<?>> factory) {
-        columnFamilyOptions.setCompactionFilterFactory((AbstractCompactionFilterFactory) factory);
+        try {
+            columnFamilyOptions.setCompactionFilterFactory(
+                    (AbstractCompactionFilterFactory) factory);
+            optionsContainer.registerCloseableResource(factory);
+        } catch (RuntimeException | Error e) {
+            IOUtils.closeQuietly(factory);
+            throw e;
+        }
         return this;
     }
 
