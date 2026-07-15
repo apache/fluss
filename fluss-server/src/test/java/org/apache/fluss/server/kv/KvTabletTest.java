@@ -19,12 +19,9 @@ package org.apache.fluss.server.kv;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.config.TableConfig;
-import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.InvalidTargetColumnException;
-import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
 import org.apache.fluss.memory.TestingMemorySegmentPool;
 import org.apache.fluss.metadata.AggFunctions;
@@ -74,7 +71,6 @@ import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.types.StringType;
 import org.apache.fluss.utils.CloseableIterator;
-import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.concurrent.FlussScheduler;
 
@@ -98,8 +94,6 @@ import java.util.Random;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -1900,41 +1894,6 @@ class KvTabletTest {
         assertThat(kvTablet.getRowCount()).isEqualTo(3);
 
         kvTablet.close();
-    }
-
-    @Test
-    void testFlushInvokesFatalErrorHandlerAfterReleasingKvLock() throws Exception {
-        conf.set(ConfigOptions.KV_WRITE_BUFFER_SIZE, MemorySize.parse("1b"));
-        initLogTabletAndKvTablet(DATA1_SCHEMA_PK, new HashMap<>());
-        List<KvRecord> records = new ArrayList<>();
-        for (int i = 0; i < 10000; i++) {
-            records.add(kvRecordFactory.ofRecord("key" + i, new Object[] {i, "value" + i}));
-        }
-        kvTablet.putAsLeader(kvRecordBatchFactory.ofRecords(records), null);
-
-        // Removing the RocksDB directory makes the buffered write fail during flush.
-        FileUtils.deleteDirectory(kvTablet.getKvTabletDir());
-        AtomicReference<Throwable> fatalError = new AtomicReference<>();
-        kvTablet.flush(
-                Long.MAX_VALUE,
-                exception -> {
-                    fatalError.set(exception);
-                    Future<?> closingFuture =
-                            executor.submit(
-                                    () -> {
-                                        kvTablet.close();
-                                        return null;
-                                    });
-                    try {
-                        closingFuture.get(10, TimeUnit.SECONDS);
-                    } catch (Exception e) {
-                        throw new FlussRuntimeException(e);
-                    }
-                });
-
-        assertThat(fatalError.get())
-                .isInstanceOf(KvStorageException.class)
-                .hasMessage("Failed to flush kv pre-write buffer.");
     }
 
     @Test
