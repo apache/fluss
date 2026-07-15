@@ -23,7 +23,6 @@ import org.apache.fluss.utils.UnsafeUtils;
 
 import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_2;
 import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_3;
-import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
 /** Versioned physical layout of raw KV value bytes. */
@@ -35,14 +34,31 @@ public final class KvValueLayout {
     private static final int SCHEMA_ID_LENGTH = 2;
     private static final int VALUE_TAG_OFFSET = SCHEMA_ID_OFFSET + SCHEMA_ID_LENGTH;
     private static final int VALUE_TAG_LENGTH = 8;
-    private static final KvValueLayout KV_FORMAT_VERSION_1_LAYOUT = new KvValueLayout(false);
-    private static final KvValueLayout KV_FORMAT_VERSION_2_LAYOUT = new KvValueLayout(false);
-    private static final KvValueLayout KV_FORMAT_VERSION_3_LAYOUT = new KvValueLayout(true);
+    private static final int NO_OFFSET = -1;
+    private static final KvValueLayout KV_FORMAT_VERSION_1_LAYOUT =
+            new KvValueLayout(
+                    HeaderKind.SCHEMA_ONLY, SCHEMA_ID_OFFSET, SCHEMA_ID_LENGTH, NO_OFFSET);
+    private static final KvValueLayout KV_FORMAT_VERSION_2_LAYOUT =
+            new KvValueLayout(
+                    HeaderKind.SCHEMA_ONLY, SCHEMA_ID_OFFSET, SCHEMA_ID_LENGTH, NO_OFFSET);
+    private static final KvValueLayout KV_FORMAT_VERSION_3_LAYOUT =
+            new KvValueLayout(
+                    HeaderKind.SCHEMA_WITH_VALUE_TAG,
+                    SCHEMA_ID_OFFSET,
+                    SCHEMA_ID_LENGTH + VALUE_TAG_LENGTH,
+                    VALUE_TAG_OFFSET);
 
-    private final boolean hasValueTag;
+    private final HeaderKind headerKind;
+    private final int schemaIdOffset;
+    private final int rowPayloadOffset;
+    private final int valueTagOffset;
 
-    private KvValueLayout(boolean hasValueTag) {
-        this.hasValueTag = hasValueTag;
+    private KvValueLayout(
+            HeaderKind headerKind, int schemaIdOffset, int rowPayloadOffset, int valueTagOffset) {
+        this.headerKind = headerKind;
+        this.schemaIdOffset = schemaIdOffset;
+        this.rowPayloadOffset = rowPayloadOffset;
+        this.valueTagOffset = valueTagOffset;
     }
 
     /** Returns the KV value layout for the table KV format version. */
@@ -62,7 +78,7 @@ public final class KvValueLayout {
 
     /** Returns the byte offset of schema id in a raw KV value. */
     public int schemaIdOffset() {
-        return SCHEMA_ID_OFFSET;
+        return schemaIdOffset;
     }
 
     /** Returns the encoded schema id length in bytes. */
@@ -72,34 +88,40 @@ public final class KvValueLayout {
 
     /** Returns whether the raw KV value has an internal value tag. */
     public boolean hasValueTag() {
-        return hasValueTag;
+        return valueTagOffset != NO_OFFSET;
     }
 
     /** Returns the byte offset of the internal value tag. */
     public int valueTagOffset() {
-        checkState(hasValueTag, "KV value layout does not have a value tag.");
-        return VALUE_TAG_OFFSET;
+        checkState(hasValueTag(), "KV value layout does not have a value tag.");
+        return valueTagOffset;
     }
 
     /** Returns the internal value tag length in bytes. */
     public int valueTagLength() {
-        return hasValueTag ? VALUE_TAG_LENGTH : 0;
+        return hasValueTag() ? VALUE_TAG_LENGTH : 0;
     }
 
     /** Returns the byte offset of row payload in a raw KV value. */
     public int rowPayloadOffset() {
-        return SCHEMA_ID_OFFSET + SCHEMA_ID_LENGTH + valueTagLength();
+        return rowPayloadOffset;
     }
 
     /** Returns the row payload length for a raw KV value length. */
     public int rowPayloadLength(int valueLength) {
-        int rowPayloadOffset = rowPayloadOffset();
-        checkArgument(
-                valueLength >= rowPayloadOffset,
-                "valueLength must be at least row payload offset %s, but was %s.",
-                rowPayloadOffset,
-                valueLength);
+        if (valueLength < rowPayloadOffset) {
+            throw new IllegalArgumentException(
+                    "valueLength must be at least row payload offset "
+                            + rowPayloadOffset
+                            + ", but was "
+                            + valueLength
+                            + ".");
+        }
         return valueLength - rowPayloadOffset;
+    }
+
+    HeaderKind headerKind() {
+        return headerKind;
     }
 
     /** Reads the schema id from a raw KV value. */
@@ -139,6 +161,23 @@ public final class KvValueLayout {
 
     /** Writes the internal value tag to a raw KV value embedded at the given offset. */
     public void writeValueTag(byte[] value, int valueOffset, long valueTag) {
-        MemorySegment.wrap(value).putLongBigEndian(valueOffset + valueTagOffset(), valueTag);
+        int absoluteValueTagOffset = valueOffset + valueTagOffset();
+        if (absoluteValueTagOffset < 0
+                || absoluteValueTagOffset > value.length - VALUE_TAG_LENGTH) {
+            throw new IndexOutOfBoundsException(
+                    "Cannot write value tag at offset "
+                            + absoluteValueTagOffset
+                            + " to value of length "
+                            + value.length
+                            + ".");
+        }
+        long bigEndianValueTag =
+                MemorySegment.LITTLE_ENDIAN ? Long.reverseBytes(valueTag) : valueTag;
+        UnsafeUtils.putLong(value, absoluteValueTagOffset, bigEndianValueTag);
+    }
+
+    enum HeaderKind {
+        SCHEMA_ONLY,
+        SCHEMA_WITH_VALUE_TAG
     }
 }

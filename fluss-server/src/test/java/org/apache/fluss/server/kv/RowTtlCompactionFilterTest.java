@@ -18,6 +18,7 @@
 package org.apache.fluss.server.kv;
 
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.record.BinaryValue;
 import org.apache.fluss.rocksdb.RocksDBHandle;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.encode.ValueEncoder;
@@ -34,6 +35,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Duration;
 
+import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_3;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static org.apache.fluss.testutils.DataTestUtils.compactedRow;
@@ -64,10 +66,8 @@ class RowTtlCompactionFilterTest {
             handle.getDb()
                     .put(
                             expiredKey,
-                            ValueEncoder.encodeValueWithTag(
-                                    DEFAULT_SCHEMA_ID, now - Duration.ofHours(2L).toMillis(), row));
-            handle.getDb()
-                    .put(freshKey, ValueEncoder.encodeValueWithTag(DEFAULT_SCHEMA_ID, now, row));
+                            encodeVersion3Value(row, now - Duration.ofHours(2L).toMillis()));
+            handle.getDb().put(freshKey, encodeVersion3Value(row, now));
             handle.getDb().flush(flushOptions);
 
             handle.getDb().compactRange();
@@ -82,5 +82,10 @@ class RowTtlCompactionFilterTest {
         assertThatThrownBy(() -> RowTtlCompactionFilterFactory.create(Duration.ZERO, 1L))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining(ConfigOptions.TABLE_KV_ROW_TTL.key());
+    }
+
+    private static byte[] encodeVersion3Value(BinaryRow row, long valueTag) {
+        return ValueEncoder.forKvFormatVersion(KV_FORMAT_VERSION_3, ignored -> valueTag)
+                .encodeValue(new BinaryValue(DEFAULT_SCHEMA_ID, row));
     }
 }

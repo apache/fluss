@@ -20,11 +20,15 @@ package org.apache.fluss.server.kv;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.TableConfig;
+import org.apache.fluss.memory.MemorySegment;
+import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.record.BinaryValue;
 import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.row.BinaryRow;
+import org.apache.fluss.row.encode.KvValueLayout;
+import org.apache.fluss.row.encode.ValueDecoder;
 import org.apache.fluss.row.encode.ValueEncoder;
 import org.apache.fluss.types.DataTypes;
 
@@ -50,13 +54,16 @@ class KvRecoverHelperTest {
         ValueEncoder writeEncoder =
                 ValueEncoder.forKvFormatVersion(KV_FORMAT_VERSION_3, timestampProvider);
 
-        BinaryValue recoveredValue =
-                KvRecoverHelper.createRecoveredValue(
+        byte[] recoveredValue =
+                KvRecoverHelper.encodeRecoveredValue(
                         writeEncoder, timestampProvider, DEFAULT_SCHEMA_ID, row, 200L);
+        BinaryValue decoded =
+                new ValueDecoder(schemaGetter, KvFormat.COMPACTED, KV_FORMAT_VERSION_3)
+                        .decodeValue(recoveredValue);
 
-        assertThat(recoveredValue.getValueTag()).isEqualTo(200L);
-        assertThat(recoveredValue.row.getInt(0)).isEqualTo(1);
-        assertThat(recoveredValue.row.getString(1).toString()).isEqualTo("a");
+        assertThat(readVersion3ValueTag(recoveredValue)).isEqualTo(200L);
+        assertThat(decoded.row.getInt(0)).isEqualTo(1);
+        assertThat(decoded.row.getString(1).toString()).isEqualTo("a");
     }
 
     @Test
@@ -71,14 +78,22 @@ class KvRecoverHelperTest {
                 ValueEncoder.forKvFormatVersion(KV_FORMAT_VERSION_3, timestampProvider);
         BinaryRow row = compactedRow(schema.getRowType(), new Object[] {1, 1234L, "a"});
 
-        BinaryValue recoveredValue =
-                KvRecoverHelper.createRecoveredValue(
+        byte[] recoveredValue =
+                KvRecoverHelper.encodeRecoveredValue(
                         writeEncoder, timestampProvider, DEFAULT_SCHEMA_ID, row, 200L);
+        BinaryValue decoded =
+                new ValueDecoder(schemaGetter, KvFormat.COMPACTED, KV_FORMAT_VERSION_3)
+                        .decodeValue(recoveredValue);
 
-        assertThat(recoveredValue.getValueTag()).isEqualTo(1234L);
-        assertThat(recoveredValue.row.getInt(0)).isEqualTo(1);
-        assertThat(recoveredValue.row.getLong(1)).isEqualTo(1234L);
-        assertThat(recoveredValue.row.getString(2).toString()).isEqualTo("a");
+        assertThat(readVersion3ValueTag(recoveredValue)).isEqualTo(1234L);
+        assertThat(decoded.row.getInt(0)).isEqualTo(1);
+        assertThat(decoded.row.getLong(1)).isEqualTo(1234L);
+        assertThat(decoded.row.getString(2).toString()).isEqualTo("a");
+    }
+
+    private static long readVersion3ValueTag(byte[] value) {
+        return KvValueLayout.forKvFormatVersion(KV_FORMAT_VERSION_3)
+                .readValueTag(MemorySegment.wrap(value));
     }
 
     private static TableConfig rowTtlProcessTimeConfig() {
