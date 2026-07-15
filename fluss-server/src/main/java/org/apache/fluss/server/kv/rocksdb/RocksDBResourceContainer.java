@@ -195,6 +195,10 @@ public class RocksDBResourceContainer implements AutoCloseable {
         return opt;
     }
 
+    void registerCloseableResource(AutoCloseable resource) {
+        handlesToClose.add(checkNotNull(resource, "resource must not be null"));
+    }
+
     @Override
     public void close() throws Exception {
         handlesToClose.forEach(IOUtils::closeQuietly);

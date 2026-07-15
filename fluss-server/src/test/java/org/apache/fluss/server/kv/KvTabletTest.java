@@ -145,9 +145,21 @@ class KvTabletTest {
     }
 
     @AfterEach
-    void afterEach() {
-        if (executor != null) {
-            executor.shutdown();
+    void afterEach() throws Exception {
+        try {
+            if (kvTablet != null) {
+                kvTablet.close();
+            }
+        } finally {
+            try {
+                if (logTablet != null) {
+                    logTablet.close();
+                }
+            } finally {
+                if (executor != null) {
+                    executor.shutdown();
+                }
+            }
         }
     }
 

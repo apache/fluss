@@ -17,15 +17,20 @@
 
 package org.apache.fluss.server.kv.rocksdb;
 
+import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.server.exception.KvBuildingException;
+import org.apache.fluss.server.kv.RowTtlCompactionFilterFactory;
+import org.apache.fluss.utils.clock.ManualClock;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.rocksdb.FlinkCompactionFilter;
 
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Path;
+import java.time.Duration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -59,13 +64,45 @@ class RocksDBKvBuilderTest {
     }
 
     @Test
-    void testBuildFail() {
+    void testCompactionFilterFactoryClosedWithKv(@TempDir Path tempDir) throws Exception {
+        FlinkCompactionFilter.FlinkCompactionFilterFactory filterFactory =
+                RowTtlCompactionFilterFactory.create(Duration.ofHours(1L), new ManualClock(0L));
+        RocksDBResourceContainer rocksDBResourceContainer =
+                new RocksDBResourceContainer(new Configuration(), tempDir.toFile());
+        RocksDBKvBuilder rocksDBKvBuilder =
+                new RocksDBKvBuilder(
+                                tempDir.toFile(),
+                                rocksDBResourceContainer,
+                                rocksDBResourceContainer.getColumnOptions())
+                        .setCompactionFilterFactory(filterFactory);
+
+        try {
+            try (RocksDBKv ignored = rocksDBKvBuilder.build()) {
+                assertThat(filterFactory.isOwningHandle()).isTrue();
+            }
+            assertThat(filterFactory.isOwningHandle()).isFalse();
+        } finally {
+            filterFactory.close();
+        }
+    }
+
+    @Test
+    void testCompactionFilterFactoryClosedWhenBuildFails() {
+        FlinkCompactionFilter.FlinkCompactionFilterFactory filterFactory =
+                RowTtlCompactionFilterFactory.create(Duration.ofHours(1L), new ManualClock(0L));
         RocksDBResourceContainer rocksDBResourceContainer = new RocksDBResourceContainer();
         RocksDBKvBuilder rocksDBKvBuilder =
                 new RocksDBKvBuilder(
-                        null,
-                        rocksDBResourceContainer,
-                        rocksDBResourceContainer.getColumnOptions());
-        assertThatThrownBy(rocksDBKvBuilder::build).isInstanceOf(KvBuildingException.class);
+                                null,
+                                rocksDBResourceContainer,
+                                rocksDBResourceContainer.getColumnOptions())
+                        .setCompactionFilterFactory(filterFactory);
+
+        try {
+            assertThatThrownBy(rocksDBKvBuilder::build).isInstanceOf(KvBuildingException.class);
+            assertThat(filterFactory.isOwningHandle()).isFalse();
+        } finally {
+            filterFactory.close();
+        }
     }
 }

@@ -49,15 +49,15 @@ class RowTtlCompactionFilterTest {
 
     @Test
     void testFlinkCompactionFilterReadsTimestampFromVersion3Value() throws Exception {
-        FlinkCompactionFilter.FlinkCompactionFilterFactory filterFactory =
-                RowTtlCompactionFilterFactory.create(
-                        Duration.ofHours(1L), 1L, new ManualClock(123456789L));
         byte[] expiredKey = "expired-key".getBytes(StandardCharsets.UTF_8);
         byte[] freshKey = "fresh-key".getBytes(StandardCharsets.UTF_8);
         BinaryRow row = compactedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
         long now = 123456789L;
 
-        try (DBOptions dbOptions = new DBOptions().setCreateIfMissing(true);
+        try (FlinkCompactionFilter.FlinkCompactionFilterFactory filterFactory =
+                        RowTtlCompactionFilterFactory.create(
+                                Duration.ofHours(1L), 1L, new ManualClock(now));
+                DBOptions dbOptions = new DBOptions().setCreateIfMissing(true);
                 ColumnFamilyOptions cfOptions =
                         new ColumnFamilyOptions().setCompactionFilterFactory(filterFactory);
                 RocksDBHandle handle = new RocksDBHandle(tempDir.toFile(), dbOptions, cfOptions);

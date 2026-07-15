@@ -279,18 +279,18 @@ public final class KvTablet {
             throws IOException {
         checkNotNull(tableConfig, "tableConfig must not be null.");
         Optional<Duration> rowTtl = tableConfig.getRowTTL();
-        @Nullable
-        AbstractCompactionFilterFactory<? extends AbstractCompactionFilter<?>>
-                compactionFilterFactory =
-                        rowTtl.isPresent()
-                                ? RowTtlCompactionFilterFactory.create(rowTtl.get(), clock)
-                                : null;
         KvValueLayout kvValueLayout = KvValueLayout.forKvFormatVersion(kvFormatVersion);
         @Nullable
         RowTtlTimestampProvider rowTtlTimestampProvider =
                 kvValueLayout.hasValueTag()
                         ? RowTtlTimestampProvider.forWrite(tableConfig, schemaGetter, clock)
                         : null;
+        @Nullable
+        AbstractCompactionFilterFactory<? extends AbstractCompactionFilter<?>>
+                compactionFilterFactory =
+                        rowTtl.isPresent()
+                                ? RowTtlCompactionFilterFactory.create(rowTtl.get(), clock)
+                                : null;
         RocksDBKv kv =
                 buildRocksDBKv(serverConf, kvTabletDir, sharedRateLimiter, compactionFilterFactory);
 
@@ -337,18 +337,28 @@ public final class KvTablet {
                     AbstractCompactionFilterFactory<? extends AbstractCompactionFilter<?>>
                             compactionFilterFactory)
             throws IOException {
-        // Enable statistics to support RocksDB statistics collection
-        RocksDBResourceContainer rocksDBResourceContainer =
-                new RocksDBResourceContainer(configuration, kvDir, true, sharedRateLimiter);
-        RocksDBKvBuilder rocksDBKvBuilder =
-                new RocksDBKvBuilder(
-                        kvDir,
-                        rocksDBResourceContainer,
-                        rocksDBResourceContainer.getColumnOptions());
-        if (compactionFilterFactory != null) {
-            rocksDBKvBuilder.setCompactionFilterFactory(compactionFilterFactory);
+        @Nullable RocksDBResourceContainer rocksDBResourceContainer = null;
+        boolean resourcesOwnedByBuilder = false;
+        try {
+            // Enable statistics to support RocksDB statistics collection
+            rocksDBResourceContainer =
+                    new RocksDBResourceContainer(configuration, kvDir, true, sharedRateLimiter);
+            RocksDBKvBuilder rocksDBKvBuilder =
+                    new RocksDBKvBuilder(
+                            kvDir,
+                            rocksDBResourceContainer,
+                            rocksDBResourceContainer.getColumnOptions());
+            if (compactionFilterFactory != null) {
+                rocksDBKvBuilder.setCompactionFilterFactory(compactionFilterFactory);
+            }
+            resourcesOwnedByBuilder = true;
+            return rocksDBKvBuilder.build();
+        } finally {
+            if (!resourcesOwnedByBuilder) {
+                IOUtils.closeQuietly(rocksDBResourceContainer);
+                IOUtils.closeQuietly(compactionFilterFactory);
+            }
         }
-        return rocksDBKvBuilder.build();
     }
 
     ValueEncoder getValueEncoder() {
