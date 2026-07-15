@@ -185,11 +185,6 @@ class KvTabletTest {
                         clock);
     }
 
-    private LogTablet createLogTablet(File tempLogDir, long tableId, PhysicalTablePath tablePath)
-            throws Exception {
-        return createLogTablet(tempLogDir, tableId, tablePath, SystemClock.getInstance());
-    }
-
     private LogTablet createLogTablet(
             File tempLogDir, long tableId, PhysicalTablePath tablePath, Clock clock)
             throws Exception {
@@ -209,24 +204,6 @@ class KvTabletTest {
                 true,
                 clock,
                 true);
-    }
-
-    private KvTablet createKvTablet(
-            PhysicalTablePath tablePath,
-            TableBucket tableBucket,
-            LogTablet logTablet,
-            File tmpKvDir,
-            SchemaGetter schemaGetter,
-            Map<String, String> tableConfig)
-            throws Exception {
-        return createKvTablet(
-                tablePath,
-                tableBucket,
-                logTablet,
-                tmpKvDir,
-                schemaGetter,
-                tableConfig,
-                SystemClock.getInstance());
     }
 
     private KvTablet createKvTablet(

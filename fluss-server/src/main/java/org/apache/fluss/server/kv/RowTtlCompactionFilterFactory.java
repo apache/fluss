@@ -21,7 +21,6 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.server.utils.RowTtlUtils;
 import org.apache.fluss.utils.clock.Clock;
-import org.apache.fluss.utils.clock.SystemClock;
 
 import org.rocksdb.FlinkCompactionFilter;
 import org.rocksdb.RocksDB;
@@ -40,20 +39,9 @@ public final class RowTtlCompactionFilterFactory {
     private RowTtlCompactionFilterFactory() {}
 
     /** Creates a configured native compaction filter factory for row TTL cleanup. */
-    public static FlinkCompactionFilter.FlinkCompactionFilterFactory create(Duration ttl) {
-        return create(ttl, QUERY_TIME_AFTER_NUM_ENTRIES, SystemClock.getInstance());
-    }
-
-    /** Creates a configured native compaction filter factory for row TTL cleanup. */
     public static FlinkCompactionFilter.FlinkCompactionFilterFactory create(
             Duration ttl, Clock clock) {
         return create(ttl, QUERY_TIME_AFTER_NUM_ENTRIES, clock);
-    }
-
-    @VisibleForTesting
-    static FlinkCompactionFilter.FlinkCompactionFilterFactory create(
-            Duration ttl, long queryTimeAfterNumEntries) {
-        return create(ttl, queryTimeAfterNumEntries, SystemClock.getInstance());
     }
 
     @VisibleForTesting
