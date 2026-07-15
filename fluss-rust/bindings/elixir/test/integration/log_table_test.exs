@@ -210,6 +210,98 @@ defmodule Fluss.Integration.LogTableTest do
 
       cleanup_table(admin, table_name)
     end
+
+    test "round-trips a deeply-nested array<map<string, row>>", %{conn: conn, admin: admin} do
+      table_name = "ex_test_deep_nested_#{:rand.uniform(100_000)}"
+      cleanup_table(admin, table_name)
+
+      # array<map<string, row<n:int, label:string>>> — three levels of nesting.
+      inner_row = {:row, [{"n", :int}, {"label", :string}]}
+
+      schema =
+        Fluss.Schema.new()
+        |> Fluss.Schema.column("id", :int)
+        |> Fluss.Schema.column("data", {:array, {:map, :string, inner_row}})
+
+      descriptor = Fluss.TableDescriptor.new!(schema)
+      :ok = Fluss.Admin.create_table(admin, @database, table_name, descriptor, false)
+
+      table = Fluss.Table.get!(conn, @database, table_name)
+      writer = Fluss.AppendWriter.new!(table)
+
+      # A list of maps; each map value is a row (atom-keyed by field name).
+      data = [
+        %{"first" => %{n: 1, label: "one"}, "second" => %{n: 2, label: "two"}},
+        %{"third" => %{n: 3, label: "three"}}
+      ]
+
+      {:ok, _} = Fluss.AppendWriter.append(writer, [1, data])
+      :ok = Fluss.AppendWriter.flush(writer)
+
+      scanner = Fluss.LogScanner.new!(table)
+      :ok = Fluss.LogScanner.subscribe(scanner, 0, Fluss.earliest_offset())
+
+      records = poll_records(scanner, 1)
+      assert length(records) == 1
+
+      row = Enum.at(records, 0)[:row]
+      assert row[:id] == 1
+      assert row[:data] == data
+
+      cleanup_table(admin, table_name)
+    end
+
+    test "round-trips nulls at every depth", %{conn: conn, admin: admin} do
+      table_name = "ex_test_nested_nulls_#{:rand.uniform(100_000)}"
+      cleanup_table(admin, table_name)
+
+      # All columns are nullable by default (no {:not_null, ...} wrapper), so
+      # nulls are allowed both for a whole complex column and for a value nested
+      # inside an array element, a map value, or a row field.
+      schema =
+        Fluss.Schema.new()
+        |> Fluss.Schema.column("id", :int)
+        |> Fluss.Schema.column("whole_array", {:array, :int})
+        |> Fluss.Schema.column("arr_with_null", {:array, :int})
+        |> Fluss.Schema.column("map_with_null", {:map, :string, :int})
+        |> Fluss.Schema.column("row_with_null", {:row, [{"x", :int}, {"y", :int}]})
+
+      descriptor = Fluss.TableDescriptor.new!(schema)
+      :ok = Fluss.Admin.create_table(admin, @database, table_name, descriptor, false)
+
+      table = Fluss.Table.get!(conn, @database, table_name)
+      writer = Fluss.AppendWriter.new!(table)
+
+      {:ok, _} =
+        Fluss.AppendWriter.append(writer, [
+          1,
+          # whole complex column is null
+          nil,
+          # null element inside an array
+          [10, nil, 30],
+          # null value inside a map
+          %{"a" => 1, "b" => nil},
+          # null field inside a row
+          %{x: nil, y: 2}
+        ])
+
+      :ok = Fluss.AppendWriter.flush(writer)
+
+      scanner = Fluss.LogScanner.new!(table)
+      :ok = Fluss.LogScanner.subscribe(scanner, 0, Fluss.earliest_offset())
+
+      records = poll_records(scanner, 1)
+      assert length(records) == 1
+
+      row = Enum.at(records, 0)[:row]
+      assert row[:id] == 1
+      assert row[:whole_array] == nil
+      assert row[:arr_with_null] == [10, nil, 30]
+      assert row[:map_with_null] == %{"a" => 1, "b" => nil}
+      assert row[:row_with_null] == %{x: nil, y: 2}
+
+      cleanup_table(admin, table_name)
+    end
   end
 
   describe "subscribe_buckets" do
