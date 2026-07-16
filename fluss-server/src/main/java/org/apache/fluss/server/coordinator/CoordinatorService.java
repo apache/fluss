@@ -755,8 +755,9 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                         tableInfo.getPartitionKeys(), partitionSpec);
         if (request.isIgnoreIfNotExists()
                 && metadataManager
-                        .getPartitions(tablePath)
-                        .contains(partitionToCreate.getPartitionName())) {
+                        .getOptionalPartitionRegistration(
+                                tablePath, partitionToCreate.getPartitionName())
+                        .isPresent()) {
             return CompletableFuture.completedFuture(response);
         }
 

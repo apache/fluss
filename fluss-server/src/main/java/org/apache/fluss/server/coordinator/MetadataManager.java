@@ -909,7 +909,7 @@ public class MetadataManager {
         }
     }
 
-    private Optional<PartitionRegistration> getOptionalPartitionRegistration(
+    Optional<PartitionRegistration> getOptionalPartitionRegistration(
             TablePath tablePath, String partitionName) {
         try {
             return zookeeperClient.getPartition(tablePath, partitionName);

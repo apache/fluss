@@ -95,11 +95,12 @@ public class CoordinatorMetadataCache implements ServerMetadataCache {
     }
 
     public Set<ServerInfo> getLiveTabletServerInfos() {
-        Map<Integer, ServerInfo> aliveTabletServers = metadataSnapshot.aliveTabletServers;
+        NodeMetadataSnapshot snapshot = metadataSnapshot;
+        Map<Integer, ServerInfo> aliveTabletServers = snapshot.aliveTabletServers;
         Set<ServerInfo> serverInfos = new HashSet<>();
         aliveTabletServers.forEach(
                 (serverId, serverInfo) -> {
-                    ServerTag tag = metadataSnapshot.serverTags.get(serverId);
+                    ServerTag tag = snapshot.serverTags.get(serverId);
                     if (tag != ServerTag.PERMANENT_OFFLINE) {
                         serverInfos.add(serverInfo);
                     }

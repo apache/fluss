@@ -30,6 +30,7 @@ import org.apache.fluss.server.coordinator.event.TestingEventManager;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaStateMachine;
 import org.apache.fluss.server.coordinator.statemachine.TableBucketStateMachine;
 import org.apache.fluss.server.entity.DeleteReplicaResultForBucket;
+import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZkEpoch;
@@ -85,6 +86,7 @@ class TableManagerTest {
     private static ExecutorService ioExecutor;
 
     private CoordinatorContext coordinatorContext;
+    private ReplicaCapacityController replicaCapacityController;
     private TableManager tableManager;
     private TableLifecycleThrottler lifecycleThrottler;
     private TestingEventManager testingEventManager;
@@ -123,6 +125,8 @@ class TableManagerTest {
     private void initTableManager() {
         testingEventManager = new TestingEventManager();
         coordinatorContext = new CoordinatorContext(zkEpoch);
+        replicaCapacityController =
+                new ReplicaCapacityController(new Configuration(), new CoordinatorMetadataCache());
         testCoordinatorChannelManager = new TestCoordinatorChannelManager();
         Configuration conf = new Configuration();
         conf.setString(ConfigOptions.REMOTE_DATA_DIR, "/tmp/fluss/remote-data");
@@ -147,6 +151,7 @@ class TableManagerTest {
                 new TableManager(
                         metadataManager,
                         coordinatorContext,
+                        replicaCapacityController,
                         replicaStateMachine,
                         tableBucketStateMachine,
                         new RemoteStorageCleaner(conf, ioExecutor),
@@ -182,6 +187,7 @@ class TableManagerTest {
         tableManager.onCreateNewTable(DATA1_TABLE_PATH, tableId, assignment);
 
         assertThat(coordinatorContext.getKvBucketCount()).isZero();
+        assertThat(replicaCapacityController.getKvLeaderReplicaCount()).isZero();
         // all replica should be online
         checkReplicaOnline(tableId, null, assignment);
         // clear the assignment for the table
@@ -206,11 +212,14 @@ class TableManagerTest {
                         System.currentTimeMillis()));
         tableManager.onCreateNewTable(DATA1_TABLE_PATH_PK, tableId, assignment);
         assertThat(coordinatorContext.getKvBucketCount()).isEqualTo(assignment.getBuckets().size());
+        assertThat(replicaCapacityController.getKvLeaderReplicaCount())
+                .isEqualTo(assignment.getBuckets().size());
 
         // now, delete the created table
         coordinatorContext.queueTableDeletion(Collections.singleton(tableId));
         tableManager.onDeleteTable(tableId);
         assertThat(coordinatorContext.getKvBucketCount()).isZero();
+        assertThat(replicaCapacityController.getKvLeaderReplicaCount()).isZero();
 
         // make sure the delete replica success events in event manager is equal to the expected
         checkReplicaDelete(tableId, null, assignment);

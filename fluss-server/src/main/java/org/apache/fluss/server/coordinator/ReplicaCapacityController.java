@@ -44,10 +44,9 @@ public class ReplicaCapacityController implements ServerReconfigurable {
     /** Negative capacity means the automatic capacity limit is disabled. */
     public static final long CAPACITY_LIMIT_DISABLED = -1L;
 
-    private final Object lock = new Object();
     private final CoordinatorMetadataCache metadataCache;
 
-    private long kvLeaderReplicaMemoryReservedBytes;
+    private volatile long kvLeaderReplicaMemoryReservedBytes;
     private volatile long observedKvLeaderReplicaCount;
 
     public ReplicaCapacityController(
@@ -75,10 +74,7 @@ public class ReplicaCapacityController implements ServerReconfigurable {
 
     @Override
     public void reconfigure(Configuration newConfig) throws ConfigException {
-        long memoryReservedBytes = getKvLeaderReplicaMemoryReservedBytes(newConfig);
-        synchronized (lock) {
-            kvLeaderReplicaMemoryReservedBytes = memoryReservedBytes;
-        }
+        kvLeaderReplicaMemoryReservedBytes = getKvLeaderReplicaMemoryReservedBytes(newConfig);
     }
 
     /** Checks whether the requested KV leader replicas fit the current observed capacity. */
@@ -87,20 +83,18 @@ public class ReplicaCapacityController implements ServerReconfigurable {
             return;
         }
 
-        synchronized (lock) {
-            long capacity = getKvLeaderReplicaCapacityLocked();
-            long observedCount = observedKvLeaderReplicaCount;
-            if (capacity != CAPACITY_LIMIT_DISABLED
-                    && (observedCount > capacity
-                            || requestedKvLeaderReplicaCount > capacity - observedCount)) {
-                throw new InsufficientKvLeaderReplicaCapacityException(
-                        String.format(
-                                "Not enough KV leader replica capacity. "
-                                        + "observedKvLeaderReplicaCount=%s, "
-                                        + "requestedKvLeaderReplicaCount=%s, "
-                                        + "kvLeaderReplicaCapacity=%s.",
-                                observedCount, requestedKvLeaderReplicaCount, capacity));
-            }
+        long capacity = getKvLeaderReplicaCapacity();
+        long observedCount = observedKvLeaderReplicaCount;
+        if (capacity != CAPACITY_LIMIT_DISABLED
+                && (observedCount > capacity
+                        || requestedKvLeaderReplicaCount > capacity - observedCount)) {
+            throw new InsufficientKvLeaderReplicaCapacityException(
+                    String.format(
+                            "Not enough KV leader replica capacity. "
+                                    + "observedKvLeaderReplicaCount=%s, "
+                                    + "requestedKvLeaderReplicaCount=%s, "
+                                    + "kvLeaderReplicaCapacity=%s.",
+                            observedCount, requestedKvLeaderReplicaCount, capacity));
         }
     }
 
@@ -119,27 +113,8 @@ public class ReplicaCapacityController implements ServerReconfigurable {
 
     /** Returns the current cluster KV leader replica capacity, or -1 if disabled. */
     public long getKvLeaderReplicaCapacity() {
-        synchronized (lock) {
-            return getKvLeaderReplicaCapacityLocked();
-        }
-    }
-
-    @VisibleForTesting
-    long getKvLeaderReplicaMemoryReservedBytes() {
-        synchronized (lock) {
-            return kvLeaderReplicaMemoryReservedBytes;
-        }
-    }
-
-    private void registerMetrics(CoordinatorMetricGroup coordinatorMetricGroup) {
-        coordinatorMetricGroup.gauge(
-                MetricNames.KV_LEADER_REPLICA_COUNT, this::getKvLeaderReplicaCount);
-        coordinatorMetricGroup.gauge(
-                MetricNames.KV_LEADER_REPLICA_CAPACITY, this::getKvLeaderReplicaCapacity);
-    }
-
-    private long getKvLeaderReplicaCapacityLocked() {
-        if (kvLeaderReplicaMemoryReservedBytes == 0) {
+        long memoryReservedBytes = kvLeaderReplicaMemoryReservedBytes;
+        if (memoryReservedBytes == 0) {
             return CAPACITY_LIMIT_DISABLED;
         }
 
@@ -167,7 +142,7 @@ public class ReplicaCapacityController implements ServerReconfigurable {
                 knownMemoryBytes
                         + averageKnownMemoryBytes
                                 * (liveTabletServerCount - knownMemoryTabletServerCount);
-        long capacity = totalMemoryBytes / kvLeaderReplicaMemoryReservedBytes;
+        long capacity = totalMemoryBytes / memoryReservedBytes;
         LOG.debug(
                 "Calculated KV leader replica capacity: liveTabletServerCount={}, "
                         + "knownMemoryTabletServerCount={}, knownMemoryBytes={}, "
@@ -178,9 +153,21 @@ public class ReplicaCapacityController implements ServerReconfigurable {
                 knownMemoryBytes,
                 averageKnownMemoryBytes,
                 totalMemoryBytes,
-                kvLeaderReplicaMemoryReservedBytes,
+                memoryReservedBytes,
                 capacity);
         return capacity;
+    }
+
+    @VisibleForTesting
+    long getKvLeaderReplicaMemoryReservedBytes() {
+        return kvLeaderReplicaMemoryReservedBytes;
+    }
+
+    private void registerMetrics(CoordinatorMetricGroup coordinatorMetricGroup) {
+        coordinatorMetricGroup.gauge(
+                MetricNames.KV_LEADER_REPLICA_COUNT, this::getKvLeaderReplicaCount);
+        coordinatorMetricGroup.gauge(
+                MetricNames.KV_LEADER_REPLICA_CAPACITY, this::getKvLeaderReplicaCapacity);
     }
 
     private static long getKvLeaderReplicaMemoryReservedBytes(Configuration conf) {

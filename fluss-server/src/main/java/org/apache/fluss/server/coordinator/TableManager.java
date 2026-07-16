@@ -47,6 +47,7 @@ public class TableManager {
     private final MetadataManager metadataManager;
     private final RemoteStorageCleaner remoteStorageCleaner;
     private final CoordinatorContext coordinatorContext;
+    private final ReplicaCapacityController replicaCapacityController;
     private final ReplicaStateMachine replicaStateMachine;
     private final TableBucketStateMachine tableBucketStateMachine;
     private final ExecutorService ioExecutor;
@@ -66,6 +67,7 @@ public class TableManager {
     public TableManager(
             MetadataManager metadataManager,
             CoordinatorContext coordinatorContext,
+            ReplicaCapacityController replicaCapacityController,
             ReplicaStateMachine replicaStateMachine,
             TableBucketStateMachine tableBucketStateMachine,
             RemoteStorageCleaner remoteStorageCleaner,
@@ -74,6 +76,7 @@ public class TableManager {
         this.metadataManager = metadataManager;
         this.remoteStorageCleaner = remoteStorageCleaner;
         this.coordinatorContext = coordinatorContext;
+        this.replicaCapacityController = replicaCapacityController;
         this.replicaStateMachine = replicaStateMachine;
         this.tableBucketStateMachine = tableBucketStateMachine;
         this.ioExecutor = ioExecutor;
@@ -168,6 +171,7 @@ public class TableManager {
         TableInfo tableInfo = coordinatorContext.getTableInfoById(tableId);
         if (tableInfo != null && tableInfo.hasPrimaryKey()) {
             coordinatorContext.addKvBuckets(tableBuckets);
+            updateObservedKvLeaderReplicaCount();
         }
         // first, we transmit it to state NewBucket
         tableBucketStateMachine.handleStateChange(tableBuckets, BucketState.NewBucket);
@@ -215,11 +219,17 @@ public class TableManager {
     private void onDeleteTableBucket(
             Set<TableBucket> tableBuckets, Set<TableBucketReplica> allReplicas) {
         coordinatorContext.removeKvBuckets(tableBuckets);
+        updateObservedKvLeaderReplicaCount();
         // to offline, send stop replica to all followers that are not in the OfflineReplica state
         // so they stop sending fetch requests to the leader
         replicaStateMachine.handleStateChanges(allReplicas, ReplicaState.OfflineReplica);
         // to deletion started
         replicaStateMachine.handleStateChanges(allReplicas, ReplicaState.ReplicaDeletionStarted);
+    }
+
+    private void updateObservedKvLeaderReplicaCount() {
+        replicaCapacityController.updateObservedKvLeaderReplicaCount(
+                coordinatorContext.getKvBucketCount());
     }
 
     public void resumeDeletions() {

@@ -110,7 +110,7 @@ class ReplicaCapacityControllerTest {
     }
 
     @Test
-    void testZeroMemoryReservedDisablesCapacityControl() {
+    void testCapacityControlDisabledByDefault() {
         CoordinatorMetadataCache metadataCache = new CoordinatorMetadataCache();
         metadataCache.updateMetadata(
                 null,
@@ -118,8 +118,9 @@ class ReplicaCapacityControllerTest {
                 Collections.emptyMap());
 
         ReplicaCapacityController controller =
-                new ReplicaCapacityController(configWithMemoryReserved(0), metadataCache);
+                new ReplicaCapacityController(new Configuration(), metadataCache);
 
+        assertThat(controller.getKvLeaderReplicaMemoryReservedBytes()).isZero();
         assertThat(controller.getKvLeaderReplicaCapacity())
                 .isEqualTo(ReplicaCapacityController.CAPACITY_LIMIT_DISABLED);
         controller.checkCanCreateKvLeaderReplicas(201);

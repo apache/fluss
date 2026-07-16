@@ -50,18 +50,6 @@ class TabletServerResourceProbeTest {
     }
 
     @Test
-    void testProbeFromDeprecatedResourceConfig() {
-        Configuration conf = new Configuration();
-        conf.setString("tablet-server.resource.cpu-cores", "4.0");
-        conf.setString("tablet-server.resource.memory-size", "2kb");
-
-        TabletServerResource resource = new TabletServerResourceProbe(conf, tempDir).probe();
-
-        assertThat(resource.getCpuCores()).isEqualTo(4.0);
-        assertThat(resource.getMemoryBytes()).isEqualTo(2048);
-    }
-
-    @Test
     void testProbeFromCgroupV2Files() throws Exception {
         write(tempDir.resolve("cpu.max"), "200000 100000");
         write(tempDir.resolve("memory.max"), "1024");

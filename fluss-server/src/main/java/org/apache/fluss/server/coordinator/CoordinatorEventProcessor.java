@@ -242,6 +242,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 new TableManager(
                         metadataManager,
                         coordinatorContext,
+                        replicaCapacityController,
                         replicaStateMachine,
                         tableBucketStateMachine,
                         new RemoteStorageCleaner(conf, ioExecutor),
@@ -607,6 +608,9 @@ public class CoordinatorEventProcessor implements EventProcessor {
     @VisibleForTesting
     void trackKvBucketsForLoadedAssignment(long tableId, Set<TableBucket> tableBuckets) {
         TableInfo tableInfo = coordinatorContext.getTableInfoById(tableId);
+        // During failover, an orphan assignment may outlive its table metadata. Conservatively
+        // treat it as KV until lifecycle cleanup removes the buckets to avoid underestimating
+        // the KV leader replica count.
         if (tableInfo == null || tableInfo.hasPrimaryKey()) {
             coordinatorContext.addKvBuckets(tableBuckets);
         }
@@ -761,7 +765,6 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 tableManager.onDeletePartition(
                         resumeDropEvent.getTableId(), resumeDropEvent.getPartitionId());
             }
-            updateObservedKvLeaderReplicaCount();
         } else if (event instanceof ListRebalanceProgressEvent) {
             ListRebalanceProgressEvent listRebalanceProgressEvent =
                     (ListRebalanceProgressEvent) event;
@@ -842,7 +845,6 @@ public class CoordinatorEventProcessor implements EventProcessor {
         coordinatorContext.putTableInfo(tableInfo);
         TableAssignment tableAssignment = createTableEvent.getTableAssignment();
         tableManager.onCreateNewTable(tablePath, tableInfo.getTableId(), tableAssignment);
-        updateObservedKvLeaderReplicaCount();
         if (createTableEvent.isAutoPartitionTable()) {
             autoPartitionManager.addAutoPartitionTable(tableInfo, true);
         }
@@ -1037,7 +1039,6 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 createPartitionEvent.getPartitionId(),
                 partitionName,
                 partitionAssignment);
-        updateObservedKvLeaderReplicaCount();
         autoPartitionManager.addPartition(tableId, partitionName);
 
         Set<TableBucket> tableBuckets = new HashSet<>();
@@ -1074,7 +1075,6 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
         coordinatorContext.queueTableDeletion(Collections.singleton(tableId));
         tableManager.onDeleteTable(tableId);
-        updateObservedKvLeaderReplicaCount();
         if (dropTableEvent.isAutoPartitionTable()) {
             autoPartitionManager.removeAutoPartitionTable(tableId);
         }
@@ -1121,7 +1121,6 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
         coordinatorContext.queuePartitionDeletion(Collections.singleton(tablePartition));
         tableManager.onDeletePartition(tableId, dropPartitionEvent.getPartitionId());
-        updateObservedKvLeaderReplicaCount();
         autoPartitionManager.removePartition(tableId, dropPartitionEvent.getPartitionName());
 
         // send update metadata request.

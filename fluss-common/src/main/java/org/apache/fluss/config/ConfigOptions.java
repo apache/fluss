@@ -322,13 +322,14 @@ public class ConfigOptions {
     public static final ConfigOption<MemorySize> KV_LEADER_REPLICA_MEMORY_RESERVED =
             key("kv.leader-replica.memory-reserved")
                     .memoryType()
-                    .defaultValue(MemorySize.parse("8mb"))
+                    .defaultValue(MemorySize.ZERO)
                     .withDescription(
                             "The estimated memory consumption of each KV leader replica, "
                                     + "used by the CoordinatorServer to calculate the cluster-level "
                                     + "KV leader replica capacity. This value does not reserve or "
-                                    + "enforce memory on the tablet server. A value of 0 disables "
-                                    + "memory-based KV leader replica capacity control.");
+                                    + "enforce memory on the tablet server. The default value of 0 "
+                                    + "disables memory-based KV leader replica capacity control. "
+                                    + "Set a positive value to enable it.");
 
     /**
      * The network address and port the server binds to for accepting connections.
@@ -605,7 +606,6 @@ public class ConfigOptions {
             key("tablet-server.advertised-resource.cpu-cores")
                     .doubleType()
                     .noDefaultValue()
-                    .withDeprecatedKeys("tablet-server.resource.cpu-cores")
                     .withDescription(
                             "The CPU capacity, in cores, that this tablet server advertises to the "
                                     + "CoordinatorServer for resource reporting. This option does not limit "
@@ -616,7 +616,6 @@ public class ConfigOptions {
             key("tablet-server.advertised-resource.memory-size")
                     .memoryType()
                     .noDefaultValue()
-                    .withDeprecatedKeys("tablet-server.resource.memory-size")
                     .withDescription(
                             "The memory capacity that this tablet server advertises to the CoordinatorServer "
                                     + "for resource reporting and cluster-level KV leader replica capacity "
