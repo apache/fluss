@@ -30,7 +30,7 @@ import org.apache.fluss.predicate.{Predicate => FlussPredicate}
 import org.apache.fluss.spark.SparkFlussConf
 import org.apache.fluss.spark.read.lake.{FlussLakeInputPartition, FlussLakeUpsertInputPartition, FlussLakeUtils}
 import org.apache.fluss.spark.utils.SparkPartitionPredicate
-import org.apache.fluss.utils.ExceptionUtils
+import org.apache.fluss.utils.{ExceptionUtils, Preconditions}
 
 import org.apache.spark.sql.connector.read.InputPartition
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
@@ -41,19 +41,23 @@ import scala.collection.JavaConverters._
 import scala.collection.mutable
 
 /**
- * Plans Spark [[InputPartition]]s for a Fluss batch scan. The planner owns a Fluss client
- * connection for the lifetime of the scan and is closed by the enclosing batch.
+ * Plans Spark [[InputPartition]]s for a Fluss batch scan. The plan-time metadata RPCs (partition
+ * listing, offset/kv-snapshot lookups) run on a connection opened lazily inside `plan()` and
+ * released in its finally block. The lake-snapshot probe uses its own short-lived connection,
+ * because it may be read earlier — at planning/description time via [[hasLakeSnapshot]] — possibly
+ * before `plan()` runs or when it never runs at all. The planner does NOT rely on the enclosing
+ * batch being closed, because the Spark DSv2 Batch interface exposes no `close()` lifecycle that
+ * Spark would invoke.
  *
- * Concrete planners probe for a readable lake snapshot at construction time and branch inside
- * `plan()`:
+ * Concrete planners probe for a readable lake snapshot (once, memoized) and branch inside `plan()`:
  *   - Lake-union branch (snapshot present): unions lake splits with a Fluss log-tail (append) or
  *     kv+log-tail (upsert).
  *   - Log-only branch (snapshot absent): the plan is derived exclusively from Fluss metadata — the
  *     full Fluss log (append) or Fluss kv snapshots + log tail (upsert).
  *
- * The probe is snapshot-isolated: it is performed exactly once per planner instance (i.e. once per
- * Spark scan build). There is no runtime fallback path — presence/absence is decided
- * deterministically at construction and `plan()` picks a branch accordingly.
+ * The probe is snapshot-isolated: it runs at most once per planner instance. There is no runtime
+ * fallback path — presence/absence is decided deterministically by the memoized probe and `plan()`
+ * picks a branch accordingly.
  */
 sealed trait SplitPlanner extends AutoCloseable {
 
@@ -66,8 +70,9 @@ sealed trait SplitPlanner extends AutoCloseable {
   def plan(): Array[InputPartition]
 
   /**
-   * Whether this planner will union its Fluss plan with a lake snapshot. Determined once at
-   * construction; deterministic across `plan()` invocations.
+   * Whether this planner will union its Fluss plan with a lake snapshot. Backed by the memoized
+   * probe, so the answer is deterministic and stable across `plan()` invocations and repeated reads
+   * (e.g. from FlussScan.description()).
    */
   def hasLakeSnapshot: Boolean
 
@@ -87,8 +92,10 @@ sealed trait AppendSplitPlanner extends SplitPlanner
 sealed trait UpsertSplitPlanner extends SplitPlanner
 
 /**
- * Base implementation: owns the shared Fluss client Connection + Admin so concrete planners can
- * issue metadata requests. [[close]] tears down the whole chain.
+ * Base implementation: lazily opens a Fluss client Connection + Admin for the plan-time metadata
+ * RPCs and tears it down in [[close]] (scoped to a single `plan()` call, not to a Spark-managed
+ * batch lifecycle). The lake-snapshot probe deliberately uses its own short-lived connection — see
+ * [[probeLakeSnapshot]] — since it can fire before or independently of `plan()`.
  *
  * Also centralizes the lake-snapshot probe: if data lake is enabled at the table level, try loading
  * the readable snapshot; treat [[LakeTableSnapshotNotExistException]] as "no snapshot", all other
@@ -100,37 +107,81 @@ abstract class AbstractSplitPlanner(
     override val flussConfig: Configuration)
   extends SplitPlanner {
 
-  protected lazy val conn: Connection = ConnectionFactory.createConnection(flussConfig)
+  // Fluss client connection scoped to plan()-time metadata RPCs (partition/offset/kv-snapshot
+  // lookups). Opened lazily on first use and released in plan()'s finally block. We deliberately do
+  // NOT rely on the enclosing batch being closed: the Spark DSv2 Batch interface exposes no close()
+  // lifecycle, so the planner itself must release the connection once planning finishes. The probe
+  // does not use this connection (see probeLakeSnapshot). Not synchronized: Spark plans on a single
+  // driver thread.
+  private var conn: Connection = _
+  private var admin0: Admin = _
 
-  protected lazy val admin: Admin = conn.getAdmin
+  protected def admin: Admin = {
+    if (admin0 == null) {
+      conn = ConnectionFactory.createConnection(flussConfig)
+      admin0 = conn.getAdmin
+    }
+    admin0
+  }
 
   protected lazy val partitionInfos: util.List[PartitionInfo] =
     admin.listPartitionInfos(tablePath).get()
 
   protected def stoppingOffsetsInitializer: OffsetsInitializer
 
+  // Memoized lake-snapshot probe: computed at most once per planner instance. It can be triggered
+  // as early as ScanBuilder.build()/EXPLAIN time, because FlussScan.scanType (via description())
+  // reads hasLakeSnapshot — before plan() runs, or even when plan() never runs. The probe manages
+  // its own short-lived connection (see probeLakeSnapshot); this only caches the result. Not
+  // synchronized: Spark plans on a single driver thread.
+  private var probed = false
+  private var cachedLakeSnapshot: Option[LakeSnapshot] = None
+
+  protected def readableLakeSnapshot: Option[LakeSnapshot] = {
+    if (!probed) {
+      cachedLakeSnapshot = probeLakeSnapshot()
+      probed = true
+    }
+    cachedLakeSnapshot
+  }
+
   /**
-   * Probes the readable lake snapshot exactly once. Absent = data-lake disabled at the table level,
-   * OR the readable snapshot admin call reported no snapshot; Present = snapshot to union with the
-   * Fluss tail. Other exceptions propagate.
+   * Raw lake-snapshot probe (memoization handled by [[readableLakeSnapshot]]). Absent = data-lake
+   * disabled at the table level, OR the readable snapshot admin call reported no snapshot; Present =
+   * snapshot to union with the Fluss tail. Other exceptions propagate.
+   *
+   * The probe uses its own short-lived connection, closed before returning, independent of the
+   * plan-scoped [[admin]] connection. This is required because the probe can be read from
+   * FlussScan.scanType/description() at planning (build) time — possibly before plan() runs, or
+   * when plan() never runs at all (EXPLAIN, pruned/duplicated scans). Borrowing the plan-scoped
+   * connection here would leak it in exactly those cases, since that connection is only released in
+   * plan()'s finally block.
    */
   protected def probeLakeSnapshot(): Option[LakeSnapshot] = {
     if (!tableInfo.getTableConfig.isDataLakeEnabled) {
       None
     } else {
+      val probeConn = ConnectionFactory.createConnection(flussConfig)
       try {
-        Some(admin.getReadableLakeSnapshot(tablePath).get())
-      } catch {
-        case e: Exception =>
-          if (
-            ExceptionUtils
-              .stripExecutionException(e)
-              .isInstanceOf[LakeTableSnapshotNotExistException]
-          ) {
-            None
-          } else {
-            throw e
-          }
+        val probeAdmin = probeConn.getAdmin
+        try {
+          Some(probeAdmin.getReadableLakeSnapshot(tablePath).get())
+        } catch {
+          case e: Exception =>
+            if (
+              ExceptionUtils
+                .stripExecutionException(e)
+                .isInstanceOf[LakeTableSnapshotNotExistException]
+            ) {
+              None
+            } else {
+              throw e
+            }
+        } finally {
+          probeAdmin.close()
+        }
+      } finally {
+        probeConn.close()
       }
     }
   }
@@ -147,9 +198,19 @@ abstract class AbstractSplitPlanner(
       .toMap
   }
 
+  /**
+   * Releases the Fluss client connection. Idempotent and null-safe; it never forces the lazily
+   * opened connection into existence, so it is a no-op when no metadata access ever occurred.
+   */
   override def close(): Unit = {
-    if (admin != null) admin.close()
-    if (conn != null) conn.close()
+    if (admin0 != null) {
+      admin0.close()
+      admin0 = null
+    }
+    if (conn != null) {
+      conn.close()
+      conn = null
+    }
   }
 }
 
@@ -186,9 +247,7 @@ class AppendPlanner(
   extends AbstractSplitPlanner(tablePath, tableInfo, flussConfig)
   with AppendSplitPlanner {
 
-  private val readableLakeSnapshot: Option[LakeSnapshot] = probeLakeSnapshot()
-
-  override val hasLakeSnapshot: Boolean = readableLakeSnapshot.isDefined
+  override def hasLakeSnapshot: Boolean = readableLakeSnapshot.isDefined
 
   private val startOffsetsInitializer: OffsetsInitializer = OffsetsInitializer.full()
 
@@ -202,10 +261,15 @@ class AppendPlanner(
   override val logTailPredicate: Option[FlussPredicate] =
     if (tableInfo.getTableConfig.getLogFormat == LogFormat.ARROW) pushedPredicate else None
 
-  override def plan(): Array[InputPartition] = readableLakeSnapshot match {
-    case Some(snap) => planLakeUnion(snap)
-    case None => planLogOnly()
-  }
+  override def plan(): Array[InputPartition] =
+    try {
+      readableLakeSnapshot match {
+        case Some(snap) => planLakeUnion(snap)
+        case None => planLogOnly()
+      }
+    } finally {
+      close()
+    }
 
   // ---------------------------------------------------------------------------------------------
   // Log-only branch: pure Fluss log scan from earliest → committed with optional range splitting.
@@ -516,9 +580,7 @@ class UpsertPlanner(
   extends AbstractSplitPlanner(tablePath, tableInfo, flussConfig)
   with UpsertSplitPlanner {
 
-  private val readableLakeSnapshot: Option[LakeSnapshot] = probeLakeSnapshot()
-
-  override val hasLakeSnapshot: Boolean = readableLakeSnapshot.isDefined
+  override def hasLakeSnapshot: Boolean = readableLakeSnapshot.isDefined
 
   override protected val stoppingOffsetsInitializer: OffsetsInitializer =
     FlussOffsetInitializers.stoppingOffsetsInitializer(true, options, flussConfig)
@@ -527,10 +589,15 @@ class UpsertPlanner(
   // to be reconciled with kv snapshots — see FlussUpsertPartitionReader).
   override val logTailPredicate: Option[FlussPredicate] = None
 
-  override def plan(): Array[InputPartition] = readableLakeSnapshot match {
-    case Some(snap) => planLakeUnion(snap)
-    case None => planLogOnly()
-  }
+  override def plan(): Array[InputPartition] =
+    try {
+      readableLakeSnapshot match {
+        case Some(snap) => planLakeUnion(snap)
+        case None => planLogOnly()
+      }
+    } finally {
+      close()
+    }
 
   // ---------------------------------------------------------------------------------------------
   // Log-only branch: Fluss kv snapshots + log tail (no lake involvement).
@@ -574,9 +641,9 @@ class UpsertPlanner(
           val logEndingOffset = bucketIdToLogOffset.get(bucketId)
 
           if (snapshotIdOpt.isPresent) {
-            assert(
+            Preconditions.checkState(
               logStartingOffsetOpt.isPresent,
-              "Log offset must be present when snapshot id is present")
+              "Log offset must be present when snapshot id is present": Object)
             FlussUpsertInputPartition(
               tableBucket,
               snapshotIdOpt.getAsLong,

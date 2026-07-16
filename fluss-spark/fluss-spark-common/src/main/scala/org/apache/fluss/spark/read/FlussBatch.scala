@@ -29,10 +29,14 @@ import org.apache.spark.sql.util.CaseInsensitiveStringMap
 import scala.collection.JavaConverters._
 
 /**
- * Base class for planner-backed batch scans. The planner (constructed at ScanBuilder-time) owns the
- * Fluss client Connection/Admin lifecycle and produces the [[InputPartition]]s; the Batch is a thin
- * adapter that hands the plan to Spark and dispatches [[createReaderFactory]] based on whether the
- * planner is unioning with a lake snapshot (lake-union) or reading Fluss only (log-only).
+ * Base class for planner-backed batch scans. The planner (constructed at ScanBuilder-time) opens
+ * and releases the Fluss client Connection/Admin itself — scoped to its `plan()` call — and
+ * produces the [[InputPartition]]s; the Batch is a thin adapter that hands the plan to Spark and
+ * dispatches [[createReaderFactory]] based on whether the planner is unioning with a lake snapshot
+ * (lake-union) or reading Fluss only (log-only).
+ *
+ * The Batch is intentionally not [[AutoCloseable]]: the Spark DSv2 Batch interface has no `close()`
+ * hook that Spark invokes, so connection cleanup lives in the planner rather than here.
  */
 abstract class FlussBatch(
     tablePath: TablePath,
@@ -41,8 +45,7 @@ abstract class FlussBatch(
     limit: Option[Int],
     flussConfig: Configuration,
     planner: SplitPlanner)
-  extends Batch
-  with AutoCloseable {
+  extends Batch {
 
   protected def projection: Array[Int] = {
     val columnNameToIndex = tableInfo.getSchema.getColumnNames.asScala.zipWithIndex.toMap
@@ -55,10 +58,6 @@ abstract class FlussBatch(
   }
 
   override def planInputPartitions(): Array[InputPartition] = planner.plan()
-
-  override def close(): Unit = {
-    if (planner != null) planner.close()
-  }
 }
 
 /** Batch for reading log table (append-only table). */

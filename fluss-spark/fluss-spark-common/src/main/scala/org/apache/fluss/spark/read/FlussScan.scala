@@ -87,7 +87,7 @@ case class FlussAppendScan(
     planner: AppendSplitPlanner)
   extends FlussScan {
 
-  override protected val scanType: String =
+  override protected lazy val scanType: String =
     if (planner.hasLakeSnapshot) "LakeAppend" else "Append"
 
   override def toBatch: Batch = {
@@ -131,7 +131,7 @@ case class FlussUpsertScan(
     planner: UpsertSplitPlanner)
   extends FlussScan {
 
-  override protected val scanType: String =
+  override protected lazy val scanType: String =
     if (planner.hasLakeSnapshot) "LakeUpsert" else "Upsert"
 
   override def toBatch: Batch = {
