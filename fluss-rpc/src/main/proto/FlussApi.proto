@@ -476,6 +476,8 @@ message GetLakeSnapshotResponse {
   required int64 table_id = 1;
   required int64 snapshotId = 2;
   repeated PbLakeSnapshotForBucket bucket_snapshots = 3;
+  // Opaque table-level tiering state (see LakeTieringTableState), passed through as JSON bytes.
+  optional bytes tiering_state_json = 4;
 }
 
 message GetFileSystemSecurityTokenRequest {
@@ -1284,6 +1286,8 @@ message PbTableOffsets {
   required int64 table_id = 1;
   required PbTablePath table_path = 2;
   repeated PbBucketOffset bucket_offsets = 3;
+  // Opaque table-level tiering state (see LakeTieringTableState), passed through as JSON bytes.
+  optional bytes tiering_state_json = 4;
 }
 
 message PbBucketOffset {

@@ -23,6 +23,8 @@ import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
 import org.apache.fluss.lake.committer.CommitterInitContext;
 import org.apache.fluss.lake.committer.LakeCommitResult;
 import org.apache.fluss.lake.committer.LakeCommitter;
+import org.apache.fluss.lake.committer.PartitionDoneHandler;
+import org.apache.fluss.lake.committer.PartitionDoneInitContext;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.lake.writer.LakeWriter;
@@ -35,19 +37,34 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /** An implementation of {@link LakeTieringFactory} for testing purpose. */
 public class TestingLakeTieringFactory
         implements LakeTieringFactory<TestingWriteResult, TestingCommittable> {
 
     @Nullable private TestingLakeCommitter testingLakeCommitter;
+    @Nullable private final PartitionDoneHandler partitionDoneHandler;
 
     public TestingLakeTieringFactory(@Nullable TestingLakeCommitter testingLakeCommitter) {
+        this(testingLakeCommitter, null);
+    }
+
+    public TestingLakeTieringFactory(
+            @Nullable TestingLakeCommitter testingLakeCommitter,
+            @Nullable PartitionDoneHandler partitionDoneHandler) {
         this.testingLakeCommitter = testingLakeCommitter;
+        this.partitionDoneHandler = partitionDoneHandler;
     }
 
     public TestingLakeTieringFactory() {
-        this(null);
+        this(null, null);
+    }
+
+    @Override
+    public Optional<PartitionDoneHandler> createPartitionDoneHandler(
+            PartitionDoneInitContext partitionDoneInitContext) {
+        return Optional.ofNullable(partitionDoneHandler);
     }
 
     @Override

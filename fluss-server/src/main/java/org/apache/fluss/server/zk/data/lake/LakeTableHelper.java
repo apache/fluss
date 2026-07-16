@@ -171,13 +171,25 @@ public class LakeTableHelper {
         // Merge current  with previous one since the current request
         // may not carry all buckets for the table. It typically only carries buckets
         // that were written after the previous commit.
+        LakeTableSnapshot previousSnapshot = previousLakeTable.getOrReadLatestTableSnapshot();
 
         // merge log end offsets, current will override the previous
         Map<TableBucket, Long> bucketLogEndOffset =
-                new HashMap<>(
-                        previousLakeTable.getOrReadLatestTableSnapshot().getBucketLogEndOffset());
+                new HashMap<>(previousSnapshot.getBucketLogEndOffset());
         bucketLogEndOffset.putAll(newTableBucketOffsets.getOffsets());
-        return new TableBucketOffsets(newTableBucketOffsets.getTableId(), bucketLogEndOffset);
+
+        // Unlike the per-bucket offsets above (partial merge), the tiering state is opaque here and
+        // cannot be field-merged, so it uses whole-value snapshot (PUT) semantics:
+        //  - present (including an empty object) overwrites the whole state;
+        //  - absent keeps the previous state (a legacy/no-op writer never sends it, so keeping the
+        //    previous value is required for rolling-upgrade safety).
+        byte[] tieringStateJson =
+                newTableBucketOffsets.getTieringStateJson() != null
+                        ? newTableBucketOffsets.getTieringStateJson()
+                        : previousSnapshot.getTieringStateJson();
+
+        return new TableBucketOffsets(
+                newTableBucketOffsets.getTableId(), bucketLogEndOffset, tieringStateJson);
     }
 
     public FsPath storeLakeTableOffsetsFile(

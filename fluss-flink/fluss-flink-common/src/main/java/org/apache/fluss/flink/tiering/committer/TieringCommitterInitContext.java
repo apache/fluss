@@ -20,11 +20,15 @@ package org.apache.fluss.flink.tiering.committer;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.lake.committer.CommitterInitContext;
 import org.apache.fluss.lake.committer.LakeCommitter;
+import org.apache.fluss.lake.committer.PartitionDoneInitContext;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 
-/** The {@link CommitterInitContext} implementation for {@link LakeCommitter}. */
-public class TieringCommitterInitContext implements CommitterInitContext {
+/**
+ * The {@link CommitterInitContext} implementation for {@link LakeCommitter}. It also implements
+ * {@link PartitionDoneInitContext} so it can be reused to create a partition done handler.
+ */
+public class TieringCommitterInitContext implements CommitterInitContext, PartitionDoneInitContext {
 
     private final TablePath tablePath;
     private final TableInfo tableInfo;

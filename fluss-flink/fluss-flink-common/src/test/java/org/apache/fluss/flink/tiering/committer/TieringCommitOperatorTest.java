@@ -18,6 +18,8 @@
 package org.apache.fluss.flink.tiering.committer;
 
 import org.apache.fluss.client.metadata.LakeSnapshot;
+import org.apache.fluss.config.AutoPartitionTimeUnit;
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
 import org.apache.fluss.flink.adapter.StreamOperatorParametersAdapter;
 import org.apache.fluss.flink.tiering.TestingLakeTieringFactory;
@@ -27,7 +29,11 @@ import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
 import org.apache.fluss.flink.tiering.source.TableBucketWriteResult;
 import org.apache.fluss.flink.utils.FlinkTestBase;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
+import org.apache.fluss.lake.committer.LakeTieringTableState;
+import org.apache.fluss.lake.committer.PartitionDoneCandidate;
+import org.apache.fluss.lake.committer.PartitionDoneHandler;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 
 import org.apache.flink.configuration.Configuration;
@@ -58,6 +64,7 @@ import java.util.Map;
 
 import static org.apache.fluss.lake.committer.LakeCommitter.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
 import static org.apache.fluss.record.TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR;
+import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -204,6 +211,156 @@ class TieringCommitOperatorTest extends FlinkTestBase {
             } else {
                 verifyNoLakeSnapshot(tablePath);
             }
+        }
+    }
+
+    @Test
+    void testPartitionMarkDoneDeletesDoneFromState() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "mark_done_persist");
+        long tableId = createTable(tablePath, markDoneEnabledDescriptor());
+        Map<String, Long> partitionIdByNames =
+                FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath);
+
+        // a handler that marks all candidate partitions done and records the calls
+        RecordingPartitionDoneHandler handler = new RecordingPartitionDoneHandler(false);
+        TieringCommitOperator<TestingWriteResult, TestingCommittable> operator =
+                createOperatorWithHandler(handler);
+        try {
+            // one data round: all buckets of all partitions carry data
+            int numberOfWriteResults = 3 * partitionIdByNames.size();
+            long offset = 0;
+            long timestamp = System.currentTimeMillis();
+            for (int bucket = 0; bucket < 3; bucket++) {
+                for (Map.Entry<String, Long> entry : partitionIdByNames.entrySet()) {
+                    TableBucket tableBucket = new TableBucket(tableId, entry.getValue(), bucket);
+                    operator.processElement(
+                            createTableBucketWriteResultStreamRecord(
+                                    tablePath,
+                                    tableBucket,
+                                    entry.getKey(),
+                                    1,
+                                    offset++,
+                                    timestamp++,
+                                    numberOfWriteResults));
+                }
+            }
+
+            // handler should have been invoked with the active partitions as candidates
+            assertThat(handler.getMarkedPartitions())
+                    .containsExactlyInAnyOrderElementsOf(partitionIdByNames.keySet());
+
+            // delete-on-done: all done partitions are removed from the state, which is initialized.
+            LakeSnapshot lakeSnapshot = admin.getLatestLakeSnapshot(tablePath).get();
+            LakeTieringTableState state = lakeSnapshot.getLakeTieringTableState();
+            assertThat(state).isNotNull();
+            assertThat(state.isPartitionDoneInitialized()).isTrue();
+            assertThat(state.getPartitionUpdateTimes()).isEmpty();
+        } finally {
+            operator.close();
+        }
+    }
+
+    @Test
+    void testMarkDoneActionFailureDoesNotFailMainPath() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "mark_done_action_failure");
+        long tableId = createTable(tablePath, markDoneEnabledDescriptor());
+        Map<String, Long> partitionIdByNames =
+                FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath);
+
+        // a handler that always throws
+        RecordingPartitionDoneHandler handler = new RecordingPartitionDoneHandler(true);
+        TieringCommitOperator<TestingWriteResult, TestingCommittable> operator =
+                createOperatorWithHandler(handler);
+        try {
+            int numberOfWriteResults = 3 * partitionIdByNames.size();
+            long offset = 0;
+            long timestamp = System.currentTimeMillis();
+            for (int bucket = 0; bucket < 3; bucket++) {
+                for (Map.Entry<String, Long> entry : partitionIdByNames.entrySet()) {
+                    TableBucket tableBucket = new TableBucket(tableId, entry.getValue(), bucket);
+                    operator.processElement(
+                            createTableBucketWriteResultStreamRecord(
+                                    tablePath,
+                                    tableBucket,
+                                    entry.getKey(),
+                                    1,
+                                    offset++,
+                                    timestamp++,
+                                    numberOfWriteResults));
+                }
+            }
+
+            // the lake snapshot (main tiering path) must still be committed despite action failure
+            LakeSnapshot lakeSnapshot = admin.getLatestLakeSnapshot(tablePath).get();
+            assertThat(lakeSnapshot.getSnapshotId()).isGreaterThanOrEqualTo(0L);
+            // action failed -> cold start not initialized, and no partition dropped from the state
+            LakeTieringTableState state = lakeSnapshot.getLakeTieringTableState();
+            assertThat(state).isNotNull();
+            assertThat(state.isPartitionDoneInitialized()).isFalse();
+            assertThat(state.getPartitionUpdateTimes().keySet())
+                    .containsExactlyInAnyOrderElementsOf(partitionIdByNames.values());
+        } finally {
+            operator.close();
+        }
+    }
+
+    private TableDescriptor markDoneEnabledDescriptor() {
+        return TableDescriptor.builder()
+                .schema(DATA1_SCHEMA)
+                .distributedBy(3)
+                .partitionedBy("b")
+                .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
+                .property(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, AutoPartitionTimeUnit.YEAR)
+                .customProperty("paimon.partition.idle-time-to-done", "60 s")
+                .build();
+    }
+
+    private TieringCommitOperator<TestingWriteResult, TestingCommittable> createOperatorWithHandler(
+            PartitionDoneHandler handler) throws Exception {
+        MockOperatorEventGateway gateway = new MockOperatorEventGateway();
+        StreamOperatorParameters<CommittableMessage<TestingCommittable>> params =
+                StreamOperatorParametersAdapter.create(
+                        new SourceOperatorStreamTask<String>(new DummyEnvironment()),
+                        new MockStreamConfig(new Configuration(), 1),
+                        new MockOutput<>(new ArrayList<>()),
+                        null,
+                        new MockOperatorEventDispatcher(gateway),
+                        null);
+        TieringCommitOperator<TestingWriteResult, TestingCommittable> operator =
+                new TieringCommitOperator<>(
+                        params,
+                        FLUSS_CLUSTER_EXTENSION.getClientConfig(),
+                        new org.apache.fluss.config.Configuration(),
+                        new TestingLakeTieringFactory(null, handler));
+        operator.open();
+        return operator;
+    }
+
+    /** A testing handler that marks all candidate partitions done, or always throws. */
+    private static final class RecordingPartitionDoneHandler implements PartitionDoneHandler {
+        private final boolean alwaysThrow;
+        private final List<String> markedPartitions = new ArrayList<>();
+
+        RecordingPartitionDoneHandler(boolean alwaysThrow) {
+            this.alwaysThrow = alwaysThrow;
+        }
+
+        @Override
+        public List<String> markDoneIfReady(
+                List<PartitionDoneCandidate> candidates, long currentTime) throws Exception {
+            if (alwaysThrow) {
+                throw new RuntimeException("testing mark-done action failure");
+            }
+            List<String> done = new ArrayList<>();
+            for (PartitionDoneCandidate state : candidates) {
+                done.add(state.partitionName());
+            }
+            markedPartitions.addAll(done);
+            return done;
+        }
+
+        List<String> getMarkedPartitions() {
+            return markedPartitions;
         }
     }
 

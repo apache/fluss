@@ -22,6 +22,7 @@ import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.lake.paimon.testutils.FlinkPaimonTieringTestBase;
 import org.apache.fluss.metadata.PartitionInfo;
+import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
@@ -183,6 +184,73 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
                         0);
             }
             checkFlussOffsetsInSnapshot(partitionedTablePath, expectedOffsets);
+        } finally {
+            jobClient.cancel().get();
+        }
+    }
+
+    @Test
+    void testPartitionMarkDone() throws Exception {
+        // A non-auto partitioned table with a past-date partition so that, once the table becomes
+        // fully idle, the heartbeat rounds drive the partition to be marked done (a _SUCCESS file
+        // is written to the Paimon partition directory).
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "markDonePartitionedTable");
+        Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .column("dt", DataTypes.STRING())
+                        .build();
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .distributedBy(1, "a")
+                        .partitionedBy("dt")
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
+                        .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500))
+                        .customProperty("paimon.partition.idle-time-to-done", "3 s")
+                        .build();
+        createTable(tablePath, descriptor);
+
+        String partition = "2020-01-01";
+        admin.createPartition(
+                        tablePath,
+                        new PartitionSpec(Collections.singletonMap("dt", partition)),
+                        false)
+                .get();
+
+        // write some rows into the partition, then stop writing so the table becomes idle
+        writeRows(
+                tablePath,
+                Arrays.asList(
+                        row(1, "v1", partition), row(2, "v2", partition), row(3, "v3", partition)),
+                true);
+
+        JobClient jobClient = buildTieringJob(execEnv);
+        try {
+            FileStoreTable paimonTable =
+                    (FileStoreTable)
+                            paimonCatalog.getTable(
+                                    Identifier.create(
+                                            tablePath.getDatabaseName(), tablePath.getTableName()));
+            org.apache.paimon.fs.Path successFile =
+                    new org.apache.paimon.fs.Path(
+                            paimonTable.location(), "dt=" + partition + "/_SUCCESS");
+
+            // wait until the _SUCCESS file appears (idle 3s + heartbeat rounds drive mark-done
+            // once the table becomes fully idle)
+            long deadline = System.currentTimeMillis() + 60_000L;
+            boolean marked = false;
+            while (System.currentTimeMillis() < deadline) {
+                if (paimonTable.fileIO().exists(successFile)) {
+                    marked = true;
+                    break;
+                }
+                Thread.sleep(1000L);
+            }
+            assertThat(marked)
+                    .as("the _SUCCESS mark-done file should be created for partition " + partition)
+                    .isTrue();
         } finally {
             jobClient.cancel().get();
         }

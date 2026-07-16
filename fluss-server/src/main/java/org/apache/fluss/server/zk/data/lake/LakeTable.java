@@ -21,7 +21,6 @@ package org.apache.fluss.server.zk.data.lake;
 import org.apache.fluss.fs.FSDataInputStream;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
-import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.json.TableBucketOffsets;
@@ -32,7 +31,6 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.Collections;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 
 import static org.apache.fluss.metrics.registry.MetricRegistry.LOG;
@@ -203,9 +201,12 @@ public class LakeTable {
         FSDataInputStream inputStream = offsetFilePath.getFileSystem().open(offsetFilePath);
         try (ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
             IOUtils.copyBytes(inputStream, outputStream, true);
-            Map<TableBucket, Long> logOffsets =
-                    TableBucketOffsets.fromJsonBytes(outputStream.toByteArray()).getOffsets();
-            return new LakeTableSnapshot(snapshotId, logOffsets);
+            TableBucketOffsets tableBucketOffsets =
+                    TableBucketOffsets.fromJsonBytes(outputStream.toByteArray());
+            return new LakeTableSnapshot(
+                    snapshotId,
+                    tableBucketOffsets.getOffsets(),
+                    tableBucketOffsets.getTieringStateJson());
         }
     }
 
