@@ -7,7 +7,7 @@ sidebar_position: 3
 
 ## Introduction
 
-[Apache Gravitino](https://gravitino.apache.org/) is a high-performance metadata management system that provides a unified metadata layer for data lake and lakehouse architectures. It offers an [Iceberg REST Catalog](https://iceberg.apache.org/concepts/catalog/#decoupling-using-the-rest-catalog) interface with credential vending support, making tiered Iceberg tables discoverable and queryable by any Iceberg-compatible engine.
+[Apache Gravitino](https://gravitino.apache.org/) is a high-performance metadata management system that provides a unified metadata layer for data lake and lakehouse architectures. It offers an [Iceberg REST Catalog](https://iceberg.apache.org/rest-catalog-spec) interface with credential vending support, making tiered Iceberg tables discoverable and queryable by any Iceberg-compatible engine.
 
 This guide explains how to configure Fluss to use Apache Gravitino as its Iceberg REST catalog. For general Iceberg integration details (table mapping, data types, limitations), see [Iceberg Integration](/docs/next/streaming-lakehouse/datalake-formats/iceberg/).
 
