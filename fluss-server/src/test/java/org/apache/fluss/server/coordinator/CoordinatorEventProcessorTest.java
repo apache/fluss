@@ -88,6 +88,7 @@ import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.server.zk.data.ZkData.PartitionIdsZNode;
 import org.apache.fluss.server.zk.data.ZkData.TableIdsZNode;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
+import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.clock.SystemClock;
@@ -342,6 +343,54 @@ class CoordinatorEventProcessorTest {
         eventProcessor.startup();
 
         assertThat(replicaCapacityController.getKvLeaderReplicaCount()).isEqualTo(N_BUCKETS);
+    }
+
+    @Test
+    void testAutoPartitionInitializationAfterCapacityInputsRestored() throws Exception {
+        initCoordinatorChannel();
+        TablePath kvTablePath = TablePath.of(defaultDatabase, "startup_capacity_kv");
+        TableAssignment tableAssignment =
+                generateAssignment(
+                        N_BUCKETS,
+                        REPLICATION_FACTOR,
+                        new TabletServerInfo[] {
+                            new TabletServerInfo(0, "rack0"),
+                            new TabletServerInfo(1, "rack1"),
+                            new TabletServerInfo(2, "rack2")
+                        });
+        long kvTableId =
+                metadataManager.createTable(
+                        kvTablePath, remoteDataDir, TEST_TABLE, tableAssignment, false);
+        verifyTableCreated(kvTableId, tableAssignment, N_BUCKETS, REPLICATION_FACTOR);
+
+        TablePath autoPartitionTablePath =
+                TablePath.of(defaultDatabase, "startup_capacity_auto_partition");
+        long autoPartitionTableId =
+                metadataManager.createTable(
+                        autoPartitionTablePath, remoteDataDir, getPartitionedTable(), null, false);
+
+        eventProcessor.shutdown();
+        autoPartitionManager.close();
+
+        serverMetadataCache = new CoordinatorMetadataCache();
+        replicaCapacityController =
+                new ReplicaCapacityController(new Configuration(), serverMetadataCache);
+        RecordingAutoPartitionManager recordingAutoPartitionManager =
+                new RecordingAutoPartitionManager(
+                        serverMetadataCache,
+                        metadataManager,
+                        remoteDataDir,
+                        replicaCapacityController);
+        autoPartitionManager = recordingAutoPartitionManager;
+        eventProcessor = buildCoordinatorEventProcessor();
+        initCoordinatorChannel();
+        eventProcessor.startup();
+
+        assertThat(recordingAutoPartitionManager.getInitializedTableIds())
+                .contains(autoPartitionTableId);
+        assertThat(recordingAutoPartitionManager.getObservedKvLeaderReplicaCountAtInit())
+                .isEqualTo(N_BUCKETS);
+        assertThat(recordingAutoPartitionManager.getLiveTabletServerCountAtInit()).isEqualTo(3);
     }
 
     @Test
@@ -2055,6 +2104,57 @@ class CoordinatorEventProcessorTest {
                 kvSnapshotLeaseManager,
                 scheduler,
                 SystemClock.getInstance());
+    }
+
+    private static class RecordingAutoPartitionManager extends AutoPartitionManager {
+
+        private final CoordinatorMetadataCache metadataCache;
+        private final ReplicaCapacityController replicaCapacityController;
+
+        private Set<Long> initializedTableIds = Collections.emptySet();
+        private long observedKvLeaderReplicaCountAtInit = -1;
+        private int liveTabletServerCountAtInit = -1;
+
+        private RecordingAutoPartitionManager(
+                CoordinatorMetadataCache metadataCache,
+                MetadataManager metadataManager,
+                String remoteDataDir,
+                ReplicaCapacityController replicaCapacityController) {
+            super(
+                    metadataCache,
+                    metadataManager,
+                    new RemoteDirDynamicLoader(
+                            Configuration.fromMap(
+                                    Collections.singletonMap(
+                                            ConfigOptions.REMOTE_DATA_DIR.key(), remoteDataDir))),
+                    new Configuration(),
+                    replicaCapacityController,
+                    SystemClock.getInstance(),
+                    new ManuallyTriggeredScheduledExecutorService());
+            this.metadataCache = metadataCache;
+            this.replicaCapacityController = replicaCapacityController;
+        }
+
+        @Override
+        public void initAutoPartitionTables(List<TableInfo> tableInfos) {
+            initializedTableIds =
+                    tableInfos.stream().map(TableInfo::getTableId).collect(Collectors.toSet());
+            observedKvLeaderReplicaCountAtInit =
+                    replicaCapacityController.getKvLeaderReplicaCount();
+            liveTabletServerCountAtInit = metadataCache.getLiveTabletServerInfos().size();
+        }
+
+        private Set<Long> getInitializedTableIds() {
+            return initializedTableIds;
+        }
+
+        private long getObservedKvLeaderReplicaCountAtInit() {
+            return observedKvLeaderReplicaCountAtInit;
+        }
+
+        private int getLiveTabletServerCountAtInit() {
+            return liveTabletServerCountAtInit;
+        }
     }
 
     private void initCoordinatorChannel() throws Exception {
