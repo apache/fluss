@@ -129,19 +129,7 @@ class IcebergTieringTest {
                                 isPartitionedTable ? "partitioned" : "unpartitioned"));
         createTable(tablePath, isPrimaryKeyTable, isPartitionedTable);
 
-        TableDescriptor descriptor =
-                TableDescriptor.builder()
-                        .schema(
-                                Schema.newBuilder()
-                                        .column("c1", DataTypes.INT())
-                                        .column("c2", DataTypes.STRING())
-                                        .column("c3", DataTypes.STRING())
-                                        .build())
-                        .distributedBy(BUCKET_NUM)
-                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
-                        .build();
-        TableInfo tableInfo =
-                TableInfo.of(tablePath, 0, 1, descriptor, DEFAULT_REMOTE_DATA_DIR, 1L, 1L);
+        TableInfo tableInfo = createTableInfo(tablePath, isPrimaryKeyTable, isPartitionedTable);
 
         Table icebergTable = icebergCatalog.loadTable(toIceberg(tablePath));
 
@@ -227,20 +215,7 @@ class IcebergTieringTest {
     void testRejectIncompatiblePartitionSpec() {
         TablePath tablePath = TablePath.of("iceberg", "test_incompatible_partition_spec");
         createTable(tablePath, true, false);
-        TableDescriptor descriptor =
-                TableDescriptor.builder()
-                        .schema(
-                                Schema.newBuilder()
-                                        .column("c1", DataTypes.INT())
-                                        .column("c2", DataTypes.STRING())
-                                        .column("c3", DataTypes.STRING())
-                                        .primaryKey("c1", "c3")
-                                        .build())
-                        .distributedBy(BUCKET_NUM, "c1")
-                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
-                        .build();
-        TableInfo tableInfo =
-                TableInfo.of(tablePath, 0, 1, descriptor, DEFAULT_REMOTE_DATA_DIR, 1L, 1L);
+        TableInfo tableInfo = createTableInfo(tablePath, true, false);
 
         Table icebergTable = icebergCatalog.loadTable(toIceberg(tablePath));
         String bucketFieldName = icebergTable.spec().fields().get(0).name();
@@ -255,6 +230,37 @@ class IcebergTieringTest {
                 .hasMessageContaining("Iceberg partition spec is incompatible")
                 .hasMessageContaining("bucket[3]")
                 .hasMessageContaining("bucket[6]");
+
+        assertThatThrownBy(() -> createLakeWriter(tablePath, 0, null, null, tableInfo))
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining("Iceberg partition spec is incompatible");
+    }
+
+    private TableInfo createTableInfo(
+            TablePath tablePath, boolean isPrimaryKeyTable, boolean isPartitionedTable) {
+        Schema.Builder schemaBuilder =
+                Schema.newBuilder()
+                        .column("c1", DataTypes.INT())
+                        .column("c2", DataTypes.STRING())
+                        .column("c3", DataTypes.STRING());
+        if (isPrimaryKeyTable) {
+            if (isPartitionedTable) {
+                schemaBuilder.primaryKey("c1", "c3");
+            } else {
+                schemaBuilder.primaryKey("c1");
+            }
+        }
+
+        TableDescriptor.Builder descriptorBuilder =
+                TableDescriptor.builder()
+                        .schema(schemaBuilder.build())
+                        .distributedBy(BUCKET_NUM)
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true);
+        if (isPartitionedTable) {
+            descriptorBuilder.partitionedBy("c3");
+        }
+        return TableInfo.of(
+                tablePath, 0, 1, descriptorBuilder.build(), DEFAULT_REMOTE_DATA_DIR, 1L, 1L);
     }
 
     private LakeWriter<IcebergWriteResult> createLakeWriter(
@@ -420,9 +426,17 @@ class IcebergTieringTest {
         org.apache.iceberg.Schema schema =
                 new org.apache.iceberg.Schema(
                         Arrays.asList(
-                                Types.NestedField.required(1, "c1", Types.IntegerType.get()),
+                                isPrimaryTable
+                                        ? Types.NestedField.required(
+                                                1, "c1", Types.IntegerType.get())
+                                        : Types.NestedField.optional(
+                                                1, "c1", Types.IntegerType.get()),
                                 Types.NestedField.optional(2, "c2", Types.StringType.get()),
-                                Types.NestedField.required(3, "c3", Types.StringType.get()),
+                                isPrimaryTable && isPartitionedTable
+                                        ? Types.NestedField.required(
+                                                3, "c3", Types.StringType.get())
+                                        : Types.NestedField.optional(
+                                                3, "c3", Types.StringType.get()),
                                 Types.NestedField.required(
                                         4, BUCKET_COLUMN_NAME, Types.IntegerType.get()),
                                 Types.NestedField.required(
