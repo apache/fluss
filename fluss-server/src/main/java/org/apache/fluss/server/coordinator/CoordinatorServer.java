@@ -248,7 +248,6 @@ public class CoordinatorServer extends ServerBase {
                     new ReplicaCapacityController(conf, metadataCache, serverMetricGroup);
 
             this.dynamicConfigManager = new DynamicConfigManager(zkClient, conf);
-            this.metadataCache = new CoordinatorMetadataCache();
 
             this.authorizer = AuthorizerLoader.createAuthorizer(conf, zkClient, pluginManager);
             if (authorizer != null) {
