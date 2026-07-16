@@ -574,8 +574,7 @@ public class DynamicConfigChangeTest {
         Configuration configuration = new Configuration();
         configuration.set(ConfigOptions.KV_LEADER_REPLICA_MEMORY_RESERVED, MemorySize.parse("8mb"));
 
-        DynamicConfigManager dynamicConfigManager =
-                new DynamicConfigManager(zookeeperClient, configuration);
+        DynamicConfigManager dynamicConfigManager = createManager(configuration);
 
         AtomicReference<MemorySize> reconfiguredMemoryReserved = new AtomicReference<>();
         dynamicConfigManager.register(
