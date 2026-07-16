@@ -25,6 +25,8 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.rpc.messages.ErrorMessage;
+import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.log.LogSegment;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperClient;
@@ -40,6 +42,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.ExecutionException;
 
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA_1_WITH_KEY_AND_VALUE;
@@ -50,7 +53,6 @@ import static org.apache.fluss.testutils.DataTestUtils.genKvRecordBatch;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** The ITCase for tabletServer shutdown (controlled shutdown). */
 public class TabletServerShutdownITCase {
@@ -100,17 +102,37 @@ public class TabletServerShutdownITCase {
                         .activeLogSegment();
         logSegment.deleteIfExists();
 
-        // should get RetriableException since the leader server is shutdown
-        // and new Leader will be on new server
-        assertThatThrownBy(() -> writeData(leaderGateWay, tableId, isLogTable))
-                .cause()
-                .isInstanceOf(RetriableException.class);
+        ErrorMessage errorResponse = null;
+        ExecutionException requestFailure = null;
+        try {
+            errorResponse = writeData(leaderGateWay, tableId, isLogTable);
+        } catch (ExecutionException e) {
+            requestFailure = e;
+        }
 
-        // should only has 2 tablet servers
-        FLUSS_CLUSTER_EXTENSION.assertHasTabletServerNumber(2);
+        TabletServer leaderServer = FLUSS_CLUSTER_EXTENSION.getTabletServerById(leader);
+        try {
+            // The storage IOException should trigger the fatal error handler and stop the leader
+            // server. The failed request may either receive the storage error response or fail when
+            // the RPC connection is closed, depending on which completes first.
+            FLUSS_CLUSTER_EXTENSION.assertHasTabletServerNumber(2);
+        } finally {
+            // Wait for the fatal shutdown to finish before reusing the same server ID and data dir.
+            leaderServer.closeAsync().get();
+            FLUSS_CLUSTER_EXTENSION.startTabletServer(leader, true);
+        }
 
-        // restart the shutdown server
-        FLUSS_CLUSTER_EXTENSION.startTabletServer(leader, true);
+        if (requestFailure != null) {
+            assertThat(requestFailure).cause().isInstanceOf(RetriableException.class);
+        } else {
+            assertThat(errorResponse).isNotNull();
+            assertThat(errorResponse.hasErrorCode()).isTrue();
+            assertThat(errorResponse.getErrorCode())
+                    .isEqualTo(
+                            isLogTable
+                                    ? Errors.LOG_STORAGE_EXCEPTION.code()
+                                    : Errors.KV_STORAGE_EXCEPTION.code());
+        }
     }
 
     @Test
@@ -237,20 +259,22 @@ public class TabletServerShutdownITCase {
                 () -> assertThat(zkClient.getLeaderAndIsr(tb).get().leader()).isEqualTo(leader));
     }
 
-    private void writeData(
+    private ErrorMessage writeData(
             TabletServerGateway tabletServerGateway, long tableId, boolean isLogTable)
             throws Exception {
         if (isLogTable) {
-            tabletServerGateway
+            return tabletServerGateway
                     .produceLog(
                             newProduceLogRequest(tableId, 0, 1, genMemoryLogRecordsByObject(DATA1)))
-                    .get();
+                    .get()
+                    .getBucketsRespAt(0);
         } else {
-            tabletServerGateway
+            return tabletServerGateway
                     .putKv(
                             newPutKvRequest(
                                     tableId, 0, 1, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)))
-                    .get();
+                    .get()
+                    .getBucketsRespAt(0);
         }
     }
 }
