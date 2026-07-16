@@ -39,6 +39,7 @@ use arrow::array::RecordBatch;
 use arrow::compute::concat_batches;
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::Bytes;
+use futures::Stream;
 use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
@@ -101,6 +102,15 @@ impl LimitBatchScanner {
             batches.push(batch);
         }
         Ok(batches)
+    }
+
+    /// Consume this scanner into a [`Stream`] that yields its single
+    /// [`ScanBatch`], then ends. Shares the streaming contract of
+    /// [`RecordBatchLogReader::into_stream`](crate::client::RecordBatchLogReader::into_stream).
+    pub fn into_stream(self) -> impl Stream<Item = Result<ScanBatch>> + Send {
+        futures::stream::try_unfold(self, |mut scanner| async move {
+            Ok(scanner.next_batch().await?.map(|batch| (batch, scanner)))
+        })
     }
 
     /// The bucket scanned by this `LimitBatchScanner`.

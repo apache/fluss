@@ -38,6 +38,7 @@ use crate::record::ScanBatch;
 use crate::rpc::message::OffsetSpec;
 use arrow::record_batch::RecordBatch;
 use arrow_schema::SchemaRef;
+use futures::Stream;
 use log::warn;
 use std::collections::{HashMap, VecDeque};
 use std::time::Duration;
@@ -206,6 +207,18 @@ impl RecordBatchLogReader {
                 }
             }
         }
+    }
+
+    /// Consume this reader into a [`Stream`] of [`ScanBatch`]es, one per
+    /// [`next_batch`](Self::next_batch) call, ending when all buckets reach
+    /// their stopping offsets or on the first error.
+    ///
+    /// Dropping the stream early runs the reader's [`Drop`] cleanup. The stream
+    /// is `Send` but `!Unpin`; pin it before polling.
+    pub fn into_stream(self) -> impl Stream<Item = Result<ScanBatch>> + Send {
+        futures::stream::try_unfold(self, |mut reader| async move {
+            Ok(reader.next_batch().await?.map(|batch| (batch, reader)))
+        })
     }
 
     /// Convert this async reader into a synchronous [`arrow::record_batch::RecordBatchReader`].

@@ -22,6 +22,7 @@ mod batch_scanner_test {
     use arrow::array::{Int32Array, Int64Array, StringArray, record_batch};
     use fluss::metadata::{DataTypes, LogFormat, Schema, TableBucket, TableDescriptor, TablePath};
     use fluss::row::GenericRow;
+    use futures::TryStreamExt;
     use std::collections::HashMap;
 
     /// End-to-end check that the scanner yields the appended rows once and then
@@ -90,6 +91,70 @@ mod batch_scanner_test {
         assert!(
             scanner.next_batch().await.expect("poll").is_none(),
             "scanner must end after one batch"
+        );
+    }
+
+    /// `into_stream` yields the scanner's single batch then ends, mirroring the
+    /// `next_batch` -> `Some` -> `None` sequence.
+    #[tokio::test]
+    async fn batch_scanner_into_stream_yields_single_batch() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("admin");
+
+        let table_path = TablePath::new("fluss", "test_batch_scanner_into_stream");
+        let descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("c1", DataTypes::int())
+                    .column("c2", DataTypes::string())
+                    .build()
+                    .expect("schema"),
+            )
+            .distributed_by(Some(1), vec!["c1".to_string()])
+            .build()
+            .expect("descriptor");
+        create_table(&admin, &table_path, &descriptor).await;
+
+        let table = connection.get_table(&table_path).await.expect("table");
+        let writer = table
+            .new_append()
+            .expect("append")
+            .create_writer()
+            .expect("writer");
+        writer
+            .append_arrow_batch(
+                record_batch!(
+                    ("c1", Int32, [1, 2, 3, 4, 5]),
+                    ("c2", Utf8, ["a", "b", "c", "d", "e"])
+                )
+                .unwrap(),
+            )
+            .expect("append batch");
+        writer.flush().await.expect("flush");
+
+        let table_info = table.get_table_info();
+        let bucket = TableBucket::new(table_info.table_id, 0);
+
+        let scanner = table
+            .new_scan()
+            .limit(3)
+            .expect("limit")
+            .create_bucket_batch_scanner(bucket.clone())
+            .expect("create batch scanner");
+
+        let batches = scanner
+            .into_stream()
+            .try_collect::<Vec<_>>()
+            .await
+            .expect("drain batch scanner stream");
+
+        assert_eq!(batches.len(), 1, "limit scanner yields exactly one batch");
+        assert_eq!(batches[0].bucket(), &bucket);
+        assert!(
+            batches[0].num_records() > 0 && batches[0].num_records() <= 3,
+            "expected 1..=3 records, got {}",
+            batches[0].num_records()
         );
     }
 

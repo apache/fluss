@@ -28,6 +28,7 @@ mod reader_test {
     use fluss::config::{Config, NoKeyAssigner};
     use fluss::metadata::{DataTypes, Schema, TableBucket, TableDescriptor, TablePath};
     use fluss::rpc::message::OffsetSpec;
+    use futures::TryStreamExt;
     use std::collections::HashMap;
     use std::time::Duration;
 
@@ -514,6 +515,77 @@ mod reader_test {
             ids,
             vec![1, 2, 3, 4],
             "latest-offset reader should read all records present in subscribed partitions"
+        );
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
+    }
+
+    #[tokio::test]
+    async fn into_stream_yields_same_batches_as_next_batch() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss", "test_reader_into_stream");
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("name", DataTypes::string())
+                    .build()
+                    .expect("Failed to build schema"),
+            )
+            .build()
+            .expect("Failed to build table");
+        create_table(&admin, &table_path, &table_descriptor).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+        let writer = table
+            .new_append()
+            .expect("Failed to create append")
+            .create_writer()
+            .expect("Failed to create writer");
+        writer
+            .append_arrow_batch(
+                record_batch!(
+                    ("id", Int32, [1, 2, 3, 4, 5]),
+                    ("name", Utf8, ["a", "b", "c", "d", "e"])
+                )
+                .unwrap(),
+            )
+            .expect("Failed to append batch");
+        writer.flush().await.expect("Failed to flush");
+
+        let scanner = table
+            .new_scan()
+            .create_record_batch_log_scanner()
+            .expect("Failed to create record batch scanner");
+        scanner
+            .subscribe(0, EARLIEST_OFFSET)
+            .await
+            .expect("Failed to subscribe bucket");
+
+        let reader = RecordBatchLogReader::new_until_latest(scanner, &admin)
+            .await
+            .expect("Failed to create latest-offset reader");
+        let batches = tokio::time::timeout(
+            Duration::from_secs(10),
+            reader.into_stream().try_collect::<Vec<_>>(),
+        )
+        .await
+        .expect("Timed out draining reader stream")
+        .expect("Failed to drain reader stream");
+
+        assert_eq!(
+            extract_ids_from_batches(&batches),
+            vec![1, 2, 3, 4, 5],
+            "into_stream should yield the same records next_batch would return"
         );
 
         admin
