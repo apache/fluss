@@ -872,7 +872,15 @@ public final class FlussClusterExtension
     }
 
     private Optional<Replica> getReplica(TableBucket tableBucket, int replica, boolean isLeader) {
-        ReplicaManager replicaManager = getTabletServerById(replica).getReplicaManager();
+        TabletServer tabletServer = getTabletServerById(replica);
+        if (tabletServer == null) {
+            // The leader may temporarily be NO_LEADER, or the corresponding server may have been
+            // removed locally while a failover is still in progress. Let waitValue retry instead
+            // of failing with a NullPointerException.
+            return Optional.empty();
+        }
+
+        ReplicaManager replicaManager = tabletServer.getReplicaManager();
         if (replicaManager.getReplica(tableBucket) instanceof ReplicaManager.OnlineReplica) {
             ReplicaManager.OnlineReplica onlineReplica =
                     (ReplicaManager.OnlineReplica) replicaManager.getReplica(tableBucket);
