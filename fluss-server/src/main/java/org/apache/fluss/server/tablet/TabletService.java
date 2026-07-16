@@ -84,7 +84,11 @@ import org.apache.fluss.server.RpcServiceBase;
 import org.apache.fluss.server.authorizer.Authorizer;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.entity.FetchReqInfo;
+import org.apache.fluss.server.entity.NotifyKvSnapshotOffsetData;
+import org.apache.fluss.server.entity.NotifyLakeTableOffsetData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
+import org.apache.fluss.server.entity.NotifyRemoteLogOffsetsData;
+import org.apache.fluss.server.entity.StopReplicaData;
 import org.apache.fluss.server.entity.UserContext;
 import org.apache.fluss.server.kv.scan.OpenScanResult;
 import org.apache.fluss.server.kv.scan.ScannerContext;
@@ -93,6 +97,7 @@ import org.apache.fluss.server.log.FetchParams;
 import org.apache.fluss.server.log.FetchParamsBuilder;
 import org.apache.fluss.server.log.FilterInfo;
 import org.apache.fluss.server.log.ListOffsetsParam;
+import org.apache.fluss.server.metadata.ClusterMetadata;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.metadata.TabletServerMetadataProvider;
 import org.apache.fluss.server.replica.Replica;
@@ -111,6 +116,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.function.BiFunction;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.security.acl.OperationType.READ;
@@ -365,24 +371,13 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         int coordinatorEpoch = notifyLeaderAndIsrRequest.getCoordinatorEpoch();
         List<NotifyLeaderAndIsrData> notifyLeaderAndIsrRequestData =
                 getNotifyLeaderAndIsrRequestData(notifyLeaderAndIsrRequest);
-        try {
-            replicaStateChangeExecutor.execute(
-                    () -> {
-                        try {
-                            replicaManager.becomeLeaderOrFollower(
-                                    coordinatorEpoch,
-                                    notifyLeaderAndIsrRequestData,
-                                    result ->
-                                            response.complete(
-                                                    makeNotifyLeaderAndIsrResponse(result)));
-                        } catch (Throwable t) {
-                            response.completeExceptionally(t);
-                        }
-                    });
-        } catch (Throwable t) {
-            response.completeExceptionally(t);
-        }
-        return response;
+        return submitReplicaStateChange(
+                response,
+                result ->
+                        replicaManager.becomeLeaderOrFollower(
+                                coordinatorEpoch,
+                                notifyLeaderAndIsrRequestData,
+                                value -> result.complete(makeNotifyLeaderAndIsrResponse(value))));
     }
 
     @Override
@@ -404,20 +399,29 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                 request.hasCoordinatorEpoch()
                         ? request.getCoordinatorEpoch()
                         : INITIAL_COORDINATOR_EPOCH;
-        replicaManager.maybeUpdateMetadataCache(
-                coordinatorEpoch, getUpdateMetadataRequestData(request));
-        return CompletableFuture.completedFuture(new UpdateMetadataResponse());
+        ClusterMetadata clusterMetadata = getUpdateMetadataRequestData(request);
+        CompletableFuture<UpdateMetadataResponse> response = new CompletableFuture<>();
+        return submitReplicaStateChange(
+                response,
+                result -> {
+                    replicaManager.maybeUpdateMetadataCache(coordinatorEpoch, clusterMetadata);
+                    result.complete(new UpdateMetadataResponse());
+                });
     }
 
     @Override
     public CompletableFuture<StopReplicaResponse> stopReplica(
             StopReplicaRequest stopReplicaRequest) {
         CompletableFuture<StopReplicaResponse> response = new CompletableFuture<>();
-        replicaManager.stopReplicas(
-                stopReplicaRequest.getCoordinatorEpoch(),
-                getStopReplicaData(stopReplicaRequest),
-                result -> response.complete(makeStopReplicaResponse(result)));
-        return response;
+        int coordinatorEpoch = stopReplicaRequest.getCoordinatorEpoch();
+        List<StopReplicaData> stopReplicaData = getStopReplicaData(stopReplicaRequest);
+        return submitReplicaStateChange(
+                response,
+                result ->
+                        replicaManager.stopReplicas(
+                                coordinatorEpoch,
+                                stopReplicaData,
+                                value -> result.complete(makeStopReplicaResponse(value))));
     }
 
     @Override
@@ -451,26 +455,38 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     public CompletableFuture<NotifyRemoteLogOffsetsResponse> notifyRemoteLogOffsets(
             NotifyRemoteLogOffsetsRequest request) {
         CompletableFuture<NotifyRemoteLogOffsetsResponse> response = new CompletableFuture<>();
-        replicaManager.notifyRemoteLogOffsets(
-                getNotifyRemoteLogOffsetsData(request), response::complete);
-        return response;
+        NotifyRemoteLogOffsetsData notifyRemoteLogOffsetsData =
+                getNotifyRemoteLogOffsetsData(request);
+        return submitReplicaStateChange(
+                response,
+                result ->
+                        replicaManager.notifyRemoteLogOffsets(
+                                notifyRemoteLogOffsetsData, result::complete));
     }
 
     @Override
     public CompletableFuture<NotifyKvSnapshotOffsetResponse> notifyKvSnapshotOffset(
             NotifyKvSnapshotOffsetRequest request) {
         CompletableFuture<NotifyKvSnapshotOffsetResponse> response = new CompletableFuture<>();
-        replicaManager.notifyKvSnapshotOffset(
-                getNotifySnapshotOffsetData(request), response::complete);
-        return response;
+        NotifyKvSnapshotOffsetData notifyKvSnapshotOffsetData =
+                getNotifySnapshotOffsetData(request);
+        return submitReplicaStateChange(
+                response,
+                result ->
+                        replicaManager.notifyKvSnapshotOffset(
+                                notifyKvSnapshotOffsetData, result::complete));
     }
 
     @Override
     public CompletableFuture<NotifyLakeTableOffsetResponse> notifyLakeTableOffset(
             NotifyLakeTableOffsetRequest request) {
         CompletableFuture<NotifyLakeTableOffsetResponse> response = new CompletableFuture<>();
-        replicaManager.notifyLakeTableOffset(getNotifyLakeTableOffset(request), response::complete);
-        return response;
+        NotifyLakeTableOffsetData notifyLakeTableOffsetData = getNotifyLakeTableOffset(request);
+        return submitReplicaStateChange(
+                response,
+                result ->
+                        replicaManager.notifyLakeTableOffset(
+                                notifyLakeTableOffsetData, result::complete));
     }
 
     @Override
@@ -699,6 +715,23 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         }
 
         return CompletableFuture.completedFuture(response);
+    }
+
+    private <T> CompletableFuture<T> submitReplicaStateChange(
+            CompletableFuture<T> response, Consumer<CompletableFuture<T>> action) {
+        try {
+            replicaStateChangeExecutor.execute(
+                    () -> {
+                        try {
+                            action.accept(response);
+                        } catch (Throwable t) {
+                            response.completeExceptionally(t);
+                        }
+                    });
+        } catch (Throwable t) {
+            response.completeExceptionally(t);
+        }
+        return response;
     }
 
     @Override
