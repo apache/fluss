@@ -383,6 +383,32 @@ public class FlinkConversionsTest {
                                 .withDescription(
                                         ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE
                                                 .description()));
+
+        org.apache.fluss.config.ConfigOption<?> noDefaultMemoryOption =
+                org.apache.fluss.config.ConfigBuilder.key("table.test.memory")
+                        .memoryType()
+                        .noDefaultValue()
+                        .withDescription("Test memory option without default value.");
+        flinkOption = FlinkConversions.toFlinkOption(noDefaultMemoryOption);
+        assertThat(flinkOption)
+                .isEqualTo(
+                        org.apache.flink.configuration.ConfigOptions.key(
+                                        noDefaultMemoryOption.key())
+                                .stringType()
+                                .noDefaultValue()
+                                .withDescription(noDefaultMemoryOption.description()));
+
+        flinkOption = FlinkConversions.toFlinkOption(ConfigOptions.TABLE_KV_COMPRESSION_PER_LEVEL);
+        assertThat(flinkOption)
+                .isEqualTo(
+                        org.apache.flink.configuration.ConfigOptions.key(
+                                        ConfigOptions.TABLE_KV_COMPRESSION_PER_LEVEL.key())
+                                .enumType(ConfigOptions.KvCompressionType.class)
+                                .asList()
+                                .noDefaultValue()
+                                .withDescription(
+                                        ConfigOptions.TABLE_KV_COMPRESSION_PER_LEVEL
+                                                .description()));
     }
 
     @Test
