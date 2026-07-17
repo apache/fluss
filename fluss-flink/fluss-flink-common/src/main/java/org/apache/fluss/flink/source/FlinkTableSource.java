@@ -273,8 +273,9 @@ public class FlinkTableSource
     }
 
     /**
-     * Copy constructor used by version-specific subclasses (e.g. the Flink 2.x
-     * custom-lookup-shuffle variant) to wrap an already-built source while preserving all state.
+     * Copy constructor: the single source of truth for cloning this source's state. Used by {@link
+     * #copy()} and by version-specific subclasses (e.g. the Flink 2.x custom-lookup-shuffle
+     * variant) to wrap an already-built source while preserving all state.
      */
     protected FlinkTableSource(FlinkTableSource other) {
         this.tablePath = other.tablePath;
@@ -301,7 +302,7 @@ public class FlinkTableSource
         this.projectedFields = other.projectedFields;
         this.singleRowFilter = other.singleRowFilter;
         this.modificationScanType = other.modificationScanType;
-        // Note: selectRowCount/limit are intentionally not carried over, consistent with copy().
+        // Note: selectRowCount/limit are intentionally not carried over (reset on copy).
         this.partitionFilters = other.partitionFilters;
         this.lakeSource = other.lakeSource;
         this.logRecordBatchFilter = other.logRecordBatchFilter;
@@ -549,40 +550,10 @@ public class FlinkTableSource
 
     @Override
     public DynamicTableSource copy() {
-        FlinkTableSource source =
-                new FlinkTableSource(
-                        tablePath,
-                        flussConfig,
-                        tableConfig,
-                        tableOutputType,
-                        primaryKeyIndexes,
-                        bucketKeyIndexes,
-                        partitionKeyIndexes,
-                        streaming,
-                        startupOptions,
-                        lookupAsync,
-                        insertIfNotExists,
-                        cache,
-                        scanPartitionDiscoveryIntervalMs,
-                        splitPerAssignmentBatchSize,
-                        isDataLakeEnabled,
-                        mergeEngineType,
-                        tableOptions,
-                        leaseContext);
-        source.producedDataType = producedDataType;
-        source.projectedFields = projectedFields;
-        source.singleRowFilter = singleRowFilter;
-        source.modificationScanType = modificationScanType;
-        source.partitionFilters = partitionFilters;
-        source.lakeSource = lakeSource;
-        source.logRecordBatchFilter = logRecordBatchFilter;
-        source.watermarkStrategy = watermarkStrategy;
-        // Carry over the stashed lookup normalizer so that a copy made between
-        // getLookupRuntimeProvider() and getPartitioner() (Flink 2.x custom lookup shuffle)
-        // does not silently disable the shuffle.
-        source.lastLookupNormalizer = lastLookupNormalizer;
-        // Note: availableStatsColumns is already computed in the constructor
-        return source;
+        // Single source of truth for state copying: the copy constructor. It also carries over the
+        // stashed lookup normalizer, so a copy made between getLookupRuntimeProvider() and
+        // getPartitioner() (Flink 2.x custom lookup shuffle) does not silently disable the shuffle.
+        return new FlinkTableSource(this);
     }
 
     // ---- accessors for version-specific (Flink 2.x) custom lookup shuffle ----

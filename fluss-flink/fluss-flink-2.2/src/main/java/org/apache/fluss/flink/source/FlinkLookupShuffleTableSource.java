@@ -59,19 +59,27 @@ public class FlinkLookupShuffleTableSource extends FlinkTableSource
         if (normalizer == null || bucketKeyIndexes.length == 0) {
             return Optional.empty();
         }
-        // Only full primary-key lookups are shuffled by bucket. Prefix lookups keep Flink's
-        // default distribution, because a prefix of the lookup key is not the bucket key and
-        // would not co-locate rows by Fluss bucket.
+        // Only full primary-key lookups are shuffled here. A prefix lookup's normalized key does
+        // contain all bucket-key fields, so it could be shuffled too; supporting it would mean
+        // keying off the normalizer's expected-key row type instead of the full PK projection.
+        // TODO: extend custom shuffle to prefix lookups on the bucket key.
         if (normalizer.getLookupType() != LookupType.LOOKUP) {
             return Optional.empty();
         }
 
-        // number of buckets of the Fluss table
+        // Number of buckets of the Fluss table. Catalog tables always have this injected; a
+        // temporary table created without an explicit (or with a malformed) 'bucket.num' silently
+        // keeps Flink's default distribution.
         String bucketNumStr = tableOptions().get(FlinkConnectorOptions.BUCKET_NUMBER.key());
         if (bucketNumStr == null) {
             return Optional.empty();
         }
-        int numBuckets = Integer.parseInt(bucketNumStr);
+        final int numBuckets;
+        try {
+            numBuckets = Integer.parseInt(bucketNumStr);
+        } catch (NumberFormatException e) {
+            return Optional.empty();
+        }
 
         // The normalized lookup key row is the primary key in Fluss key order.
         RowType keyFlinkRowType = FlinkUtils.projectRowType(tableOutputType(), primaryKeyIndexes());
