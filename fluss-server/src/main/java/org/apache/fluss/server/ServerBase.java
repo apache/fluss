@@ -179,22 +179,42 @@ public abstract class ServerBase implements AutoCloseableAsync, FatalErrorHandle
                 "Fatal error occurred while running the {}. Shutting it down...",
                 getServerName(),
                 exception);
-        if (ExceptionUtils.isJvmFatalError(exception)) {
-            System.exit(-1);
+        if (ExceptionUtils.isJvmFatalOrOutOfMemoryError(exception)) {
+            exitJvm();
         } else if (fatalErrorShutdownTriggered.compareAndSet(false, true)) {
-            FutureUtils.orTimeout(
-                    getTerminationFuture(),
-                    FATAL_ERROR_SHUTDOWN_TIMEOUT_MS,
-                    TimeUnit.MILLISECONDS,
-                    String.format(
-                            "Waiting for %s shutting down timed out after %s ms.",
-                            getServerName(), FATAL_ERROR_SHUTDOWN_TIMEOUT_MS));
-
-            Thread shutdownThread =
-                    new ExecutorThreadFactory(getServerName() + "-fatal-error-shutdown")
-                            .newThread(() -> closeAsync(Result.FAILURE));
-            shutdownThread.start();
+            try {
+                FutureUtils.orTimeout(
+                        getTerminationFuture(),
+                        FATAL_ERROR_SHUTDOWN_TIMEOUT_MS,
+                        TimeUnit.MILLISECONDS,
+                        String.format(
+                                "Waiting for %s shutting down timed out after %s ms.",
+                                getServerName(), FATAL_ERROR_SHUTDOWN_TIMEOUT_MS));
+                startFatalErrorShutdownThread();
+            } catch (Throwable shutdownFailure) {
+                try {
+                    LOG.error(
+                            "Failed to start fatal-error shutdown for {}. Terminating the process.",
+                            getServerName(),
+                            shutdownFailure);
+                } finally {
+                    exitJvm();
+                }
+            }
         }
+    }
+
+    @VisibleForTesting
+    void startFatalErrorShutdownThread() {
+        Thread shutdownThread =
+                new ExecutorThreadFactory(getServerName() + "-fatal-error-shutdown")
+                        .newThread(() -> closeAsync(Result.FAILURE));
+        shutdownThread.start();
+    }
+
+    @VisibleForTesting
+    void exitJvm() {
+        System.exit(-1);
     }
 
     @Override

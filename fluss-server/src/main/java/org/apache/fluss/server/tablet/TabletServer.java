@@ -477,10 +477,23 @@ public class TabletServer extends ServerBase {
                 if (scannerManager != null) {
                     scannerManager.close();
                 }
+            } catch (Throwable t) {
+                exception = ExceptionUtils.firstOrSuppressed(t, exception);
+            }
 
+            try {
                 shutdownReplicaManager();
-                shutdownTabletManagers();
+            } catch (Throwable t) {
+                exception = ExceptionUtils.firstOrSuppressed(t, exception);
+            }
 
+            try {
+                shutdownTabletManagers();
+            } catch (Throwable t) {
+                exception = ExceptionUtils.firstOrSuppressed(t, exception);
+            }
+
+            try {
                 if (localDiskManager != null) {
                     localDiskManager.close();
                 }

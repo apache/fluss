@@ -19,6 +19,7 @@ package org.apache.fluss.server.tablet;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.FlussRuntimeException;
 
 import org.junit.jupiter.api.Test;
 
@@ -26,6 +27,7 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -33,6 +35,7 @@ import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for the shutdown ordering of {@link TabletServer}. */
 final class TabletServerShutdownTest {
@@ -63,10 +66,28 @@ final class TabletServerShutdownTest {
         }
     }
 
+    @Test
+    void testClosesTabletManagersWhenReplicaManagerShutdownFails() throws Exception {
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.TABLET_SERVER_ID, 0);
+        conf.setString(ConfigOptions.REMOTE_DATA_DIR, DEFAULT_REMOTE_DATA_DIR);
+        TestingTabletServer server = new TestingTabletServer(conf);
+        server.completeRpcShutdown();
+        server.failReplicaManagerShutdown();
+
+        assertThatThrownBy(() -> server.stopServices().get(10, TimeUnit.SECONDS))
+                .isInstanceOf(ExecutionException.class)
+                .hasCauseInstanceOf(FlussRuntimeException.class);
+        assertThat(server.getShutdownEvents())
+                .containsExactly(
+                        "rpc-started", "rpc-completed", "replica-manager", "tablet-managers");
+    }
+
     private static final class TestingTabletServer extends TabletServer {
         private final CompletableFuture<Void> rpcShutdownFuture = new CompletableFuture<>();
         private final CountDownLatch rpcShutdownStarted = new CountDownLatch(1);
         private final List<String> shutdownEvents = new CopyOnWriteArrayList<>();
+        private boolean failReplicaManagerShutdown;
 
         private TestingTabletServer(Configuration conf) {
             super(conf);
@@ -83,6 +104,9 @@ final class TabletServerShutdownTest {
         @Override
         void shutdownReplicaManager() {
             shutdownEvents.add("replica-manager");
+            if (failReplicaManagerShutdown) {
+                throw new FlussRuntimeException("Expected replica manager shutdown failure.");
+            }
         }
 
         @Override
@@ -96,6 +120,10 @@ final class TabletServerShutdownTest {
 
         private void completeRpcShutdown() {
             rpcShutdownFuture.complete(null);
+        }
+
+        private void failReplicaManagerShutdown() {
+            failReplicaManagerShutdown = true;
         }
 
         private List<String> getShutdownEvents() {

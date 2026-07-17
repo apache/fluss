@@ -72,12 +72,44 @@ final class ServerBaseTest {
         }
     }
 
+    @Test
+    void testOutOfMemoryErrorTerminatesJvmWithoutStartingShutdown() {
+        TestingServer server = createTestingServer();
+
+        server.onFatalError(new OutOfMemoryError("Expected out-of-memory error."));
+
+        assertThat(server.getJvmExitCalls()).isOne();
+        assertThat(server.getShutdownCalls()).isZero();
+    }
+
+    @Test
+    void testShutdownThreadStartFailureTerminatesJvm() {
+        TestingServer server = createTestingServer();
+        server.failFatalErrorShutdownThreadStart();
+
+        try {
+            server.onFatalError(new FlussRuntimeException("Expected fatal error."));
+
+            assertThat(server.getJvmExitCalls()).isOne();
+            assertThat(server.getShutdownCalls()).isZero();
+        } finally {
+            server.completeTermination();
+        }
+    }
+
+    private static TestingServer createTestingServer() {
+        return new TestingServer(
+                new CountDownLatch(1), new CountDownLatch(0), new AtomicReference<>());
+    }
+
     private static final class TestingServer extends ServerBase {
         private final CountDownLatch shutdownStarted;
         private final CountDownLatch finishShutdown;
         private final AtomicReference<Thread> shutdownThread;
         private final CompletableFuture<Result> terminationFuture = new CompletableFuture<>();
         private final AtomicInteger shutdownCalls = new AtomicInteger();
+        private final AtomicInteger jvmExitCalls = new AtomicInteger();
+        private boolean failFatalErrorShutdownThreadStart;
 
         private TestingServer(
                 CountDownLatch shutdownStarted,
@@ -113,12 +145,37 @@ final class ServerBaseTest {
         }
 
         @Override
+        void startFatalErrorShutdownThread() {
+            if (failFatalErrorShutdownThreadStart) {
+                throw new OutOfMemoryError("unable to create new native thread");
+            }
+            super.startFatalErrorShutdownThread();
+        }
+
+        @Override
+        void exitJvm() {
+            jvmExitCalls.incrementAndGet();
+        }
+
+        @Override
         public @Nullable Authorizer getAuthorizer() {
             return null;
         }
 
         private int getShutdownCalls() {
             return shutdownCalls.get();
+        }
+
+        private int getJvmExitCalls() {
+            return jvmExitCalls.get();
+        }
+
+        private void failFatalErrorShutdownThreadStart() {
+            failFatalErrorShutdownThreadStart = true;
+        }
+
+        private void completeTermination() {
+            terminationFuture.complete(Result.FAILURE);
         }
 
         private static void await(CountDownLatch latch) {
