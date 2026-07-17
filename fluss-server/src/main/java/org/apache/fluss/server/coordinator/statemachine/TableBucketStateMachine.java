@@ -383,7 +383,7 @@ public class TableBucketStateMachine {
                                 targetState,
                                 String.format(
                                         "Can't find partition name for partition: %s.",
-                                        tableBucket.getBucket()));
+                                        tableBucket.getPartitionId()));
                         return;
                     }
                 }
@@ -516,7 +516,7 @@ public class TableBucketStateMachine {
                             BucketState.OnlineBucket,
                             String.format(
                                     "Can't find partition name for partition: %s.",
-                                    tableBucket.getBucket()));
+                                    tableBucket.getPartitionId()));
                     continue;
                 }
             }
