@@ -418,6 +418,7 @@ class AutoPartitionManagerTest {
                                 new LakeCatalogDynamicLoader(new Configuration(), null, true)),
                         remoteDirDynamicLoader,
                         new Configuration(),
+                        disabledCapacityController(),
                         clock,
                         periodicExecutor);
         autoPartitionManager.start();
