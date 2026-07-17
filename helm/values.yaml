@@ -85,6 +85,9 @@ tablet:
   initContainers: []
   extraEnv: []
   envFrom: []
+  annotations: {}
+  service:
+    annotations: {}
   podAnnotations: {}
   podLabels: {}
   podDisruptionBudget:
@@ -128,6 +131,9 @@ coordinator:
   initContainers: []
   extraEnv: []
   envFrom: []
+  annotations: {}
+  service:
+    annotations: {}
   podAnnotations: {}
   podLabels: {}
   podDisruptionBudget:
