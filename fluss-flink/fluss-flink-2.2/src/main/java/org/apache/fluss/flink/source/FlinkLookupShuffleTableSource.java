@@ -47,8 +47,8 @@ public class FlinkLookupShuffleTableSource extends FlinkTableSource
 
     @Override
     public DynamicTableSource copy() {
-        // preserve the subtype (and thus the ability) across planner copies
-        return new FlinkLookupShuffleTableSource((FlinkTableSource) super.copy());
+        // Copy once via the copy constructor; this preserves the subtype (and thus the ability).
+        return new FlinkLookupShuffleTableSource(this);
     }
 
     @Override
