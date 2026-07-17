@@ -128,6 +128,7 @@ public class TableLookup implements Lookup {
                     metadataUpdater,
                     lookupClient,
                     insertIfNotExists,
+                    admin,
                     new HistoricalPartitionResolver(metadataUpdater, admin));
         } else {
             // throw exception if the insertIfNotExists is enabled for prefix key lookup, as

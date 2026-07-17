@@ -29,7 +29,9 @@ import org.apache.fluss.lake.lakestorage.LakeStoragePlugin;
 import org.apache.fluss.lake.lakestorage.LakeStoragePluginSetUp;
 import org.apache.fluss.lake.lakestorage.LakeTableLookuper;
 import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
+import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -74,10 +76,10 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  * than table path to prevent a deleted and recreated table from reusing the old table's lookuper. A
  * cached lookuper is replaced when its schema ID no longer matches the requested table schema.
  *
- * <p>A lookuper is closed when replaced, explicitly invalidated by a replica lifecycle event, the
- * manager shuts down, or after three hours without access. Caffeine expiration is scheduled on the
- * shared TabletServer scheduler, allowing idle resources to be released even if no subsequent
- * lookup accesses the cache.
+ * <p>A lookuper is closed when replaced, explicitly invalidated by a replica lifecycle event,
+ * evicted after the cache reaches ten tables, the manager shuts down, or after three hours without
+ * access. Caffeine expiration is scheduled on the shared TabletServer scheduler, allowing idle
+ * resources to be released even if no subsequent lookup accesses the cache.
  */
 class HistoricalLakeLookupManager implements AutoCloseable {
 
@@ -85,6 +87,13 @@ class HistoricalLakeLookupManager implements AutoCloseable {
     private static final String LOOKUPER_CACHE_EXPIRATION_TASK_NAME =
             "historical-lookuper-cache-expiration";
     private static final Duration LOOKUPER_CACHE_EXPIRATION = Duration.ofHours(3);
+    private static final int MAX_CACHED_LOOKUPERS = 10;
+
+    // TODO: MAX_CACHED_LOOKUPERS and the 2GB per-table limit configured by
+    // PaimonLakeTableLookuper through Paimon's "lookup.cache-max-disk-size" option are hard-coded.
+    // Make them configurable, and prefer a Paimon IOManager-level global disk limit shared by all
+    // table lookupers because fixed per-table limits can underutilize cache for hot tables while
+    // reserving too much for cold tables.
 
     private final Configuration conf;
     private final @Nullable PluginManager pluginManager;
@@ -124,6 +133,7 @@ class HistoricalLakeLookupManager implements AutoCloseable {
         this.lakeTableLookupers =
                 Caffeine.newBuilder()
                         .expireAfterAccess(LOOKUPER_CACHE_EXPIRATION)
+                        .maximumSize(MAX_CACHED_LOOKUPERS)
                         .ticker(checkNotNull(ticker, "ticker must not be null."))
                         .scheduler(checkNotNull(cacheScheduler, "cacheScheduler must not be null."))
                         .executor(Runnable::run)
@@ -132,7 +142,7 @@ class HistoricalLakeLookupManager implements AutoCloseable {
                                         CachedLakeTableLookuper cachedLookuper,
                                         RemovalCause ignoredCause) -> {
                                     if (cachedLookuper != null) {
-                                        closeLookuper(cachedLookuper);
+                                        cachedLookuper.invalidate();
                                     }
                                 })
                         .build();
@@ -158,7 +168,7 @@ class HistoricalLakeLookupManager implements AutoCloseable {
     }
 
     CompletableFuture<LookupResultForBucket> lookup(
-            LookupDataForBucket lookupData, TableInfo tableInfo) {
+            LookupDataForBucket lookupData, TableInfo tableInfo, SchemaInfo schemaInfo) {
         TableBucket tableBucket = lookupData.tableBucket();
         if (!lookupPermits.tryAcquire()) {
             return CompletableFuture.completedFuture(
@@ -175,7 +185,7 @@ class HistoricalLakeLookupManager implements AutoCloseable {
         try {
             future =
                     CompletableFuture.supplyAsync(
-                            () -> lookupInternal(lookupData, tableInfo), ioExecutor);
+                            () -> lookupInternal(lookupData, tableInfo, schemaInfo), ioExecutor);
         } catch (RuntimeException e) {
             lookupPermits.release();
             throw e;
@@ -195,26 +205,39 @@ class HistoricalLakeLookupManager implements AutoCloseable {
     }
 
     private LookupResultForBucket lookupInternal(
-            LookupDataForBucket lookupData, TableInfo tableInfo) {
+            LookupDataForBucket lookupData, TableInfo tableInfo, SchemaInfo schemaInfo) {
         TableBucket tableBucket = lookupData.tableBucket();
+        CachedLakeTableLookuper cachedLookuper = null;
         try {
-            LookupContext context = createLookupContext(lookupData, tableInfo);
-            CachedLakeTableLookuper cachedLookuper =
+            LookupContext context = createLookupContext(lookupData, tableInfo, schemaInfo);
+            cachedLookuper =
                     lakeTableLookupers
                             .asMap()
                             .compute(
                                     context.tableId,
                                     (ignored, currentLookuper) -> {
-                                        if (currentLookuper != null
-                                                && currentLookuper.schemaId == context.schemaId) {
-                                            return currentLookuper;
+                                        CachedLakeTableLookuper selectedLookuper = currentLookuper;
+                                        // Create the lookuper lazily, and recreate it after schema
+                                        // evolution so it reloads lake table/query state and
+                                        // encodes values with the requested schema.
+                                        if (selectedLookuper == null
+                                                || selectedLookuper.schemaId != context.schemaId) {
+                                            LakeTableLookuper newLookuper =
+                                                    createLakeTableLookuper(
+                                                            context.tablePath,
+                                                            getOrPreparePaimonLookupTempDir(),
+                                                            tableInfo
+                                                                    .getTableConfig()
+                                                                    .getKvFormat());
+                                            selectedLookuper =
+                                                    new CachedLakeTableLookuper(
+                                                            context.schemaId, newLookuper);
                                         }
-                                        LakeTableLookuper newLookuper =
-                                                createLakeTableLookuper(
-                                                        context.tablePath,
-                                                        getOrPreparePaimonLookupTempDir());
-                                        return new CachedLakeTableLookuper(
-                                                context.schemaId, newLookuper);
+                                        // Pin the lookuper before leaving the atomic cache update.
+                                        // Eviction or invalidation can then defer closing it until
+                                        // this lookup releases it.
+                                        selectedLookuper.acquire();
+                                        return selectedLookuper;
                                     });
             List<byte[]> values = new ArrayList<>(lookupData.keys().size());
             for (byte[] key : lookupData.keys()) {
@@ -223,10 +246,15 @@ class HistoricalLakeLookupManager implements AutoCloseable {
             return new LookupResultForBucket(tableBucket, values);
         } catch (Exception e) {
             return new LookupResultForBucket(tableBucket, ApiError.fromThrowable(e));
+        } finally {
+            if (cachedLookuper != null) {
+                cachedLookuper.release();
+            }
         }
     }
 
-    private LookupContext createLookupContext(LookupDataForBucket lookupData, TableInfo tableInfo) {
+    private LookupContext createLookupContext(
+            LookupDataForBucket lookupData, TableInfo tableInfo, SchemaInfo schemaInfo) {
         TableBucket tableBucket = lookupData.tableBucket();
         String originalPartitionName = lookupData.originalPartitionName();
         if (originalPartitionName == null) {
@@ -252,14 +280,15 @@ class HistoricalLakeLookupManager implements AutoCloseable {
                 new LakeTableLookuper.LookupContext(
                         originalPartitionSpec,
                         tableBucket.getBucket(),
-                        (short) tableInfo.getSchemaInfo().getSchemaId(),
-                        tableInfo.getRowType());
+                        (short) schemaInfo.getSchemaId(),
+                        schemaInfo.getSchema().getRowType());
         return new LookupContext(
-                tableInfo.getTableId(), tableInfo.getSchemaId(), tablePath, lookupContext);
+                tableInfo.getTableId(), schemaInfo.getSchemaId(), tablePath, lookupContext);
     }
 
     @VisibleForTesting
-    LakeTableLookuper createLakeTableLookuper(TablePath tablePath, String ioTmpDir) {
+    LakeTableLookuper createLakeTableLookuper(
+            TablePath tablePath, String ioTmpDir, KvFormat kvFormat) {
         DataLakeFormat dataLakeFormat = conf.get(ConfigOptions.DATALAKE_FORMAT);
         if (dataLakeFormat == null) {
             throw new LakeStorageNotConfiguredException(
@@ -283,7 +312,7 @@ class HistoricalLakeLookupManager implements AutoCloseable {
         LakeStorage lakeStorage =
                 lakeStoragePlugin.createLakeStorage(Configuration.fromMap(lakeProperties));
         return lakeStorage.createLakeTableLookuper(
-                tablePath, new LakeStorage.LookuperContext(ioTmpDir));
+                tablePath, new LakeStorage.LookuperContext(ioTmpDir, kvFormat));
     }
 
     private synchronized String getOrPreparePaimonLookupTempDir() {
@@ -337,10 +366,40 @@ class HistoricalLakeLookupManager implements AutoCloseable {
     private static final class CachedLakeTableLookuper {
         private final int schemaId;
         private final LakeTableLookuper lookuper;
+        private int activeLookups;
+        private boolean invalidated;
+        private boolean closed;
 
         private CachedLakeTableLookuper(int schemaId, LakeTableLookuper lookuper) {
             this.schemaId = schemaId;
             this.lookuper = lookuper;
+        }
+
+        private synchronized void acquire() {
+            if (invalidated) {
+                throw new IllegalStateException("Lake table lookuper has been invalidated.");
+            }
+            activeLookups++;
+        }
+
+        private synchronized void release() {
+            if (activeLookups <= 0) {
+                throw new IllegalStateException("Lake table lookuper is not acquired.");
+            }
+            activeLookups--;
+            closeIfUnused();
+        }
+
+        private synchronized void invalidate() {
+            invalidated = true;
+            closeIfUnused();
+        }
+
+        private void closeIfUnused() {
+            if (invalidated && activeLookups == 0 && !closed) {
+                closed = true;
+                closeLookuper(this);
+            }
         }
     }
 }

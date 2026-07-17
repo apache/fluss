@@ -1002,6 +1002,7 @@ class AutoPartitionManagerTest {
                         metadataManager,
                         remoteDirDynamicLoader,
                         new Configuration(),
+                        disabledCapacityController(),
                         clock,
                         periodicExecutor);
         autoPartitionManager.start();

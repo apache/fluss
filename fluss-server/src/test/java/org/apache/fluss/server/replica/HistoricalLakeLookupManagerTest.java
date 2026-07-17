@@ -21,12 +21,17 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.HistoricalLookupThrottledException;
 import org.apache.fluss.lake.lakestorage.LakeTableLookuper;
+import org.apache.fluss.metadata.KvFormat;
+import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.entity.LookupResultForBucket;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.entity.LookupDataForBucket;
+import org.apache.fluss.types.DataTypes;
 
 import com.github.benmanes.caffeine.cache.Scheduler;
 import com.github.benmanes.caffeine.cache.Ticker;
@@ -67,13 +72,19 @@ class HistoricalLakeLookupManagerTest {
         HistoricalLakeLookupManager manager = createManager(1, executor);
 
         CompletableFuture<LookupResultForBucket> first =
-                manager.lookup(lookupData(HISTORICAL_BUCKET), PARTITION_TABLE_INFO);
+                manager.lookup(
+                        lookupData(HISTORICAL_BUCKET),
+                        PARTITION_TABLE_INFO,
+                        PARTITION_TABLE_INFO.getSchemaInfo());
         assertThat(first).isNotDone();
         assertThat(executor.numQueuedTasks()).isEqualTo(1);
 
         TableBucket secondBucket = new TableBucket(PARTITION_TABLE_ID, 2L, 0);
         LookupResultForBucket second =
-                manager.lookup(lookupData(secondBucket), PARTITION_TABLE_INFO)
+                manager.lookup(
+                                lookupData(secondBucket),
+                                PARTITION_TABLE_INFO,
+                                PARTITION_TABLE_INFO.getSchemaInfo())
                         .get(1, TimeUnit.SECONDS);
 
         assertThat(second.failed()).isTrue();
@@ -89,14 +100,20 @@ class HistoricalLakeLookupManagerTest {
         HistoricalLakeLookupManager manager = createManager(1, executor);
 
         CompletableFuture<LookupResultForBucket> first =
-                manager.lookup(lookupData(HISTORICAL_BUCKET), PARTITION_TABLE_INFO);
+                manager.lookup(
+                        lookupData(HISTORICAL_BUCKET),
+                        PARTITION_TABLE_INFO,
+                        PARTITION_TABLE_INFO.getSchemaInfo());
         executor.runNext();
         LookupResultForBucket firstResult = first.get(1, TimeUnit.SECONDS);
         assertThat(firstResult.failed()).isTrue();
         assertThat(firstResult.getError().error()).isNotEqualTo(Errors.HISTORICAL_LOOKUP_THROTTLED);
 
         CompletableFuture<LookupResultForBucket> second =
-                manager.lookup(lookupData(HISTORICAL_BUCKET), PARTITION_TABLE_INFO);
+                manager.lookup(
+                        lookupData(HISTORICAL_BUCKET),
+                        PARTITION_TABLE_INFO,
+                        PARTITION_TABLE_INFO.getSchemaInfo());
         assertThat(second).isNotDone();
         assertThat(executor.numQueuedTasks()).isEqualTo(1);
     }
@@ -109,15 +126,18 @@ class HistoricalLakeLookupManagerTest {
         CompletableFuture<LookupResultForBucket> first =
                 manager.lookup(
                         lookupData(new TableBucket(PARTITION_TABLE_ID, 1L, 0)),
-                        PARTITION_TABLE_INFO);
+                        PARTITION_TABLE_INFO,
+                        PARTITION_TABLE_INFO.getSchemaInfo());
         CompletableFuture<LookupResultForBucket> second =
                 manager.lookup(
                         lookupData(new TableBucket(PARTITION_TABLE_ID, 2L, 0)),
-                        PARTITION_TABLE_INFO);
+                        PARTITION_TABLE_INFO,
+                        PARTITION_TABLE_INFO.getSchemaInfo());
         LookupResultForBucket third =
                 manager.lookup(
                                 lookupData(new TableBucket(PARTITION_TABLE_ID, 3L, 0)),
-                                PARTITION_TABLE_INFO)
+                                PARTITION_TABLE_INFO,
+                                PARTITION_TABLE_INFO.getSchemaInfo())
                         .get(1, TimeUnit.SECONDS);
 
         assertThat(first).isNotDone();
@@ -164,6 +184,29 @@ class HistoricalLakeLookupManagerTest {
     }
 
     @Test
+    void testCreatesLookuperWithTableKvFormat() throws Exception {
+        ManualExecutor executor = new ManualExecutor();
+        TestingHistoricalLakeLookupManager manager = createTestingManager(executor);
+        TableDescriptor indexedDescriptor =
+                TableDescriptor.builder(PARTITION_TABLE_INFO.toTableDescriptor())
+                        .kvFormat(KvFormat.INDEXED)
+                        .build();
+        TableInfo indexedTableInfo =
+                TableInfo.of(
+                        PARTITION_TABLE_INFO.getTablePath(),
+                        PARTITION_TABLE_INFO.getTableId(),
+                        PARTITION_TABLE_INFO.getSchemaId(),
+                        indexedDescriptor,
+                        PARTITION_TABLE_INFO.getRemoteDataDir(),
+                        PARTITION_TABLE_INFO.getCreatedTime(),
+                        PARTITION_TABLE_INFO.getModifiedTime());
+
+        lookupAndRun(manager, executor, indexedTableInfo);
+
+        assertThat(manager.createdKvFormats).containsExactly(KvFormat.INDEXED);
+    }
+
+    @Test
     void testDoesNotReuseLookuperForRecreatedTable() throws Exception {
         ManualExecutor executor = new ManualExecutor();
         TestingHistoricalLakeLookupManager manager = createTestingManager(executor);
@@ -184,17 +227,27 @@ class HistoricalLakeLookupManagerTest {
         lookupAndRun(manager, executor, PARTITION_TABLE_INFO);
         TestingLakeTableLookuper initialLookuper = manager.createdLookupers.get(0);
 
-        TableInfo evolvedTableInfo =
-                tableInfo(PARTITION_TABLE_ID, PARTITION_TABLE_INFO.getSchemaId() + 1);
-        lookupAndRun(manager, executor, evolvedTableInfo);
+        Schema evolvedSchema =
+                Schema.newBuilder()
+                        .fromSchema(PARTITION_TABLE_INFO.getSchema())
+                        .column("new_col", DataTypes.STRING())
+                        .build();
+        SchemaInfo evolvedSchemaInfo =
+                new SchemaInfo(evolvedSchema, PARTITION_TABLE_INFO.getSchemaId() + 1);
+        lookupAndRun(manager, executor, PARTITION_TABLE_INFO, evolvedSchemaInfo);
         assertThat(initialLookuper.closed).isTrue();
         assertThat(manager.createdLookupers).hasSize(2);
 
         TestingLakeTableLookuper evolvedLookuper = manager.createdLookupers.get(1);
+        assertThat(evolvedLookuper.lookupContexts).hasSize(1);
+        assertThat(evolvedLookuper.lookupContexts.get(0).schemaId())
+                .isEqualTo((short) evolvedSchemaInfo.getSchemaId());
+        assertThat(evolvedLookuper.lookupContexts.get(0).valueRowType())
+                .isEqualTo(evolvedSchema.getRowType());
         manager.invalidateTableLookuper(PARTITION_TABLE_ID);
         assertThat(evolvedLookuper.closed).isTrue();
 
-        lookupAndRun(manager, executor, evolvedTableInfo);
+        lookupAndRun(manager, executor, PARTITION_TABLE_INFO, evolvedSchemaInfo);
         assertThat(manager.createdLookupers).hasSize(3);
     }
 
@@ -228,6 +281,22 @@ class HistoricalLakeLookupManagerTest {
         assertThat(expiredLookuper.closed).isTrue();
         lookupAndRun(manager, executor, PARTITION_TABLE_INFO);
         assertThat(manager.createdLookupers).hasSize(2);
+    }
+
+    @Test
+    void testLimitsCachedLookupersToTen() throws Exception {
+        ManualExecutor executor = new ManualExecutor();
+        TestingHistoricalLakeLookupManager manager = createTestingManager(executor);
+
+        for (int i = 0; i < 11; i++) {
+            lookupAndRun(
+                    manager,
+                    executor,
+                    tableInfo(PARTITION_TABLE_ID + i, PARTITION_TABLE_INFO.getSchemaId()));
+        }
+
+        assertThat(manager.createdLookupers).hasSize(11);
+        assertThat(manager.createdLookupers).filteredOn(lookuper -> lookuper.closed).hasSize(1);
     }
 
     private HistoricalLakeLookupManager createManager(
@@ -273,9 +342,18 @@ class HistoricalLakeLookupManagerTest {
     private static void lookupAndRun(
             HistoricalLakeLookupManager manager, ManualExecutor executor, TableInfo tableInfo)
             throws Exception {
+        lookupAndRun(manager, executor, tableInfo, tableInfo.getSchemaInfo());
+    }
+
+    private static void lookupAndRun(
+            HistoricalLakeLookupManager manager,
+            ManualExecutor executor,
+            TableInfo tableInfo,
+            SchemaInfo schemaInfo)
+            throws Exception {
         TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), 1L, 0);
         CompletableFuture<LookupResultForBucket> future =
-                manager.lookup(lookupData(tableBucket), tableInfo);
+                manager.lookup(lookupData(tableBucket), tableInfo, schemaInfo);
         executor.runNext();
         assertThat(future.get(1, TimeUnit.SECONDS).failed()).isFalse();
     }
@@ -284,6 +362,7 @@ class HistoricalLakeLookupManagerTest {
             extends HistoricalLakeLookupManager {
         private final List<TestingLakeTableLookuper> createdLookupers = new ArrayList<>();
         private final List<String> createdIoTmpDirs = new ArrayList<>();
+        private final List<KvFormat> createdKvFormats = new ArrayList<>();
 
         private TestingHistoricalLakeLookupManager(Configuration conf, ManualExecutor executor) {
             super(
@@ -304,19 +383,26 @@ class HistoricalLakeLookupManagerTest {
         }
 
         @Override
-        LakeTableLookuper createLakeTableLookuper(TablePath tablePath, String ioTmpDir) {
+        LakeTableLookuper createLakeTableLookuper(
+                TablePath tablePath, String ioTmpDir, KvFormat kvFormat) {
             TestingLakeTableLookuper lookuper = new TestingLakeTableLookuper();
             createdLookupers.add(lookuper);
             createdIoTmpDirs.add(ioTmpDir);
+            createdKvFormats.add(kvFormat);
             return lookuper;
         }
     }
 
     private static final class TestingLakeTableLookuper implements LakeTableLookuper {
         private boolean closed;
+        private final List<LookupContext> lookupContexts = new ArrayList<>();
 
         @Override
         public byte[] lookup(byte[] key, LookupContext context) {
+            if (closed) {
+                throw new IllegalStateException("Lookuper is already closed.");
+            }
+            lookupContexts.add(context);
             return key;
         }
 

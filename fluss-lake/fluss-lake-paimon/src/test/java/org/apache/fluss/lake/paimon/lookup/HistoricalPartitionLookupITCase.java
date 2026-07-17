@@ -117,18 +117,9 @@ class HistoricalPartitionLookupITCase extends FlinkPaimonTieringTestBase {
             jobClient.cancel().get();
         }
 
-        admin.alterTable(
-                        tablePath,
-                        Collections.singletonList(
-                                TableChange.set(
-                                        ConfigOptions.TABLE_AUTO_PARTITION_NUM_RETENTION.key(),
-                                        String.valueOf(EXPIRED_PARTITION_RETENTION))),
-                        false)
-                .get();
-
-        // Cache the still-existing normal partition route, then keep using the same lookuper after
-        // retention cleanup. It should invalidate the deleted partition and reroute to historical
-        // lookup.
+        // Create the lookuper with the initial retention, cache the still-existing normal
+        // partition route, then keep using it after the retention changes and the partition is
+        // deleted. It should use the latest retention to reroute to historical lookup.
         try (Connection lookupConn = ConnectionFactory.createConnection(clientConf);
                 Table table = lookupConn.getTable(tablePath)) {
             Lookuper lookuper = table.newLookup().createLookuper();
@@ -137,6 +128,15 @@ class HistoricalPartitionLookupITCase extends FlinkPaimonTieringTestBase {
             assertThatRow(lookupRow)
                     .withSchema(evolvedSchema.getRowType())
                     .isEqualTo(expectedNewRow);
+
+            admin.alterTable(
+                            tablePath,
+                            Collections.singletonList(
+                                    TableChange.set(
+                                            ConfigOptions.TABLE_AUTO_PARTITION_NUM_RETENTION.key(),
+                                            String.valueOf(EXPIRED_PARTITION_RETENTION))),
+                            false)
+                    .get();
 
             admin.dropPartition(tablePath, expiredPartitionSpec, true).get();
             waitUntilPartitionDropped(tablePath, EXPIRED_PARTITION_NAME);

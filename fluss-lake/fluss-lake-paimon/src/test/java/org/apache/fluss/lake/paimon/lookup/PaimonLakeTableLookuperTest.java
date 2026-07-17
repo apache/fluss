@@ -112,7 +112,8 @@ class PaimonLakeTableLookuperTest {
                 Collections.singletonMap(
                         0, Collections.singletonList(paimonRow(1, "20240101", "Alice"))));
 
-        try (LakeTableLookuper lookuper = new PaimonLakeTableLookuper(paimonConfig, tablePath)) {
+        try (LakeTableLookuper lookuper =
+                new PaimonLakeTableLookuper(paimonConfig, tablePath, KvFormat.COMPACTED)) {
             LakeTableLookuper.LookupContext context =
                     lookupContext(schema, "20240101", 0, SCHEMA_ID);
 
@@ -132,6 +133,37 @@ class PaimonLakeTableLookuperTest {
     }
 
     @Test
+    void testLookupWithIndexedKvFormat() throws Exception {
+        TablePath tablePath = TablePath.of(DB, "indexed_kv_format");
+        Schema schema = pkSchema();
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder(partitionedPkDescriptor(schema))
+                        .kvFormat(KvFormat.INDEXED)
+                        .build();
+        FileStoreTable table = createPaimonTable(tablePath, tableDescriptor);
+        writeAndCommitData(
+                table,
+                Collections.singletonMap(
+                        0, Collections.singletonList(paimonRow(1, "20240101", "Alice"))));
+
+        try (LakeTableLookuper lookuper =
+                new PaimonLakeTableLookuper(paimonConfig, tablePath, KvFormat.INDEXED)) {
+            LakeTableLookuper.LookupContext context =
+                    lookupContext(schema, "20240101", 0, SCHEMA_ID);
+
+            BinaryValue decodedValue =
+                    decodeValue(
+                            lookuper.lookup(paimonKey(schema, 1, "20240101"), context),
+                            SCHEMA_ID,
+                            schema,
+                            KvFormat.INDEXED);
+
+            assertThat(decodedValue.schemaId).isEqualTo(SCHEMA_ID);
+            assertRow(decodedValue.row, 1, "20240101", "Alice");
+        }
+    }
+
+    @Test
     void testRefreshFilesAfterCompactionAndSnapshotExpiration() throws Exception {
         TablePath tablePath = TablePath.of(DB, "compacted_pk");
         Schema schema = pkSchema();
@@ -147,7 +179,8 @@ class PaimonLakeTableLookuperTest {
         List<DataFileMeta> filesBeforeCompaction = dataFiles(table, partition, 0);
         assertThat(filesBeforeCompaction).hasSize(5);
 
-        try (LakeTableLookuper lookuper = new PaimonLakeTableLookuper(paimonConfig, tablePath)) {
+        try (LakeTableLookuper lookuper =
+                new PaimonLakeTableLookuper(paimonConfig, tablePath, KvFormat.COMPACTED)) {
             LakeTableLookuper.LookupContext context =
                     lookupContext(schema, "20240101", 0, SCHEMA_ID);
             assertThat(lookuper.lookup(paimonKey(schema, 5, "20240101"), context)).isNotNull();
@@ -208,7 +241,8 @@ class PaimonLakeTableLookuperTest {
                 table,
                 Collections.singletonMap(0, Collections.singletonList(paimonRow(1, 7, "Alice"))));
 
-        try (LakeTableLookuper lookuper = new PaimonLakeTableLookuper(paimonConfig, tablePath)) {
+        try (LakeTableLookuper lookuper =
+                new PaimonLakeTableLookuper(paimonConfig, tablePath, KvFormat.COMPACTED)) {
             LakeTableLookuper.LookupContext context =
                     new LakeTableLookuper.LookupContext(
                             ResolvedPartitionSpec.fromPartitionName(
@@ -238,7 +272,8 @@ class PaimonLakeTableLookuperTest {
         TableDescriptor tableDescriptor = TableDescriptor.builder().schema(schema).build();
         createPaimonTable(tablePath, tableDescriptor);
 
-        try (LakeTableLookuper lookuper = new PaimonLakeTableLookuper(paimonConfig, tablePath)) {
+        try (LakeTableLookuper lookuper =
+                new PaimonLakeTableLookuper(paimonConfig, tablePath, KvFormat.COMPACTED)) {
             LakeTableLookuper.LookupContext context =
                     new LakeTableLookuper.LookupContext(
                             new ResolvedPartitionSpec(
@@ -289,7 +324,8 @@ class PaimonLakeTableLookuperTest {
                         0,
                         Collections.singletonList(paimonRow(2, "20240101", "Bob", "new-value"))));
 
-        try (LakeTableLookuper lookuper = new PaimonLakeTableLookuper(paimonConfig, tablePath)) {
+        try (LakeTableLookuper lookuper =
+                new PaimonLakeTableLookuper(paimonConfig, tablePath, KvFormat.COMPACTED)) {
             BinaryValue oldSchemaValue =
                     decodeValue(
                             lookuper.lookup(
@@ -421,7 +457,12 @@ class PaimonLakeTableLookuperTest {
     }
 
     private static BinaryValue decodeValue(byte[] value, short schemaId, Schema schema) {
-        return new ValueDecoder(new TestingSchemaGetter(schemaId, schema), KvFormat.COMPACTED)
+        return decodeValue(value, schemaId, schema, KvFormat.COMPACTED);
+    }
+
+    private static BinaryValue decodeValue(
+            byte[] value, short schemaId, Schema schema, KvFormat kvFormat) {
+        return new ValueDecoder(new TestingSchemaGetter(schemaId, schema), kvFormat)
                 .decodeValue(value);
     }
 

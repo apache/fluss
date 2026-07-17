@@ -308,7 +308,7 @@ public class PartitionUtils {
         String autoPartitionValue =
                 partitionSpec.getPartitionValues().get(autoPartitionKeyIndex.get());
         AutoPartitionTimeUnit timeUnit = autoPartitionStrategy.timeUnit();
-        if (!isValidPartitionTime(autoPartitionValue, timeUnit)) {
+        if (!isValidPartitionTime(autoPartitionValue, timeUnit, autoPartitionStrategy)) {
             return false;
         }
 
@@ -320,7 +320,11 @@ public class PartitionUtils {
         ZonedDateTime current =
                 ZonedDateTime.ofInstant(now, autoPartitionStrategy.timeZone().toZoneId());
         String earliestRetained =
-                generateAutoPartitionTime(current, -autoPartitionStrategy.numToRetain(), timeUnit);
+                generateAutoPartitionTime(
+                        current,
+                        -autoPartitionStrategy.numToRetain(),
+                        timeUnit,
+                        autoPartitionStrategy);
         return earliestRetained.compareTo(autoPartitionValue) > 0;
     }
 

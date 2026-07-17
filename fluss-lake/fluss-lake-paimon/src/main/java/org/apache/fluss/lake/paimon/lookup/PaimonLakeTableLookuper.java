@@ -23,13 +23,13 @@ import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.lake.lakestorage.LakeTableLookuper;
 import org.apache.fluss.lake.paimon.utils.PaimonPartitionBucket;
 import org.apache.fluss.lake.paimon.utils.PaimonRowAsFlussRow;
+import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.InternalRow;
-import org.apache.fluss.row.encode.CompactedRowEncoder;
+import org.apache.fluss.row.encode.RowEncoder;
 import org.apache.fluss.row.encode.ValueEncoder;
-import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.IOUtils;
 
@@ -40,6 +40,7 @@ import org.apache.paimon.catalog.CatalogFactory;
 import org.apache.paimon.disk.IOManager;
 import org.apache.paimon.io.DataFileMeta;
 import org.apache.paimon.memory.MemorySegment;
+import org.apache.paimon.options.MemorySize;
 import org.apache.paimon.options.Options;
 import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.table.query.LocalTableQuery;
@@ -83,12 +84,17 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  */
 public class PaimonLakeTableLookuper implements LakeTableLookuper {
 
-    // Hard-code a conservative 1GB default for now to avoid unbounded lookup cache growth.
-    private static final String DEFAULT_LOOKUP_CACHE_MAX_DISK_SIZE = "1gb";
+    // Each TabletServer caches at most ten table lookupers, bounding their retained lookup cache
+    // capacity to 20GB. See HistoricalLakeLookupManager for the follow-up to make this configurable
+    // and use a global Paimon IOManager limit.
+    private static final String LOOKUP_CACHE_MAX_DISK_SIZE = "2gb";
+    private static final MemorySize LOOKUP_CACHE_MAX_DISK_MEMORY_SIZE =
+            MemorySize.parse(LOOKUP_CACHE_MAX_DISK_SIZE);
 
     private final Configuration paimonConfig;
     private final TablePath tablePath;
     private final String ioTmpDir;
+    private final KvFormat kvFormat;
 
     private final Set<PaimonPartitionBucket> initializedBuckets;
 
@@ -100,19 +106,21 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
     private int primaryKeyFieldCount;
     private boolean hasCachedValueEncoder;
     private short cachedValueSchemaId;
-    private @Nullable CompactedRowEncoder cachedValueRowEncoder;
+    private @Nullable RowEncoder cachedValueRowEncoder;
     private @Nullable InternalRow.FieldGetter[] cachedValueFieldGetters;
     private boolean closed;
 
-    public PaimonLakeTableLookuper(Configuration paimonConfig, TablePath tablePath) {
-        this(paimonConfig, tablePath, ConfigOptions.IO_TMP_DIR.defaultValue());
+    public PaimonLakeTableLookuper(
+            Configuration paimonConfig, TablePath tablePath, KvFormat kvFormat) {
+        this(paimonConfig, tablePath, ConfigOptions.IO_TMP_DIR.defaultValue(), kvFormat);
     }
 
     public PaimonLakeTableLookuper(
-            Configuration paimonConfig, TablePath tablePath, String ioTmpDir) {
+            Configuration paimonConfig, TablePath tablePath, String ioTmpDir, KvFormat kvFormat) {
         this.paimonConfig = checkNotNull(paimonConfig, "paimonConfig must not be null.");
         this.tablePath = checkNotNull(tablePath, "tablePath must not be null.");
         this.ioTmpDir = checkNotNull(ioTmpDir, "ioTmpDir must not be null.");
+        this.kvFormat = checkNotNull(kvFormat, "kvFormat must not be null.");
         this.initializedBuckets = new HashSet<>();
     }
 
@@ -185,10 +193,14 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
 
     private FileStoreTable withLookupCacheOptions(FileStoreTable table) {
         String key = CoreOptions.LOOKUP_CACHE_MAX_DISK_SIZE.key();
-        if (table.options().containsKey(key)) {
+        String configuredMaxDiskSize = table.options().get(key);
+        if (configuredMaxDiskSize != null
+                && MemorySize.parse(configuredMaxDiskSize)
+                                .compareTo(LOOKUP_CACHE_MAX_DISK_MEMORY_SIZE)
+                        <= 0) {
             return table;
         }
-        return table.copy(Collections.singletonMap(key, DEFAULT_LOOKUP_CACHE_MAX_DISK_SIZE));
+        return table.copy(Collections.singletonMap(key, LOOKUP_CACHE_MAX_DISK_SIZE));
     }
 
     private static IOManager createIOManager(String ioTmpDir) {
@@ -250,6 +262,11 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
             addFilesByName(dataFilesByName, dataSplit.dataFiles());
         }
 
+        // TODO: Refresh the file set if writes to expired partitions are supported in the future.
+        // Historical lookup is triggered only after the original Fluss partition has expired and
+        // been dropped. This PR does not support writes to expired partitions, so no new rows are
+        // expected and initializing the file set once is sufficient. Compaction-related missing
+        // files are handled by the IOException refresh path below.
         localTableQuery()
                 .refreshFiles(
                         partition,
@@ -315,7 +332,7 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
         PaimonRowAsFlussRow flussRow = new PaimonRowAsFlussRow(paimonRow);
         try {
             ensureValueEncoder(schemaId, valueRowType);
-            CompactedRowEncoder rowEncoder =
+            RowEncoder rowEncoder =
                     checkNotNull(cachedValueRowEncoder, "cachedValueRowEncoder must not be null.");
             InternalRow.FieldGetter[] fieldGetters =
                     checkNotNull(
@@ -338,8 +355,7 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
         }
 
         IOUtils.closeQuietly(cachedValueRowEncoder, "Fluss value row encoder");
-        DataType[] fieldTypes = valueRowType.getChildren().toArray(new DataType[0]);
-        cachedValueRowEncoder = new CompactedRowEncoder(fieldTypes);
+        cachedValueRowEncoder = RowEncoder.create(kvFormat, valueRowType);
         cachedValueFieldGetters = InternalRow.createFieldGetters(valueRowType);
         cachedValueSchemaId = schemaId;
         hasCachedValueEncoder = true;

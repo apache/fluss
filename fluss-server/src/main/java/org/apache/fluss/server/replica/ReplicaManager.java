@@ -39,6 +39,7 @@ import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -891,7 +892,10 @@ public class ReplicaManager implements ServerReconfigurable {
                     throw new InvalidPartitionException(
                             "Historical lookup request must target a historical partition.");
                 }
-                lookupFuture = historicalLakeLookupManager.lookup(data, replica.getTableInfo());
+                SchemaInfo latestSchemaInfo = replica.getSchemaGetter().getLatestSchemaInfo();
+                lookupFuture =
+                        historicalLakeLookupManager.lookup(
+                                data, replica.getTableInfo(), latestSchemaInfo);
             } catch (Exception e) {
                 lookupFuture =
                         CompletableFuture.completedFuture(
@@ -1125,7 +1129,9 @@ public class ReplicaManager implements ServerReconfigurable {
 
                     for (StopReplicaData data : stopReplicaDataList) {
                         TableBucket tb = data.getTableBucket();
-                        historicalLakeLookupManager.invalidateTableLookuper(tb.getTableId());
+                        long tableId = tb.getTableId();
+                        ioExecutor.execute(
+                                () -> historicalLakeLookupManager.invalidateTableLookuper(tableId));
                         HostedReplica hostedReplica = getReplica(tb);
                         if (hostedReplica instanceof NoneReplica) {
                             if (data.isDeleteLocal()) {
