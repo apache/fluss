@@ -34,8 +34,8 @@ tar -xzf fluss-$FLUSS_VERSION$-bin.tgz
 cd fluss-$FLUSS_VERSION$/
 ```
 
-2. If you want to enable [Lakehouse Storage](docs/maintenance/tiered-storage/lakehouse-storage.md), you need to prepare the required JAR files for the datalake first. For more details,
-   see [Add other jars required by datalake](docs/maintenance/tiered-storage/lakehouse-storage.md#add-other-jars-required-by-datalake).
+2. If you want to enable [Lakehouse Storage](../tiered-storage/lakehouse-storage.md), you need to prepare the required JAR files for the datalake first. For more details,
+   see [Deploying Streaming Lakehouse](../../install-deploy/deploying-streaming-lakehouse.md).
 
 3. Next, copy the configuration options from 0.6 (`fluss-0.6/conf/server.yaml`) to the new configuration
 file (`fluss-$FLUSS_VERSION$/conf/server.yaml`). Adding any new options introduced in version $FLUSS_VERSION$ as
@@ -56,6 +56,44 @@ To upgrade the `TabletServers`, follow these steps one-by-one for each `TabletSe
 ```shell
 ./fluss-$FLUSS_VERSION$/bin/tablet-server.sh start
 ```
+
+**Wait for the cluster to recover before upgrading the next TabletServer**
+
+After restarting a TabletServer, you should wait for the cluster to fully recover before proceeding to the next one.
+Upgrading too quickly can cause multiple servers to be in an unrecovered state simultaneously, which may break min-ISR guarantees
+and affect data availability.
+
+You can use the **Cluster Health API** to monitor the cluster's health status:
+
+```java
+Admin admin = connection.getAdmin();
+
+ClusterHealth health = admin.getClusterHealth().get();
+System.out.println("Status: " + health.getStatus());
+System.out.println("Replicas: " + health.getInSyncReplicas() + "/" + health.getNumReplicas());
+System.out.println("Leaders: " + health.getActiveLeaderReplicas() + "/" + health.getNumLeaderReplicas());
+
+if (health.getStatus() == ClusterHealthStatus.GREEN) {
+    // Safe to proceed with the next TabletServer
+}
+```
+
+The API returns the following health metrics:
+
+| Field | Meaning |
+|-------|---------|
+| `status` | Cluster health: GREEN (all replicas in-sync, all leaders active), YELLOW (all leaders active, some followers not in-sync), RED (some leaders not active) |
+| `numReplicas` | Total number of assigned replicas across all buckets |
+| `inSyncReplicas` | Total number of in-sync replicas across all buckets |
+| `numLeaderReplicas` | Total number of leader slots (one per bucket) |
+| `activeLeaderReplicas` | Number of active leaders (leader alive and acknowledged) |
+
+Wait until the status is GREEN before upgrading the next TabletServer. GREEN means all replicas are in-sync and all leaders are active — fully recovered.
+
+:::tip
+For Kubernetes deployments, you can enable the Cluster Health API readiness probe in the Helm chart to automate this check.
+See [Deploying with Helm Charts — Cluster Health Readiness Probe](docs/install-deploy/deploying-with-helm.md#cluster-health-readiness-probe) for details.
+:::
 
 ### Upgrade the CoordinatorServer
 

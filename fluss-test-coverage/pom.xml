@@ -28,8 +28,19 @@
 
     <artifactId>fluss-test-coverage</artifactId>
     <packaging>jar</packaging>
-    <name>Fluss : Test Code Coverage</name>
-    <description>Module for aggregating code coverage across all modules.</description>
+    <name>Apache Fluss (Incubating) : Test Code Coverage</name>
+    <description>
+        Module for aggregating code coverage across all modules.
+
+        Apache Fluss is an effort undergoing incubation at The Apache Software
+        Foundation (ASF), sponsored by the Apache Incubator PMC. Incubation is
+        required of all newly accepted projects until a further review indicates
+        that the infrastructure, communications, and decision-making process have
+        stabilized in a manner consistent with other successful ASF projects.
+        While incubation status is not necessarily a reflection of the
+        completeness or stability of the code, it does indicate that the project
+        has yet to be fully endorsed by the ASF.
+    </description>
 
     <dependencies>
         <!-- All Fluss modules which should report code coverage -->
@@ -418,6 +429,7 @@
                                         </exclude>
                                         <exclude>org.apache.fluss.fs.hdfs.HdfsSecurityTokenReceiver</exclude>
                                         <exclude>org.apache.fluss.fs.oss.*</exclude>
+                                        <exclude>org.apache.fluss.fs.cos.*</exclude>
                                         <exclude>org.apache.fluss.fs.s3.*</exclude>
                                         <exclude>org.apache.fluss.fs.obs.*</exclude>
                                         <exclude>com.amazonaws.services.s3.model.transform.XmlResponsesSaxParser*
@@ -436,12 +448,15 @@
                                         <exclude>org.apache.fluss.predicate.*</exclude>
                                         <!-- end exclude for lake source -->
                                         <exclude>org.apache.fluss.lake.source.*</exclude>
-                                        <!-- exclude for dummy class -->
+                                        <!-- exclude for readiness-probe CLI tool and dist dummy class -->
+                                        <exclude>org.apache.fluss.server.tools.ClusterHealthReadinessCheck</exclude>
+                                        <exclude>org.apache.fluss.server.tools.ClusterHealthReadinessCheck.*</exclude>
                                         <exclude>org.apache.fluss.dist.DummyClass</exclude>
                                         <exclude>org.apache.fluss.flink.DummyClass120</exclude>
                                         <exclude>org.apache.fluss.lake.batch.ArrowRecordBatch</exclude>
                                         <exclude>org.apache.fluss.lake.committer.CommittedLakeSnapshot</exclude>
                                         <exclude>org.apache.fluss.lake.paimon.utils.FlussDataTypeToPaimonDataType</exclude>
+                                        <exclude>org.apache.paimon.arrow.converter.Arrow2PaimonVectorConverter*</exclude>
                                         <!-- start exclude for lake lance -->
                                         <exclude>org.apache.fluss.lake.lance.*</exclude>
                                         <!-- temporarily exclude iceberg -->
@@ -484,6 +499,16 @@
                                         <exclude>org.apache.fluss.flink.tiering.FlussLakeTieringEntrypoint</exclude>
                                         <exclude>org.apache.fluss.flink.tiering.FlussLakeTiering</exclude>
                                         <!-- end exclude for flink tiering service -->
+                                        <exclude>
+                                            org.apache.fluss.flink.functions.bitmap.RbAndAggFunction.AccumulatorSerializer.AccumulatorSerializerSnapshot
+                                        </exclude>
+                                        <!-- start exclude for flink action -->
+                                        <exclude>org.apache.fluss.flink.action.Action</exclude>
+                                        <exclude>org.apache.fluss.flink.action.ActionFactory</exclude>
+                                        <exclude>org.apache.fluss.flink.action.ActionLoader</exclude>
+                                        <exclude>org.apache.fluss.flink.action.FlussActionEntrypoint</exclude>
+                                        <exclude>org.apache.fluss.flink.action.orphan.*</exclude>
+                                        <!-- end exclude for flink action -->
                                         <!-- exclude flink compatibility class for catalogs -->
                                         <exclude>org.apache.flink.table.catalog.*</exclude>
                                     </excludes>

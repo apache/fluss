@@ -29,7 +29,7 @@
 
     <artifactId>fluss-flink-1.18</artifactId>
 
-    <name>Fluss : Engine Flink : 1.18</name>
+    <name>Apache Fluss (Incubating) : Engine Flink : 1.18</name>
 
     <properties>
         <flink.major.version>1.18</flink.major.version>
@@ -219,6 +219,14 @@
                                     <include>org.apache.fluss:fluss-client</include>
                                 </includes>
                             </artifactSet>
+                            <filters combine.children="append">
+                                <filter>
+                                    <artifact>org.apache.fluss:fluss-flink-common</artifact>
+                                    <excludes>
+                                        <exclude>org/apache/fluss/flink/action/**</exclude>
+                                    </excludes>
+                                </filter>
+                            </filters>
                         </configuration>
                     </execution>
                 </executions>

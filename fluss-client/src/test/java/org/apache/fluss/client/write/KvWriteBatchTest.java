@@ -221,6 +221,7 @@ class KvWriteBatchTest {
         PreAllocatedPagedOutputView outputView =
                 new PreAllocatedPagedOutputView(Collections.singletonList(memorySegment));
         return new KvWriteBatch(
+                tb.getTableId(),
                 tb.getBucket(),
                 PhysicalTablePath.of(DATA1_TABLE_PATH_PK),
                 DATA1_TABLE_INFO_PK.getSchemaId(),
@@ -316,6 +317,7 @@ class KvWriteBatchTest {
                 new PreAllocatedPagedOutputView(
                         Collections.singletonList(memoryPool.nextSegment()));
         return new KvWriteBatch(
+                tb.getTableId(),
                 tb.getBucket(),
                 PhysicalTablePath.of(DATA1_TABLE_PATH_PK),
                 DATA1_TABLE_INFO_PK.getSchemaId(),

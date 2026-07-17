@@ -239,6 +239,75 @@ class LakeTableManagerITCase {
     }
 
     @Test
+    void testAlterDatalakeAutoCompaction() throws Exception {
+        AdminGateway adminGateway = getAdminGateway();
+
+        String db1 = "test_alter_datalake_auto_compaction_db";
+        String tb1 = "tb1";
+        TablePath tablePath = TablePath.of(db1, tb1);
+        adminGateway.createDatabase(newCreateDatabaseRequest(db1, false)).get();
+
+        Map<String, String> initialProperties = new HashMap<>();
+        initialProperties.put(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true");
+        adminGateway
+                .createTable(
+                        newCreateTableRequest(
+                                tablePath, newPkTable().withProperties(initialProperties), false))
+                .get();
+
+        Map<String, String> setProperties = new HashMap<>();
+        setProperties.put(ConfigOptions.TABLE_DATALAKE_AUTO_COMPACTION.key(), "true");
+        adminGateway
+                .alterTable(
+                        newAlterTableRequest(
+                                tablePath,
+                                setProperties,
+                                Collections.emptyList(),
+                                Collections.emptyList(),
+                                false))
+                .get();
+
+        TableDescriptor disabledLakeTableDescriptor =
+                TableDescriptor.fromJsonBytes(
+                        adminGateway
+                                .getTableInfo(newGetTableInfoRequest(tablePath))
+                                .get()
+                                .getTableJson());
+        assertThat(
+                        disabledLakeTableDescriptor
+                                .getProperties()
+                                .get(ConfigOptions.TABLE_DATALAKE_AUTO_COMPACTION.key()))
+                .isEqualTo("true");
+
+        Map<String, String> resetProperties = new HashMap<>();
+        resetProperties.put(ConfigOptions.TABLE_DATALAKE_AUTO_COMPACTION.key(), "false");
+        adminGateway
+                .alterTable(
+                        newAlterTableRequest(
+                                tablePath,
+                                resetProperties,
+                                Collections.emptyList(),
+                                Collections.emptyList(),
+                                false))
+                .get();
+
+        TableDescriptor tableDescriptorAfterReset =
+                TableDescriptor.fromJsonBytes(
+                        adminGateway
+                                .getTableInfo(newGetTableInfoRequest(tablePath))
+                                .get()
+                                .getTableJson());
+        assertThat(
+                        tableDescriptorAfterReset
+                                .getProperties()
+                                .get(ConfigOptions.TABLE_DATALAKE_AUTO_COMPACTION.key()))
+                .isEqualTo("false");
+
+        adminGateway.dropTable(newDropTableRequest(db1, tb1, false)).get();
+        adminGateway.dropDatabase(newDropDatabaseRequest(db1, false, true)).get();
+    }
+
+    @Test
     void testAlterTableDatalakeFreshnessAffectsTiering() throws Exception {
         AdminGateway adminGateway = getAdminGateway();
 

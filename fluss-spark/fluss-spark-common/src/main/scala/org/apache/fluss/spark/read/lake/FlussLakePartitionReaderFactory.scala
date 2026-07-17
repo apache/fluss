@@ -35,13 +35,14 @@ class FlussLakePartitionReaderFactory(
     projection: Array[Int],
     flussPredicate: Option[FlussPredicate],
     logTailPredicate: Option[FlussPredicate],
+    limit: Option[Int],
     flussConfig: Configuration)
   extends PartitionReaderFactory {
 
   @transient private lazy val lakeSource: LakeSource[LakeSplit] = {
-    val source = FlussLakeUtils.createLakeSource(tableProperties, tablePath)
+    val source = FlussLakeUtils.createLakeSource(flussConfig.toMap, tableProperties, tablePath)
     source.withProject(FlussLakeUtils.lakeProjection(projection))
-    flussPredicate.foreach(FlussLakeBatch.applyLakeFilters(source, _))
+    flussPredicate.foreach(FlussLakeUtils.applyLakeFilters(source, _))
     source
   }
 
@@ -53,12 +54,14 @@ class FlussLakePartitionReaderFactory(
           lakeOnlySplit,
           lakeSource,
           projection,
+          limit,
           flussConfig)
       case logSplit: FlussAppendInputPartition =>
         new FlussAppendPartitionReader(
           tablePath,
           projection,
           logTailPredicate,
+          limit,
           logSplit,
           flussConfig)
       case mixedSplit: FlussLakeUpsertInputPartition =>
@@ -66,6 +69,7 @@ class FlussLakePartitionReaderFactory(
           tablePath,
           lakeSource,
           projection,
+          limit,
           mixedSplit,
           flussConfig)
       case _ =>

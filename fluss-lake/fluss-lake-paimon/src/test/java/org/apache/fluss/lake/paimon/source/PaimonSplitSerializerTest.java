@@ -27,9 +27,11 @@ import org.apache.paimon.CoreOptions;
 import org.apache.paimon.Snapshot;
 import org.apache.paimon.data.BinaryString;
 import org.apache.paimon.data.GenericRow;
+import org.apache.paimon.io.DataOutputViewStreamWrapper;
 import org.apache.paimon.schema.Schema;
 import org.apache.paimon.table.Table;
 import org.apache.paimon.types.DataTypes;
+import org.apache.paimon.utils.InstantiationUtil;
 import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayInputStream;
@@ -49,61 +51,18 @@ class PaimonSplitSerializerTest extends PaimonSourceTestBase {
 
     @Test
     void testSerializeAndDeserialize() throws Exception {
-        // prepare paimon table
-        int bucketNum = 1;
-        TablePath tablePath = TablePath.of(DEFAULT_DB, DEFAULT_TABLE);
-        Schema.Builder builder =
-                Schema.newBuilder()
-                        .column("c1", DataTypes.INT())
-                        .column("c2", DataTypes.STRING())
-                        .column("c3", DataTypes.STRING());
-        builder.partitionKeys("c3");
-        builder.primaryKey("c1", "c3");
-        builder.option(CoreOptions.BUCKET.key(), String.valueOf(bucketNum));
-        createTable(tablePath, builder.build());
-        Table table = getTable(tablePath);
-
-        GenericRow record1 =
-                GenericRow.of(12, BinaryString.fromString("a"), BinaryString.fromString("A"));
-        writeRecord(tablePath, Collections.singletonList(record1));
-        Snapshot snapshot = table.latestSnapshot().get();
-
-        LakeSource<PaimonSplit> lakeSource = lakeStorage.createLakeSource(tablePath);
-        List<PaimonSplit> plan = lakeSource.createPlanner(snapshot::id).plan();
-
-        PaimonSplit originalPaimonSplit = plan.get(0);
+        PaimonSplit originalPaimonSplit = createStringPartitionSplit();
         byte[] serialized = serializer.serialize(originalPaimonSplit);
         PaimonSplit deserialized = serializer.deserialize(serializer.getVersion(), serialized);
 
         assertThat(deserialized.dataSplit()).isEqualTo(originalPaimonSplit.dataSplit());
         assertThat(deserialized.isBucketUnAware()).isEqualTo(originalPaimonSplit.isBucketUnAware());
+        assertThat(deserialized.partition()).isEqualTo(originalPaimonSplit.partition());
     }
 
     @Test
     void testJavaSerializationRoundTrip() throws Exception {
-        // prepare paimon table
-        int bucketNum = 1;
-        TablePath tablePath = TablePath.of(DEFAULT_DB, DEFAULT_TABLE);
-        Schema.Builder builder =
-                Schema.newBuilder()
-                        .column("c1", DataTypes.INT())
-                        .column("c2", DataTypes.STRING())
-                        .column("c3", DataTypes.STRING());
-        builder.partitionKeys("c3");
-        builder.primaryKey("c1", "c3");
-        builder.option(CoreOptions.BUCKET.key(), String.valueOf(bucketNum));
-        createTable(tablePath, builder.build());
-        Table table = getTable(tablePath);
-
-        GenericRow record1 =
-                GenericRow.of(12, BinaryString.fromString("a"), BinaryString.fromString("A"));
-        writeRecord(tablePath, Collections.singletonList(record1));
-        Snapshot snapshot = table.latestSnapshot().get();
-
-        LakeSource<PaimonSplit> lakeSource = lakeStorage.createLakeSource(tablePath);
-        List<PaimonSplit> plan = lakeSource.createPlanner(snapshot::id).plan();
-
-        PaimonSplit original = plan.get(0);
+        PaimonSplit original = createStringPartitionSplit();
 
         // Serialize via Java serialization
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
@@ -124,9 +83,55 @@ class PaimonSplitSerializerTest extends PaimonSourceTestBase {
     }
 
     @Test
+    void testDeserializeVersion1PreservesStringPartition() throws Exception {
+        PaimonSplit original = createStringPartitionSplit();
+        byte[] serialized = serializeVersion1(original);
+
+        PaimonSplit deserialized = serializer.deserialize(1, serialized);
+
+        assertThat(deserialized.dataSplit()).isEqualTo(original.dataSplit());
+        assertThat(deserialized.isBucketUnAware()).isEqualTo(original.isBucketUnAware());
+        assertThat(deserialized.partition()).isEqualTo(Collections.singletonList("A"));
+    }
+
+    @Test
     void testDeserializeWithInvalidData() {
         byte[] invalidData = "invalid".getBytes();
         assertThatThrownBy(() -> serializer.deserialize(1, invalidData))
                 .isInstanceOf(IOException.class);
+    }
+
+    private PaimonSplit createStringPartitionSplit() throws Exception {
+        // prepare paimon table
+        int bucketNum = 1;
+        TablePath tablePath = TablePath.of(DEFAULT_DB, DEFAULT_TABLE);
+        Schema.Builder builder =
+                Schema.newBuilder()
+                        .column("c1", DataTypes.INT())
+                        .column("c2", DataTypes.STRING())
+                        .column("c3", DataTypes.STRING());
+        builder.partitionKeys("c3");
+        builder.primaryKey("c1", "c3");
+        builder.option(CoreOptions.BUCKET.key(), String.valueOf(bucketNum));
+        createTable(tablePath, builder.build());
+        Table table = getTable(tablePath);
+
+        GenericRow record1 =
+                GenericRow.of(12, BinaryString.fromString("a"), BinaryString.fromString("A"));
+        writeRecord(tablePath, Collections.singletonList(record1));
+        Snapshot snapshot = table.latestSnapshot().get();
+
+        LakeSource<PaimonSplit> lakeSource = lakeStorage.createLakeSource(tablePath);
+        List<PaimonSplit> plan = lakeSource.createPlanner(snapshot::id).plan();
+
+        return plan.get(0);
+    }
+
+    private byte[] serializeVersion1(PaimonSplit paimonSplit) throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        DataOutputViewStreamWrapper view = new DataOutputViewStreamWrapper(out);
+        InstantiationUtil.serializeObject(view, paimonSplit.dataSplit());
+        view.writeBoolean(paimonSplit.isBucketUnAware());
+        return out.toByteArray();
     }
 }

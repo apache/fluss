@@ -136,6 +136,9 @@ public class KvSnapshotLeaseHandler {
         Long partitionId = tableBucket.getPartitionId();
         int bucketId = tableBucket.getBucket();
         KvSnapshotTableLease tableLease = tableIdToTableLease.get(tableId);
+        if (tableLease == null) {
+            return -1L;
+        }
         if (partitionId == null) {
             // For none-partitioned table.
             bucketIndex = tableLease.getBucketSnapshots();

@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.cluster.ConfigEntry;
@@ -86,6 +87,7 @@ import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.metadata.MetadataProvider;
 import org.apache.fluss.server.metadata.PartitionMetadata;
+import org.apache.fluss.server.metadata.PartitionNegativeCache;
 import org.apache.fluss.server.metadata.ServerMetadataCache;
 import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.tablet.TabletService;
@@ -143,6 +145,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     protected final MetadataManager metadataManager;
     protected final @Nullable Authorizer authorizer;
     protected final DynamicConfigManager dynamicConfigManager;
+    protected final PartitionNegativeCache partitionNegativeCache;
 
     private long tokenLastUpdateTimeMs = 0;
     private ObtainedSecurityToken securityToken = null;
@@ -164,7 +167,13 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         this.metadataManager = metadataManager;
         this.authorizer = authorizer;
         this.dynamicConfigManager = dynamicConfigManager;
+        this.partitionNegativeCache = new PartitionNegativeCache();
         this.ioExecutor = ioExecutor;
+    }
+
+    @VisibleForTesting
+    public PartitionNegativeCache getPartitionNegativeCache() {
+        return partitionNegativeCache;
     }
 
     @Override
@@ -302,6 +311,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         response.setTableJson(tableInfo.toTableDescriptor().toJsonBytes())
                 .setSchemaId(tableInfo.getSchemaId())
                 .setTableId(tableInfo.getTableId())
+                .setRemoteDataDir(tableInfo.getRemoteDataDir())
                 .setCreatedTime(tableInfo.getCreatedTime())
                 .setModifiedTime(tableInfo.getModifiedTime());
         return CompletableFuture.completedFuture(response);
@@ -616,7 +626,16 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
             Optional<PhysicalTablePath> physicalTablePath =
                     metadataProvider.getPhysicalTablePathFromCache(partitionId);
             if (physicalTablePath.isPresent()) {
+                partitionNegativeCache.markExistent(partitionId);
                 partitionPaths.add(physicalTablePath.get());
+            } else if (partitionNegativeCache.isKnownNonExistent(partitionId)) {
+                // Fast-path only after the positive metadata cache misses. A stale negative-cache
+                // entry must not hide a partition that has already been synced into metadata cache.
+                throw new PartitionNotExistException(
+                        String.format(
+                                "The partition id '%d' does not exist or you don't have"
+                                        + " permission to access it.",
+                                partitionId));
             } else {
                 partitionIdsNotExistsInCache.add(partitionId);
             }
@@ -631,8 +650,15 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
             }
             for (long partitionId : partitionIdsNotExistsInCache) {
                 if (partitionIdAndPaths.containsKey(partitionId)) {
+                    partitionNegativeCache.markExistent(partitionId);
                     partitionPaths.add(partitionIdAndPaths.get(partitionId));
                 } else {
+                    // Only cache when the authoritative partition assignment is also gone. A miss
+                    // from the scoped table-path lookup may simply mean that the request omitted
+                    // the owning table or the session is not authorized for it.
+                    if (isPartitionAssignmentMissingFromZk(partitionId)) {
+                        partitionNegativeCache.markNonExistent(partitionId);
+                    }
                     throw new PartitionNotExistException(
                             String.format(
                                     "The partition id '%d' does not exist or you don't have permission to access it.",
@@ -672,5 +698,17 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                 new HashSet<>(metadataCache.getAllAliveTabletServers(listenerName).values());
         return buildMetadataResponse(
                 coordinatorServer, aliveTabletServers, tablesMetadata, partitionsMetadata);
+    }
+
+    private boolean isPartitionAssignmentMissingFromZk(long partitionId) {
+        try {
+            return !zkClient.getPartitionAssignment(partitionId).isPresent();
+        } catch (Exception e) {
+            LOG.warn(
+                    "Failed to check partition assignment for partition {}. Skip negative cache update.",
+                    partitionId,
+                    e);
+            return false;
+        }
     }
 }

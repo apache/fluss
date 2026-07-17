@@ -28,7 +28,7 @@
     </parent>
 
     <artifactId>fluss-lake-iceberg</artifactId>
-    <name>Fluss : Lake : Iceberg</name>
+    <name>Apache Fluss (Incubating) : Lake : Iceberg</name>
 
     <packaging>jar</packaging>
     <dependencies>

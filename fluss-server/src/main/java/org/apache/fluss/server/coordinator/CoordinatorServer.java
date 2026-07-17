@@ -34,11 +34,13 @@ import org.apache.fluss.server.authorizer.Authorizer;
 import org.apache.fluss.server.authorizer.AuthorizerLoader;
 import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseManager;
 import org.apache.fluss.server.coordinator.rebalance.RebalanceManager;
+import org.apache.fluss.server.coordinator.remote.RemoteDirDynamicLoader;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
 import org.apache.fluss.server.metadata.ServerMetadataCache;
 import org.apache.fluss.server.metrics.ServerMetricUtils;
 import org.apache.fluss.server.metrics.group.CoordinatorMetricGroup;
 import org.apache.fluss.server.metrics.group.LakeTieringMetricGroup;
+import org.apache.fluss.server.storage.DiskWriteLimitConfigValidator;
 import org.apache.fluss.server.zk.ZkEpoch;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperUtils;
@@ -49,7 +51,9 @@ import org.apache.fluss.utils.ExecutorUtils;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
+import org.apache.fluss.utils.concurrent.FlussScheduler;
 import org.apache.fluss.utils.concurrent.FutureUtils;
+import org.apache.fluss.utils.concurrent.Scheduler;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -67,6 +71,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import static org.apache.fluss.config.ConfigOptions.BACKGROUND_THREADS;
 import static org.apache.fluss.config.FlussConfigUtils.validateCoordinatorConfigs;
 
 /**
@@ -134,6 +139,10 @@ public class CoordinatorServer extends ServerBase {
     @GuardedBy("lock")
     private LakeTableTieringManager lakeTableTieringManager;
 
+    /** Shared scheduler for lightweight coordinator background tasks. */
+    @GuardedBy("lock")
+    private Scheduler scheduler;
+
     @GuardedBy("lock")
     private ExecutorService ioExecutor;
 
@@ -148,10 +157,16 @@ public class CoordinatorServer extends ServerBase {
     private LakeCatalogDynamicLoader lakeCatalogDynamicLoader;
 
     @GuardedBy("lock")
+    private RemoteDirDynamicLoader remoteDirDynamicLoader;
+
+    @GuardedBy("lock")
     private CoordinatorLeaderElection coordinatorLeaderElection;
 
     @GuardedBy("lock")
     private KvSnapshotLeaseManager kvSnapshotLeaseManager;
+
+    @GuardedBy("lock")
+    private ReplicaCapacityController replicaCapacityController;
 
     public CoordinatorServer(Configuration conf) {
         this(conf, SystemClock.getInstance());
@@ -209,6 +224,9 @@ public class CoordinatorServer extends ServerBase {
             LOG.info("Initializing Coordinator services as standby.");
             List<Endpoint> endpoints = Endpoint.loadBindEndpoints(conf, ServerType.COORDINATOR);
 
+            this.scheduler = new FlussScheduler(conf.get(BACKGROUND_THREADS));
+            scheduler.startup();
+
             // for metrics
             this.metricRegistry = MetricRegistry.create(conf, pluginManager);
             this.serverMetricGroup =
@@ -224,14 +242,12 @@ public class CoordinatorServer extends ServerBase {
             this.coordinatorLeaderElection = new CoordinatorLeaderElection(zkClient, serverId);
 
             this.lakeCatalogDynamicLoader = new LakeCatalogDynamicLoader(conf, pluginManager, true);
-            this.dynamicConfigManager = new DynamicConfigManager(zkClient, conf, true);
-
-            // Register server reconfigurable components
-            dynamicConfigManager.register(lakeCatalogDynamicLoader);
-
-            dynamicConfigManager.startup();
-
+            this.remoteDirDynamicLoader = new RemoteDirDynamicLoader(conf);
             this.metadataCache = new CoordinatorMetadataCache();
+            this.replicaCapacityController =
+                    new ReplicaCapacityController(conf, metadataCache, serverMetricGroup);
+
+            this.dynamicConfigManager = new DynamicConfigManager(zkClient, conf);
 
             this.authorizer = AuthorizerLoader.createAuthorizer(conf, zkClient, pluginManager);
             if (authorizer != null) {
@@ -270,10 +286,12 @@ public class CoordinatorServer extends ServerBase {
                             authorizer,
                             lakeCatalogDynamicLoader,
                             lakeTableTieringManager,
+                            remoteDirDynamicLoader,
                             dynamicConfigManager,
                             ioExecutor,
                             kvSnapshotLeaseManager,
-                            coordinatorLeaderElection);
+                            coordinatorLeaderElection,
+                            replicaCapacityController);
 
             this.rpcServer =
                     RpcServer.create(
@@ -283,6 +301,15 @@ public class CoordinatorServer extends ServerBase {
                             serverMetricGroup,
                             RequestsMetrics.createCoordinatorServerRequestMetrics(
                                     serverMetricGroup));
+            // Register server reconfigurable components
+            dynamicConfigManager.register(lakeCatalogDynamicLoader);
+            dynamicConfigManager.register(remoteDirDynamicLoader);
+            dynamicConfigManager.register(replicaCapacityController);
+            // Register stateless validators for coordinator-side upfront validation
+            dynamicConfigManager.register(new DiskWriteLimitConfigValidator());
+            rpcServer.getServerReconfigurables().forEach(dynamicConfigManager::register);
+            dynamicConfigManager.startup();
+
             rpcServer.start();
 
             registerCoordinatorServer();
@@ -303,7 +330,12 @@ public class CoordinatorServer extends ServerBase {
             this.coordinatorChannelManager = new CoordinatorChannelManager(rpcClient);
 
             this.autoPartitionManager =
-                    new AutoPartitionManager(metadataCache, metadataManager, conf);
+                    new AutoPartitionManager(
+                            metadataCache,
+                            metadataManager,
+                            remoteDirDynamicLoader,
+                            conf,
+                            replicaCapacityController);
             autoPartitionManager.start();
 
             // start coordinator event processor after we register coordinator leader to zk
@@ -317,14 +349,21 @@ public class CoordinatorServer extends ServerBase {
                             metadataCache,
                             coordinatorChannelManager,
                             coordinatorContext,
+                            replicaCapacityController,
                             autoPartitionManager,
                             lakeTableTieringManager,
                             serverMetricGroup,
                             conf,
                             ioExecutor,
                             metadataManager,
-                            kvSnapshotLeaseManager);
+                            kvSnapshotLeaseManager,
+                            scheduler,
+                            clock);
             coordinatorEventProcessor.startup();
+
+            // As the active leader, this server is the sole writer of dynamic configs and holds the
+            // latest values, so stop consuming change notifications to avoid rolling a value back.
+            dynamicConfigManager.pauseListening();
 
             createDefaultDatabase();
         }
@@ -395,6 +434,14 @@ public class CoordinatorServer extends ServerBase {
                 }
             } catch (Throwable t) {
                 LOG.warn("Failed to close client metric group", t);
+            }
+
+            try {
+                // Back to standby: resume consuming config-change notifications and re-sync from
+                // ZooKeeper to pick up any changes the new leader made while we were not listening.
+                dynamicConfigManager.resumeListening();
+            } catch (Throwable t) {
+                LOG.warn("Failed to resume dynamic config listening", t);
             }
 
             LOG.info("Coordinator leader services cleaned up successfully.");
@@ -521,9 +568,37 @@ public class CoordinatorServer extends ServerBase {
         }
     }
 
+    @VisibleForTesting
+    ReplicaCapacityController getReplicaCapacityController() {
+        return replicaCapacityController;
+    }
+
     CompletableFuture<Void> stopServices() {
+        // Closing the leader election may wait for cleanupCoordinatorLeader(), which acquires
+        // lock. Close it before entering the synchronized shutdown section to avoid deadlock.
+        Throwable leaderElectionException = null;
+        try {
+            if (coordinatorLeaderElection != null) {
+                coordinatorLeaderElection.close();
+                coordinatorLeaderElection = null;
+            }
+        } catch (Throwable t) {
+            leaderElectionException = t;
+        }
+
         synchronized (lock) {
-            Throwable exception = null;
+            Throwable exception = leaderElectionException;
+
+            try {
+                // We must shut down the scheduler early because otherwise, the scheduler could
+                // touch other resources that might have been shutdown and cause exceptions.
+                if (scheduler != null) {
+                    scheduler.shutdown();
+                    scheduler = null;
+                }
+            } catch (Throwable t) {
+                exception = ExceptionUtils.firstOrSuppressed(t, exception);
+            }
 
             try {
                 if (serverMetricGroup != null) {
@@ -616,18 +691,14 @@ public class CoordinatorServer extends ServerBase {
                     lakeCatalogDynamicLoader.close();
                 }
 
+                if (remoteDirDynamicLoader != null) {
+                    remoteDirDynamicLoader.close();
+                }
+
                 if (kvSnapshotLeaseManager != null) {
                     kvSnapshotLeaseManager.close();
                 }
 
-            } catch (Throwable t) {
-                exception = ExceptionUtils.firstOrSuppressed(t, exception);
-            }
-
-            try {
-                if (coordinatorLeaderElection != null) {
-                    coordinatorLeaderElection.close();
-                }
             } catch (Throwable t) {
                 exception = ExceptionUtils.firstOrSuppressed(t, exception);
             }

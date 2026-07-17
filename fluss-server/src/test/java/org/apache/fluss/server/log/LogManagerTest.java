@@ -33,8 +33,10 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
+import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.concurrent.FlussScheduler;
+import org.apache.fluss.utils.concurrent.Scheduler;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
@@ -50,10 +52,18 @@ import org.junit.jupiter.params.provider.MethodSource;
 import javax.annotation.Nullable;
 
 import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.time.Duration;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.Delayed;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.record.TestData.ANOTHER_DATA1;
 import static org.apache.fluss.record.TestData.DATA1;
@@ -68,6 +78,7 @@ import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.server.log.LogManager.CLEAN_SHUTDOWN_FILE;
 import static org.apache.fluss.testutils.DataTestUtils.assertLogRecordsEquals;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
+import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link LogManager}. */
@@ -354,6 +365,139 @@ final class LogManagerTest extends LogTestBase {
     }
 
     @Test
+    void testPeriodicRecoveryPointCheckpoint() throws Exception {
+        logManager.shutdown();
+        logManager = null;
+        localDiskManager.close();
+        localDiskManager = LocalDiskManager.create(conf);
+
+        RecordingScheduler scheduler = new RecordingScheduler();
+        logManager =
+                LogManager.create(
+                        conf,
+                        zkClient,
+                        scheduler,
+                        SystemClock.getInstance(),
+                        TestingMetricGroups.TABLET_SERVER_METRICS,
+                        localDiskManager);
+        logManager.startup();
+
+        RecordingScheduledTask checkpointTask =
+                scheduler.getTask("fluss-recovery-point-checkpoint");
+        assertThat((Object) checkpointTask).isNotNull();
+        assertThat(checkpointTask.getDelayMs()).isEqualTo(60_000L);
+        assertThat(checkpointTask.getPeriodMs()).isEqualTo(60_000L);
+
+        initTableBuckets(null);
+        LogTablet log1 = getOrCreateLog(tablePath1, null, tableBucket1);
+        log1.appendAsLeader(genMemoryLogRecordsByObject(DATA1));
+        log1.flush(false);
+
+        checkpointTask.run();
+
+        Map<TableBucket, Long> checkpoints =
+                new OffsetCheckpointFile(
+                                new File(tempDir, LogManager.RECOVERY_POINT_CHECKPOINT_FILE))
+                        .read();
+        assertThat(checkpoints).containsEntry(tableBucket1, log1.getRecoveryPoint());
+    }
+
+    @Test
+    void testLogManagerPeriodicallyCheckpointsRecoveryPoints() throws Exception {
+        logManager.shutdown();
+        logManager = null;
+        localDiskManager.close();
+
+        conf.set(ConfigOptions.LOG_FLUSH_OFFSET_CHECKPOINT_INTERVAL, Duration.ofMillis(10));
+        localDiskManager = LocalDiskManager.create(conf);
+
+        FlussScheduler scheduler = new FlussScheduler(1);
+        scheduler.startup();
+        try {
+            logManager =
+                    LogManager.create(
+                            conf,
+                            zkClient,
+                            scheduler,
+                            SystemClock.getInstance(),
+                            TestingMetricGroups.TABLET_SERVER_METRICS,
+                            localDiskManager);
+            logManager.startup();
+
+            initTableBuckets(null);
+            LogTablet log1 = getOrCreateLog(tablePath1, null, tableBucket1);
+            log1.appendAsLeader(genMemoryLogRecordsByObject(DATA1));
+            log1.flush(false);
+
+            waitUntil(
+                    () -> {
+                        Map<TableBucket, Long> checkpoints =
+                                new OffsetCheckpointFile(
+                                                new File(
+                                                        tempDir,
+                                                        LogManager.RECOVERY_POINT_CHECKPOINT_FILE))
+                                        .read();
+                        return checkpoints.containsKey(tableBucket1)
+                                && checkpoints.get(tableBucket1).equals(log1.getRecoveryPoint());
+                    },
+                    Duration.ofSeconds(2),
+                    "Timed out waiting for periodic recovery point checkpoint.");
+        } finally {
+            scheduler.shutdown();
+        }
+    }
+
+    @Test
+    void testRecoveryPointCheckpointSkipsFlushedSegmentsDuringRecovery() throws Exception {
+        initTableBuckets(null);
+        LogTablet log1 = getOrCreateLog(tablePath1, null, tableBucket1);
+        log1.appendAsLeader(genMemoryLogRecordsByObject(DATA1));
+
+        File firstSegmentFile = FlussPaths.logFile(log1.getLogDir(), 0L);
+        assertThat(firstSegmentFile).exists();
+        long cleanSegmentSize = firstSegmentFile.length();
+
+        log1.roll(Optional.empty());
+        long rolledSegmentBaseOffset = log1.activeLogSegment().getBaseOffset();
+        log1.appendAsLeader(genMemoryLogRecordsByObject(ANOTHER_DATA1));
+        log1.flush(false);
+        long recoveryPoint = log1.getRecoveryPoint();
+        assertThat(recoveryPoint).isGreaterThan(rolledSegmentBaseOffset);
+
+        logManager.checkpointRecoveryOffsets(tempDir);
+        Map<TableBucket, Long> checkpoints =
+                new OffsetCheckpointFile(
+                                new File(tempDir, LogManager.RECOVERY_POINT_CHECKPOINT_FILE))
+                        .read();
+        assertThat(checkpoints).containsEntry(tableBucket1, recoveryPoint);
+
+        logManager.shutdown();
+        logManager = null;
+        Files.deleteIfExists(new File(tempDir, CLEAN_SHUTDOWN_FILE).toPath());
+
+        assertThat(firstSegmentFile.length()).isEqualTo(cleanSegmentSize);
+        appendInvalidBytes(firstSegmentFile);
+        long corruptSegmentSize = firstSegmentFile.length();
+        assertThat(corruptSegmentSize).isGreaterThan(cleanSegmentSize);
+
+        localDiskManager.close();
+        localDiskManager = LocalDiskManager.create(conf);
+
+        logManager =
+                LogManager.create(
+                        conf,
+                        zkClient,
+                        new FlussScheduler(1),
+                        SystemClock.getInstance(),
+                        TestingMetricGroups.TABLET_SERVER_METRICS,
+                        localDiskManager);
+        logManager.startup();
+
+        assertThat(logManager.getLog(tableBucket1)).isPresent();
+        assertThat(firstSegmentFile.length()).isEqualTo(corruptSegmentSize);
+    }
+
+    @Test
     @Tag(ServerTestTags.JBOD_MULTI_DIR_TAG)
     void testPerDirectoryCleanShutdownAndRecovery() throws Exception {
         File dataDir1 = new File(tempDir, "data-1");
@@ -423,6 +567,96 @@ final class LogManagerTest extends LogTestBase {
 
     private FetchDataInfo readLog(LogTablet log) throws Exception {
         return log.read(0, Integer.MAX_VALUE, FetchIsolation.LOG_END, true, null, null);
+    }
+
+    private static void appendInvalidBytes(File file) throws IOException {
+        try (FileOutputStream outputStream = new FileOutputStream(file, true)) {
+            outputStream.write(new byte[] {0, 1, 2, 3});
+        }
+    }
+
+    private static final class RecordingScheduler implements Scheduler {
+        private final Map<String, RecordingScheduledTask> tasks = new HashMap<>();
+
+        @Override
+        public void startup() {}
+
+        @Override
+        public void shutdown() {}
+
+        @Override
+        public ScheduledFuture<?> schedule(
+                String name, Runnable task, long delayMs, long periodMs) {
+            RecordingScheduledTask scheduledTask =
+                    new RecordingScheduledTask(task, delayMs, periodMs);
+            tasks.put(name, scheduledTask);
+            return scheduledTask;
+        }
+
+        private RecordingScheduledTask getTask(String name) {
+            return tasks.get(name);
+        }
+    }
+
+    private static final class RecordingScheduledTask implements ScheduledFuture<Void> {
+        private final Runnable task;
+        private final long delayMs;
+        private final long periodMs;
+        private boolean cancelled;
+
+        private RecordingScheduledTask(Runnable task, long delayMs, long periodMs) {
+            this.task = task;
+            this.delayMs = delayMs;
+            this.periodMs = periodMs;
+        }
+
+        private long getDelayMs() {
+            return delayMs;
+        }
+
+        private long getPeriodMs() {
+            return periodMs;
+        }
+
+        private void run() {
+            task.run();
+        }
+
+        @Override
+        public long getDelay(TimeUnit unit) {
+            return unit.convert(delayMs, TimeUnit.MILLISECONDS);
+        }
+
+        @Override
+        public int compareTo(Delayed o) {
+            return Long.compare(getDelay(TimeUnit.MILLISECONDS), o.getDelay(TimeUnit.MILLISECONDS));
+        }
+
+        @Override
+        public boolean cancel(boolean mayInterruptIfRunning) {
+            cancelled = true;
+            return true;
+        }
+
+        @Override
+        public boolean isCancelled() {
+            return cancelled;
+        }
+
+        @Override
+        public boolean isDone() {
+            return cancelled;
+        }
+
+        @Override
+        public Void get() {
+            return null;
+        }
+
+        @Override
+        public Void get(long timeout, TimeUnit unit) {
+            return null;
+        }
     }
 
     @AfterEach

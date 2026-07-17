@@ -22,7 +22,9 @@ import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.cluster.ServerReconfigurable;
 import org.apache.fluss.exception.AuthenticationException;
+import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.metrics.util.NOPMetricsGroup;
 import org.apache.fluss.rpc.TestingTabletGatewayService;
@@ -106,9 +108,9 @@ public class SaslAuthenticationITCase {
         clientConfig.setString("client.security.sasl.mechanism", "FAKE");
         clientConfig.setString("client.security.sasl.jaas.config", jaasClientInfo);
         assertThatThrownBy(() -> testAuthentication(clientConfig))
-                .cause()
                 .isExactlyInstanceOf(AuthenticationException.class)
-                .hasMessage("Failed to load login manager");
+                .hasMessageContaining(
+                        "Only 'org.apache.fluss.security.auth.sasl.plain.PlainLoginModule' is supported in 'client.security.sasl.jaas.config'.");
     }
 
     @Test
@@ -120,9 +122,9 @@ public class SaslAuthenticationITCase {
         clientConfig.setString("client.security.sasl.mechanism", "DIGEST-MD5");
         clientConfig.setString("client.security.sasl.jaas.config", jaasClientInfo);
         assertThatThrownBy(() -> testAuthentication(clientConfig))
-                .cause()
                 .isExactlyInstanceOf(AuthenticationException.class)
-                .hasMessage("SASL server enables [PLAIN] while protocol of client is 'DIGEST-MD5'");
+                .hasMessageContaining(
+                        "Only 'org.apache.fluss.security.auth.sasl.plain.PlainLoginModule' is supported in 'client.security.sasl.jaas.config'.");
     }
 
     @Test
@@ -178,6 +180,315 @@ public class SaslAuthenticationITCase {
                 .hasMessage("Authentication failed: Invalid username or password");
         clientConfig.setString("client.security.sasl.password", "alice-secret");
         testAuthentication(clientConfig);
+    }
+
+    @Test
+    void testAddAndDeleteUser() throws Exception {
+        // Start a server with username/password list config (admin and alice)
+        Configuration serverConfig = new Configuration();
+        serverConfig.setString(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:sasl");
+        serverConfig.setString("security.sasl.enabled.mechanisms", "plain");
+        serverConfig.setString(
+                "security.sasl.plain.credentials", "admin:admin-secret,alice:alice-secret");
+        serverConfig.setString(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS.key(), "3");
+
+        MetricGroup metricGroup = NOPMetricsGroup.newInstance();
+        TestingAuthenticateGatewayService service = new TestingAuthenticateGatewayService();
+        try (NetUtils.Port port = getAvailablePort();
+                NettyServer nettyServer =
+                        new NettyServer(
+                                serverConfig,
+                                Collections.singletonList(
+                                        new Endpoint("localhost", port.getPort(), "CLIENT")),
+                                service,
+                                metricGroup,
+                                RequestsMetrics.createCoordinatorServerRequestMetrics(
+                                        metricGroup))) {
+            nettyServer.start();
+            ServerNode serverNode =
+                    new ServerNode(1, "localhost", port.getPort(), ServerType.TABLET_SERVER);
+            ServerReconfigurable reconfigurable = nettyServer.getServerReconfigurables().get(0);
+
+            // Verify "admin" can authenticate
+            try (NettyClient client = createSaslClient("admin", "admin-secret")) {
+                verifyListTables(client, serverNode);
+            }
+
+            // Verify "bob" cannot authenticate initially
+            try (NettyClient client = createSaslClient("bob", "bob-secret")) {
+                assertThatThrownBy(() -> verifyListTables(client, serverNode))
+                        .cause()
+                        .isExactlyInstanceOf(AuthenticationException.class)
+                        .hasMessageContaining("Invalid username or password");
+            }
+
+            // Add user "bob" via reconfigure
+            Configuration addBobConfig = new Configuration();
+            addBobConfig.setString(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:sasl");
+            addBobConfig.setString("security.sasl.enabled.mechanisms", "plain");
+            addBobConfig.setString(
+                    "security.sasl.plain.credentials",
+                    "admin:admin-secret,alice:alice-secret,bob:bob-secret");
+            reconfigurable.validate(addBobConfig);
+            reconfigurable.reconfigure(addBobConfig);
+
+            // Verify "bob" can now authenticate
+            try (NettyClient client = createSaslClient("bob", "bob-secret")) {
+                verifyListTables(client, serverNode);
+            }
+
+            // Delete user "admin" via reconfigure
+            Configuration removeAdminConfig = new Configuration();
+            removeAdminConfig.setString(
+                    ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:sasl");
+            removeAdminConfig.setString("security.sasl.enabled.mechanisms", "plain");
+            removeAdminConfig.setString(
+                    "security.sasl.plain.credentials", "alice:alice-secret,bob:bob-secret");
+            reconfigurable.validate(removeAdminConfig);
+            reconfigurable.reconfigure(removeAdminConfig);
+
+            // Verify "admin" can no longer authenticate
+            try (NettyClient client = createSaslClient("admin", "admin-secret")) {
+                assertThatThrownBy(() -> verifyListTables(client, serverNode))
+                        .cause()
+                        .isExactlyInstanceOf(AuthenticationException.class)
+                        .hasMessageContaining("Invalid username or password");
+            }
+
+            // Verify "bob" still works
+            try (NettyClient client = createSaslClient("bob", "bob-secret")) {
+                verifyListTables(client, serverNode);
+            }
+        }
+    }
+
+    @Test
+    void testReconfigureMergesUsersWithExistingJaasConfig() throws Exception {
+        // Start server with legacy jaas.config containing "admin" and "alice"
+        Configuration serverConfig = new Configuration();
+        serverConfig.setString(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:sasl");
+        serverConfig.setString("security.sasl.enabled.mechanisms", "plain");
+        serverConfig.setString(
+                "security.sasl.plain.jaas.config",
+                "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required"
+                        + " user_admin=\"admin-secret\""
+                        + " user_alice=\"alice-secret\";");
+        serverConfig.setString(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS.key(), "3");
+
+        MetricGroup metricGroup = NOPMetricsGroup.newInstance();
+        TestingAuthenticateGatewayService service = new TestingAuthenticateGatewayService();
+        try (NetUtils.Port port = getAvailablePort();
+                NettyServer nettyServer =
+                        new NettyServer(
+                                serverConfig,
+                                Collections.singletonList(
+                                        new Endpoint("localhost", port.getPort(), "CLIENT")),
+                                service,
+                                metricGroup,
+                                RequestsMetrics.createCoordinatorServerRequestMetrics(
+                                        metricGroup))) {
+            nettyServer.start();
+            ServerNode serverNode =
+                    new ServerNode(1, "localhost", port.getPort(), ServerType.TABLET_SERVER);
+            ServerReconfigurable reconfigurable = nettyServer.getServerReconfigurables().get(0);
+
+            // Verify existing users from jaas.config can authenticate
+            try (NettyClient client = createSaslClient("admin", "admin-secret")) {
+                verifyListTables(client, serverNode);
+            }
+            try (NettyClient client = createSaslClient("alice", "alice-secret")) {
+                verifyListTables(client, serverNode);
+            }
+
+            // Verify "bob" cannot authenticate before reconfigure
+            try (NettyClient client = createSaslClient("bob", "bob-secret")) {
+                assertThatThrownBy(() -> verifyListTables(client, serverNode))
+                        .cause()
+                        .isExactlyInstanceOf(AuthenticationException.class)
+                        .hasMessageContaining("Invalid username or password");
+            }
+
+            // Reconfigure with SERVER_SASL_CREDENTIALS containing only "bob".
+            // The merge logic should keep existing users (admin, alice) AND add bob.
+            Configuration newConfig = new Configuration();
+            newConfig.setString(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:sasl");
+            newConfig.setString("security.sasl.plain.credentials", "bob:bob-secret");
+            reconfigurable.validate(newConfig);
+            reconfigurable.reconfigure(newConfig);
+
+            // After merge: admin, alice (from existing jaas.config) + bob (from users list)
+            try (NettyClient client = createSaslClient("admin", "admin-secret")) {
+                verifyListTables(client, serverNode);
+            }
+            try (NettyClient client = createSaslClient("alice", "alice-secret")) {
+                verifyListTables(client, serverNode);
+            }
+            try (NettyClient client = createSaslClient("bob", "bob-secret")) {
+                verifyListTables(client, serverNode);
+            }
+
+            newConfig.removeKey("security.sasl.plain.credentials");
+            reconfigurable.validate(newConfig);
+            reconfigurable.reconfigure(newConfig);
+            // Verify existing users from jaas.config can authenticate
+            try (NettyClient client = createSaslClient("alice", "alice-secret")) {
+                verifyListTables(client, serverNode);
+            }
+
+            // Verify "bob" cannot authenticate before reconfigure
+            try (NettyClient client = createSaslClient("bob", "bob-secret")) {
+                assertThatThrownBy(() -> verifyListTables(client, serverNode))
+                        .cause()
+                        .isExactlyInstanceOf(AuthenticationException.class)
+                        .hasMessageContaining("Invalid username or password");
+            }
+        }
+    }
+
+    @Test
+    void testValidateRejectsInvalidUsernameCharacters() throws Exception {
+        Configuration serverConfig = new Configuration();
+        serverConfig.setString(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:sasl");
+        serverConfig.setString("security.sasl.enabled.mechanisms", "plain");
+        serverConfig.setString(
+                "security.sasl.plain.jaas.config",
+                "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required"
+                        + " user_admin=\"admin-secret\";");
+        serverConfig.setString(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS.key(), "3");
+
+        MetricGroup metricGroup = NOPMetricsGroup.newInstance();
+        TestingAuthenticateGatewayService service = new TestingAuthenticateGatewayService();
+        try (NetUtils.Port port = getAvailablePort();
+                NettyServer nettyServer =
+                        new NettyServer(
+                                serverConfig,
+                                Collections.singletonList(
+                                        new Endpoint("localhost", port.getPort(), "CLIENT")),
+                                service,
+                                metricGroup,
+                                RequestsMetrics.createCoordinatorServerRequestMetrics(
+                                        metricGroup))) {
+            nettyServer.start();
+            ServerReconfigurable reconfigurable = nettyServer.getServerReconfigurables().get(0);
+
+            // Username with spaces
+            Configuration badUsername = new Configuration();
+            badUsername.setString("security.sasl.plain.credentials", "bad user:password");
+            assertThatThrownBy(() -> reconfigurable.validate(badUsername))
+                    .isInstanceOf(ConfigException.class)
+                    .hasMessageContaining("contains invalid characters");
+
+            // Username with special chars (@)
+            Configuration atUsername = new Configuration();
+            atUsername.setString("security.sasl.plain.credentials", "user@domain:password");
+            assertThatThrownBy(() -> reconfigurable.validate(atUsername))
+                    .isInstanceOf(ConfigException.class)
+                    .hasMessageContaining("contains invalid characters");
+
+            // Username with dots
+            Configuration dotUsername = new Configuration();
+            dotUsername.setString("security.sasl.plain.credentials", "user.name:password");
+            assertThatThrownBy(() -> reconfigurable.validate(dotUsername))
+                    .isInstanceOf(ConfigException.class)
+                    .hasMessageContaining("contains invalid characters");
+
+            // Username with hyphens
+            Configuration hyphenUsername = new Configuration();
+            hyphenUsername.setString("security.sasl.plain.credentials", "user-name:password");
+            assertThatThrownBy(() -> reconfigurable.validate(hyphenUsername))
+                    .isInstanceOf(ConfigException.class)
+                    .hasMessageContaining("contains invalid characters");
+
+            // Valid username with underscores should pass
+            Configuration validUsername = new Configuration();
+            validUsername.setString("security.sasl.plain.credentials", "user_name:pw");
+            reconfigurable.validate(validUsername);
+        }
+    }
+
+    @Test
+    void testValidateRejectsInvalidPasswordCharacters() throws Exception {
+        Configuration serverConfig = new Configuration();
+        serverConfig.setString(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:sasl");
+        serverConfig.setString("security.sasl.enabled.mechanisms", "plain");
+        serverConfig.setString(
+                "security.sasl.plain.jaas.config",
+                "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required"
+                        + " user_admin=\"admin-secret\";");
+        serverConfig.setString(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS.key(), "3");
+
+        MetricGroup metricGroup = NOPMetricsGroup.newInstance();
+        TestingAuthenticateGatewayService service = new TestingAuthenticateGatewayService();
+        try (NetUtils.Port port = getAvailablePort();
+                NettyServer nettyServer =
+                        new NettyServer(
+                                serverConfig,
+                                Collections.singletonList(
+                                        new Endpoint("localhost", port.getPort(), "CLIENT")),
+                                service,
+                                metricGroup,
+                                RequestsMetrics.createCoordinatorServerRequestMetrics(
+                                        metricGroup))) {
+            nettyServer.start();
+            ServerReconfigurable reconfigurable = nettyServer.getServerReconfigurables().get(0);
+
+            // Password with comma (breaks map format)
+            Configuration commaPassword = new Configuration();
+            commaPassword.setString("security.sasl.plain.credentials", "bob:pass,word");
+            assertThatThrownBy(() -> reconfigurable.validate(commaPassword))
+                    .isInstanceOf(ConfigException.class)
+                    .hasMessageContaining("Failed to parse security.sasl.plain.credentials");
+
+            // Password with colon (breaks map key-value format)
+            Configuration colonPassword = new Configuration();
+            colonPassword.setString("security.sasl.plain.credentials", "bob:'pass:word'");
+            assertThatThrownBy(() -> reconfigurable.validate(colonPassword))
+                    .isInstanceOf(ConfigException.class)
+                    .hasMessageContaining("contains invalid characters");
+
+            // Password with double-quote (breaks JAAS value)
+            Configuration quotePassword = new Configuration();
+            quotePassword.setString("security.sasl.plain.credentials", "bob:pass\"word");
+            assertThatThrownBy(() -> reconfigurable.validate(quotePassword))
+                    .isInstanceOf(ConfigException.class)
+                    .hasMessageContaining("password for user 'bob' contains invalid characters");
+
+            // Password with semicolon (breaks JAAS statement)
+            Configuration semicolonPassword = new Configuration();
+            semicolonPassword.setString("security.sasl.plain.credentials", "bob:pass;word");
+            assertThatThrownBy(() -> reconfigurable.validate(semicolonPassword))
+                    .isInstanceOf(ConfigException.class)
+                    .hasMessageContaining("contains invalid characters");
+
+            // Password with backslash (escape char)
+            Configuration backslashPassword = new Configuration();
+            backslashPassword.setString("security.sasl.plain.credentials", "bob:pass\\word");
+            assertThatThrownBy(() -> reconfigurable.validate(backslashPassword))
+                    .isInstanceOf(ConfigException.class)
+                    .hasMessageContaining("contains invalid characters");
+
+            // Valid password with special chars (!, @, #, $, etc.) should pass
+            Configuration validPassword = new Configuration();
+            validPassword.setString("security.sasl.plain.credentials", "bob:P@ss!w0rd#$%^&*()");
+            reconfigurable.validate(validPassword);
+        }
+    }
+
+    private NettyClient createSaslClient(String username, String password) {
+        Configuration clientConfig = new Configuration();
+        clientConfig.setString("client.security.protocol", "sasl");
+        clientConfig.setString("client.security.sasl.mechanism", "plain");
+        clientConfig.setString("client.security.sasl.username", username);
+        clientConfig.setString("client.security.sasl.password", password);
+        return new NettyClient(clientConfig, TestingClientMetricGroup.newInstance());
+    }
+
+    private void verifyListTables(NettyClient client, ServerNode serverNode) throws Exception {
+        ListTablesRequest request = new ListTablesRequest().setDatabaseName("test-database");
+        ListTablesResponse response =
+                (ListTablesResponse)
+                        client.sendRequest(serverNode, ApiKeys.LIST_TABLES, request).get();
+        assertThat(response.getTableNamesList()).isEqualTo(Collections.singletonList("test-table"));
     }
 
     private void testAuthentication(Configuration clientConfig) throws Exception {

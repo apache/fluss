@@ -23,6 +23,8 @@ import org.apache.fluss.metadata.{TableBucket, TablePath}
 import org.apache.fluss.spark.read.{FlussMetrics, FlussScan, FlussUpsertInputPartition, FlussUpsertScan}
 
 import org.apache.spark.sql.{DataFrame, Row}
+import org.apache.spark.sql.execution.{FilterExec, SparkPlan}
+import org.apache.spark.sql.execution.adaptive.AdaptiveSparkPlanExec
 import org.apache.spark.sql.execution.datasources.v2.{BatchScanExec, DataSourceV2ScanRelation}
 import org.assertj.core.api.Assertions.assertThat
 
@@ -133,13 +135,6 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
           Row(800L, 23L, "addr3") ::
           Nil
       )
-
-      // Only support FULL startup mode.
-      withSQLConf(
-        s"${SparkFlussConf.SPARK_FLUSS_CONF_PREFIX}${SparkFlussConf.SCAN_START_UP_MODE.key()}" -> "latest") {
-        intercept[UnsupportedOperationException](
-          sql(s"SELECT * FROM $DEFAULT_DATABASE.t ORDER BY orderId").show())
-      }
     }
   }
 
@@ -432,6 +427,57 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
     }
   }
 
+  test("Spark Read: mixed partition and non-partition filter (PK table)") {
+    withPkPartitionedTable {
+      val query = sql(s"SELECT * FROM $DEFAULT_DATABASE.t WHERE dt = '2026-01-01' AND amount > 601")
+      checkAnswer(query, Row(700L, 22L, 602, "addr2", "2026-01-01") :: Nil)
+      // Partition predicate extracted for partition pruning
+      assert(partitionPredicate(query).isDefined)
+      // Non-partition predicate (amount > 601) remains as a Filter node in the plan
+      val executedPlan = query.queryExecution.executedPlan match {
+        case aqe: AdaptiveSparkPlanExec => aqe.executedPlan
+        case e: SparkPlan => e
+      }
+      assert(
+        executedPlan.exists(_.isInstanceOf[FilterExec]),
+        s"Expected Filter node in plan for non-partition predicate, got: $executedPlan")
+
+      val numRowsRead = executedPlan
+        .collectFirst { case b: BatchScanExec => b.metrics(FlussMetrics.NUM_ROWS_READ).value }
+        .getOrElse(0L)
+      assert(numRowsRead == 2L, s"Expected 2 rows read for single partition, got $numRowsRead")
+    }
+  }
+
+  test("Spark Read: partition-only filter should not leave FilterExec in plan (PK table)") {
+    withPkPartitionedTable {
+      val query = sql(s"SELECT * FROM $DEFAULT_DATABASE.t WHERE dt = '2026-01-01'")
+      checkAnswer(
+        query,
+        Row(700L, 22L, 602, "addr2", "2026-01-01") :: Row(
+          600L,
+          21L,
+          601,
+          "addr1",
+          "2026-01-01") :: Nil)
+      // Partition predicate extracted for partition pruning
+      assert(partitionPredicate(query).isDefined)
+      // No FilterExec should remain since all predicates are partition predicates
+      val executedPlan = query.queryExecution.executedPlan match {
+        case aqe: AdaptiveSparkPlanExec => aqe.executedPlan
+        case e: SparkPlan => e
+      }
+      assert(
+        !executedPlan.exists(_.isInstanceOf[FilterExec]),
+        s"Expected no Filter node in plan for partition-only predicate, got: $executedPlan")
+
+      val numRowsRead = executedPlan
+        .collectFirst { case b: BatchScanExec => b.metrics(FlussMetrics.NUM_ROWS_READ).value }
+        .getOrElse(0L)
+      assert(numRowsRead == 2L, s"Expected 2 rows read for single partition, got $numRowsRead")
+    }
+  }
+
   private def withPkPartitionedTable(body: => Unit): Unit = withTable("t") {
     sql(s"""
            |CREATE TABLE $DEFAULT_DATABASE.t (
@@ -446,6 +492,53 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
            |(1000L, 25L, 605, "addr5", "2026-01-03")
            |""".stripMargin)
     body
+  }
+
+  test("Spark Read: primary key table limit pushdown") {
+    withPkPartitionedTable {
+      val dfNoLimit = sql(s"SELECT * FROM $DEFAULT_DATABASE.t")
+      assert(flussUpsertScan(dfNoLimit).flatMap(_.limit).isEmpty)
+
+      val dfLimit = sql(s"SELECT * FROM $DEFAULT_DATABASE.t WHERE dt = '2026-01-01' LIMIT 1")
+      assert(flussUpsertScan(dfLimit).flatMap(_.limit).contains(1))
+
+      // Verify limit pushdown actually reduces rows read via metrics
+      dfLimit.collect()
+      val batchScanExec = dfLimit.queryExecution.executedPlan.collectFirst {
+        case b: BatchScanExec => b
+      }.get
+      val numRowsRead = batchScanExec.metrics(FlussMetrics.NUM_ROWS_READ).value
+      assert(numRowsRead == 1L, s"Expected 1 rows read with limit pushdown, got $numRowsRead")
+    }
+  }
+
+  test("Spark Read: primary key table batch read has no data hole with monotonic keys") {
+    withTable("fluss_fault_test_pk") {
+      val tablePath = createTablePath("fluss_fault_test_pk")
+      sql(s"""
+             |CREATE TABLE $DEFAULT_DATABASE.fluss_fault_test_pk (seq_id BIGINT, payload STRING)
+             |TBLPROPERTIES("primary.key" = "seq_id", "bucket.num" = 1)
+             |""".stripMargin)
+
+      // First batch: seq_id 1..100, materialized into a kv snapshot.
+      val firstBatch = (1 to 100).map(i => s"($i, 'v$i')").mkString(", ")
+      sql(s"INSERT INTO $DEFAULT_DATABASE.fluss_fault_test_pk VALUES $firstBatch")
+      flussServer.triggerAndWaitSnapshot(tablePath)
+
+      // Second batch: seq_id 101..200, only present in the log tail. All keys are
+      // strictly greater than the max key in the snapshot, mimicking a datagen job
+      // that keeps appending monotonically increasing primary keys.
+      val secondBatch = (101 to 200).map(i => s"($i, 'v$i')").mkString(", ")
+      sql(s"INSERT INTO $DEFAULT_DATABASE.fluss_fault_test_pk VALUES $secondBatch")
+
+      // total_count must equal max_seq - min_seq + 1, i.e. no data hole.
+      checkAnswer(
+        sql(s"""
+               |SELECT COUNT(*) AS total_count, MAX(seq_id) AS max_seq, MIN(seq_id) AS min_seq
+               |FROM $DEFAULT_DATABASE.fluss_fault_test_pk""".stripMargin),
+        Row(200L, 200L, 1L) :: Nil
+      )
+    }
   }
 
   private def partitionPredicate(df: DataFrame): Option[org.apache.fluss.predicate.Predicate] = {

@@ -145,4 +145,4 @@ SELECT * FROM log_table$changelog;
 For detailed information, see the [Virtual Tables](/table-design/virtual-tables.md) documentation.
 
 ## Log Tiering
-Log Table supports tiering data to different storage tiers. See more details about [Remote Log](maintenance/tiered-storage/remote-storage.md).
+Log Table supports tiering data to different storage tiers. See more details about [Remote Log](../../maintenance/tiered-storage/remote-storage.md).

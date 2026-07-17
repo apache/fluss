@@ -21,21 +21,49 @@ import org.apache.fluss.config.{ConfigOptions, Configuration}
 import org.apache.fluss.lake.lakestorage.LakeStoragePluginSetUp
 import org.apache.fluss.lake.source.{LakeSource, LakeSplit}
 import org.apache.fluss.metadata.TablePath
+import org.apache.fluss.predicate.{Predicate => FlussPredicate}
 import org.apache.fluss.utils.PropertiesUtils
 
-import java.util
+import org.apache.spark.internal.Logging
 
-object FlussLakeUtils {
+import java.util
+import java.util.Collections
+
+import scala.collection.JavaConverters._
+
+object FlussLakeUtils extends Logging {
+
+  /**
+   * Paimon DLF supports multiple authentication schemes (see
+   * https://paimon.apache.org/docs/1.3/concepts/rest/dlf/), allowing clients to freely choose the
+   * appropriate method based on their runtime environment. However, the Fluss server does not
+   * propagate auth configs for all scenarios. These keys are therefore overridden with the values
+   * from the Catalog configuration, replacing whatever the Fluss server provides, so that clients
+   * can use their preferred authentication method.
+   */
+  private val REMOVAL_KEYS = Set(
+    "dlf.access-key-id",
+    "dlf.access-key-secret",
+    "dlf.security-token",
+    "dlf.token-path",
+    "dlf.token-loader")
 
   def createLakeSource(
+      catalogProperties: util.Map[String, String],
       tableProperties: util.Map[String, String],
       tablePath: TablePath): LakeSource[LakeSplit] = {
     val tableConfig = Configuration.fromMap(tableProperties)
     val datalakeFormat = tableConfig.get(ConfigOptions.TABLE_DATALAKE_FORMAT)
     val dataLakePrefix = "table.datalake." + datalakeFormat + "."
 
-    val catalogProperties = PropertiesUtils.extractAndRemovePrefix(tableProperties, dataLakePrefix)
-    val lakeConfig = Configuration.fromMap(catalogProperties)
+    val rewriteProperties =
+      PropertiesUtils.extractAndRemovePrefix(tableProperties, dataLakePrefix).asScala.filterNot {
+        case (k, _) => REMOVAL_KEYS(k)
+      } ++
+        catalogProperties.asScala.filter { case (k, _) => REMOVAL_KEYS(k) }
+
+    val lakeConfig =
+      Configuration.fromMap(rewriteProperties.asJava)
     val lakeStoragePlugin =
       LakeStoragePluginSetUp.fromDataLakeFormat(datalakeFormat.toString, null)
     val lakeStorage = lakeStoragePlugin.createLakeStorage(lakeConfig)
@@ -45,4 +73,19 @@ object FlussLakeUtils {
   def lakeProjection(projection: Array[Int]): Array[Array[Int]] = {
     projection.map(i => Array(i))
   }
+
+  def applyLakeFilters(
+      lakeSource: LakeSource[LakeSplit],
+      predicates: java.util.List[FlussPredicate]): LakeSource.FilterPushDownResult = {
+    val result = lakeSource.withFilters(predicates)
+    logInfo(
+      s"Lake source accepted ${result.acceptedPredicates()}, " +
+        s"remaining ${result.remainingPredicates()}")
+    result
+  }
+
+  def applyLakeFilters(
+      lakeSource: LakeSource[LakeSplit],
+      predicate: FlussPredicate): LakeSource.FilterPushDownResult =
+    applyLakeFilters(lakeSource, Collections.singletonList(predicate))
 }

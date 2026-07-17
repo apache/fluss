@@ -30,7 +30,7 @@
     <packaging>jar</packaging>
 
     <artifactId>fluss-flink-tiering</artifactId>
-    <name>Fluss : Flink : Tiering</name>
+    <name>Apache Fluss (Incubating) : Flink : Tiering</name>
 
     <properties>
         <flink.minor.version>1.20.3</flink.minor.version>

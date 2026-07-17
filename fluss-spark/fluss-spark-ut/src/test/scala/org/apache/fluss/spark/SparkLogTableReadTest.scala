@@ -17,12 +17,12 @@
 
 package org.apache.fluss.spark
 
-import org.apache.fluss.spark.read.{FlussMetrics, FlussScan}
-import org.apache.fluss.spark.read.FlussAppendScan
+import org.apache.fluss.spark.read.{FlussAppendScan, FlussMetrics, FlussScan}
 
 import org.apache.spark.sql.{DataFrame, Row}
-import org.apache.spark.sql.Row
 import org.apache.spark.sql.connector.expressions.filter.Predicate
+import org.apache.spark.sql.connector.read.InputPartition
+import org.apache.spark.sql.execution.adaptive.AdaptiveSparkPlanExec
 import org.apache.spark.sql.execution.datasources.v2.{BatchScanExec, DataSourceV2ScanRelation}
 import org.assertj.core.api.Assertions.assertThat
 
@@ -487,6 +487,7 @@ class SparkLogTableReadTest extends FlussSparkTestBase {
                          |WHERE dt = '2026-01-02' AND amount > 603 ORDER BY orderId""".stripMargin)
       checkAnswer(query, Row(900L) :: Nil)
       assert(partitionPredicate(query).isDefined)
+      assert(pushedPredicates(query).nonEmpty)
     }
   }
 
@@ -494,6 +495,42 @@ class SparkLogTableReadTest extends FlussSparkTestBase {
     withPartitionedTable {
       val query = sql(s"SELECT * FROM $DEFAULT_DATABASE.t WHERE dt = '2099-01-01'")
       checkAnswer(query, Nil)
+      assert(partitionPredicate(query).isDefined)
+    }
+  }
+
+  test("Spark Read: partition pushdown — all supported types") {
+    withTable("t") {
+      sql(s"""
+             |CREATE TABLE $DEFAULT_DATABASE.t (
+             |  id INT,
+             |  p_bool BOOLEAN, p_int_eq INT, p_int_range INT,
+             |  p_bigint BIGINT, p_float FLOAT, p_double DOUBLE,
+             |  p_string STRING, p_binary BINARY,
+             |  p_date DATE, p_ts TIMESTAMP, p_ts_ntz TIMESTAMP_NTZ)
+             |PARTITIONED BY (
+             |  p_bool, p_int_eq, p_int_range, p_bigint, p_float, p_double,
+             |  p_string, p_binary, p_date, p_ts, p_ts_ntz)""".stripMargin)
+      sql(s"""INSERT INTO $DEFAULT_DATABASE.t VALUES
+             |(1, false, 10, 10, 99999L, CAST(12.5 AS FLOAT), 7.88, 'hello',
+             |  CAST('Hi' AS BINARY), DATE '2026-01-01',
+             |  TIMESTAMP '2026-01-01 12:00:00', TIMESTAMP_NTZ '2026-01-01 12:00:00'),
+             |(2, true, 11, 2, 99998L, CAST(13.5 AS FLOAT), 8.88, 'world',
+             |  CAST('Bye' AS BINARY), DATE '2026-01-02',
+             |  TIMESTAMP '2026-01-02 12:00:00', TIMESTAMP_NTZ '2026-01-02 12:00:00')
+             |""".stripMargin)
+
+      val query = sql(s"""
+                         |SELECT id FROM $DEFAULT_DATABASE.t WHERE
+                         |  p_bool = false AND p_int_eq = 10 AND p_int_range > 2
+                         |  AND p_bigint = 99999L
+                         |  AND p_float = CAST(12.5 AS FLOAT) AND p_double = 7.88
+                         |  AND p_string = 'hello' AND p_binary = CAST('Hi' AS BINARY)
+                         |  AND p_date = DATE '2026-01-01'
+                         |  AND p_ts = TIMESTAMP '2026-01-01 12:00:00'
+                         |  AND p_ts_ntz = TIMESTAMP_NTZ '2026-01-01 12:00:00'
+                         |""".stripMargin)
+      checkAnswer(query, Row(1) :: Nil)
       assert(partitionPredicate(query).isDefined)
     }
   }
@@ -601,6 +638,96 @@ class SparkLogTableReadTest extends FlussSparkTestBase {
 
       val numRowsRead = batchScanExec.metrics(FlussMetrics.NUM_ROWS_READ).value
       assert(numRowsRead == 5L, s"Expected 5 rows read, got $numRowsRead")
+    }
+  }
+
+  test("Spark Read: limit pushdown") {
+    withTable("t") {
+      sql(s"""
+             |CREATE TABLE $DEFAULT_DATABASE.t (id INT, name STRING)
+             |""".stripMargin)
+
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t VALUES
+             |(1, 'a'), (2, 'b'), (3, 'c'), (4, 'd'), (5, 'e')
+             |""".stripMargin)
+
+      val dfNoLimit = sql(s"SELECT * FROM $DEFAULT_DATABASE.t")
+      assert(flussAppendScans(dfNoLimit).flatMap(_.limit).isEmpty)
+
+      val dfLimit = sql(s"SELECT * FROM $DEFAULT_DATABASE.t LIMIT 2")
+      assert(flussAppendScans(dfLimit).flatMap(_.limit).distinct == Seq(2))
+
+      // Verify limit pushdown actually reduces rows read via metrics
+      dfLimit.collect()
+      val batchScanExec = dfLimit.queryExecution.executedPlan.collectFirst {
+        case b: BatchScanExec => b
+      }.get
+      val numRowsRead = batchScanExec.metrics(FlussMetrics.NUM_ROWS_READ).value
+      assert(numRowsRead == 2L, s"Expected 2 rows read with limit pushdown, got $numRowsRead")
+    }
+  }
+
+  test("Spark Read: split partition by config") {
+    withSampleTable {
+      withSQLConf(
+        s"${SparkFlussConf.SPARK_FLUSS_CONF_PREFIX}${SparkFlussConf.SCAN_MAX_RECORDS_PER_PARTITION.key()}"
+          -> "2") {
+        val df = sql(s"SELECT amount FROM $DEFAULT_DATABASE.t ORDER BY orderId")
+        checkAnswer(df, Row(601) :: Row(602) :: Row(603) :: Row(604) :: Row(605) :: Nil)
+
+        val partitions = getInputPartitions(df)
+        assertThat(partitions.length).isEqualTo(3)
+      }
+    }
+
+    withTable("t_partition") {
+      sql(
+        s"""
+           |CREATE TABLE $DEFAULT_DATABASE.t_partition (orderId BIGINT, itemId BIGINT, amount INT, address STRING, dt STRING)
+           |PARTITIONED BY (dt)
+           |""".stripMargin
+      )
+
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t_partition VALUES
+             |(600L, 21L, 601, "addr1", "2026-01-01"), (700L, 22L, 602, "addr2", "2026-01-01"),
+             |(800L, 23L, 603, "addr3", "2026-01-02"), (900L, 24L, 604, "addr4", "2026-01-02"),
+             |(1000L, 25L, 605, "addr5", "2026-01-03")
+             |""".stripMargin)
+      Seq((0, 3), (1, 5), (2, 3)).foreach {
+        case (maxRecords, expectedPartitions) =>
+          withClue(s"maxRecords = $maxRecords, expectedPartitions = $expectedPartitions") {
+            withSQLConf(
+              s"${SparkFlussConf.SPARK_FLUSS_CONF_PREFIX}${SparkFlussConf.SCAN_MAX_RECORDS_PER_PARTITION.key()}"
+                -> maxRecords.toString) {
+              val df = sql(s"SELECT * FROM $DEFAULT_DATABASE.t_partition ORDER BY orderId")
+              checkAnswer(
+                df,
+                Row(600L, 21L, 601, "addr1", "2026-01-01") ::
+                  Row(700L, 22L, 602, "addr2", "2026-01-01") ::
+                  Row(800L, 23L, 603, "addr3", "2026-01-02") ::
+                  Row(900L, 24L, 604, "addr4", "2026-01-02") ::
+                  Row(1000L, 25L, 605, "addr5", "2026-01-03") :: Nil
+              )
+
+              val partitions = getInputPartitions(df)
+              assertThat(partitions.length).isEqualTo(expectedPartitions)
+            }
+          }
+      }
+    }
+  }
+
+  private def getInputPartitions(df: DataFrame): Seq[InputPartition] = {
+    df.queryExecution.executedPlan match {
+      case aeq: AdaptiveSparkPlanExec =>
+        aeq.inputPlan.collect { case b: BatchScanExec => b.inputPartitions }.flatten
+      case e =>
+        e.collect {
+          case b: BatchScanExec => b.inputPartitions
+          case _ => Seq.empty[InputPartition]
+        }.flatten
     }
   }
 }

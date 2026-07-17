@@ -17,6 +17,8 @@
 
 package org.apache.fluss.server.utils;
 
+import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
@@ -64,6 +66,7 @@ import static org.apache.fluss.metadata.TableDescriptor.LOG_OFFSET_COLUMN;
 import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
 import static org.apache.fluss.utils.PartitionUtils.PARTITION_KEY_SUPPORTED_TYPES;
+import static org.apache.fluss.utils.PartitionUtils.validateTimeFormat;
 
 /** Validator of {@link TableDescriptor}. */
 public class TableDescriptorValidation {
@@ -129,6 +132,19 @@ public class TableDescriptorValidation {
         checkTableLakeFormatMatchesCluster(tableConf, clusterDataLakeFormat);
     }
 
+    /** Validates the schema after altering table columns. */
+    @Internal
+    public static void validateAlterTableSchema(TableInfo table, Schema newSchema) {
+        if (table.getTableConfig()
+                .getMergeEngineType()
+                .map(MergeEngineType.AGGREGATION::equals)
+                .orElse(false)) {
+            validateAggregationFunctionParameters(newSchema);
+        } else {
+            validateNoAggregationFunctions(newSchema);
+        }
+    }
+
     private static void checkTableLakeFormatMatchesCluster(
             Configuration tableConf, @Nullable DataLakeFormat clusterDataLakeFormat) {
         if (clusterDataLakeFormat == null) {
@@ -168,6 +184,15 @@ public class TableDescriptorValidation {
                             unsupportedKeys.stream()
                                     .map(k -> "'" + k + "'")
                                     .collect(Collectors.joining(", "))));
+        }
+
+        // Standby replica is only applicable to primary key tables
+        if (tableKeysToChange.contains(ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key())
+                && !currentTable.hasPrimaryKey()) {
+            throw new InvalidAlterTableException(
+                    String.format(
+                            "'%s' can only be altered on primary key tables.",
+                            ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key()));
         }
 
         if (!currentConfig.getDataLakeFormat().isPresent()) {
@@ -230,7 +255,7 @@ public class TableDescriptorValidation {
         if (bucketCount > maxBucketNum) {
             throw new TooManyBucketsException(
                     String.format(
-                            "Bucket count %s exceeds the maximum limit %s.",
+                            "Bucket count %s exceeds the maximum limit %s for a non-partitioned table or partition.",
                             bucketCount, maxBucketNum));
         }
         List<String> bucketKeys = tableDescriptor.getTableDistribution().get().getBucketKeys();
@@ -314,6 +339,9 @@ public class TableDescriptorValidation {
     private static void checkMergeEngine(
             Configuration tableConf, boolean hasPrimaryKey, Schema schema) {
         MergeEngineType mergeEngine = tableConf.get(ConfigOptions.TABLE_MERGE_ENGINE);
+        if (mergeEngine != MergeEngineType.AGGREGATION) {
+            validateNoAggregationFunctions(schema);
+        }
         if (mergeEngine != null) {
             if (!hasPrimaryKey) {
                 throw new InvalidConfigException(
@@ -364,6 +392,20 @@ public class TableDescriptorValidation {
                 }
                 // Validate aggregation function parameters for aggregation merge engine
                 validateAggregationFunctionParameters(schema);
+            }
+        }
+    }
+
+    /** Validates that the schema doesn't contain any aggregation functions. */
+    private static void validateNoAggregationFunctions(Schema schema) {
+        for (Schema.Column column : schema.getColumns()) {
+            Optional<AggFunction> aggFunction = column.getAggFunction();
+            if (aggFunction.isPresent()) {
+                throw new InvalidConfigException(
+                        String.format(
+                                "Aggregation function is only supported for aggregation merge engine table, "
+                                        + "but column '%s' has aggregation function '%s'.",
+                                column.getName(), aggFunction.get()));
             }
         }
     }
@@ -421,6 +463,8 @@ public class TableDescriptorValidation {
             Configuration tableConf, List<String> partitionKeys, RowType rowType) {
         boolean isPartitioned = !partitionKeys.isEmpty();
         AutoPartitionStrategy autoPartition = AutoPartitionStrategy.from(tableConf);
+        boolean hasExplicitTimeFormat =
+                tableConf.contains(ConfigOptions.TABLE_AUTO_PARTITION_TIME_FORMAT);
 
         if (!isPartitioned && autoPartition.isAutoPartitionEnabled()) {
             throw new InvalidConfigException(
@@ -441,6 +485,18 @@ public class TableDescriptorValidation {
                                     PARTITION_KEY_SUPPORTED_TYPES,
                                     partitionKey,
                                     partitionDataType));
+                }
+            }
+
+            if (hasExplicitTimeFormat) {
+                try {
+                    validateTimeFormat(autoPartition.timeUnit(), autoPartition);
+                } catch (IllegalArgumentException e) {
+                    throw new InvalidTableException(
+                            String.format(
+                                    "Invalid table property '%s': %s",
+                                    ConfigOptions.TABLE_AUTO_PARTITION_TIME_FORMAT.key(),
+                                    e.getMessage()));
                 }
             }
 
@@ -478,7 +534,41 @@ public class TableDescriptorValidation {
                                             + "partition is enabled, please set table property '%s'.",
                                     ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT.key()));
                 }
+
+                String autoPartitionKey =
+                        StringUtils.isNullOrWhitespaceOnly(autoPartition.key())
+                                ? partitionKeys.get(0)
+                                : autoPartition.key();
+                DataType autoPartitionDataType =
+                        rowType.getTypeAt(rowType.getFieldIndex(autoPartitionKey));
+                checkDateAutoPartitionCompatibility(
+                        autoPartition, autoPartitionKey, autoPartitionDataType);
             }
+        }
+    }
+
+    private static void checkDateAutoPartitionCompatibility(
+            AutoPartitionStrategy autoPartition,
+            String autoPartitionKey,
+            DataType autoPartitionDataType) {
+        if (autoPartitionDataType.getTypeRoot() != DataTypeRoot.DATE) {
+            return;
+        }
+        if (autoPartition.timeUnit() != AutoPartitionTimeUnit.DAY) {
+            throw new InvalidTableException(
+                    String.format(
+                            "Table property '%s' must be '%s' when auto partition key '%s' has DATE type.",
+                            ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT.key(),
+                            AutoPartitionTimeUnit.DAY,
+                            autoPartitionKey));
+        }
+        if (!"yyyy-MM-dd".equals(autoPartition.timeFormat())) {
+            throw new InvalidTableException(
+                    String.format(
+                            "Table property '%s' must be '%s' when auto partition key '%s' has DATE type.",
+                            ConfigOptions.TABLE_AUTO_PARTITION_TIME_FORMAT.key(),
+                            "yyyy-MM-dd",
+                            autoPartitionKey));
         }
     }
 

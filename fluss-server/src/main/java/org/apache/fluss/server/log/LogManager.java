@@ -23,6 +23,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.LogStorageException;
+import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.SchemaNotExistException;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -34,6 +35,7 @@ import org.apache.fluss.server.log.checkpoint.OffsetCheckpointFile;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.server.storage.LocalDiskManager;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
@@ -48,7 +50,9 @@ import javax.annotation.concurrent.ThreadSafe;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -59,6 +63,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
 
@@ -100,6 +105,7 @@ public final class LogManager extends TabletManagerBase {
     private final Map<TableBucket, LogTablet> currentLogs = new ConcurrentHashMap<>();
 
     private volatile Map<File, OffsetCheckpointFile> recoveryPointCheckpoints;
+    private volatile ScheduledFuture<?> recoveryPointCheckpointTask;
     private boolean loadLogsCompletedFlag = false;
 
     private LogManager(
@@ -142,7 +148,17 @@ public final class LogManager extends TabletManagerBase {
     public void startup() {
         loadAllLogs();
 
-        // TODO add more scheduler, like log-flusher etc.
+        long checkpointIntervalMs =
+                conf.get(ConfigOptions.LOG_FLUSH_OFFSET_CHECKPOINT_INTERVAL).toMillis();
+        LOG.info(
+                "Starting log recovery point checkpoint with a period of {} ms.",
+                checkpointIntervalMs);
+        recoveryPointCheckpointTask =
+                scheduler.schedule(
+                        "fluss-recovery-point-checkpoint",
+                        this::checkpointRecoveryOffsets,
+                        checkpointIntervalMs,
+                        checkpointIntervalMs);
     }
 
     private void initializeCheckpointMaps() throws IOException {
@@ -386,6 +402,25 @@ public final class LogManager extends TabletManagerBase {
         PhysicalTablePath physicalTablePath = pathAndBucket.f0;
         TablePath tablePath = physicalTablePath.getTablePath();
         TableInfo tableInfo = getTableInfo(zkClient, tablePath);
+
+        // Table schema exists, but the partition may have been dropped (or dropped
+        // and recreated with a new ID) while this TS was offline.
+        // Validate both partition name and partition ID against ZK.
+        String partitionName = physicalTablePath.getPartitionName();
+        if (partitionName != null) {
+            Optional<PartitionRegistration> registration =
+                    zkClient.getPartition(tablePath, partitionName);
+            if (!registration.isPresent()
+                    || registration.get().getPartitionId() != tableBucket.getPartitionId()) {
+                throw new PartitionNotExistException(
+                        String.format(
+                                "Failed to load partition '%s' (partitionId=%d) of table '%s': "
+                                        + "partition not found or partitionId mismatch in "
+                                        + "zookeeper metadata.",
+                                partitionName, tableBucket.getPartitionId(), tablePath));
+            }
+        }
+
         LogTablet logTablet =
                 LogTablet.create(
                         dataDir,
@@ -424,6 +459,10 @@ public final class LogManager extends TabletManagerBase {
     /** Close all the logs. */
     public void shutdown() {
         LOG.info("Shutting down LogManager.");
+        if (recoveryPointCheckpointTask != null) {
+            recoveryPointCheckpointTask.cancel(false);
+            recoveryPointCheckpointTask = null;
+        }
 
         Map<File, List<LogTablet>> logsByDataDir = new LinkedHashMap<>();
         for (File dataDir : dataDirs) {
@@ -535,17 +574,19 @@ public final class LogManager extends TabletManagerBase {
                     loadLog(dataDir, tabletDir, cleanShutdown, recoveryPoints, conf, clock);
                 } catch (Exception e) {
                     LOG.error("Fail to loadLog from {}", tabletDir, e);
-                    if (e instanceof SchemaNotExistException) {
+                    if (e instanceof SchemaNotExistException
+                            || e instanceof PartitionNotExistException) {
                         LOG.error(
-                                "schema not exist, table for {} has already been dropped, the residual data will be removed.",
+                                "Table or partition for {} has already been dropped, the residual data will be removed.",
                                 tabletDir,
                                 e);
                         FileUtils.deleteDirectoryQuietly(tabletDir);
 
-                        // Also delete corresponding KV tablet directory if it exists
                         try {
                             Tuple2<PhysicalTablePath, TableBucket> pathAndBucket =
                                     FlussPaths.parseTabletDir(tabletDir);
+
+                            // Also delete corresponding KV tablet directory if it exists
                             File kvTabletDir =
                                     FlussPaths.kvTabletDir(
                                             dataDir, pathAndBucket.f0, pathAndBucket.f1);
@@ -555,11 +596,24 @@ public final class LogManager extends TabletManagerBase {
                                         kvTabletDir);
                                 FileUtils.deleteDirectoryQuietly(kvTabletDir);
                             }
-                        } catch (Exception kvDeleteException) {
+
+                            boolean isPartitioned = pathAndBucket.f0.getPartitionName() != null;
+                            File partitionDir = tabletDir.getParentFile();
+                            if (partitionDir != null) {
+                                deleteEmptyDirQuietly(partitionDir);
+
+                                if (isPartitioned) {
+                                    File tableDir = partitionDir.getParentFile();
+                                    if (tableDir != null) {
+                                        deleteEmptyDirQuietly(tableDir);
+                                    }
+                                }
+                            }
+                        } catch (Exception cleanupException) {
                             LOG.warn(
-                                    "Failed to delete corresponding KV tablet directory for log {}: {}",
+                                    "Failed to clean up residual KV/parent directories for {}: {}",
                                     tabletDir,
-                                    kvDeleteException.getMessage());
+                                    cleanupException.getMessage());
                         }
                         return;
                     }
@@ -576,6 +630,12 @@ public final class LogManager extends TabletManagerBase {
                 currentLogs.values().stream()
                         .filter(log -> log.getDataDir().equals(dataDir))
                         .collect(Collectors.toList()));
+    }
+
+    void checkpointRecoveryOffsets() {
+        for (File dataDir : dataDirs) {
+            checkpointRecoveryOffsets(dataDir);
+        }
     }
 
     private void checkpointRecoveryOffsets(File dataDir, List<LogTablet> logs) {
@@ -604,6 +664,18 @@ public final class LogManager extends TabletManagerBase {
             this.pool = pool;
             this.jobs = jobs;
             this.startTimeMillis = startTimeMillis;
+        }
+    }
+
+    private static void deleteEmptyDirQuietly(File dir) {
+        try {
+            Files.delete(dir.toPath());
+        } catch (DirectoryNotEmptyException e) {
+            LOG.warn("Directory {} is not empty, skipping deletion.", dir);
+        } catch (NoSuchFileException ignored) {
+            // Already gone — fine.
+        } catch (IOException e) {
+            LOG.warn("Failed to delete empty directory {}: {}", dir, e.getMessage());
         }
     }
 

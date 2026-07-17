@@ -687,7 +687,9 @@ public final class KvTablet {
                     } else {
                         try {
                             int rowCountDiff = kvPreWriteBuffer.flush(exclusiveUpToLogOffset);
-                            flushedLogOffset = exclusiveUpToLogOffset;
+                            if (exclusiveUpToLogOffset > flushedLogOffset) {
+                                flushedLogOffset = exclusiveUpToLogOffset;
+                            }
                             if (rowCount != ROW_COUNT_DISABLED) {
                                 // row count is enabled, we update the row count after flush.
                                 long currentRowCount = rowCount;

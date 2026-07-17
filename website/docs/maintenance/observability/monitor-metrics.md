@@ -294,8 +294,8 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </thead>
   <tbody>
     <tr>
-       <th rowspan="27"><strong>coordinator</strong></th>
-      <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="10">-</td>
+       <th rowspan="28"><strong>coordinator</strong></th>
+      <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="11">-</td>
       <td>activeCoordinatorCount</td>
       <td>The number of active CoordinatorServer (only leader) in this cluster.</td>
       <td>Gauge</td>
@@ -343,6 +343,11 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
     <tr>
       <td>replicasToDeleteCount</td>
       <td>The total number of replicas in the progress to be deleted in this cluster.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>pendingLeaderActivationCount</td>
+      <td>The number of buckets currently waiting for the leader-activation acknowledgement from the target tablet server. A non-zero, sustained value blocks the cluster-health API from reporting GREEN and will hold the readiness gate during a rolling upgrade; if it stays non-zero indefinitely it indicates a stuck activation that requires investigation.</td>
       <td>Gauge</td>
     </tr>
     <tr>
@@ -401,9 +406,14 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>Gauge</td>
     </tr>
     <tr>
-      <td rowspan="7">lakeTiering_table</td>
+      <td rowspan="8">lakeTiering_table</td>
       <td>tierLag</td>
       <td>Time in milliseconds since the last successful tiering operation for this table. For newly registered tables that have never completed a tiering round, the lag is measured from the time the table was registered.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>tieredTimestamp</td>
+      <td>The epoch timestamp (in milliseconds) of the last successful tiering operation for this table. For newly registered tables that have never completed a tiering round, this is the time the table was registered.</td>
       <td>Gauge</td>
     </tr>
     <tr>
@@ -639,17 +649,29 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </thead>
   <tbody>
     <tr>
-      <th rowspan="1"><strong>coordinator</strong></th>
+      <th rowspan="2"><strong>coordinator</strong></th>
       <td rowspan="1">request</td>
       <td>requestQueueSize</td>
       <td>The CoordinatorServer node network waiting queue size.</td>
       <td>Gauge</td>
     </tr>
     <tr>
-      <th rowspan="8">tabletserver</th>
+      <td rowspan="1">request_processor_index</td>
+      <td>requestQueueSize</td>
+      <td>The CoordinatorServer node network waiting queue size labeled with <code>processor_index</code>.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <th rowspan="9">tabletserver</th>
       <td rowspan="1">request</td>
       <td>requestQueueSize</td>
       <td>The TabletServer node network waiting queue size.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td rowspan="1">request_processor_index</td>
+      <td>requestQueueSize</td>
+      <td>The TabletServer node network waiting queue size labeled with <code>processor_index</code>.</td>
       <td>Gauge</td>
     </tr>
     <tr>
@@ -863,7 +885,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>Gauge</td>
     </tr>
      <tr>
-      <td rowspan="2">table_bucket_lakeTiering</td>
+      <td rowspan="3">table_bucket_lakeTiering</td>
       <td>pendingRecords</td>
       <td>The number of records lag between the latest log record and the latest tiered lake log record for this table bucket. Returns -1 if row count is disabled (WAL mode or v0.9 old table) and no tiering has completed.</td>
       <td>Gauge</td>
@@ -871,6 +893,11 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
      <tr>
       <td>timestampLag</td>
       <td>The timestamp lag between the latest log record and the latest tiered lake log record for this table bucket, in milliseconds.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>pendingRecordsLag</td>
+      <td>The elapsed time, in milliseconds, since the oldest committed record in this table bucket became pending for lake tiering. Returns 0 when no committed records are pending lake tiering.</td>
       <td>Gauge</td>
     </tr>
     <tr>

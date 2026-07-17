@@ -196,19 +196,23 @@ class FlinkCatalogTest {
                         mockLakeCatalog);
         catalog.open();
 
-        // First check if database exists, and drop it if it does
+        // Clean up any leftover tables from previous tests
         if (catalog.databaseExists(DEFAULT_DB)) {
-            catalog.dropDatabase(DEFAULT_DB, true, true);
-        }
-        try {
-            catalog.createDatabase(
-                    DEFAULT_DB, new CatalogDatabaseImpl(Collections.emptyMap(), null), true);
-        } catch (CatalogException e) {
-            // the auto partitioned manager may create the db zk node
-            // in another thread, so if exception is NodeExistsException, just ignore
-            if (!ExceptionUtils.findThrowableWithMessage(e, "KeeperException$NodeExistsException")
-                    .isPresent()) {
-                throw e;
+            for (String table : catalog.listTables(DEFAULT_DB)) {
+                catalog.dropTable(new ObjectPath(DEFAULT_DB, table), true);
+            }
+        } else {
+            try {
+                catalog.createDatabase(
+                        DEFAULT_DB, new CatalogDatabaseImpl(Collections.emptyMap(), null), true);
+            } catch (CatalogException e) {
+                // the auto partitioned manager may create the db zk node
+                // in another thread, so if exception is NodeExistsException, just ignore
+                if (!ExceptionUtils.findThrowableWithMessage(
+                                e, "KeeperException$NodeExistsException")
+                        .isPresent()) {
+                    throw e;
+                }
             }
         }
     }
@@ -1003,7 +1007,7 @@ class FlinkCatalogTest {
 
         // Test functions operations
         List<String> functions = catalog.listFunctions(DEFAULT_DB);
-        assertThat(functions).isEmpty();
+        assertThat(functions).contains("rb_build_agg", "rb_or_agg", "rb_and_agg");
 
         ObjectPath functionPath = new ObjectPath(DEFAULT_DB, "testFunction");
         assertThat(catalog.functionExists(functionPath)).isFalse();
@@ -1097,5 +1101,21 @@ class FlinkCatalogTest {
                 throws TableAlreadyExistException, DatabaseNotExistException {
             catalog.createTable(tablePath, table, false);
         }
+    }
+
+    @Test
+    void testBitmapFunctionsRegistered() throws Exception {
+
+        List<String> functions = catalog.listFunctions(DEFAULT_DB);
+
+        assertThat(functions).contains("rb_build_agg", "rb_or_agg", "rb_and_agg");
+
+        assertThat(catalog.functionExists(new ObjectPath(DEFAULT_DB, "rb_build_agg"))).isTrue();
+
+        assertThat(catalog.functionExists(new ObjectPath(DEFAULT_DB, "rb_or_agg"))).isTrue();
+
+        assertThat(catalog.functionExists(new ObjectPath(DEFAULT_DB, "rb_and_agg"))).isTrue();
+
+        assertThat(catalog.functionExists(new ObjectPath(DEFAULT_DB, "unknown_fn"))).isFalse();
     }
 }

@@ -46,9 +46,10 @@ import scala.collection.mutable
 class FlussUpsertPartitionReader(
     tablePath: TablePath,
     projection: Array[Int],
+    limit: Option[Int],
     flussPartition: FlussUpsertInputPartition,
     flussConfig: Configuration)
-  extends FlussPartitionReader(tablePath, flussConfig)
+  extends FlussPartitionReader(tablePath, flussConfig, limit)
   with Logging {
 
   override protected lazy val projectedRowType: RowType = rowType.project(projectionWithPks)

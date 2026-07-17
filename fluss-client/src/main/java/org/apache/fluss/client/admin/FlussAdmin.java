@@ -18,10 +18,12 @@
 package org.apache.fluss.client.admin;
 
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.client.metadata.ActiveKvSnapshots;
 import org.apache.fluss.client.metadata.KvSnapshotMetadata;
 import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.client.metadata.MetadataUpdater;
+import org.apache.fluss.client.metadata.RemoteLogManifestInfo;
 import org.apache.fluss.client.utils.ClientRpcMessageUtils;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
@@ -48,6 +50,7 @@ import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metadata.TableStats;
 import org.apache.fluss.rpc.GatewayClientProxy;
+import org.apache.fluss.rpc.RetryableGatewayClientProxy;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.AdminGateway;
 import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
@@ -67,6 +70,7 @@ import org.apache.fluss.rpc.messages.DescribeClusterConfigsRequest;
 import org.apache.fluss.rpc.messages.DropAclsRequest;
 import org.apache.fluss.rpc.messages.DropDatabaseRequest;
 import org.apache.fluss.rpc.messages.DropTableRequest;
+import org.apache.fluss.rpc.messages.GetClusterHealthRequest;
 import org.apache.fluss.rpc.messages.GetDatabaseInfoRequest;
 import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataRequest;
 import org.apache.fluss.rpc.messages.GetLakeSnapshotRequest;
@@ -79,10 +83,12 @@ import org.apache.fluss.rpc.messages.GetTableStatsResponse;
 import org.apache.fluss.rpc.messages.ListAclsRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesResponse;
+import org.apache.fluss.rpc.messages.ListKvSnapshotsRequest;
 import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.messages.ListOffsetsResponse;
 import org.apache.fluss.rpc.messages.ListPartitionInfosRequest;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressRequest;
+import org.apache.fluss.rpc.messages.ListRemoteLogManifestsRequest;
 import org.apache.fluss.rpc.messages.ListTablesRequest;
 import org.apache.fluss.rpc.messages.ListTablesResponse;
 import org.apache.fluss.rpc.messages.PbAlterConfig;
@@ -98,6 +104,7 @@ import org.apache.fluss.rpc.messages.TableExistsResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.security.acl.AclBinding;
 import org.apache.fluss.security.acl.AclBindingFilter;
+import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import javax.annotation.Nullable;
@@ -111,6 +118,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeAlterDatabaseRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeAlterTableRequest;
@@ -139,13 +148,33 @@ public class FlussAdmin implements Admin {
     private final AdminReadOnlyGateway readOnlyGateway;
     private final MetadataUpdater metadataUpdater;
 
+    /**
+     * Single-thread executor that runs the metadata-refresh callback for {@link
+     * RetryableGatewayClientProxy}.
+     */
+    private final ExecutorService refreshExecutor =
+            Executors.newFixedThreadPool(
+                    1, new ExecutorThreadFactory("fluss-admin-metadata-refresh"));
+
     public FlussAdmin(RpcClient client, MetadataUpdater metadataUpdater) {
+        // TODO: AdminGateway includes non-idempotent write operations (createTable, dropTable,
+        //  createDatabase, etc.). Wrapping it with RetryableGatewayClientProxy is unsafe because
+        //  a request may succeed on the server while the response is lost (surfacing as a
+        //  RetriableException), causing a duplicate mutation on retry. A future phase should
+        //  introduce idempotent retry semantics (e.g., request-id deduplication) before enabling
+        //  retry on the write gateway.
         this.gateway =
                 GatewayClientProxy.createGatewayProxy(
                         metadataUpdater::getCoordinatorServer, client, AdminGateway.class);
-        this.readOnlyGateway =
+        AdminGateway rawReadOnlyGateway =
                 GatewayClientProxy.createGatewayProxy(
                         metadataUpdater::getRandomTabletServer, client, AdminGateway.class);
+        this.readOnlyGateway =
+                RetryableGatewayClientProxy.createRetryableGatewayProxy(
+                        rawReadOnlyGateway,
+                        metadataUpdater::refreshClusterUntilAvailable,
+                        refreshExecutor,
+                        AdminGateway.class);
         this.metadataUpdater = metadataUpdater;
     }
 
@@ -367,6 +396,36 @@ public class FlussAdmin implements Admin {
                 .thenApply(ClientRpcMessageUtils::toPartitionInfos);
     }
 
+    /**
+     * Returns per-bucket remote log manifest path for the given table or partition.
+     *
+     * <p>Used by the orphan cleanup action to construct the active manifest path set without
+     * relying on FS LIST + mtime selection.
+     */
+    @Override
+    public CompletableFuture<List<RemoteLogManifestInfo>> listRemoteLogManifests(
+            long tableId, @Nullable Long partitionId) {
+        ListRemoteLogManifestsRequest request = new ListRemoteLogManifestsRequest();
+        request.setTableId(tableId);
+        if (partitionId != null) {
+            request.setPartitionId(partitionId);
+        }
+        return gateway.listRemoteLogManifests(request)
+                .thenApply(ClientRpcMessageUtils::toRemoteLogManifestInfos);
+    }
+
+    @Override
+    public CompletableFuture<ActiveKvSnapshots> listKvSnapshots(
+            long tableId, @Nullable Long partitionId) {
+        ListKvSnapshotsRequest request = new ListKvSnapshotsRequest();
+        request.setTableId(tableId);
+        if (partitionId != null) {
+            request.setPartitionId(partitionId);
+        }
+        return gateway.listKvSnapshots(request)
+                .thenApply(ClientRpcMessageUtils::toActiveKvSnapshots);
+    }
+
     @Override
     public CompletableFuture<Void> createPartition(
             TablePath tablePath, PartitionSpec partitionSpec, boolean ignoreIfExists) {
@@ -425,7 +484,12 @@ public class FlussAdmin implements Admin {
 
     @Override
     public KvSnapshotLease createKvSnapshotLease(String leaseId, long leaseDurationMs) {
-        return new KvSnapshotLeaseImpl(leaseId, leaseDurationMs, gateway);
+        return new KvSnapshotLeaseImpl(
+                leaseId,
+                leaseDurationMs,
+                gateway,
+                metadataUpdater::refreshClusterUntilAvailable,
+                refreshExecutor);
     }
 
     @Override
@@ -739,7 +803,9 @@ public class FlussAdmin implements Admin {
 
     @Override
     public void close() {
-        // nothing to do yet
+        // Stop the metadata-refresh executor; any in-flight refresh will be interrupted, which
+        // refreshClusterUntilAvailable handles by surfacing the InterruptedException upward.
+        refreshExecutor.shutdownNow();
     }
 
     private static Map<Integer, GetTableStatsRequest> prepareTableStatsRequests(
@@ -868,6 +934,12 @@ public class FlussAdmin implements Admin {
                 bucketToOffsetMap.get(resp.getBucketId()).complete(resp.getOffset());
             }
         }
+    }
+
+    @Override
+    public CompletableFuture<ClusterHealth> getClusterHealth() {
+        return gateway.getClusterHealth(new GetClusterHealthRequest())
+                .thenApply(ClientRpcMessageUtils::toClusterHealth);
     }
 
     @VisibleForTesting

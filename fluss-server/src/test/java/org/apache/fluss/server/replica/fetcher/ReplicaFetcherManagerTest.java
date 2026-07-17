@@ -24,6 +24,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
+import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 import org.apache.fluss.server.replica.ReplicaManager;
 import org.apache.fluss.server.replica.ReplicaTestBase;
 import org.apache.fluss.server.replica.fetcher.ReplicaFetcherManager.ServerIdAndFetcherId;
@@ -36,8 +37,10 @@ import org.junit.jupiter.api.Test;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
@@ -120,6 +123,32 @@ class ReplicaFetcherManagerTest extends ReplicaTestBase {
 
         fetcherManager.shutdownIdleFetcherThreads();
         assertThat(fetcherThreadMap.size()).isEqualTo(0);
+    }
+
+    @Test
+    void testDoesNotAddFetcherWhenFollowerHasNoLeader() {
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
+        AtomicReference<List<NotifyLeaderAndIsrResultForBucket>> result = new AtomicReference<>();
+
+        replicaManager.becomeLeaderOrFollower(
+                INITIAL_COORDINATOR_EPOCH,
+                Collections.singletonList(
+                        new NotifyLeaderAndIsrData(
+                                PhysicalTablePath.of(DATA1_TABLE_PATH),
+                                tb,
+                                Collections.singletonList(TABLET_SERVER_ID),
+                                new LeaderAndIsr(
+                                        LeaderAndIsr.NO_LEADER,
+                                        LeaderAndIsr.INITIAL_LEADER_EPOCH,
+                                        Collections.emptyList(),
+                                        Collections.emptyList(),
+                                        INITIAL_COORDINATOR_EPOCH,
+                                        LeaderAndIsr.INITIAL_BUCKET_EPOCH))),
+                result::set);
+
+        assertThat(result.get()).hasSize(1);
+        assertThat(result.get().get(0).succeeded()).isTrue();
+        assertThat(replicaManager.getReplicaFetcherManager().getFetcherThreadMap()).isEmpty();
     }
 
     private class TestingReplicaFetcherManager extends ReplicaFetcherManager {

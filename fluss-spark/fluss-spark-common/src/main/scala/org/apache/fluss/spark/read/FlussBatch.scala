@@ -17,41 +17,35 @@
 
 package org.apache.fluss.spark.read
 
-import org.apache.fluss.client.{Connection, ConnectionFactory}
-import org.apache.fluss.client.admin.Admin
-import org.apache.fluss.client.initializer.{BucketOffsetsRetrieverImpl, OffsetsInitializer, SnapshotOffsetsInitializer}
-import org.apache.fluss.client.metadata.KvSnapshots
-import org.apache.fluss.client.table.scanner.log.LogScanner
 import org.apache.fluss.config.Configuration
-import org.apache.fluss.metadata.{PartitionInfo, TableBucket, TableInfo, TablePath}
-import org.apache.fluss.predicate.Predicate
-import org.apache.fluss.spark.utils.SparkPartitionPredicate
+import org.apache.fluss.metadata.{TableInfo, TablePath}
+import org.apache.fluss.predicate.{Predicate => FlussPredicate}
+import org.apache.fluss.spark.read.lake.FlussLakePartitionReaderFactory
 
 import org.apache.spark.sql.connector.read.{Batch, InputPartition, PartitionReaderFactory}
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
 
-import java.util
-
 import scala.collection.JavaConverters._
 
+/**
+ * Base class for planner-backed batch scans. The planner (constructed at ScanBuilder-time) opens
+ * and releases the Fluss client Connection/Admin itself — scoped to its `plan()` call — and
+ * produces the [[InputPartition]]s; the Batch is a thin adapter that hands the plan to Spark and
+ * dispatches [[createReaderFactory]] based on whether the planner is unioning with a lake snapshot
+ * (lake-union) or reading Fluss only (log-only).
+ *
+ * The Batch is intentionally not [[AutoCloseable]]: the Spark DSv2 Batch interface has no `close()`
+ * hook that Spark invokes, so connection cleanup lives in the planner rather than here.
+ */
 abstract class FlussBatch(
     tablePath: TablePath,
     tableInfo: TableInfo,
     readSchema: StructType,
-    flussConfig: Configuration)
-  extends Batch
-  with AutoCloseable {
-
-  lazy val conn: Connection = ConnectionFactory.createConnection(flussConfig)
-
-  lazy val admin: Admin = conn.getAdmin
-
-  lazy val partitionInfos: util.List[PartitionInfo] = admin.listPartitionInfos(tablePath).get()
-
-  def startOffsetsInitializer: OffsetsInitializer
-
-  def stoppingOffsetsInitializer: OffsetsInitializer
+    limit: Option[Int],
+    flussConfig: Configuration,
+    planner: SplitPlanner)
+  extends Batch {
 
   protected def projection: Array[Int] = {
     val columnNameToIndex = tableInfo.getSchema.getColumnNames.asScala.zipWithIndex.toMap
@@ -63,48 +57,7 @@ abstract class FlussBatch(
     }
   }
 
-  protected def createUpsertPartitions(
-      partitionName: String,
-      kvSnapshots: KvSnapshots,
-      bucketOffsetsRetriever: BucketOffsetsRetrieverImpl): Array[InputPartition] = {
-    val tableId = kvSnapshots.getTableId
-    val partitionId = kvSnapshots.getPartitionId
-    val bucketIds = kvSnapshots.getBucketIds
-    val bucketIdToLogOffset =
-      stoppingOffsetsInitializer.getBucketOffsets(partitionName, bucketIds, bucketOffsetsRetriever)
-    bucketIds.asScala
-      .map {
-        bucketId =>
-          val tableBucket = new TableBucket(tableId, partitionId, bucketId)
-          val snapshotIdOpt = kvSnapshots.getSnapshotId(bucketId)
-          val logStartingOffsetOpt = kvSnapshots.getLogOffset(bucketId)
-          val logEndingOffset = bucketIdToLogOffset.get(bucketId)
-
-          if (snapshotIdOpt.isPresent) {
-            assert(
-              logStartingOffsetOpt.isPresent,
-              "Log offset must be present when snapshot id is present")
-            FlussUpsertInputPartition(
-              tableBucket,
-              snapshotIdOpt.getAsLong,
-              logStartingOffsetOpt.getAsLong,
-              logEndingOffset)
-          } else {
-            FlussUpsertInputPartition(tableBucket, -1L, LogScanner.EARLIEST_OFFSET, logEndingOffset)
-          }
-      }
-      .map(_.asInstanceOf[InputPartition])
-      .toArray
-  }
-
-  override def close(): Unit = {
-    if (admin != null) {
-      admin.close()
-    }
-    if (conn != null) {
-      conn.close()
-    }
-  }
+  override def planInputPartitions(): Array[InputPartition] = planner.plan()
 }
 
 /** Batch for reading log table (append-only table). */
@@ -112,97 +65,33 @@ class FlussAppendBatch(
     tablePath: TablePath,
     tableInfo: TableInfo,
     readSchema: StructType,
-    pushedPredicate: Option[Predicate],
-    partitionPredicate: Option[Predicate],
+    pushedPredicate: Option[FlussPredicate],
+    limit: Option[Int],
     options: CaseInsensitiveStringMap,
-    flussConfig: Configuration)
-  extends FlussBatch(tablePath, tableInfo, readSchema, flussConfig) {
-
-  override val startOffsetsInitializer: OffsetsInitializer = {
-    FlussOffsetInitializers.startOffsetsInitializer(options, flussConfig)
-  }
-
-  override val stoppingOffsetsInitializer: OffsetsInitializer = {
-    FlussOffsetInitializers.stoppingOffsetsInitializer(true, options, flussConfig)
-  }
-
-  override def planInputPartitions(): Array[InputPartition] = {
-    val bucketOffsetsRetrieverImpl = new BucketOffsetsRetrieverImpl(admin, tablePath)
-    val buckets = (0 until tableInfo.getNumBuckets).toSeq
-
-    def createPartitions(
-        partitionId: Option[Long],
-        startBucketOffsets: Map[Integer, Long],
-        stoppingBucketOffsets: Map[Integer, Long]): Array[InputPartition] = {
-      buckets.map {
-        bucketId =>
-          val (startBucketOffset, stoppingBucketOffset) =
-            (startBucketOffsets(bucketId), stoppingBucketOffsets(bucketId))
-          partitionId match {
-            case Some(partitionId) =>
-              val tableBucket = new TableBucket(tableInfo.getTableId, partitionId, bucketId)
-              FlussAppendInputPartition(tableBucket, startBucketOffset, stoppingBucketOffset)
-                .asInstanceOf[InputPartition]
-            case None =>
-              val tableBucket = new TableBucket(tableInfo.getTableId, bucketId)
-              FlussAppendInputPartition(tableBucket, startBucketOffset, stoppingBucketOffset)
-                .asInstanceOf[InputPartition]
-          }
-      }.toArray
-    }
-
-    if (tableInfo.isPartitioned) {
-      val matching =
-        SparkPartitionPredicate.filterPartitions(partitionInfos.asScala.toSeq, partitionPredicate)
-      matching
-        .map {
-          partitionInfo =>
-            val startBucketOffsets = startOffsetsInitializer.getBucketOffsets(
-              partitionInfo.getPartitionName,
-              buckets.map(Integer.valueOf).asJava,
-              bucketOffsetsRetrieverImpl)
-            val stoppingBucketOffsets = stoppingOffsetsInitializer.getBucketOffsets(
-              partitionInfo.getPartitionName,
-              buckets.map(Integer.valueOf).asJava,
-              bucketOffsetsRetrieverImpl)
-            (
-              partitionInfo.getPartitionId,
-              startBucketOffsets.asScala.map(e => (e._1, Long2long(e._2))),
-              stoppingBucketOffsets.asScala.map(e => (e._1, Long2long(e._2))))
-        }
-        .flatMap {
-          case (partitionId, startBucketOffsets, stoppingBucketOffsets) =>
-            createPartitions(
-              Some(partitionId),
-              startBucketOffsets.toMap,
-              stoppingBucketOffsets.toMap)
-        }
-        .toArray
-    } else {
-      val startBucketOffsets = startOffsetsInitializer.getBucketOffsets(
-        null,
-        buckets.map(Integer.valueOf).asJava,
-        bucketOffsetsRetrieverImpl)
-      val stoppingBucketOffsets = stoppingOffsetsInitializer.getBucketOffsets(
-        null,
-        buckets.map(Integer.valueOf).asJava,
-        bucketOffsetsRetrieverImpl)
-      createPartitions(
-        None,
-        startBucketOffsets.asScala.map(e => (e._1, Long2long(e._2))).toMap,
-        stoppingBucketOffsets.asScala.map(e => (e._1, Long2long(e._2))).toMap)
-    }
-  }
+    flussConfig: Configuration,
+    appendPlanner: AppendSplitPlanner)
+  extends FlussBatch(tablePath, tableInfo, readSchema, limit, flussConfig, appendPlanner) {
 
   override def createReaderFactory(): PartitionReaderFactory = {
-    new FlussAppendPartitionReaderFactory(
-      tablePath,
-      projection,
-      pushedPredicate,
-      options,
-      flussConfig)
+    if (appendPlanner.hasLakeSnapshot) {
+      new FlussLakePartitionReaderFactory(
+        tableInfo.getProperties.toMap,
+        tablePath,
+        projection,
+        pushedPredicate,
+        appendPlanner.logTailPredicate,
+        limit,
+        flussConfig)
+    } else {
+      new FlussAppendPartitionReaderFactory(
+        tablePath,
+        projection,
+        pushedPredicate,
+        limit,
+        options,
+        flussConfig)
+    }
   }
-
 }
 
 /** Batch for reading primary key table (upsert table). */
@@ -210,43 +99,25 @@ class FlussUpsertBatch(
     tablePath: TablePath,
     tableInfo: TableInfo,
     readSchema: StructType,
-    partitionPredicate: Option[Predicate],
+    pushedPredicate: Option[FlussPredicate],
+    limit: Option[Int],
     options: CaseInsensitiveStringMap,
-    flussConfig: Configuration)
-  extends FlussBatch(tablePath, tableInfo, readSchema, flussConfig) {
-
-  override val startOffsetsInitializer: OffsetsInitializer = {
-    val offsetsInitializer = FlussOffsetInitializers.startOffsetsInitializer(options, flussConfig)
-    if (!offsetsInitializer.isInstanceOf[SnapshotOffsetsInitializer]) {
-      throw new UnsupportedOperationException("Upsert scan only support FULL startup mode.")
-    }
-    offsetsInitializer
-  }
-
-  override val stoppingOffsetsInitializer: OffsetsInitializer = {
-    FlussOffsetInitializers.stoppingOffsetsInitializer(true, options, flussConfig)
-  }
-
-  private val bucketOffsetsRetriever = new BucketOffsetsRetrieverImpl(admin, tablePath)
-
-  override def planInputPartitions(): Array[InputPartition] = {
-    if (tableInfo.isPartitioned) {
-      val matching =
-        SparkPartitionPredicate.filterPartitions(partitionInfos.asScala.toSeq, partitionPredicate)
-      matching.flatMap {
-        partitionInfo =>
-          val partitionName = partitionInfo.getPartitionName
-          val kvSnapshots =
-            admin.getLatestKvSnapshots(tablePath, partitionName).get()
-          createUpsertPartitions(partitionName, kvSnapshots, bucketOffsetsRetriever)
-      }.toArray
-    } else {
-      val kvSnapshots = admin.getLatestKvSnapshots(tablePath).get()
-      createUpsertPartitions(null, kvSnapshots, bucketOffsetsRetriever)
-    }
-  }
+    flussConfig: Configuration,
+    upsertPlanner: UpsertSplitPlanner)
+  extends FlussBatch(tablePath, tableInfo, readSchema, limit, flussConfig, upsertPlanner) {
 
   override def createReaderFactory(): PartitionReaderFactory = {
-    new FlussUpsertPartitionReaderFactory(tablePath, projection, options, flussConfig)
+    if (upsertPlanner.hasLakeSnapshot) {
+      new FlussLakePartitionReaderFactory(
+        tableInfo.getProperties.toMap,
+        tablePath,
+        projection,
+        pushedPredicate,
+        upsertPlanner.logTailPredicate,
+        limit,
+        flussConfig)
+    } else {
+      new FlussUpsertPartitionReaderFactory(tablePath, projection, limit, options, flussConfig)
+    }
   }
 }

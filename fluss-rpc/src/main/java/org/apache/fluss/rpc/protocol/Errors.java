@@ -27,10 +27,12 @@ import org.apache.fluss.exception.DatabaseAlreadyExistException;
 import org.apache.fluss.exception.DatabaseNotEmptyException;
 import org.apache.fluss.exception.DatabaseNotExistException;
 import org.apache.fluss.exception.DeletionDisabledException;
+import org.apache.fluss.exception.DiskWriteLockedException;
 import org.apache.fluss.exception.DuplicateSequenceException;
 import org.apache.fluss.exception.FencedLeaderEpochException;
 import org.apache.fluss.exception.FencedTieringEpochException;
 import org.apache.fluss.exception.IneligibleReplicaException;
+import org.apache.fluss.exception.InsufficientKvLeaderReplicaCapacityException;
 import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidColumnProjectionException;
 import org.apache.fluss.exception.InvalidConfigException;
@@ -265,7 +267,15 @@ public enum Errors {
     TOO_MANY_SCANNERS(
             69,
             "The per-bucket or per-server scanner session limit has been reached.",
-            TooManyScannersException::new);
+            TooManyScannersException::new),
+    DISK_WRITE_LOCKED(
+            70,
+            "The tablet server has rejected writes because its data disk usage reached the configured write-limit ratio.",
+            DiskWriteLockedException::new),
+    INSUFFICIENT_KV_LEADER_REPLICA_CAPACITY(
+            71,
+            "The cluster does not have enough KV leader replica capacity.",
+            InsufficientKvLeaderReplicaCapacityException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 

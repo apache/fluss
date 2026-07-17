@@ -23,6 +23,8 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.flink.source.deserializer.FlussDeserializationSchema;
 import org.apache.fluss.flink.source.reader.LeaseContext;
+import org.apache.fluss.lake.source.LakeSource;
+import org.apache.fluss.lake.source.LakeSplit;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.types.RowType;
@@ -71,7 +73,8 @@ public class FlussSource<OUT> extends FlinkSource<OUT> {
             OffsetsInitializer offsetsInitializer,
             long scanPartitionDiscoveryIntervalMs,
             FlussDeserializationSchema<OUT> deserializationSchema,
-            boolean streaming) {
+            boolean streaming,
+            @Nullable LakeSource<LakeSplit> lakeSource) {
         this(
                 flussConf,
                 tablePath,
@@ -84,7 +87,8 @@ public class FlussSource<OUT> extends FlinkSource<OUT> {
                 scanPartitionDiscoveryIntervalMs,
                 FlinkConnectorOptions.SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE.defaultValue(),
                 deserializationSchema,
-                streaming);
+                streaming,
+                lakeSource);
     }
 
     FlussSource(
@@ -99,7 +103,8 @@ public class FlussSource<OUT> extends FlinkSource<OUT> {
             long scanPartitionDiscoveryIntervalMs,
             int splitPerAssignmentBatchSize,
             FlussDeserializationSchema<OUT> deserializationSchema,
-            boolean streaming) {
+            boolean streaming,
+            @Nullable LakeSource<LakeSplit> lakeSource) {
         // TODO: Support partition pushDown in datastream
         super(
                 flussConf,
@@ -115,6 +120,7 @@ public class FlussSource<OUT> extends FlinkSource<OUT> {
                 deserializationSchema,
                 streaming,
                 null,
+                lakeSource,
                 LeaseContext.DEFAULT);
     }
 

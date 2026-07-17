@@ -19,10 +19,11 @@ package org.apache.fluss.lake.iceberg;
 
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.exception.InvalidTableException;
+import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.lake.iceberg.utils.IcebergCatalogUtils;
+import org.apache.fluss.lake.iceberg.utils.IcebergPartitionSpecUtils;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -36,6 +37,7 @@ import org.apache.iceberg.SortOrder;
 import org.apache.iceberg.Table;
 import org.apache.iceberg.TableProperties;
 import org.apache.iceberg.UpdateProperties;
+import org.apache.iceberg.UpdateSchema;
 import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.catalog.Namespace;
 import org.apache.iceberg.catalog.SupportsNamespaces;
@@ -44,21 +46,18 @@ import org.apache.iceberg.exceptions.AlreadyExistsException;
 import org.apache.iceberg.exceptions.NoSuchNamespaceException;
 import org.apache.iceberg.exceptions.NoSuchTableException;
 import org.apache.iceberg.types.Type;
-import org.apache.iceberg.types.Types;
+
+import javax.annotation.Nullable;
 
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HashSet;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
+import static org.apache.fluss.lake.iceberg.IcebergSchemaUtils.SYSTEM_COLUMNS;
 import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
-import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
-import static org.apache.iceberg.types.Type.TypeID.STRING;
 
 /** An Iceberg implementation of {@link LakeCatalog}. */
 public class IcebergLakeCatalog implements LakeCatalog {
@@ -68,16 +67,6 @@ public class IcebergLakeCatalog implements LakeCatalog {
                     TableProperties.MERGE_MODE,
                     TableProperties.UPDATE_MODE,
                     TableProperties.DELETE_MODE);
-
-    public static final LinkedHashMap<String, Type> SYSTEM_COLUMNS = new LinkedHashMap<>();
-
-    static {
-        // We need __bucket system column to filter out the given bucket
-        // for iceberg bucket append only table & primary key table.
-        SYSTEM_COLUMNS.put(BUCKET_COLUMN_NAME, Types.IntegerType.get());
-        SYSTEM_COLUMNS.put(OFFSET_COLUMN_NAME, Types.LongType.get());
-        SYSTEM_COLUMNS.put(TIMESTAMP_COLUMN_NAME, Types.TimestampType.withZone());
-    }
 
     private final Catalog icebergCatalog;
 
@@ -101,11 +90,11 @@ public class IcebergLakeCatalog implements LakeCatalog {
         // convert Fluss table path to iceberg table
         boolean isPkTable = tableDescriptor.hasPrimaryKey();
         TableIdentifier icebergId = toIcebergTableIdentifier(tablePath);
-        Schema icebergSchema = convertToIcebergSchema(tableDescriptor, isPkTable);
+        Schema icebergSchema = IcebergSchemaUtils.createIcebergSchema(tableDescriptor, isPkTable);
         Catalog.TableBuilder tableBuilder = icebergCatalog.buildTable(icebergId, icebergSchema);
 
         PartitionSpec partitionSpec =
-                createPartitionSpec(tableDescriptor, icebergSchema, isPkTable);
+                IcebergPartitionSpecUtils.createPartitionSpec(tableDescriptor, icebergSchema);
         SortOrder sortOrder = createSortOrder(icebergSchema);
         tableBuilder.withProperties(buildTableProperties(tableDescriptor, isPkTable));
         tableBuilder.withPartitionSpec(partitionSpec);
@@ -133,33 +122,133 @@ public class IcebergLakeCatalog implements LakeCatalog {
             throws TableNotExistException {
         try {
             Table table = icebergCatalog.loadTable(toIcebergTableIdentifier(tablePath));
-            UpdateProperties updateProperties = table.updateProperties();
-            for (TableChange tableChange : tableChanges) {
-                if (tableChange instanceof TableChange.SetOption) {
-                    TableChange.SetOption option = (TableChange.SetOption) tableChange;
-                    checkArgument(
-                            !RESERVED_PROPERTIES.contains(option.getKey()),
-                            "Cannot set table property '%s'",
-                            option.getKey());
-                    updateProperties.set(
-                            convertFlussPropertyKeyToIceberg(option.getKey()), option.getValue());
-                } else if (tableChange instanceof TableChange.ResetOption) {
-                    TableChange.ResetOption option = (TableChange.ResetOption) tableChange;
-                    checkArgument(
-                            !RESERVED_PROPERTIES.contains(option.getKey()),
-                            "Cannot reset table property '%s'",
-                            option.getKey());
-                    updateProperties.remove(convertFlussPropertyKeyToIceberg(option.getKey()));
+
+            List<TableChange> schemaChanges = new ArrayList<>();
+            List<TableChange> propertyChanges = new ArrayList<>();
+            for (TableChange change : tableChanges) {
+                if (change instanceof TableChange.SchemaChange) {
+                    schemaChanges.add(change);
                 } else {
-                    throw new UnsupportedOperationException(
-                            "Unsupported table change: " + tableChange.getClass());
+                    propertyChanges.add(change);
                 }
             }
 
-            updateProperties.commit();
+            if (!schemaChanges.isEmpty()) {
+                applySchemaChanges(table, schemaChanges, context);
+            }
+
+            if (!propertyChanges.isEmpty()) {
+                applyPropertyChanges(table, propertyChanges);
+            }
         } catch (NoSuchTableException e) {
             throw new TableNotExistException("Table " + tablePath + " does not exist.");
         }
+    }
+
+    private void applyPropertyChanges(Table table, List<TableChange> propertyChanges) {
+        UpdateProperties updateProperties = table.updateProperties();
+        for (TableChange tableChange : propertyChanges) {
+            if (tableChange instanceof TableChange.SetOption) {
+                TableChange.SetOption option = (TableChange.SetOption) tableChange;
+                checkArgument(
+                        !RESERVED_PROPERTIES.contains(option.getKey()),
+                        "Cannot set table property '%s'",
+                        option.getKey());
+                updateProperties.set(
+                        convertFlussPropertyKeyToIceberg(option.getKey()), option.getValue());
+            } else if (tableChange instanceof TableChange.ResetOption) {
+                TableChange.ResetOption option = (TableChange.ResetOption) tableChange;
+                checkArgument(
+                        !RESERVED_PROPERTIES.contains(option.getKey()),
+                        "Cannot reset table property '%s'",
+                        option.getKey());
+                updateProperties.remove(convertFlussPropertyKeyToIceberg(option.getKey()));
+            } else {
+                throw new UnsupportedOperationException(
+                        "Unsupported table change: " + tableChange.getClass());
+            }
+        }
+        updateProperties.commit();
+    }
+
+    private void applySchemaChanges(Table table, List<TableChange> schemaChanges, Context context) {
+        Schema currentIcebergSchema = table.schema();
+
+        // Check schema compatibility to handle crash recovery idempotency.
+        boolean skipAddColumns;
+        if (isIcebergSchemaCompatible(currentIcebergSchema, context.getCurrentTable())) {
+            // Iceberg schema matches current Fluss schema, apply all changes.
+            skipAddColumns = false;
+        } else if (isIcebergSchemaCompatible(currentIcebergSchema, context.getExpectedTable())) {
+            // Iceberg schema already matches expected (post-alter) schema,
+            // skip AddColumn changes since they were already applied.
+            skipAddColumns = true;
+        } else {
+            throw new InvalidAlterTableException(
+                    String.format(
+                            "Iceberg schema is not compatible with Fluss schema: "
+                                    + "Iceberg schema: %s, Fluss schema: %s. "
+                                    + "therefore you need to add the diff columns all at once, "
+                                    + "rather than applying other table changes: %s.",
+                            currentIcebergSchema,
+                            context.getCurrentTable().getSchema(),
+                            schemaChanges));
+        }
+
+        UpdateSchema updateSchema = table.updateSchema();
+        String firstSystemColumnName = SYSTEM_COLUMNS.keySet().iterator().next();
+        boolean hasChanges = false;
+
+        for (TableChange tableChange : schemaChanges) {
+            if (tableChange instanceof TableChange.AddColumn) {
+                if (skipAddColumns) {
+                    continue;
+                }
+                TableChange.AddColumn addColumn = (TableChange.AddColumn) tableChange;
+
+                if (!(addColumn.getPosition() instanceof TableChange.Last)) {
+                    throw new UnsupportedOperationException(
+                            "Only support to add column at last for iceberg table.");
+                }
+
+                org.apache.fluss.types.DataType flussDataType = addColumn.getDataType();
+                if (!flussDataType.isNullable()) {
+                    throw new UnsupportedOperationException(
+                            "Only support to add nullable column for iceberg table.");
+                }
+
+                Type icebergType = flussDataType.accept(new FlussDataTypeToIcebergDataType());
+                updateSchema.addColumn(addColumn.getName(), icebergType, addColumn.getComment());
+                updateSchema.moveBefore(addColumn.getName(), firstSystemColumnName);
+                hasChanges = true;
+            } else {
+                throw new UnsupportedOperationException(
+                        "Unsupported table change: " + tableChange.getClass());
+            }
+        }
+
+        if (hasChanges) {
+            updateSchema.commit();
+        }
+    }
+
+    /**
+     * Checks whether the current Iceberg schema is compatible with the given Fluss table
+     * descriptor. Compatibility means the user columns and system columns match in name, type, and
+     * nullability (ignoring Iceberg-assigned field IDs).
+     *
+     * <p>Iceberg reassigns field IDs during table creation, so field IDs are ignored by this
+     * comparison.
+     */
+    @VisibleForTesting
+    boolean isIcebergSchemaCompatible(
+            Schema icebergSchema, @Nullable TableDescriptor flussTableDescriptor) {
+        if (flussTableDescriptor == null) {
+            return false;
+        }
+        // Identifier fields don't affect the comparison.
+        Schema expectedSchema = IcebergSchemaUtils.createIcebergSchema(flussTableDescriptor, false);
+        return IcebergSchemaUtils.compatibleWith(icebergSchema, expectedSchema);
     }
 
     private TableIdentifier toIcebergTableIdentifier(TablePath tablePath) {
@@ -172,114 +261,6 @@ public class IcebergLakeCatalog implements LakeCatalog {
         } catch (AlreadyExistsException e) {
             throw new TableAlreadyExistException("Table " + tablePath + " already exists.");
         }
-    }
-
-    public Schema convertToIcebergSchema(TableDescriptor tableDescriptor, boolean isPkTable) {
-        List<Types.NestedField> fields = new ArrayList<>();
-        int fieldId = 0;
-
-        int totalTopLevelFields =
-                tableDescriptor.getSchema().getColumns().size() + SYSTEM_COLUMNS.size();
-        FlussDataTypeToIcebergDataType converter =
-                new FlussDataTypeToIcebergDataType(totalTopLevelFields);
-
-        // general columns
-        for (org.apache.fluss.metadata.Schema.Column column :
-                tableDescriptor.getSchema().getColumns()) {
-            String colName = column.getName();
-            if (SYSTEM_COLUMNS.containsKey(colName)) {
-                throw new IllegalArgumentException(
-                        "Column '" + colName + "' conflicts with a reserved system column name.");
-            }
-            Types.NestedField field;
-            if (column.getDataType().isNullable()) {
-                field =
-                        Types.NestedField.optional(
-                                fieldId++,
-                                colName,
-                                column.getDataType().accept(converter),
-                                column.getComment().orElse(null));
-            } else {
-                field =
-                        Types.NestedField.required(
-                                fieldId++,
-                                colName,
-                                column.getDataType().accept(converter),
-                                column.getComment().orElse(null));
-            }
-            fields.add(field);
-        }
-
-        // system columns
-        for (Map.Entry<String, Type> systemColumn : SYSTEM_COLUMNS.entrySet()) {
-            fields.add(
-                    Types.NestedField.required(
-                            fieldId++, systemColumn.getKey(), systemColumn.getValue()));
-        }
-
-        if (isPkTable) {
-            // set identifier fields
-            int[] primaryKeyIndexes = tableDescriptor.getSchema().getPrimaryKeyIndexes();
-            Set<Integer> identifierFieldIds = new HashSet<>();
-            for (int pkIdx : primaryKeyIndexes) {
-                identifierFieldIds.add(fields.get(pkIdx).fieldId());
-            }
-            return new Schema(fields, identifierFieldIds);
-        } else {
-            return new Schema(fields);
-        }
-    }
-
-    private PartitionSpec createPartitionSpec(
-            TableDescriptor tableDescriptor, Schema icebergSchema, boolean isPkTable) {
-        List<String> bucketKeys = tableDescriptor.getBucketKeys();
-        int bucketCount =
-                tableDescriptor
-                        .getTableDistribution()
-                        .flatMap(TableDescriptor.TableDistribution::getBucketCount)
-                        .orElseThrow(
-                                () ->
-                                        new IllegalArgumentException(
-                                                "Bucket count (bucket.num) must be set"));
-
-        // Only support one bucket key for now
-        if (bucketKeys.size() > 1) {
-            throw new UnsupportedOperationException(
-                    "Only one bucket key is supported for Iceberg at the moment");
-        }
-
-        // pk table must have bucket key
-        if (bucketKeys.isEmpty() && isPkTable) {
-            throw new IllegalArgumentException(
-                    "Bucket key must be set for primary key Iceberg tables");
-        }
-
-        PartitionSpec.Builder builder = PartitionSpec.builderFor(icebergSchema);
-        List<String> partitionKeys = tableDescriptor.getPartitionKeys();
-        // always set identity partition with partition key
-        for (String partitionKey : partitionKeys) {
-            if (!icebergSchema.findType(partitionKey).typeId().equals(STRING)) {
-                // TODO: Support other types of partition keys
-                throw new InvalidTableException(
-                        String.format(
-                                "Partition key only support string type for iceberg currently. Column `%s` is not string type.",
-                                partitionKey));
-            }
-            builder.identity(partitionKey);
-        }
-
-        if (isPkTable) {
-            builder.bucket(bucketKeys.get(0), bucketCount);
-        } else {
-            // if there is no bucket keys, use identity(__bucket)
-            if (bucketKeys.isEmpty()) {
-                builder.identity(BUCKET_COLUMN_NAME);
-            } else {
-                builder.bucket(bucketKeys.get(0), bucketCount);
-            }
-        }
-
-        return builder.build();
     }
 
     private void setFlussPropertyToIceberg(

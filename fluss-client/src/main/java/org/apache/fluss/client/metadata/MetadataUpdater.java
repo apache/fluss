@@ -294,6 +294,66 @@ public class MetadataUpdater {
     }
 
     /**
+     * Refreshes the cluster node list until a live server is reached, falling back to a bootstrap
+     * re-initialization when no tablet server is available.
+     *
+     * <p>This is the recovery entry point for stale server addresses (e.g., during rolling upgrades
+     * where every tablet server IP changes). Unlike {@link #updateMetadata}, which only probes a
+     * single server per call, this method loops: each failed server is marked unavailable so the
+     * next iteration picks a different one, and once all known servers are exhausted it
+     * re-initializes the cluster from the bootstrap servers. The loop is therefore bounded by the
+     * number of known servers (at most N attempts + 1 bootstrap) and always converges.
+     *
+     * <p>No additional backoff is introduced here on purpose: each failed attempt already pays a
+     * connection timeout, and the terminal bootstrap path ({@link
+     * #tryToInitializeClusterWithRetries}) carries its own exponential backoff. Keeping this method
+     * a plain "loop until available or bootstrap" avoids over-engineering and stacking redundant
+     * throttling layers.
+     */
+    public void refreshClusterUntilAvailable() {
+        while (true) {
+            ServerNode serverNode =
+                    getOneAvailableTabletServerNode(cluster, unavailableTabletServerIds);
+            if (serverNode == null) {
+                // All known tablet servers are unavailable, re-initialize the cluster from the
+                // bootstrap servers as the terminal recovery step and stop.
+                synchronized (this) {
+                    LOG.info(
+                            "No available tablet server to refresh metadata, re-initializing cluster using bootstrap server.");
+                    cluster = initializeCluster(conf, rpcClient);
+                }
+                unavailableTabletServerIds.removeIf(cluster.getAliveTabletServers()::containsKey);
+                return;
+            }
+
+            try {
+                synchronized (this) {
+                    cluster =
+                            sendMetadataRequestAndRebuildCluster(
+                                    cluster, rpcClient, null, null, null, serverNode);
+                }
+                // Refresh succeeded against a live server, the cluster node list is now up to date.
+                unavailableTabletServerIds.removeIf(cluster.getAliveTabletServers()::containsKey);
+                return;
+            } catch (Exception e) {
+                Throwable t = stripExecutionException(e);
+                if (t instanceof RetriableException || t instanceof TimeoutException) {
+                    unavailableTabletServerIds.add(serverNode.id());
+                    LOG.warn(
+                            "tabletServer {} is unavailable for refreshing metadata for retriable exception, trying the next server. unavailable tabletServer set {}",
+                            serverNode,
+                            unavailableTabletServerIds,
+                            t);
+                    // Continue the loop to try the next available server, or fall back to
+                    // bootstrap when none remain.
+                } else {
+                    throw new FlussRuntimeException("Failed to refresh metadata", t);
+                }
+            }
+        }
+    }
+
+    /**
      * Initialize Cluster. This step just to get the coordinator server address and alive tablet
      * servers according to the config {@link ConfigOptions#BOOTSTRAP_SERVERS}.
      */

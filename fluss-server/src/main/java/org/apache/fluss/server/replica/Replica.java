@@ -598,11 +598,10 @@ public final class Replica {
                     return getLogHighWatermark() - lakeLogEndOffset;
                 });
         lakeTieringMetricGroup.gauge(
-                MetricNames.LOG_LAKE_TIMESTAMP_LAG,
-                () ->
-                        logTablet.getLakeMaxTimestamp() < 0L
-                                ? -1
-                                : logTablet.localMaxTimestamp() - logTablet.getLakeMaxTimestamp());
+                MetricNames.LOG_LAKE_TIMESTAMP_LAG, logTablet::getTimestampLag);
+        lakeTieringMetricGroup.gauge(
+                MetricNames.LAKE_PENDING_RECORDS_LAG,
+                () -> logTablet.getPendingRecordsLag(clock.milliseconds()));
     }
 
     private void onBecomeNewFollower(int standbyReplica) {
@@ -899,10 +898,14 @@ public final class Replica {
                             snapshotContext.getZooKeeperClient(),
                             snapshotContext.maxFetchLogSizeInRecoverKv());
 
-            // Always create RemoteLogFetcher; the temp directory is lazily created only
-            // when fetch() is actually called, so this is lightweight.
+            // Temp directory is created lazily on first fetch().
             RemoteLogFetcher remoteLogFetcher =
-                    new RemoteLogFetcher(remoteLogManager, tableBucket, logTablet.getLogDir());
+                    new RemoteLogFetcher(
+                            remoteLogManager,
+                            tableBucket,
+                            logTablet.getLogDir(),
+                            snapshotContext.remoteLogPrefetchNumInRecoverKv(),
+                            snapshotContext.remoteLogDownloadThreadsInRecoverKv());
 
             try {
                 KvRecoverHelper kvRecoverHelper =

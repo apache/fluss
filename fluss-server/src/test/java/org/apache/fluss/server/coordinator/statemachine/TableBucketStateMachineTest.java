@@ -33,9 +33,11 @@ import org.apache.fluss.server.coordinator.CoordinatorTestUtils;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.LakeTableTieringManager;
 import org.apache.fluss.server.coordinator.MetadataManager;
+import org.apache.fluss.server.coordinator.ReplicaCapacityController;
 import org.apache.fluss.server.coordinator.TestCoordinatorChannelManager;
 import org.apache.fluss.server.coordinator.event.CoordinatorEventManager;
 import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseManager;
+import org.apache.fluss.server.coordinator.remote.RemoteDirDynamicLoader;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElection.ControlledShutdownLeaderElection;
 import org.apache.fluss.server.coordinator.statemachine.TableBucketStateMachine.ElectionResult;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
@@ -50,7 +52,10 @@ import org.apache.fluss.shaded.guava32.com.google.common.collect.Sets;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
+import org.apache.fluss.utils.concurrent.FlussScheduler;
+import org.apache.fluss.utils.concurrent.Scheduler;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -90,9 +95,11 @@ class TableBucketStateMachineTest {
     private TestCoordinatorChannelManager testCoordinatorChannelManager;
     private CoordinatorRequestBatch coordinatorRequestBatch;
     private AutoPartitionManager autoPartitionManager;
+    private ReplicaCapacityController replicaCapacityController;
     private LakeTableTieringManager lakeTableTieringManager;
     private CoordinatorMetadataCache serverMetadataCache;
     private KvSnapshotLeaseManager kvSnapshotLeaseManager;
+    private Scheduler scheduler;
 
     @BeforeAll
     static void baseBeforeAll() throws Exception {
@@ -119,6 +126,9 @@ class TableBucketStateMachineTest {
                         },
                         coordinatorContext);
         serverMetadataCache = new CoordinatorMetadataCache();
+        replicaCapacityController =
+                new ReplicaCapacityController(
+                        conf, serverMetadataCache, TestingMetricGroups.COORDINATOR_METRICS);
         autoPartitionManager =
                 new AutoPartitionManager(
                         serverMetadataCache,
@@ -126,7 +136,9 @@ class TableBucketStateMachineTest {
                                 zookeeperClient,
                                 new Configuration(),
                                 new LakeCatalogDynamicLoader(new Configuration(), null, true)),
-                        new Configuration());
+                        new RemoteDirDynamicLoader(conf),
+                        conf,
+                        replicaCapacityController);
         lakeTableTieringManager =
                 new LakeTableTieringManager(TestingMetricGroups.LAKE_TIERING_METRICS);
 
@@ -138,6 +150,16 @@ class TableBucketStateMachineTest {
                         SystemClock.getInstance(),
                         TestingMetricGroups.COORDINATOR_METRICS);
         kvSnapshotLeaseManager.start();
+
+        scheduler = new FlussScheduler(1);
+        scheduler.startup();
+    }
+
+    @AfterEach
+    void afterEach() throws Exception {
+        if (scheduler != null) {
+            scheduler.shutdown();
+        }
     }
 
     @Test
@@ -300,6 +322,7 @@ class TableBucketStateMachineTest {
                                         new Configuration(),
                                         TestingClientMetricGroup.newInstance())),
                         coordinatorContext,
+                        replicaCapacityController,
                         autoPartitionManager,
                         lakeTableTieringManager,
                         TestingMetricGroups.COORDINATOR_METRICS,
@@ -310,7 +333,9 @@ class TableBucketStateMachineTest {
                                 zookeeperClient,
                                 new Configuration(),
                                 new LakeCatalogDynamicLoader(new Configuration(), null, true)),
-                        kvSnapshotLeaseManager);
+                        kvSnapshotLeaseManager,
+                        scheduler,
+                        SystemClock.getInstance());
         CoordinatorEventManager eventManager =
                 new CoordinatorEventManager(
                         coordinatorEventProcessor, TestingMetricGroups.COORDINATOR_METRICS);

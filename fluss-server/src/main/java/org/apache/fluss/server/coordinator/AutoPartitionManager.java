@@ -22,6 +22,7 @@ import org.apache.fluss.cluster.TabletServerInfo;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.InsufficientKvLeaderReplicaCapacityException;
 import org.apache.fluss.exception.PartitionAlreadyExistsException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.TooManyBucketsException;
@@ -29,6 +30,7 @@ import org.apache.fluss.exception.TooManyPartitionsException;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.server.coordinator.remote.RemoteDirDynamicLoader;
 import org.apache.fluss.server.metadata.ServerMetadataCache;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
@@ -75,6 +77,10 @@ import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
  * An auto partition manager which will trigger auto partition for the tables in cluster
  * periodically. It'll use a {@link ScheduledExecutorService} to schedule the auto partition which
  * will trigger auto partition for them.
+ *
+ * <p>TODO: migrate the jittered partition-creation throttling logic into {@link
+ * TableLifecycleThrottler} so that partition creation and deletion share the same lifecycle gate.
+ * Tracked by https://github.com/apache/fluss/issues/3457.
  */
 public class AutoPartitionManager implements AutoCloseable {
 
@@ -85,6 +91,8 @@ public class AutoPartitionManager implements AutoCloseable {
 
     private final ServerMetadataCache metadataCache;
     private final MetadataManager metadataManager;
+    private final RemoteDirDynamicLoader remoteDirDynamicLoader;
+    private final ReplicaCapacityController replicaCapacityController;
     private final Clock clock;
 
     private final long periodicInterval;
@@ -108,12 +116,18 @@ public class AutoPartitionManager implements AutoCloseable {
     public AutoPartitionManager(
             ServerMetadataCache metadataCache,
             MetadataManager metadataManager,
-            Configuration conf) {
+            RemoteDirDynamicLoader remoteDirDynamicLoader,
+            Configuration conf,
+            ReplicaCapacityController replicaCapacityController) {
         this(
                 metadataCache,
                 metadataManager,
+                remoteDirDynamicLoader,
                 conf,
+                replicaCapacityController,
                 SystemClock.getInstance(),
+                // TODO: Reuse the CoordinatorServer shared scheduler for this lightweight
+                // coordinator periodic task instead of creating a component-owned scheduler.
                 Executors.newScheduledThreadPool(
                         1, new ExecutorThreadFactory("periodic-auto-partition-manager")));
     }
@@ -122,11 +136,15 @@ public class AutoPartitionManager implements AutoCloseable {
     AutoPartitionManager(
             ServerMetadataCache metadataCache,
             MetadataManager metadataManager,
+            RemoteDirDynamicLoader remoteDirDynamicLoader,
             Configuration conf,
+            ReplicaCapacityController replicaCapacityController,
             Clock clock,
             ScheduledExecutorService periodicExecutor) {
         this.metadataCache = metadataCache;
         this.metadataManager = metadataManager;
+        this.remoteDirDynamicLoader = remoteDirDynamicLoader;
+        this.replicaCapacityController = replicaCapacityController;
         this.clock = clock;
         this.periodicExecutor = periodicExecutor;
         this.periodicInterval = conf.get(ConfigOptions.AUTO_PARTITION_CHECK_INTERVAL).toMillis();
@@ -181,6 +199,34 @@ public class AutoPartitionManager implements AutoCloseable {
                     "Removed auto partition table [{}] (id={}) from scheduler",
                     tableInfo.getTablePath(),
                     tableInfo.getTableId());
+        }
+    }
+
+    /**
+     * Handles a table's auto-partition strategy change after table properties are updated.
+     *
+     * @param newTableInfo the updated table information
+     * @param oldStrategy the old auto partition strategy
+     * @param newStrategy the updated auto partition strategy
+     */
+    public void handleAutoPartitionStrategyChange(
+            TableInfo newTableInfo,
+            AutoPartitionStrategy oldStrategy,
+            AutoPartitionStrategy newStrategy) {
+        checkNotClosed();
+        long tableId = newTableInfo.getTableId();
+        boolean oldAutoPartitionEnabled = oldStrategy.isAutoPartitionEnabled();
+        boolean newAutoPartitionEnabled = newStrategy.isAutoPartitionEnabled();
+
+        if (!oldAutoPartitionEnabled && newAutoPartitionEnabled) {
+            LOG.info("Table {} auto partition enabled from false to true.", tableId);
+            addAutoPartitionTable(newTableInfo, true);
+        } else if (oldAutoPartitionEnabled && !newAutoPartitionEnabled) {
+            LOG.info("Table {} auto partition enabled from true to false.", tableId);
+            removeAutoPartitionTable(tableId);
+        } else if (newAutoPartitionEnabled) {
+            LOG.info("Table {} auto partition strategy changed.", tableId);
+            updateAutoPartitionTables(newTableInfo);
         }
     }
 
@@ -309,6 +355,12 @@ public class AutoPartitionManager implements AutoCloseable {
             }
 
             TableInfo tableInfo = autoPartitionTables.get(tableId);
+            if (tableInfo == null) {
+                LOG.debug(
+                        "Skipping auto partitioning for table id {} as it is not registered.",
+                        tableId);
+                continue;
+            }
             TablePath tablePath = tableInfo.getTablePath();
             TreeMap<String, Set<String>> currentPartitions =
                     partitionsByTable.computeIfAbsent(
@@ -338,7 +390,7 @@ public class AutoPartitionManager implements AutoCloseable {
             dropPartitions(
                     tablePath,
                     tableInfo.getPartitionKeys(),
-                    createPartitionInstant,
+                    now,
                     tableInfo.getTableConfig().getAutoPartitionStrategy(),
                     currentPartitions);
             createPartitions(tableInfo, createPartitionInstant, currentPartitions);
@@ -366,15 +418,21 @@ public class AutoPartitionManager implements AutoCloseable {
             long tableId = tableInfo.getTableId();
             int replicaFactor = tableInfo.getTableConfig().getReplicationFactor();
             TabletServerInfo[] servers = metadataCache.getLiveServers();
+            long newKvLeaderReplicaCount =
+                    tableInfo.hasPrimaryKey() ? tableInfo.getNumBuckets() : 0;
             try {
+                replicaCapacityController.checkCanCreateKvLeaderReplicas(newKvLeaderReplicaCount);
+
                 Map<Integer, BucketAssignment> bucketAssignments =
                         generateAssignment(tableInfo.getNumBuckets(), replicaFactor, servers)
                                 .getBucketAssignments();
                 PartitionAssignment partitionAssignment =
                         new PartitionAssignment(tableInfo.getTableId(), bucketAssignments);
 
+                // select a remote data dir for the partition
+                String remoteDataDir = remoteDirDynamicLoader.getRemoteDirSelector().nextDataDir();
                 metadataManager.createPartition(
-                        tablePath, tableId, partitionAssignment, partition, false);
+                        tablePath, tableId, remoteDataDir, partitionAssignment, partition, false);
                 // only single partition key table supports automatic creation of partitions
                 currentPartitions.put(partition.getPartitionName(), null);
                 LOG.info(
@@ -395,9 +453,16 @@ public class AutoPartitionManager implements AutoCloseable {
             } catch (TooManyBucketsException t) {
                 LOG.warn(
                         "Auto partitioning skip to create partition {} for table [{}], "
-                                + "because exceed the maximum number of buckets.",
+                                + "because exceed the maximum number of buckets per partition.",
                         partition,
                         tablePath);
+            } catch (InsufficientKvLeaderReplicaCapacityException t) {
+                LOG.warn(
+                        "Auto partitioning skip to create partition {} for table [{}], "
+                                + "because {}",
+                        partition,
+                        tablePath,
+                        t.getMessage());
             } catch (Exception e) {
                 LOG.error(
                         "Auto partitioning failed to create partition {} for table [{}].",
@@ -423,7 +488,11 @@ public class AutoPartitionManager implements AutoCloseable {
         for (int idx = 0; idx < partitionToPreCreate; idx++) {
             ResolvedPartitionSpec partition =
                     generateAutoPartition(
-                            partitionKeys, currentZonedDateTime, idx, autoPartitionTimeUnit);
+                            partitionKeys,
+                            currentZonedDateTime,
+                            idx,
+                            autoPartitionTimeUnit,
+                            autoPartitionStrategy);
             // if the partition already exists, we don't need to create it, otherwise, create it
             if (!currentPartitions.containsKey(partition.getPartitionName())) {
                 partitionsToCreate.add(partition);
@@ -451,7 +520,10 @@ public class AutoPartitionManager implements AutoCloseable {
         // Get the earliest one partition time that need to retain.
         String lastRetainPartitionTime =
                 generateAutoPartitionTime(
-                        currentZonedDateTime, -numToRetain, autoPartitionStrategy.timeUnit());
+                        currentZonedDateTime,
+                        -numToRetain,
+                        autoPartitionStrategy.timeUnit(),
+                        autoPartitionStrategy);
 
         // For partition table with a single partition key, for example dt(yyyyMMdd)
         // assuming now is 20250508, and table.auto-partition.num-retention=2 then partition
@@ -469,38 +541,43 @@ public class AutoPartitionManager implements AutoCloseable {
                 currentPartitions.headMap(lastRetainPartitionTime).entrySet().iterator();
         while (iterator.hasNext()) {
             Map.Entry<String, Set<String>> entry = iterator.next();
+            dropPartitions(tablePath, partitionKeys, iterator, entry);
+        }
+    }
 
-            Iterator<String> dropIterator;
-            if (entry.getValue() == null) {
-                dropIterator = new HashSet<>(Collections.singleton(entry.getKey())).iterator();
-            } else {
-                dropIterator = entry.getValue().iterator();
-            }
+    private void dropPartitions(
+            TablePath tablePath,
+            List<String> partitionKeys,
+            Iterator<Map.Entry<String, Set<String>>> iterator,
+            Map.Entry<String, Set<String>> entry) {
+        Iterator<String> dropIterator;
+        if (entry.getValue() == null) {
+            dropIterator = new HashSet<>(Collections.singleton(entry.getKey())).iterator();
+        } else {
+            dropIterator = entry.getValue().iterator();
+        }
 
-            while (dropIterator.hasNext()) {
-                String partitionName = dropIterator.next();
-                // drop the partition
-                try {
-                    metadataManager.dropPartition(
-                            tablePath,
-                            ResolvedPartitionSpec.fromPartitionName(partitionKeys, partitionName),
-                            false);
-                } catch (PartitionNotExistException e) {
-                    LOG.info(
-                            "Auto partitioning skip to delete partition {} for table [{}] as the partition is not exist.",
-                            partitionName,
-                            tablePath);
-                }
-
-                // only remove when zk success, this reflects to the partitionsByTable
-                dropIterator.remove();
+        while (dropIterator.hasNext()) {
+            String partitionName = dropIterator.next();
+            try {
+                metadataManager.dropPartition(
+                        tablePath,
+                        ResolvedPartitionSpec.fromPartitionName(partitionKeys, partitionName),
+                        false);
+            } catch (PartitionNotExistException e) {
                 LOG.info(
-                        "Auto partitioning deleted partition {} for table [{}].",
+                        "Auto partitioning skip to delete partition {} for table [{}] as the partition is not exist.",
                         partitionName,
                         tablePath);
             }
-            iterator.remove();
+
+            dropIterator.remove();
+            LOG.info(
+                    "Auto partitioning deleted partition {} for table [{}].",
+                    partitionName,
+                    tablePath);
         }
+        iterator.remove();
     }
 
     @VisibleForTesting

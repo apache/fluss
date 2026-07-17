@@ -18,7 +18,7 @@
 package org.apache.fluss.spark.row
 
 import org.apache.fluss.row.{InternalRow => FlussInternalRow}
-import org.apache.fluss.types.{ArrayType => FlussArrayType, BinaryType => FlussBinaryType, LocalZonedTimestampType, MapType => FlussMapType, RowType, TimestampType}
+import org.apache.fluss.types.{ArrayType => FlussArrayType, BinaryType => FlussBinaryType, BytesType => FlussBytesType, LocalZonedTimestampType, MapType => FlussMapType, RowType, TimestampType}
 import org.apache.fluss.utils.InternalRowUtils
 
 import org.apache.spark.sql.catalyst.{InternalRow => SparkInteralRow}
@@ -84,9 +84,9 @@ class FlussAsSparkRow(rowType: RowType) extends SparkInteralRow {
     DataConverter.toSparkUTF8String(row.getString(ordinal))
   }
 
-  override def getBinary(ordinal: Int): Array[Byte] = {
-    val binaryType = rowType.getTypeAt(ordinal).asInstanceOf[FlussBinaryType]
-    row.getBinary(ordinal, binaryType.getLength)
+  override def getBinary(ordinal: Int): Array[Byte] = rowType.getTypeAt(ordinal) match {
+    case b: FlussBinaryType => row.getBinary(ordinal, b.getLength)
+    case _: FlussBytesType => row.getBytes(ordinal)
   }
 
   override def getInterval(ordinal: Int): CalendarInterval =

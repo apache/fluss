@@ -21,12 +21,14 @@ import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.exception.DiskWriteLockedException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidRequiredAcksException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.KvFormat;
+import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
@@ -68,6 +70,7 @@ import org.apache.fluss.server.kv.rocksdb.RocksDBKv;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.log.FetchParams;
 import org.apache.fluss.server.log.ListOffsetsParam;
+import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.log.checkpoint.OffsetCheckpointFile;
 import org.apache.fluss.server.metadata.BucketMetadata;
 import org.apache.fluss.server.metadata.ClusterMetadata;
@@ -95,6 +98,7 @@ import javax.annotation.Nullable;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -489,6 +493,124 @@ class ReplicaManagerTest extends ReplicaTestBase {
             assertMemoryRecordsEquals(
                     DATA1_ROW_TYPE, schemaGetter, records1, Collections.singletonList(DATA1));
         }
+    }
+
+    @Test
+    void testAppendRejectedWhenDiskLocked() throws Exception {
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 1);
+        makeLogTableAsLeader(tb.getBucket());
+
+        // simulate disk usage breaching the write-limit ratio (default 0.85)
+        replicaManager.getDiskUsageMonitor().update(0.95);
+        assertThat(replicaManager.isDiskWriteLocked()).isTrue();
+
+        assertThatThrownBy(
+                        () ->
+                                replicaManager.appendRecordsToLog(
+                                        20000,
+                                        1,
+                                        Collections.singletonMap(
+                                                tb, genMemoryLogRecordsByObject(DATA1)),
+                                        null,
+                                        (result) -> {}))
+                .isInstanceOf(DiskWriteLockedException.class)
+                .hasMessageContaining("data disk usage");
+
+        // recover when usage drops below (limit - 0.05) -> 0.80
+        replicaManager.getDiskUsageMonitor().update(0.50);
+        assertThat(replicaManager.isDiskWriteLocked()).isFalse();
+
+        CompletableFuture<List<ProduceLogResultForBucket>> future = new CompletableFuture<>();
+        replicaManager.appendRecordsToLog(
+                20000,
+                1,
+                Collections.singletonMap(tb, genMemoryLogRecordsByObject(DATA1)),
+                null,
+                future::complete);
+        assertThat(future.get()).containsOnly(new ProduceLogResultForBucket(tb, 0, 10L));
+    }
+
+    @Test
+    void testPutKvRejectedWhenDiskLocked() {
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID_PK, 1);
+        makeKvTableAsLeader(DATA1_TABLE_ID_PK, DATA1_TABLE_PATH_PK, tb.getBucket());
+
+        replicaManager.getDiskUsageMonitor().update(0.99);
+        assertThat(replicaManager.isDiskWriteLocked()).isTrue();
+
+        assertThatThrownBy(
+                        () ->
+                                replicaManager.putRecordsToKv(
+                                        20000,
+                                        1,
+                                        Collections.singletonMap(
+                                                tb, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)),
+                                        null,
+                                        MergeMode.DEFAULT,
+                                        PUT_KV_VERSION,
+                                        (result) -> {}))
+                .isInstanceOf(DiskWriteLockedException.class);
+
+        // unlock for any subsequent tests on the shared replicaManager instance
+        replicaManager.getDiskUsageMonitor().update(0.10);
+    }
+
+    @Test
+    void testNewKvLeaderRejectedWhenDiskLocked() throws Exception {
+        TableBucket kvTb = new TableBucket(DATA1_TABLE_ID_PK, 1);
+        TableBucket logTb = new TableBucket(DATA1_TABLE_ID, 1);
+
+        replicaManager.getDiskUsageMonitor().update(0.99);
+        assertThat(replicaManager.isDiskWriteLocked()).isTrue();
+
+        CompletableFuture<List<NotifyLeaderAndIsrResultForBucket>> future =
+                new CompletableFuture<>();
+        replicaManager.becomeLeaderOrFollower(
+                INITIAL_COORDINATOR_EPOCH,
+                Collections.singletonList(
+                        new NotifyLeaderAndIsrData(
+                                PhysicalTablePath.of(DATA1_TABLE_PATH_PK),
+                                kvTb,
+                                Collections.singletonList(TABLET_SERVER_ID),
+                                new LeaderAndIsr(
+                                        TABLET_SERVER_ID,
+                                        INITIAL_LEADER_EPOCH,
+                                        Collections.singletonList(TABLET_SERVER_ID),
+                                        Collections.emptyList(),
+                                        INITIAL_COORDINATOR_EPOCH,
+                                        INITIAL_BUCKET_EPOCH))),
+                future::complete);
+
+        List<NotifyLeaderAndIsrResultForBucket> results = future.get();
+        assertThat(results).hasSize(1);
+        NotifyLeaderAndIsrResultForBucket result = results.get(0);
+        assertThat(result.getError().error()).isEqualTo(Errors.DISK_WRITE_LOCKED);
+        assertThat(result.getError().messageWithFallback()).contains("data disk usage");
+        Replica kvReplica = replicaManager.getReplicaOrException(kvTb);
+        assertThat(kvReplica.isLeader()).isFalse();
+        assertThat(kvReplica.getKvTablet()).isNull();
+
+        future = new CompletableFuture<>();
+        replicaManager.becomeLeaderOrFollower(
+                INITIAL_COORDINATOR_EPOCH,
+                Collections.singletonList(
+                        new NotifyLeaderAndIsrData(
+                                PhysicalTablePath.of(DATA1_TABLE_PATH),
+                                logTb,
+                                Collections.singletonList(TABLET_SERVER_ID),
+                                new LeaderAndIsr(
+                                        TABLET_SERVER_ID,
+                                        INITIAL_LEADER_EPOCH,
+                                        Collections.singletonList(TABLET_SERVER_ID),
+                                        Collections.emptyList(),
+                                        INITIAL_COORDINATOR_EPOCH,
+                                        INITIAL_BUCKET_EPOCH))),
+                future::complete);
+
+        assertThat(future.get()).containsOnly(new NotifyLeaderAndIsrResultForBucket(logTb));
+        assertThat(replicaManager.getReplicaOrException(logTb).isLeader()).isTrue();
+
+        replicaManager.getDiskUsageMonitor().update(0.10);
     }
 
     @Test
@@ -2483,5 +2605,42 @@ class ReplicaManagerTest extends ReplicaTestBase {
         assertThat(checkpoint1.get(new TableBucket(DATA1_TABLE_ID, 0))).isEqualTo(10L);
         assertThat(checkpoint2).containsOnlyKeys(new TableBucket(DATA1_TABLE_ID, 1));
         assertThat(checkpoint2.get(new TableBucket(DATA1_TABLE_ID, 1))).isEqualTo(10L);
+    }
+
+    @Test
+    void testStopReplicaSweepsOrphanDirsForNoneReplica() throws Exception {
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
+        PhysicalTablePath physicalTablePath = PhysicalTablePath.of(DATA1_TABLE_PATH);
+
+        // Create a log directly via LogManager without going through ReplicaManager.
+        // This simulates the state after TS restart where LogManager loaded the log
+        // but no NotifyLeaderAndIsr arrived (so allReplicas is empty → NoneReplica).
+        File dataDir = localDiskManager.dataDirs().get(0);
+        LogTablet logTablet =
+                logManager.getOrCreateLog(
+                        dataDir, physicalTablePath, tb, LogFormat.ARROW, 1, false);
+        File logDir = logTablet.getLogDir();
+        Path tableDir = logManager.getTabletParentDir(dataDir, physicalTablePath, tb);
+        assertThat(logDir).exists();
+        assertThat(tableDir).exists();
+
+        // Verify the bucket is NoneReplica (not in allReplicas).
+        assertThat(replicaManager.getReplica(tb)).isInstanceOf(ReplicaManager.NoneReplica.class);
+
+        // Send stopReplicas with deleteLocal=true. This should hit the NoneReplica
+        // branch and invoke sweepOrphanTabletDirs to clean up the orphan log.
+        CompletableFuture<List<StopReplicaResultForBucket>> future = new CompletableFuture<>();
+        replicaManager.stopReplicas(
+                INITIAL_COORDINATOR_EPOCH,
+                Collections.singletonList(
+                        new StopReplicaData(tb, true, false, INITIAL_COORDINATOR_EPOCH, 0)),
+                future::complete);
+
+        assertThat(future.get()).containsOnly(new StopReplicaResultForBucket(tb));
+        // The log directory and table parent directory should be cleaned up.
+        assertThat(logDir).doesNotExist();
+        assertThat(tableDir).doesNotExist();
+        // LogManager should no longer hold the log.
+        assertThat(logManager.getLog(tb)).isNotPresent();
     }
 }

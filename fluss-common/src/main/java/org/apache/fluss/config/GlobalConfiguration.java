@@ -18,6 +18,7 @@
 package org.apache.fluss.config;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.config.provider.ConfigProviders;
 import org.apache.fluss.exception.IllegalConfigurationException;
 
 import org.slf4j.Logger;
@@ -116,6 +117,9 @@ public class GlobalConfiguration {
             configuration.addAll(dynamicProperties);
         }
 
+        // resolve ${provider:...} markers after merging, so the logs above show only markers
+        ConfigProviders.resolve(configuration);
+
         return configuration;
     }
 
@@ -126,7 +130,7 @@ public class GlobalConfiguration {
                                 "{} configuration property: {}={}",
                                 prefix,
                                 key,
-                                value instanceof Password ? Password.HIDDEN_CONTENT : value));
+                                ConfigurationUtils.hideSensitiveValue(key, value)));
     }
 
     /**

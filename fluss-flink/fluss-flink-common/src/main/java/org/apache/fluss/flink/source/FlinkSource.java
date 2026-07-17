@@ -52,6 +52,9 @@ import org.apache.flink.core.io.SimpleVersionedSerializer;
 
 import javax.annotation.Nullable;
 
+import java.util.Collections;
+import java.util.List;
+
 import static org.apache.fluss.config.ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR;
 import static org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils.getClientScannerIoTmpDir;
 
@@ -236,6 +239,14 @@ public class FlinkSource<OUT>
     public SplitEnumerator<SourceSplitBase, SourceEnumeratorState> restoreEnumerator(
             SplitEnumeratorContext<SourceSplitBase> splitEnumeratorContext,
             SourceEnumeratorState sourceEnumeratorState) {
+        List<SourceSplitBase> remainingHybridLakeFlussSplits =
+                sourceEnumeratorState.getRemainingHybridLakeFlussSplits();
+        // A fresh null means lake splits are not initialized yet. When restoring, null means
+        // nothing is pending, so normalize it here to avoid generating lake splits later.
+        if (remainingHybridLakeFlussSplits == null) {
+            remainingHybridLakeFlussSplits = Collections.emptyList();
+        }
+
         return new FlinkSourceEnumerator(
                 tablePath,
                 flussConf,
@@ -244,7 +255,7 @@ public class FlinkSource<OUT>
                 splitEnumeratorContext,
                 sourceEnumeratorState.getAssignedBuckets(),
                 sourceEnumeratorState.getAssignedPartitions(),
-                sourceEnumeratorState.getRemainingHybridLakeFlussSplits(),
+                remainingHybridLakeFlussSplits,
                 offsetsInitializer,
                 scanPartitionDiscoveryIntervalMs,
                 splitPerAssignmentBatchSize,
@@ -254,7 +265,9 @@ public class FlinkSource<OUT>
                 new LeaseContext(
                         sourceEnumeratorState.getLeaseId(),
                         leaseContext.getKvSnapshotLeaseDurationMs()),
-                true);
+                true,
+                sourceEnumeratorState.isInitialDiscoveryFinished(),
+                sourceEnumeratorState.getUnassignedSplits());
     }
 
     @Override

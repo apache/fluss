@@ -153,10 +153,6 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
             }
 
         } catch (Throwable t) {
-            if (tableCommit != null) {
-                // if any error happen while commit, abort the commit to clean committable
-                tableCommit.abort(manifestCommittable.fileCommittables());
-            }
             throw new IOException(t);
         }
     }

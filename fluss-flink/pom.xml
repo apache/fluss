@@ -28,7 +28,7 @@
     </parent>
 
     <artifactId>fluss-flink</artifactId>
-    <name>Fluss : Engine Flink :</name>
+    <name>Apache Fluss (Incubating) : Engine Flink :</name>
     <packaging>pom</packaging>
 
     <modules>

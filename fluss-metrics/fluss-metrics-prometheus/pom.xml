@@ -28,7 +28,7 @@
     </parent>
 
     <artifactId>fluss-metrics-prometheus</artifactId>
-    <name>Fluss : Metrics : Prometheus</name>
+    <name>Apache Fluss (Incubating) : Metrics : Prometheus</name>
 
     <properties>
         <prometheus.version>0.8.1</prometheus.version>

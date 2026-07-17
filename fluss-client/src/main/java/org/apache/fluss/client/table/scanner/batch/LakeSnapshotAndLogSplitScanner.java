@@ -54,6 +54,7 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
     private final @Nullable List<LakeSplit> lakeSplits;
     private Comparator<InternalRow> rowComparator;
     private List<CloseableIterator<LogRecord>> lakeRecordIterators = new ArrayList<>();
+    private boolean lakeRecordIteratorsInitialized;
     private final LakeSource<LakeSplit> lakeSource;
 
     private final int[] pkIndexes;
@@ -155,16 +156,7 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
     @Override
     public CloseableIterator<InternalRow> pollBatch(Duration timeout) throws IOException {
         if (logScanFinished) {
-            if (lakeRecordIterators.isEmpty()) {
-                if (lakeSplits == null || lakeSplits.isEmpty()) {
-                    lakeRecordIterators = Collections.emptyList();
-                } else {
-                    for (LakeSplit lakeSplit : lakeSplits) {
-                        lakeRecordIterators.add(
-                                lakeSource.createRecordReader(() -> lakeSplit).read());
-                    }
-                }
-            }
+            initializeLakeRecordIterators();
             if (currentSortMergeReader == null) {
                 currentSortMergeReader =
                         new SortMergeReader(
@@ -179,30 +171,54 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
             }
             return currentSortMergeReader.readBatch();
         } else {
-            if (lakeRecordIterators.isEmpty()) {
-                List<RecordReader> recordReaders = new ArrayList<>();
-                if (lakeSplits == null || lakeSplits.isEmpty()) {
-                    // pass null split to get rowComparator
-                    recordReaders.add(lakeSource.createRecordReader(() -> null));
-                } else {
-                    for (LakeSplit lakeSplit : lakeSplits) {
-                        recordReaders.add(lakeSource.createRecordReader(() -> lakeSplit));
-                    }
-                }
-                for (RecordReader reader : recordReaders) {
-                    if (reader instanceof SortedRecordReader) {
-                        rowComparator = ((SortedRecordReader) reader).order();
-                    } else {
-                        throw new UnsupportedOperationException(
-                                "lake records must instance of sorted view.");
-                    }
-                    lakeRecordIterators.add(reader.read());
-                }
+            initializeLakeRecordIterators();
+            if (logRows == null) {
                 logRows = new TreeMap<>(rowComparator);
             }
             pollLogRecords(timeout);
             return CloseableIterator.wrap(Collections.emptyIterator());
         }
+    }
+
+    private void initializeLakeRecordIterators() throws IOException {
+        if (lakeRecordIteratorsInitialized) {
+            return;
+        }
+
+        List<RecordReader> recordReaders = new ArrayList<>();
+        if (lakeSplits == null || lakeSplits.isEmpty()) {
+            // pass null split to get rowComparator
+            recordReaders.add(lakeSource.createRecordReader(sortedReaderContext(null)));
+        } else {
+            for (LakeSplit lakeSplit : lakeSplits) {
+                recordReaders.add(lakeSource.createRecordReader(sortedReaderContext(lakeSplit)));
+            }
+        }
+        for (RecordReader reader : recordReaders) {
+            if (reader instanceof SortedRecordReader) {
+                rowComparator = ((SortedRecordReader) reader).order();
+            } else {
+                throw new UnsupportedOperationException(
+                        "lake records must instance of sorted view.");
+            }
+            lakeRecordIterators.add(reader.read());
+        }
+        lakeRecordIteratorsInitialized = true;
+    }
+
+    private LakeSource.ReaderContext<LakeSplit> sortedReaderContext(@Nullable LakeSplit lakeSplit) {
+        return new LakeSource.ReaderContext<LakeSplit>() {
+            @Nullable
+            @Override
+            public LakeSplit lakeSplit() {
+                return lakeSplit;
+            }
+
+            @Override
+            public boolean requireSortedRecords() {
+                return true;
+            }
+        };
     }
 
     private void pollLogRecords(Duration timeout) {

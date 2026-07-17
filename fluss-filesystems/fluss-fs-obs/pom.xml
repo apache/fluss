@@ -28,7 +28,7 @@
     </parent>
 
     <artifactId>fluss-fs-obs</artifactId>
-    <name>Fluss : FileSystems : OBS FS</name>
+    <name>Apache Fluss (Incubating) : FileSystems : OBS FS</name>
 
     <properties>
         <fs.obs.sdk.version>3.24.12</fs.obs.sdk.version>

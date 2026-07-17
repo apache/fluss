@@ -28,7 +28,7 @@
     </parent>
 
     <artifactId>fluss-spark-ut_${scala.binary.version}</artifactId>
-    <name>Fluss : Engine Spark : UT</name>
+    <name>Apache Fluss (Incubating) : Engine Spark : UT</name>
 
     <dependencies>
         <dependency>
@@ -91,6 +91,13 @@
         <dependency>
             <groupId>org.apache.paimon</groupId>
             <artifactId>paimon-bundle</artifactId>
+            <version>${paimon.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.paimon</groupId>
+            <artifactId>paimon-arrow</artifactId>
             <version>${paimon.version}</version>
             <scope>test</scope>
         </dependency>

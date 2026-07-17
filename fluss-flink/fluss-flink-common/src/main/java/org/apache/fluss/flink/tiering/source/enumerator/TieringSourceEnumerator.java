@@ -31,6 +31,8 @@ import org.apache.fluss.flink.tiering.source.split.TieringSplit;
 import org.apache.fluss.flink.tiering.source.split.TieringSplitGenerator;
 import org.apache.fluss.flink.tiering.source.state.TieringSourceEnumeratorState;
 import org.apache.fluss.lake.committer.TieringStats;
+import org.apache.fluss.lake.writer.LakeTieringFactory;
+import org.apache.fluss.lake.writer.TieringTableValidator;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.GatewayClientProxy;
@@ -42,6 +44,7 @@ import org.apache.fluss.rpc.messages.PbHeartbeatReqForTable;
 import org.apache.fluss.rpc.messages.PbLakeTieringStats;
 import org.apache.fluss.rpc.messages.PbLakeTieringTableInfo;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
+import org.apache.fluss.utils.ExceptionUtils;
 
 import org.apache.flink.api.connector.source.ReaderInfo;
 import org.apache.flink.api.connector.source.SourceEvent;
@@ -98,6 +101,7 @@ public class TieringSourceEnumerator
 
     private final Configuration flussConf;
     private final SplitEnumeratorContext<TieringSplit> context;
+    private final LakeTieringFactory<?, ?> lakeTieringFactory;
     private final ScheduledExecutorService timerService;
     private final SplitEnumeratorMetricGroup enumeratorMetricGroup;
     private final long pollTieringTableIntervalMs;
@@ -124,9 +128,11 @@ public class TieringSourceEnumerator
     public TieringSourceEnumerator(
             Configuration flussConf,
             SplitEnumeratorContext<TieringSplit> context,
+            LakeTieringFactory<?, ?> lakeTieringFactory,
             long pollTieringTableIntervalMs) {
         this.flussConf = flussConf;
         this.context = context;
+        this.lakeTieringFactory = lakeTieringFactory;
         this.timerService =
                 Executors.newSingleThreadScheduledExecutor(
                         r -> new Thread(r, "Tiering-Timer-Thread"));
@@ -352,10 +358,11 @@ public class TieringSourceEnumerator
         }
     }
 
-    private void generateAndAssignSplits(
+    @VisibleForTesting
+    void generateAndAssignSplits(
             @Nullable Tuple3<Long, Long, TablePath> tieringTable, Throwable throwable) {
         if (throwable != null) {
-            LOG.warn("Failed to request tiering table, will retry later.", throwable);
+            ExceptionUtils.rethrow(throwable);
         }
         if (tieringTable != null) {
             generateTieringSplits(tieringTable);
@@ -421,6 +428,7 @@ public class TieringSourceEnumerator
                                 TablePath.of(
                                         tieringTable.getTablePath().getDatabaseName(),
                                         tieringTable.getTablePath().getTableName()));
+                tieringTableEpochs.put(lakeTieringInfo.f0, lakeTieringInfo.f1);
                 LOG.info("Tiering table {} has been requested.", lakeTieringInfo);
             } else {
                 LOG.info("No available Tiering table found, will poll later.");
@@ -447,11 +455,14 @@ public class TieringSourceEnumerator
         try {
             TablePath tablePath = tieringTable.f2;
             final TableInfo tableInfo = flussAdmin.getTableInfo(tablePath).get();
-            List<TieringSplit> tieringSplits =
-                    populateNumberOfTieringSplits(splitGenerator.generateTableSplits(tableInfo));
+            if (lakeTieringFactory instanceof TieringTableValidator) {
+                ((TieringTableValidator) lakeTieringFactory).validateTable(tableInfo);
+            }
+            List<TieringSplit> tieringSplits = splitGenerator.generateTableSplits(tableInfo);
             // shuffle tiering split to avoid splits tiering skew
             // after introduce tiering max duration
             Collections.shuffle(tieringSplits);
+            tieringSplits = populateTieringRoundMetadata(tieringSplits);
             LOG.info(
                     "Generate Tiering {} splits for table {} with cost {}ms.",
                     tieringSplits.size(),
@@ -461,9 +472,9 @@ public class TieringSourceEnumerator
                 LOG.info(
                         "Generate Tiering splits for table {} is empty, no need to tier data.",
                         tieringTable.f2.getTableName());
+                tieringTableEpochs.remove(tieringTable.f0);
                 finishedTables.put(tieringTable.f0, TieringFinishInfo.from(tieringTable.f1));
             } else {
-                tieringTableEpochs.put(tieringTable.f0, tieringTable.f1);
                 pendingSplits.addAll(tieringSplits);
 
                 timerService.schedule(
@@ -482,14 +493,24 @@ public class TieringSourceEnumerator
         } catch (Exception e) {
             LOG.warn("Fail to generate Tiering splits for table {}.", tieringTable.f2, e);
             failedTableEpochs.put(tieringTable.f0, tieringTable.f1);
+            tieringTableEpochs.remove(tieringTable.f0);
         }
     }
 
-    private List<TieringSplit> populateNumberOfTieringSplits(List<TieringSplit> tieringSplits) {
+    private List<TieringSplit> populateTieringRoundMetadata(List<TieringSplit> tieringSplits) {
         int numberOfSplits = tieringSplits.size();
-        return tieringSplits.stream()
-                .map(split -> split.copy(numberOfSplits))
-                .collect(Collectors.toList());
+        if (numberOfSplits == 0) {
+            return Collections.emptyList();
+        }
+        long tieringRoundTimestamp = System.currentTimeMillis();
+        List<TieringSplit> splitsWithMetadata = new ArrayList<>(numberOfSplits);
+        for (int splitIndex = 0; splitIndex < numberOfSplits; splitIndex++) {
+            splitsWithMetadata.add(
+                    tieringSplits
+                            .get(splitIndex)
+                            .copy(numberOfSplits, splitIndex, tieringRoundTimestamp));
+        }
+        return splitsWithMetadata;
     }
 
     @Override

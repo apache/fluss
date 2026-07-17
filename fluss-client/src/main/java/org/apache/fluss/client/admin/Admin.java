@@ -18,9 +18,11 @@
 package org.apache.fluss.client.admin;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.client.metadata.ActiveKvSnapshots;
 import org.apache.fluss.client.metadata.KvSnapshotMetadata;
 import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.metadata.LakeSnapshot;
+import org.apache.fluss.client.metadata.RemoteLogManifestInfo;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.rebalance.GoalType;
 import org.apache.fluss.cluster.rebalance.RebalanceProgress;
@@ -354,7 +356,7 @@ public interface Admin extends AutoCloseable {
      *   <li>{@link TooManyPartitionsException} if the number of partitions is larger than the
      *       maximum number of partitions of one table, see {@link ConfigOptions#MAX_PARTITION_NUM}.
      *   <li>{@link TooManyBucketsException} if the number of buckets is larger than the maximum
-     *       number of buckets of one table, see {@link ConfigOptions#MAX_BUCKET_NUM}.
+     *       number of buckets of one partition, see {@link ConfigOptions#MAX_BUCKET_NUM}.
      * </ul>
      *
      * @param tablePath The table path of the table.
@@ -770,4 +772,49 @@ public interface Admin extends AutoCloseable {
      * @since 0.9
      */
     CompletableFuture<Void> deleteProducerOffsets(String producerId);
+
+    /**
+     * Get the health status of the cluster asynchronously.
+     *
+     * <p>The returned {@link ClusterHealth} contains replica statistics and an overall {@link
+     * ClusterHealthStatus}:
+     *
+     * <ul>
+     *   <li>{@link ClusterHealthStatus#GREEN} — all replicas are in-sync and all leaders are
+     *       active. The cluster is fully healthy.
+     *   <li>{@link ClusterHealthStatus#YELLOW} — all leaders are active, but some replicas have not
+     *       yet rejoined the in-sync replica set (ISR).
+     *   <li>{@link ClusterHealthStatus#RED} — one or more leader replicas have not yet been
+     *       confirmed active (e.g., leader election or KV snapshot recovery is still in progress).
+     *   <li>{@link ClusterHealthStatus#UNKNOWN} — the Coordinator was unable to determine cluster
+     *       health (e.g., the server does not support this API).
+     * </ul>
+     *
+     * <p>This API is designed for the situation like a Kubernetes readiness-probe gate during
+     * rolling upgrades: only proceed to the next pod when the status is {@code GREEN}, ensuring all
+     * replicas have fully recovered before the next server is restarted.
+     *
+     * @return a {@link CompletableFuture} that completes with the cluster health information.
+     * @since 1.0
+     */
+    CompletableFuture<ClusterHealth> getClusterHealth();
+
+    /**
+     * List per-bucket remote log manifest entries for a table or partition scope.
+     *
+     * @param tableId the table to query
+     * @param partitionId optional partition id (null for non-partitioned tables)
+     * @return per-bucket manifest paths and end offsets
+     */
+    CompletableFuture<List<RemoteLogManifestInfo>> listRemoteLogManifests(
+            long tableId, @Nullable Long partitionId);
+
+    /**
+     * List per-bucket active KV snapshot ids for a table or partition scope.
+     *
+     * @param tableId the table to query
+     * @param partitionId optional partition id (null for non-partitioned tables)
+     * @return per-bucket active snapshot ids grouped by bucket
+     */
+    CompletableFuture<ActiveKvSnapshots> listKvSnapshots(long tableId, @Nullable Long partitionId);
 }

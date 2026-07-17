@@ -25,11 +25,11 @@ While the prior points give ways to identify promising candidates, the following
 
 ## Path to PPMC Membership
 
-Outstanding committers may be invited to join the Project Management Committee (PPMC). As described in [Fluss Team](fluss-team.md), the PPMC is the vehicle through which decision-making power and responsibility for oversight devolves to developers. While committers have the ability to update the code, only the PPMC as a body has the authority to:
+The Project Management Committee (PPMC) is the official controlling body of the project. PPMC members “must” be able to perform the official responsibilities of the PPMC (verify releases and growth of committers/PPMC). We “want” them to be people that have a vision for Fluss, technology and community wise.
 
-- Vote on formal releases of the project's software
-- Vote in new committers and PPMC members
-- Manage the incubator project
+For the avoidance of doubt, not every PPMC member needs to know all details of how exactly Fluss’s release process works (it is okay to understand the gist and how to find the details). Likewise, not every PPMC member needs to be a visionary. We strive to build a PPMC that covers all parts well, understanding that each member brings different strengths.
+
+Ideally, we find candidates among active community members that have shown initiative to shape the direction of Fluss (technology and community) and have shown willingness to learn the official processes, such as how to create or verify for releases.
 
 For more details on PPMC roles and responsibilities, see [Fluss Team](fluss-team.md).
 

@@ -23,6 +23,7 @@ import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.LakeTableAlreadyExistException;
@@ -46,6 +47,7 @@ import org.apache.paimon.data.GenericRow;
 import org.apache.paimon.data.Timestamp;
 import org.apache.paimon.options.Options;
 import org.apache.paimon.schema.SchemaChange;
+import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.table.Table;
 import org.apache.paimon.table.sink.BatchTableCommit;
 import org.apache.paimon.table.sink.BatchTableWrite;
@@ -390,6 +392,8 @@ class LakeEnabledTableCreateITCase {
 
     @Test
     void testCreateLakeEnableTableWithUnsettablePaimonOptions() {
+        assertThat(PAIMON_UNSETTABLE_OPTIONS).doesNotContain(CoreOptions.PATH.key());
+
         Map<String, String> customProperties = new HashMap<>();
 
         for (String key : PAIMON_UNSETTABLE_OPTIONS) {
@@ -416,6 +420,138 @@ class LakeEnabledTableCreateITCase {
                                     "The Paimon option %s will be set automatically by Fluss and should not be set manually.",
                                     key));
         }
+    }
+
+    @Test
+    void testAlterPaimonPathOnlyWhenPaimonTableNotCreated() throws Exception {
+        TableDescriptor lakeDisabledTable =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("c1", DataTypes.INT())
+                                        .column("c2", DataTypes.STRING())
+                                        .build())
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, false)
+                        .distributedBy(BUCKET_NUM, "c1", "c2")
+                        .build();
+        TablePath lakeDisabledTablePath = TablePath.of(DATABASE, "alter_paimon_path_disabled");
+        admin.createTable(lakeDisabledTablePath, lakeDisabledTable, false).get();
+
+        String customPaimonPath =
+                Files.createTempDirectory("alter-paimon-path-disabled").toUri().toString();
+        admin.alterTable(
+                        lakeDisabledTablePath,
+                        Collections.singletonList(TableChange.set("paimon.path", customPaimonPath)),
+                        false)
+                .get();
+        assertThat(
+                        admin.getTableInfo(lakeDisabledTablePath)
+                                .get()
+                                .toTableDescriptor()
+                                .getCustomProperties())
+                .containsEntry("paimon.path", customPaimonPath);
+        assertThatThrownBy(
+                        () ->
+                                paimonCatalog.getTable(
+                                        Identifier.create(
+                                                DATABASE, lakeDisabledTablePath.getTableName())))
+                .isInstanceOf(Catalog.TableNotExistException.class)
+                .hasMessageContaining(
+                        String.format(
+                                "Table %s.%s does not exist",
+                                DATABASE, lakeDisabledTablePath.getTableName()));
+
+        TableDescriptor lakeEnabledTable =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("c1", DataTypes.INT())
+                                        .column("c2", DataTypes.STRING())
+                                        .build())
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .distributedBy(BUCKET_NUM, "c1", "c2")
+                        .build();
+        TablePath lakeEnabledTablePath = TablePath.of(DATABASE, "alter_paimon_path_enabled");
+        admin.createTable(lakeEnabledTablePath, lakeEnabledTable, false).get();
+
+        Identifier lakeEnabledPaimonPath =
+                Identifier.create(DATABASE, lakeEnabledTablePath.getTableName());
+        FileStoreTable paimonTable = (FileStoreTable) paimonCatalog.getTable(lakeEnabledPaimonPath);
+        String paimonPath = paimonTable.location().toString();
+
+        admin.alterTable(
+                        lakeEnabledTablePath,
+                        Arrays.asList(
+                                TableChange.set("paimon.path", paimonPath + "/"),
+                                TableChange.set("key", "value")),
+                        false)
+                .get();
+
+        paimonTable = (FileStoreTable) paimonCatalog.getTable(lakeEnabledPaimonPath);
+        assertThat(paimonTable.location().toString()).isEqualTo(paimonPath);
+        assertThat(paimonTable.options()).containsEntry("fluss.key", "value");
+        long schemaId = paimonTable.schema().id();
+
+        admin.alterTable(
+                        lakeEnabledTablePath,
+                        Collections.singletonList(TableChange.set("paimon.path", paimonPath)),
+                        false)
+                .get();
+
+        paimonTable = (FileStoreTable) paimonCatalog.getTable(lakeEnabledPaimonPath);
+        assertThat(paimonTable.location().toString()).isEqualTo(paimonPath);
+        assertThat(paimonTable.schema().id()).isEqualTo(schemaId);
+
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                lakeEnabledTablePath,
+                                                Collections.singletonList(
+                                                        TableChange.set(
+                                                                "paimon.path",
+                                                                Files.createTempDirectory(
+                                                                                "alter-paimon-path-enabled")
+                                                                        .toUri()
+                                                                        .toString())),
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining(
+                        "'paimon.path' can only be altered before the Paimon table is created");
+
+        TablePath lakeReDisabledTablePath =
+                TablePath.of(DATABASE, "alter_paimon_path_created_then_disabled");
+        admin.createTable(lakeReDisabledTablePath, lakeEnabledTable, false).get();
+        Identifier lakeReDisabledPaimonPath =
+                Identifier.create(DATABASE, lakeReDisabledTablePath.getTableName());
+        paimonCatalog.getTable(lakeReDisabledPaimonPath);
+
+        admin.alterTable(
+                        lakeReDisabledTablePath,
+                        Collections.singletonList(
+                                TableChange.set(
+                                        ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "false")),
+                        false)
+                .get();
+
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                lakeReDisabledTablePath,
+                                                Collections.singletonList(
+                                                        TableChange.set(
+                                                                "paimon.path",
+                                                                Files.createTempDirectory(
+                                                                                "alter-paimon-path-created")
+                                                                        .toUri()
+                                                                        .toString())),
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining(
+                        "'paimon.path' can only be altered before the Paimon table is created");
     }
 
     @Test

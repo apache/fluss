@@ -27,6 +27,7 @@ import org.apache.fluss.exception.FencedLeaderEpochException;
 import org.apache.fluss.exception.InvalidColumnProjectionException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidRequiredAcksException;
+import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.exception.LogOffsetOutOfRangeException;
 import org.apache.fluss.exception.LogStorageException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
@@ -106,9 +107,11 @@ import org.apache.fluss.server.replica.delay.DelayedTableBucketKey;
 import org.apache.fluss.server.replica.delay.DelayedWrite;
 import org.apache.fluss.server.replica.fetcher.InitialFetchStatus;
 import org.apache.fluss.server.replica.fetcher.ReplicaFetcherManager;
+import org.apache.fluss.server.storage.DiskUsageMonitor;
 import org.apache.fluss.server.storage.LocalDiskManager;
 import org.apache.fluss.server.utils.FatalErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
@@ -123,7 +126,9 @@ import javax.annotation.concurrent.GuardedBy;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -144,7 +149,6 @@ import java.util.stream.Stream;
 
 import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_2;
 import static org.apache.fluss.server.TabletManagerBase.getTableInfo;
-import static org.apache.fluss.utils.FileUtils.isDirectoryEmpty;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
@@ -332,6 +336,7 @@ public class ReplicaManager implements ServerReconfigurable {
         this.ioExecutor = ioExecutor;
         this.minInSyncReplicas = conf.get(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER);
         this.scannerManager = checkNotNull(scannerManager, "scannerManager");
+
         registerMetrics();
     }
 
@@ -344,6 +349,9 @@ public class ReplicaManager implements ServerReconfigurable {
                 this::maybeShrinkIsr,
                 0L,
                 conf.get(ConfigOptions.LOG_REPLICA_MAX_LAG_TIME).toMillis() / 2);
+
+        // Start periodic disk usage monitoring (initial + periodic sampling)
+        localDiskManager.startDiskUsageMonitor(scheduler);
     }
 
     public RemoteLogManager getRemoteLogManager() {
@@ -423,6 +431,11 @@ public class ReplicaManager implements ServerReconfigurable {
         physicalStorage.gauge(
                 MetricNames.SERVER_PHYSICAL_STORAGE_REMOTE_LOG_SIZE,
                 this::physicalStorageRemoteLogSize);
+
+        serverMetricGroup.gauge(
+                MetricNames.DISK_USAGE_RATIO, localDiskManager::getLastDiskUsageRatio);
+        serverMetricGroup.gauge(
+                MetricNames.DISK_WRITE_LOCKED, () -> localDiskManager.isDiskWriteLocked() ? 1 : 0);
     }
 
     @VisibleForTesting
@@ -592,6 +605,16 @@ public class ReplicaManager implements ServerReconfigurable {
         }
     }
 
+    @VisibleForTesting
+    public boolean isDiskWriteLocked() {
+        return localDiskManager.isDiskWriteLocked();
+    }
+
+    @VisibleForTesting
+    public DiskUsageMonitor getDiskUsageMonitor() {
+        return localDiskManager.getDiskUsageMonitor();
+    }
+
     /**
      * Append log records to leader replicas of the buckets, and wait for them to be replicated to
      * other replicas.
@@ -609,6 +632,7 @@ public class ReplicaManager implements ServerReconfigurable {
         if (isRequiredAcksInvalid(requiredAcks)) {
             throw new InvalidRequiredAcksException("Invalid required acks: " + requiredAcks);
         }
+        localDiskManager.ensureWritable();
 
         long startTime = System.currentTimeMillis();
         Map<TableBucket, ProduceLogResultForBucket> appendResult =
@@ -662,6 +686,7 @@ public class ReplicaManager implements ServerReconfigurable {
         if (isRequiredAcksInvalid(requiredAcks)) {
             throw new InvalidRequiredAcksException("Invalid required acks: " + requiredAcks);
         }
+        localDiskManager.ensureWritable();
 
         long startTime = System.currentTimeMillis();
         Map<TableBucket, PutKvResultForBucket> kvPutResult =
@@ -956,7 +981,20 @@ public class ReplicaManager implements ServerReconfigurable {
                         TableBucket tb = data.getTableBucket();
                         HostedReplica hostedReplica = getReplica(tb);
                         if (hostedReplica instanceof NoneReplica) {
-                            // do nothing fort this case.
+                            if (data.isDeleteLocal()) {
+                                try {
+                                    sweepOrphanTabletDirs(tb, deletedTableIds, deletedPartitionIds);
+                                } catch (Exception e) {
+                                    LOG.error(
+                                            "Failed to sweep orphan tablet directories for {}",
+                                            tb,
+                                            e);
+                                    result.add(
+                                            new StopReplicaResultForBucket(
+                                                    tb, ApiError.fromThrowable(e)));
+                                    continue;
+                                }
+                            }
                             result.add(new StopReplicaResultForBucket(tb));
                         } else if (hostedReplica instanceof OfflineReplica) {
                             LOG.warn(
@@ -1231,6 +1269,8 @@ public class ReplicaManager implements ServerReconfigurable {
                                                         "Could not find leader for follower replica %s while make "
                                                                 + "follower for %s.",
                                                         serverId, tb)))));
+            } else if (leaderId == LeaderAndIsr.NO_LEADER) {
+                LOG.info("Skip adding fetcher for follower replica {} without leader.", tb);
             } else {
                 bucketAndStatus.put(
                         tb,
@@ -1787,7 +1827,11 @@ public class ReplicaManager implements ServerReconfigurable {
         if (requestLeaderEpoch >= currentLeaderEpoch) {
             if (data.getReplicas().contains(serverId)) {
                 int leaderId = data.getLeader();
-                return leaderId == serverId;
+                boolean becomeLeader = leaderId == serverId;
+                if (becomeLeader) {
+                    ensureWritableForNewKvLeader(replica, requestLeaderEpoch);
+                }
+                return becomeLeader;
             } else {
                 String errorMessage =
                         String.format(
@@ -1806,6 +1850,17 @@ public class ReplicaManager implements ServerReconfigurable {
             LOG.warn("Ignore the notify leader and isr request because {}", errorMessage);
             throw new FencedLeaderEpochException(errorMessage);
         }
+    }
+
+    private void ensureWritableForNewKvLeader(Replica replica, int requestLeaderEpoch) {
+        if (!replica.isKvTable() || requestLeaderEpoch <= replica.getLeaderEpoch()) {
+            return;
+        }
+
+        // TODO: Once standby replicas maintain local KV snapshots, allow promoting a standby
+        // replica while disk write protection is active because it should not need to download a
+        // large remote snapshot during make-leader.
+        localDiskManager.ensureWritable();
     }
 
     /**
@@ -1905,6 +1960,59 @@ public class ReplicaManager implements ServerReconfigurable {
         return new StopReplicaResultForBucket(tb);
     }
 
+    /**
+     * Remove on-disk tablet directories for a bucket that the in-memory ReplicaManager does not
+     * know about. This handles the case where a stopReplica(delete=true) arrives after the
+     * TabletServer was restarted during a delete — LogManager loaded the log at startup but no
+     * NotifyLeaderAndIsr ever ran, so allReplicas is empty.
+     */
+    private void sweepOrphanTabletDirs(
+            TableBucket tb, Map<Long, Path> deletedTableIds, Map<Long, Path> deletedPartitionIds) {
+        Optional<LogTablet> orphanLog = logManager.getLog(tb);
+        if (!orphanLog.isPresent()) {
+            return;
+        }
+
+        LogTablet logTablet = orphanLog.get();
+        File dataDir = logTablet.getDataDir();
+        PhysicalTablePath physicalTablePath = logTablet.getPhysicalTablePath();
+        Path tabletParentDir = logManager.getTabletParentDir(dataDir, physicalTablePath, tb);
+
+        // Clean KV before log so that if KV cleanup fails, the log is still
+        // present and a coordinator retry can re-enter this method.
+        boolean isKvTable = false;
+        if (kvManager.getKv(tb).isPresent()) {
+            kvManager.dropKv(tb);
+            isKvTable = true;
+        } else {
+            File kvTabletDir = FlussPaths.kvTabletDir(dataDir, physicalTablePath, tb);
+            if (kvTabletDir.exists()) {
+                isKvTable = true;
+                try {
+                    FileUtils.deleteDirectory(kvTabletDir);
+                } catch (IOException e) {
+                    throw new KvStorageException(
+                            String.format(
+                                    "Failed to delete orphan KV tablet directory %s", kvTabletDir),
+                            e);
+                }
+            }
+        }
+
+        logManager.dropLog(tb);
+
+        localDiskManager.recordReplicaDelete(dataDir, isKvTable);
+
+        if (tb.getPartitionId() != null) {
+            deletedPartitionIds.put(tb.getPartitionId(), tabletParentDir);
+            deletedTableIds.put(tb.getTableId(), tabletParentDir.getParent());
+        } else {
+            deletedTableIds.put(tb.getTableId(), tabletParentDir);
+        }
+
+        LOG.info("Swept orphan tablet directories for bucket {}", tb);
+    }
+
     private void truncateToHighWatermark(List<Replica> replicas) {
         for (Replica replica : replicas) {
             long highWatermark = replica.getLogTablet().getHighWatermark();
@@ -1938,14 +2046,19 @@ public class ReplicaManager implements ServerReconfigurable {
     }
 
     private void dropEmptyTableOrPartitionDir(Path dir, long id, String dirType) {
-        if (!Files.exists(dir) || !isDirectoryEmpty(dir)) {
-            return;
-        }
-
-        LOG.info("Drop empty {} dir '{}' of {} id {}.", dirType, dir, dirType, id);
         try {
-            FileUtils.deleteDirectory(dir.toFile());
-        } catch (Exception e) {
+            Files.delete(dir);
+            LOG.info("Dropped empty {} dir '{}' of {} id {}.", dirType, dir, dirType, id);
+        } catch (DirectoryNotEmptyException e) {
+            LOG.warn(
+                    "{} dir '{}' of {} id {} is not empty, skipping deletion.",
+                    dirType,
+                    dir,
+                    dirType,
+                    id);
+        } catch (NoSuchFileException ignored) {
+            // Already gone — fine.
+        } catch (IOException e) {
             LOG.error("Failed to delete empty {} dir '{}' of {} id {}.", dirType, dir, dirType, e);
         }
     }

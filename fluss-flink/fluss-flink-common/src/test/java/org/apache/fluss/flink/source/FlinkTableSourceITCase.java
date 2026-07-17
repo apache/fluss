@@ -1228,7 +1228,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
 
         String query =
                 "select * from all_type_partitioned_table where "
-                        + "p_bool is false and p_int not in (12) and p_bigint in (99999) and p_bytes=CAST('Hi' AS VARBINARY) "
+                        + "p_bool is false and p_int < 11 and p_bigint in (99999) and p_bytes=CAST('Hi' AS VARBINARY) "
                         + "and p_string='hello' and p_float=CAST(12.5 AS FLOAT) and p_double=7.88 and p_date=DATE '2025-10-12' "
                         + "and p_time=TIME '12:55:00' and p_ts_ntz=TIMESTAMP '2025-10-12 12:55:00.001' "
                         + "and p_ts_ltz=TO_TIMESTAMP_LTZ(4001, 3)";
@@ -1236,7 +1236,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
         assertThat(plan)
                 .contains(
                         "TableSourceScan(table=[[testcatalog, defaultdb, all_type_partitioned_table, "
-                                + "filter=[and(and(and(and(and(and(and(and(and(and(<>(p_int, 12), "
+                                + "filter=[and(and(and(and(and(and(and(and(and(and(<(p_int, 11), "
                                 + "=(p_bigint, 99999:BIGINT)), =(p_bytes, X'4869':VARBINARY(2147483647))), "
                                 + "=(p_string, _UTF-16LE'hello':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\")), "
                                 + "=(p_float, 1.25E1:FLOAT)), =(p_double, 7.88E0:DOUBLE)), =(p_date, 2025-10-12)), "

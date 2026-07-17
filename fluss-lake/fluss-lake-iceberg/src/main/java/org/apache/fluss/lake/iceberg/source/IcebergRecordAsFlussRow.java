@@ -38,7 +38,7 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 
-import static org.apache.fluss.lake.iceberg.IcebergLakeCatalog.SYSTEM_COLUMNS;
+import static org.apache.fluss.lake.iceberg.IcebergSchemaUtils.SYSTEM_COLUMNS;
 
 /** Adapter for Iceberg Record as fluss row. */
 public class IcebergRecordAsFlussRow implements InternalRow {
@@ -94,7 +94,7 @@ public class IcebergRecordAsFlussRow implements InternalRow {
             return (int) ((LocalDate) value).toEpochDay();
         }
         if (value instanceof LocalTime) {
-            return (int) ((LocalTime) value).toNanoOfDay() / 1_000_000;
+            return (int) (((LocalTime) value).toNanoOfDay() / 1_000_000);
         }
         return (Integer) value;
     }

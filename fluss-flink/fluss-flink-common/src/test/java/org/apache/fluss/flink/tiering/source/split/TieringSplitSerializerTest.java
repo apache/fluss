@@ -69,8 +69,8 @@ class TieringSplitSerializerTest {
 
         String expectedSplitString =
                 isPartitionedTable
-                        ? "TieringSnapshotSplit{tablePath=test_db.test_partitioned_table, tableBucket=TableBucket{tableId=1, partitionId=100, bucket=2}, partitionName='1024', numberOfSplits=30, skipCurrentRound=false, snapshotId=0, logOffsetOfSnapshot=200}"
-                        : "TieringSnapshotSplit{tablePath=test_db.test_table, tableBucket=TableBucket{tableId=1, bucket=2}, partitionName='null', numberOfSplits=30, skipCurrentRound=false, snapshotId=0, logOffsetOfSnapshot=200}";
+                        ? "TieringSnapshotSplit{tablePath=test_db.test_partitioned_table, tableBucket=TableBucket{tableId=1, partitionId=100, bucket=2}, partitionName='1024', numberOfSplits=30, skipCurrentRound=false, snapshotId=0, logOffsetOfSnapshot=200, splitIndex=-1, tieringRoundTimestamp=-1}"
+                        : "TieringSnapshotSplit{tablePath=test_db.test_table, tableBucket=TableBucket{tableId=1, bucket=2}, partitionName='null', numberOfSplits=30, skipCurrentRound=false, snapshotId=0, logOffsetOfSnapshot=200, splitIndex=-1, tieringRoundTimestamp=-1}";
         assertThat(new TieringSnapshotSplit(path, bucket, partitionName, 0L, 200L, 30).toString())
                 .isEqualTo(expectedSplitString);
     }
@@ -103,8 +103,8 @@ class TieringSplitSerializerTest {
 
         String expectedSplitString =
                 isPartitionedTable
-                        ? "TieringLogSplit{tablePath=test_db.test_partitioned_table, tableBucket=TableBucket{tableId=1, partitionId=100, bucket=2}, partitionName='1024', numberOfSplits=2, skipCurrentRound=false, startingOffset=100, stoppingOffset=200}"
-                        : "TieringLogSplit{tablePath=test_db.test_table, tableBucket=TableBucket{tableId=1, bucket=2}, partitionName='null', numberOfSplits=2, skipCurrentRound=false, startingOffset=100, stoppingOffset=200}";
+                        ? "TieringLogSplit{tablePath=test_db.test_partitioned_table, tableBucket=TableBucket{tableId=1, partitionId=100, bucket=2}, partitionName='1024', numberOfSplits=2, skipCurrentRound=false, startingOffset=100, stoppingOffset=200, splitIndex=-1, tieringRoundTimestamp=-1}"
+                        : "TieringLogSplit{tablePath=test_db.test_table, tableBucket=TableBucket{tableId=1, bucket=2}, partitionName='null', numberOfSplits=2, skipCurrentRound=false, startingOffset=100, stoppingOffset=200, splitIndex=-1, tieringRoundTimestamp=-1}";
         assertThat(new TieringLogSplit(path, bucket, partitionName, 100, 200, 2).toString())
                 .isEqualTo(expectedSplitString);
     }
@@ -150,5 +150,26 @@ class TieringSplitSerializerTest {
         deserializedLogSplit =
                 (TieringLogSplit) serializer.deserialize(serializer.getVersion(), serialized);
         assertThat(deserializedLogSplit).isEqualTo(logSplit);
+    }
+
+    @Test
+    void testTieringRoundTimestampSerde() throws Exception {
+        TieringSnapshotSplit snapshotSplit =
+                new TieringSnapshotSplit(tablePath, tableBucket, null, 0L, 200L, 10, 0, 1000L);
+        byte[] serialized = serializer.serialize(snapshotSplit);
+        TieringSnapshotSplit deserializedSnapshotSplit =
+                (TieringSnapshotSplit) serializer.deserialize(serializer.getVersion(), serialized);
+        assertThat(deserializedSnapshotSplit.getSplitIndex()).isZero();
+        assertThat(deserializedSnapshotSplit.isFirstSplit()).isTrue();
+        assertThat(deserializedSnapshotSplit.getTieringRoundTimestamp()).isEqualTo(1000L);
+
+        TieringLogSplit logSplit =
+                new TieringLogSplit(tablePath, tableBucket, null, 100, 200, 40, 2, 2000L);
+        serialized = serializer.serialize(logSplit);
+        TieringLogSplit deserializedLogSplit =
+                (TieringLogSplit) serializer.deserialize(serializer.getVersion(), serialized);
+        assertThat(deserializedLogSplit.getSplitIndex()).isEqualTo(2);
+        assertThat(deserializedLogSplit.isFirstSplit()).isFalse();
+        assertThat(deserializedLogSplit.getTieringRoundTimestamp()).isEqualTo(2000L);
     }
 }

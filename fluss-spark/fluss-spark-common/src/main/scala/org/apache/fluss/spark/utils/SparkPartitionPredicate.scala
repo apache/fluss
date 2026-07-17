@@ -18,9 +18,7 @@
 package org.apache.fluss.spark.utils
 
 import org.apache.fluss.metadata.{PartitionInfo, TableInfo}
-import org.apache.fluss.predicate.{CompoundPredicate, LeafPredicate, PartitionPredicateVisitor, Predicate => FlussPredicate, PredicateBuilder, PredicateVisitor}
-import org.apache.fluss.row.{BinaryString, GenericRow}
-import org.apache.fluss.types.{DataTypes, RowType}
+import org.apache.fluss.predicate.{PartitionPredicateVisitor, Predicate => FlussPredicate, PredicateBuilder}
 import org.apache.fluss.utils.PartitionUtils
 
 import org.apache.spark.sql.connector.expressions.filter.Predicate
@@ -30,77 +28,64 @@ import scala.jdk.CollectionConverters._
 /** Extracts a partition-key predicate and prunes the partition list at planning time. */
 object SparkPartitionPredicate {
 
-  def extract(tableInfo: TableInfo, predicates: Seq[Predicate]): Option[FlussPredicate] = {
+  def extract(
+      tableInfo: TableInfo,
+      predicates: Seq[Predicate]): (Seq[Predicate], Option[FlussPredicate]) = {
     val partitionKeys = tableInfo.getPartitionKeys
-    if (partitionKeys.isEmpty) return None
-
-    val rowType = partitionRowType(tableInfo)
-    val onlyPartitionKeys = new PartitionPredicateVisitor(partitionKeys)
-
-    val converted = predicates.flatMap {
-      sparkPredicate =>
-        SparkPredicateConverter
-          .convert(rowType, sparkPredicate)
-          .filter(_.visit(onlyPartitionKeys))
-          .map(stringifyLiterals)
+    if (partitionKeys.isEmpty) {
+      return (predicates, None)
     }
 
-    converted match {
+    val rowType = PartitionUtils.partitionRowType(tableInfo)
+    val onlyPartitionKeys = new PartitionPredicateVisitor(partitionKeys)
+
+    val flussPredicates = predicates.map {
+      sparkPredicate => (sparkPredicate, SparkPredicateConverter.convert(rowType, sparkPredicate))
+    }
+
+    val (partitionPairs, nonPartitionPairs) = flussPredicates.partition {
+      case (_, predicateOpt) =>
+        predicateOpt.exists(_.visit(onlyPartitionKeys))
+    }
+
+    val nonPartitionPredicates = nonPartitionPairs.map(_._1)
+    val partitionPredicate = partitionPairs.flatMap(_._2) match {
       case Seq() => None
       case Seq(single) => Some(single)
       case many => Some(PredicateBuilder.and(many.asJava))
     }
+
+    (nonPartitionPredicates, partitionPredicate)
   }
 
   def filterPartitions(
+      tableInfo: TableInfo,
       partitionInfos: Seq[PartitionInfo],
       partitionPredicate: Option[FlussPredicate]): Seq[PartitionInfo] =
     partitionPredicate match {
       case None => partitionInfos
-      case Some(predicate) => partitionInfos.filter(p => predicate.test(toPartitionRow(p)))
+      case Some(predicate) =>
+        val rowType = PartitionUtils.partitionRowType(tableInfo)
+        partitionInfos.filter {
+          p =>
+            predicate.test(
+              PartitionUtils.toPartitionRow(p.getResolvedPartitionSpec.getPartitionValues, rowType))
+        }
     }
 
-  private def partitionRowType(tableInfo: TableInfo): RowType = {
-    val schemaRowType = tableInfo.getRowType
-    val fieldNames = schemaRowType.getFieldNames
-    val partitionFieldIndexes = tableInfo.getPartitionKeys.asScala.map(fieldNames.indexOf).toArray
-    schemaRowType.project(partitionFieldIndexes)
-  }
-
-  private def toPartitionRow(partitionInfo: PartitionInfo): GenericRow = {
-    val values = partitionInfo.getResolvedPartitionSpec.getPartitionValues
-    val row = new GenericRow(values.size)
-    var i = 0
-    while (i < values.size) {
-      row.setField(i, BinaryString.fromString(values.get(i)))
-      i += 1
+  /**
+   * Tests whether a partition (described by its ordered partition values) matches the given
+   * predicate. Returns true when no predicate is provided.
+   */
+  def matchesPartition(
+      tableInfo: TableInfo,
+      partitionValues: Seq[String],
+      partitionPredicate: Option[FlussPredicate]): Boolean =
+    partitionPredicate match {
+      case None => true
+      case Some(_) if partitionValues.isEmpty => true
+      case Some(predicate) =>
+        val rowType = PartitionUtils.partitionRowType(tableInfo)
+        predicate.test(PartitionUtils.toPartitionRow(partitionValues.asJava, rowType))
     }
-    row
-  }
-
-  // Partition values are stored as strings; literals must be coerced before evaluation.
-  private val stringifier: PredicateVisitor[FlussPredicate] = new PredicateVisitor[FlussPredicate] {
-    override def visit(leaf: LeafPredicate): FlussPredicate = {
-      val converted: Seq[Object] = leaf.literals.asScala.toSeq.map {
-        case null => null
-        case literal =>
-          BinaryString.fromString(
-            PartitionUtils.convertValueOfType(literal, leaf.`type`.getTypeRoot))
-      }
-      new LeafPredicate(
-        leaf.function,
-        DataTypes.STRING,
-        leaf.index,
-        leaf.fieldName,
-        converted.asJava)
-    }
-
-    override def visit(compound: CompoundPredicate): FlussPredicate = {
-      val children = compound.children.asScala.map(_.visit(this)).asJava
-      new CompoundPredicate(compound.function, children)
-    }
-  }
-
-  private def stringifyLiterals(predicate: FlussPredicate): FlussPredicate =
-    predicate.visit(stringifier)
 }

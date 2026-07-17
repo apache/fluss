@@ -38,6 +38,7 @@ import org.apache.fluss.exception.DatabaseAlreadyExistException;
 import org.apache.fluss.exception.DatabaseNotEmptyException;
 import org.apache.fluss.exception.DatabaseNotExistException;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidDatabaseException;
 import org.apache.fluss.exception.InvalidPartitionException;
@@ -83,6 +84,7 @@ import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.tablet.TestTabletServerGateway;
+import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.ServerTags;
 import org.apache.fluss.types.DataTypeChecks;
@@ -117,8 +119,10 @@ import static org.apache.fluss.config.ConfigOptions.DATALAKE_FORMAT;
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_ENABLED;
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_FORMAT;
 import static org.apache.fluss.metadata.DataLakeFormat.PAIMON;
+import static org.apache.fluss.record.TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.testutils.DataTestUtils.row;
+import static org.apache.fluss.testutils.InternalRowAssert.assertThatRow;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -294,6 +298,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         options.put(
                 ConfigOptions.TABLE_KV_FORMAT_VERSION.key(),
                 String.valueOf(CURRENT_KV_FORMAT_VERSION));
+        options.put(ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key(), "true");
         assertThat(tableInfo.toTableDescriptor())
                 .isEqualTo(tableDescriptor.withProperties(options));
         assertThat(schemaInfo2).isEqualTo(schemaInfo);
@@ -323,6 +328,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         options.put(
                 ConfigOptions.TABLE_KV_FORMAT_VERSION.key(),
                 String.valueOf(CURRENT_KV_FORMAT_VERSION));
+        options.put(ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key(), "true");
         assertThat(tableInfo.toTableDescriptor()).isEqualTo(expected.withProperties(options));
         assertThat(schemaInfo2).isEqualTo(schemaInfo);
         // assert created time
@@ -566,6 +572,73 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
     }
 
     @Test
+    void testAlterAggregationTableColumnWithAggFunction() throws Exception {
+        TablePath tablePath = TablePath.of("test_db", "alter_aggregation_table_column");
+        Map<String, String> properties = new HashMap<>();
+        properties.put(ConfigOptions.TABLE_MERGE_ENGINE.key(), "aggregation");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.INT())
+                                        .column("value", DataTypes.BIGINT(), AggFunctions.SUM())
+                                        .primaryKey("id")
+                                        .build())
+                        .distributedBy(3, "id")
+                        .properties(properties)
+                        .build();
+        admin.createTable(tablePath, tableDescriptor, false).get();
+
+        admin.alterTable(
+                        tablePath,
+                        Collections.singletonList(
+                                TableChange.addColumn(
+                                        "new_value",
+                                        DataTypes.BIGINT(),
+                                        "new aggregate column",
+                                        TableChange.ColumnPosition.last(),
+                                        AggFunctions.SUM())),
+                        false)
+                .get();
+
+        SchemaInfo schemaInfo = admin.getTableSchema(tablePath).get();
+        assertThat(schemaInfo.getSchema().getAggFunction("new_value")).hasValue(AggFunctions.SUM());
+
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
+            upsertWriter.upsert(row(1, 10L, 100L));
+            upsertWriter.upsert(row(1, 20L, 200L));
+            upsertWriter.flush();
+
+            assertThatRow(lookupRow(table.newLookup().createLookuper(), row(1)))
+                    .withSchema(schemaInfo.getSchema().getRowType())
+                    .isEqualTo(row(1, 30L, 300L));
+        }
+    }
+
+    @Test
+    void testAlterNonAggregationTableColumnWithAggFunction() throws Exception {
+        TablePath tablePath = TablePath.of("test_db", "alter_non_aggregation_table_column");
+        admin.createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, false).get();
+
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                tablePath,
+                                                Collections.singletonList(
+                                                        TableChange.addColumn(
+                                                                "new_value",
+                                                                DataTypes.BIGINT(),
+                                                                "new aggregate column",
+                                                                TableChange.ColumnPosition.last(),
+                                                                AggFunctions.SUM())),
+                                                false)
+                                        .get())
+                .hasMessageContaining(
+                        "Aggregation function is only supported for aggregation merge engine table");
+    }
+
+    @Test
     void testCreateInvalidDatabaseAndTable() throws Exception {
         assertThatThrownBy(
                         () ->
@@ -672,6 +745,12 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         TableInfo tableInfoAggregate = admin.getTableInfo(tablePathAggregate).join();
         assertThat(tableInfoAggregate.getTableConfig().getDeleteBehavior())
                 .hasValue(DeleteBehavior.IGNORE);
+        assertThat(tableInfoAggregate.getSchema().getAggFunction("count"))
+                .hasValue(AggFunctions.SUM());
+        assertThat(tableInfoAggregate.getProperties().toMap())
+                .doesNotContainKey("fields.count.agg");
+        assertThat(tableInfoAggregate.getCustomProperties().toMap())
+                .doesNotContainKey("fields.count.agg");
 
         // Test 2.6: AGGREGATION merge engine with delete behavior explicitly set to ALLOW - should
         // be allowed
@@ -907,6 +986,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
             options.put(
                     ConfigOptions.TABLE_KV_FORMAT_VERSION.key(),
                     String.valueOf(CURRENT_KV_FORMAT_VERSION));
+            options.put(ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key(), "true");
             assertThat(tableInfo.toTableDescriptor()).isEqualTo(expected.withProperties(options));
         }
     }
@@ -1042,6 +1122,72 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
             assertThat(partitionIdByNames.get(partitionInfo.getPartitionName()))
                     .isEqualTo(partitionInfo.getPartitionId());
         }
+    }
+
+    @Test
+    void testListPartitionInfosAfterTabletServerRestart() throws Exception {
+        String dbName = DEFAULT_TABLE_PATH.getDatabaseName();
+        TablePath partitionedTablePath = TablePath.of(dbName, "test_retry_partitioned_table");
+        admin.createTable(partitionedTablePath, DATA1_PARTITIONED_TABLE_DESCRIPTOR, true).get();
+        FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(partitionedTablePath);
+
+        // First query should succeed.
+        List<PartitionInfo> partitionInfosBefore =
+                admin.listPartitionInfos(partitionedTablePath).get();
+        assertThat(partitionInfosBefore).isNotEmpty();
+
+        // Restart all tablet servers (they bind to new ports, making cached addresses stale).
+        for (int i = 0; i < FLUSS_CLUSTER_EXTENSION.getTabletServerNodes().size(); i++) {
+            FLUSS_CLUSTER_EXTENSION.stopTabletServer(i);
+            FLUSS_CLUSTER_EXTENSION.startTabletServer(i);
+        }
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
+
+        // Second query using the same admin client should succeed after retry with metadata
+        // refresh (verifies RetryableGatewayClientProxy convergence on stale addresses).
+        List<PartitionInfo> partitionInfosAfter =
+                admin.listPartitionInfos(partitionedTablePath).get();
+        assertThat(partitionInfosAfter).hasSize(partitionInfosBefore.size());
+    }
+
+    @Test
+    void testKvSnapshotLeaseAfterCoordinatorServerRestart() throws Exception {
+        long tableId = admin.getTableInfo(DEFAULT_TABLE_PATH).get().getTableId();
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+        Map<TableBucket, Long> snapshots = Collections.singletonMap(tableBucket, 0L);
+        KvSnapshotLease lease = admin.createKvSnapshotLease("test-retry-kv-snapshot-lease", 60000L);
+        ZooKeeperClient zkClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
+
+        // Restart the coordinator server so that the lease uses a stale cached address.
+        restartCoordinatorServer(zkClient);
+
+        lease.acquireSnapshots(snapshots).get();
+        assertThat(zkClient.getKvSnapshotLeaseMetadata(lease.leaseId())).isPresent();
+
+        // Verify that release also refreshes metadata and retries against the new coordinator.
+        restartCoordinatorServer(zkClient);
+
+        lease.releaseSnapshots(Collections.singleton(tableBucket)).get();
+        assertThat(zkClient.getKvSnapshotLeaseMetadata(lease.leaseId())).isNotPresent();
+
+        // Recreate the lease before verifying drop with another stale coordinator address.
+        lease.acquireSnapshots(snapshots).get();
+        assertThat(zkClient.getKvSnapshotLeaseMetadata(lease.leaseId())).isPresent();
+
+        restartCoordinatorServer(zkClient);
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
+
+        lease.dropLease().get();
+        assertThat(zkClient.getKvSnapshotLeaseMetadata(lease.leaseId())).isNotPresent();
+    }
+
+    private void restartCoordinatorServer(ZooKeeperClient zkClient) throws Exception {
+        FLUSS_CLUSTER_EXTENSION.stopCoordinatorServer();
+        waitUntil(
+                () -> !zkClient.getCoordinatorLeaderAddress().isPresent(),
+                Duration.ofMinutes(1),
+                "Coordinator server node still exists in ZooKeeper");
+        FLUSS_CLUSTER_EXTENSION.startCoordinatorServer();
     }
 
     @Test
@@ -1350,6 +1496,204 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
     }
 
     @Test
+    void testTimeFormatOptionForAutoPartitionedTable() throws Exception {
+        String dbName = DEFAULT_TABLE_PATH.getDatabaseName();
+
+        TableDescriptor nonDayTable =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.STRING())
+                                        .column("pt", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(3, "id")
+                        .partitionedBy("pt")
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
+                        .property(
+                                ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
+                                AutoPartitionTimeUnit.MONTH)
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_TIME_FORMAT, "MM-yyyy")
+                        .build();
+        assertThatThrownBy(
+                        () ->
+                                admin.createTable(
+                                                TablePath.of(
+                                                        dbName,
+                                                        "test_invalid_auto_partition_day_format_non_day"),
+                                                nonDayTable,
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining(ConfigOptions.TABLE_AUTO_PARTITION_TIME_FORMAT.key())
+                .hasMessageContaining("must contain fields [year, month] in this order")
+                .hasMessageContaining("MONTH");
+
+        TableDescriptor disabledAutoPartitionTable =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.STRING())
+                                        .column("pt", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(3, "id")
+                        .partitionedBy("pt")
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_TIME_FORMAT, "yyyy-MM-dd")
+                        .build();
+        admin.createTable(
+                        TablePath.of(dbName, "test_auto_partition_time_format_disabled"),
+                        disabledAutoPartitionTable,
+                        false)
+                .get();
+
+        TableDescriptor datePartitionKeyWithCompactDayFormat =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.STRING())
+                                        .column("pt", DataTypes.DATE())
+                                        .build())
+                        .distributedBy(3, "id")
+                        .partitionedBy("pt")
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
+                        .property(
+                                ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
+                                AutoPartitionTimeUnit.DAY)
+                        .build();
+        assertThatThrownBy(
+                        () ->
+                                admin.createTable(
+                                                TablePath.of(
+                                                        dbName,
+                                                        "test_invalid_auto_partition_day_format_date_key"),
+                                                datePartitionKeyWithCompactDayFormat,
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining(ConfigOptions.TABLE_AUTO_PARTITION_TIME_FORMAT.key())
+                .hasMessageContaining("yyyy-MM-dd")
+                .hasMessageContaining("DATE");
+
+        TableDescriptor datePartitionKeyWithMonthUnit =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.STRING())
+                                        .column("pt", DataTypes.DATE())
+                                        .build())
+                        .distributedBy(3, "id")
+                        .partitionedBy("pt")
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
+                        .property(
+                                ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
+                                AutoPartitionTimeUnit.MONTH)
+                        .build();
+        assertThatThrownBy(
+                        () ->
+                                admin.createTable(
+                                                TablePath.of(
+                                                        dbName,
+                                                        "test_invalid_auto_partition_month_unit_date_key"),
+                                                datePartitionKeyWithMonthUnit,
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT.key())
+                .hasMessageContaining(AutoPartitionTimeUnit.DAY.name())
+                .hasMessageContaining("DATE");
+
+        TableDescriptor validDashedDayFormatTable =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.STRING())
+                                        .column("pt", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(3, "id")
+                        .partitionedBy("pt")
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
+                        .property(
+                                ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
+                                AutoPartitionTimeUnit.DAY)
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_TIME_FORMAT, "yyyy-MM-dd")
+                        .build();
+        TablePath tablePath = TablePath.of(dbName, "test_invalid_auto_partition_day_format_alter");
+        admin.createTable(tablePath, validDashedDayFormatTable, false).get();
+
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                tablePath,
+                                                Collections.singletonList(
+                                                        TableChange.set(
+                                                                ConfigOptions
+                                                                        .TABLE_AUTO_PARTITION_TIME_FORMAT
+                                                                        .key(),
+                                                                "yyyyMMdd")),
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining(ConfigOptions.TABLE_AUTO_PARTITION_TIME_FORMAT.key());
+
+        admin.alterTable(
+                        tablePath,
+                        Collections.singletonList(
+                                TableChange.set(
+                                        ConfigOptions.TABLE_AUTO_PARTITION_ENABLED.key(), "false")),
+                        false)
+                .get();
+        assertThatThrownBy(
+                        () ->
+                                admin.createPartition(
+                                                tablePath,
+                                                newPartitionSpec("pt", "20000101"),
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(InvalidPartitionException.class)
+                .hasMessageContaining("yyyy-MM-dd");
+        admin.createPartition(tablePath, newPartitionSpec("pt", "2000-01-01"), false).get();
+
+        TableDescriptor disabledDateDayTable =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.STRING())
+                                        .column("pt", DataTypes.DATE())
+                                        .build())
+                        .distributedBy(3, "id")
+                        .partitionedBy("pt")
+                        .property(
+                                ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
+                                AutoPartitionTimeUnit.DAY)
+                        .build();
+        TablePath disabledDateDayTablePath =
+                TablePath.of(dbName, "test_invalid_auto_partition_day_format_enable");
+        admin.createTable(disabledDateDayTablePath, disabledDateDayTable, false).get();
+
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                disabledDateDayTablePath,
+                                                Collections.singletonList(
+                                                        TableChange.set(
+                                                                ConfigOptions
+                                                                        .TABLE_AUTO_PARTITION_ENABLED
+                                                                        .key(),
+                                                                "true")),
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining(ConfigOptions.TABLE_AUTO_PARTITION_TIME_FORMAT.key())
+                .hasMessageContaining("yyyy-MM-dd")
+                .hasMessageContaining("DATE");
+    }
+
+    @Test
     void testCreateInvalidPartitionForAutoPartitionedTable() throws Exception {
         String dbName = DEFAULT_TABLE_PATH.getDatabaseName();
         // numToRetain defaults to 7; with DAY unit, anything older than (today - 7 days) is
@@ -1546,6 +1890,132 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .hasMessageContaining("not.exist.key");
     }
 
+    @Test
+    void testDynamicDiskWriteLimitRatios() throws Exception {
+        try {
+            // Both ratios can be lowered atomically when their relationship remains valid.
+            admin.alterClusterConfigs(
+                            Arrays.asList(
+                                    new AlterConfig(
+                                            ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO.key(),
+                                            "0.95",
+                                            AlterConfigOpType.SET),
+                                    new AlterConfig(
+                                            ConfigOptions.SERVER_DATA_DISK_WRITE_RECOVER_RATIO
+                                                    .key(),
+                                            "0.90",
+                                            AlterConfigOpType.SET)))
+                    .get();
+            assertConfigEntry(
+                    ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO.key(),
+                    "0.95",
+                    ConfigEntry.ConfigSource.DYNAMIC_SERVER_CONFIG);
+            assertConfigEntry(
+                    ConfigOptions.SERVER_DATA_DISK_WRITE_RECOVER_RATIO.key(),
+                    "0.90",
+                    ConfigEntry.ConfigSource.DYNAMIC_SERVER_CONFIG);
+
+            // Invalid value: 0.0 (must be greater than the recover ratio).
+            assertThatThrownBy(
+                            () ->
+                                    admin.alterClusterConfigs(
+                                                    Collections.singletonList(
+                                                            new AlterConfig(
+                                                                    ConfigOptions
+                                                                            .SERVER_DATA_DISK_WRITE_LIMIT_RATIO
+                                                                            .key(),
+                                                                    "0.0",
+                                                                    AlterConfigOpType.SET)))
+                                            .get())
+                    .cause()
+                    .isInstanceOf(ConfigException.class)
+                    .hasMessageContaining("Invalid disk write-limit configuration");
+            // Invalid value: 0.90 (must be strictly greater than the recover ratio).
+            assertThatThrownBy(
+                            () ->
+                                    admin.alterClusterConfigs(
+                                                    Collections.singletonList(
+                                                            new AlterConfig(
+                                                                    ConfigOptions
+                                                                            .SERVER_DATA_DISK_WRITE_LIMIT_RATIO
+                                                                            .key(),
+                                                                    "0.90",
+                                                                    AlterConfigOpType.SET)))
+                                            .get())
+                    .cause()
+                    .isInstanceOf(ConfigException.class)
+                    .hasMessageContaining("Invalid disk write-limit configuration");
+
+            // Invalid value: 1.5 (must be <= 1.0)
+            assertThatThrownBy(
+                            () ->
+                                    admin.alterClusterConfigs(
+                                                    Collections.singletonList(
+                                                            new AlterConfig(
+                                                                    ConfigOptions
+                                                                            .SERVER_DATA_DISK_WRITE_LIMIT_RATIO
+                                                                            .key(),
+                                                                    "1.5",
+                                                                    AlterConfigOpType.SET)))
+                                            .get())
+                    .cause()
+                    .isInstanceOf(ConfigException.class)
+                    .hasMessageContaining("Invalid disk write-limit configuration");
+
+        } finally {
+            // Reset both ratios in one request so the default relationship remains valid.
+            admin.alterClusterConfigs(
+                            Arrays.asList(
+                                    new AlterConfig(
+                                            ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO.key(),
+                                            null,
+                                            AlterConfigOpType.DELETE),
+                                    new AlterConfig(
+                                            ConfigOptions.SERVER_DATA_DISK_WRITE_RECOVER_RATIO
+                                                    .key(),
+                                            null,
+                                            AlterConfigOpType.DELETE)))
+                    .get();
+        }
+    }
+
+    @Test
+    void testDynamicRemoteDataDirsWithRoundRobin() throws Exception {
+        String originalDir = FLUSS_CLUSTER_EXTENSION.getRemoteDataDir();
+        String newDir1 = FLUSS_CLUSTER_EXTENSION.getRemoteDataDir("remote-dir-1");
+        String newDir2 = FLUSS_CLUSTER_EXTENSION.getRemoteDataDir("remote-dir-2");
+
+        // Dynamically switch from single remote.data.dir to multiple remote.data.dirs
+        // with round-robin strategy; original dir must be included
+        admin.alterClusterConfigs(
+                        Collections.singletonList(
+                                new AlterConfig(
+                                        ConfigOptions.REMOTE_DATA_DIRS.key(),
+                                        String.join(",", originalDir, newDir1, newDir2),
+                                        AlterConfigOpType.SET)))
+                .get();
+
+        // Create 6 tables and verify round-robin distribution across 3 directories
+        int tableCount = 6;
+        Map<String, Integer> dirUsageCount = new HashMap<>();
+        for (int i = 0; i < tableCount; i++) {
+            TablePath tablePath = TablePath.of("test_db", "dynamic_rr_table_" + i);
+            createTable(
+                    tablePath,
+                    TableDescriptor.builder().schema(DEFAULT_SCHEMA).distributedBy(1, "id").build(),
+                    true);
+
+            TableInfo tableInfo = admin.getTableInfo(tablePath).get();
+            String remoteDataDir = tableInfo.getRemoteDataDir();
+            assertThat(remoteDataDir).isNotNull();
+            dirUsageCount.merge(remoteDataDir, 1, Integer::sum);
+        }
+
+        // Each of the 3 directories should be used exactly twice (6 / 3 = 2)
+        assertThat(dirUsageCount).hasSize(3);
+        assertThat(dirUsageCount.values()).allMatch(count -> count == 2);
+    }
+
     private void assertConfigEntry(
             String key, @Nullable String value, ConfigEntry.ConfigSource source)
             throws ExecutionException, InterruptedException {
@@ -1620,12 +2090,8 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .collect(Collectors.toList());
     }
 
-    /**
-     * Test that creating a partitioned table with bucket count exceeding the maximum throws
-     * TooManyBucketsException.
-     */
     @Test
-    public void testAddTooManyBuckets() throws Exception {
+    public void testBucketLimitForPartitionedTableAppliesPerPartition() throws Exception {
         // Already set low maximum bucket limit to 30 for this test in ClientToServerITCaseBase
         String dbName = DEFAULT_TABLE_PATH.getDatabaseName();
         TableDescriptor partitionedTable =
@@ -1642,35 +2108,46 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         TablePath tablePath = TablePath.of(dbName, "test_add_too_many_buckets_table");
         admin.createTable(tablePath, partitionedTable, true).get();
 
-        // Add 3 partitions (3 * 10 = 30 buckets, which is the limit)
-        for (int i = 0; i < 3; i++) {
+        // Add 4 partitions. The total bucket count is 40, which is above the configured limit,
+        // but each partition only has 10 buckets.
+        for (int i = 0; i < 4; i++) {
             admin.createPartition(tablePath, newPartitionSpec("age", String.valueOf(i)), false)
                     .get();
         }
+        assertThat(admin.listPartitionInfos(tablePath).get()).hasSize(4);
 
-        // Try to add one more partition, exceeding the bucket limit (4 * 10 > 30)
+        TableDescriptor tooManyBucketsPartitionedTable =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.STRING())
+                                        .column("name", DataTypes.STRING())
+                                        .column("age", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(40, "id")
+                        .partitionedBy("age")
+                        .build();
+        TablePath tooManyBucketsTablePath =
+                TablePath.of(dbName, "test_too_many_buckets_partitioned");
+
         assertThatThrownBy(
                         () ->
-                                admin.createPartition(
-                                                tablePath, newPartitionSpec("age", "4"), false)
+                                admin.createTable(
+                                                tooManyBucketsTablePath,
+                                                tooManyBucketsPartitionedTable,
+                                                false)
                                         .get())
                 .cause()
                 .isInstanceOf(TooManyBucketsException.class)
-                .hasMessageContaining("exceeding the maximum of 30 buckets");
+                .hasMessageContaining(
+                        "Bucket count 40 exceeds the maximum limit 30 for a non-partitioned table or partition.");
     }
 
-    /**
-     * Test that creating a non-partitioned table with bucket count exceeding the maximum throws
-     * TooManyBucketsException.
-     */
     @Test
     public void testBucketLimitForNonPartitionedTable() throws Exception {
-        // Set a low maximum bucket limit for this test
-        // (Assuming the configuration is already set to 30 in ClientToServerITCaseBase)
         String dbName = DEFAULT_TABLE_PATH.getDatabaseName();
 
-        // Create a non-partitioned table with 40 buckets (exceeding limit of 30)
-        TableDescriptor nonPartitionedTable =
+        TableDescriptor maxBucketsNonPartitionedTable =
                 TableDescriptor.builder()
                         .schema(
                                 Schema.newBuilder()
@@ -1678,16 +2155,75 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                                         .column("name", DataTypes.STRING())
                                         .column("value", DataTypes.STRING())
                                         .build())
-                        .distributedBy(40, "id") // 40 buckets exceeds the limit of 30
-                        .build(); // No partitionedBy call makes this non-partitioned
+                        .distributedBy(30, "id")
+                        .build();
+        TablePath maxBucketsTablePath = TablePath.of(dbName, "test_max_buckets_non_partitioned");
 
-        TablePath tablePath = TablePath.of(dbName, "test_too_many_buckets_non_partitioned");
+        admin.createTable(maxBucketsTablePath, maxBucketsNonPartitionedTable, false).get();
 
-        // Creating this table should throw TooManyBucketsException
-        assertThatThrownBy(() -> admin.createTable(tablePath, nonPartitionedTable, false).get())
+        TableDescriptor tooManyBucketsNonPartitionedTable =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.STRING())
+                                        .column("name", DataTypes.STRING())
+                                        .column("value", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(31, "id")
+                        .build();
+        TablePath tooManyBucketsTablePath =
+                TablePath.of(dbName, "test_too_many_buckets_non_partitioned");
+
+        assertThatThrownBy(
+                        () ->
+                                admin.createTable(
+                                                tooManyBucketsTablePath,
+                                                tooManyBucketsNonPartitionedTable,
+                                                false)
+                                        .get())
                 .cause()
                 .isInstanceOf(TooManyBucketsException.class)
-                .hasMessageContaining("exceeds the maximum limit");
+                .hasMessageContaining(
+                        "Bucket count 31 exceeds the maximum limit 30 for a non-partitioned table or partition.");
+    }
+
+    @Test
+    public void testDefaultPartitionAndBucketLimitsForNonPartitionedTable() throws Exception {
+        assertThat(ConfigOptions.MAX_PARTITION_NUM.defaultValue()).isEqualTo(1000);
+        assertThat(ConfigOptions.MAX_BUCKET_NUM.defaultValue()).isEqualTo(4096);
+
+        FlussClusterExtension defaultLimitCluster =
+                FlussClusterExtension.builder().setNumOfTabletServers(1).build();
+        defaultLimitCluster.start();
+
+        try (Connection connection =
+                        ConnectionFactory.createConnection(defaultLimitCluster.getClientConfig());
+                Admin defaultLimitAdmin = connection.getAdmin()) {
+            String dbName = "test_default_bucket_limit_db";
+            TablePath tablePath = TablePath.of(dbName, "test_too_many_buckets_by_default");
+            TableDescriptor nonPartitionedTable =
+                    TableDescriptor.builder()
+                            .schema(
+                                    Schema.newBuilder()
+                                            .column("id", DataTypes.STRING())
+                                            .column("name", DataTypes.STRING())
+                                            .build())
+                            .distributedBy(4097, "id")
+                            .build();
+
+            defaultLimitAdmin.createDatabase(dbName, DatabaseDescriptor.EMPTY, false).get();
+            assertThatThrownBy(
+                            () ->
+                                    defaultLimitAdmin
+                                            .createTable(tablePath, nonPartitionedTable, false)
+                                            .get())
+                    .cause()
+                    .isInstanceOf(TooManyBucketsException.class)
+                    .hasMessageContaining(
+                            "Bucket count 4097 exceeds the maximum limit 4096 for a non-partitioned table or partition.");
+        } finally {
+            defaultLimitCluster.close();
+        }
     }
 
     /** Test that creating a table with system columns throws InvalidTableException. */
@@ -2272,5 +2808,56 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .rootCause()
                 .isInstanceOf(NetworkException.class)
                 .hasMessageContaining("connection timed out");
+    }
+
+    @Test
+    void testClusterHealthDuringRollingUpgrade() throws Exception {
+        TablePath tablePath = TablePath.of("test_db", "health_test_table");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder().schema(DEFAULT_SCHEMA).distributedBy(3, "id").build();
+        long tableId = createTable(tablePath, tableDescriptor, true);
+        waitAllReplicasReady(tableId, 3);
+
+        // Phase 1: Cluster is healthy — status should be GREEN.
+        ClusterHealth health = admin.getClusterHealth().get();
+        assertThat(health.getStatus()).isEqualTo(ClusterHealthStatus.GREEN);
+        assertThat(health.getNumReplicas()).isEqualTo(health.getInSyncReplicas());
+        assertThat(health.getNumLeaderReplicas()).isEqualTo(health.getActiveLeaderReplicas());
+
+        // Phase 2: Stop one tablet server (simulate server crash during rolling upgrade).
+        int stoppedServerId = 0;
+        FLUSS_CLUSTER_EXTENSION.stopTabletServer(stoppedServerId);
+        FLUSS_CLUSTER_EXTENSION.assertHasTabletServerNumber(2);
+
+        for (int bucket = 0; bucket < 3; bucket++) {
+            TableBucket tb = new TableBucket(tableId, bucket);
+            FLUSS_CLUSTER_EXTENSION.waitUntilReplicaShrinkFromIsr(tb, stoppedServerId);
+        }
+
+        // Status should not be GREEN (YELLOW or RED depending on leader placement).
+        ClusterHealth duringDown = admin.getClusterHealth().get();
+        assertThat(duringDown.getStatus()).isNotEqualTo(ClusterHealthStatus.GREEN);
+        assertThat(duringDown.getInSyncReplicas()).isLessThan(duringDown.getNumReplicas());
+
+        // Phase 3: Restart the server.
+        FLUSS_CLUSTER_EXTENSION.startTabletServer(stoppedServerId);
+        FLUSS_CLUSTER_EXTENSION.assertHasTabletServerNumber(3);
+
+        // Phase 4: Wait for recovery — status should return to GREEN.
+        for (int bucket = 0; bucket < 3; bucket++) {
+            TableBucket tb = new TableBucket(tableId, bucket);
+            FLUSS_CLUSTER_EXTENSION.waitUntilReplicaExpandToIsr(tb, stoppedServerId);
+        }
+
+        waitUntil(
+                () -> admin.getClusterHealth().get().getStatus() == ClusterHealthStatus.GREEN,
+                Duration.ofMinutes(1),
+                "Cluster should return to GREEN after server restart");
+
+        ClusterHealth afterRecovery = admin.getClusterHealth().get();
+        assertThat(afterRecovery.getStatus()).isEqualTo(ClusterHealthStatus.GREEN);
+        assertThat(afterRecovery.getNumReplicas()).isEqualTo(afterRecovery.getInSyncReplicas());
+        assertThat(afterRecovery.getNumLeaderReplicas())
+                .isEqualTo(afterRecovery.getActiveLeaderReplicas());
     }
 }

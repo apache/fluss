@@ -24,6 +24,10 @@ import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.AuthorizationException;
+import org.apache.fluss.config.cluster.AlterConfig;
+import org.apache.fluss.config.cluster.AlterConfigOpType;
+import org.apache.fluss.config.cluster.ConfigEntry;
+import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.NotCoordinatorLeaderException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.GatewayClientProxy;
@@ -220,6 +224,72 @@ class CoordinatorHighAvailabilityITCase {
 
         verifyServerIsLeader(leader, "test_reentrant_db_3");
         createGatewayForServer(leader).metadata(new MetadataRequest()).get();
+    }
+
+    /**
+     * Regression test for #3625: a standby coordinator must keep applying dynamic config changes so
+     * that, after failover, the promoted leader uses the latest config rather than a stale snapshot
+     * taken when it started up as standby.
+     */
+    @Test
+    void testStandbyTracksDynamicConfigAndNewLeaderUsesItAfterFailover() throws Exception {
+        coordinatorServer1 = new CoordinatorServer(createConfiguration());
+        coordinatorServer2 = new CoordinatorServer(createConfiguration());
+
+        coordinatorServer1.start();
+        coordinatorServer2.start();
+
+        waitUntilCoordinatorServerElected();
+        CoordinatorAddress firstLeaderAddr = zookeeperClient.getCoordinatorLeaderAddress().get();
+
+        CoordinatorServer leader = findServerById(firstLeaderAddr.getId());
+        CoordinatorServer standby = findServerByNotId(firstLeaderAddr.getId());
+        assertThat(leader).isNotNull();
+        assertThat(standby).isNotNull();
+
+        String configKey = ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER.key();
+
+        // Alter a dynamic config through the current leader. This persists it to ZK and inserts a
+        // change notification that every server (including the standby) should react to.
+        leader.getDynamicConfigManager()
+                .alterConfigs(
+                        Collections.singletonList(
+                                new AlterConfig(configKey, "3", AlterConfigOpType.SET)));
+
+        // The standby must pick up the change while it is still a standby.
+        waitUntil(
+                () -> "3".equals(dynamicConfigValue(standby, configKey)),
+                Duration.ofSeconds(30),
+                "Standby coordinator did not apply dynamic config change while standby");
+
+        // Fail over: killing the leader's ZK session promotes the standby to leader.
+        killZkSession(leader);
+        waitUntilNewLeaderElected(leader.getServerId());
+        assertThat(zookeeperClient.getCoordinatorLeaderAddress().get().getId())
+                .as("After killing leader, standby should become leader")
+                .isEqualTo(standby.getServerId());
+
+        // The newly promoted leader must still see the up-to-date value, not a stale one.
+        assertThat(dynamicConfigValue(standby, configKey))
+                .as("Newly promoted leader should use the dynamic config it tracked while standby")
+                .isEqualTo("3");
+
+        // As the new leader it is now the sole writer: a further alter must take effect and stick.
+        standby.getDynamicConfigManager()
+                .alterConfigs(
+                        Collections.singletonList(
+                                new AlterConfig(configKey, "5", AlterConfigOpType.SET)));
+        assertThat(dynamicConfigValue(standby, configKey)).isEqualTo("5");
+    }
+
+    /** Reads the effective value of a config key from a server's DynamicConfigManager. */
+    private static String dynamicConfigValue(CoordinatorServer server, String configKey) {
+        for (ConfigEntry entry : server.getDynamicConfigManager().describeConfigs()) {
+            if (entry.key().equals(configKey)) {
+                return entry.value();
+            }
+        }
+        return null;
     }
 
     @Test

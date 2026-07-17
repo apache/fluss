@@ -27,7 +27,7 @@
     </parent>
 
     <artifactId>fluss-protogen-generator</artifactId>
-    <name>Fluss : ProtoGen : Generator</name>
+    <name>Apache Fluss (Incubating) : ProtoGen : Generator</name>
     <packaging>jar</packaging>
 
     <dependencies>

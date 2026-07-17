@@ -742,8 +742,8 @@ _fsAzurePlugin: &fsAzurePlugin
         - sh
         - -c
         - |
-          wget -O /plugins/azure/fluss-fs-azure-0.9.jar \
-            https://repo1.maven.org/maven2/org/apache/fluss/fluss-fs-azure/0.9.0-incubating/fluss-fs-azure-0.9.0-incubating.jar
+          wget -O /plugins/azure/fluss-fs-azure-$FLUSS_VERSION$.jar \
+            $FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-fs-azure/$FLUSS_VERSION$/fluss-fs-azure-$FLUSS_VERSION$.jar
       volumeMounts:
         - name: azure-plugin
           mountPath: /plugins
@@ -770,6 +770,43 @@ helm upgrade fluss ./helm -f values-new.yaml
 ### Rolling Updates
 
 The StatefulSets support rolling updates. When you update the configuration, pods will be restarted one by one to maintain availability.
+
+#### Cluster Health Readiness Probe
+
+The TabletServer readiness probe performs a two-step check to ensure safe rolling upgrades:
+
+1. **Local TCP port check** — confirms the TabletServer process is up and listening.
+2. **Cluster health check** — calls the Coordinator's Cluster Health API to confirm cluster status is GREEN (all replicas
+   in-sync, all leaders active) across the cluster.
+
+Only when both steps pass is the pod marked as Ready, allowing the StatefulSet controller to proceed to the next pod.
+If the Coordinator does not support the Cluster Health API (e.g., during a mixed-version upgrade from an older version),
+the probe immediately falls back to TCP-only port readiness.
+
+You can tune the probe parameters in your values:
+
+```yaml
+tablet:
+  readinessProbe:
+    # Timeout in ms for the RPC call to Coordinator (default: 5000)
+    rpcTimeoutMs: 5000
+    # Standard Kubernetes probe parameters (tuned for recovery checks)
+    failureThreshold: 200
+    timeoutSeconds: 10
+    initialDelaySeconds: 15
+    periodSeconds: 5
+```
+
+| Parameter          | Default | Description                                                                                                                                    |
+|--------------------|---------|------------------------------------------------------------------------------------------------------------------------------------------------|
+| `rpcTimeoutMs`     | `5000`  | Timeout in milliseconds for the RPC call to the Coordinator.                                                                                   |
+| `failureThreshold` | `200`   | Max consecutive probe failures before marking the pod as unready. With `periodSeconds=5`, this allows up to ~16 minutes for recovery.          |
+| `periodSeconds`    | `5`     | How often the probe runs.                                                                                                                      |
+
+:::note
+The CoordinatorServer does not need the Cluster Health API probe — it does not host data replicas, so a simple TCP check is sufficient.
+The Coordinator should be upgraded **after** all TabletServers are fully upgraded and recovered.
+:::
 
 ## Custom Container Images
 
@@ -805,7 +842,7 @@ image:
 
 ### Health Checks
 
-The chart includes liveness and readiness probes:
+The chart includes liveness and readiness probes. By default, both use TCP socket checks:
 
 ```yaml
 livenessProbe:
@@ -822,6 +859,9 @@ readinessProbe:
   periodSeconds: 3
   failureThreshold: 100
 ```
+
+For TabletServers, you can enable the Cluster Health readiness probe for safe rolling upgrades.
+See [Cluster Health Readiness Probe](#cluster-health-readiness-probe) for details.
 
 ### Logs
 

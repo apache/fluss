@@ -22,6 +22,7 @@ import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.metadata.KvSnapshotMetadata;
 import org.apache.fluss.client.table.scanner.batch.BatchScanner;
 import org.apache.fluss.client.table.scanner.batch.CompositeBatchScanner;
+import org.apache.fluss.client.table.scanner.batch.KvBatchScanner;
 import org.apache.fluss.client.table.scanner.batch.KvSnapshotBatchScanner;
 import org.apache.fluss.client.table.scanner.batch.LimitBatchScanner;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
@@ -47,6 +48,7 @@ import java.util.stream.IntStream;
 
 /** API for configuring and creating {@link LogScanner} and {@link BatchScanner}. */
 public class TableScan implements Scan {
+
     private final FlussConnection conn;
     private final TableInfo tableInfo;
     private final SchemaGetter schemaGetter;
@@ -159,10 +161,19 @@ public class TableScan implements Scan {
                             "BatchScanner doesn't support filter pushdown. Table: %s, bucket: %s",
                             tableInfo.getTablePath(), tableBucket));
         }
+        if (tableInfo.hasPrimaryKey() && limit == null) {
+            return new KvBatchScanner(
+                    tableInfo,
+                    tableBucket,
+                    schemaGetter,
+                    conn.getMetadataUpdater(),
+                    kvBatchSizeBytes(),
+                    projectedColumns);
+        }
         if (limit == null) {
             throw new UnsupportedOperationException(
                     String.format(
-                            "Currently, BatchScanner is only available when limit is set. Table: %s, bucket: %s",
+                            "BatchScanner over a Log Table requires limit to be set. Table: %s, bucket: %s",
                             tableInfo.getTablePath(), tableBucket));
         }
         return new LimitBatchScanner(
@@ -172,6 +183,13 @@ public class TableScan implements Scan {
                 conn.getMetadataUpdater(),
                 projectedColumns,
                 limit);
+    }
+
+    private int kvBatchSizeBytes() {
+        return (int)
+                conn.getConfiguration()
+                        .get(ConfigOptions.CLIENT_SCANNER_KV_FETCH_MAX_BYTES)
+                        .getBytes();
     }
 
     @Override

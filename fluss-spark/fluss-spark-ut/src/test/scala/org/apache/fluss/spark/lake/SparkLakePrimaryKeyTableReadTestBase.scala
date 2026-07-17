@@ -20,8 +20,11 @@ package org.apache.fluss.spark.lake
 import org.apache.fluss.config.{ConfigOptions, Configuration}
 import org.apache.fluss.metadata.DataLakeFormat
 import org.apache.fluss.spark.SparkConnectorOptions.{BUCKET_NUMBER, PRIMARY_KEY}
+import org.apache.fluss.spark.read.FlussMetrics
+import org.apache.fluss.spark.read.FlussUpsertInputPartition
 
 import org.apache.spark.sql.Row
+import org.apache.spark.sql.execution.datasources.v2.BatchScanExec
 
 import java.nio.file.Files
 
@@ -117,7 +120,7 @@ abstract class SparkLakePrimaryKeyTableReadTestBase extends SparkLakeTableReadTe
              |""".stripMargin)
 
       val df = sql(s"SELECT * FROM $DEFAULT_DATABASE.t_fb_hybrid ORDER BY id")
-      val partitions = lakeUpsertInputPartitions(df)
+      val partitions = lakeInputPartitions(df).map(_.asInstanceOf[FlussUpsertInputPartition])
       assert(
         partitions.exists(_.snapshotId >= 0),
         s"Expected at least one hybrid partition with snapshotId >= 0, got: ${partitions.mkString(", ")}")
@@ -157,7 +160,7 @@ abstract class SparkLakePrimaryKeyTableReadTestBase extends SparkLakeTableReadTe
              |""".stripMargin)
 
       val df = sql(s"SELECT * FROM $DEFAULT_DATABASE.t_fb_hybrid_partitioned ORDER BY id")
-      val partitions = lakeUpsertInputPartitions(df)
+      val partitions = lakeInputPartitions(df).map(_.asInstanceOf[FlussUpsertInputPartition])
       assert(
         partitions.exists(_.snapshotId >= 0),
         s"Expected at least one hybrid partition with snapshotId >= 0, got: ${partitions.mkString(", ")}")
@@ -455,6 +458,40 @@ abstract class SparkLakePrimaryKeyTableReadTestBase extends SparkLakeTableReadTe
         sql(s"SELECT id, score FROM $DEFAULT_DATABASE.t_pd_pk_union WHERE score >= 90 ORDER BY id")
       checkAnswer(query, Row(1, 90) :: Row(3, 95) :: Row(5, 92) :: Nil)
       assertPushedNames(query, Set(">="))
+    }
+  }
+
+  test("Spark Lake Read: union with limit pushdown") {
+    withTable("t_pk_union_limit") {
+      sql(s"""
+             |CREATE TABLE $DEFAULT_DATABASE.t_pk_union_limit (id INT, name STRING, score INT)
+             | TBLPROPERTIES (
+             |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
+             |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
+             |  '${PRIMARY_KEY.key()}' = 'id',
+             |  '${BUCKET_NUMBER.key()}' = 1)
+             |""".stripMargin)
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t_pk_union_limit VALUES
+             |(1, 'alice', 90), (2, 'bob', 85), (3, 'charlie', 95)
+             |""".stripMargin)
+      tierToLake("t_pk_union_limit")
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t_pk_union_limit VALUES
+             |(4, 'dave', 88), (5, 'eve', 92)
+             |""".stripMargin)
+
+      val query =
+        sql(s"SELECT id, score FROM $DEFAULT_DATABASE.t_pk_union_limit LIMIT 2")
+      assert(flussScan(query).flatMap(_.limit).distinct == Seq(2))
+
+      // Verify limit pushdown actually reduces rows read via metrics
+      query.collect()
+      val batchScanExec = query.queryExecution.executedPlan.collectFirst {
+        case b: BatchScanExec => b
+      }.get
+      val numRowsRead = batchScanExec.metrics(FlussMetrics.NUM_ROWS_READ).value
+      assert(numRowsRead == 2L, s"Expected 2 rows read with limit pushdown, got $numRowsRead")
     }
   }
 

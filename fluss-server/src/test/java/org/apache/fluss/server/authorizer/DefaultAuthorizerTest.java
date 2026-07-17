@@ -224,6 +224,35 @@ public class DefaultAuthorizerTest {
     }
 
     @Test
+    void testPrincipalIgnoreCaseMatchesConfiguredUser() throws Exception {
+        // The setup configures USER:root as a super user with full access. USER:user1 has no
+        // matching ACLs and is not a super user, so READ on database1 should always be denied.
+        // The root session intentionally uses user:ROOT to verify case-sensitive matching first.
+        Session normalUserSession = createSession("USER", "user1", "192.168.1.1");
+        Session superUserSession = createSession("user", "ROOT", "192.168.1.1");
+        assertThat(authorizer.isAuthorized(normalUserSession, READ, Resource.database("database1")))
+                .isFalse();
+        assertThat(authorizer.isAuthorized(superUserSession, READ, Resource.database("database1")))
+                .isFalse();
+        Configuration ignoreCaseConfiguration = new Configuration(configuration);
+        ignoreCaseConfiguration.setBoolean(ConfigOptions.SECURITY_ACL_PRINCIPAL_IGNORE_CASE, true);
+        try (Authorizer ignoreCaseAuthorizer =
+                AuthorizerLoader.createAuthorizer(ignoreCaseConfiguration, zooKeeperClient, null)) {
+            assertThat(ignoreCaseAuthorizer).isNotNull();
+            // Enabling ignore-case lets user:ROOT match the configured USER:root super user, but it
+            // does not grant privileges to USER:user1.
+            assertThat(
+                            ignoreCaseAuthorizer.isAuthorized(
+                                    normalUserSession, READ, Resource.database("database1")))
+                    .isFalse();
+            assertThat(
+                            ignoreCaseAuthorizer.isAuthorized(
+                                    superUserSession, READ, Resource.database("database1")))
+                    .isTrue();
+        }
+    }
+
+    @Test
     void testAclWithOperationAll() throws Exception {
         Session session = createSession("user1", "192.168.1.1");
         List<Action> actions =
@@ -664,12 +693,16 @@ public class DefaultAuthorizerTest {
     }
 
     private Session createSession(String username, String host) throws Exception {
+        return createSession("USER", username, host);
+    }
+
+    private Session createSession(String userType, String username, String host) throws Exception {
         return new Session(
                 (byte) 1,
                 "FLUSS",
                 false,
                 InetAddress.getByName(host),
-                new FlussPrincipal(username, "USER"));
+                new FlussPrincipal(username, userType));
     }
 
     private AclBinding createAclBinding(

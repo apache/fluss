@@ -27,6 +27,8 @@ import org.apache.fluss.exception.NoRebalanceInProgressException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.coordinator.CoordinatorEventProcessor;
+import org.apache.fluss.server.coordinator.event.EventManager;
+import org.apache.fluss.server.coordinator.event.RebalanceTaskTimeoutEvent;
 import org.apache.fluss.server.coordinator.rebalance.goal.Goal;
 import org.apache.fluss.server.coordinator.rebalance.goal.GoalOptimizer;
 import org.apache.fluss.server.coordinator.rebalance.model.ClusterModel;
@@ -36,6 +38,9 @@ import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.RebalanceTask;
+import org.apache.fluss.utils.clock.Clock;
+import org.apache.fluss.utils.clock.SystemClock;
+import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -53,6 +58,9 @@ import java.util.SortedSet;
 import java.util.TreeSet;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.CANCELED;
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.COMPLETED;
@@ -70,8 +78,17 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 public class RebalanceManager {
     private static final Logger LOG = LoggerFactory.getLogger(RebalanceManager.class);
 
+    /** Hardcoded timeout for an in-flight rebalance task: 2 minutes. */
+    private static final long REBALANCE_TASK_TIMEOUT_MS = 2 * 60 * 1000L;
+
+    /** Hardcoded interval for the periodic timeout check: 30 seconds. */
+    private static final long TIMEOUT_CHECK_INTERVAL_MS = 30 * 1000L;
+
     private final ZooKeeperClient zkClient;
     private final CoordinatorEventProcessor eventProcessor;
+    private final EventManager eventManager;
+    private final Clock clock;
+    private final ScheduledExecutorService timeoutChecker;
 
     /** A queue of in progress table bucket to rebalance. */
     private final Queue<TableBucket> inProgressRebalanceTasksQueue = new ArrayDeque<>();
@@ -90,15 +107,67 @@ public class RebalanceManager {
     private volatile @Nullable String currentRebalanceId;
     private volatile boolean isClosed = false;
 
-    public RebalanceManager(CoordinatorEventProcessor eventProcessor, ZooKeeperClient zkClient) {
+    /**
+     * Timestamp when the current in-flight task was started, or -1 if idle.
+     *
+     * <p>Write ordering contract (volatile publication idiom): always write {@code
+     * inflightTaskStartMs} BEFORE {@code inflightTaskBucket} when setting, and clear {@code
+     * inflightTaskBucket} BEFORE {@code inflightTaskStartMs} when resetting. The timeout checker
+     * reads in reverse order (bucket first, then startMs), ensuring it never observes a stale
+     * startMs paired with a new bucket.
+     */
+    private volatile long inflightTaskStartMs = -1;
+
+    /** The bucket of the current in-flight task, or null if idle. Acts as the "gate" variable. */
+    private volatile @Nullable TableBucket inflightTaskBucket;
+
+    public RebalanceManager(
+            CoordinatorEventProcessor eventProcessor,
+            ZooKeeperClient zkClient,
+            EventManager eventManager,
+            Clock clock) {
+        this(
+                eventProcessor,
+                zkClient,
+                eventManager,
+                clock,
+                // TODO: Reuse the CoordinatorServer shared scheduler for this lightweight
+                // coordinator timeout checker instead of creating a component-owned scheduler.
+                Executors.newScheduledThreadPool(
+                        1, new ExecutorThreadFactory("rebalance-timeout")));
+    }
+
+    @VisibleForTesting
+    RebalanceManager(
+            CoordinatorEventProcessor eventProcessor,
+            ZooKeeperClient zkClient,
+            EventManager eventManager,
+            Clock clock,
+            ScheduledExecutorService timeoutChecker) {
         this.eventProcessor = eventProcessor;
         this.zkClient = zkClient;
+        this.eventManager = eventManager;
+        this.clock = clock == null ? SystemClock.getInstance() : clock;
+        this.timeoutChecker = timeoutChecker;
         this.goalOptimizer = new GoalOptimizer();
     }
 
     public void startup() {
         LOG.info("Start up rebalance manager.");
         initialize();
+    }
+
+    /** Starts the periodic timeout checker. Call after {@link #startup()}. */
+    public void start() {
+        timeoutChecker.scheduleWithFixedDelay(
+                this::checkTimeoutSafely,
+                TIMEOUT_CHECK_INTERVAL_MS,
+                TIMEOUT_CHECK_INTERVAL_MS,
+                TimeUnit.MILLISECONDS);
+        LOG.info(
+                "RebalanceManager timeout checker started: timeoutMs={}, checkIntervalMs={}",
+                REBALANCE_TASK_TIMEOUT_MS,
+                TIMEOUT_CHECK_INTERVAL_MS);
     }
 
     public @Nullable String getRebalanceId() {
@@ -132,6 +201,9 @@ public class RebalanceManager {
         inProgressRebalanceTasks.clear();
         inProgressRebalanceTasksQueue.clear();
         finishedRebalanceTasks.clear();
+        // Clear gate (bucket) first, then data (startMs).
+        inflightTaskBucket = null;
+        inflightTaskStartMs = -1;
 
         currentRebalanceId = rebalanceId;
         if (rebalancePlan.isEmpty()) {
@@ -170,6 +242,9 @@ public class RebalanceManager {
             finishedRebalanceTasks.put(
                     tableBucket,
                     RebalanceResultForBucket.of(resultForBucket.plan(), statusForBucket));
+            // Clear gate (bucket) first, then data (startMs).
+            inflightTaskBucket = null;
+            inflightTaskStartMs = -1;
             LOG.info(
                     "Rebalance task {} in progress: {} tasks pending, {} completed.",
                     currentRebalanceId,
@@ -250,6 +325,9 @@ public class RebalanceManager {
         rebalanceStatus = CANCELED;
         inProgressRebalanceTasksQueue.clear();
         inProgressRebalanceTasks.clear();
+        // Clear gate (bucket) first, then data (startMs).
+        inflightTaskBucket = null;
+        inflightTaskStartMs = -1;
         // Here, it will not clear finishedRebalanceTasks, because it will be used by
         // listRebalanceProgress. It will be cleared when next register.
 
@@ -302,6 +380,9 @@ public class RebalanceManager {
     private void processNewRebalanceTask() {
         TableBucket tableBucket = inProgressRebalanceTasksQueue.peek();
         if (tableBucket != null && inProgressRebalanceTasks.containsKey(tableBucket)) {
+            // Write data (startMs) first, then publish gate (bucket).
+            inflightTaskStartMs = clock.milliseconds();
+            inflightTaskBucket = tableBucket;
             RebalanceResultForBucket resultForBucket = inProgressRebalanceTasks.get(tableBucket);
             RebalanceResultForBucket rebalanceResultForBucket =
                     RebalanceResultForBucket.of(resultForBucket.plan(), REBALANCING);
@@ -362,7 +443,11 @@ public class RebalanceManager {
             List<Integer> assignment = coordinatorContext.getAssignment(tableBucket);
             Optional<LeaderAndIsr> bucketLeaderAndIsrOpt =
                     coordinatorContext.getBucketLeaderAndIsr(tableBucket);
-            checkArgument(bucketLeaderAndIsrOpt.isPresent(), "Bucket leader and isr is empty.");
+            // Skip the bucket if leader and ISR information is not available yet
+            // This can happen during table creation when leader election is not completed
+            if (!bucketLeaderAndIsrOpt.isPresent()) {
+                continue;
+            }
             LeaderAndIsr isr = bucketLeaderAndIsrOpt.get();
             int leader = isr.leader();
             // Skip the bucket if it is in a transient state (e.g., during table creation)
@@ -396,12 +481,46 @@ public class RebalanceManager {
         return new ClusterModel(servers);
     }
 
+    private void checkTimeoutSafely() {
+        try {
+            checkTimeout();
+        } catch (Throwable t) {
+            LOG.error("Unexpected error in RebalanceManager timeout check.", t);
+        }
+    }
+
+    @VisibleForTesting
+    void checkTimeout() {
+        // Read gate (bucket) first, then data (startMs).
+        // If bucket is non-null, happens-before guarantees startMs is at least as
+        // fresh as the value written before bucket was published.
+        TableBucket bucket = inflightTaskBucket;
+        long startMs = inflightTaskStartMs;
+        if (bucket == null || startMs < 0) {
+            return;
+        }
+        long elapsed = clock.milliseconds() - startMs;
+        if (elapsed > REBALANCE_TASK_TIMEOUT_MS) {
+            LOG.warn(
+                    "In-flight rebalance task for {} timed out after {}ms. "
+                            + "Treating it as timed out and advancing to the next task.",
+                    bucket,
+                    elapsed);
+            // Clear gate (bucket) first, then data (startMs), matching the
+            // publication idiom so the next checkTimeout sees bucket==null.
+            inflightTaskBucket = null;
+            inflightTaskStartMs = -1;
+            eventManager.put(new RebalanceTaskTimeoutEvent(bucket));
+        }
+    }
+
     private void checkNotClosed() {
         checkArgument(!isClosed, "RebalanceManager is already closed.");
     }
 
     public void close() {
         isClosed = true;
+        timeoutChecker.shutdownNow();
     }
 
     @VisibleForTesting
