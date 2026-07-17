@@ -19,6 +19,7 @@ package org.apache.fluss.server.authorizer;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.AuthorizationException;
 import org.apache.fluss.rpc.netty.server.Session;
 import org.apache.fluss.security.acl.AccessControlEntry;
 import org.apache.fluss.security.acl.AccessControlEntryFilter;
@@ -202,6 +203,56 @@ public class DefaultAuthorizerTest {
                                 new AccessControlEntryFilter(
                                         null, null, READ, PermissionType.ANY))));
         assertThat(authorizer.authorizeActions(session, actions)).containsExactly(false, true);
+    }
+
+    @Test
+    void testAclModificationRequiresAllPermission() throws Exception {
+        Resource resource = Resource.database("database1");
+        Session alterSession = createSession("alter-user", "192.168.1.1");
+        Session allSession = createSession("all-user", "192.168.1.1");
+        AclBinding targetAcl = createAclBinding(resource, "target-user", "*", READ);
+
+        authorizer.addAcls(
+                createRootUserSession(),
+                Arrays.asList(
+                        createAclBinding(resource, "alter-user", "*", ALTER),
+                        createAclBinding(resource, "all-user", "*", OperationType.ALL)));
+
+        assertThatThrownBy(
+                        () ->
+                                authorizer.addAcls(
+                                        alterSession, Collections.singletonList(targetAcl)))
+                .isInstanceOf(AuthorizationException.class)
+                .hasMessageContaining("operate ALL on resource");
+
+        List<AclCreateResult> createResults =
+                authorizer.addAcls(allSession, Collections.singletonList(targetAcl));
+        assertThat(createResults).hasSize(1);
+        assertThat(createResults.get(0).exception()).isNotPresent();
+        assertThat(listAcls(authorizer, resource)).contains(targetAcl.getAccessControlEntry());
+
+        AclBindingFilter targetAclFilter =
+                new AclBindingFilter(
+                        new ResourceFilter(DATABASE, "database1"),
+                        new AccessControlEntryFilter(
+                                targetAcl.getAccessControlEntry().getPrincipal(),
+                                "*",
+                                READ,
+                                PermissionType.ALLOW));
+        assertThatThrownBy(
+                        () ->
+                                authorizer.dropAcls(
+                                        alterSession, Collections.singletonList(targetAclFilter)))
+                .isInstanceOf(AuthorizationException.class)
+                .hasMessageContaining("operate ALL on resource");
+
+        List<AclDeleteResult> deleteResults =
+                authorizer.dropAcls(allSession, Collections.singletonList(targetAclFilter));
+        assertThat(deleteResults).hasSize(1);
+        assertThat(deleteResults.get(0).error()).isNotPresent();
+        assertThat(deleteResults.get(0).aclBindingDeleteResults())
+                .extracting(AclDeleteResult.AclBindingDeleteResult::aclBinding)
+                .containsExactly(targetAcl);
     }
 
     @Test

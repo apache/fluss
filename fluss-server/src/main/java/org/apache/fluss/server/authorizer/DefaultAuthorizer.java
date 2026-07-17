@@ -614,7 +614,7 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
                     // The minimum granularity of ACL operation permissions is Database.
                     authorize(
                             session,
-                            OperationType.ALTER,
+                            OperationType.ALL,
                             resource.getType() != ResourceType.TABLE
                                     ? resource
                                     : Resource.database(

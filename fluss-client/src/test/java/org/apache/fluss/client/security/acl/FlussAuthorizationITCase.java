@@ -281,7 +281,7 @@ public class FlussAuthorizationITCase {
                                         PermissionType.ALLOW)));
         assertThatThrownBy(() -> guestAdmin.createAcls(noAuthorizationAclBinding).all().get())
                 .hasMessageContaining(
-                        "Principal %s have no authorization to operate ALTER on resource",
+                        "Principal %s have no authorization to operate ALL on resource",
                         guestPrincipal);
 
         aclBindings =
@@ -291,7 +291,7 @@ public class FlussAuthorizationITCase {
                                 new AccessControlEntry(
                                         WILD_CARD_PRINCIPAL,
                                         WILD_CARD_HOST,
-                                        OperationType.ALTER,
+                                        OperationType.ALL,
                                         PermissionType.ALLOW)));
         rootAdmin.createAcls(aclBindings).all().get();
         guestAdmin.createAcls(noAuthorizationAclBinding).all().get();
