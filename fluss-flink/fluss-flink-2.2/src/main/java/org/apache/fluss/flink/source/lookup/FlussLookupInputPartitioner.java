@@ -30,6 +30,8 @@ import org.apache.flink.table.types.logical.RowType;
 
 import javax.annotation.Nullable;
 
+import java.util.List;
+
 /**
  * Partitions the lookup-join probe stream by Fluss bucket key, consistent with the client-side
  * bucketing used by {@code PrimaryKeyLookuper} (bucket key encoding + {@link BucketingFunction}).
@@ -42,7 +44,7 @@ public class FlussLookupInputPartitioner implements InputDataPartitioner {
     private final LookupNormalizer normalizer;
     // Flink row type of the normalized lookup key row (primary key in Fluss key order).
     private final RowType keyFlinkRowType;
-    private final java.util.List<String> bucketKeyNames;
+    private final List<String> bucketKeyNames;
     @Nullable private final DataLakeFormat lakeFormat;
     private final int numBuckets;
 
@@ -53,7 +55,7 @@ public class FlussLookupInputPartitioner implements InputDataPartitioner {
     public FlussLookupInputPartitioner(
             LookupNormalizer normalizer,
             RowType keyFlinkRowType,
-            java.util.List<String> bucketKeyNames,
+            List<String> bucketKeyNames,
             @Nullable DataLakeFormat lakeFormat,
             int numBuckets) {
         this.normalizer = normalizer;
