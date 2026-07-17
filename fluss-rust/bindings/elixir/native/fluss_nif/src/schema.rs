@@ -52,6 +52,10 @@ pub enum DataType {
     Decimal(u32, u32),
     Char(u32),
     Binary(usize),
+    Array(Box<DataType>),
+    Map(Box<DataType>, Box<DataType>),
+    Row(Vec<(String, DataType)>),
+    NotNull(Box<DataType>),
 }
 
 fn to_fluss_type(dt: &DataType) -> metadata::DataType {
@@ -72,32 +76,55 @@ fn to_fluss_type(dt: &DataType) -> metadata::DataType {
         DataType::Decimal(precision, scale) => DataTypes::decimal(*precision, *scale),
         DataType::Char(length) => DataTypes::char(*length),
         DataType::Binary(length) => DataTypes::binary(*length),
+        DataType::Array(item) => DataTypes::array(to_fluss_type(item)),
+        DataType::Map(k, v) => DataTypes::map(to_fluss_type(k), to_fluss_type(v)),
+        DataType::Row(fields) => DataTypes::row(
+            fields
+                .iter()
+                .map(|(name, dt)| DataTypes::field(name, to_fluss_type(dt)))
+                .collect(),
+        ),
+        DataType::NotNull(dt) => to_fluss_type(dt).as_non_nullable(),
     }
 }
 
 fn from_fluss_type(dt: &metadata::DataType) -> Result<DataType, Error> {
-    match dt {
-        metadata::DataType::Boolean(_) => Ok(DataType::Boolean),
-        metadata::DataType::TinyInt(_) => Ok(DataType::Tinyint),
-        metadata::DataType::SmallInt(_) => Ok(DataType::Smallint),
-        metadata::DataType::Int(_) => Ok(DataType::Int),
-        metadata::DataType::BigInt(_) => Ok(DataType::Bigint),
-        metadata::DataType::Float(_) => Ok(DataType::Float),
-        metadata::DataType::Double(_) => Ok(DataType::Double),
-        metadata::DataType::String(_) => Ok(DataType::String),
-        metadata::DataType::Bytes(_) => Ok(DataType::Bytes),
-        metadata::DataType::Date(_) => Ok(DataType::Date),
-        metadata::DataType::Time(_) => Ok(DataType::Time),
-        metadata::DataType::Timestamp(_) => Ok(DataType::Timestamp),
-        metadata::DataType::TimestampLTz(_) => Ok(DataType::TimestampLtz),
-        metadata::DataType::Decimal(d) => Ok(DataType::Decimal(d.precision(), d.scale())),
-        metadata::DataType::Char(c) => Ok(DataType::Char(c.length())),
-        metadata::DataType::Binary(b) => Ok(DataType::Binary(b.length())),
-        metadata::DataType::Array(_) | metadata::DataType::Map(_) | metadata::DataType::Row(_) => {
-            Err(Error::UnsupportedOperation {
-                message: format!("data type {dt:?} is not supported by the Elixir bindings"),
-            })
+    let base = match dt {
+        metadata::DataType::Boolean(_) => DataType::Boolean,
+        metadata::DataType::TinyInt(_) => DataType::Tinyint,
+        metadata::DataType::SmallInt(_) => DataType::Smallint,
+        metadata::DataType::Int(_) => DataType::Int,
+        metadata::DataType::BigInt(_) => DataType::Bigint,
+        metadata::DataType::Float(_) => DataType::Float,
+        metadata::DataType::Double(_) => DataType::Double,
+        metadata::DataType::String(_) => DataType::String,
+        metadata::DataType::Bytes(_) => DataType::Bytes,
+        metadata::DataType::Date(_) => DataType::Date,
+        metadata::DataType::Time(_) => DataType::Time,
+        metadata::DataType::Timestamp(_) => DataType::Timestamp,
+        metadata::DataType::TimestampLTz(_) => DataType::TimestampLtz,
+        metadata::DataType::Decimal(d) => DataType::Decimal(d.precision(), d.scale()),
+        metadata::DataType::Char(c) => DataType::Char(c.length()),
+        metadata::DataType::Binary(b) => DataType::Binary(b.length()),
+        metadata::DataType::Array(a) => {
+            DataType::Array(Box::new(from_fluss_type(a.get_element_type())?))
         }
+        metadata::DataType::Map(m) => DataType::Map(
+            Box::new(from_fluss_type(m.key_type())?),
+            Box::new(from_fluss_type(m.value_type())?),
+        ),
+        metadata::DataType::Row(r) => DataType::Row(
+            r.fields()
+                .iter()
+                .map(|f| Ok((f.name().to_string(), from_fluss_type(f.data_type())?)))
+                .collect::<Result<Vec<_>, Error>>()?,
+        ),
+    };
+
+    if dt.is_nullable() {
+        Ok(base)
+    } else {
+        Ok(DataType::NotNull(Box::new(base)))
     }
 }
 

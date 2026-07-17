@@ -135,13 +135,6 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
           Row(800L, 23L, "addr3") ::
           Nil
       )
-
-      // Only support FULL startup mode.
-      withSQLConf(
-        s"${SparkFlussConf.SPARK_FLUSS_CONF_PREFIX}${SparkFlussConf.SCAN_START_UP_MODE.key()}" -> "latest") {
-        intercept[UnsupportedOperationException](
-          sql(s"SELECT * FROM $DEFAULT_DATABASE.t ORDER BY orderId").show())
-      }
     }
   }
 

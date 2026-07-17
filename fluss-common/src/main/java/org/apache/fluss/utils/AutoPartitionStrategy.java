@@ -31,6 +31,7 @@ public class AutoPartitionStrategy {
     private final boolean autoPartitionEnabled;
     private final String key;
     private final AutoPartitionTimeUnit timeUnit;
+    private final String timeFormat;
     private final int numPreCreate;
     private final int numToRetain;
     private final TimeZone timeZone;
@@ -39,12 +40,14 @@ public class AutoPartitionStrategy {
             boolean autoPartitionEnabled,
             String key,
             AutoPartitionTimeUnit autoPartitionTimeUnit,
+            String timeFormat,
             int numPreCreate,
             int numToRetain,
             TimeZone timeZone) {
         this.autoPartitionEnabled = autoPartitionEnabled;
         this.key = key;
         this.timeUnit = autoPartitionTimeUnit;
+        this.timeFormat = timeFormat;
         this.numPreCreate = numPreCreate;
         this.numToRetain = numToRetain;
         this.timeZone = timeZone;
@@ -59,6 +62,7 @@ public class AutoPartitionStrategy {
                 conf.getBoolean(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED),
                 conf.getString(ConfigOptions.TABLE_AUTO_PARTITION_KEY),
                 conf.get(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT),
+                conf.getOptional(ConfigOptions.TABLE_AUTO_PARTITION_TIME_FORMAT).orElse(null),
                 conf.getInt(ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE),
                 conf.getInt(ConfigOptions.TABLE_AUTO_PARTITION_NUM_RETENTION),
                 TimeZone.getTimeZone(conf.getString(ConfigOptions.TABLE_AUTO_PARTITION_TIMEZONE)));
@@ -74,6 +78,10 @@ public class AutoPartitionStrategy {
 
     public AutoPartitionTimeUnit timeUnit() {
         return timeUnit;
+    }
+
+    public String timeFormat() {
+        return timeFormat;
     }
 
     public int numPreCreate() {
@@ -98,6 +106,9 @@ public class AutoPartitionStrategy {
                 + '\''
                 + ", timeUnit="
                 + timeUnit
+                + ", timeFormat='"
+                + timeFormat
+                + '\''
                 + ", numPreCreate="
                 + numPreCreate
                 + ", numToRetain="
@@ -121,12 +132,19 @@ public class AutoPartitionStrategy {
                 && numToRetain == that.numToRetain
                 && Objects.equals(key, that.key)
                 && timeUnit == that.timeUnit
+                && Objects.equals(timeFormat, that.timeFormat)
                 && Objects.equals(timeZone, that.timeZone);
     }
 
     @Override
     public int hashCode() {
         return Objects.hash(
-                autoPartitionEnabled, key, timeUnit, numPreCreate, numToRetain, timeZone);
+                autoPartitionEnabled,
+                key,
+                timeUnit,
+                timeFormat,
+                numPreCreate,
+                numToRetain,
+                timeZone);
     }
 }

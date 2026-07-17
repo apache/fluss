@@ -26,13 +26,16 @@ mod table_test {
     };
     use arrow::array::record_batch;
     use fluss::client::{EARLIEST_OFFSET, FlussTable, TableScan};
-    use fluss::metadata::{DataField, DataTypes, Schema, TableDescriptor, TablePath};
+    use fluss::metadata::{
+        AddColumn, AlterTableChanges, ColumnPositionType, DataField, DataTypes, JsonSerde, Schema,
+        TableDescriptor, TablePath,
+    };
     use fluss::record::ScanRecord;
     use fluss::row::binary_array::FlussArrayWriter;
     use fluss::row::binary_map::FlussMapWriter;
     use fluss::row::{
-        DataGetters, Date, Datum, Decimal, GenericRow, InternalArray, InternalMap, Time,
-        TimestampLtz, TimestampNtz,
+        DataGetters, Date, Datum, Decimal, GenericRow, InternalArray, InternalMap, InternalRow,
+        Time, TimestampLtz, TimestampNtz,
     };
     use fluss::rpc::message::OffsetSpec;
     use std::collections::HashMap;
@@ -1948,5 +1951,188 @@ mod table_test {
         );
 
         admin.drop_table(&table_path, false).await.expect("drop");
+    }
+
+    #[tokio::test]
+    async fn schema_evolution_add_column_log_scanner_dynamic_schema() {
+        run_schema_evolution_add_column_log_scanner(false).await;
+    }
+
+    #[tokio::test]
+    async fn schema_evolution_add_column_log_scanner_fixed_schema() {
+        run_schema_evolution_add_column_log_scanner(true).await;
+    }
+
+    /// Test that a single log scanner can read records across a schema change
+    /// (add column) in both dynamic-schema and fixed-schema modes.
+    async fn run_schema_evolution_add_column_log_scanner(fixed_schema: bool) {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+
+        let table_path = TablePath::new(
+            "fluss",
+            format!("test_schema_evolution_log_scanner_fixed_{fixed_schema}"),
+        );
+
+        // 1. Create table with initial schema: (id INT, name STRING)
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("name", DataTypes::string())
+                    .build()
+                    .expect("Failed to build schema"),
+            )
+            .build()
+            .expect("Failed to build table");
+
+        create_table(&admin, &table_path, &table_descriptor).await;
+        wait_for_table_ready(&admin, &table_path).await;
+
+        // 2. Get table handle and create scanner + subscribe from EARLIEST
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+        let log_scanner = table
+            .new_scan()
+            .with_fixed_schema(fixed_schema)
+            .create_log_scanner()
+            .expect("Failed to create log scanner");
+        let num_buckets = table.get_table_info().get_num_buckets();
+        for bucket_id in 0..num_buckets {
+            log_scanner
+                .subscribe(bucket_id, EARLIEST_OFFSET)
+                .await
+                .expect("Failed to subscribe");
+        }
+
+        // 3. Write records with old schema
+        let writer_v0 = table
+            .new_append()
+            .expect("append")
+            .create_writer()
+            .expect("writer");
+        writer_v0
+            .append_arrow_batch(
+                record_batch!(
+                    ("id", Int32, [1, 2, 3]),
+                    ("name", Utf8, ["alice", "bob", "charlie"])
+                )
+                .unwrap(),
+            )
+            .expect("Failed to append old-schema batch");
+        writer_v0.flush().await.expect("flush");
+
+        // 4. Poll old-schema records
+        let mut old_records: Vec<(i32, String)> = Vec::new();
+        let start = std::time::Instant::now();
+        while old_records.len() < 3 && start.elapsed() < Duration::from_secs(10) {
+            let recs = log_scanner
+                .poll(Duration::from_millis(500))
+                .await
+                .expect("poll");
+            for rec in recs {
+                let row = rec.row();
+                old_records.push((
+                    row.get_int(0).unwrap(),
+                    row.get_string(1).unwrap().to_string(),
+                ));
+            }
+        }
+        assert_eq!(old_records.len(), 3, "Expected 3 old-schema records");
+        old_records.sort_by_key(|r| r.0);
+        assert_eq!(
+            old_records,
+            vec![
+                (1, "alice".to_string()),
+                (2, "bob".to_string()),
+                (3, "charlie".to_string()),
+            ]
+        );
+
+        // 5. Alter table: add column "age INT"
+        let age_type_json = serde_json::to_vec(
+            &DataTypes::int()
+                .serialize_json()
+                .expect("serialize INT type"),
+        )
+        .expect("to_vec");
+        admin
+            .alter_table(
+                &table_path,
+                false,
+                AlterTableChanges {
+                    add_columns: vec![AddColumn {
+                        column_name: "age".to_string(),
+                        data_type_json: age_type_json,
+                        comment: None,
+                        position: ColumnPositionType::Last,
+                    }],
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("Failed to alter table");
+
+        // 6. Get a new table handle with the updated schema and write new records
+        let table_v1 = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get updated table");
+        let writer_v1 = table_v1
+            .new_append()
+            .expect("append")
+            .create_writer()
+            .expect("writer");
+        writer_v1
+            .append_arrow_batch(
+                record_batch!(
+                    ("id", Int32, [4, 5, 6]),
+                    ("name", Utf8, ["dave", "eve", "frank"]),
+                    ("age", Int32, [30, 25, 40])
+                )
+                .unwrap(),
+            )
+            .expect("Failed to append new-schema batch");
+        writer_v1.flush().await.expect("flush");
+
+        // 7. Continue reading from the SAME scanner — it should handle schema
+        //    evolution and return the new-schema records with the extra column.
+        let mut new_records: Vec<(i32, String, Option<i32>)> = Vec::new();
+        let start = std::time::Instant::now();
+        while new_records.len() < 3 && start.elapsed() < Duration::from_secs(10) {
+            let recs = log_scanner
+                .poll(Duration::from_millis(500))
+                .await
+                .expect("poll");
+            for rec in recs {
+                let row = rec.row();
+                let id = row.get_int(0).unwrap();
+                let name = row.get_string(1).unwrap().to_string();
+                let age = if row.get_field_count() > 2 && !row.is_null_at(2).unwrap_or(true) {
+                    Some(row.get_int(2).unwrap())
+                } else {
+                    None
+                };
+                new_records.push((id, name, age));
+            }
+        }
+        assert_eq!(new_records.len(), 3, "Expected 3 new-schema records");
+        new_records.sort_by_key(|r| r.0);
+        assert_eq!(
+            new_records,
+            vec![
+                (4, "dave".to_string(), (!fixed_schema).then_some(30),),
+                (5, "eve".to_string(), (!fixed_schema).then_some(25)),
+                (6, "frank".to_string(), (!fixed_schema).then_some(40),),
+            ]
+        );
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
     }
 }

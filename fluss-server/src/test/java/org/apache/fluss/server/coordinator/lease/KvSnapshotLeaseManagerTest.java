@@ -226,6 +226,21 @@ public class KvSnapshotLeaseManagerTest {
         release("lease1", Collections.singletonList(newTableBucket));
         assertThat(kvSnapshotLeaseManager.getLeasedBucketCount()).isEqualTo(7);
 
+        TableBucket onlyBucketForTable = new TableBucket(DATA1_TABLE_ID_PK + 100, 0);
+        tableIdToRegisterBucket = new HashMap<>();
+        tableIdToRegisterBucket.put(
+                onlyBucketForTable.getTableId(),
+                Collections.singletonList(new TableBucketSnapshot(onlyBucketForTable, 0L)));
+        acquire("lease1", tableIdToRegisterBucket);
+        assertThat(kvSnapshotLeaseManager.getLeasedBucketCount()).isEqualTo(8);
+
+        // Releasing the same table bucket again should be idempotent even after the first release
+        // removed the entire table from the lease while other tables remain.
+        release("lease1", Collections.singletonList(onlyBucketForTable));
+        assertThat(kvSnapshotLeaseManager.getLeasedBucketCount()).isEqualTo(7);
+        release("lease1", Collections.singletonList(onlyBucketForTable));
+        assertThat(kvSnapshotLeaseManager.getLeasedBucketCount()).isEqualTo(7);
+
         // release a non-exist bucket.
         release(
                 "lease1",

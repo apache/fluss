@@ -20,6 +20,7 @@ package org.apache.fluss.flink.tiering.source.enumerator;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.NetworkException;
+import org.apache.fluss.flink.tiering.TestingLakeTieringFactory;
 import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
 import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
 import org.apache.fluss.flink.tiering.event.TieringReachMaxDurationEvent;
@@ -28,8 +29,10 @@ import org.apache.fluss.flink.tiering.source.split.TieringLogSplit;
 import org.apache.fluss.flink.tiering.source.split.TieringSnapshotSplit;
 import org.apache.fluss.flink.tiering.source.split.TieringSplit;
 import org.apache.fluss.flink.tiering.source.split.TieringSplitGenerator;
+import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
 import org.apache.fluss.rpc.messages.PbLakeTableOffsetForBucket;
@@ -45,12 +48,14 @@ import org.junit.jupiter.api.Test;
 
 import javax.annotation.Nullable;
 
+import java.io.IOException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -773,7 +778,41 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
 
     private TieringSourceEnumerator createTieringSourceEnumerator(
             Configuration flussConf, MockSplitEnumeratorContext<TieringSplit> context) {
-        return new TieringSourceEnumerator(flussConf, context, 500);
+        return createTieringSourceEnumerator(flussConf, context, new TestingLakeTieringFactory());
+    }
+
+    private TieringSourceEnumerator createTieringSourceEnumerator(
+            Configuration flussConf,
+            MockSplitEnumeratorContext<TieringSplit> context,
+            LakeTieringFactory<?, ?> lakeTieringFactory) {
+        return new TieringSourceEnumerator(flussConf, context, lakeTieringFactory, 500);
+    }
+
+    @Test
+    void testTableValidationFailureDoesNotAssignSplits() throws Exception {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "tiering-validation-failure");
+        createTable(tablePath, DEFAULT_LOG_TABLE_DESCRIPTOR);
+        AtomicReference<TableInfo> validatedTable = new AtomicReference<>();
+        TestingLakeTieringFactory lakeTieringFactory =
+                new TestingLakeTieringFactory() {
+                    @Override
+                    public void validateTable(TableInfo tableInfo) throws IOException {
+                        validatedTable.set(tableInfo);
+                        throw new IOException("expected validation failure");
+                    }
+                };
+
+        try (FlussMockSplitEnumeratorContext<TieringSplit> context =
+                        new FlussMockSplitEnumeratorContext<>(1);
+                TieringSourceEnumerator enumerator =
+                        createTieringSourceEnumerator(flussConf, context, lakeTieringFactory)) {
+            enumerator.start();
+            registerSingleReaderAndHandleSplitRequests(context, enumerator, 0, 0);
+
+            assertThat(validatedTable.get()).isNotNull();
+            assertThat(validatedTable.get().getTablePath()).isEqualTo(tablePath);
+            assertThat(context.getSplitsAssignmentSequence()).isEmpty();
+        }
     }
 
     @Test

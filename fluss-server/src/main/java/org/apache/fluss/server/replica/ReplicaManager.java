@@ -111,6 +111,7 @@ import org.apache.fluss.server.storage.DiskUsageMonitor;
 import org.apache.fluss.server.storage.LocalDiskManager;
 import org.apache.fluss.server.utils.FatalErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
@@ -1268,6 +1269,8 @@ public class ReplicaManager implements ServerReconfigurable {
                                                         "Could not find leader for follower replica %s while make "
                                                                 + "follower for %s.",
                                                         serverId, tb)))));
+            } else if (leaderId == LeaderAndIsr.NO_LEADER) {
+                LOG.info("Skip adding fetcher for follower replica {} without leader.", tb);
             } else {
                 bucketAndStatus.put(
                         tb,

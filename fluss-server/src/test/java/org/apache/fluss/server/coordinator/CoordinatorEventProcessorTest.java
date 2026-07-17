@@ -88,6 +88,7 @@ import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.server.zk.data.ZkData.PartitionIdsZNode;
 import org.apache.fluss.server.zk.data.ZkData.TableIdsZNode;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
+import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.clock.SystemClock;
@@ -172,6 +173,7 @@ class CoordinatorEventProcessorTest {
     private LakeTableTieringManager lakeTableTieringManager;
     private CompletedSnapshotStoreManager completedSnapshotStoreManager;
     private CoordinatorMetadataCache serverMetadataCache;
+    private ReplicaCapacityController replicaCapacityController;
     private KvSnapshotLeaseManager kvSnapshotLeaseManager;
     private Scheduler scheduler;
     private String remoteDataDir;
@@ -216,12 +218,14 @@ class CoordinatorEventProcessorTest {
         remoteDataDir = zookeeperClient.getDefaultRemoteDataDir();
         Configuration conf = new Configuration();
         conf.setString(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
+        replicaCapacityController = new ReplicaCapacityController(conf, serverMetadataCache);
         autoPartitionManager =
                 new AutoPartitionManager(
                         serverMetadataCache,
                         metadataManager,
                         new RemoteDirDynamicLoader(conf),
-                        new Configuration());
+                        conf,
+                        replicaCapacityController);
         kvSnapshotLeaseManager =
                 new KvSnapshotLeaseManager(
                         Duration.ofMinutes(10).toMillis(),
@@ -256,6 +260,140 @@ class CoordinatorEventProcessorTest {
     }
 
     @Test
+    void testLoadedAssignmentsTrackKnownKvAndUnknownTablesConservatively() throws Exception {
+        long kvTableId = 10001L;
+        long logTableId = 10002L;
+        long orphanTableId = 10003L;
+        TableDescriptor logTable =
+                TableDescriptor.builder()
+                        .schema(Schema.newBuilder().column("a", DataTypes.INT()).build())
+                        .distributedBy(1)
+                        .build();
+        TableBucket kvBucket = new TableBucket(kvTableId, 0);
+        TableBucket logBucket = new TableBucket(logTableId, 0);
+        TableBucket orphanBucket = new TableBucket(orphanTableId, 0);
+
+        fromCtx(
+                ctx -> {
+                    long now = System.currentTimeMillis();
+                    ctx.putTableInfo(
+                            TableInfo.of(
+                                    TablePath.of(defaultDatabase, "known_kv"),
+                                    kvTableId,
+                                    0,
+                                    TEST_TABLE,
+                                    remoteDataDir,
+                                    now,
+                                    now));
+                    ctx.putTableInfo(
+                            TableInfo.of(
+                                    TablePath.of(defaultDatabase, "known_log"),
+                                    logTableId,
+                                    0,
+                                    logTable,
+                                    remoteDataDir,
+                                    now,
+                                    now));
+
+                    eventProcessor.trackKvBucketsForLoadedAssignment(
+                            kvTableId, Collections.singleton(kvBucket));
+                    eventProcessor.trackKvBucketsForLoadedAssignment(
+                            logTableId, Collections.singleton(logBucket));
+                    eventProcessor.trackKvBucketsForLoadedAssignment(
+                            orphanTableId, Collections.singleton(orphanBucket));
+                    return null;
+                });
+
+        assertThat(fromCtx(CoordinatorContext::getKvBucketCount)).isEqualTo(2);
+        fromCtx(
+                ctx -> {
+                    ctx.removeKvBuckets(Arrays.asList(kvBucket, logBucket, orphanBucket));
+                    return null;
+                });
+        assertThat(fromCtx(CoordinatorContext::getKvBucketCount)).isZero();
+    }
+
+    @Test
+    void testStartupAndShutdownPublishObservedKvLeaderReplicaCount() throws Exception {
+        initCoordinatorChannel();
+        TablePath tablePath = TablePath.of(defaultDatabase, "startup_observed_count");
+        TableAssignment tableAssignment =
+                generateAssignment(
+                        N_BUCKETS,
+                        REPLICATION_FACTOR,
+                        new TabletServerInfo[] {
+                            new TabletServerInfo(0, "rack0"),
+                            new TabletServerInfo(1, "rack1"),
+                            new TabletServerInfo(2, "rack2")
+                        });
+        long tableId =
+                metadataManager.createTable(
+                        tablePath, remoteDataDir, TEST_TABLE, tableAssignment, false);
+        verifyTableCreated(tableId, tableAssignment, N_BUCKETS, REPLICATION_FACTOR);
+        assertThat(replicaCapacityController.getKvLeaderReplicaCount()).isEqualTo(N_BUCKETS);
+
+        eventProcessor.shutdown();
+        assertThat(replicaCapacityController.getKvLeaderReplicaCount()).isZero();
+
+        // Simulate a stale value left by a previous CoordinatorContext. Startup must replace it
+        // with the count reconstructed from the loaded assignments.
+        replicaCapacityController.updateObservedKvLeaderReplicaCount(100);
+        eventProcessor = buildCoordinatorEventProcessor();
+        initCoordinatorChannel();
+        eventProcessor.startup();
+
+        assertThat(replicaCapacityController.getKvLeaderReplicaCount()).isEqualTo(N_BUCKETS);
+    }
+
+    @Test
+    void testAutoPartitionInitializationAfterCapacityInputsRestored() throws Exception {
+        initCoordinatorChannel();
+        TablePath kvTablePath = TablePath.of(defaultDatabase, "startup_capacity_kv");
+        TableAssignment tableAssignment =
+                generateAssignment(
+                        N_BUCKETS,
+                        REPLICATION_FACTOR,
+                        new TabletServerInfo[] {
+                            new TabletServerInfo(0, "rack0"),
+                            new TabletServerInfo(1, "rack1"),
+                            new TabletServerInfo(2, "rack2")
+                        });
+        long kvTableId =
+                metadataManager.createTable(
+                        kvTablePath, remoteDataDir, TEST_TABLE, tableAssignment, false);
+        verifyTableCreated(kvTableId, tableAssignment, N_BUCKETS, REPLICATION_FACTOR);
+
+        TablePath autoPartitionTablePath =
+                TablePath.of(defaultDatabase, "startup_capacity_auto_partition");
+        long autoPartitionTableId =
+                metadataManager.createTable(
+                        autoPartitionTablePath, remoteDataDir, getPartitionedTable(), null, false);
+
+        eventProcessor.shutdown();
+        autoPartitionManager.close();
+
+        serverMetadataCache = new CoordinatorMetadataCache();
+        replicaCapacityController =
+                new ReplicaCapacityController(new Configuration(), serverMetadataCache);
+        RecordingAutoPartitionManager recordingAutoPartitionManager =
+                new RecordingAutoPartitionManager(
+                        serverMetadataCache,
+                        metadataManager,
+                        remoteDataDir,
+                        replicaCapacityController);
+        autoPartitionManager = recordingAutoPartitionManager;
+        eventProcessor = buildCoordinatorEventProcessor();
+        initCoordinatorChannel();
+        eventProcessor.startup();
+
+        assertThat(recordingAutoPartitionManager.getInitializedTableIds())
+                .contains(autoPartitionTableId);
+        assertThat(recordingAutoPartitionManager.getObservedKvLeaderReplicaCountAtInit())
+                .isEqualTo(N_BUCKETS);
+        assertThat(recordingAutoPartitionManager.getLiveTabletServerCountAtInit()).isEqualTo(3);
+    }
+
+    @Test
     void testCreateAndDropTable() throws Exception {
         // make sure all request to gateway should be successful
         initCoordinatorChannel();
@@ -283,6 +421,8 @@ class CoordinatorEventProcessorTest {
                         t2, remoteDataDir, tableDescriptor, tableAssignment, false);
 
         verifyTableCreated(t2Id, tableAssignment, nBuckets, replicationFactor);
+        retryVerifyContext(ctx -> assertThat(ctx.getKvBucketCount()).isEqualTo(6));
+        assertThat(replicaCapacityController.getKvLeaderReplicaCount()).isEqualTo(6);
 
         // mock CompletedSnapshotStore
         for (TableBucket tableBucket : allTableBuckets(t1Id, nBuckets)) {
@@ -295,6 +435,8 @@ class CoordinatorEventProcessorTest {
         metadataManager.dropTable(t1, false);
 
         verifyTableDropped(t1Id);
+        retryVerifyContext(ctx -> assertThat(ctx.getKvBucketCount()).isEqualTo(3));
+        assertThat(replicaCapacityController.getKvLeaderReplicaCount()).isEqualTo(3);
 
         // verify CompleteSnapshotStore has been removed when the table is dropped
         assertThat(completedSnapshotStoreManager.getBucketCompletedSnapshotStores()).isEmpty();
@@ -326,6 +468,8 @@ class CoordinatorEventProcessorTest {
         Set<TableBucketReplica> tableBucketReplicas =
                 fromCtx(ctx -> ctx.getAllReplicasForTable(t2Id));
         assertThat(tableBucketReplicas).isEmpty();
+        assertThat(fromCtx(CoordinatorContext::getKvBucketCount)).isZero();
+        assertThat(replicaCapacityController.getKvLeaderReplicaCount()).isZero();
     }
 
     @Test
@@ -1950,6 +2094,7 @@ class CoordinatorEventProcessorTest {
                 serverMetadataCache,
                 testCoordinatorChannelManager,
                 new CoordinatorContext(zkEpoch),
+                replicaCapacityController,
                 autoPartitionManager,
                 lakeTableTieringManager,
                 TestingMetricGroups.COORDINATOR_METRICS,
@@ -1959,6 +2104,57 @@ class CoordinatorEventProcessorTest {
                 kvSnapshotLeaseManager,
                 scheduler,
                 SystemClock.getInstance());
+    }
+
+    private static class RecordingAutoPartitionManager extends AutoPartitionManager {
+
+        private final CoordinatorMetadataCache metadataCache;
+        private final ReplicaCapacityController replicaCapacityController;
+
+        private Set<Long> initializedTableIds = Collections.emptySet();
+        private long observedKvLeaderReplicaCountAtInit = -1;
+        private int liveTabletServerCountAtInit = -1;
+
+        private RecordingAutoPartitionManager(
+                CoordinatorMetadataCache metadataCache,
+                MetadataManager metadataManager,
+                String remoteDataDir,
+                ReplicaCapacityController replicaCapacityController) {
+            super(
+                    metadataCache,
+                    metadataManager,
+                    new RemoteDirDynamicLoader(
+                            Configuration.fromMap(
+                                    Collections.singletonMap(
+                                            ConfigOptions.REMOTE_DATA_DIR.key(), remoteDataDir))),
+                    new Configuration(),
+                    replicaCapacityController,
+                    SystemClock.getInstance(),
+                    new ManuallyTriggeredScheduledExecutorService());
+            this.metadataCache = metadataCache;
+            this.replicaCapacityController = replicaCapacityController;
+        }
+
+        @Override
+        public void initAutoPartitionTables(List<TableInfo> tableInfos) {
+            initializedTableIds =
+                    tableInfos.stream().map(TableInfo::getTableId).collect(Collectors.toSet());
+            observedKvLeaderReplicaCountAtInit =
+                    replicaCapacityController.getKvLeaderReplicaCount();
+            liveTabletServerCountAtInit = metadataCache.getLiveTabletServerInfos().size();
+        }
+
+        private Set<Long> getInitializedTableIds() {
+            return initializedTableIds;
+        }
+
+        private long getObservedKvLeaderReplicaCountAtInit() {
+            return observedKvLeaderReplicaCountAtInit;
+        }
+
+        private int getLiveTabletServerCountAtInit() {
+            return liveTabletServerCountAtInit;
+        }
     }
 
     private void initCoordinatorChannel() throws Exception {

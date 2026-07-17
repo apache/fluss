@@ -40,7 +40,21 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
-/** Manager for dynamic configurations. */
+/**
+ * Manager for dynamic configurations.
+ *
+ * <p>Used by both the CoordinatorServer and the TabletServer. A TabletServer always applies dynamic
+ * config-change notifications from ZooKeeper. A CoordinatorServer applies them only while it is a
+ * standby (follower): a standby keeps tracking changes so that, once it is promoted to leader, its
+ * components (e.g. SASL credentials) already reflect the latest config rather than a stale
+ * snapshot.
+ *
+ * <p>An active coordinator leader stops consuming notifications (see {@link #pauseListening()}),
+ * because it is itself the only writer of dynamic configs and already holds the latest values;
+ * letting it react to its own notifications could roll a config back to an older value (A to B to
+ * A). On losing leadership it resumes consuming (see {@link #resumeListening()}) and re-syncs from
+ * ZooKeeper to pick up any changes made by the new leader while it was not listening.
+ */
 public class DynamicConfigManager {
     private static final Logger LOG = LoggerFactory.getLogger(DynamicConfigManager.class);
     private static final long CHANGE_NOTIFICATION_EXPIRATION_MS = 15 * 60 * 1000L;
@@ -48,13 +62,17 @@ public class DynamicConfigManager {
     private final DynamicServerConfig dynamicServerConfig;
     private final ZooKeeperClient zooKeeperClient;
     private final ZkNodeChangeNotificationWatcher configChangeListener;
-    private final boolean isCoordinator;
 
-    public DynamicConfigManager(
-            ZooKeeperClient zooKeeperClient, Configuration configuration, boolean isCoordinator) {
+    /**
+     * Whether change notifications are applied. Always true on a TabletServer and on a standby
+     * CoordinatorServer; set to false while a CoordinatorServer is the active leader. Volatile
+     * because it is flipped by the leader-election thread and read by the notification thread.
+     */
+    private volatile boolean listeningEnabled = true;
+
+    public DynamicConfigManager(ZooKeeperClient zooKeeperClient, Configuration configuration) {
         this.dynamicServerConfig = new DynamicServerConfig(configuration);
         this.zooKeeperClient = zooKeeperClient;
-        this.isCoordinator = isCoordinator;
         this.configChangeListener =
                 new ZkNodeChangeNotificationWatcher(
                         zooKeeperClient,
@@ -95,6 +113,28 @@ public class DynamicConfigManager {
 
     public void close() {
         configChangeListener.stop();
+    }
+
+    /**
+     * Stops applying config-change notifications. Called when a CoordinatorServer becomes the
+     * active leader: the leader is the sole writer of dynamic configs and already holds the latest
+     * values, so reacting to its own notifications is unnecessary and could roll a value back (A to
+     * B to A).
+     */
+    public void pauseListening() {
+        listeningEnabled = false;
+    }
+
+    /**
+     * Resumes applying config-change notifications and re-syncs the current config from ZooKeeper.
+     * Called when a CoordinatorServer loses leadership: while it was leader it ignored
+     * notifications, so it must re-read ZooKeeper once to pick up any changes made by the new
+     * leader.
+     */
+    public void resumeListening() throws Exception {
+        listeningEnabled = true;
+        Map<String, String> entityConfigs = zooKeeperClient.fetchEntityConfig();
+        dynamicServerConfig.updateDynamicConfig(entityConfigs, true);
     }
 
     public List<ConfigEntry> describeConfigs() {
@@ -340,7 +380,9 @@ public class DynamicConfigManager {
 
         @Override
         public void processNotification(byte[] notification) throws Exception {
-            if (isCoordinator) {
+            // An active coordinator leader is the sole writer of dynamic configs, so it ignores
+            // notifications to avoid rolling back a value it just set (A to B to A).
+            if (!listeningEnabled) {
                 return;
             }
 

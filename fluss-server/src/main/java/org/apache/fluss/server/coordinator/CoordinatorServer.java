@@ -165,6 +165,9 @@ public class CoordinatorServer extends ServerBase {
     @GuardedBy("lock")
     private KvSnapshotLeaseManager kvSnapshotLeaseManager;
 
+    @GuardedBy("lock")
+    private ReplicaCapacityController replicaCapacityController;
+
     public CoordinatorServer(Configuration conf) {
         this(conf, SystemClock.getInstance());
     }
@@ -240,9 +243,11 @@ public class CoordinatorServer extends ServerBase {
 
             this.lakeCatalogDynamicLoader = new LakeCatalogDynamicLoader(conf, pluginManager, true);
             this.remoteDirDynamicLoader = new RemoteDirDynamicLoader(conf);
-
-            this.dynamicConfigManager = new DynamicConfigManager(zkClient, conf, true);
             this.metadataCache = new CoordinatorMetadataCache();
+            this.replicaCapacityController =
+                    new ReplicaCapacityController(conf, metadataCache, serverMetricGroup);
+
+            this.dynamicConfigManager = new DynamicConfigManager(zkClient, conf);
 
             this.authorizer = AuthorizerLoader.createAuthorizer(conf, zkClient, pluginManager);
             if (authorizer != null) {
@@ -285,7 +290,8 @@ public class CoordinatorServer extends ServerBase {
                             dynamicConfigManager,
                             ioExecutor,
                             kvSnapshotLeaseManager,
-                            coordinatorLeaderElection);
+                            coordinatorLeaderElection,
+                            replicaCapacityController);
 
             this.rpcServer =
                     RpcServer.create(
@@ -298,6 +304,7 @@ public class CoordinatorServer extends ServerBase {
             // Register server reconfigurable components
             dynamicConfigManager.register(lakeCatalogDynamicLoader);
             dynamicConfigManager.register(remoteDirDynamicLoader);
+            dynamicConfigManager.register(replicaCapacityController);
             // Register stateless validators for coordinator-side upfront validation
             dynamicConfigManager.register(new DiskWriteLimitConfigValidator());
             rpcServer.getServerReconfigurables().forEach(dynamicConfigManager::register);
@@ -324,7 +331,11 @@ public class CoordinatorServer extends ServerBase {
 
             this.autoPartitionManager =
                     new AutoPartitionManager(
-                            metadataCache, metadataManager, remoteDirDynamicLoader, conf);
+                            metadataCache,
+                            metadataManager,
+                            remoteDirDynamicLoader,
+                            conf,
+                            replicaCapacityController);
             autoPartitionManager.start();
 
             // start coordinator event processor after we register coordinator leader to zk
@@ -338,6 +349,7 @@ public class CoordinatorServer extends ServerBase {
                             metadataCache,
                             coordinatorChannelManager,
                             coordinatorContext,
+                            replicaCapacityController,
                             autoPartitionManager,
                             lakeTableTieringManager,
                             serverMetricGroup,
@@ -348,6 +360,10 @@ public class CoordinatorServer extends ServerBase {
                             scheduler,
                             clock);
             coordinatorEventProcessor.startup();
+
+            // As the active leader, this server is the sole writer of dynamic configs and holds the
+            // latest values, so stop consuming change notifications to avoid rolling a value back.
+            dynamicConfigManager.pauseListening();
 
             createDefaultDatabase();
         }
@@ -418,6 +434,14 @@ public class CoordinatorServer extends ServerBase {
                 }
             } catch (Throwable t) {
                 LOG.warn("Failed to close client metric group", t);
+            }
+
+            try {
+                // Back to standby: resume consuming config-change notifications and re-sync from
+                // ZooKeeper to pick up any changes the new leader made while we were not listening.
+                dynamicConfigManager.resumeListening();
+            } catch (Throwable t) {
+                LOG.warn("Failed to resume dynamic config listening", t);
             }
 
             LOG.info("Coordinator leader services cleaned up successfully.");
@@ -542,6 +566,11 @@ public class CoordinatorServer extends ServerBase {
         } else {
             throw new IllegalStateException("CoordinatorEventProcessor is not initialized yet.");
         }
+    }
+
+    @VisibleForTesting
+    ReplicaCapacityController getReplicaCapacityController() {
+        return replicaCapacityController;
     }
 
     CompletableFuture<Void> stopServices() {

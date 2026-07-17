@@ -33,6 +33,7 @@ import org.apache.fluss.server.coordinator.CoordinatorTestUtils;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.LakeTableTieringManager;
 import org.apache.fluss.server.coordinator.MetadataManager;
+import org.apache.fluss.server.coordinator.ReplicaCapacityController;
 import org.apache.fluss.server.coordinator.TestCoordinatorChannelManager;
 import org.apache.fluss.server.coordinator.event.CoordinatorEventManager;
 import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseManager;
@@ -94,6 +95,7 @@ class TableBucketStateMachineTest {
     private TestCoordinatorChannelManager testCoordinatorChannelManager;
     private CoordinatorRequestBatch coordinatorRequestBatch;
     private AutoPartitionManager autoPartitionManager;
+    private ReplicaCapacityController replicaCapacityController;
     private LakeTableTieringManager lakeTableTieringManager;
     private CoordinatorMetadataCache serverMetadataCache;
     private KvSnapshotLeaseManager kvSnapshotLeaseManager;
@@ -124,6 +126,9 @@ class TableBucketStateMachineTest {
                         },
                         coordinatorContext);
         serverMetadataCache = new CoordinatorMetadataCache();
+        replicaCapacityController =
+                new ReplicaCapacityController(
+                        conf, serverMetadataCache, TestingMetricGroups.COORDINATOR_METRICS);
         autoPartitionManager =
                 new AutoPartitionManager(
                         serverMetadataCache,
@@ -132,7 +137,8 @@ class TableBucketStateMachineTest {
                                 new Configuration(),
                                 new LakeCatalogDynamicLoader(new Configuration(), null, true)),
                         new RemoteDirDynamicLoader(conf),
-                        new Configuration());
+                        conf,
+                        replicaCapacityController);
         lakeTableTieringManager =
                 new LakeTableTieringManager(TestingMetricGroups.LAKE_TIERING_METRICS);
 
@@ -316,6 +322,7 @@ class TableBucketStateMachineTest {
                                         new Configuration(),
                                         TestingClientMetricGroup.newInstance())),
                         coordinatorContext,
+                        replicaCapacityController,
                         autoPartitionManager,
                         lakeTableTieringManager,
                         TestingMetricGroups.COORDINATOR_METRICS,
