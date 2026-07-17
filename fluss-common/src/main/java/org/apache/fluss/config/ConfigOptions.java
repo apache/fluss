@@ -232,6 +232,19 @@ public class ConfigOptions {
                                     + "conditions, such as disk write protection, become electable "
                                     + "again after recovery.");
 
+    public static final ConfigOption<Integer> COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS =
+            key("coordinator.rebalance.max-inflight-tasks")
+                    .intType()
+                    .defaultValue(1)
+                    .withDescription(
+                            "The maximum number of bucket-level rebalance tasks that can be "
+                                    + "executed concurrently by the coordinator. A higher value "
+                                    + "can speed up rebalance, while a lower value reduces the "
+                                    + "number of simultaneous bucket movements. Setting it to 0 "
+                                    + "pauses scheduling new rebalance tasks; already in-flight "
+                                    + "tasks continue until they complete or time out. The value "
+                                    + "must be non-negative.");
+
     public static final ConfigOption<Boolean> LOG_TABLE_ALLOW_CREATION =
             key("allow.create.log.tables")
                     .booleanType()

@@ -45,6 +45,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
+import static org.apache.fluss.config.ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS;
 import static org.apache.fluss.config.ConfigOptions.DATALAKE_FORMAT;
 import static org.apache.fluss.config.ConfigOptions.KV_SHARED_RATE_LIMITER_BYTES_PER_SEC;
 import static org.apache.fluss.config.ConfigOptions.KV_SNAPSHOT_INTERVAL;
@@ -73,6 +74,7 @@ class DynamicServerConfig {
             new HashSet<>(
                     Arrays.asList(
                             DATALAKE_FORMAT.key(),
+                            COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS.key(),
                             LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER.key(),
                             KV_SHARED_RATE_LIMITER_BYTES_PER_SEC.key(),
                             KV_SNAPSHOT_INTERVAL.key(),
@@ -122,6 +124,8 @@ class DynamicServerConfig {
 
     void register(ServerReconfigurable serverReconfigurable) {
         serverReconfigures.put(serverReconfigurable.getClass(), serverReconfigurable);
+        serverReconfigurable.validate(currentConfig);
+        serverReconfigurable.reconfigure(currentConfig);
     }
 
     /**

@@ -32,7 +32,9 @@ import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.coordinator.TestCoordinatorChannelManager;
 import org.apache.fluss.server.coordinator.event.CoordinatorEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
+import org.apache.fluss.server.coordinator.event.RebalanceMaxInflightTasksChangedEvent;
 import org.apache.fluss.server.coordinator.event.RebalanceTaskTimeoutEvent;
+import org.apache.fluss.server.coordinator.event.RecoverRebalanceEvent;
 import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseManager;
 import org.apache.fluss.server.coordinator.remote.RemoteDirDynamicLoader;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
@@ -59,6 +61,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executors;
@@ -172,12 +175,45 @@ public class RebalanceManagerTest {
     }
 
     @Test
+    void testStartupQueuesRecoverRebalanceEvent() throws Exception {
+        ManualClock clock = new ManualClock(0L);
+        RecordingEventManager eventManager = new RecordingEventManager();
+        NoOpScheduledExecutor executor = new NoOpScheduledExecutor();
+        RecordingCoordinatorEventProcessor eventProcessor =
+                buildRecordingCoordinatorEventProcessor(new Configuration());
+        RebalanceManager manager =
+                new RebalanceManager(
+                        eventProcessor, zookeeperClient, eventManager, clock, executor);
+
+        Map<TableBucket, RebalancePlanForBucket> plan = createRebalancePlan(2);
+        RebalanceTask rebalanceTask = new RebalanceTask("recover-test", NOT_STARTED, plan);
+        zookeeperClient.registerRebalanceTask(rebalanceTask);
+
+        manager.startup();
+
+        assertThat(eventProcessor.executedPlans).isEmpty();
+        assertThat(eventManager.events).hasSize(1);
+        assertThat(eventManager.events.get(0)).isInstanceOf(RecoverRebalanceEvent.class);
+
+        RecoverRebalanceEvent recoverEvent = (RecoverRebalanceEvent) eventManager.events.get(0);
+        assertThat(recoverEvent.getRebalanceTask()).isEqualTo(rebalanceTask);
+
+        manager.registerRebalance(
+                rebalanceTask.getRebalanceId(),
+                rebalanceTask.getExecutePlan(),
+                rebalanceTask.getRebalanceStatus());
+        assertThat(eventProcessor.executedPlans).hasSize(1);
+
+        manager.close();
+    }
+
+    @Test
     void testTimeoutEnqueuesEvent() throws Exception {
         ManualClock clock = new ManualClock(0L);
         RecordingEventManager eventManager = new RecordingEventManager();
         NoOpScheduledExecutor executor = new NoOpScheduledExecutor();
-        CoordinatorEventProcessor eventProcessor =
-                buildCoordinatorEventProcessor(new Configuration());
+        RecordingCoordinatorEventProcessor eventProcessor =
+                buildRecordingCoordinatorEventProcessor(new Configuration());
 
         RebalanceManager manager =
                 new RebalanceManager(
@@ -186,7 +222,7 @@ public class RebalanceManagerTest {
 
         TableBucket tb1 = new TableBucket(1L, 0);
         TableBucket tb2 = new TableBucket(1L, 1);
-        Map<TableBucket, RebalancePlanForBucket> plan = new HashMap<>();
+        Map<TableBucket, RebalancePlanForBucket> plan = new LinkedHashMap<>();
         plan.put(
                 tb1,
                 new RebalancePlanForBucket(
@@ -198,6 +234,7 @@ public class RebalanceManagerTest {
 
         zookeeperClient.registerRebalanceTask(new RebalanceTask("timeout-test", NOT_STARTED, plan));
         manager.registerRebalance("timeout-test", plan, NOT_STARTED);
+        assertThat(eventProcessor.executedPlans).hasSize(1);
 
         // Not yet timed out.
         clock.advanceTime(Duration.ofMillis(100_000));
@@ -214,8 +251,11 @@ public class RebalanceManagerTest {
                 (RebalanceTaskTimeoutEvent) eventManager.events.get(0);
         assertThat(timeoutEvent.getTableBucket()).isEqualTo(tb1);
 
-        // A second checkTimeout() should NOT enqueue another event because the
-        // inflight state was cleared after the first timeout.
+        manager.finishRebalanceTask(tb1, TIMEOUT);
+        assertThat(eventProcessor.executedPlans).hasSize(2);
+
+        // A second checkTimeout() should NOT enqueue another event because the timeout event
+        // has been handled on the coordinator event thread.
         clock.advanceTime(Duration.ofMillis(30_000));
         manager.checkTimeout();
         assertThat(eventManager.events).hasSize(1);
@@ -228,8 +268,8 @@ public class RebalanceManagerTest {
         ManualClock clock = new ManualClock(0L);
         RecordingEventManager eventManager = new RecordingEventManager();
         NoOpScheduledExecutor executor = new NoOpScheduledExecutor();
-        CoordinatorEventProcessor eventProcessor =
-                buildCoordinatorEventProcessor(new Configuration());
+        RecordingCoordinatorEventProcessor eventProcessor =
+                buildRecordingCoordinatorEventProcessor(new Configuration());
 
         RebalanceManager manager =
                 new RebalanceManager(
@@ -237,7 +277,7 @@ public class RebalanceManagerTest {
         manager.startup();
 
         TableBucket tb1 = new TableBucket(1L, 0);
-        Map<TableBucket, RebalancePlanForBucket> plan = new HashMap<>();
+        Map<TableBucket, RebalancePlanForBucket> plan = new LinkedHashMap<>();
         plan.put(
                 tb1,
                 new RebalancePlanForBucket(
@@ -265,8 +305,8 @@ public class RebalanceManagerTest {
         ManualClock clock = new ManualClock(0L);
         RecordingEventManager eventManager = new RecordingEventManager();
         NoOpScheduledExecutor executor = new NoOpScheduledExecutor();
-        CoordinatorEventProcessor eventProcessor =
-                buildCoordinatorEventProcessor(new Configuration());
+        RecordingCoordinatorEventProcessor eventProcessor =
+                buildRecordingCoordinatorEventProcessor(new Configuration());
 
         RebalanceManager manager =
                 new RebalanceManager(
@@ -275,7 +315,7 @@ public class RebalanceManagerTest {
 
         TableBucket tb1 = new TableBucket(1L, 0);
         TableBucket tb2 = new TableBucket(1L, 1);
-        Map<TableBucket, RebalancePlanForBucket> plan = new HashMap<>();
+        Map<TableBucket, RebalancePlanForBucket> plan = new LinkedHashMap<>();
         plan.put(
                 tb1,
                 new RebalancePlanForBucket(
@@ -308,6 +348,205 @@ public class RebalanceManagerTest {
         manager.close();
     }
 
+    @Test
+    void testRegisterRebalanceRespectsMaxInflightTasks() throws Exception {
+        ManualClock clock = new ManualClock(0L);
+        RecordingEventManager eventManager = new RecordingEventManager();
+        NoOpScheduledExecutor executor = new NoOpScheduledExecutor();
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS, 2);
+        RecordingCoordinatorEventProcessor eventProcessor =
+                buildRecordingCoordinatorEventProcessor(conf);
+        RebalanceManager manager =
+                new RebalanceManager(
+                        eventProcessor, zookeeperClient, eventManager, clock, conf, executor);
+
+        Map<TableBucket, RebalancePlanForBucket> plan = createRebalancePlan(5);
+        List<TableBucket> buckets = new ArrayList<>(plan.keySet());
+        zookeeperClient.registerRebalanceTask(
+                new RebalanceTask("inflight-test", NOT_STARTED, plan));
+
+        manager.registerRebalance("inflight-test", plan, NOT_STARTED);
+
+        assertThat(eventProcessor.executedPlans).hasSize(2);
+        assertThat(countStatus(manager, RebalanceStatus.REBALANCING)).isEqualTo(2);
+        assertThat(countStatus(manager, RebalanceStatus.NOT_STARTED)).isEqualTo(3);
+
+        manager.finishRebalanceTask(buckets.get(0), COMPLETED);
+
+        assertThat(eventProcessor.executedPlans).hasSize(3);
+        assertThat(eventProcessor.executedPlans.get(2).getTableBucket()).isEqualTo(buckets.get(2));
+        assertThat(countStatus(manager, RebalanceStatus.REBALANCING)).isEqualTo(2);
+        assertThat(countStatus(manager, RebalanceStatus.NOT_STARTED)).isEqualTo(2);
+
+        manager.close();
+    }
+
+    @Test
+    void testIncreaseMaxInflightRebalanceTasksStartsMoreTasks() throws Exception {
+        ManualClock clock = new ManualClock(0L);
+        RecordingEventManager eventManager = new RecordingEventManager();
+        NoOpScheduledExecutor executor = new NoOpScheduledExecutor();
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS, 1);
+        RecordingCoordinatorEventProcessor eventProcessor =
+                buildRecordingCoordinatorEventProcessor(conf);
+        RebalanceManager manager =
+                new RebalanceManager(
+                        eventProcessor, zookeeperClient, eventManager, clock, conf, executor);
+
+        Map<TableBucket, RebalancePlanForBucket> plan = createRebalancePlan(4);
+        zookeeperClient.registerRebalanceTask(
+                new RebalanceTask("increase-inflight-test", NOT_STARTED, plan));
+        manager.registerRebalance("increase-inflight-test", plan, NOT_STARTED);
+        assertThat(eventProcessor.executedPlans).hasSize(1);
+
+        Configuration newConfig = new Configuration(conf);
+        newConfig.set(ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS, 3);
+        manager.reconfigure(newConfig);
+
+        assertThat(manager.getMaxInflightRebalanceTasks()).isEqualTo(1);
+        assertThat(eventProcessor.executedPlans).hasSize(1);
+        applyLatestMaxInflightTasksChangedEvent(eventManager, manager, 3);
+
+        assertThat(manager.getMaxInflightRebalanceTasks()).isEqualTo(3);
+        assertThat(eventProcessor.executedPlans).hasSize(3);
+        assertThat(countStatus(manager, RebalanceStatus.REBALANCING)).isEqualTo(3);
+        assertThat(countStatus(manager, RebalanceStatus.NOT_STARTED)).isEqualTo(1);
+
+        manager.close();
+    }
+
+    @Test
+    void testZeroMaxInflightRebalanceTasksPausesAndResumesScheduling() throws Exception {
+        ManualClock clock = new ManualClock(0L);
+        RecordingEventManager eventManager = new RecordingEventManager();
+        NoOpScheduledExecutor executor = new NoOpScheduledExecutor();
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS, 0);
+        RecordingCoordinatorEventProcessor eventProcessor =
+                buildRecordingCoordinatorEventProcessor(conf);
+        RebalanceManager manager =
+                new RebalanceManager(
+                        eventProcessor, zookeeperClient, eventManager, clock, conf, executor);
+
+        Map<TableBucket, RebalancePlanForBucket> plan = createRebalancePlan(4);
+        zookeeperClient.registerRebalanceTask(
+                new RebalanceTask("paused-inflight-test", NOT_STARTED, plan));
+        manager.registerRebalance("paused-inflight-test", plan, NOT_STARTED);
+
+        assertThat(manager.getMaxInflightRebalanceTasks()).isZero();
+        assertThat(eventProcessor.executedPlans).isEmpty();
+        assertThat(countStatus(manager, RebalanceStatus.NOT_STARTED)).isEqualTo(4);
+        assertThat(manager.hasInProgressRebalance()).isTrue();
+
+        Configuration newConfig = new Configuration(conf);
+        newConfig.set(ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS, 2);
+        manager.reconfigure(newConfig);
+
+        assertThat(manager.getMaxInflightRebalanceTasks()).isZero();
+        assertThat(eventProcessor.executedPlans).isEmpty();
+        applyLatestMaxInflightTasksChangedEvent(eventManager, manager, 2);
+
+        assertThat(manager.getMaxInflightRebalanceTasks()).isEqualTo(2);
+        assertThat(eventProcessor.executedPlans).hasSize(2);
+        assertThat(countStatus(manager, RebalanceStatus.REBALANCING)).isEqualTo(2);
+        assertThat(countStatus(manager, RebalanceStatus.NOT_STARTED)).isEqualTo(2);
+
+        manager.close();
+    }
+
+    @Test
+    void testDecreaseMaxInflightRebalanceTasksToZeroDoesNotCancelRunningTasks() throws Exception {
+        ManualClock clock = new ManualClock(0L);
+        RecordingEventManager eventManager = new RecordingEventManager();
+        NoOpScheduledExecutor executor = new NoOpScheduledExecutor();
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS, 3);
+        RecordingCoordinatorEventProcessor eventProcessor =
+                buildRecordingCoordinatorEventProcessor(conf);
+        RebalanceManager manager =
+                new RebalanceManager(
+                        eventProcessor, zookeeperClient, eventManager, clock, conf, executor);
+
+        Map<TableBucket, RebalancePlanForBucket> plan = createRebalancePlan(5);
+        List<TableBucket> buckets = new ArrayList<>(plan.keySet());
+        zookeeperClient.registerRebalanceTask(
+                new RebalanceTask("decrease-inflight-test", NOT_STARTED, plan));
+        manager.registerRebalance("decrease-inflight-test", plan, NOT_STARTED);
+        assertThat(eventProcessor.executedPlans).hasSize(3);
+
+        Configuration newConfig = new Configuration(conf);
+        newConfig.set(ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS, 0);
+        manager.reconfigure(newConfig);
+
+        assertThat(manager.getMaxInflightRebalanceTasks()).isEqualTo(3);
+        applyLatestMaxInflightTasksChangedEvent(eventManager, manager, 0);
+
+        assertThat(manager.getMaxInflightRebalanceTasks()).isZero();
+        assertThat(eventProcessor.executedPlans).hasSize(3);
+        manager.finishRebalanceTask(buckets.get(0), COMPLETED);
+        manager.finishRebalanceTask(buckets.get(1), COMPLETED);
+        assertThat(eventProcessor.executedPlans).hasSize(3);
+
+        manager.finishRebalanceTask(buckets.get(2), COMPLETED);
+
+        assertThat(eventProcessor.executedPlans).hasSize(3);
+        assertThat(countStatus(manager, RebalanceStatus.NOT_STARTED)).isEqualTo(2);
+        assertThat(countStatus(manager, RebalanceStatus.REBALANCING)).isZero();
+
+        newConfig.set(ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS, 1);
+        manager.reconfigure(newConfig);
+
+        assertThat(eventProcessor.executedPlans).hasSize(3);
+        applyLatestMaxInflightTasksChangedEvent(eventManager, manager, 1);
+
+        assertThat(eventProcessor.executedPlans).hasSize(4);
+        assertThat(eventProcessor.executedPlans.get(3).getTableBucket()).isEqualTo(buckets.get(3));
+        assertThat(countStatus(manager, RebalanceStatus.REBALANCING)).isEqualTo(1);
+
+        manager.close();
+    }
+
+    @Test
+    void testTimeoutEnqueuesEventsForAllInflightTasks() throws Exception {
+        ManualClock clock = new ManualClock(0L);
+        RecordingEventManager eventManager = new RecordingEventManager();
+        NoOpScheduledExecutor executor = new NoOpScheduledExecutor();
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS, 2);
+        RecordingCoordinatorEventProcessor eventProcessor =
+                buildRecordingCoordinatorEventProcessor(conf);
+        RebalanceManager manager =
+                new RebalanceManager(
+                        eventProcessor, zookeeperClient, eventManager, clock, conf, executor);
+
+        Map<TableBucket, RebalancePlanForBucket> plan = createRebalancePlan(3);
+        List<TableBucket> buckets = new ArrayList<>(plan.keySet());
+        zookeeperClient.registerRebalanceTask(
+                new RebalanceTask("timeout-all-inflight-test", NOT_STARTED, plan));
+        manager.registerRebalance("timeout-all-inflight-test", plan, NOT_STARTED);
+        assertThat(eventProcessor.executedPlans).hasSize(2);
+
+        clock.advanceTime(Duration.ofMillis(130_000));
+        manager.checkTimeout();
+
+        assertThat(eventManager.events).hasSize(2);
+        assertThat(((RebalanceTaskTimeoutEvent) eventManager.events.get(0)).getTableBucket())
+                .isEqualTo(buckets.get(0));
+        assertThat(((RebalanceTaskTimeoutEvent) eventManager.events.get(1)).getTableBucket())
+                .isEqualTo(buckets.get(1));
+
+        manager.finishRebalanceTask(buckets.get(0), TIMEOUT);
+        manager.finishRebalanceTask(buckets.get(1), TIMEOUT);
+        assertThat(eventProcessor.executedPlans).hasSize(3);
+
+        manager.checkTimeout();
+        assertThat(eventManager.events).hasSize(2);
+
+        manager.close();
+    }
+
     private CoordinatorEventProcessor buildCoordinatorEventProcessor(Configuration conf) {
         return new CoordinatorEventProcessor(
                 zookeeperClient,
@@ -323,6 +562,92 @@ public class RebalanceManagerTest {
                 kvSnapshotLeaseManager,
                 scheduler,
                 SystemClock.getInstance());
+    }
+
+    private RecordingCoordinatorEventProcessor buildRecordingCoordinatorEventProcessor(
+            Configuration conf) {
+        return new RecordingCoordinatorEventProcessor(
+                zookeeperClient,
+                serverMetadataCache,
+                testCoordinatorChannelManager,
+                new CoordinatorContext(zkEpoch),
+                autoPartitionManager,
+                lakeTableTieringManager,
+                conf,
+                metadataManager,
+                kvSnapshotLeaseManager,
+                scheduler);
+    }
+
+    private static Map<TableBucket, RebalancePlanForBucket> createRebalancePlan(int bucketCount) {
+        Map<TableBucket, RebalancePlanForBucket> plan = new LinkedHashMap<>();
+        for (int bucketId = 0; bucketId < bucketCount; bucketId++) {
+            TableBucket tableBucket = new TableBucket(1L, bucketId);
+            plan.put(
+                    tableBucket,
+                    new RebalancePlanForBucket(
+                            tableBucket, 0, 0, Arrays.asList(0, 1, 2), Arrays.asList(0, 1, 2)));
+        }
+        return plan;
+    }
+
+    private static int countStatus(RebalanceManager manager, RebalanceStatus status) {
+        int count = 0;
+        for (RebalanceResultForBucket result :
+                manager.listRebalanceProgress(null).progressForBucketMap().values()) {
+            if (result.status() == status) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private static void applyLatestMaxInflightTasksChangedEvent(
+            RecordingEventManager eventManager, RebalanceManager manager, int expectedMaxInflight) {
+        CoordinatorEvent event = eventManager.events.get(eventManager.events.size() - 1);
+        assertThat(event).isInstanceOf(RebalanceMaxInflightTasksChangedEvent.class);
+        RebalanceMaxInflightTasksChangedEvent changedEvent =
+                (RebalanceMaxInflightTasksChangedEvent) event;
+        assertThat(changedEvent.getMaxInflightTasks()).isEqualTo(expectedMaxInflight);
+        manager.updateMaxInflightRebalanceTasks(changedEvent.getMaxInflightTasks());
+    }
+
+    private static final class RecordingCoordinatorEventProcessor
+            extends CoordinatorEventProcessor {
+        private final List<RebalancePlanForBucket> executedPlans = new ArrayList<>();
+
+        private RecordingCoordinatorEventProcessor(
+                ZooKeeperClient zooKeeperClient,
+                CoordinatorMetadataCache serverMetadataCache,
+                TestCoordinatorChannelManager testCoordinatorChannelManager,
+                CoordinatorContext coordinatorContext,
+                AutoPartitionManager autoPartitionManager,
+                LakeTableTieringManager lakeTableTieringManager,
+                Configuration conf,
+                MetadataManager metadataManager,
+                KvSnapshotLeaseManager kvSnapshotLeaseManager,
+                Scheduler scheduler) {
+            super(
+                    zooKeeperClient,
+                    serverMetadataCache,
+                    testCoordinatorChannelManager,
+                    coordinatorContext,
+                    autoPartitionManager,
+                    lakeTableTieringManager,
+                    TestingMetricGroups.COORDINATOR_METRICS,
+                    conf,
+                    Executors.newFixedThreadPool(
+                            1, new ExecutorThreadFactory("recording-coordinator-io")),
+                    metadataManager,
+                    kvSnapshotLeaseManager,
+                    scheduler,
+                    SystemClock.getInstance());
+        }
+
+        @Override
+        public void tryToExecuteRebalanceTask(RebalancePlanForBucket planForBucket) {
+            executedPlans.add(planForBucket);
+        }
     }
 
     /** Records events put into the coordinator event queue. */

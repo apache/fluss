@@ -568,6 +568,164 @@ public class DynamicConfigChangeTest {
     }
 
     @Test
+    void testDynamicRebalanceMaxInflightTasksChange() throws Exception {
+        Configuration configuration = new Configuration();
+        configuration.set(ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS, 1);
+
+        DynamicConfigManager dynamicConfigManager =
+                new DynamicConfigManager(zookeeperClient, configuration, true);
+
+        AtomicInteger reconfiguredValue = new AtomicInteger();
+        dynamicConfigManager.register(
+                new ServerReconfigurable() {
+                    @Override
+                    public void validate(Configuration newConfig) throws ConfigException {
+                        int newValue =
+                                newConfig.get(
+                                        ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS);
+                        if (newValue < 0) {
+                            throw new ConfigException(
+                                    String.format(
+                                            "Invalid %s: must be non-negative, but was %s",
+                                            ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS
+                                                    .key(),
+                                            newValue));
+                        }
+                    }
+
+                    @Override
+                    public void reconfigure(Configuration newConfig) {
+                        reconfiguredValue.set(
+                                newConfig.get(
+                                        ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS));
+                    }
+                });
+        dynamicConfigManager.startup();
+        assertThat(reconfiguredValue.get()).isEqualTo(1);
+
+        dynamicConfigManager.alterConfigs(
+                Collections.singletonList(
+                        new AlterConfig(
+                                ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS.key(),
+                                "5",
+                                AlterConfigOpType.SET)));
+
+        Map<String, String> zkConfig = zookeeperClient.fetchEntityConfig();
+        assertThat(zkConfig.get(ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS.key()))
+                .isEqualTo("5");
+        assertThat(reconfiguredValue.get()).isEqualTo(5);
+
+        dynamicConfigManager.alterConfigs(
+                Collections.singletonList(
+                        new AlterConfig(
+                                ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS.key(),
+                                "0",
+                                AlterConfigOpType.SET)));
+
+        zkConfig = zookeeperClient.fetchEntityConfig();
+        assertThat(zkConfig.get(ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS.key()))
+                .isEqualTo("0");
+        assertThat(reconfiguredValue.get()).isZero();
+
+        dynamicConfigManager.alterConfigs(
+                Collections.singletonList(
+                        new AlterConfig(
+                                ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS.key(),
+                                null,
+                                AlterConfigOpType.DELETE)));
+
+        zkConfig = zookeeperClient.fetchEntityConfig();
+        assertThat(zkConfig)
+                .doesNotContainKey(ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS.key());
+        assertThat(reconfiguredValue.get()).isEqualTo(1);
+    }
+
+    @Test
+    void testPreventInvalidRebalanceMaxInflightTasks() throws Exception {
+        Configuration configuration = new Configuration();
+        configuration.set(ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS, 1);
+
+        DynamicConfigManager dynamicConfigManager =
+                new DynamicConfigManager(zookeeperClient, configuration, true);
+
+        AtomicInteger reconfiguredValue = new AtomicInteger();
+        dynamicConfigManager.register(
+                new ServerReconfigurable() {
+                    @Override
+                    public void validate(Configuration newConfig) throws ConfigException {
+                        int newValue =
+                                newConfig.get(
+                                        ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS);
+                        if (newValue < 0) {
+                            throw new ConfigException(
+                                    String.format(
+                                            "Invalid %s: must be non-negative, but was %s",
+                                            ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS
+                                                    .key(),
+                                            newValue));
+                        }
+                    }
+
+                    @Override
+                    public void reconfigure(Configuration newConfig) {
+                        reconfiguredValue.set(
+                                newConfig.get(
+                                        ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS));
+                    }
+                });
+        dynamicConfigManager.startup();
+
+        assertThatThrownBy(
+                        () ->
+                                dynamicConfigManager.alterConfigs(
+                                        Collections.singletonList(
+                                                new AlterConfig(
+                                                        ConfigOptions
+                                                                .COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS
+                                                                .key(),
+                                                        "-1",
+                                                        AlterConfigOpType.SET))))
+                .isInstanceOf(ConfigException.class)
+                .hasMessageContaining("must be non-negative");
+
+        assertThat(reconfiguredValue.get()).isEqualTo(1);
+        assertThat(zookeeperClient.fetchEntityConfig())
+                .doesNotContainKey(ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS.key());
+    }
+
+    @Test
+    void testLateRegisterReceivesCurrentDynamicRebalanceMaxInflightTasks() throws Exception {
+        Configuration configuration = new Configuration();
+        configuration.set(ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS, 1);
+
+        DynamicConfigManager dynamicConfigManager =
+                new DynamicConfigManager(zookeeperClient, configuration, true);
+        dynamicConfigManager.startup();
+        dynamicConfigManager.alterConfigs(
+                Collections.singletonList(
+                        new AlterConfig(
+                                ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS.key(),
+                                "4",
+                                AlterConfigOpType.SET)));
+
+        AtomicInteger reconfiguredValue = new AtomicInteger();
+        dynamicConfigManager.register(
+                new ServerReconfigurable() {
+                    @Override
+                    public void validate(Configuration newConfig) throws ConfigException {}
+
+                    @Override
+                    public void reconfigure(Configuration newConfig) {
+                        reconfiguredValue.set(
+                                newConfig.get(
+                                        ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS));
+                    }
+                });
+
+        assertThat(reconfiguredValue.get()).isEqualTo(4);
+    }
+
+    @Test
     void testDynamicReconfigurationOfRemoteDataDirs() throws Exception {
         Configuration configuration = new Configuration();
         configuration.set(ConfigOptions.REMOTE_DATA_DIR, "hdfs://default-dir");
