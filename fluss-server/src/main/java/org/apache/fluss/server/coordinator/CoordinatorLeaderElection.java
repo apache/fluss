@@ -18,6 +18,7 @@
 
 package org.apache.fluss.server.coordinator;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.exception.CoordinatorEpochFencedException;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.ZkData;
@@ -28,12 +29,16 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
+
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /**
  * Using by coordinator server. Coordinator servers listen ZK node and elect leadership.
@@ -69,6 +74,7 @@ import java.util.function.Consumer;
  */
 public class CoordinatorLeaderElection implements AutoCloseable {
     private static final Logger LOG = LoggerFactory.getLogger(CoordinatorLeaderElection.class);
+    private static final long DEFAULT_CLOSE_TIMEOUT_MS = 10000L;
 
     private final String serverId;
     private final LeaderLatch leaderLatch;
@@ -79,6 +85,7 @@ public class CoordinatorLeaderElection implements AutoCloseable {
     // cleanup, and state transitions never overlap.
     private final ExecutorService leaderCallbackExecutor;
     private final CompletableFuture<Void> closeFuture = new CompletableFuture<>();
+    private final long closeTimeoutMs;
 
     private final AtomicBoolean closing = new AtomicBoolean(false);
     private volatile State state = State.INITIAL;
@@ -86,7 +93,14 @@ public class CoordinatorLeaderElection implements AutoCloseable {
     private volatile Consumer<Throwable> cleanupLeaderServices;
 
     public CoordinatorLeaderElection(ZooKeeperClient zkClient, String serverId) {
+        this(zkClient, serverId, DEFAULT_CLOSE_TIMEOUT_MS);
+    }
+
+    @VisibleForTesting
+    CoordinatorLeaderElection(ZooKeeperClient zkClient, String serverId, long closeTimeoutMs) {
+        checkArgument(closeTimeoutMs > 0, "Close timeout must be positive.");
         this.serverId = serverId;
+        this.closeTimeoutMs = closeTimeoutMs;
         this.leaderLatch =
                 new LeaderLatch(
                         zkClient.getCuratorClient(),
@@ -119,12 +133,12 @@ public class CoordinatorLeaderElection implements AutoCloseable {
                 new LeaderLatchListener() {
                     @Override
                     public void isLeader() {
-                        submitLeadershipEvent(true, initLeaderServices);
+                        submitLeadershipEvent(() -> becomeLeader(initLeaderServices));
                     }
 
                     @Override
                     public void notLeader() {
-                        submitLeadershipEvent(false, initLeaderServices);
+                        submitLeadershipEvent(CoordinatorLeaderElection.this::becomeStandby);
                     }
                 });
 
@@ -164,8 +178,11 @@ public class CoordinatorLeaderElection implements AutoCloseable {
                     });
         }
 
-        closeFuture.join();
-        leaderCallbackExecutor.shutdown();
+        if (waitForCloseTaskCompletion()) {
+            leaderCallbackExecutor.shutdown();
+        } else {
+            leaderCallbackExecutor.shutdownNow();
+        }
         awaitCallbackExecutorTermination();
     }
 
@@ -173,7 +190,7 @@ public class CoordinatorLeaderElection implements AutoCloseable {
         return !closing.get() && state == State.LEADER;
     }
 
-    private void submitLeadershipEvent(boolean leader, Runnable initLeaderServices) {
+    private void submitLeadershipEvent(Runnable leadershipEvent) {
         if (closing.get()) {
             return;
         }
@@ -183,11 +200,7 @@ public class CoordinatorLeaderElection implements AutoCloseable {
                         if (closing.get() || state == State.CLOSED) {
                             return;
                         }
-                        if (leader) {
-                            becomeLeader(initLeaderServices);
-                        } else {
-                            becomeStandby();
-                        }
+                        leadershipEvent.run();
                     });
         } catch (RejectedExecutionException e) {
             if (!closing.get()) {
@@ -248,20 +261,46 @@ public class CoordinatorLeaderElection implements AutoCloseable {
         }
     }
 
-    private void awaitCallbackExecutorTermination() {
-        boolean interrupted = false;
-        while (true) {
-            try {
-                if (leaderCallbackExecutor.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS)) {
-                    break;
-                }
-            } catch (InterruptedException e) {
-                interrupted = true;
-            }
-        }
-
-        if (interrupted) {
+    private boolean waitForCloseTaskCompletion() {
+        try {
+            closeFuture.get(closeTimeoutMs, TimeUnit.MILLISECONDS);
+            return true;
+        } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            LOG.warn(
+                    "Interrupted while waiting for leader callback cleanup for server {}.",
+                    serverId);
+            return false;
+        } catch (ExecutionException e) {
+            LOG.warn(
+                    "Failed while waiting for leader callback cleanup for server {}.", serverId, e);
+            return false;
+        } catch (TimeoutException e) {
+            LOG.warn(
+                    "Timed out after {} ms while waiting for leader callback cleanup for server "
+                            + "{}. Continuing shutdown.",
+                    closeTimeoutMs,
+                    serverId);
+            return false;
+        }
+    }
+
+    private void awaitCallbackExecutorTermination() {
+        try {
+            if (!leaderCallbackExecutor.awaitTermination(closeTimeoutMs, TimeUnit.MILLISECONDS)) {
+                LOG.warn(
+                        "Leader callback executor for server {} did not terminate within {} ms. "
+                                + "Continuing shutdown.",
+                        serverId,
+                        closeTimeoutMs);
+            }
+        } catch (InterruptedException e) {
+            leaderCallbackExecutor.shutdownNow();
+            Thread.currentThread().interrupt();
+            LOG.warn(
+                    "Interrupted while waiting for leader callback executor for server {} to "
+                            + "terminate.",
+                    serverId);
         }
     }
 
