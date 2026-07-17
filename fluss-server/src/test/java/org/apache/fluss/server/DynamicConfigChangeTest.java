@@ -1148,7 +1148,7 @@ public class DynamicConfigChangeTest {
     void testRejectProviderMarkerInDynamicConfig() throws Exception {
         Configuration configuration = new Configuration();
         DynamicConfigManager dynamicConfigManager =
-                new DynamicConfigManager(zookeeperClient, configuration, true);
+                new DynamicConfigManager(zookeeperClient, configuration);
         dynamicConfigManager.startup();
 
         assertThatThrownBy(
@@ -1171,7 +1171,7 @@ public class DynamicConfigChangeTest {
         configuration.markSensitive("datalake.paimon.custom.value");
 
         DynamicConfigManager dynamicConfigManager =
-                new DynamicConfigManager(zookeeperClient, configuration, true);
+                new DynamicConfigManager(zookeeperClient, configuration);
         dynamicConfigManager.startup();
 
         ConfigEntry entry =
