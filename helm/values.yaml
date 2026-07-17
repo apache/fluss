@@ -146,6 +146,18 @@ listeners:
   client:
     port: 9124
 
+# Secrets referenced from configurationOverrides via config provider markers:
+# mounts are read with ${directory:/etc/fluss/secrets/<name>:<key>}, env entries
+# with ${env:<NAME>}. The chart generates the matching config.providers lines.
+secrets:
+  # - name: paimon-creds
+  #   secretName: fluss-paimon-creds
+  mounts: []
+  # - name: PAIMON_S3_ACCESS_KEY
+  #   secretName: fluss-paimon-creds
+  #   key: access-key
+  env: []
+
 # Fluss security configurations
 security:
   client:

@@ -383,6 +383,45 @@ The same pattern works with Sealed Secrets, HashiCorp Vault Agent Injector (prod
 | `configurationOverrides.data.dir` | Local data directory | `/tmp/fluss/data` |
 | `configurationOverrides.internal.listener.name` | Internal listener name | `INTERNAL` |
 
+### Secrets in Configuration Overrides
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `secrets.mounts` | Secrets mounted as files under `/etc/fluss/secrets/<name>`, entries of `{name, secretName}` | `[]` |
+| `secrets.env` | Secret values injected as env vars via `secretKeyRef`, entries of `{name, secretName, key}` | `[]` |
+
+Any `configurationOverrides` value can reference a secret through a
+[config provider marker](../security/secrets.md) instead of a literal, so the rendered
+`server.yaml` ConfigMap never contains secret material. The chart generates the matching
+`config.providers` settings, restricted to the declared mounts and env names.
+
+```bash
+kubectl create secret generic fluss-paimon-creds \
+  --from-literal=access-key=... --from-literal=secret-key=...
+```
+
+```yaml
+secrets:
+  mounts:
+    - name: paimon-creds
+      secretName: fluss-paimon-creds
+
+configurationOverrides:
+  datalake.paimon.s3.access-key: ${directory:/etc/fluss/secrets/paimon-creds:access-key}
+  datalake.paimon.s3.secret-key: ${directory:/etc/fluss/secrets/paimon-creds:secret-key}
+```
+
+To rotate a secret, update the Kubernetes Secret and restart the pods
+(`kubectl rollout restart statefulset -l app.kubernetes.io/name=fluss`); markers are resolved at
+server startup.
+
+This works with any Secret producer — for example, an
+[External Secrets Operator](https://external-secrets.io/) `ExternalSecret` syncing from AWS
+Secrets Manager or Vault into the referenced Secret. To restart pods automatically when the
+Secret changes, a controller such as [Reloader](https://github.com/stakater/Reloader) can watch
+it (annotate the StatefulSets with `secret.reloader.stakater.com/reload: "<secret-name>"`),
+making rotation fully hands-off.
+
 ### Tablet Server Parameters
 
 | Parameter | Description | Default |

@@ -98,6 +98,9 @@ spec:
             - name: FLUSS_ENV_JAVA_OPTS
               value: "-Djava.security.auth.login.config=/etc/fluss/conf/jaas.conf"
             {{- end }}
+            {{- if (include "fluss.secrets.enabled" .) }}
+            {{- include "fluss.secrets.env" . | trim | nindent 12 }}
+            {{- end }}
             {{- with .Values.coordinator.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -151,6 +154,9 @@ spec:
               mountPath: /etc/fluss/conf
               readOnly: true
             {{- end }}
+            {{- if (include "fluss.secrets.enabled" .) }}
+            {{- include "fluss.secrets.volumeMounts" . | trim | nindent 12 }}
+            {{- end }}
             {{- with .Values.coordinator.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -164,6 +170,9 @@ spec:
         {{- end }}
         {{- if (include "fluss.security.jaas.required" .) }}
         {{- include "fluss.security.jaas.volumes" . | nindent 8 }}
+        {{- end }}
+        {{- if (include "fluss.secrets.enabled" .) }}
+        {{- include "fluss.secrets.volumes" . | trim | nindent 8 }}
         {{- end }}
         {{- with .Values.coordinator.extraVolumes }}
         {{- toYaml . | nindent 8 }}
