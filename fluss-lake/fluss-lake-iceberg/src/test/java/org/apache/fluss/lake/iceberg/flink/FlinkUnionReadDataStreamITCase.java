@@ -238,7 +238,7 @@ public class FlinkUnionReadDataStreamITCase extends FlinkUnionReadTestBase {
     void testBoundedRequiresFullStartupModeFailsFast() throws Exception {
         String tableName = "ds_bounded_invalid_startup";
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
-        createLogTable(tablePath, false);
+        createPkTable(tablePath, false);
 
         FlussSourceBuilder<RowData> builder =
                 FlussSource.<RowData>builder()
@@ -251,27 +251,8 @@ public class FlinkUnionReadDataStreamITCase extends FlinkUnionReadTestBase {
 
         assertThatThrownBy(builder::build)
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("Bounded (batch) read requires");
-    }
-
-    @Test
-    void testBoundedRequiresDataLakeEnabledFailsFast() throws Exception {
-        String tableName = "ds_bounded_no_lake";
-        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
-        createNonLakeLogTable(tablePath);
-
-        FlussSourceBuilder<RowData> builder =
-                FlussSource.<RowData>builder()
-                        .setBootstrapServers(bootstrapServers())
-                        .setDatabase(DEFAULT_DB)
-                        .setTable(tableName)
-                        .setStartingOffsets(OffsetsInitializer.full())
-                        .setBounded()
-                        .setDeserializationSchema(new RowDataDeserializationSchema());
-
-        assertThatThrownBy(builder::build)
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("Bounded (batch) read requires");
+                .hasMessageContaining(
+                        "Bounded (batch) read on primary-key tables requires full mode");
     }
 
     @Test

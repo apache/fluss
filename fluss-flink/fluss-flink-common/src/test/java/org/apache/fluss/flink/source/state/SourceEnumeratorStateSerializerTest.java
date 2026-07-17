@@ -67,7 +67,15 @@ class SourceEnumeratorStateSerializerTest {
         // Add a HybridSnapshotLogSplit
         TableBucket hybridSplitBucket = new TableBucket(1, 1);
         HybridSnapshotLogSplit hybridSplit =
-                new HybridSnapshotLogSplit(hybridSplitBucket, null, 200L, 50L);
+                new HybridSnapshotLogSplit(
+                        hybridSplitBucket,
+                        null,
+                        200L,
+                        0,
+                        false,
+                        50L,
+                        LogSplit.NO_STOPPING_OFFSET,
+                        false);
         remainingHybridLakeFlussSplits.add(hybridSplit);
 
         // Add a LakeSnapshotAndFlussLogSplit
@@ -232,7 +240,16 @@ class SourceEnumeratorStateSerializerTest {
         List<SourceSplitBase> unassignedSplits = new ArrayList<>();
         unassignedSplits.add(new LogSplit(new TableBucket(1, 0), null, 100L));
         unassignedSplits.add(new LogSplit(new TableBucket(1, 5L, 1), "p5", 200L));
-        unassignedSplits.add(new HybridSnapshotLogSplit(new TableBucket(1, 2), null, 300L, 50L));
+        unassignedSplits.add(
+                new HybridSnapshotLogSplit(
+                        new TableBucket(1, 2),
+                        null,
+                        300L,
+                        0,
+                        false,
+                        50L,
+                        LogSplit.NO_STOPPING_OFFSET,
+                        false));
 
         SourceEnumeratorState sourceEnumeratorState =
                 new SourceEnumeratorState(

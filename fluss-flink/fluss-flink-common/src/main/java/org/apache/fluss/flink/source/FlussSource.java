@@ -19,6 +19,7 @@ package org.apache.fluss.flink.source;
 
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.initializer.OffsetsInitializer;
+import org.apache.fluss.client.initializer.SnapshotOffsetsInitializer;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.flink.source.deserializer.FlussDeserializationSchema;
@@ -114,7 +115,7 @@ public class FlussSource<OUT> extends FlinkSource<OUT> {
                 sourceOutputType,
                 projectedFields,
                 logRecordBatchFilter,
-                offsetsInitializer,
+                validateBatchStartupMode(offsetsInitializer, hasPrimaryKey, streaming, tablePath),
                 scanPartitionDiscoveryIntervalMs,
                 splitPerAssignmentBatchSize,
                 deserializationSchema,
@@ -131,6 +132,24 @@ public class FlussSource<OUT> extends FlinkSource<OUT> {
      */
     public static <T> FlussSourceBuilder<T> builder() {
         return new FlussSourceBuilder<>();
+    }
+
+    private static OffsetsInitializer validateBatchStartupMode(
+            OffsetsInitializer offsetsInitializer,
+            boolean hasPrimaryKey,
+            boolean streaming,
+            TablePath tablePath) {
+        if (!streaming
+                && hasPrimaryKey
+                && !(offsetsInitializer instanceof SnapshotOffsetsInitializer)) {
+            throw new IllegalArgumentException(
+                    String.format(
+                            "Bounded (batch) read on primary-key tables requires full mode "
+                                    + "(OffsetsInitializer.full()), but table '%s' isn't started "
+                                    + "in full mode.",
+                            tablePath));
+        }
+        return offsetsInitializer;
     }
 
     @VisibleForTesting

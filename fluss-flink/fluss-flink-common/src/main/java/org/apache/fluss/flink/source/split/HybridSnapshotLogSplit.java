@@ -22,6 +22,9 @@ import org.apache.fluss.metadata.TableBucket;
 import javax.annotation.Nullable;
 
 import java.util.Objects;
+import java.util.Optional;
+
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /**
  * The hybrid split for first reading the snapshot files and then switch to read the cdc log from a
@@ -32,17 +35,13 @@ import java.util.Objects;
  */
 public class HybridSnapshotLogSplit extends SnapshotSplit {
 
+    public static final long NO_SNAPSHOT_ID = -1L;
+
     private static final String HYBRID_SPLIT_PREFIX = "hybrid-snapshot-log-";
     private final boolean isSnapshotFinished;
     private final long logStartingOffset;
-
-    public HybridSnapshotLogSplit(
-            TableBucket tableBucket,
-            @Nullable String partitionName,
-            long snapshotId,
-            long logStartingOffset) {
-        this(tableBucket, partitionName, snapshotId, 0, false, logStartingOffset);
-    }
+    private final long logStoppingOffset;
+    private final boolean isBatch;
 
     public HybridSnapshotLogSplit(
             TableBucket tableBucket,
@@ -50,14 +49,29 @@ public class HybridSnapshotLogSplit extends SnapshotSplit {
             long snapshotId,
             long recordsToSkip,
             boolean isSnapshotFinished,
-            long logStartingOffset) {
+            long logStartingOffset,
+            long logStoppingOffset,
+            boolean isBatch) {
         super(tableBucket, partitionName, snapshotId, recordsToSkip);
+        checkArgument(
+                !isBatch || logStoppingOffset >= 0,
+                "Batch hybrid snapshot log split must have a non-negative stopping offset.");
         this.isSnapshotFinished = isSnapshotFinished;
         this.logStartingOffset = logStartingOffset;
+        this.logStoppingOffset = logStoppingOffset;
+        this.isBatch = isBatch;
     }
 
     public long getLogStartingOffset() {
         return logStartingOffset;
+    }
+
+    public Optional<Long> getLogStoppingOffset() {
+        return logStoppingOffset >= 0 ? Optional.of(logStoppingOffset) : Optional.empty();
+    }
+
+    public boolean isBatch() {
+        return isBatch;
     }
 
     public boolean isSnapshotFinished() {
@@ -82,12 +96,19 @@ public class HybridSnapshotLogSplit extends SnapshotSplit {
         }
         HybridSnapshotLogSplit that = (HybridSnapshotLogSplit) o;
         return isSnapshotFinished == that.isSnapshotFinished
-                && logStartingOffset == that.logStartingOffset;
+                && logStartingOffset == that.logStartingOffset
+                && logStoppingOffset == that.logStoppingOffset
+                && isBatch == that.isBatch;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(super.hashCode(), isSnapshotFinished, logStartingOffset);
+        return Objects.hash(
+                super.hashCode(),
+                isSnapshotFinished,
+                logStartingOffset,
+                logStoppingOffset,
+                isBatch);
     }
 
     @Override
@@ -103,6 +124,10 @@ public class HybridSnapshotLogSplit extends SnapshotSplit {
                 + isSnapshotFinished
                 + ", logStartingOffset="
                 + logStartingOffset
+                + ", logStoppingOffset="
+                + logStoppingOffset
+                + ", isBatch="
+                + isBatch
                 + ", recordsToSkip="
                 + recordsToSkip
                 + '}';
