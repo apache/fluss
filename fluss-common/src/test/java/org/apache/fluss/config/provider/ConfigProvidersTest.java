@@ -164,6 +164,49 @@ class ConfigProvidersTest {
     }
 
     @Test
+    void testEscapeNotAppliedWithoutProviders() {
+        Configuration config = new Configuration();
+        config.setString("literal", "$${env:PATH}");
+        ConfigProviders.resolve(config);
+        assertThat(config.toMap().get("literal")).isEqualTo("$${env:PATH}");
+    }
+
+    @Test
+    void testDuplicateProviderIdentifierFailsFast() {
+        Configuration config = new Configuration();
+        config.setString(ConfigOptions.CONFIG_PROVIDERS.key(), "dup");
+        assertThatThrownBy(() -> ConfigProviders.resolve(config))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining("Multiple config providers with identifier 'dup'");
+    }
+
+    /** Registered in the test services file, clashing with {@link DuplicateProviderB}. */
+    public static class DuplicateProviderA implements ConfigProvider {
+        @Override
+        public String identifier() {
+            return "dup";
+        }
+
+        @Override
+        public String resolve(String path, String key) {
+            return key;
+        }
+    }
+
+    /** Registered in the test services file, clashing with {@link DuplicateProviderA}. */
+    public static class DuplicateProviderB implements ConfigProvider {
+        @Override
+        public String identifier() {
+            return "dup";
+        }
+
+        @Override
+        public String resolve(String path, String key) {
+            return key;
+        }
+    }
+
+    @Test
     void testResolvedValuesAreHiddenInToString(@TempDir Path secretsDir) throws Exception {
         Files.write(secretsDir.resolve("cred"), "raw-secret".getBytes(StandardCharsets.UTF_8));
 

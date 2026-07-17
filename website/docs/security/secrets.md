@@ -46,7 +46,8 @@ control or shipped as a plain Kubernetes ConfigMap while the secrets live in a m
 
 A marker has the form `${provider:[path:]key}` and must be the **entire** configuration value;
 markers embedded inside larger values are not resolved. To use a literal value that starts with
-`${`, escape it by doubling the dollar sign: `$${literal}` becomes `${literal}`.
+`${`, escape it by doubling the dollar sign: `$${literal}` becomes `${literal}`. The escape, like
+marker resolution, only applies when `config.providers` is set.
 
 Resolution happens once, when the configuration is loaded: on server startup, when a client
 connection is created via `ConnectionFactory`, and when the lake tiering service parses its
@@ -78,6 +79,10 @@ itself: place the jar on the server classpath (`lib/`), or bundle it with the Fl
 Flink jobs. Plugin directories are not scanned.
 
 ## Kubernetes example
+
+When deploying with the Helm chart, the `secrets.mounts` / `secrets.env` values generate all of
+the below — see
+[Deploying with Helm](../install-deploy/deploying-with-helm.md#secrets-in-configuration-overrides).
 
 ```yaml
 # server.yaml shipped as a plain ConfigMap — contains no secrets

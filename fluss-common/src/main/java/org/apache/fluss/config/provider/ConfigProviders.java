@@ -154,20 +154,31 @@ public final class ConfigProviders {
                     ServiceLoader.load(ConfigProvider.class, ConfigProvider.class.getClassLoader());
             for (Iterator<ConfigProvider> it = loader.iterator(); it.hasNext(); ) {
                 ConfigProvider provider = it.next();
-                if (requested.contains(provider.identifier())
-                        && !providers.containsKey(provider.identifier())) {
-                    try {
-                        provider.configure(paramsFor(config, provider.identifier()));
-                    } catch (Exception e) {
-                        throw new IllegalConfigurationException(
-                                "Invalid configuration for config provider '"
-                                        + provider.identifier()
-                                        + "': "
-                                        + e.getMessage(),
-                                e);
-                    }
-                    providers.put(provider.identifier(), provider);
+                if (!requested.contains(provider.identifier())) {
+                    continue;
                 }
+                ConfigProvider existing = providers.get(provider.identifier());
+                if (existing != null) {
+                    throw new IllegalConfigurationException(
+                            "Multiple config providers with identifier '"
+                                    + provider.identifier()
+                                    + "' found on the classpath: "
+                                    + existing.getClass().getName()
+                                    + ", "
+                                    + provider.getClass().getName()
+                                    + ".");
+                }
+                try {
+                    provider.configure(paramsFor(config, provider.identifier()));
+                } catch (Exception e) {
+                    throw new IllegalConfigurationException(
+                            "Invalid configuration for config provider '"
+                                    + provider.identifier()
+                                    + "': "
+                                    + e.getMessage(),
+                            e);
+                }
+                providers.put(provider.identifier(), provider);
             }
 
             for (String name : requested) {

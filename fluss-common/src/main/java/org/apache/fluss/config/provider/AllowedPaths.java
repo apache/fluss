@@ -91,7 +91,8 @@ final class AllowedPaths {
         try {
             return Paths.get(path.toFile().getCanonicalPath());
         } catch (IOException e) {
-            return path.toAbsolutePath().normalize();
+            throw new IllegalArgumentException(
+                    "Cannot canonicalize path '" + path + "' for the allowed-paths check.", e);
         }
     }
 }
