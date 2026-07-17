@@ -46,6 +46,7 @@ import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 import static org.apache.fluss.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsIgnoreOrder;
@@ -242,16 +243,102 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
     }
 
     @Test
-    void testScanSingleRowFilterException() throws Exception {
+    void testScanWithIncompletePrimaryKeyFilter() throws Exception {
         String tableName = prepareSourceTable(new String[] {"id", "name"}, null);
         String query = String.format("SELECT * FROM %s WHERE id = 1", tableName);
 
-        // doesn't have all condition for primary key, doesn't support to execute
-        assertThatThrownBy(() -> tEnv.explainSql(query))
-                .isInstanceOf(UnsupportedOperationException.class)
-                .hasMessage(
-                        "Currently, Fluss only support queries on table with datalake enabled"
-                                + " or point queries on primary key when it's in batch execution mode.");
+        CloseableIterator<Row> collected = tEnv.executeSql(query).collect();
+        List<String> expected = Collections.singletonList("+I[1, address1, name1]");
+        assertResultsIgnoreOrder(collected, expected, true);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testScanFullPrimaryKeyTable(boolean partitionTable) throws Exception {
+        String tableName =
+                partitionTable
+                        ? prepareSourceTable(new String[] {"id", "dt"}, "dt")
+                        : prepareSourceTable(new String[] {"id", "name"}, null);
+        String query = String.format("SELECT * FROM %s", tableName);
+
+        CloseableIterator<Row> collected = tEnv.executeSql(query).collect();
+        List<String> expected;
+        if (partitionTable) {
+            String partition =
+                    waitUntilPartitions(
+                                    FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(),
+                                    TablePath.of(DEFAULT_DB, tableName))
+                            .values()
+                            .stream()
+                            .sorted()
+                            .findFirst()
+                            .get();
+            expected =
+                    Arrays.asList(
+                            String.format("+I[1, address1, name1, %s]", partition),
+                            String.format("+I[2, address2, name2, %s]", partition),
+                            String.format("+I[3, address3, name3, %s]", partition),
+                            String.format("+I[4, address4, name4, %s]", partition),
+                            String.format("+I[5, address5, name5, %s]", partition));
+        } else {
+            expected =
+                    Arrays.asList(
+                            "+I[1, address1, name1]",
+                            "+I[2, address2, name2]",
+                            "+I[3, address3, name3]",
+                            "+I[4, address4, name4]",
+                            "+I[5, address5, name5]");
+        }
+        assertResultsIgnoreOrder(collected, expected, true);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testScanFullLogTable(boolean partitionTable) throws Exception {
+        String tableName = partitionTable ? preparePartitionedLogTable() : prepareLogTable();
+        String query = String.format("SELECT * FROM %s", tableName);
+
+        CloseableIterator<Row> collected = tEnv.executeSql(query).collect();
+        List<String> expected;
+        if (partitionTable) {
+            Collection<String> partitions =
+                    waitUntilPartitions(
+                                    FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(),
+                                    TablePath.of(DEFAULT_DB, tableName))
+                            .values();
+            expected =
+                    partitions.stream()
+                            .flatMap(
+                                    partition ->
+                                            Arrays.stream(
+                                                    new String[] {
+                                                        String.format(
+                                                                "+I[1, address1, name1, %s]",
+                                                                partition),
+                                                        String.format(
+                                                                "+I[2, null, name2, %s]",
+                                                                partition),
+                                                        String.format(
+                                                                "+I[3, address3, name3, %s]",
+                                                                partition),
+                                                        String.format(
+                                                                "+I[4, null, name4, %s]",
+                                                                partition),
+                                                        String.format(
+                                                                "+I[5, address5, name5, %s]",
+                                                                partition)
+                                                    }))
+                            .collect(Collectors.toList());
+        } else {
+            expected =
+                    Arrays.asList(
+                            "+I[1, address1, name1]",
+                            "+I[2, null, name2]",
+                            "+I[3, address3, name3]",
+                            "+I[4, null, name4]",
+                            "+I[5, address5, name5]");
+        }
+        assertResultsIgnoreOrder(collected, expected, true);
     }
 
     @Test
@@ -314,6 +401,60 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
     }
 
     @Test
+    void testPrimaryKeyTableBatchScanMergesSnapshotAndLog() throws Exception {
+        String tableName = String.format("test_pk_batch_snapshot_log_%s", RandomUtils.nextInt());
+        tEnv.executeSql(
+                String.format(
+                        "create table %s ("
+                                + "  id int not null,"
+                                + "  address varchar,"
+                                + "  name varchar,"
+                                + "  primary key (id) NOT ENFORCED)"
+                                + " with ('bucket.num' = '4')",
+                        tableName));
+
+        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
+            upsertWriter.upsert(row(1, "address1", "name1"));
+            upsertWriter.upsert(row(2, "address2", "name2"));
+            upsertWriter.upsert(row(3, "address3", "name3"));
+            upsertWriter.flush();
+
+            FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tablePath);
+
+            upsertWriter.upsert(row(1, "address11", "name11"));
+            upsertWriter.delete(row(2, null, null));
+            upsertWriter.upsert(row(4, "address4", "name4"));
+            upsertWriter.flush();
+        }
+
+        CloseableIterator<Row> collected =
+                tEnv.executeSql(String.format("SELECT * FROM %s", tableName)).collect();
+        List<String> expected =
+                Arrays.asList(
+                        "+I[1, address11, name11]",
+                        "+I[3, address3, name3]",
+                        "+I[4, address4, name4]");
+        assertResultsIgnoreOrder(collected, expected, true);
+    }
+
+    @Test
+    void testPrimaryKeyTableBatchScanRejectsNonFullStartupMode() throws Exception {
+        String tableName = prepareSourceTable(new String[] {"id"}, null);
+        String query =
+                String.format(
+                        "SELECT * FROM %s /*+ OPTIONS('scan.startup.mode' = 'earliest') */",
+                        tableName);
+
+        assertThatThrownBy(() -> tEnv.explainSql(query))
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessage(
+                        "Currently, Fluss batch scan on primary-key tables only supports "
+                                + "full startup mode.");
+    }
+
+    @Test
     void testLimitLogTableScan() throws Exception {
         String tableName = prepareLogTable();
 
@@ -352,6 +493,20 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
         collected = collectRowsWithTimeout(iterRows, 3);
         assertThat(collected).isSubsetOf(expected);
         assertThat(collected).hasSize(3);
+    }
+
+    @Test
+    void testLogTableBatchScanSupportsNonFullStartupMode() throws Exception {
+        String tableName = prepareLogTable();
+        String query =
+                String.format(
+                        "SELECT COUNT(address) FROM %s "
+                                + "/*+ OPTIONS('scan.startup.mode' = 'earliest') */",
+                        tableName);
+
+        CloseableIterator<Row> iterRows = tEnv.executeSql(query).collect();
+        List<String> collected = collectRowsWithTimeout(iterRows, 1);
+        assertThat(collected).isEqualTo(Collections.singletonList("+I[3]"));
     }
 
     @Test
@@ -414,33 +569,21 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
         assertThat(collected).isEqualTo(expected);
 
         // test COUNT(column) on nullable column - should NOT push down
-        // For PK table, this will fail because it doesn't support full scan in batch mode
-        assertThatThrownBy(
-                        () ->
-                                tEnv.explainSql(
-                                        String.format("SELECT COUNT(address) FROM %s", tableName)))
-                .hasMessageContaining(
-                        "Currently, Fluss only support queries on table with datalake enabled or point queries on primary key when it's in batch execution mode.");
+        query = String.format("SELECT COUNT(address) FROM %s", tableName);
+        iterRows = tEnv.executeSql(query).collect();
+        collected = collectRowsWithTimeout(iterRows, 1);
+        assertThat(collected).isEqualTo(expected);
 
-        assertThatThrownBy(
-                        () ->
-                                tEnv.explainSql(
-                                        String.format(
-                                                "SELECT COUNT(DISTINCT address) FROM %s",
-                                                tableName)))
-                .hasMessageContaining(
-                        "Currently, Fluss only support queries on table with datalake enabled or point queries on primary key when it's in batch execution mode.");
+        query = String.format("SELECT COUNT(DISTINCT address) FROM %s", tableName);
+        iterRows = tEnv.executeSql(query).collect();
+        collected = collectRowsWithTimeout(iterRows, 1);
+        assertThat(collected).isEqualTo(expected);
 
         // test not push down grouping count.
-        assertThatThrownBy(
-                        () ->
-                                tEnv.explainSql(
-                                                String.format(
-                                                        "SELECT COUNT(*) FROM %s group by id",
-                                                        tableName))
-                                        .wait())
-                .hasMessageContaining(
-                        "Currently, Fluss only support queries on table with datalake enabled or point queries on primary key when it's in batch execution mode.");
+        query = String.format("SELECT COUNT(*) FROM %s group by id", tableName);
+        iterRows = tEnv.executeSql(query).collect();
+        collected = collectRowsWithTimeout(iterRows, 5);
+        assertThat(collected).containsOnly("+I[1]");
     }
 
     @Test
@@ -489,32 +632,23 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
         assertThat(collected).isEqualTo(expected);
 
         // test COUNT(column) with NULL values - should NOT push down for nullable columns
-        // This will fail because log table doesn't support full scan in batch mode
-        assertThatThrownBy(
-                        () ->
-                                tEnv.explainSql(
-                                        String.format("SELECT COUNT(address) FROM %s", tableName)))
-                .hasMessageContaining(
-                        "Currently, Fluss only support queries on table with datalake enabled or point queries on primary key when it's in batch execution mode.");
-        assertThatThrownBy(
-                        () ->
-                                tEnv.explainSql(
-                                        String.format(
-                                                "SELECT COUNT(DISTINCT address) FROM %s",
-                                                tableName)))
-                .hasMessageContaining(
-                        "Currently, Fluss only support queries on table with datalake enabled or point queries on primary key when it's in batch execution mode.");
+        query = String.format("SELECT COUNT(address) FROM %s", tableName);
+        iterRows = tEnv.executeSql(query).collect();
+        collected = collectRowsWithTimeout(iterRows, 1);
+        assertThat(collected)
+                .isEqualTo(
+                        Collections.singletonList(String.format("+I[%s]", partitionTable ? 6 : 3)));
+
+        query = String.format("SELECT COUNT(DISTINCT address) FROM %s", tableName);
+        iterRows = tEnv.executeSql(query).collect();
+        collected = collectRowsWithTimeout(iterRows, 1);
+        assertThat(collected).isEqualTo(Collections.singletonList("+I[3]"));
 
         // test not push down grouping count.
-        assertThatThrownBy(
-                        () ->
-                                tEnv.explainSql(
-                                                String.format(
-                                                        "SELECT COUNT(*) FROM %s group by id",
-                                                        tableName))
-                                        .wait())
-                .hasMessageContaining(
-                        "Currently, Fluss only support queries on table with datalake enabled or point queries on primary key when it's in batch execution mode.");
+        query = String.format("SELECT COUNT(*) FROM %s group by id", tableName);
+        iterRows = tEnv.executeSql(query).collect();
+        collected = collectRowsWithTimeout(iterRows, 5);
+        assertThat(collected).containsOnly(String.format("+I[%s]", partitionTable ? 2 : 1));
     }
 
     private String prepareSourceTable(String[] keys, String partitionedKey) throws Exception {

@@ -476,7 +476,9 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
 
     private static String toHybridSnapshotLogSplitId(TableBucket tableBucket) {
         // snapshotId and logOffset doesn't affect splitId, use mocked 0 value.
-        return new HybridSnapshotLogSplit(tableBucket, null, 0, 0).splitId();
+        return new HybridSnapshotLogSplit(
+                        tableBucket, null, 0, 0, false, 0, LogSplit.NO_STOPPING_OFFSET, false)
+                .splitId();
     }
 
     private static int getBucketId(InternalRow row) {
@@ -499,7 +501,14 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
             if (snapshotId.isPresent() && logOffset.isPresent()) {
                 hybridSnapshotLogSplits.add(
                         new HybridSnapshotLogSplit(
-                                tableBucket, null, snapshotId.getAsLong(), logOffset.getAsLong()));
+                                tableBucket,
+                                null,
+                                snapshotId.getAsLong(),
+                                0,
+                                false,
+                                logOffset.getAsLong(),
+                                LogSplit.NO_STOPPING_OFFSET,
+                                false));
             }
         }
         return hybridSnapshotLogSplits;

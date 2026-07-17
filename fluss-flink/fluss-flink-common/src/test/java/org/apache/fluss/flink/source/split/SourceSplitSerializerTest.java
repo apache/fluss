@@ -19,6 +19,7 @@ package org.apache.fluss.flink.source.split;
 
 import org.apache.fluss.metadata.TableBucket;
 
+import org.apache.flink.core.memory.DataOutputSerializer;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -39,12 +40,21 @@ class SourceSplitSerializerTest {
     @ValueSource(booleans = {true, false})
     void testHybridSnapshotLogSplitSerde(boolean isPartitioned) throws Exception {
         int snapshotId = 100;
-        int recordsToSkip = 3;
+        long logStartingOffset = 3L;
+        long recordsToSkip = 4L;
         TableBucket bucket = isPartitioned ? partitionedTableBucket : tableBucket;
         String partitionName = isPartitioned ? "2024" : null;
 
         HybridSnapshotLogSplit split =
-                new HybridSnapshotLogSplit(bucket, partitionName, snapshotId, recordsToSkip);
+                new HybridSnapshotLogSplit(
+                        bucket,
+                        partitionName,
+                        snapshotId,
+                        0,
+                        false,
+                        logStartingOffset,
+                        LogSplit.NO_STOPPING_OFFSET,
+                        false);
         byte[] serialized = serializer.serialize(split);
 
         SourceSplitBase deserializedSplit =
@@ -53,7 +63,14 @@ class SourceSplitSerializerTest {
 
         split =
                 new HybridSnapshotLogSplit(
-                        bucket, partitionName, snapshotId, recordsToSkip, true, 5);
+                        bucket,
+                        partitionName,
+                        snapshotId,
+                        recordsToSkip,
+                        true,
+                        5,
+                        LogSplit.NO_STOPPING_OFFSET,
+                        false);
         serialized = serializer.serialize(split);
         deserializedSplit = serializer.deserialize(serializer.getVersion(), serialized);
         assertThat(deserializedSplit).isEqualTo(split);
@@ -70,5 +87,57 @@ class SourceSplitSerializerTest {
         SourceSplitBase deserializedSplit =
                 serializer.deserialize(serializer.getVersion(), serialized);
         assertThat(deserializedSplit).isEqualTo(logSplit);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testHybridSnapshotLogSplitSerdeWithStoppingOffset(boolean isPartitioned) throws Exception {
+        TableBucket bucket = isPartitioned ? partitionedTableBucket : tableBucket;
+        String partitionName = isPartitioned ? "2024" : null;
+        HybridSnapshotLogSplit split =
+                new HybridSnapshotLogSplit(bucket, partitionName, 100L, 0L, false, 20L, 30L, true);
+
+        byte[] serialized = serializer.serialize(split);
+        SourceSplitBase deserializedSplit =
+                serializer.deserialize(serializer.getVersion(), serialized);
+
+        assertThat(deserializedSplit).isEqualTo(split);
+        assertThat(deserializedSplit.asHybridSnapshotLogSplit().isBatch()).isTrue();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testDeserializeVersionZeroHybridSnapshotLogSplit(boolean isPartitioned) throws Exception {
+        TableBucket bucket = isPartitioned ? partitionedTableBucket : tableBucket;
+        String partitionName = isPartitioned ? "2024" : null;
+        DataOutputSerializer out = new DataOutputSerializer(64);
+        out.writeByte(SourceSplitBase.HYBRID_SNAPSHOT_SPLIT_FLAG);
+        out.writeLong(bucket.getTableId());
+        out.writeBoolean(bucket.getPartitionId() != null);
+        if (bucket.getPartitionId() != null) {
+            out.writeLong(bucket.getPartitionId());
+            out.writeUTF(partitionName);
+        }
+        out.writeInt(bucket.getBucket());
+        out.writeLong(100L);
+        out.writeLong(3L);
+        out.writeBoolean(false);
+        out.writeLong(20L);
+
+        SourceSplitBase deserializedSplit = serializer.deserialize(0, out.getCopyOfBuffer());
+
+        assertThat(deserializedSplit)
+                .isEqualTo(
+                        new HybridSnapshotLogSplit(
+                                bucket,
+                                partitionName,
+                                100L,
+                                3L,
+                                false,
+                                20L,
+                                LogSplit.NO_STOPPING_OFFSET,
+                                false));
+        assertThat(deserializedSplit.asHybridSnapshotLogSplit().isBatch()).isFalse();
+        assertThat(deserializedSplit.asHybridSnapshotLogSplit().getLogStoppingOffset()).isEmpty();
     }
 }
