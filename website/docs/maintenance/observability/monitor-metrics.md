@@ -406,9 +406,14 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>Gauge</td>
     </tr>
     <tr>
-      <td rowspan="7">lakeTiering_table</td>
+      <td rowspan="8">lakeTiering_table</td>
       <td>tierLag</td>
       <td>Time in milliseconds since the last successful tiering operation for this table. For newly registered tables that have never completed a tiering round, the lag is measured from the time the table was registered.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>tieredTimestamp</td>
+      <td>The epoch timestamp (in milliseconds) of the last successful tiering operation for this table. For newly registered tables that have never completed a tiering round, this is the time the table was registered.</td>
       <td>Gauge</td>
     </tr>
     <tr>
