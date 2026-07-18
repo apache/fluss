@@ -22,7 +22,6 @@ import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 
 import java.io.IOException;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
@@ -32,9 +31,9 @@ import java.util.Map;
  * {"version":1,"partition_done_initialized":true,"partition_update_times":{"5":1704153550000}}}.
  *
  * <p>Validation is strict for known fields, tolerant for unknown ones. {@code version} is mandatory
- * and positive; a corrupt known field fails fast. A higher-than-supported {@code version} is read
- * as version-only (so an older build detects it and goes read-only), and serialization refuses it
- * so an older build can never overwrite a state written by a newer build.
+ * and positive; a corrupt known field fails fast. A higher-than-supported {@code version} is
+ * neither read nor written; the caller keeps the raw bytes and passes them through unchanged so a
+ * newer build's state is never dropped.
  */
 public class LakeTieringTableStateJsonSerde
         implements JsonSerializer<LakeTieringTableState>, JsonDeserializer<LakeTieringTableState> {
@@ -48,15 +47,15 @@ public class LakeTieringTableStateJsonSerde
 
     @Override
     public void serialize(LakeTieringTableState state, JsonGenerator generator) throws IOException {
-        // Refuse to write a version this build does not understand (it would drop unparsed newer
-        // fields); higher-version states are read-only.
+        // Defense: this build never constructs a higher-version state to write (it passes the raw
+        // bytes through instead), so this guards against misuse of the version-taking constructor.
         if (state.getVersion() > LakeTieringTableState.CURRENT_VERSION) {
             throw new IllegalStateException(
-                    "Refusing to serialize tiering state with unsupported version "
+                    "Refusing to serialize unsupported tiering state version "
                             + state.getVersion()
                             + " > "
                             + LakeTieringTableState.CURRENT_VERSION
-                            + " (read-only).");
+                            + ".");
         }
         generator.writeStartObject();
         generator.writeNumberField(VERSION_KEY, state.getVersion());
@@ -88,10 +87,14 @@ public class LakeTieringTableStateJsonSerde
         }
         int version = versionNode.asInt();
 
-        // Higher-than-supported version: read version-only (skip other fields) so an older build
-        // detects it and stays read-only.
+        // A newer version cannot be interpreted here; the caller must pass the raw bytes through.
         if (version > LakeTieringTableState.CURRENT_VERSION) {
-            return new LakeTieringTableState(version, false, Collections.emptyMap());
+            throw new IllegalArgumentException(
+                    "Unsupported tiering state version "
+                            + version
+                            + " > "
+                            + LakeTieringTableState.CURRENT_VERSION
+                            + "; pass the raw bytes through unchanged.");
         }
 
         // partition_done_initialized: optional, must be a boolean when present.

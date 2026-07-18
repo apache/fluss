@@ -92,23 +92,20 @@ class LakeTieringTableStateJsonSerdeTest {
     }
 
     @Test
-    void testHigherVersionIsReadableButNotWritable() {
-        // Reading a higher (unsupported) version and unknown fields must not raise; only the
-        // version
-        // is read (higher-version fields skipped) so an older build can detect it and degrade to
-        // read-only.
+    void testHigherVersionIsNeitherReadableNorWritable() {
+        // Reading a newer, unreadable version fails fast so the caller passes the raw bytes through
+        // instead of interpreting (and possibly dropping) it.
         String json =
                 "{\"version\":99,\"partition_done_initialized\":true,"
                         + "\"partition_update_times\":{\"5\":1000},\"future_field\":\"x\"}";
-        LakeTieringTableState state =
-                LakeTieringTableState.fromJsonBytes(json.getBytes(StandardCharsets.UTF_8));
-        assertThat(state.getVersion()).isEqualTo(99);
-        // higher-version fields are NOT interpreted.
-        assertThat(state.isPartitionDoneInitialized()).isFalse();
-        assertThat(state.getPartitionUpdateTimes()).isEmpty();
-        // Writing it back is refused: an older build must not overwrite a newer-version state.
-        assertThatThrownBy(state::toJsonBytes)
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("read-only");
+        assertThatThrownBy(
+                        () ->
+                                LakeTieringTableState.fromJsonBytes(
+                                        json.getBytes(StandardCharsets.UTF_8)))
+                .isInstanceOf(IllegalArgumentException.class);
+
+        // Writing a higher-version object is likewise refused (defense against misuse).
+        LakeTieringTableState higher = new LakeTieringTableState(99, true, new HashMap<>());
+        assertThatThrownBy(higher::toJsonBytes).isInstanceOf(IllegalStateException.class);
     }
 }

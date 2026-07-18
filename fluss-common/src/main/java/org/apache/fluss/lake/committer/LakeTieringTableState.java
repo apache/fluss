@@ -41,10 +41,10 @@ import java.util.Objects;
  * </ul>
  *
  * <p>This is a flat, versioned model. Evolve it by adding fields and bumping {@link
- * #CURRENT_VERSION} (e.g. a future watermark mode). To stay safe when a newer and an older tiering
- * job run against the same table across rounds, a consumer that reads a {@code version} higher than
- * its own {@link #CURRENT_VERSION} must treat it as read-only so it never drops fields written by a
- * newer build; the serializer enforces this by refusing to write such a state.
+ * #CURRENT_VERSION}. When a newer and an older tiering job run against the same table across
+ * rounds, a build that reads a {@code version} higher than its own {@link #CURRENT_VERSION} cannot
+ * interpret it: {@link #fromJsonBytes} raises {@link IllegalArgumentException}, and the caller must
+ * pass the raw bytes through unchanged so the newer build's state is never dropped.
  *
  * @since 0.9
  */

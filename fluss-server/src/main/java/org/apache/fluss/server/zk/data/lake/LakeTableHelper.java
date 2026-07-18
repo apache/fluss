@@ -63,17 +63,21 @@ public class LakeTableHelper {
         Optional<LakeTable> optPreviousLakeTable = zkClient.getLakeTable(tableId);
         // Merge with previous snapshot if exists
         if (optPreviousLakeTable.isPresent()) {
-            TableBucketOffsets tableBucketOffsets =
-                    mergeTableBucketOffsets(
-                            optPreviousLakeTable.get(),
-                            new TableBucketOffsets(
-                                    tableId, lakeTableSnapshot.getBucketLogEndOffset()));
-            // State is v2-only: carry it through so the legacy (v1) serde fails fast if present.
-            lakeTableSnapshot =
-                    new LakeTableSnapshot(
-                            tableId,
-                            tableBucketOffsets.getOffsets(),
-                            tableBucketOffsets.getTieringStateJson());
+            LakeTableSnapshot previousSnapshot =
+                    optPreviousLakeTable.get().getOrReadLatestTableSnapshot();
+            // The legacy (v1) format cannot carry tiering state. This path is not expected to run
+            // on a state-bearing table; if it does (e.g. an old committer), drop the state with a
+            // warning instead of failing the commit.
+            if (previousSnapshot.getTieringStateJson() != null) {
+                LOG.warn(
+                        "Dropping tiering state for table {} on a legacy (v1) lake commit; "
+                                + "the v1 format cannot store it.",
+                        tableId);
+            }
+            Map<TableBucket, Long> bucketLogEndOffset =
+                    new HashMap<>(previousSnapshot.getBucketLogEndOffset());
+            bucketLogEndOffset.putAll(lakeTableSnapshot.getBucketLogEndOffset());
+            lakeTableSnapshot = new LakeTableSnapshot(tableId, bucketLogEndOffset);
         }
         zkClient.upsertLakeTable(
                 tableId, new LakeTable(lakeTableSnapshot), optPreviousLakeTable.isPresent());
@@ -183,15 +187,10 @@ public class LakeTableHelper {
                 new HashMap<>(previousSnapshot.getBucketLogEndOffset());
         bucketLogEndOffset.putAll(newTableBucketOffsets.getOffsets());
 
-        // Unlike the per-bucket offsets above (partial merge), the tiering state is opaque here and
-        // cannot be field-merged, so it uses whole-value snapshot (PUT) semantics:
-        //  - present (including an empty object) overwrites the whole state;
-        //  - absent keeps the previous state (a legacy/no-op writer never sends it, so keeping the
-        //    previous value is required for rolling-upgrade safety).
-        byte[] tieringStateJson =
-                newTableBucketOffsets.getTieringStateJson() != null
-                        ? newTableBucketOffsets.getTieringStateJson()
-                        : previousSnapshot.getTieringStateJson();
+        // The tiering state is opaque and cannot be field-merged; the committer always sends the
+        // complete state, so it is overwritten wholesale (absent means "no state"). Byte pass-
+        // through on the committer side keeps a newer, unreadable state from being dropped.
+        byte[] tieringStateJson = newTableBucketOffsets.getTieringStateJson();
 
         return new TableBucketOffsets(
                 newTableBucketOffsets.getTableId(), bucketLogEndOffset, tieringStateJson);

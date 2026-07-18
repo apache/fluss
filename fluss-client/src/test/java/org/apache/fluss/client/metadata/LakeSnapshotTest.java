@@ -34,18 +34,30 @@ class LakeSnapshotTest {
 
     @Test
     void testLazyParse() {
-        // absent -> null.
-        assertThat(new LakeSnapshot(1L, Collections.emptyMap()).getLakeTieringTableState())
-                .isNull();
+        // absent -> null (parsed and raw).
+        LakeSnapshot absent = new LakeSnapshot(1L, Collections.emptyMap());
+        assertThat(absent.getLakeTieringTableState()).isNull();
+        assertThat(absent.getRawTieringStateJson()).isNull();
 
-        // present -> parsed lazily.
+        // present -> parsed lazily; raw bytes also exposed.
         byte[] json =
                 new LakeTieringTableState(true, Collections.singletonMap(5L, 1000L)).toJsonBytes();
-        LakeTieringTableState state =
-                new LakeSnapshot(1L, Collections.emptyMap(), json).getLakeTieringTableState();
+        LakeSnapshot present = new LakeSnapshot(1L, Collections.emptyMap(), json);
+        LakeTieringTableState state = present.getLakeTieringTableState();
         assertThat(state).isNotNull();
         assertThat(state.isPartitionDoneInitialized()).isTrue();
         assertThat(state.getPartitionUpdateTimes()).containsEntry(5L, 1000L);
+        assertThat(present.getRawTieringStateJson()).isEqualTo(json);
+    }
+
+    @Test
+    void testHigherVersionExposesRawBytesForPassthrough() {
+        byte[] json = "{\"version\":99}".getBytes(StandardCharsets.UTF_8);
+        LakeSnapshot snapshot = new LakeSnapshot(1L, Collections.emptyMap(), json);
+        // unreadable here: parsing fails so the caller passes the raw bytes through unchanged.
+        assertThatThrownBy(snapshot::getLakeTieringTableState)
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThat(snapshot.getRawTieringStateJson()).isEqualTo(json);
     }
 
     @Test

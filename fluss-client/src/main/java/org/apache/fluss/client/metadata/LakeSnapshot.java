@@ -31,8 +31,9 @@ import java.util.Map;
  * A class representing the lake snapshot information of a table. It contains:
  * <li>The snapshot id and the log offset for each bucket.
  * <li>The opaque table-level tiering state (see {@link LakeTieringTableState}) for partitioned
- *     tables, parsed lazily via {@link #getLakeTieringTableState()}. It is {@code null} for
- *     non-partitioned tables or when talking to an old coordinator that does not report it.
+ *     tables, exposed parsed via {@link #getLakeTieringTableState()} or raw via {@link
+ *     #getRawTieringStateJson()}. It is {@code null} for non-partitioned tables or when talking to
+ *     an old coordinator that does not report it.
  *
  * @since 0.3
  */
@@ -75,6 +76,15 @@ public class LakeSnapshot {
         return lakeTieringTableStateJson == null
                 ? null
                 : LakeTieringTableState.fromJsonBytes(lakeTieringTableStateJson);
+    }
+
+    /**
+     * Returns the raw, unparsed tiering-state JSON bytes ({@code null} if absent), for passing a
+     * newer, unreadable state through unchanged.
+     */
+    @Nullable
+    public byte[] getRawTieringStateJson() {
+        return lakeTieringTableStateJson;
     }
 
     @Override
