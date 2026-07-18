@@ -67,10 +67,10 @@ public enum ApiKeys {
     COMMIT_REMOTE_LOG_MANIFEST(1027, 0, 0, PRIVATE),
     NOTIFY_REMOTE_LOG_OFFSETS(1028, 0, 0, PRIVATE),
     NOTIFY_KV_SNAPSHOT_OFFSET(1029, 0, 0, PRIVATE),
-    COMMIT_LAKE_TABLE_SNAPSHOT(1030, 0, 0, PRIVATE),
+    // Version 1: PbLakeTableSnapshotMetadata may carry tiering_epoch for fencing.
+    COMMIT_LAKE_TABLE_SNAPSHOT(1030, 0, 1, PRIVATE),
     NOTIFY_LAKE_TABLE_OFFSET(1031, 0, 0, PRIVATE),
-    // Version 1: response may carry the opaque tiering_state_json (for capability detection).
-    GET_LAKE_SNAPSHOT(1032, 0, 1, PUBLIC),
+    GET_LAKE_SNAPSHOT(1032, 0, 0, PUBLIC),
     LIMIT_SCAN(1033, 0, 0, PUBLIC),
 
     // Version 0: Uses lake's encoder for prefix key encoding (legacy behavior).

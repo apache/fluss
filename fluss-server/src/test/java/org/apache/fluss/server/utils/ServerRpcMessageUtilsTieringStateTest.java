@@ -18,55 +18,24 @@
 
 package org.apache.fluss.server.utils;
 
-import org.apache.fluss.lake.committer.LakeTieringTableState;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.messages.GetLakeSnapshotResponse;
 import org.apache.fluss.rpc.messages.PbTableOffsets;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
-import org.apache.fluss.utils.json.TableBucketOffsets;
 
 import org.junit.jupiter.api.Test;
 
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Tests for the opaque tiering-state passthrough in {@link ServerRpcMessageUtils}, covering the
- * PREPARE read path ({@link ServerRpcMessageUtils#toTableBucketOffsets}) and the GET fill path
- * ({@link ServerRpcMessageUtils#makeGetLakeSnapshotResponse}).
+ * Tests that {@link ServerRpcMessageUtils} omits the tiering state when absent (PREPARE read yields
+ * {@code null}, GET fill leaves the field unset). The present-state passthrough is covered
+ * end-to-end by {@code CommitLakeTableSnapshotITCase}.
  */
 class ServerRpcMessageUtilsTieringStateTest {
-
-    @Test
-    void testTieringStatePassthroughRoundTrip() {
-        // PREPARE read (toTableBucketOffsets) -> persist -> GET fill (makeGetLakeSnapshotResponse).
-        long tableId = 1L;
-        byte[] tieringStateJson =
-                new LakeTieringTableState(true, Collections.singletonMap(5L, 1704153550000L))
-                        .toJsonBytes();
-
-        PbTableOffsets pbTableOffsets = new PbTableOffsets();
-        pbTableOffsets.setTableId(tableId);
-        pbTableOffsets.setTablePath().setDatabaseName("db").setTableName("t");
-        pbTableOffsets.addBucketOffset().setPartitionId(5L).setBucketId(0).setLogEndOffset(100L);
-        pbTableOffsets.setTieringStateJson(tieringStateJson);
-
-        TableBucketOffsets offsets = ServerRpcMessageUtils.toTableBucketOffsets(pbTableOffsets);
-        assertThat(offsets.getOffsets()).containsEntry(new TableBucket(tableId, 5L, 0), 100L);
-        assertThat(offsets.getTieringStateJson()).isEqualTo(tieringStateJson);
-
-        LakeTableSnapshot snapshot =
-                new LakeTableSnapshot(9L, offsets.getOffsets(), offsets.getTieringStateJson());
-        GetLakeSnapshotResponse response =
-                ServerRpcMessageUtils.makeGetLakeSnapshotResponse(tableId, snapshot);
-        assertThat(response.getTableId()).isEqualTo(tableId);
-        assertThat(response.getSnapshotId()).isEqualTo(9L);
-        assertThat(response.hasTieringStateJson()).isTrue();
-        assertThat(response.getTieringStateJson()).isEqualTo(tieringStateJson);
-    }
 
     @Test
     void testAbsentTieringState() {

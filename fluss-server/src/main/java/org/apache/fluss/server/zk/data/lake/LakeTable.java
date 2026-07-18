@@ -51,8 +51,9 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  */
 public class LakeTable {
 
-    // Version 2 (current):
-    // a list of lake snapshot metadata, record the metadata for different lake snapshots
+    // Version 2 (current): an append-only log of lake snapshot metadata. A lake snapshot id may
+    // repeat across entries (a state-only round appends a new entry reusing it); entries are
+    // immutable once written and reads resolve to the latest matching one.
     @Nullable private final List<LakeSnapshotMetadata> lakeSnapshotMetadatas;
 
     // Version 1 (legacy): the full lake table snapshot info stored in ZK, will be null in version2
@@ -106,7 +107,9 @@ public class LakeTable {
     @Nullable
     private LakeSnapshotMetadata getLakeSnapshotMetadata(long snapshotId) {
         if (lakeSnapshotMetadatas != null) {
-            for (LakeSnapshotMetadata lakeSnapshotMetadata : lakeSnapshotMetadatas) {
+            // Resolve to the latest (last) entry for the id: it may repeat across entries.
+            for (int i = lakeSnapshotMetadatas.size() - 1; i >= 0; i--) {
+                LakeSnapshotMetadata lakeSnapshotMetadata = lakeSnapshotMetadatas.get(i);
                 if (lakeSnapshotMetadata.snapshotId == snapshotId) {
                     return lakeSnapshotMetadata;
                 }

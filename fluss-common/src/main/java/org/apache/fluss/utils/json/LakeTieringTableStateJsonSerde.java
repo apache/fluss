@@ -22,6 +22,7 @@ import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 
 import java.io.IOException;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
@@ -30,11 +31,10 @@ import java.util.Map;
  * Json serializer and deserializer for {@link LakeTieringTableState}, e.g. {@code
  * {"version":1,"partition_done_initialized":true,"partition_update_times":{"5":1704153550000}}}.
  *
- * <p>Field-level compatibility: unknown fields are ignored and missing fields fall back to
- * defaults, and {@code version} is NOT strictly gated on read, so a higher-version payload still
- * degrades to the fields this build understands. Writers must honor the version rule documented on
- * {@link LakeTieringTableState} (do not overwrite a state whose version is higher than {@link
- * LakeTieringTableState#CURRENT_VERSION}).
+ * <p>Validation is strict for known fields, tolerant for unknown ones. {@code version} is mandatory
+ * and positive; a corrupt known field fails fast. A higher-than-supported {@code version} is read
+ * as version-only (so an older build detects it and goes read-only), and serialization refuses it
+ * so an older build can never overwrite a state written by a newer build.
  */
 public class LakeTieringTableStateJsonSerde
         implements JsonSerializer<LakeTieringTableState>, JsonDeserializer<LakeTieringTableState> {
@@ -48,6 +48,16 @@ public class LakeTieringTableStateJsonSerde
 
     @Override
     public void serialize(LakeTieringTableState state, JsonGenerator generator) throws IOException {
+        // Refuse to write a version this build does not understand (it would drop unparsed newer
+        // fields); higher-version states are read-only.
+        if (state.getVersion() > LakeTieringTableState.CURRENT_VERSION) {
+            throw new IllegalStateException(
+                    "Refusing to serialize tiering state with unsupported version "
+                            + state.getVersion()
+                            + " > "
+                            + LakeTieringTableState.CURRENT_VERSION
+                            + " (read-only).");
+        }
         generator.writeStartObject();
         generator.writeNumberField(VERSION_KEY, state.getVersion());
         generator.writeBooleanField(
@@ -62,26 +72,77 @@ public class LakeTieringTableStateJsonSerde
 
     @Override
     public LakeTieringTableState deserialize(JsonNode node) {
-        // no strict version gating on read: read best-effort and ignore unknown fields.
-        int version =
-                node.has(VERSION_KEY)
-                        ? node.get(VERSION_KEY).asInt()
-                        : LakeTieringTableState.VERSION_1;
+        if (node == null || !node.isObject()) {
+            throw new IllegalArgumentException(
+                    "Corrupt tiering state: expected a JSON object but got " + node);
+        }
 
-        // VERSION_1 fields, read for any version so a higher (unsupported) version degrades to the
-        // fields this build knows. When evolving, bump CURRENT_VERSION and read the new fields here
-        // guarded by `if (version >= VERSION_2)`.
-        boolean partitionDoneInitialized =
-                node.has(PARTITION_DONE_INITIALIZED_KEY)
-                        && node.get(PARTITION_DONE_INITIALIZED_KEY).asBoolean();
+        // version is mandatory and a positive integer; it gates the rest of the parsing.
+        JsonNode versionNode = node.get(VERSION_KEY);
+        if (versionNode == null || !versionNode.isInt() || versionNode.asInt() <= 0) {
+            throw new IllegalArgumentException(
+                    "Corrupt tiering state: '"
+                            + VERSION_KEY
+                            + "' must be a positive integer but got "
+                            + versionNode);
+        }
+        int version = versionNode.asInt();
 
+        // Higher-than-supported version: read version-only (skip other fields) so an older build
+        // detects it and stays read-only.
+        if (version > LakeTieringTableState.CURRENT_VERSION) {
+            return new LakeTieringTableState(version, false, Collections.emptyMap());
+        }
+
+        // partition_done_initialized: optional, must be a boolean when present.
+        JsonNode initializedNode = node.get(PARTITION_DONE_INITIALIZED_KEY);
+        if (initializedNode != null && !initializedNode.isBoolean()) {
+            throw new IllegalArgumentException(
+                    "Corrupt tiering state: '"
+                            + PARTITION_DONE_INITIALIZED_KEY
+                            + "' must be a boolean but got "
+                            + initializedNode);
+        }
+        boolean partitionDoneInitialized = initializedNode != null && initializedNode.asBoolean();
+
+        // partition_update_times: optional object; positive-id keys, non-negative values.
         Map<Long, Long> partitionUpdateTimes = new HashMap<>();
         JsonNode updateTimesNode = node.get(PARTITION_UPDATE_TIMES_KEY);
-        if (updateTimesNode != null && updateTimesNode.isObject()) {
+        if (updateTimesNode != null && !updateTimesNode.isNull()) {
+            if (!updateTimesNode.isObject()) {
+                throw new IllegalArgumentException(
+                        "Corrupt tiering state: '"
+                                + PARTITION_UPDATE_TIMES_KEY
+                                + "' must be a JSON object but got "
+                                + updateTimesNode);
+            }
             Iterator<Map.Entry<String, JsonNode>> fields = updateTimesNode.fields();
             while (fields.hasNext()) {
                 Map.Entry<String, JsonNode> field = fields.next();
-                partitionUpdateTimes.put(Long.valueOf(field.getKey()), field.getValue().asLong());
+                long partitionId;
+                try {
+                    partitionId = Long.parseLong(field.getKey());
+                } catch (NumberFormatException e) {
+                    throw new IllegalArgumentException(
+                            "Corrupt tiering state: invalid partitionId key '"
+                                    + field.getKey()
+                                    + "' in "
+                                    + PARTITION_UPDATE_TIMES_KEY);
+                }
+                if (partitionId <= 0) {
+                    throw new IllegalArgumentException(
+                            "Corrupt tiering state: partitionId must be positive but got "
+                                    + partitionId);
+                }
+                JsonNode valueNode = field.getValue();
+                if (!valueNode.canConvertToLong() || valueNode.asLong() < 0) {
+                    throw new IllegalArgumentException(
+                            "Corrupt tiering state: update time for partition "
+                                    + partitionId
+                                    + " must be a non-negative integer but got "
+                                    + valueNode);
+                }
+                partitionUpdateTimes.put(partitionId, valueNode.asLong());
             }
         }
 

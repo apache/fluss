@@ -43,8 +43,8 @@ import java.util.Objects;
  * <p>This is a flat, versioned model. Evolve it by adding fields and bumping {@link
  * #CURRENT_VERSION} (e.g. a future watermark mode). To stay safe when a newer and an older tiering
  * job run against the same table across rounds, a consumer that reads a {@code version} higher than
- * its own {@link #CURRENT_VERSION} MUST NOT overwrite the persisted state (leave it untouched, i.e.
- * do not send {@code tiering_state} back), so it never drops fields written by a newer build.
+ * its own {@link #CURRENT_VERSION} must treat it as read-only so it never drops fields written by a
+ * newer build; the serializer enforces this by refusing to write such a state.
  *
  * @since 0.9
  */

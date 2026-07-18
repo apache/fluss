@@ -71,6 +71,12 @@ public class LakeTableSnapshotLegacyJsonSerde
     @Override
     public void serialize(LakeTableSnapshot lakeTableSnapshot, JsonGenerator generator)
             throws IOException {
+        // Tiering state is a v2-only feature; the legacy v1 format cannot carry it (fail fast
+        // rather than silently drop it).
+        if (lakeTableSnapshot.getTieringStateJson() != null) {
+            throw new IllegalStateException(
+                    "The legacy (v1) lake table format does not support tiering state.");
+        }
         generator.writeStartObject();
         generator.writeNumberField(VERSION_KEY, VERSION_1);
         generator.writeNumberField(SNAPSHOT_ID, lakeTableSnapshot.getSnapshotId());

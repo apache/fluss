@@ -68,7 +68,12 @@ public class LakeTableHelper {
                             optPreviousLakeTable.get(),
                             new TableBucketOffsets(
                                     tableId, lakeTableSnapshot.getBucketLogEndOffset()));
-            lakeTableSnapshot = new LakeTableSnapshot(tableId, tableBucketOffsets.getOffsets());
+            // State is v2-only: carry it through so the legacy (v1) serde fails fast if present.
+            lakeTableSnapshot =
+                    new LakeTableSnapshot(
+                            tableId,
+                            tableBucketOffsets.getOffsets(),
+                            tableBucketOffsets.getTieringStateJson());
         }
         zkClient.upsertLakeTable(
                 tableId, new LakeTable(lakeTableSnapshot), optPreviousLakeTable.isPresent());

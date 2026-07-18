@@ -64,7 +64,8 @@ public class CommitLakeTableSnapshotsData {
                 @Nullable LakeTableSnapshot lakeTableSnapshot,
                 @Nullable Map<TableBucket, Long> tableMaxTieredTimestamps,
                 @Nullable LakeTable.LakeSnapshotMetadata lakeSnapshotMetadata,
-                @Nullable Long earliestSnapshotIDToKeep) {
+                @Nullable Long earliestSnapshotIDToKeep,
+                @Nullable Long tieringEpoch) {
             snapshotMap.put(
                     tableId,
                     new CommitLakeTableSnapshot(
@@ -73,7 +74,8 @@ public class CommitLakeTableSnapshotsData {
                                     ? tableMaxTieredTimestamps
                                     : Collections.emptyMap(),
                             lakeSnapshotMetadata,
-                            earliestSnapshotIDToKeep));
+                            earliestSnapshotIDToKeep,
+                            tieringEpoch));
         }
 
         /**
@@ -149,15 +151,20 @@ public class CommitLakeTableSnapshotsData {
         // The earliest snapshot ID to keep for Paimon DV tables. Null for non-Paimon-DV tables.
         @Nullable private final Long earliestSnapshotIDToKeep;
 
+        // Tiering assignment epoch for fencing; null when the committer did not send it (legacy).
+        @Nullable private final Long tieringEpoch;
+
         public CommitLakeTableSnapshot(
                 @Nullable LakeTableSnapshot lakeTableSnapshot,
                 @Nullable Map<TableBucket, Long> tableMaxTieredTimestamps,
                 @Nullable LakeTable.LakeSnapshotMetadata lakeSnapshotMetadata,
-                @Nullable Long earliestSnapshotIDToKeep) {
+                @Nullable Long earliestSnapshotIDToKeep,
+                @Nullable Long tieringEpoch) {
             this.lakeTableSnapshot = lakeTableSnapshot;
             this.tableMaxTieredTimestamps = tableMaxTieredTimestamps;
             this.lakeSnapshotMetadata = lakeSnapshotMetadata;
             this.earliestSnapshotIDToKeep = earliestSnapshotIDToKeep;
+            this.tieringEpoch = tieringEpoch;
         }
 
         @Nullable
@@ -173,6 +180,11 @@ public class CommitLakeTableSnapshotsData {
         @Nullable
         public Long getEarliestSnapshotIDToKeep() {
             return earliestSnapshotIDToKeep;
+        }
+
+        @Nullable
+        public Long getTieringEpoch() {
+            return tieringEpoch;
         }
     }
 }
