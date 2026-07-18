@@ -40,6 +40,7 @@ public final class BucketCleanTask implements CleanTask {
     private final Set<String> logActiveManifestPaths;
     private final Set<String> kvActiveSnapDirs;
     private final Set<String> kvSharedSstFileNames;
+    private final boolean kvSharedSstRefsComplete;
     private final long cutoffMillis;
     private final boolean dryRun;
     private final boolean allowDeleteManifest;
@@ -51,6 +52,7 @@ public final class BucketCleanTask implements CleanTask {
             Set<String> logActiveManifestPaths,
             Set<String> kvActiveSnapDirs,
             Set<String> kvSharedSstFileNames,
+            boolean kvSharedSstRefsComplete,
             long cutoffMillis,
             boolean dryRun,
             boolean allowDeleteManifest) {
@@ -60,6 +62,7 @@ public final class BucketCleanTask implements CleanTask {
         this.logActiveManifestPaths = new HashSet<>(logActiveManifestPaths);
         this.kvActiveSnapDirs = new HashSet<>(kvActiveSnapDirs);
         this.kvSharedSstFileNames = new HashSet<>(kvSharedSstFileNames);
+        this.kvSharedSstRefsComplete = kvSharedSstRefsComplete;
         this.cutoffMillis = cutoffMillis;
         this.dryRun = dryRun;
         this.allowDeleteManifest = allowDeleteManifest;
@@ -93,11 +96,16 @@ public final class BucketCleanTask implements CleanTask {
     }
 
     /**
-     * Active shared SST file names (basenames) resolved from active snapshots' {@code _METADATA}
-     * files. Empty when metadata could not be read (rules treat empty as "keep all").
+     * Active remote shared SST object names (basenames) resolved from active snapshots' {@code
+     * _METADATA} files.
      */
     public Set<String> kvSharedSstFileNames() {
         return kvSharedSstFileNames;
+    }
+
+    /** Whether the shared SST reference set is authoritative, including a proven-empty set. */
+    public boolean kvSharedSstRefsComplete() {
+        return kvSharedSstRefsComplete;
     }
 
     public long cutoffMillis() {

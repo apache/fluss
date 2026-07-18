@@ -27,12 +27,12 @@ import java.util.regex.Pattern;
  * Rule for shared SST files under the {@code shared/} KV directory.
  *
  * <p>Determines whether a shared SST file is still referenced by any active snapshot. The active
- * set is built from the union of {@code shared_file_handles[*].local_path} across all active
- * snapshots' {@code _METADATA} files.
+ * set is built from the union of remote {@code shared_file_handles[*].kv_file_handle.path}
+ * basenames across all active snapshots' {@code _METADATA} files.
  *
- * <p>Safety: when the active set is empty (either because metadata reads failed or the bucket
- * genuinely has no shared SSTs in any active snapshot), the rule conservatively returns {@link
- * Decision#KEEP_ACTIVE} to prevent mis-deletion.
+ * <p>Safety: completeness is explicit. An unresolved set conservatively returns {@link
+ * Decision#KEEP_ACTIVE}; a resolved-but-empty set proves that no active snapshot references a
+ * shared object and therefore allows the normal cutoff policy to run.
  */
 @Internal
 public final class KvSharedSstRule implements FileRule {
@@ -61,9 +61,7 @@ public final class KvSharedSstRule implements FileRule {
             return Decision.KEEP_ACTIVE;
         }
 
-        // Empty active set means the metadata could not be read or genuinely no shared SSTs
-        // exist in any active snapshot — conservatively keep all files to prevent mis-deletion.
-        if (activeRefs.kvSharedSstFileNames().isEmpty()) {
+        if (!activeRefs.kvSharedSstRefsComplete()) {
             return Decision.KEEP_ACTIVE;
         }
 

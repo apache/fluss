@@ -26,15 +26,15 @@ import java.util.HashSet;
 import java.util.Set;
 
 /**
- * Result of fetching active shared SST file names for a single bucket by second-reading the active
- * snapshots' {@code _METADATA} files.
+ * Result of fetching active remote shared SST object names for a single bucket by second-reading
+ * the active snapshots' {@code _METADATA} files.
  *
  * <p>Two outcomes:
  *
  * <ul>
  *   <li><b>OK</b>: All (or a safe subset of) metadata reads succeeded; {@link
- *       #sharedSstFileNames()} contains the union of shared SST file basenames referenced by active
- *       snapshots.
+ *       #sharedSstFileNames()} contains the union of remote shared SST object basenames referenced
+ *       by active snapshots.
  *   <li><b>Failed</b>: A non-transient IO error prevented safe determination of the active set; the
  *       caller must skip shared SST cleanup for this bucket to uphold the "may leak, must not
  *       mis-delete" invariant.
@@ -73,7 +73,7 @@ public final class KvSharedSstFetchResult {
     }
 
     /**
-     * Union of shared SST file basenames referenced by active snapshots. Empty when {@link
+     * Union of remote shared SST object basenames referenced by active snapshots. Empty when {@link
      * #allMetadataReadOk()} is false.
      */
     public Set<String> sharedSstFileNames() {

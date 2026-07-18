@@ -303,13 +303,13 @@ class ActiveRefsFetcherTest {
 
         String metadataSnap5 =
                 "{\"kv_snapshot_handle\":{\"shared_file_handles\":["
-                        + "{\"local_path\":\"aaa.sst\",\"size\":100},"
-                        + "{\"local_path\":\"bbb.sst\",\"size\":200}"
+                        + "{\"kv_file_handle\":{\"path\":\"oss://b/kv/db/t-7/0/shared/remote-a\",\"size\":100},\"local_path\":\"aaa.sst\"},"
+                        + "{\"kv_file_handle\":{\"path\":\"oss://b/kv/db/t-7/0/shared/remote-b\",\"size\":200},\"local_path\":\"bbb.sst\"}"
                         + "]}}";
         String metadataSnap10 =
                 "{\"kv_snapshot_handle\":{\"shared_file_handles\":["
-                        + "{\"local_path\":\"bbb.sst\",\"size\":200},"
-                        + "{\"local_path\":\"ccc.sst\",\"size\":300}"
+                        + "{\"kv_file_handle\":{\"path\":\"oss://b/kv/db/t-7/0/shared/remote-b\",\"size\":200},\"local_path\":\"different-local.sst\"},"
+                        + "{\"kv_file_handle\":{\"path\":\"oss://b/kv/db/t-7/0/shared/remote-c\",\"size\":300},\"local_path\":\"ccc.sst\"}"
                         + "]}}";
 
         StubManifestReader reader = new StubManifestReader();
@@ -328,7 +328,7 @@ class ActiveRefsFetcherTest {
 
         assertThat(result.allMetadataReadOk()).isTrue();
         assertThat(result.sharedSstFileNames())
-                .containsExactlyInAnyOrder("aaa.sst", "bbb.sst", "ccc.sst");
+                .containsExactlyInAnyOrder("remote-a", "remote-b", "remote-c");
     }
 
     @Test
@@ -338,7 +338,7 @@ class ActiveRefsFetcherTest {
 
         String metadataSnap5 =
                 "{\"kv_snapshot_handle\":{\"shared_file_handles\":["
-                        + "{\"local_path\":\"aaa.sst\",\"size\":100}"
+                        + "{\"kv_file_handle\":{\"path\":\"oss://b/kv/db/t-7/0/shared/remote-a\",\"size\":100},\"local_path\":\"aaa.sst\"}"
                         + "]}}";
 
         StubManifestReader reader = new StubManifestReader();
@@ -399,6 +399,31 @@ class ActiveRefsFetcherTest {
 
         assertThat(result.allMetadataReadOk()).isFalse();
         assertThat(result.failureReason()).contains("Failed to parse snapshot metadata");
+    }
+
+    @Test
+    void fetchKvSharedSstFileNamesRejectsPathOutsideCurrentBucket() {
+        FsPath kvTabletDir = new FsPath("oss://b/kv/db/t-7/0");
+        Set<String> activeSnapDirs = Collections.singleton("snap-5");
+        String metadata =
+                "{\"kv_snapshot_handle\":{\"shared_file_handles\":["
+                        + "{\"kv_file_handle\":{\"path\":\"oss://b/kv/db/t-8/0/shared/remote-a\",\"size\":100},\"local_path\":\"aaa.sst\"}"
+                        + "]}}";
+
+        StubManifestReader reader = new StubManifestReader();
+        reader.returnBytes(
+                new FsPath("oss://b/kv/db/t-7/0/snap-5/_METADATA"),
+                metadata.getBytes(StandardCharsets.UTF_8));
+        ActiveRefsFetcher fetcher =
+                new ActiveRefsFetcher(
+                        new StubAdmin(new AtomicInteger()), reader, /* maxRetries= */ 3);
+
+        KvSharedSstFetchResult result =
+                fetcher.fetchKvSharedSstFileNames(kvTabletDir, activeSnapDirs);
+
+        assertThat(result.allMetadataReadOk()).isFalse();
+        assertThat(result.failureReason()).contains("outside the expected bucket directory");
+        assertThat(result.sharedSstFileNames()).isEmpty();
     }
 
     // -------------------------------------------------------------------------

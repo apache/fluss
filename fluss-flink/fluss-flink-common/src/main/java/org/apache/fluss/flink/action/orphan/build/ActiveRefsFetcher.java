@@ -260,9 +260,10 @@ public final class ActiveRefsFetcher {
      * {@code _METADATA} files of its active snapshots.
      *
      * <p>For each active snapshot directory, the method constructs the metadata path ({@code
-     * {kvTabletDir}/{snapDir}/_METADATA}), reads the file, and extracts shared SST basenames via
-     * {@link CompletedSnapshotJsonSerde}. The union across all active snapshots forms the complete
-     * active set.
+     * {kvTabletDir}/{snapDir}/_METADATA}), reads the file, and extracts the basename of each remote
+     * {@code kv_file_handle.path} via {@link CompletedSnapshotJsonSerde}. Every path must be a
+     * direct child of this bucket's {@code shared/} directory. The union across all active
+     * snapshots forms the complete active set.
      *
      * <p>Failure handling:
      *
@@ -296,8 +297,22 @@ public final class ActiveRefsFetcher {
                                 e.getMessage() != null ? e.getMessage() : e.getClass().getName()));
             }
             try {
-                sharedSstFileNames.addAll(
-                        CompletedSnapshotJsonSerde.parseSharedSstLocalPaths(metadataBytes));
+                FsPath expectedSharedDir = FlussPaths.remoteKvSharedDir(kvTabletDir);
+                for (String remotePathString :
+                        CompletedSnapshotJsonSerde.parseSharedSstRemotePaths(metadataBytes)) {
+                    FsPath remotePath;
+                    try {
+                        remotePath = new FsPath(remotePathString);
+                    } catch (RuntimeException e) {
+                        throw new IOException("Invalid shared SST remote path", e);
+                    }
+                    if (!expectedSharedDir.equals(remotePath.getParent())
+                            || remotePath.getName().isEmpty()) {
+                        throw new IOException(
+                                "Shared SST remote path is outside the expected bucket directory");
+                    }
+                    sharedSstFileNames.add(remotePath.getName());
+                }
             } catch (IOException e) {
                 return KvSharedSstFetchResult.failed(
                         String.format(

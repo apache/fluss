@@ -38,8 +38,8 @@ import java.util.Set;
  *
  * <p>This class is the single source of truth for KV snapshot {@code _METADATA} JSON format
  * constants. It provides full serialization/deserialization as well as lightweight extraction
- * utilities (e.g., {@link #parseSharedSstLocalPaths(byte[])}) for consumers that do not need a full
- * domain object.
+ * utilities (e.g., {@link #parseSharedSstLocalPaths(byte[])} and {@link
+ * #parseSharedSstRemotePaths(byte[])}) for consumers that do not need a full domain object.
  */
 public class CompletedSnapshotJsonSerde
         implements JsonSerializer<CompletedSnapshot>, JsonDeserializer<CompletedSnapshot> {
@@ -288,18 +288,7 @@ public class CompletedSnapshotJsonSerde
      */
     public static Set<String> parseSharedSstLocalPaths(byte[] metadataJsonBytes)
             throws IOException {
-        JsonNode root = JsonSerdeUtils.OBJECT_MAPPER_INSTANCE.readTree(metadataJsonBytes);
-        JsonNode kvSnapshotHandle = root.get(KV_SNAPSHOT_HANDLE);
-        if (kvSnapshotHandle == null) {
-            throw new IOException("Missing '" + KV_SNAPSHOT_HANDLE + "' in _METADATA JSON payload");
-        }
-        JsonNode sharedFilesNode = kvSnapshotHandle.get(KV_SHARED_FILES_HANDLE);
-        if (sharedFilesNode == null || !sharedFilesNode.isArray()) {
-            throw new IOException(
-                    "Missing or non-array '"
-                            + KV_SHARED_FILES_HANDLE
-                            + "' in _METADATA JSON payload");
-        }
+        JsonNode sharedFilesNode = parseSharedFileHandles(metadataJsonBytes);
 
         Set<String> fileNames = new HashSet<>();
         for (JsonNode entry : sharedFilesNode) {
@@ -324,5 +313,71 @@ public class CompletedSnapshotJsonSerde
             fileNames.add(localPath);
         }
         return fileNames;
+    }
+
+    /**
+     * Parses a {@code _METADATA} JSON payload and returns the remote paths of shared SST objects
+     * referenced by the snapshot.
+     *
+     * <p>Remote storage assigns an opaque name to each uploaded object. It is therefore unsafe for
+     * cleanup to compare a scanned remote object with {@code local_path}, which is only the RocksDB
+     * filename on the tablet server. This method navigates {@code kv_snapshot_handle →
+     * shared_file_handles[*] → kv_file_handle.path} and fails closed when any entry is malformed.
+     */
+    public static Set<String> parseSharedSstRemotePaths(byte[] metadataJsonBytes)
+            throws IOException {
+        JsonNode sharedFilesNode = parseSharedFileHandles(metadataJsonBytes);
+        Set<String> remotePaths = new HashSet<>();
+        for (JsonNode entry : sharedFilesNode) {
+            JsonNode fileHandleNode = entry.get(KV_FILE_HANDLE);
+            if (fileHandleNode == null || !fileHandleNode.isObject()) {
+                throw new IOException(
+                        "Missing or non-object '"
+                                + KV_FILE_HANDLE
+                                + "' in "
+                                + KV_SHARED_FILES_HANDLE
+                                + " entry");
+            }
+            JsonNode remotePathNode = fileHandleNode.get(KV_FILE_PATH);
+            if (remotePathNode == null || !remotePathNode.isTextual()) {
+                throw new IOException(
+                        "Missing or non-textual '"
+                                + KV_FILE_HANDLE
+                                + "."
+                                + KV_FILE_PATH
+                                + "' in "
+                                + KV_SHARED_FILES_HANDLE
+                                + " entry");
+            }
+            String remotePath = remotePathNode.asText();
+            if (remotePath.isEmpty()) {
+                throw new IOException(
+                        "Empty '"
+                                + KV_FILE_HANDLE
+                                + "."
+                                + KV_FILE_PATH
+                                + "' in "
+                                + KV_SHARED_FILES_HANDLE
+                                + " entry");
+            }
+            remotePaths.add(remotePath);
+        }
+        return remotePaths;
+    }
+
+    private static JsonNode parseSharedFileHandles(byte[] metadataJsonBytes) throws IOException {
+        JsonNode root = JsonSerdeUtils.OBJECT_MAPPER_INSTANCE.readTree(metadataJsonBytes);
+        JsonNode kvSnapshotHandle = root == null ? null : root.get(KV_SNAPSHOT_HANDLE);
+        if (kvSnapshotHandle == null) {
+            throw new IOException("Missing '" + KV_SNAPSHOT_HANDLE + "' in _METADATA JSON payload");
+        }
+        JsonNode sharedFilesNode = kvSnapshotHandle.get(KV_SHARED_FILES_HANDLE);
+        if (sharedFilesNode == null || !sharedFilesNode.isArray()) {
+            throw new IOException(
+                    "Missing or non-array '"
+                            + KV_SHARED_FILES_HANDLE
+                            + "' in _METADATA JSON payload");
+        }
+        return sharedFilesNode;
     }
 }

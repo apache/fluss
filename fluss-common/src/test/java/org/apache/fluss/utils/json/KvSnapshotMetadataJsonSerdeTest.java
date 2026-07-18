@@ -26,8 +26,58 @@ import java.util.Set;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** Tests for {@link CompletedSnapshotJsonSerde#parseSharedSstLocalPaths}. */
+/** Tests for the lightweight shared-SST parsers in {@link CompletedSnapshotJsonSerde}. */
 class KvSnapshotMetadataJsonSerdeTest {
+
+    @Test
+    void parsesRemotePathsIndependentlyOfLocalPaths() throws IOException {
+        String json =
+                "{"
+                        + "\"kv_snapshot_handle\":{"
+                        + "  \"shared_file_handles\":["
+                        + "    {\"kv_file_handle\":{\"path\":\"oss://bucket/kv/db/t-7/0/shared/remote-a\",\"size\":100},\"local_path\":\"000001.sst\"},"
+                        + "    {\"kv_file_handle\":{\"path\":\"oss://bucket/kv/db/t-7/0/shared/remote-b\",\"size\":200},\"local_path\":\"000002.sst\"}"
+                        + "  ]"
+                        + "}"
+                        + "}";
+
+        Set<String> result =
+                CompletedSnapshotJsonSerde.parseSharedSstRemotePaths(
+                        json.getBytes(StandardCharsets.UTF_8));
+
+        assertThat(result)
+                .containsExactlyInAnyOrder(
+                        "oss://bucket/kv/db/t-7/0/shared/remote-a",
+                        "oss://bucket/kv/db/t-7/0/shared/remote-b");
+    }
+
+    @Test
+    void remotePathParserFailsClosedWhenRemoteHandleIsMissing() {
+        String json =
+                "{\"kv_snapshot_handle\":{\"shared_file_handles\":["
+                        + "{\"local_path\":\"000001.sst\"}]}}";
+
+        assertThatThrownBy(
+                        () ->
+                                CompletedSnapshotJsonSerde.parseSharedSstRemotePaths(
+                                        json.getBytes(StandardCharsets.UTF_8)))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("kv_file_handle");
+    }
+
+    @Test
+    void remotePathParserFailsClosedWhenRemotePathIsEmpty() {
+        String json =
+                "{\"kv_snapshot_handle\":{\"shared_file_handles\":["
+                        + "{\"kv_file_handle\":{\"path\":\"\",\"size\":100},\"local_path\":\"000001.sst\"}]}}";
+
+        assertThatThrownBy(
+                        () ->
+                                CompletedSnapshotJsonSerde.parseSharedSstRemotePaths(
+                                        json.getBytes(StandardCharsets.UTF_8)))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("kv_file_handle.path");
+    }
 
     @Test
     void parsesSharedSstLocalPathsFromValidMetadata() throws IOException {

@@ -447,24 +447,34 @@ public final class ScopeEnumeratorFunction extends ProcessFunction<Integer, Clea
             String kvTabletDir = null;
             Set<String> kvActiveSnaps = Collections.emptySet();
             Set<String> kvSharedSstFileNames = Collections.emptySet();
-            if (kvTargetOk && kvActiveByBucket.containsKey(bucketId)) {
+            boolean kvSharedSstRefsComplete = false;
+            if (kvTargetOk) {
                 kvTabletDir =
                         FlussPaths.remoteKvTabletDir(
                                         remoteKvDir,
                                         physicalPath(liveTable.tablePath, partitionInfo),
                                         tableBucket)
                                 .toString();
-                kvActiveSnaps = kvActiveByBucket.get(bucketId);
-                KvSharedSstFetchResult sstResult =
-                        fetcher.fetchKvSharedSstFileNames(new FsPath(kvTabletDir), kvActiveSnaps);
-                if (sstResult.allMetadataReadOk()) {
-                    kvSharedSstFileNames = sstResult.sharedSstFileNames();
+                kvActiveSnaps = kvActiveByBucket.getOrDefault(bucketId, Collections.emptySet());
+                if (kvActiveSnaps.isEmpty()) {
+                    // The successful ListKvSnapshots response is authoritative: this bucket has
+                    // no active snapshots, hence no active shared SST references.
+                    kvSharedSstRefsComplete = true;
                 } else {
-                    audit.logSkipKvSharedSst(
-                            liveTable.tableId, partitionId, bucketId, sstResult.failureReason());
+                    KvSharedSstFetchResult sstResult =
+                            fetcher.fetchKvSharedSstFileNames(
+                                    new FsPath(kvTabletDir), kvActiveSnaps);
+                    if (sstResult.allMetadataReadOk()) {
+                        kvSharedSstFileNames = sstResult.sharedSstFileNames();
+                        kvSharedSstRefsComplete = true;
+                    } else {
+                        audit.logSkipKvSharedSst(
+                                liveTable.tableId,
+                                partitionId,
+                                bucketId,
+                                sstResult.failureReason());
+                    }
                 }
-            } else if (kvTargetOk) {
-                audit.logSkipKvBucket(liveTable.tableId, partitionId, bucketId, "empty_active_set");
             }
 
             if (logTabletDir == null && kvTabletDir == null) {
@@ -479,6 +489,7 @@ public final class ScopeEnumeratorFunction extends ProcessFunction<Integer, Clea
                             logActiveManifestPaths,
                             kvActiveSnaps,
                             kvSharedSstFileNames,
+                            kvSharedSstRefsComplete,
                             config.olderThanMillis(),
                             config.dryRun(),
                             config.allowDeleteManifest()));

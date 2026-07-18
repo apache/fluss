@@ -124,7 +124,8 @@ public final class ScanAndCleanFunction extends ProcessFunction<CleanTask, Clean
                         task.logSegmentRelativePaths(),
                         task.kvActiveSnapDirs(),
                         task.logActiveManifestPaths(),
-                        task.kvSharedSstFileNames());
+                        task.kvSharedSstFileNames(),
+                        task.kvSharedSstRefsComplete());
         RuleDispatcher dispatcher = new RuleDispatcher(task.allowDeleteManifest());
         SafeDeleter safeDeleter = createSafeDeleter(anyDir.getFileSystem(), task.dryRun());
         BucketCleaner cleaner =
@@ -210,7 +211,7 @@ public final class ScanAndCleanFunction extends ProcessFunction<CleanTask, Clean
                         new FileMeta(childPath, child.getLen(), child.getModificationTime());
                 FileRule rule = dispatcher.dispatch(meta);
                 Decision decision =
-                        rule.evaluate(meta, BucketActiveRefs.empty(), task.cutoffMillis());
+                        rule.evaluate(meta, BucketActiveRefs.knownEmpty(), task.cutoffMillis());
                 switch (decision) {
                     case DELETE:
                         if (safeDeleter.deleteFile(meta.path(), decision, rule.id())) {

@@ -32,12 +32,21 @@ public final class BucketActiveRefs {
                     Collections.emptySet(),
                     Collections.emptySet(),
                     Collections.emptySet(),
-                    Collections.emptySet());
+                    Collections.emptySet(),
+                    false);
+    private static final BucketActiveRefs KNOWN_EMPTY =
+            new BucketActiveRefs(
+                    Collections.emptySet(),
+                    Collections.emptySet(),
+                    Collections.emptySet(),
+                    Collections.emptySet(),
+                    true);
 
     private final Set<String> logSegmentRelativePaths;
     private final Set<String> kvActiveSnapDirs;
     private final Set<String> logActiveManifestPaths;
     private final Set<String> kvSharedSstFileNames;
+    private final boolean kvSharedSstRefsComplete;
 
     public BucketActiveRefs(
             Set<String> logSegmentRelativePaths,
@@ -47,7 +56,8 @@ public final class BucketActiveRefs {
                 logSegmentRelativePaths,
                 kvActiveSnapDirs,
                 logActiveManifestPaths,
-                Collections.emptySet());
+                Collections.emptySet(),
+                false);
     }
 
     public BucketActiveRefs(
@@ -55,6 +65,20 @@ public final class BucketActiveRefs {
             Set<String> kvActiveSnapDirs,
             Set<String> logActiveManifestPaths,
             Set<String> kvSharedSstFileNames) {
+        this(
+                logSegmentRelativePaths,
+                kvActiveSnapDirs,
+                logActiveManifestPaths,
+                kvSharedSstFileNames,
+                true);
+    }
+
+    public BucketActiveRefs(
+            Set<String> logSegmentRelativePaths,
+            Set<String> kvActiveSnapDirs,
+            Set<String> logActiveManifestPaths,
+            Set<String> kvSharedSstFileNames,
+            boolean kvSharedSstRefsComplete) {
         this.logSegmentRelativePaths =
                 Collections.unmodifiableSet(new HashSet<>(logSegmentRelativePaths));
         this.kvActiveSnapDirs = Collections.unmodifiableSet(new HashSet<>(kvActiveSnapDirs));
@@ -62,10 +86,16 @@ public final class BucketActiveRefs {
                 Collections.unmodifiableSet(new HashSet<>(logActiveManifestPaths));
         this.kvSharedSstFileNames =
                 Collections.unmodifiableSet(new HashSet<>(kvSharedSstFileNames));
+        this.kvSharedSstRefsComplete = kvSharedSstRefsComplete;
     }
 
     public static BucketActiveRefs empty() {
         return EMPTY;
+    }
+
+    /** Returns a proven-empty active set, for example for an already-confirmed orphan directory. */
+    public static BucketActiveRefs knownEmpty() {
+        return KNOWN_EMPTY;
     }
 
     public Set<String> logSegmentRelativePaths() {
@@ -101,15 +131,16 @@ public final class BucketActiveRefs {
     }
 
     /**
-     * Returns the set of active shared SST file names (basenames only, e.g. {@code
-     * "abc-def-0.sst"}) for the bucket. Built from the union of {@code
-     * shared_file_handles[*].local_path} across all active snapshots' {@code _METADATA} files.
-     *
-     * <p>An empty set means no shared SST active set could be determined (either all active
-     * snapshots have zero shared files — which is unusual for PK tables — or the metadata read
-     * failed). Rules must treat an empty set conservatively (keep all files).
+     * Returns the set of active remote shared SST object names (basenames only) for the bucket.
+     * Built from the union of {@code shared_file_handles[*].kv_file_handle.path} across all active
+     * snapshots' {@code _METADATA} files.
      */
     public Set<String> kvSharedSstFileNames() {
         return kvSharedSstFileNames;
+    }
+
+    /** Whether the shared SST reference set is authoritative, including a proven-empty set. */
+    public boolean kvSharedSstRefsComplete() {
+        return kvSharedSstRefsComplete;
     }
 }

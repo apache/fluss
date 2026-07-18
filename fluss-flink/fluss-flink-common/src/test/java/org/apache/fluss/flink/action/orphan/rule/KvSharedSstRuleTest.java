@@ -55,13 +55,27 @@ class KvSharedSstRuleTest {
     }
 
     @Test
-    void keepsExpiredSharedSstWhenActiveSetIsEmpty() {
-        // Empty active set = metadata read failure or no shared SSTs in any snapshot.
-        // Must conservatively keep all files.
+    void keepsExpiredSharedSstWhenActiveSetIsUnknown() {
         FileMeta file = file("/kv/db/t-1/0/shared/abc-001.sst", NOW - 2 * DAY_MS);
 
         assertThat(rule.evaluate(file, BucketActiveRefs.empty(), CUTOFF_MS))
                 .isEqualTo(Decision.KEEP_ACTIVE);
+    }
+
+    @Test
+    void deletesExpiredSharedSstWhenActiveSetIsKnownEmpty() {
+        FileMeta file = file("/kv/db/t-1/0/shared/abc-001.sst", NOW - 2 * DAY_MS);
+
+        assertThat(rule.evaluate(file, BucketActiveRefs.knownEmpty(), CUTOFF_MS))
+                .isEqualTo(Decision.DELETE);
+    }
+
+    @Test
+    void defersYoungSharedSstWhenActiveSetIsKnownEmpty() {
+        FileMeta file = file("/kv/db/t-1/0/shared/abc-001.sst", NOW - DAY_MS / 2);
+
+        assertThat(rule.evaluate(file, BucketActiveRefs.knownEmpty(), CUTOFF_MS))
+                .isEqualTo(Decision.DEFER);
     }
 
     @Test

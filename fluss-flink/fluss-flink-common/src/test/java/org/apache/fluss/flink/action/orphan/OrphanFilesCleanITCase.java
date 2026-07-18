@@ -493,7 +493,7 @@ abstract class OrphanFilesCleanITCase extends AbstractTestBase {
     }
 
     @Test
-    void pkOrphanTableRetainsSharedSstEvenWithOptIn() throws Exception {
+    void pkOrphanTableCleansSharedSstWithOptIn() throws Exception {
         String dbName = newDatabaseName("orphankv");
         long tableId = allocateDroppedPrimaryKeyTableId(dbName, "seed_pk_table");
         createLogTable(dbName, "live_anchor");
@@ -507,13 +507,42 @@ abstract class OrphanFilesCleanITCase extends AbstractTestBase {
 
         runCleanerForDatabase(false, dbName, "--allow-clean-orphan-tables");
 
-        assertThat(Files.exists(layout.orphanFile)).isTrue();
-        assertThat(Files.exists(layout.tableDir)).isTrue();
+        assertThat(Files.exists(layout.orphanFile)).isFalse();
+        assertThat(Files.exists(layout.tableDir)).isFalse();
         assertThat(auditMessages())
-                .noneMatch(
+                .anyMatch(
                         m ->
-                                m.contains("rule=kv-shared-sst")
+                                m.contains("action=deleted")
+                                        && m.contains("rule=kv-shared-sst")
                                         && m.contains(layout.orphanFile.toString()));
+    }
+
+    @Test
+    void pkBucketWithoutActiveSnapshotsCleansExpiredSharedSst() throws Exception {
+        String dbName = newDatabaseName("emptykv");
+        TablePath tablePath = createPrimaryKeyTable(dbName, "empty_snapshot_pk");
+        TableInfo tableInfo = admin.getTableInfo(tablePath).get();
+        TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), 0);
+        FsPath remoteKvTabletDir =
+                FlussPaths.remoteKvTabletDir(
+                        new FsPath(remoteDataRoot().resolve("kv").toUri().toString()),
+                        PhysicalTablePath.of(tablePath),
+                        tableBucket);
+        Path sharedDir = localPath(FlussPaths.remoteKvSharedDir(remoteKvTabletDir));
+        Files.createDirectories(sharedDir);
+        Path orphan = Files.write(sharedDir.resolve("unreferenced.sst"), new byte[] {0x42});
+        makeOld(orphan);
+        makeOld(sharedDir);
+
+        runCleanerForDatabase(false, dbName);
+
+        assertThat(Files.exists(orphan)).isFalse();
+        assertThat(auditMessages())
+                .anyMatch(
+                        m ->
+                                m.contains("action=deleted")
+                                        && m.contains("rule=kv-shared-sst")
+                                        && m.contains("unreferenced.sst"));
     }
 
     @Test
@@ -1127,8 +1156,14 @@ abstract class OrphanFilesCleanITCase extends AbstractTestBase {
                 if (j > 0) {
                     json.append(",");
                 }
-                json.append("{\"local_path\":\"").append(sharedFiles[j]).append("\",");
-                json.append("\"size\":1024}");
+                FsPath remoteSharedSst =
+                        new FsPath(FlussPaths.remoteKvSharedDir(remoteKvTabletDir), sharedFiles[j]);
+                json.append("{\"kv_file_handle\":{\"path\":\"")
+                        .append(remoteSharedSst)
+                        .append("\",\"size\":1024},")
+                        .append("\"local_path\":\"local-")
+                        .append(j)
+                        .append(".sst\"}");
             }
             json.append("]}}");
 
