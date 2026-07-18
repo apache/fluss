@@ -40,6 +40,8 @@ public interface UpsertWriter extends TableWriter {
 
     /**
      * Delete a certain record from the Fluss table. The input must contain the primary key fields.
+     * When the full table row and primary-key row have the same field count, the input is treated
+     * as a full table row in table schema order.
      *
      * @param record the record to delete.
      * @return A {@link CompletableFuture} that always delete result when complete normally.

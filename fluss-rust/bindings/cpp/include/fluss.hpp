@@ -540,6 +540,7 @@ struct TableInfo {
     std::vector<std::string> primary_keys;
     std::vector<std::string> bucket_keys;
     std::vector<std::string> partition_keys;
+    bool has_partition_expressions = false;
     int32_t num_buckets;
     bool has_primary_key;
     bool is_partitioned;

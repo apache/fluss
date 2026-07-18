@@ -24,6 +24,9 @@ import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
+import org.apache.fluss.metadata.DateTruncPartitionTransform;
+import org.apache.fluss.metadata.PartitionExpression;
+import org.apache.fluss.metadata.PartitionKey;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
@@ -674,6 +677,67 @@ class AutoPartitionManagerTest {
         assertThat(partitions.keySet()).doesNotContain("20250419");
         // Retained partitions should still exist
         assertThat(partitions.keySet()).contains("20250420", "20250421", "20250422");
+    }
+
+    @Test
+    void testImplicitPartitionUsesVirtualKeyForAutomaticCreateAndDrop() throws Exception {
+        ZonedDateTime startTime =
+                LocalDateTime.parse("2025-04-19T00:00:00").atZone(ZoneId.of("UTC"));
+        ManualClock clock = new ManualClock(startTime.toInstant().toEpochMilli());
+        ManuallyTriggeredScheduledExecutorService periodicExecutor =
+                new ManuallyTriggeredScheduledExecutorService();
+        AutoPartitionManager autoPartitionManager =
+                new AutoPartitionManager(
+                        new TestingServerMetadataCache(3),
+                        metadataManager,
+                        remoteDirDynamicLoader,
+                        new Configuration(),
+                        clock,
+                        periodicExecutor);
+        autoPartitionManager.start();
+
+        long tableId = 1L;
+        TablePath tablePath = TablePath.of("db", "implicit_partition_lifecycle");
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.INT().copy(false))
+                                        .column("event_time", DataTypes.TIMESTAMP().copy(false))
+                                        .primaryKey("id", "event_time")
+                                        .build())
+                        .partitionedByKeys(
+                                PartitionKey.expression(
+                                        PartitionExpression.of(
+                                                "event_day",
+                                                DateTruncPartitionTransform.of(
+                                                        "event_time", AutoPartitionTimeUnit.DAY))))
+                        .distributedBy(1, "id")
+                        .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 3)
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_KEY, "event_day")
+                        .property(
+                                ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
+                                AutoPartitionTimeUnit.DAY)
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_TIMEZONE, "UTC")
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_NUM_RETENTION, 2)
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE, 1)
+                        .build();
+        TableInfo tableInfo =
+                TableInfo.of(tablePath, tableId, 1, descriptor, remoteDataDir, 1L, 1L);
+        zookeeperClient.registerTable(
+                tablePath, TableRegistration.newTable(tableId, remoteDataDir, descriptor));
+
+        autoPartitionManager.addAutoPartitionTable(tableInfo, true);
+        periodicExecutor.triggerNonPeriodicScheduledTasks();
+        assertThat(zookeeperClient.getPartitionRegistrations(tablePath).keySet())
+                .containsExactly("20250419");
+
+        clock.advanceTime(Duration.ofDays(3).plusHours(23));
+        periodicExecutor.triggerPeriodicScheduledTasks();
+        assertThat(zookeeperClient.getPartitionRegistrations(tablePath).keySet())
+                .doesNotContain("20250419")
+                .isNotEmpty();
     }
 
     /**

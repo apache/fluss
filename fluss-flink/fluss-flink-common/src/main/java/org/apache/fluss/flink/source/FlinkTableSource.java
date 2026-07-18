@@ -129,8 +129,9 @@ public class FlinkTableSource
     private final int[] primaryKeyIndexes;
     // will be empty if no bucket key
     private final int[] bucketKeyIndexes;
-    // will be empty if no partition key
+    // indexes of schema-backed physical partition keys; may be empty for implicit partitions
     private final int[] partitionKeyIndexes;
+    private final boolean partitioned;
     private final boolean streaming;
     private final FlinkConnectorOptionsUtils.StartupOptions startupOptions;
 
@@ -236,6 +237,48 @@ public class FlinkTableSource
             @Nullable MergeEngineType mergeEngineType,
             Map<String, String> tableOptions,
             LeaseContext leaseContext) {
+        this(
+                tablePath,
+                flussConfig,
+                tableConfig,
+                tableOutputType,
+                primaryKeyIndexes,
+                bucketKeyIndexes,
+                partitionKeyIndexes,
+                partitionKeyIndexes.length > 0,
+                streaming,
+                startupOptions,
+                lookupAsync,
+                insertIfNotExists,
+                cache,
+                scanPartitionDiscoveryIntervalMs,
+                splitPerAssignmentBatchSize,
+                isDataLakeEnabled,
+                mergeEngineType,
+                tableOptions,
+                leaseContext);
+    }
+
+    public FlinkTableSource(
+            TablePath tablePath,
+            Configuration flussConfig,
+            TableConfig tableConfig,
+            org.apache.flink.table.types.logical.RowType tableOutputType,
+            int[] primaryKeyIndexes,
+            int[] bucketKeyIndexes,
+            int[] partitionKeyIndexes,
+            boolean partitioned,
+            boolean streaming,
+            FlinkConnectorOptionsUtils.StartupOptions startupOptions,
+            boolean lookupAsync,
+            boolean insertIfNotExists,
+            @Nullable LookupCache cache,
+            long scanPartitionDiscoveryIntervalMs,
+            int splitPerAssignmentBatchSize,
+            boolean isDataLakeEnabled,
+            @Nullable MergeEngineType mergeEngineType,
+            Map<String, String> tableOptions,
+            LeaseContext leaseContext) {
         this.tablePath = tablePath;
         this.flussConfig = flussConfig;
         this.tableOutputType = tableOutputType;
@@ -243,6 +286,7 @@ public class FlinkTableSource
         this.primaryKeyIndexes = primaryKeyIndexes;
         this.bucketKeyIndexes = bucketKeyIndexes;
         this.partitionKeyIndexes = partitionKeyIndexes;
+        this.partitioned = partitioned;
         this.streaming = streaming;
         this.startupOptions = checkNotNull(startupOptions, "startupOptions must not be null");
 
@@ -329,7 +373,7 @@ public class FlinkTableSource
     }
 
     private boolean isPartitioned() {
-        return partitionKeyIndexes.length > 0;
+        return partitioned;
     }
 
     @Override
@@ -516,6 +560,7 @@ public class FlinkTableSource
                         primaryKeyIndexes,
                         bucketKeyIndexes,
                         partitionKeyIndexes,
+                        partitioned,
                         streaming,
                         startupOptions,
                         lookupAsync,

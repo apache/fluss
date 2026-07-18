@@ -20,6 +20,7 @@ use crate::client::ClientSchemaGetter;
 use crate::client::lookup::LookupClient;
 use crate::client::metadata::Metadata;
 use crate::client::table::partition_getter::PartitionGetter;
+use crate::client::table::unsupported_implicit_partition_operation;
 use crate::error::{Error, Result};
 use crate::metadata::{
     KvFormat, PhysicalTablePath, RowType, Schema, TableBucket, TableInfo, TablePath,
@@ -292,6 +293,9 @@ impl TableLookup {
     /// operations together to reduce network round trips. This achieves parity
     /// with the Java client implementation for improved throughput.
     pub fn create_lookuper(self) -> Result<Lookuper> {
+        if self.table_info.has_partition_expressions() {
+            return Err(unsupported_implicit_partition_operation("lookup"));
+        }
         let num_buckets = self.table_info.get_num_buckets();
 
         // Get data lake format from table config for bucketing function
@@ -448,6 +452,9 @@ pub struct TablePrefixLookup {
 
 impl TablePrefixLookup {
     pub fn create_lookuper(self) -> Result<PrefixKeyLookuper> {
+        if self.table_info.has_partition_expressions() {
+            return Err(unsupported_implicit_partition_operation("prefix lookup"));
+        }
         validate_prefix_lookup(&self.table_info, &self.lookup_column_names)?;
 
         let num_buckets = self.table_info.get_num_buckets();

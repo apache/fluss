@@ -17,6 +17,10 @@
 
 package org.apache.fluss.lake.hudi.utils;
 
+import org.apache.fluss.config.AutoPartitionTimeUnit;
+import org.apache.fluss.metadata.DateTruncPartitionTransform;
+import org.apache.fluss.metadata.PartitionExpression;
+import org.apache.fluss.metadata.PartitionKey;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
@@ -29,9 +33,11 @@ import java.util.Map;
 import static org.apache.fluss.lake.hudi.utils.HudiConversions.FLUSS_BUCKET_AWARE_OPTION;
 import static org.apache.fluss.lake.hudi.utils.HudiConversions.FLUSS_BUCKET_KEYS_OPTION;
 import static org.apache.fluss.lake.hudi.utils.HudiConversions.FLUSS_PARTITION_KEYS_OPTION;
+import static org.apache.fluss.lake.hudi.utils.catalog.HudiCatalogUtils.FILE_SYSTEM_TYPE;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** Test for {@link HudiConversions}. */
+/** Tests for {@link HudiConversions}. */
 class HudiConversionsTest {
 
     @Test
@@ -90,5 +96,36 @@ class HudiConversionsTest {
                         TablePath.of("db1", "table1"), tableDescriptor, false);
 
         assertThat(properties).containsEntry(FLUSS_PARTITION_KEYS_OPTION, "dt,hr");
+    }
+
+    @Test
+    void testCreateHudiCatalogTableRejectsImplicitPartition() {
+        assertThatThrownBy(
+                        () ->
+                                HudiConversions.createHudiCatalogTable(
+                                        TablePath.of("test_db", "implicit_partition_table"),
+                                        implicitPartitionDescriptor(),
+                                        false,
+                                        FILE_SYSTEM_TYPE))
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessage("Hudi lake tables do not support implicit partition expressions yet.");
+    }
+
+    private static TableDescriptor implicitPartitionDescriptor() {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("event_time", DataTypes.TIMESTAMP().copy(false))
+                        .column("payload", DataTypes.STRING())
+                        .build();
+        return TableDescriptor.builder()
+                .schema(schema)
+                .partitionedByKeys(
+                        PartitionKey.expression(
+                                PartitionExpression.of(
+                                        "event_day",
+                                        DateTruncPartitionTransform.of(
+                                                "event_time", AutoPartitionTimeUnit.DAY))))
+                .distributedBy(1)
+                .build();
     }
 }

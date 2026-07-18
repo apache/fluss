@@ -340,7 +340,7 @@ public class FlussSourceBuilder<OUT> {
         flussConf.addAll(tableInfo.getCustomProperties());
         flussConf.addAll(tableInfo.getProperties());
 
-        boolean isPartitioned = !tableInfo.getPartitionKeys().isEmpty();
+        boolean isPartitioned = tableInfo.isPartitioned();
         boolean hasPrimaryKey = !tableInfo.getPrimaryKeys().isEmpty();
 
         RowType sourceOutputType =

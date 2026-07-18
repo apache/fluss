@@ -924,7 +924,7 @@ public class FlinkCatalog extends AbstractCatalog {
         if (isPrefixList(physicalPrimaryKeys, bucketKeys)) {
             indexKeys.addAll(bucketKeys);
             if (tableInfo.isPartitioned()) {
-                indexKeys.addAll(tableInfo.getPartitionKeys());
+                indexKeys.addAll(tableInfo.getPhysicalPartitionKeys());
             }
         }
 

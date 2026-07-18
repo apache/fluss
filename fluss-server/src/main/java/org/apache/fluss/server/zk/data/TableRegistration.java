@@ -20,6 +20,7 @@ package org.apache.fluss.server.zk.data;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.TableConfig;
+import org.apache.fluss.metadata.PartitionExpression;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -29,9 +30,12 @@ import org.apache.fluss.metadata.TablePath;
 
 import javax.annotation.Nullable;
 
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
@@ -48,6 +52,7 @@ public class TableRegistration {
     public final long tableId;
     public final @Nullable String comment;
     public final List<String> partitionKeys;
+    public final List<PartitionExpression> partitionExpressions;
     public final List<String> bucketKeys;
     public final int bucketCount;
     public final Map<String, String> properties;
@@ -76,12 +81,38 @@ public class TableRegistration {
             @Nullable String remoteDataDir,
             long createdTime,
             long modifiedTime) {
+        this(
+                tableId,
+                comment,
+                partitionKeys,
+                Collections.emptyList(),
+                tableDistribution,
+                properties,
+                customProperties,
+                remoteDataDir,
+                createdTime,
+                modifiedTime);
+    }
+
+    public TableRegistration(
+            long tableId,
+            @Nullable String comment,
+            List<String> partitionKeys,
+            List<PartitionExpression> partitionExpressions,
+            TableDistribution tableDistribution,
+            Map<String, String> properties,
+            Map<String, String> customProperties,
+            @Nullable String remoteDataDir,
+            long createdTime,
+            long modifiedTime) {
         checkArgument(
                 tableDistribution.getBucketCount().isPresent(),
                 "Bucket count is required for table registration.");
         this.tableId = tableId;
         this.comment = comment;
         this.partitionKeys = partitionKeys;
+        this.partitionExpressions = partitionExpressions;
+        validatePartitionExpressions(partitionKeys, partitionExpressions);
         this.bucketCount = tableDistribution.getBucketCount().get();
         this.bucketKeys = tableDistribution.getBucketKeys();
         this.properties = properties;
@@ -121,6 +152,7 @@ public class TableRegistration {
                 schemaInfo.getSchema(),
                 this.bucketKeys,
                 this.partitionKeys,
+                this.partitionExpressions,
                 this.bucketCount,
                 properties,
                 Configuration.fromMap(this.customProperties),
@@ -140,6 +172,7 @@ public class TableRegistration {
                 tableId,
                 tableDescriptor.getComment().orElse(null),
                 tableDescriptor.getPartitionKeys(),
+                tableDescriptor.getPartitionExpressions(),
                 tableDescriptor.getTableDistribution().get(),
                 tableDescriptor.getProperties(),
                 tableDescriptor.getCustomProperties(),
@@ -155,6 +188,7 @@ public class TableRegistration {
                 tableId,
                 comment,
                 partitionKeys,
+                partitionExpressions,
                 new TableDistribution(bucketCount, bucketKeys),
                 newProperties,
                 newCustomProperties,
@@ -176,6 +210,7 @@ public class TableRegistration {
                 tableId,
                 comment,
                 partitionKeys,
+                partitionExpressions,
                 new TableDistribution(bucketCount, bucketKeys),
                 properties,
                 customProperties,
@@ -199,6 +234,7 @@ public class TableRegistration {
                 && modifiedTime == that.modifiedTime
                 && Objects.equals(comment, that.comment)
                 && Objects.equals(partitionKeys, that.partitionKeys)
+                && Objects.equals(partitionExpressions, that.partitionExpressions)
                 && Objects.equals(bucketCount, that.bucketCount)
                 && Objects.equals(bucketKeys, that.bucketKeys)
                 && Objects.equals(properties, that.properties)
@@ -212,6 +248,7 @@ public class TableRegistration {
                 tableId,
                 comment,
                 partitionKeys,
+                partitionExpressions,
                 bucketCount,
                 bucketKeys,
                 properties,
@@ -231,6 +268,8 @@ public class TableRegistration {
                 + '\''
                 + ", partitionKeys="
                 + partitionKeys
+                + ", partitionExpressions="
+                + partitionExpressions
                 + ", bucketCount="
                 + bucketCount
                 + ", bucketKeys="
@@ -246,5 +285,26 @@ public class TableRegistration {
                 + ", modifiedTime="
                 + modifiedTime
                 + '}';
+    }
+
+    private static void validatePartitionExpressions(
+            List<String> partitionKeys, List<PartitionExpression> partitionExpressions) {
+        Set<String> partitionKeySet = new HashSet<>(partitionKeys);
+        Set<String> virtualPartitionKeys = new HashSet<>();
+        for (PartitionExpression partitionExpression : partitionExpressions) {
+            checkArgument(
+                    partitionExpression.getVirtualPartitionSpecKey().isPresent(),
+                    "Partition expression must contain a resolved virtual partition spec key.");
+            String virtualPartitionKey = partitionExpression.getVirtualPartitionSpecKey().get();
+            checkArgument(
+                    partitionKeySet.contains(virtualPartitionKey),
+                    "Virtual partition spec key '%s' is not present in partition keys %s.",
+                    virtualPartitionKey,
+                    partitionKeys);
+            checkArgument(
+                    virtualPartitionKeys.add(virtualPartitionKey),
+                    "Duplicate virtual partition spec key '%s'.",
+                    virtualPartitionKey);
+        }
     }
 }
