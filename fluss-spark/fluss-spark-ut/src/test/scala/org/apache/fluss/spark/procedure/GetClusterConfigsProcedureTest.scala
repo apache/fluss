@@ -20,6 +20,8 @@ package org.apache.fluss.spark.procedure
 import org.apache.fluss.config.ConfigOptions
 import org.apache.fluss.spark.FlussSparkTestBase
 
+import org.apache.spark.sql.Row
+
 class GetClusterConfigsProcedureTest extends FlussSparkTestBase {
 
   test("get_cluster_configs: get all configurations") {
@@ -28,15 +30,23 @@ class GetClusterConfigsProcedureTest extends FlussSparkTestBase {
     assert(result.length > 0)
 
     val firstRow = result.head
-    assert(firstRow.length == 3)
+    assert(firstRow.length == 6)
     assert(
-      firstRow.schema.fieldNames.sameElements(Array("config_key", "config_value", "config_source")))
+      firstRow.schema.fieldNames.sameElements(
+        Array(
+          "config_key",
+          "config_value",
+          "config_source",
+          "default_value",
+          "is_default",
+          "description")))
 
     result.foreach {
       row =>
         assert(row.getString(0) != null)
-        assert(row.getString(1) != null)
+        // config_value may be null for unset options, but source/default flag must be present
         assert(row.getString(2) != null)
+        assert(!row.isNullAt(4))
     }
 
     val result2 =
@@ -51,7 +61,13 @@ class GetClusterConfigsProcedureTest extends FlussSparkTestBase {
       s"CALL $DEFAULT_CATALOG.sys.get_cluster_configs(config_keys => array('$testKey'))").collect()
 
     assert(result.length == 1)
-    assert(result.head.toString() == "[kv.snapshot.interval,1 s,STATIC]")
+    val row = result.head
+    assert(row.getString(0) == "kv.snapshot.interval")
+    assert(row.getString(2) == "STATIC")
+    // The resolved value (1 s) differs from the declared default (10 min).
+    assert(row.getString(3) == "10 min")
+    assert(!row.getBoolean(4))
+    assert(row.getString(5) != null)
   }
 
   test("get_cluster_configs: get multiple configurations") {
@@ -64,10 +80,20 @@ class GetClusterConfigsProcedureTest extends FlussSparkTestBase {
 
     assert(result.length == 2)
 
-    // convert the result into a map of key to value for easy verification, key is the first column
-    val kvMap: Map[String, String] = result.map(r => r.getString(0) -> r.toString).toMap
-    assert(kvMap.getOrElse(key1, "") == s"[$key1,1 s,STATIC]")
-    assert(kvMap.getOrElse(key2, "") == s"[$key2,FLUSS://localhost:0,STATIC]")
+    // convert the result into a map of key to row for easy verification
+    val rowMap: Map[String, org.apache.spark.sql.Row] =
+      result.map(r => r.getString(0) -> r).toMap
+    val kvRow = rowMap(key1)
+    assert(kvRow.getString(2) == "STATIC")
+    assert(kvRow.getString(3) == "10 min")
+    assert(!kvRow.getBoolean(4))
+    assert(kvRow.getString(5) != null)
+
+    val bindRow = rowMap(key2)
+    // bind.listeners has no declared default value in ConfigOptions.
+    assert(bindRow.isNullAt(3))
+    assert(bindRow.getBoolean(4))
+    assert(bindRow.getString(5) != null)
   }
 
   test("get_cluster_configs: get non-existent configuration") {
@@ -110,5 +136,32 @@ class GetClusterConfigsProcedureTest extends FlussSparkTestBase {
       sql(s"CALL $DEFAULT_CATALOG.sys.get_cluster_configs(config_keys => array())").collect()
 
     assert(result.length > 0)
+  }
+
+  test("get_cluster_configs: default_value and is_default columns for an overridden key") {
+    val testKey = ConfigOptions.KV_SNAPSHOT_INTERVAL.key()
+
+    val result = sql(
+      s"CALL $DEFAULT_CATALOG.sys.get_cluster_configs(config_keys => array('$testKey'))").collect()
+
+    assert(result.length == 1)
+    val row = result.head
+    // KV_SNAPSHOT_INTERVAL declared default is 10 min but the test cluster overrides it to 1 s.
+    assert(row.getString(3) == "10 min")
+    assert(!row.getBoolean(4))
+    assert(row.getString(5) != null)
+  }
+
+  test("get_cluster_configs: key with no default reports null default and is_default=true") {
+    val testKey = ConfigOptions.BIND_LISTENERS.key()
+
+    val result = sql(
+      s"CALL $DEFAULT_CATALOG.sys.get_cluster_configs(config_keys => array('$testKey'))").collect()
+
+    assert(result.length == 1)
+    val row = result.head
+    assert(row.isNullAt(3))
+    assert(row.getBoolean(4))
+    assert(row.getString(5) != null)
   }
 }
