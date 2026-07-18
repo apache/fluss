@@ -54,6 +54,22 @@ during the Fluss cluster working.
 | server.io-pool.size                                 | Integer            | 10                                                                                                                                                                       | The size of the IO thread pool to run blocking operations for both coordinator and tablet servers. This includes discard unnecessary snapshot files, transfer kv snapshot files, and transfer remote log files. Increase this value if you experience slow IO operations. The default value is 10.                                                                                                                                                                                                                                                                                                                                                                                                                 |
 
 
+## Environment
+
+The following options control the launch environment of the Fluss server processes, such as the JVM options and the directory for process id files. They are set in `conf/server.yaml` and are applied by the startup scripts under `bin/` when starting the CoordinatorServer and TabletServer.
+
+| Option                           | Type   | Default | Description                                                                                                                                                                             |
+|----------------------------------|--------|---------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| env.java.home                    | String | (None)  | Path to the JDK/JRE used to run the Fluss processes. If not set, the system `JAVA_HOME` or the `java` binary found on the `PATH` is used.                                               |
+| env.java.opts.all                | String | (None)  | JVM options applied to all Fluss server processes, i.e. both the CoordinatorServer and the TabletServer, for example `-Xmx4g -XX:+UseG1GC`. When `FLUSS_ENV_JAVA_OPTS` is not already set, the startup scripts prepend `-XX:+IgnoreUnrecognizedVMOptions` to the configured options and, on JDK 18+, append `-Djava.security.manager=allow`. |
+| env.java.opts.coordinator-server | String | (None)  | Additional JVM options applied only to the CoordinatorServer process. They are appended after `env.java.opts.all`.                                                                     |
+| env.java.opts.tablet-server      | String | (None)  | Additional JVM options applied only to the TabletServer process. They are appended after `env.java.opts.all`.                                                                          |
+| env.pid.dir                      | String | /tmp    | The directory where the `*.pid` files of the running Fluss processes are stored.                                                                                                       |
+
+:::note
+The logging-related environment options (`env.log.dir`, `env.log.level`, `env.log.max` and `env.stdout-err.redirect-to-file`) are described in the [Logging](observability/logging.md) documentation.
+:::
+
 ## CoordinatorServer
 
 | Option                                                 | Type       | Default   | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
