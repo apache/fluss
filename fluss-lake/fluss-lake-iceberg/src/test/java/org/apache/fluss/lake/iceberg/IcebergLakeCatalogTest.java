@@ -43,6 +43,8 @@ import org.apache.iceberg.SortOrder;
 import org.apache.iceberg.Table;
 import org.apache.iceberg.TableProperties;
 import org.apache.iceberg.catalog.Catalog;
+import org.apache.iceberg.catalog.Namespace;
+import org.apache.iceberg.catalog.SupportsNamespaces;
 import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.types.Types;
 import org.assertj.core.api.Assertions;
@@ -56,6 +58,7 @@ import java.io.File;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -1278,7 +1281,6 @@ class IcebergLakeCatalogTest {
                 .hasMessageContaining("not compatible");
     }
 
-    /** Direct unit tests for {@link IcebergLakeCatalog#isIcebergSchemaCompatibleWithSchema}. */
     @Test
     void testIsIcebergSchemaCompatibleWithSchema() {
         // baseline
@@ -1328,6 +1330,170 @@ class IcebergLakeCatalogTest {
                         flussIcebergCatalog.isIcebergSchemaCompatibleWithSchema(
                                 base, differentNullability))
                 .isFalse();
+
+        org.apache.iceberg.Schema withIdAsIdentifier =
+                new org.apache.iceberg.Schema(
+                        Arrays.asList(
+                                Types.NestedField.required(1, "id", Types.LongType.get()),
+                                Types.NestedField.optional(2, "name", Types.StringType.get())),
+                        Collections.singleton(1));
+        org.apache.iceberg.Schema withIdAsIdentifierDifferentIds =
+                new org.apache.iceberg.Schema(
+                        Arrays.asList(
+                                Types.NestedField.required(11, "id", Types.LongType.get()),
+                                Types.NestedField.optional(22, "name", Types.StringType.get())),
+                        Collections.singleton(11));
+        assertThat(
+                        flussIcebergCatalog.isIcebergSchemaCompatibleWithSchema(
+                                withIdAsIdentifier, withIdAsIdentifierDifferentIds))
+                .isTrue();
+
+        assertThat(
+                        flussIcebergCatalog.isIcebergSchemaCompatibleWithSchema(
+                                base, withIdAsIdentifier))
+                .isFalse();
+        assertThat(
+                        flussIcebergCatalog.isIcebergSchemaCompatibleWithSchema(
+                                withIdAsIdentifier, base))
+                .isFalse();
+
+        org.apache.iceberg.Schema withNameAsIdentifier =
+                new org.apache.iceberg.Schema(
+                        Arrays.asList(
+                                Types.NestedField.required(1, "id", Types.LongType.get()),
+                                Types.NestedField.required(2, "name", Types.StringType.get())),
+                        Collections.singleton(2));
+        org.apache.iceberg.Schema withIdAsIdentifierRequiredName =
+                new org.apache.iceberg.Schema(
+                        Arrays.asList(
+                                Types.NestedField.required(1, "id", Types.LongType.get()),
+                                Types.NestedField.required(2, "name", Types.StringType.get())),
+                        Collections.singleton(1));
+        assertThat(
+                        flussIcebergCatalog.isIcebergSchemaCompatibleWithSchema(
+                                withNameAsIdentifier, withIdAsIdentifierRequiredName))
+                .isFalse();
+
+        Set<Integer> twoIdentifiers = new HashSet<>();
+        twoIdentifiers.add(1);
+        twoIdentifiers.add(2);
+        org.apache.iceberg.Schema withTwoIdentifiers =
+                new org.apache.iceberg.Schema(
+                        Arrays.asList(
+                                Types.NestedField.required(1, "id", Types.LongType.get()),
+                                Types.NestedField.required(2, "name", Types.StringType.get())),
+                        twoIdentifiers);
+        assertThat(
+                        flussIcebergCatalog.isIcebergSchemaCompatibleWithSchema(
+                                withIdAsIdentifierRequiredName, withTwoIdentifiers))
+                .isFalse();
+    }
+
+    @Test
+    void testCreateTableFailsWhenExistingLakeTableMissesIdentifierFields() {
+        String database = "missing_identifier_db";
+        String tableName = "missing_identifier_table";
+        TablePath tablePath = TablePath.of(database, tableName);
+
+        Schema pkSchema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("name", DataTypes.STRING())
+                        .primaryKey("id")
+                        .build();
+        TableDescriptor pkTd =
+                TableDescriptor.builder().schema(pkSchema).distributedBy(4, "id").build();
+
+        // Pre-create the Iceberg table directly (bypassing Fluss) so that identifier fields
+        // are NOT set on the schema, even though columns/partition/sort/properties match.
+        Catalog rawCatalog = flussIcebergCatalog.getIcebergCatalog();
+        org.apache.iceberg.Schema noIdentifierSchema =
+                new org.apache.iceberg.Schema(
+                        Types.NestedField.required(1, "id", Types.IntegerType.get()),
+                        Types.NestedField.optional(2, "name", Types.StringType.get()),
+                        Types.NestedField.required(3, BUCKET_COLUMN_NAME, Types.IntegerType.get()),
+                        Types.NestedField.required(4, OFFSET_COLUMN_NAME, Types.LongType.get()),
+                        Types.NestedField.required(
+                                5, TIMESTAMP_COLUMN_NAME, Types.TimestampType.withZone()));
+        PartitionSpec spec = PartitionSpec.builderFor(noIdentifierSchema).bucket("id", 4).build();
+        SortOrder sortOrder =
+                SortOrder.builderFor(noIdentifierSchema).asc(OFFSET_COLUMN_NAME).build();
+        Map<String, String> props = new HashMap<>();
+        props.put(TableProperties.MERGE_MODE, RowLevelOperationMode.MERGE_ON_READ.modeName());
+        props.put(TableProperties.UPDATE_MODE, RowLevelOperationMode.MERGE_ON_READ.modeName());
+        props.put(TableProperties.DELETE_MODE, RowLevelOperationMode.MERGE_ON_READ.modeName());
+        ((SupportsNamespaces) rawCatalog).createNamespace(Namespace.of(database));
+        rawCatalog
+                .buildTable(TableIdentifier.of(database, tableName), noIdentifierSchema)
+                .withPartitionSpec(spec)
+                .withSortOrder(sortOrder)
+                .withProperties(props)
+                .create();
+
+        // Now Fluss tries to bind a PK table on top. The identifier-field mismatch must be
+        // surfaced as a schema incompatibility.
+        assertThatThrownBy(
+                        () ->
+                                flussIcebergCatalog.createTable(
+                                        tablePath, pkTd, new TestingLakeCatalogContext()))
+                .isInstanceOf(TableAlreadyExistException.class)
+                .hasMessageContaining("already exists in Iceberg catalog")
+                .hasMessageContaining("not compatible");
+    }
+
+    @Test
+    void testCreateTableFailsWhenExistingLakeTableHasWrongIdentifierFields() {
+        String database = "wrong_identifier_db";
+        String tableName = "wrong_identifier_table";
+        TablePath tablePath = TablePath.of(database, tableName);
+
+        Schema pkSchema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("name", DataTypes.STRING().copy(false))
+                        .primaryKey("id")
+                        .build();
+        TableDescriptor pkTd =
+                TableDescriptor.builder().schema(pkSchema).distributedBy(4, "id").build();
+
+        // Pre-create the Iceberg table with identifier fields pointing to "name" instead
+        // of the Fluss primary key "id".
+        Catalog rawCatalog = flussIcebergCatalog.getIcebergCatalog();
+        org.apache.iceberg.Schema wrongIdentifierSchema =
+                new org.apache.iceberg.Schema(
+                        Arrays.asList(
+                                Types.NestedField.required(1, "id", Types.IntegerType.get()),
+                                Types.NestedField.required(2, "name", Types.StringType.get()),
+                                Types.NestedField.required(
+                                        3, BUCKET_COLUMN_NAME, Types.IntegerType.get()),
+                                Types.NestedField.required(
+                                        4, OFFSET_COLUMN_NAME, Types.LongType.get()),
+                                Types.NestedField.required(
+                                        5, TIMESTAMP_COLUMN_NAME, Types.TimestampType.withZone())),
+                        Collections.singleton(2));
+        PartitionSpec spec =
+                PartitionSpec.builderFor(wrongIdentifierSchema).bucket("id", 4).build();
+        SortOrder sortOrder =
+                SortOrder.builderFor(wrongIdentifierSchema).asc(OFFSET_COLUMN_NAME).build();
+        Map<String, String> props = new HashMap<>();
+        props.put(TableProperties.MERGE_MODE, RowLevelOperationMode.MERGE_ON_READ.modeName());
+        props.put(TableProperties.UPDATE_MODE, RowLevelOperationMode.MERGE_ON_READ.modeName());
+        props.put(TableProperties.DELETE_MODE, RowLevelOperationMode.MERGE_ON_READ.modeName());
+        ((SupportsNamespaces) rawCatalog).createNamespace(Namespace.of(database));
+        rawCatalog
+                .buildTable(TableIdentifier.of(database, tableName), wrongIdentifierSchema)
+                .withPartitionSpec(spec)
+                .withSortOrder(sortOrder)
+                .withProperties(props)
+                .create();
+
+        assertThatThrownBy(
+                        () ->
+                                flussIcebergCatalog.createTable(
+                                        tablePath, pkTd, new TestingLakeCatalogContext()))
+                .isInstanceOf(TableAlreadyExistException.class)
+                .hasMessageContaining("already exists in Iceberg catalog")
+                .hasMessageContaining("not compatible");
     }
 
     /**
@@ -1567,26 +1733,26 @@ class IcebergLakeCatalogTest {
     /** White-box tests for {@link IcebergLakeCatalog#isIcebergPropertiesCompatible}. */
     @Test
     void testIsIcebergPropertiesCompatible() {
-        Map<String, String> expected = new java.util.HashMap<>();
+        Map<String, String> expected = new HashMap<>();
         expected.put("k1", "v1");
         expected.put("k2", "v2");
 
         // Existing has all expected keys with same values -> compatible.
-        Map<String, String> existing = new java.util.HashMap<>(expected);
+        Map<String, String> existing = new HashMap<>(expected);
         assertThat(flussIcebergCatalog.isIcebergPropertiesCompatible(existing, expected)).isTrue();
 
         // Existing also has extra keys -> still compatible (extras are ignored).
-        existing = new java.util.HashMap<>(expected);
+        existing = new HashMap<>(expected);
         existing.put("engine.internal", "whatever");
         assertThat(flussIcebergCatalog.isIcebergPropertiesCompatible(existing, expected)).isTrue();
 
         // Existing missing an expected key -> incompatible.
-        existing = new java.util.HashMap<>();
+        existing = new HashMap<>();
         existing.put("k1", "v1");
         assertThat(flussIcebergCatalog.isIcebergPropertiesCompatible(existing, expected)).isFalse();
 
         // Existing has key but different value -> incompatible.
-        existing = new java.util.HashMap<>(expected);
+        existing = new HashMap<>(expected);
         existing.put("k2", "different");
         assertThat(flussIcebergCatalog.isIcebergPropertiesCompatible(existing, expected)).isFalse();
     }

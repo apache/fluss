@@ -48,11 +48,14 @@ import org.apache.iceberg.exceptions.AlreadyExistsException;
 import org.apache.iceberg.exceptions.NoSuchNamespaceException;
 import org.apache.iceberg.exceptions.NoSuchTableException;
 import org.apache.iceberg.types.Type;
+import org.apache.iceberg.types.TypeUtil;
+import org.apache.iceberg.types.Types;
 
 import javax.annotation.Nullable;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -337,7 +340,6 @@ public class IcebergLakeCatalog implements LakeCatalog {
                         e);
             }
 
-            // if creating a new fluss table, we should ensure the lake table is empty
             if (isCreatingFlussTable && existingTable.currentSnapshot() != null) {
                 throw new TableAlreadyExistException(
                         String.format(
@@ -371,7 +373,19 @@ public class IcebergLakeCatalog implements LakeCatalog {
             }
         }
 
-        return true;
+        return identifierColumnNames(existingSchema).equals(identifierColumnNames(newSchema));
+    }
+
+    private static Set<String> identifierColumnNames(Schema schema) {
+        Set<String> names = new HashSet<>();
+        for (Integer fieldId : schema.identifierFieldIds()) {
+            String columnName = schema.findColumnName(fieldId);
+            if (columnName != null) {
+                names.add(columnName);
+            }
+        }
+
+        return names;
     }
 
     /** Checks whether the existing Iceberg partition spec is compatible with the expected one. */
@@ -403,6 +417,7 @@ public class IcebergLakeCatalog implements LakeCatalog {
                 return false;
             }
         }
+
         return true;
     }
 
