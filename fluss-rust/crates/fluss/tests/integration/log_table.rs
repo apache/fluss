@@ -560,7 +560,15 @@ mod table_test {
             .create_record_batch_log_scanner()
             .unwrap();
         proj.subscribe(0, 0).await.unwrap();
-        let proj_batches = proj.poll(Duration::from_secs(10)).await.unwrap();
+        let mut proj_batches = Vec::new();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while proj_batches.is_empty() && tokio::time::Instant::now() < deadline {
+            proj_batches = proj.poll(Duration::from_secs(5)).await.unwrap();
+        }
+        assert!(
+            !proj_batches.is_empty(),
+            "Expected at least one batch from projection scanner"
+        );
 
         // Projected batch should have 1 column (id), not 2 (id, name)
         assert_eq!(proj_batches[0].batch().num_columns(), 1);
