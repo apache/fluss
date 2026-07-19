@@ -20,6 +20,7 @@ package org.apache.fluss.server.replica;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.HistoricalLookupThrottledException;
 import org.apache.fluss.exception.InvalidPartitionException;
@@ -29,7 +30,6 @@ import org.apache.fluss.lake.lakestorage.LakeStoragePlugin;
 import org.apache.fluss.lake.lakestorage.LakeStoragePluginSetUp;
 import org.apache.fluss.lake.lakestorage.LakeTableLookuper;
 import org.apache.fluss.metadata.DataLakeFormat;
-import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
@@ -226,9 +226,7 @@ class HistoricalLakeLookupManager implements AutoCloseable {
                                                     createLakeTableLookuper(
                                                             context.tablePath,
                                                             getOrPreparePaimonLookupTempDir(),
-                                                            tableInfo
-                                                                    .getTableConfig()
-                                                                    .getKvFormat());
+                                                            tableInfo.getTableConfig());
                                             selectedLookuper =
                                                     new CachedLakeTableLookuper(
                                                             context.schemaId, newLookuper);
@@ -288,7 +286,7 @@ class HistoricalLakeLookupManager implements AutoCloseable {
 
     @VisibleForTesting
     LakeTableLookuper createLakeTableLookuper(
-            TablePath tablePath, String ioTmpDir, KvFormat kvFormat) {
+            TablePath tablePath, String ioTmpDir, TableConfig tableConfig) {
         DataLakeFormat dataLakeFormat = conf.get(ConfigOptions.DATALAKE_FORMAT);
         if (dataLakeFormat == null) {
             throw new LakeStorageNotConfiguredException(
@@ -312,7 +310,7 @@ class HistoricalLakeLookupManager implements AutoCloseable {
         LakeStorage lakeStorage =
                 lakeStoragePlugin.createLakeStorage(Configuration.fromMap(lakeProperties));
         return lakeStorage.createLakeTableLookuper(
-                tablePath, new LakeStorage.LookuperContext(ioTmpDir, kvFormat));
+                tablePath, new LakeStorage.LookuperContext(ioTmpDir, tableConfig));
     }
 
     private synchronized String getOrPreparePaimonLookupTempDir() {

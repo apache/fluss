@@ -19,17 +19,19 @@ package org.apache.fluss.lake.paimon.lookup;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.lake.lakestorage.LakeTableLookuper;
 import org.apache.fluss.lake.paimon.utils.PaimonPartitionBucket;
 import org.apache.fluss.lake.paimon.utils.PaimonRowAsFlussRow;
-import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.decode.CompactedKeyDecoder;
 import org.apache.fluss.row.encode.RowEncoder;
 import org.apache.fluss.row.encode.ValueEncoder;
+import org.apache.fluss.row.encode.paimon.PaimonKeyEncoder;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.IOUtils;
 
@@ -60,6 +62,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Set;
 
+import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_2;
 import static org.apache.fluss.lake.paimon.PaimonLakeCatalog.SYSTEM_COLUMNS;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimonPartition;
@@ -94,7 +97,7 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
     private final Configuration paimonConfig;
     private final TablePath tablePath;
     private final String ioTmpDir;
-    private final KvFormat kvFormat;
+    private final TableConfig tableConfig;
 
     private final Set<PaimonPartitionBucket> initializedBuckets;
 
@@ -104,6 +107,12 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
     private @Nullable LocalTableQuery localTableQuery;
     private @Nullable RowPartitionKeyExtractor partitionKeyExtractor;
     private int primaryKeyFieldCount;
+
+    // Both encoders are initialized only for a kv-format-v2 table whose bucket key differs from
+    // its physical primary key. They remain null when the incoming Fluss key already uses Paimon's
+    // BinaryRow encoding and no conversion is needed.
+    private @Nullable CompactedKeyDecoder compactedKeyDecoder;
+    private @Nullable PaimonKeyEncoder paimonKeyEncoder;
     private boolean hasCachedValueEncoder;
     private short cachedValueSchemaId;
     private @Nullable RowEncoder cachedValueRowEncoder;
@@ -111,16 +120,19 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
     private boolean closed;
 
     public PaimonLakeTableLookuper(
-            Configuration paimonConfig, TablePath tablePath, KvFormat kvFormat) {
-        this(paimonConfig, tablePath, ConfigOptions.IO_TMP_DIR.defaultValue(), kvFormat);
+            Configuration paimonConfig, TablePath tablePath, TableConfig tableConfig) {
+        this(paimonConfig, tablePath, ConfigOptions.IO_TMP_DIR.defaultValue(), tableConfig);
     }
 
     public PaimonLakeTableLookuper(
-            Configuration paimonConfig, TablePath tablePath, String ioTmpDir, KvFormat kvFormat) {
+            Configuration paimonConfig,
+            TablePath tablePath,
+            String ioTmpDir,
+            TableConfig tableConfig) {
         this.paimonConfig = checkNotNull(paimonConfig, "paimonConfig must not be null.");
         this.tablePath = checkNotNull(tablePath, "tablePath must not be null.");
         this.ioTmpDir = checkNotNull(ioTmpDir, "ioTmpDir must not be null.");
-        this.kvFormat = checkNotNull(kvFormat, "kvFormat must not be null.");
+        this.tableConfig = checkNotNull(tableConfig, "tableConfig must not be null.");
         this.initializedBuckets = new HashSet<>();
     }
 
@@ -130,15 +142,16 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
         checkNotNull(key, "key must not be null.");
         checkNotNull(context, "context must not be null.");
         checkNotClosed();
-        ensureInitialized();
+        ensureInitialized(context.valueRowType());
 
         org.apache.paimon.data.BinaryRow partition =
                 convertPartition(context.partitionSpec(), context.valueRowType());
-        org.apache.paimon.data.BinaryRow keyRow = wrapLookupKey(key);
+        org.apache.paimon.data.BinaryRow keyRow = toPaimonLookupKey(key);
         initializeFilesIfNeeded(partition, context.bucketId());
 
         org.apache.paimon.data.InternalRow paimonRow =
-                lookupWithFileRefresh(partition, context.bucketId(), keyRow);
+                lookupWithFileRefresh(
+                        partition, context.bucketId(), keyRow, context.valueRowType());
         if (paimonRow == null) {
             return null;
         }
@@ -164,7 +177,7 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
         }
     }
 
-    private void ensureInitialized() throws Exception {
+    private void ensureInitialized(RowType valueRowType) throws Exception {
         if (localTableQuery != null) {
             return;
         }
@@ -181,7 +194,28 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
         ioManager = createIOManager(ioTmpDir);
         localTableQuery = createLocalTableQuery();
         partitionKeyExtractor = new RowPartitionKeyExtractor(fileStoreTable.schema());
-        primaryKeyFieldCount = fileStoreTable.primaryKeys().size();
+        List<String> trimmedPrimaryKeys = fileStoreTable.schema().trimmedPrimaryKeys();
+        primaryKeyFieldCount = trimmedPrimaryKeys.size();
+        initializeLookupKeyConverter(valueRowType, trimmedPrimaryKeys);
+    }
+
+    private void initializeLookupKeyConverter(
+            RowType valueRowType, List<String> trimmedPrimaryKeys) {
+        // Legacy/v1 tables and v2 tables with a default bucket key already encode Fluss lookup
+        // keys with Paimon's key encoder. Only v2 tables with a non-default bucket key use the
+        // compacted key encoding and need conversion before querying Paimon.
+        if (tableConfig.getKvFormatVersion().orElse(1) != KV_FORMAT_VERSION_2
+                || fileStoreTable().schema().bucketKeys().equals(trimmedPrimaryKeys)) {
+            return;
+        }
+
+        // Kv-format-v2 tables with a non-default bucket key store Fluss keys using the compacted
+        // encoding to support prefix lookup. Paimon's LocalTableQuery expects its own BinaryRow
+        // encoding, so convert the key at the lake lookup boundary.
+        compactedKeyDecoder =
+                CompactedKeyDecoder.createKeyDecoder(valueRowType, trimmedPrimaryKeys);
+        RowType keyRowType = valueRowType.project(trimmedPrimaryKeys);
+        paimonKeyEncoder = new PaimonKeyEncoder(keyRowType, trimmedPrimaryKeys);
     }
 
     private LocalTableQuery createLocalTableQuery() {
@@ -232,10 +266,20 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
                 partitionKeyExtractor()::partition);
     }
 
-    private org.apache.paimon.data.BinaryRow wrapLookupKey(byte[] key) {
+    private org.apache.paimon.data.BinaryRow toPaimonLookupKey(byte[] key) {
+        byte[] paimonKey = key;
+        if (compactedKeyDecoder != null) {
+            // A non-null decoder means the Fluss lookup key uses compacted encoding. Decode it
+            // first, then re-encode it as the Paimon BinaryRow expected by LocalTableQuery.
+            InternalRow decodedKey = compactedKeyDecoder.decodeKey(key);
+            paimonKey =
+                    checkNotNull(paimonKeyEncoder, "Paimon key encoder must be initialized.")
+                            .encodeKey(decodedKey);
+        }
+
         org.apache.paimon.data.BinaryRow keyRow =
                 new org.apache.paimon.data.BinaryRow(primaryKeyFieldCount);
-        keyRow.pointTo(MemorySegment.wrap(key), 0, key.length);
+        keyRow.pointTo(MemorySegment.wrap(paimonKey), 0, paimonKey.length);
         return keyRow;
     }
 
@@ -279,7 +323,8 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
     private org.apache.paimon.data.InternalRow lookupWithFileRefresh(
             org.apache.paimon.data.BinaryRow partition,
             int bucketId,
-            org.apache.paimon.data.InternalRow keyRow)
+            org.apache.paimon.data.InternalRow keyRow,
+            RowType valueRowType)
             throws Exception {
         try {
             return localTableQuery().lookup(partition, bucketId, keyRow);
@@ -289,7 +334,7 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
             // surface as any IOException. Refresh and retry only once so persistent I/O failures
             // do not repeatedly rebuild Paimon lookup state within one request.
             try {
-                refreshFiles(partition, bucketId);
+                refreshFiles(partition, bucketId, valueRowType);
                 return localTableQuery().lookup(partition, bucketId, keyRow);
             } catch (IOException retryError) {
                 retryError.addSuppressed(e);
@@ -305,7 +350,8 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
         }
     }
 
-    private void refreshFiles(org.apache.paimon.data.BinaryRow partition, int bucketId)
+    private void refreshFiles(
+            org.apache.paimon.data.BinaryRow partition, int bucketId, RowType valueRowType)
             throws Exception {
         IOUtils.closeQuietly(localTableQuery, "Paimon local table query");
         IOUtils.closeQuietly(ioManager, "Paimon lookup IO manager");
@@ -316,7 +362,7 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
         fileStoreTable = null;
         partitionKeyExtractor = null;
         initializedBuckets.clear();
-        ensureInitialized();
+        ensureInitialized(valueRowType);
         initializeFilesIfNeeded(partition, bucketId);
     }
 
@@ -355,7 +401,7 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
         }
 
         IOUtils.closeQuietly(cachedValueRowEncoder, "Fluss value row encoder");
-        cachedValueRowEncoder = RowEncoder.create(kvFormat, valueRowType);
+        cachedValueRowEncoder = RowEncoder.create(tableConfig.getKvFormat(), valueRowType);
         cachedValueFieldGetters = InternalRow.createFieldGetters(valueRowType);
         cachedValueSchemaId = schemaId;
         hasCachedValueEncoder = true;

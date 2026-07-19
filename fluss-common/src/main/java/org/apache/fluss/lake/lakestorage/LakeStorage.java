@@ -18,9 +18,9 @@
 package org.apache.fluss.lake.lakestorage;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
-import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.TablePath;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -70,17 +70,17 @@ public interface LakeStorage {
     /** Runtime context for creating a lake table lookuper. */
     final class LookuperContext {
         private final String ioTmpDir;
-        private final KvFormat kvFormat;
+        private final TableConfig tableConfig;
 
         /**
          * Creates a lookuper context.
          *
          * @param ioTmpDir local directory for temporary files used by the lookuper
-         * @param kvFormat immutable KV format of the table
+         * @param tableConfig configuration of the Fluss table
          */
-        public LookuperContext(String ioTmpDir, KvFormat kvFormat) {
+        public LookuperContext(String ioTmpDir, TableConfig tableConfig) {
             this.ioTmpDir = checkNotNull(ioTmpDir, "ioTmpDir must not be null.");
-            this.kvFormat = checkNotNull(kvFormat, "kvFormat must not be null.");
+            this.tableConfig = checkNotNull(tableConfig, "tableConfig must not be null.");
         }
 
         /** Returns the local directory for temporary files used by the lookuper. */
@@ -88,9 +88,9 @@ public interface LakeStorage {
             return ioTmpDir;
         }
 
-        /** Returns the immutable KV format of the table. */
-        public KvFormat kvFormat() {
-            return kvFormat;
+        /** Returns the configuration of the Fluss table. */
+        public TableConfig tableConfig() {
+            return tableConfig;
         }
     }
 }

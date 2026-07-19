@@ -19,6 +19,7 @@ package org.apache.fluss.server.replica;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.HistoricalLookupThrottledException;
 import org.apache.fluss.lake.lakestorage.LakeTableLookuper;
 import org.apache.fluss.metadata.KvFormat;
@@ -184,12 +185,15 @@ class HistoricalLakeLookupManagerTest {
     }
 
     @Test
-    void testCreatesLookuperWithTableKvFormat() throws Exception {
+    void testCreatesLookuperWithTableKvConfig() throws Exception {
         ManualExecutor executor = new ManualExecutor();
         TestingHistoricalLakeLookupManager manager = createTestingManager(executor);
         TableDescriptor indexedDescriptor =
                 TableDescriptor.builder(PARTITION_TABLE_INFO.toTableDescriptor())
                         .kvFormat(KvFormat.INDEXED)
+                        .property(
+                                ConfigOptions.TABLE_KV_FORMAT_VERSION,
+                                ConfigOptions.KV_FORMAT_VERSION_2)
                         .build();
         TableInfo indexedTableInfo =
                 TableInfo.of(
@@ -203,7 +207,11 @@ class HistoricalLakeLookupManagerTest {
 
         lookupAndRun(manager, executor, indexedTableInfo);
 
-        assertThat(manager.createdKvFormats).containsExactly(KvFormat.INDEXED);
+        assertThat(manager.createdTableConfigs).hasSize(1);
+        TableConfig createdTableConfig = manager.createdTableConfigs.get(0);
+        assertThat(createdTableConfig.getKvFormat()).isEqualTo(KvFormat.INDEXED);
+        assertThat(createdTableConfig.getKvFormatVersion())
+                .contains(ConfigOptions.KV_FORMAT_VERSION_2);
     }
 
     @Test
@@ -362,7 +370,7 @@ class HistoricalLakeLookupManagerTest {
             extends HistoricalLakeLookupManager {
         private final List<TestingLakeTableLookuper> createdLookupers = new ArrayList<>();
         private final List<String> createdIoTmpDirs = new ArrayList<>();
-        private final List<KvFormat> createdKvFormats = new ArrayList<>();
+        private final List<TableConfig> createdTableConfigs = new ArrayList<>();
 
         private TestingHistoricalLakeLookupManager(Configuration conf, ManualExecutor executor) {
             super(
@@ -384,11 +392,11 @@ class HistoricalLakeLookupManagerTest {
 
         @Override
         LakeTableLookuper createLakeTableLookuper(
-                TablePath tablePath, String ioTmpDir, KvFormat kvFormat) {
+                TablePath tablePath, String ioTmpDir, TableConfig tableConfig) {
             TestingLakeTableLookuper lookuper = new TestingLakeTableLookuper();
             createdLookupers.add(lookuper);
             createdIoTmpDirs.add(ioTmpDir);
-            createdKvFormats.add(kvFormat);
+            createdTableConfigs.add(tableConfig);
             return lookuper;
         }
     }

@@ -1162,14 +1162,23 @@ public class ServerRpcMessageUtils {
             for (int i = 0; i < lookupReqForBucket.getKeysCount(); i++) {
                 keys.add(lookupReqForBucket.getKeyAt(i));
             }
-            lookupEntryData.put(
-                    tb,
+            LookupDataForBucket lookupData =
                     new LookupDataForBucket(
                             tb,
                             keys,
                             lookupReqForBucket.hasOriginalPartitionName()
                                     ? lookupReqForBucket.getOriginalPartitionName()
-                                    : null));
+                                    : null);
+            LookupDataForBucket previous = lookupEntryData.putIfAbsent(tb, lookupData);
+            if (previous != null) {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Duplicate historical lookup requests for table bucket %s with "
+                                        + "original partitions %s and %s.",
+                                tb,
+                                previous.originalPartitionName(),
+                                lookupData.originalPartitionName()));
+            }
         }
         return lookupEntryData;
     }
