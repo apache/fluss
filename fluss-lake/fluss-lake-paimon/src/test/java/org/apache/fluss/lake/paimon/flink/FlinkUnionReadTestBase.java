@@ -30,8 +30,6 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 
 import javax.annotation.Nullable;
 
-import static org.apache.fluss.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
-
 /** Base class for Flink union read test. */
 public class FlinkUnionReadTestBase extends FlinkPaimonTieringTestBase {
 
@@ -76,7 +74,7 @@ public class FlinkUnionReadTestBase extends FlinkPaimonTieringTestBase {
         streamTEnv.executeSql(
                 String.format(
                         "create catalog %s with ('type' = 'fluss', '%s' = '%s')",
-                        CATALOG_NAME, BOOTSTRAP_SERVERS.key(), bootstrapServers));
+                        CATALOG_NAME, ConfigOptions.BOOTSTRAP_SERVERS.key(), bootstrapServers));
         streamTEnv.executeSql("use catalog " + CATALOG_NAME);
         streamTEnv.executeSql("use " + DEFAULT_DB);
         return streamTEnv;
@@ -94,7 +92,7 @@ public class FlinkUnionReadTestBase extends FlinkPaimonTieringTestBase {
         batchTEnv.executeSql(
                 String.format(
                         "create catalog %s with ('type' = 'fluss', '%s' = '%s')",
-                        CATALOG_NAME, BOOTSTRAP_SERVERS.key(), bootstrapServers));
+                        CATALOG_NAME, ConfigOptions.BOOTSTRAP_SERVERS.key(), bootstrapServers));
         batchTEnv.executeSql("use catalog " + CATALOG_NAME);
         batchTEnv.executeSql("use " + DEFAULT_DB);
     }

@@ -26,6 +26,7 @@ import org.apache.fluss.rpc.messages.PbPrefixLookupRespForBucket;
 import org.apache.fluss.rpc.messages.PbValue;
 import org.apache.fluss.rpc.messages.PbValueList;
 import org.apache.fluss.rpc.messages.PrefixLookupResponse;
+import org.apache.fluss.server.config.ResolvedTableConfig;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKv;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKvBuilder;
 import org.apache.fluss.server.kv.rocksdb.RocksDBResourceContainer;
@@ -157,7 +158,9 @@ public class KvTestUtils {
 
             dbDataDownloader.transferAllDataToDirectory(downloadSpec1, closeableRegistry);
             RocksDBResourceContainer rocksDBResourceContainer =
-                    new RocksDBResourceContainer(new Configuration(), destPath.toFile());
+                    new RocksDBResourceContainer(
+                            new ResolvedTableConfig(new Configuration(), new Configuration()),
+                            destPath.toFile());
             return new RocksDBKvBuilder(
                             destPath.toFile(),
                             rocksDBResourceContainer,

@@ -21,6 +21,7 @@ import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.DiskWriteLockedException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidRequiredAcksException;
@@ -28,7 +29,6 @@ import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.KvFormat;
-import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
@@ -60,6 +60,7 @@ import org.apache.fluss.rpc.entity.PutKvResultForBucket;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.protocol.MergeMode;
+import org.apache.fluss.server.config.ResolvedTableConfig;
 import org.apache.fluss.server.entity.FetchReqInfo;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
@@ -2618,7 +2619,11 @@ class ReplicaManagerTest extends ReplicaTestBase {
         File dataDir = localDiskManager.dataDirs().get(0);
         LogTablet logTablet =
                 logManager.getOrCreateLog(
-                        dataDir, physicalTablePath, tb, LogFormat.ARROW, 1, false);
+                        dataDir,
+                        physicalTablePath,
+                        tb,
+                        new ResolvedTableConfig(new Configuration(), conf),
+                        false);
         File logDir = logTablet.getLogDir();
         Path tableDir = logManager.getTabletParentDir(dataDir, physicalTablePath, tb);
         assertThat(logDir).exists();

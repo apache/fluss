@@ -50,6 +50,7 @@ import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.record.bytesview.MultiBytesView;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.encode.ValueEncoder;
+import org.apache.fluss.server.config.ResolvedTableConfig;
 import org.apache.fluss.server.kv.autoinc.AutoIncrementManager;
 import org.apache.fluss.server.kv.autoinc.TestingSequenceGeneratorFactory;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.Key;
@@ -175,11 +176,10 @@ class KvTabletTest {
                 tablePath,
                 logTabletDir,
                 conf,
+                new ResolvedTableConfig(new Configuration(), conf),
                 TestingMetricGroups.TABLET_SERVER_METRICS,
                 0,
                 new FlussScheduler(1),
-                LogFormat.ARROW,
-                1,
                 true,
                 SystemClock.getInstance(),
                 true);
@@ -193,7 +193,7 @@ class KvTabletTest {
             SchemaGetter schemaGetter,
             Map<String, String> tableConfig)
             throws Exception {
-        TableConfig tableConf = new TableConfig(Configuration.fromMap(tableConfig));
+        TableConfig tableConf = new ResolvedTableConfig(Configuration.fromMap(tableConfig), conf);
         RowMerger rowMerger = RowMerger.create(tableConf, KvFormat.COMPACTED, schemaGetter);
         AutoIncrementManager autoIncrementManager =
                 new AutoIncrementManager(
@@ -207,7 +207,7 @@ class KvTabletTest {
                 tableBucket,
                 logTablet,
                 tmpKvDir,
-                conf,
+                tableConf,
                 TestingMetricGroups.TABLET_SERVER_METRICS,
                 new RootAllocator(Long.MAX_VALUE),
                 new TestingMemorySegmentPool(10 * 1024),

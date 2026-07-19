@@ -29,8 +29,6 @@ import org.junit.jupiter.api.BeforeEach;
 
 import javax.annotation.Nullable;
 
-import static org.apache.fluss.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
-
 /** Base class for iceberg union read test. */
 class FlinkUnionReadTestBase extends FlinkIcebergTieringTestBase {
     protected static final String DEFAULT_DB = "fluss";
@@ -55,7 +53,7 @@ class FlinkUnionReadTestBase extends FlinkIcebergTieringTestBase {
         batchTEnv.executeSql(
                 String.format(
                         "create catalog %s with ('type' = 'fluss', '%s' = '%s')",
-                        CATALOG_NAME, BOOTSTRAP_SERVERS.key(), bootstrapServers));
+                        CATALOG_NAME, ConfigOptions.BOOTSTRAP_SERVERS.key(), bootstrapServers));
         batchTEnv.executeSql("use catalog " + CATALOG_NAME);
         batchTEnv.executeSql("use " + DEFAULT_DB);
         buildStreamTEnv(null);
@@ -74,7 +72,7 @@ class FlinkUnionReadTestBase extends FlinkIcebergTieringTestBase {
         streamTEnv.executeSql(
                 String.format(
                         "create catalog %s with ('type' = 'fluss', '%s' = '%s')",
-                        CATALOG_NAME, BOOTSTRAP_SERVERS.key(), bootstrapServers));
+                        CATALOG_NAME, ConfigOptions.BOOTSTRAP_SERVERS.key(), bootstrapServers));
         streamTEnv.executeSql("use catalog " + CATALOG_NAME);
         streamTEnv.executeSql("use " + DEFAULT_DB);
         return streamTEnv;

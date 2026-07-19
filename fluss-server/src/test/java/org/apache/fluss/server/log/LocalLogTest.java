@@ -29,6 +29,7 @@ import org.apache.fluss.record.LogRecordBatchStatisticsTestUtils;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.LogTestBase;
 import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.server.config.ResolvedTableConfig;
 import org.apache.fluss.server.log.LocalLog.SegmentDeletionReason;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.utils.CloseableIterator;
@@ -870,6 +871,7 @@ final class LocalLogTest extends LogTestBase {
                 recoverPoint,
                 nextOffsetMetadata,
                 tableBucket,
+                new ResolvedTableConfig(new Configuration(), logConf),
                 LogFormat.ARROW);
     }
 }

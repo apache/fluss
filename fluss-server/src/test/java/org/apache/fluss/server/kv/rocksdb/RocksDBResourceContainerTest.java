@@ -19,6 +19,7 @@ package org.apache.fluss.server.kv.rocksdb;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.server.config.ResolvedTableConfig;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -123,7 +124,8 @@ class RocksDBResourceContainerTest {
         }
         try (RocksDBResourceContainer container =
                 new RocksDBResourceContainer(
-                        new Configuration(), new File(longInstanceBasePath.toString()))) {
+                        new ResolvedTableConfig(new Configuration(), new Configuration()),
+                        new File(longInstanceBasePath.toString()))) {
             // the db log dir should be empty since we disable the log for the instance path is
             // too long
             assertThat(container.getDbOptions().dbLogDir()).isEmpty();
@@ -133,37 +135,40 @@ class RocksDBResourceContainerTest {
     }
 
     @Test
-    void testConfigurationOptionsFromConfig() throws Exception {
+    void testTableConfigurationOptions() throws Exception {
         Configuration configuration = new Configuration();
 
-        configuration.setString(ConfigOptions.KV_LOG_LEVEL.key(), "DEBUG_LEVEL");
-        configuration.setString(ConfigOptions.KV_LOG_DIR.key(), "/tmp/rocksdb-logs/");
-        configuration.setString(ConfigOptions.KV_LOG_FILE_NUM.key(), "10");
-        configuration.setString(ConfigOptions.KV_LOG_MAX_FILE_SIZE.key(), "2MB");
-        configuration.setString(ConfigOptions.KV_COMPACTION_STYLE.key(), "level");
-        configuration.setString(ConfigOptions.KV_USE_DYNAMIC_LEVEL_SIZE.key(), "TRUE");
-        configuration.setString(ConfigOptions.KV_TARGET_FILE_SIZE_BASE.key(), "8 mb");
-        configuration.setString(ConfigOptions.KV_MAX_SIZE_LEVEL_BASE.key(), "128MB");
-        configuration.setString(ConfigOptions.KV_MAX_BACKGROUND_THREADS.key(), "4");
-        configuration.setString(ConfigOptions.KV_MAX_WRITE_BUFFER_NUMBER.key(), "4");
-        configuration.setString(ConfigOptions.KV_MIN_WRITE_BUFFER_NUMBER_TO_MERGE.key(), "2");
-        configuration.setString(ConfigOptions.KV_WRITE_BUFFER_SIZE.key(), "64 MB");
-        configuration.setString(ConfigOptions.KV_BLOCK_SIZE.key(), "4 kb");
-        configuration.setString(ConfigOptions.KV_METADATA_BLOCK_SIZE.key(), "8 kb");
-        configuration.setString(ConfigOptions.KV_BLOCK_CACHE_SIZE.key(), "512 mb");
-        configuration.setString(ConfigOptions.KV_USE_BLOOM_FILTER.key(), "TRUE");
+        configuration.setString(ConfigOptions.TABLE_KV_MAX_OPEN_FILES.key(), "32");
+        configuration.setString(ConfigOptions.TABLE_KV_LOG_LEVEL.key(), "DEBUG_LEVEL");
+        configuration.setString(ConfigOptions.TABLE_KV_LOG_DIR.key(), "/tmp/rocksdb-logs/");
+        configuration.setString(ConfigOptions.TABLE_KV_LOG_FILE_NUM.key(), "10");
+        configuration.setString(ConfigOptions.TABLE_KV_LOG_MAX_FILE_SIZE.key(), "2MB");
+        configuration.setString(ConfigOptions.TABLE_KV_COMPACTION_STYLE.key(), "level");
+        configuration.setString(ConfigOptions.TABLE_KV_USE_DYNAMIC_LEVEL_SIZE.key(), "TRUE");
+        configuration.setString(ConfigOptions.TABLE_KV_TARGET_FILE_SIZE_BASE.key(), "8 mb");
+        configuration.setString(ConfigOptions.TABLE_KV_MAX_SIZE_LEVEL_BASE.key(), "128MB");
+        configuration.setString(ConfigOptions.TABLE_KV_MAX_BACKGROUND_THREADS.key(), "4");
+        configuration.setString(ConfigOptions.TABLE_KV_MAX_WRITE_BUFFER_NUMBER.key(), "4");
+        configuration.setString(ConfigOptions.TABLE_KV_MIN_WRITE_BUFFER_NUMBER_TO_MERGE.key(), "2");
+        configuration.setString(ConfigOptions.TABLE_KV_WRITE_BUFFER_SIZE.key(), "64 MB");
+        configuration.setString(ConfigOptions.TABLE_KV_BLOCK_SIZE.key(), "4 kb");
+        configuration.setString(ConfigOptions.TABLE_KV_METADATA_BLOCK_SIZE.key(), "8 kb");
+        configuration.setString(ConfigOptions.TABLE_KV_BLOCK_CACHE_SIZE.key(), "512 mb");
+        configuration.setString(ConfigOptions.TABLE_KV_USE_BLOOM_FILTER.key(), "TRUE");
         configuration.set(
-                ConfigOptions.KV_COMPRESSION_PER_LEVEL,
+                ConfigOptions.TABLE_KV_COMPRESSION_PER_LEVEL,
                 Arrays.asList(
                         ConfigOptions.KvCompressionType.NO,
                         ConfigOptions.KvCompressionType.LZ4,
                         ConfigOptions.KvCompressionType.ZSTD));
 
         try (RocksDBResourceContainer optionsContainer =
-                new RocksDBResourceContainer(configuration, null, true)) {
+                new RocksDBResourceContainer(
+                        new ResolvedTableConfig(configuration, new Configuration()), null, true)) {
 
             DBOptions dbOptions = optionsContainer.getDbOptions();
-            assertThat(dbOptions.maxOpenFiles()).isEqualTo(-1);
+            assertThat(dbOptions.maxBackgroundJobs()).isEqualTo(4);
+            assertThat(dbOptions.maxOpenFiles()).isEqualTo(32);
             assertThat(dbOptions.infoLogLevel()).isEqualTo(InfoLogLevel.DEBUG_LEVEL);
             assertThat(dbOptions.dbLogDir()).isEqualTo("/tmp/rocksdb-logs/");
             assertThat(dbOptions.keepLogFileNum()).isEqualTo(10);
@@ -200,7 +205,8 @@ class RocksDBResourceContainerTest {
         // Test with default values (all false, following RocksDB defaults)
         Configuration defaultConfig = new Configuration();
         try (RocksDBResourceContainer container =
-                new RocksDBResourceContainer(defaultConfig, null)) {
+                new RocksDBResourceContainer(
+                        new ResolvedTableConfig(new Configuration(), defaultConfig), null)) {
             ColumnFamilyOptions columnOptions = container.getColumnOptions();
             BlockBasedTableConfig tableConfig =
                     (BlockBasedTableConfig) columnOptions.tableFormatConfig();
@@ -214,15 +220,17 @@ class RocksDBResourceContainerTest {
 
         // Test with custom values (all true)
         Configuration customConfig = new Configuration();
-        customConfig.setString(ConfigOptions.KV_CACHE_INDEX_AND_FILTER_BLOCKS.key(), "true");
+        customConfig.setString(ConfigOptions.TABLE_KV_CACHE_INDEX_AND_FILTER_BLOCKS.key(), "true");
         customConfig.setString(
-                ConfigOptions.KV_CACHE_INDEX_AND_FILTER_BLOCKS_WITH_HIGH_PRIORITY.key(), "true");
+                ConfigOptions.TABLE_KV_CACHE_INDEX_AND_FILTER_BLOCKS_WITH_HIGH_PRIORITY.key(),
+                "true");
         customConfig.setString(
-                ConfigOptions.KV_PIN_L0_FILTER_AND_INDEX_BLOCKS_IN_CACHE.key(), "true");
-        customConfig.setString(ConfigOptions.KV_PIN_TOP_LEVEL_INDEX_AND_FILTER.key(), "true");
+                ConfigOptions.TABLE_KV_PIN_L0_FILTER_AND_INDEX_BLOCKS_IN_CACHE.key(), "true");
+        customConfig.setString(ConfigOptions.TABLE_KV_PIN_TOP_LEVEL_INDEX_AND_FILTER.key(), "true");
 
         try (RocksDBResourceContainer container =
-                new RocksDBResourceContainer(customConfig, null)) {
+                new RocksDBResourceContainer(
+                        new ResolvedTableConfig(customConfig, new Configuration()), null)) {
             ColumnFamilyOptions columnOptions = container.getColumnOptions();
             BlockBasedTableConfig tableConfig =
                     (BlockBasedTableConfig) columnOptions.tableFormatConfig();

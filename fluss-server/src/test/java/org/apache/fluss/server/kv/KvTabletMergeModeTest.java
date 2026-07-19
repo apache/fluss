@@ -36,6 +36,7 @@ import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.rpc.protocol.MergeMode;
+import org.apache.fluss.server.config.ResolvedTableConfig;
 import org.apache.fluss.server.kv.autoinc.AutoIncrementManager;
 import org.apache.fluss.server.kv.autoinc.TestingSequenceGeneratorFactory;
 import org.apache.fluss.server.kv.rowmerger.RowMerger;
@@ -125,17 +126,16 @@ class KvTabletMergeModeTest {
                         physicalTablePath,
                         logTabletDir,
                         conf,
+                        new ResolvedTableConfig(new Configuration(), conf),
                         TestingMetricGroups.TABLET_SERVER_METRICS,
                         0,
                         new FlussScheduler(1),
-                        LogFormat.ARROW,
-                        1,
                         true,
                         SystemClock.getInstance(),
                         true);
 
         TableBucket tableBucket = logTablet.getTableBucket();
-        TableConfig tableConf = new TableConfig(Configuration.fromMap(config));
+        TableConfig tableConf = new ResolvedTableConfig(Configuration.fromMap(config), conf);
         RowMerger rowMerger = RowMerger.create(tableConf, KvFormat.COMPACTED, schemaGetter);
         AutoIncrementManager autoIncrementManager =
                 new AutoIncrementManager(
@@ -150,7 +150,7 @@ class KvTabletMergeModeTest {
                         tableBucket,
                         logTablet,
                         tmpKvDir,
-                        conf,
+                        tableConf,
                         TestingMetricGroups.TABLET_SERVER_METRICS,
                         new RootAllocator(Long.MAX_VALUE),
                         new TestingMemorySegmentPool(10 * 1024),

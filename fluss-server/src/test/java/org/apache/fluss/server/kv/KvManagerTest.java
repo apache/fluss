@@ -19,9 +19,7 @@ package org.apache.fluss.server.kv;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.metadata.KvFormat;
-import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.SchemaInfo;
@@ -33,6 +31,7 @@ import org.apache.fluss.record.KvRecordTestUtils;
 import org.apache.fluss.record.TestData;
 import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.row.encode.ValueEncoder;
+import org.apache.fluss.server.config.ResolvedTableConfig;
 import org.apache.fluss.server.log.LogManager;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
@@ -371,14 +370,18 @@ final class KvManagerTest {
                         tablePath.getDatabaseName(), tablePath.getTableName(), partitionName);
         LogTablet logTablet =
                 logManager.getOrCreateLog(
-                        tempDir, physicalTablePath, tableBucket, LogFormat.ARROW, 1, true);
+                        tempDir,
+                        physicalTablePath,
+                        tableBucket,
+                        new ResolvedTableConfig(new Configuration(), conf),
+                        true);
         return kvManager.getOrCreateKv(
                 physicalTablePath,
                 tableBucket,
                 logTablet,
                 KvFormat.COMPACTED,
                 schemaGetter,
-                new TableConfig(new Configuration()),
+                new ResolvedTableConfig(new Configuration(), conf),
                 DEFAULT_COMPRESSION);
     }
 

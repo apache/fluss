@@ -19,12 +19,14 @@ package org.apache.fluss.server.log;
 
 import org.apache.fluss.compression.ArrowCompressionInfo;
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.LogTestBase;
 import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.server.config.ResolvedTableConfig;
 import org.apache.fluss.server.exception.CorruptIndexException;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.utils.FlussPaths;
@@ -650,11 +652,10 @@ final class LogLoaderTest extends LogTestBase {
                 PhysicalTablePath.of(DATA1_TABLE_PATH),
                 logDir,
                 conf,
+                new ResolvedTableConfig(new Configuration(), conf),
                 TestingMetricGroups.TABLET_SERVER_METRICS,
                 recoveryPoint,
                 scheduler,
-                LogFormat.ARROW,
-                1,
                 false,
                 SystemClock.getInstance(),
                 isCleanShutdown);

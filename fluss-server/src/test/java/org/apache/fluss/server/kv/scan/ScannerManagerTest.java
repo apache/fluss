@@ -23,7 +23,6 @@ import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.TooManyScannersException;
 import org.apache.fluss.memory.TestingMemorySegmentPool;
 import org.apache.fluss.metadata.KvFormat;
-import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
@@ -32,6 +31,7 @@ import org.apache.fluss.record.KvRecord;
 import org.apache.fluss.record.KvRecordTestUtils;
 import org.apache.fluss.record.TestData;
 import org.apache.fluss.record.TestingSchemaGetter;
+import org.apache.fluss.server.config.ResolvedTableConfig;
 import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.server.kv.KvTablet;
 import org.apache.fluss.server.kv.autoinc.AutoIncrementManager;
@@ -103,17 +103,16 @@ class ScannerManagerTest {
                         physicalTablePath,
                         logTabletDir,
                         conf,
+                        new ResolvedTableConfig(new Configuration(), conf),
                         TestingMetricGroups.TABLET_SERVER_METRICS,
                         0,
                         new FlussScheduler(1),
-                        LogFormat.ARROW,
-                        1,
                         true,
                         org.apache.fluss.utils.clock.SystemClock.getInstance(),
                         true);
 
         TableBucket tableBucket = logTablet.getTableBucket();
-        TableConfig tableConf = new TableConfig(new Configuration());
+        TableConfig tableConf = new ResolvedTableConfig(new Configuration(), conf);
         RowMerger rowMerger = RowMerger.create(tableConf, KvFormat.COMPACTED, schemaGetter);
         AutoIncrementManager autoIncrementManager =
                 new AutoIncrementManager(
@@ -128,7 +127,7 @@ class ScannerManagerTest {
                         tableBucket,
                         logTablet,
                         tmpKvDir,
-                        conf,
+                        tableConf,
                         TestingMetricGroups.TABLET_SERVER_METRICS,
                         new RootAllocator(Long.MAX_VALUE),
                         new TestingMemorySegmentPool(10 * 1024),

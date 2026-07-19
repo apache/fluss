@@ -19,6 +19,7 @@ package org.apache.fluss.server.log;
 
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.LogOffsetOutOfRangeException;
 import org.apache.fluss.exception.LogStorageException;
@@ -78,6 +79,7 @@ public final class LocalLog {
     static final int MAX_FILTER_SCAN_SEGMENTS = 16;
 
     private final Configuration config;
+    private final TableConfig tableConfig;
     private final LogSegments segments;
     private final TableBucket tableBucket;
     private final LogFormat logFormat;
@@ -102,10 +104,12 @@ public final class LocalLog {
             long recoveryPoint,
             LogOffsetMetadata nextOffsetMetadata,
             TableBucket tableBucket,
+            TableConfig tableConfig,
             LogFormat logFormat)
             throws IOException {
         this.logTabletDir = logTabletDir;
         this.config = config;
+        this.tableConfig = tableConfig;
         this.segments = segments;
         this.recoveryPoint = recoveryPoint;
         this.nextOffsetMetadata = nextOffsetMetadata;
@@ -331,7 +335,8 @@ public final class LocalLog {
         reason.logReason(Collections.singletonList(segmentToDelete));
 
         // open a new segment.
-        LogSegment newSegment = LogSegment.open(logTabletDir, newOffset, config, logFormat);
+        LogSegment newSegment =
+                LogSegment.open(logTabletDir, newOffset, config, tableConfig, logFormat);
         segments.add(newSegment);
 
         if (newOffset != segmentToDelete.getBaseOffset()) {
@@ -596,7 +601,8 @@ public final class LocalLog {
             logSegment.onBecomeInactiveSegment();
         }
 
-        LogSegment newSegment = LogSegment.open(logTabletDir, newOffset, config, logFormat);
+        LogSegment newSegment =
+                LogSegment.open(logTabletDir, newOffset, config, tableConfig, logFormat);
         segments.add(newSegment);
         // We need to update the segment base offset and append position data of the
         // metadata when log rolls.

@@ -18,6 +18,7 @@
 package org.apache.fluss.server.kv.rocksdb;
 
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.server.config.ResolvedTableConfig;
 import org.apache.fluss.utils.IOUtils;
 
 import org.junit.jupiter.api.extension.AfterEachCallback;
@@ -46,7 +47,10 @@ public class RocksDBExtension implements BeforeEachCallback, AfterEachCallback {
 
     private void before() throws Exception {
         rockDbDir = Files.createTempDirectory("rocksdbDir").toFile();
-        rocksDBResourceContainer = new RocksDBResourceContainer(new Configuration(), rockDbDir);
+        rocksDBResourceContainer =
+                new RocksDBResourceContainer(
+                        new ResolvedTableConfig(new Configuration(), new Configuration()),
+                        rockDbDir);
         this.rocksDBKv =
                 new RocksDBKvBuilder(
                                 rockDbDir,

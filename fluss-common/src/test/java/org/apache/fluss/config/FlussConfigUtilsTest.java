@@ -46,7 +46,30 @@ class FlussConfigUtilsTest {
                     assertThat(k).startsWith("table.");
                     assertThat(v.key()).startsWith("table.");
                 });
-        assertThat(tableOptions.size()).isEqualTo(TABLE_OPTIONS.size());
+        assertThat(TABLE_OPTIONS).containsAllEntriesOf(tableOptions);
+        assertThat(TABLE_OPTIONS)
+                .containsEntry(
+                        ConfigOptions.TABLE_LOG_SEGMENT_FILE_SIZE.key(),
+                        ConfigOptions.TABLE_LOG_SEGMENT_FILE_SIZE)
+                .containsEntry(
+                        ConfigOptions.TABLE_LOG_INDEX_FILE_SIZE.key(),
+                        ConfigOptions.TABLE_LOG_INDEX_FILE_SIZE)
+                .containsEntry(
+                        ConfigOptions.TABLE_KV_WRITE_BUFFER_SIZE.key(),
+                        ConfigOptions.TABLE_KV_WRITE_BUFFER_SIZE)
+                .containsEntry(
+                        ConfigOptions.TABLE_KV_MAX_WRITE_BUFFER_NUMBER.key(),
+                        ConfigOptions.TABLE_KV_MAX_WRITE_BUFFER_NUMBER)
+                .containsEntry(
+                        ConfigOptions.TABLE_KV_WRITE_BATCH_SIZE.key(),
+                        ConfigOptions.TABLE_KV_WRITE_BATCH_SIZE)
+                .containsEntry(
+                        ConfigOptions.TABLE_KV_MAX_BACKGROUND_THREADS.key(),
+                        ConfigOptions.TABLE_KV_MAX_BACKGROUND_THREADS);
+        assertThat(TABLE_OPTIONS.size()).isEqualTo(tableOptions.size());
+        assertThat(FlussConfigUtils.isTableStorageConfig("table.future.option")).isTrue();
+        assertThat(FlussConfigUtils.isTableStorageConfig(ConfigOptions.LOG_INDEX_FILE_SIZE.key()))
+                .isFalse();
 
         Map<String, ConfigOption<?>> clientOptions = extractConfigOptions("client.");
         assertThat(clientOptions).isNotEmpty();

@@ -328,44 +328,92 @@ public class FlinkConversions {
         org.apache.flink.configuration.ConfigOption<?> option;
         Class<?> clazz = flussOption.getClazz();
         boolean isList = flussOption.isList();
+        boolean hasDefaultValue = flussOption.hasDefaultValue();
         if (clazz.equals(String.class)) {
             if (!isList) {
-                option = builder.stringType().defaultValue((String) flussOption.defaultValue());
+                option =
+                        hasDefaultValue
+                                ? builder.stringType()
+                                        .defaultValue((String) flussOption.defaultValue())
+                                : builder.stringType().noDefaultValue();
             } else {
-                // currently, we only support string type for list
-                //noinspection unchecked
-                String[] defaultValues =
-                        ((List<String>) flussOption.defaultValue()).toArray(new String[0]);
-                option = builder.stringType().asList().defaultValues(defaultValues);
+                if (hasDefaultValue) {
+                    // currently, we only support string type for list
+                    //noinspection unchecked
+                    String[] defaultValues =
+                            ((List<String>) flussOption.defaultValue()).toArray(new String[0]);
+                    option = builder.stringType().asList().defaultValues(defaultValues);
+                } else {
+                    option = builder.stringType().asList().noDefaultValue();
+                }
             }
         } else if (clazz.equals(Integer.class)) {
-            option = builder.intType().defaultValue((Integer) flussOption.defaultValue());
+            option =
+                    hasDefaultValue
+                            ? builder.intType().defaultValue((Integer) flussOption.defaultValue())
+                            : builder.intType().noDefaultValue();
         } else if (clazz.equals(Long.class)) {
-            option = builder.longType().defaultValue((Long) flussOption.defaultValue());
+            option =
+                    hasDefaultValue
+                            ? builder.longType().defaultValue((Long) flussOption.defaultValue())
+                            : builder.longType().noDefaultValue();
         } else if (clazz.equals(Boolean.class)) {
-            option = builder.booleanType().defaultValue((Boolean) flussOption.defaultValue());
+            option =
+                    hasDefaultValue
+                            ? builder.booleanType()
+                                    .defaultValue((Boolean) flussOption.defaultValue())
+                            : builder.booleanType().noDefaultValue();
         } else if (clazz.equals(Float.class)) {
-            option = builder.floatType().defaultValue((Float) flussOption.defaultValue());
+            option =
+                    hasDefaultValue
+                            ? builder.floatType().defaultValue((Float) flussOption.defaultValue())
+                            : builder.floatType().noDefaultValue();
         } else if (clazz.equals(Double.class)) {
-            option = builder.doubleType().defaultValue((Double) flussOption.defaultValue());
+            option =
+                    hasDefaultValue
+                            ? builder.doubleType().defaultValue((Double) flussOption.defaultValue())
+                            : builder.doubleType().noDefaultValue();
         } else if (clazz.equals(Duration.class)) {
             // use string type in Flink option instead to make convert back easier
             option =
-                    builder.stringType()
-                            .defaultValue(
-                                    TimeUtils.formatWithHighestUnit(
-                                            (Duration) flussOption.defaultValue()));
+                    hasDefaultValue
+                            ? builder.stringType()
+                                    .defaultValue(
+                                            TimeUtils.formatWithHighestUnit(
+                                                    (Duration) flussOption.defaultValue()))
+                            : builder.stringType().noDefaultValue();
         } else if (clazz.equals(Password.class)) {
-            String defaultValue = ((Password) flussOption.defaultValue()).value();
-            option = builder.stringType().defaultValue(defaultValue);
+            option =
+                    hasDefaultValue
+                            ? builder.stringType()
+                                    .defaultValue(((Password) flussOption.defaultValue()).value())
+                            : builder.stringType().noDefaultValue();
         } else if (clazz.equals(MemorySize.class)) {
             // use string type in Flink option instead to make convert back easier
-            option = builder.stringType().defaultValue(flussOption.defaultValue().toString());
+            option =
+                    hasDefaultValue
+                            ? builder.stringType()
+                                    .defaultValue(flussOption.defaultValue().toString())
+                            : builder.stringType().noDefaultValue();
         } else if (clazz.isEnum()) {
             //noinspection unchecked
-            option =
-                    builder.enumType((Class<Enum>) clazz)
-                            .defaultValue((Enum) flussOption.defaultValue());
+            org.apache.flink.configuration.ConfigOptions.TypedConfigOptionBuilder<Enum>
+                    enumBuilder = builder.enumType((Class<Enum>) clazz);
+            if (!isList) {
+                option =
+                        hasDefaultValue
+                                ? enumBuilder.defaultValue((Enum) flussOption.defaultValue())
+                                : enumBuilder.noDefaultValue();
+            } else {
+                if (hasDefaultValue) {
+                    //noinspection unchecked
+                    Enum[] defaultValues =
+                            ((List<Enum>) flussOption.defaultValue()).toArray(new Enum[0]);
+                    option = enumBuilder.asList().defaultValues(defaultValues);
+                } else {
+                    option = enumBuilder.asList().noDefaultValue();
+                }
+            }
         } else {
             throw new IllegalArgumentException("Unsupported type: " + clazz);
         }

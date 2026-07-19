@@ -18,6 +18,7 @@
 package org.apache.fluss.server.kv.rocksdb;
 
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.server.config.ResolvedTableConfig;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -35,7 +36,9 @@ class RocksDBKvTest {
     void testRocksDbKv(@TempDir Path tempDir) throws Exception {
         File instanceBasePath = tempDir.toFile();
         RocksDBResourceContainer rocksDBResourceContainer =
-                new RocksDBResourceContainer(new Configuration(), instanceBasePath);
+                new RocksDBResourceContainer(
+                        new ResolvedTableConfig(new Configuration(), new Configuration()),
+                        instanceBasePath);
         RocksDBKvBuilder rocksDBKvBuilder =
                 new RocksDBKvBuilder(
                         instanceBasePath,
