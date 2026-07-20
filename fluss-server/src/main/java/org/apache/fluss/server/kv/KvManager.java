@@ -48,6 +48,8 @@ import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocatorUtil;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
+import org.apache.fluss.utils.clock.Clock;
+import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.rocksdb.RateLimiter;
@@ -117,6 +119,8 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
 
     private final ZooKeeperClient zkClient;
 
+    private final Clock clock;
+
     private final Map<TableBucket, KvTablet> currentKvs = new ConcurrentHashMap<>();
 
     /**
@@ -148,7 +152,8 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
             ZooKeeperClient zkClient,
             int recoveryThreadsPerDataDir,
             LogManager logManager,
-            TabletServerMetricGroup tabletServerMetricGroup)
+            TabletServerMetricGroup tabletServerMetricGroup,
+            Clock clock)
             throws IOException {
         super(TabletType.KV, localDiskManager.dataDirs(), conf, recoveryThreadsPerDataDir);
         this.localDiskManager = localDiskManager;
@@ -156,6 +161,7 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
         this.arrowBufferAllocator = BufferAllocatorUtil.createBufferAllocator(null);
         this.memorySegmentPool = LazyMemorySegmentPool.createServerBufferPool(conf);
         this.zkClient = zkClient;
+        this.clock = clock;
         this.remoteKvDir = FlussPaths.remoteKvDir(conf);
         this.remoteFileSystem = remoteKvDir.getFileSystem();
         this.serverMetricGroup = tabletServerMetricGroup;
@@ -189,13 +195,31 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
             TabletServerMetricGroup tabletServerMetricGroup,
             LocalDiskManager localDiskManager)
             throws IOException {
+        return create(
+                conf,
+                zkClient,
+                logManager,
+                tabletServerMetricGroup,
+                localDiskManager,
+                SystemClock.getInstance());
+    }
+
+    public static KvManager create(
+            Configuration conf,
+            ZooKeeperClient zkClient,
+            LogManager logManager,
+            TabletServerMetricGroup tabletServerMetricGroup,
+            LocalDiskManager localDiskManager,
+            Clock clock)
+            throws IOException {
         return new KvManager(
                 localDiskManager,
                 conf,
                 zkClient,
                 conf.getInt(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS),
                 logManager,
-                tabletServerMetricGroup);
+                tabletServerMetricGroup,
+                clock);
     }
 
     public void startup() {
@@ -278,7 +302,10 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
                                     schemaGetter,
                                     tableConfig.getChangelogImage(),
                                     sharedRocksDBRateLimiter,
-                                    autoIncrementManager);
+                                    autoIncrementManager,
+                                    clock,
+                                    getKvFormatVersion(tableConfig),
+                                    tableConfig);
                     currentKvs.put(tableBucket, tablet);
 
                     LOG.info(
@@ -370,7 +397,6 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
         // TODO: we should support recover schema from disk to decouple put and schema.
         TablePath tablePath = physicalTablePath.getTablePath();
         TableInfo tableInfo = getTableInfo(zkClient, tablePath);
-
         TableConfig tableConfig = tableInfo.getTableConfig();
         RowMerger rowMerger =
                 RowMerger.create(tableConfig, tableConfig.getKvFormat(), schemaGetter);
@@ -396,7 +422,10 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
                         schemaGetter,
                         tableConfig.getChangelogImage(),
                         sharedRocksDBRateLimiter,
-                        autoIncrementManager);
+                        autoIncrementManager,
+                        clock,
+                        getKvFormatVersion(tableConfig),
+                        tableConfig);
         if (this.currentKvs.containsKey(tableBucket)) {
             throw new IllegalStateException(
                     String.format(
@@ -412,6 +441,10 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
         this.currentKvs.put(tableBucket, kvTablet);
 
         return kvTablet;
+    }
+
+    private static int getKvFormatVersion(TableConfig tableConfig) {
+        return tableConfig.getKvFormatVersion().orElse(ConfigOptions.KV_FORMAT_VERSION_2);
     }
 
     public void deleteRemoteKvSnapshot(

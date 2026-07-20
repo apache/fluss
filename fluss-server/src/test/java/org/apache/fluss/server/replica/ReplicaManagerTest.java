@@ -33,6 +33,7 @@ import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.ChangeType;
@@ -116,6 +117,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_2;
+import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_3;
 import static org.apache.fluss.record.LogRecordReadContext.createArrowReadContext;
 import static org.apache.fluss.record.TestData.ANOTHER_DATA1;
 import static org.apache.fluss.record.TestData.DATA1;
@@ -125,6 +127,7 @@ import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
@@ -1312,7 +1315,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
 
         // first limit scan from an empty table.
         CompletableFuture<LimitScanResultForBucket> future = new CompletableFuture<>();
-        replicaManager.limitScan(tb, 1, future::complete);
+        replicaManager.limitScan(tb, 1, (short) 1, future::complete);
         assertThat(future.get().getValues()).isEqualTo(builder.build());
 
         // first, send one batch kv.
@@ -1330,15 +1333,107 @@ class ReplicaManagerTest extends ReplicaTestBase {
         // second, limit scan from table with limit
         builder.append(DEFAULT_SCHEMA_ID, compactedRow(DATA1_ROW_TYPE, new Object[] {1, "a1"}));
         future = new CompletableFuture<>();
-        replicaManager.limitScan(tb, 1, future::complete);
+        replicaManager.limitScan(tb, 1, (short) 1, future::complete);
         assertThat(future.get().getValues()).isEqualTo(builder.build());
 
         // third, limit scan from table with more limit
         future = new CompletableFuture<>();
-        replicaManager.limitScan(tb, 3, future::complete);
+        replicaManager.limitScan(tb, 3, (short) 1, future::complete);
         // there is only 2 records in the table bucket after merged
         builder.append(DEFAULT_SCHEMA_ID, compactedRow(DATA1_ROW_TYPE, new Object[] {2, "b1"}));
         assertThat(future.get().getValues()).isEqualTo(builder.build());
+    }
+
+    @Test
+    void testLimitScanRequiresRowTTLAwareClient() throws Exception {
+        TablePath tablePath = TablePath.of("test_db", "ttl_limit_scan_table");
+        long tableId = 150006L;
+        Map<String, String> properties = new HashMap<>(DATA1_TABLE_DESCRIPTOR_PK.getProperties());
+        properties.put(ConfigOptions.TABLE_KV_ROW_TTL.key(), "1 h");
+        properties.put(
+                ConfigOptions.TABLE_KV_FORMAT_VERSION.key(), String.valueOf(KV_FORMAT_VERSION_3));
+        TableDescriptor descriptor = DATA1_TABLE_DESCRIPTOR_PK.withProperties(properties);
+
+        if (zkClient.tableExist(tablePath)) {
+            zkClient.deleteTable(tablePath);
+        }
+        zkClient.registerTable(
+                tablePath,
+                TableRegistration.newTable(tableId, DEFAULT_REMOTE_DATA_DIR, descriptor));
+        zkClient.registerFirstSchema(tablePath, DATA1_SCHEMA_PK);
+
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+        makeKvTableAsLeader(tableId, tablePath, tableBucket.getBucket());
+
+        CompletableFuture<LimitScanResultForBucket> future = new CompletableFuture<>();
+        replicaManager.limitScan(tableBucket, 1, (short) 0, future::complete);
+
+        LimitScanResultForBucket result = future.get();
+        assertThat(result.failed()).isTrue();
+        assertThat(result.getError().error()).isEqualTo(Errors.UNSUPPORTED_VERSION);
+        assertThat(result.getError().message()).contains("row TTL");
+    }
+
+    @Test
+    void testRowTTLTableRejectsV1RawKvClient() throws Exception {
+        TablePath tablePath = TablePath.of("test_db", "ttl_raw_kv_table");
+        long tableId = 150007L;
+        Map<String, String> properties = new HashMap<>(DATA1_TABLE_DESCRIPTOR_PK.getProperties());
+        properties.put(ConfigOptions.TABLE_KV_ROW_TTL.key(), "1 h");
+        properties.put(
+                ConfigOptions.TABLE_KV_FORMAT_VERSION.key(), String.valueOf(KV_FORMAT_VERSION_3));
+        TableDescriptor descriptor = DATA1_TABLE_DESCRIPTOR_PK.withProperties(properties);
+
+        if (zkClient.tableExist(tablePath)) {
+            zkClient.deleteTable(tablePath);
+        }
+        zkClient.registerTable(
+                tablePath,
+                TableRegistration.newTable(tableId, DEFAULT_REMOTE_DATA_DIR, descriptor));
+        zkClient.registerFirstSchema(tablePath, DATA1_SCHEMA_PK);
+
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+        makeKvTableAsLeader(tableId, tablePath, tableBucket.getBucket());
+        short legacyRawKvVersion = 1;
+
+        CompletableFuture<List<PutKvResultForBucket>> putFuture = new CompletableFuture<>();
+        replicaManager.putRecordsToKv(
+                20000,
+                1,
+                Collections.singletonMap(tableBucket, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)),
+                null,
+                MergeMode.DEFAULT,
+                legacyRawKvVersion,
+                putFuture::complete);
+        PutKvResultForBucket putResult = putFuture.get().get(0);
+        assertThat(putResult.failed()).isTrue();
+        assertThat(putResult.getErrorCode()).isEqualTo(Errors.UNSUPPORTED_VERSION.code());
+        assertThat(putResult.getErrorMessage()).contains("row TTL");
+
+        CompactedKeyEncoder keyEncoder = new CompactedKeyEncoder(DATA1_ROW_TYPE, new int[] {0});
+        byte[] keyBytes = keyEncoder.encodeKey(row(DATA_1_WITH_KEY_AND_VALUE.get(0).f0));
+
+        CompletableFuture<Map<TableBucket, LookupResultForBucket>> lookupFuture =
+                new CompletableFuture<>();
+        replicaManager.lookups(
+                Collections.singletonMap(tableBucket, Collections.singletonList(keyBytes)),
+                legacyRawKvVersion,
+                lookupFuture::complete);
+        LookupResultForBucket lookupResult = lookupFuture.get().get(tableBucket);
+        assertThat(lookupResult.failed()).isTrue();
+        assertThat(lookupResult.getErrorCode()).isEqualTo(Errors.UNSUPPORTED_VERSION.code());
+        assertThat(lookupResult.getErrorMessage()).contains("row TTL");
+
+        CompletableFuture<Map<TableBucket, PrefixLookupResultForBucket>> prefixFuture =
+                new CompletableFuture<>();
+        replicaManager.prefixLookups(
+                Collections.singletonMap(tableBucket, Collections.singletonList(keyBytes)),
+                legacyRawKvVersion,
+                prefixFuture::complete);
+        PrefixLookupResultForBucket prefixResult = prefixFuture.get().get(tableBucket);
+        assertThat(prefixResult.failed()).isTrue();
+        assertThat(prefixResult.getError().error()).isEqualTo(Errors.UNSUPPORTED_VERSION);
+        assertThat(prefixResult.getError().message()).contains("row TTL");
     }
 
     @Test
@@ -1367,7 +1462,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
 
         // get limit 10 records from local.
         CompletableFuture<LimitScanResultForBucket> limitFuture = new CompletableFuture<>();
-        replicaManager.limitScan(tb, 10, limitFuture::complete);
+        replicaManager.limitScan(tb, 10, (short) 1, limitFuture::complete);
         SchemaGetter schemaGetter =
                 serverMetadataCache.subscribeWithInitialSchema(
                         DATA1_TABLE_PATH, DATA1_TABLE_ID, 1, DATA1_SCHEMA);

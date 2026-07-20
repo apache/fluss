@@ -23,10 +23,11 @@ import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.record.ValueRecord;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.ProjectedRow;
+import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.utils.SchemaUtil;
 
-import static org.apache.fluss.row.encode.ValueEncoder.SCHEMA_ID_LENGTH;
+import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_2;
 
 /**
  * A decoder that deserializes raw byte arrays of {@link ValueRecord} with dynamic or
@@ -48,12 +49,28 @@ public class FixedSchemaDecoder {
     /** Indicates whether there is no projection between source schema and target schema. */
     private final boolean noProjection;
 
+    /** The raw value layout used to locate the row payload. */
+    private final KvValueLayout kvValueLayout;
+
     public FixedSchemaDecoder(KvFormat kvFormat, Schema sourceSchema, Schema targetSchema) {
+        this(
+                kvFormat,
+                sourceSchema,
+                targetSchema,
+                KvValueLayout.forKvFormatVersion(KV_FORMAT_VERSION_2));
+    }
+
+    public FixedSchemaDecoder(
+            KvFormat kvFormat,
+            Schema sourceSchema,
+            Schema targetSchema,
+            KvValueLayout kvValueLayout) {
         this.rowDecoder =
                 RowDecoder.create(
                         kvFormat, sourceSchema.getRowType().getChildren().toArray(new DataType[0]));
         this.fieldIdMapping = SchemaUtil.getIndexMapping(sourceSchema, targetSchema);
         this.noProjection = false;
+        this.kvValueLayout = kvValueLayout;
     }
 
     /**
@@ -61,11 +78,20 @@ public class FixedSchemaDecoder {
      * target schema.
      */
     public FixedSchemaDecoder(KvFormat kvFormat, Schema schema) {
+        this(kvFormat, schema, KvValueLayout.forKvFormatVersion(KV_FORMAT_VERSION_2));
+    }
+
+    /**
+     * Creates a FixedSchemaDecoder without projection, i.e., the source schema is the same as the
+     * target schema.
+     */
+    public FixedSchemaDecoder(KvFormat kvFormat, Schema schema, KvValueLayout kvValueLayout) {
         this.rowDecoder =
                 RowDecoder.create(
                         kvFormat, schema.getRowType().getChildren().toArray(new DataType[0]));
         this.fieldIdMapping = null;
         this.noProjection = true;
+        this.kvValueLayout = kvValueLayout;
     }
 
     /**
@@ -90,6 +116,9 @@ public class FixedSchemaDecoder {
      * adheres to the fixed {@code targetSchema}.
      */
     public InternalRow decode(MemorySegment valueSegment) {
-        return decode(valueSegment, SCHEMA_ID_LENGTH, valueSegment.size() - SCHEMA_ID_LENGTH);
+        return decode(
+                valueSegment,
+                kvValueLayout.rowPayloadOffset(),
+                kvValueLayout.rowPayloadLength(valueSegment.size()));
     }
 }

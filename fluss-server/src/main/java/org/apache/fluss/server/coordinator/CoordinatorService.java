@@ -24,6 +24,7 @@ import org.apache.fluss.cluster.rebalance.GoalType;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.exception.ApiException;
@@ -52,6 +53,7 @@ import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
+import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -135,6 +137,7 @@ import org.apache.fluss.rpc.messages.RemoveServerTagRequest;
 import org.apache.fluss.rpc.messages.RemoveServerTagResponse;
 import org.apache.fluss.rpc.netty.server.Session;
 import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.security.acl.AclBinding;
 import org.apache.fluss.security.acl.AclBindingFilter;
@@ -208,6 +211,8 @@ import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.config.ConfigOptions.CURRENT_KV_FORMAT_VERSION;
+import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_3;
+import static org.apache.fluss.config.ConfigOptions.MAX_KV_FORMAT_VERSION;
 import static org.apache.fluss.config.FlussConfigUtils.isTableStorageConfig;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindingFilters;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
@@ -369,13 +374,20 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         return tablePath;
     }
 
-    private void validateKvTable(long tableId) {
+    @Override
+    protected TableInfo getTableInfo(long tableId) {
+        TablePath tablePath = getTablePathById(tableId);
+        return metadataManager.getTable(tablePath);
+    }
+
+    private TableInfo validateKvTable(long tableId) {
         TablePath tablePath = getTablePathById(tableId);
         TableInfo tableInfo = metadataManager.getTable(tablePath);
         if (!tableInfo.hasPrimaryKey()) {
             throw new NonPrimaryKeyTableException(
                     "Table '" + tablePath + "' is not a primary key table");
         }
+        return tableInfo;
     }
 
     @Override
@@ -683,20 +695,23 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
         if (newDescriptor.hasPrimaryKey()) {
             Map<String, String> newProperties = new HashMap<>(newDescriptor.getProperties());
-            Integer formatVersion =
-                    Configuration.fromMap(newProperties).get(ConfigOptions.TABLE_KV_FORMAT_VERSION);
+            Configuration newTableConf = Configuration.fromMap(newProperties);
+            Integer formatVersion = newTableConf.get(ConfigOptions.TABLE_KV_FORMAT_VERSION);
             if (formatVersion == null) {
-                // set current kv format version for default
+                int defaultKvFormatVersion =
+                        newTableConf.getOptional(ConfigOptions.TABLE_KV_ROW_TTL).isPresent()
+                                ? KV_FORMAT_VERSION_3
+                                : CURRENT_KV_FORMAT_VERSION;
                 newProperties.put(
                         ConfigOptions.TABLE_KV_FORMAT_VERSION.key(),
-                        String.valueOf(CURRENT_KV_FORMAT_VERSION));
+                        String.valueOf(defaultKvFormatVersion));
             } else {
-                if (formatVersion > CURRENT_KV_FORMAT_VERSION) {
+                if (formatVersion > MAX_KV_FORMAT_VERSION) {
                     throw new InvalidConfigException(
                             String.format(
                                     "Unsupported kv format version %d. "
                                             + "The maximum supported version is %d.",
-                                    formatVersion, CURRENT_KV_FORMAT_VERSION));
+                                    formatVersion, MAX_KV_FORMAT_VERSION));
                 }
             }
 
@@ -705,10 +720,31 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 newProperties.put(ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key(), "true");
             }
 
+            Optional<String> rowTtlTimeColumn =
+                    newTableConf.getOptional(ConfigOptions.TABLE_KV_ROW_TTL_TIME_COLUMN);
+            if (rowTtlTimeColumn.isPresent()) {
+                Optional<Integer> rowTtlTimeColumnId =
+                        getColumnId(newDescriptor.getSchema(), rowTtlTimeColumn.get());
+                if (rowTtlTimeColumnId.isPresent()) {
+                    newProperties.put(
+                            TableConfig.KV_ROW_TTL_TIME_COLUMN_ID_KEY,
+                            String.valueOf(rowTtlTimeColumnId.get()));
+                }
+            }
+
             newDescriptor = newDescriptor.withProperties(newProperties);
         }
 
         return newDescriptor;
+    }
+
+    private static Optional<Integer> getColumnId(Schema schema, String columnName) {
+        for (Schema.Column column : schema.getColumns()) {
+            if (column.getName().equals(columnName)) {
+                return Optional.of(column.getColumnId());
+            }
+        }
+        return Optional.empty();
     }
 
     private boolean isDataLakeEnabled(TableDescriptor tableDescriptor) {
@@ -1216,7 +1252,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 authorizeTable(OperationType.READ, tableId);
             }
 
-            validateKvTable(tableId);
+            TableInfo tableInfo = validateKvTable(tableId);
+            validateClientVersionForPkTable(ApiKeys.ACQUIRE_KV_SNAPSHOT_LEASE, tableInfo);
         }
 
         String leaseId = request.getLeaseId();

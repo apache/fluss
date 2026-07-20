@@ -48,20 +48,22 @@ public enum ApiKeys {
     // Version 0: Uses lake's encoder for primary key encoding (legacy behavior).
     // Version 1: Uses CompactedKeyEncoder for primary key encoding when bucket key differs from
     //            primary key, enabling prefix lookup support.
-    PUT_KV(1016, 0, 1, PUBLIC),
+    // Version 2: Requires row-TTL-aware clients for row TTL primary key tables.
+    PUT_KV(1016, 0, 2, PUBLIC),
 
     // Version 0: Uses lake's encoder for primary key encoding (legacy behavior).
     // Version 1: Uses CompactedKeyEncoder for primary key encoding when bucket key differs from
     //            primary key, enabling prefix lookup support.
-    LOOKUP(1017, 0, 1, PUBLIC),
+    // Version 2: Requires row-TTL-aware clients for row TTL primary key tables.
+    LOOKUP(1017, 0, 2, PUBLIC),
 
     NOTIFY_LEADER_AND_ISR(1018, 0, 0, PRIVATE),
     STOP_REPLICA(1019, 0, 0, PRIVATE),
     ADJUST_ISR(1020, 0, 0, PRIVATE),
     LIST_OFFSETS(1021, 0, 0, PUBLIC),
     COMMIT_KV_SNAPSHOT(1022, 0, 0, PRIVATE),
-    GET_LATEST_KV_SNAPSHOTS(1023, 0, 0, PUBLIC),
-    GET_KV_SNAPSHOT_METADATA(1024, 0, 0, PUBLIC),
+    GET_LATEST_KV_SNAPSHOTS(1023, 0, 1, PUBLIC),
+    GET_KV_SNAPSHOT_METADATA(1024, 0, 1, PUBLIC),
     GET_FILESYSTEM_SECURITY_TOKEN(1025, 0, 0, PUBLIC),
     INIT_WRITER(1026, 0, 0, PUBLIC),
     COMMIT_REMOTE_LOG_MANIFEST(1027, 0, 0, PRIVATE),
@@ -70,12 +72,15 @@ public enum ApiKeys {
     COMMIT_LAKE_TABLE_SNAPSHOT(1030, 0, 0, PRIVATE),
     NOTIFY_LAKE_TABLE_OFFSET(1031, 0, 0, PRIVATE),
     GET_LAKE_SNAPSHOT(1032, 0, 0, PUBLIC),
-    LIMIT_SCAN(1033, 0, 0, PUBLIC),
+
+    // Version 1: Requires row-TTL-aware clients for row TTL primary key tables.
+    LIMIT_SCAN(1033, 0, 1, PUBLIC),
 
     // Version 0: Uses lake's encoder for prefix key encoding (legacy behavior).
     // Version 1: Uses CompactedKeyEncoder for prefix key encoding when bucket key differs from
     //            primary key, ensuring encoded bucket key bytes are a prefix of primary key bytes.
-    PREFIX_LOOKUP(1034, 0, 1, PUBLIC),
+    // Version 2: Requires row-TTL-aware clients for row TTL primary key tables.
+    PREFIX_LOOKUP(1034, 0, 2, PUBLIC),
 
     GET_DATABASE_INFO(1035, 0, 0, PUBLIC),
     CREATE_PARTITION(1036, 0, 0, PUBLIC),
@@ -98,12 +103,12 @@ public enum ApiKeys {
     REGISTER_PRODUCER_OFFSETS(1053, 0, 0, PUBLIC),
     GET_PRODUCER_OFFSETS(1054, 0, 0, PUBLIC),
     DELETE_PRODUCER_OFFSETS(1055, 0, 0, PUBLIC),
-    ACQUIRE_KV_SNAPSHOT_LEASE(1056, 0, 0, PUBLIC),
+    ACQUIRE_KV_SNAPSHOT_LEASE(1056, 0, 1, PUBLIC),
     RELEASE_KV_SNAPSHOT_LEASE(1057, 0, 0, PUBLIC),
     DROP_KV_SNAPSHOT_LEASE(1058, 0, 0, PUBLIC),
     GET_TABLE_STATS(1059, 0, 0, PUBLIC),
     ALTER_DATABASE(1060, 0, 0, PUBLIC),
-    SCAN_KV(1061, 0, 0, PUBLIC),
+    SCAN_KV(1061, 0, 1, PUBLIC),
     GET_CLUSTER_HEALTH(1062, 0, 0, PUBLIC),
     LIST_REMOTE_LOG_MANIFESTS(1063, 0, 0, PUBLIC),
     LIST_KV_SNAPSHOTS(1064, 0, 0, PUBLIC);

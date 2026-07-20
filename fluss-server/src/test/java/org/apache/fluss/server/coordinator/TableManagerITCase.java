@@ -24,6 +24,7 @@ import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
+import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.DatabaseAlreadyExistException;
 import org.apache.fluss.exception.DatabaseNotEmptyException;
 import org.apache.fluss.exception.DatabaseNotExistException;
@@ -98,6 +99,7 @@ import java.util.stream.Collectors;
 
 import static org.apache.fluss.config.ConfigOptions.CURRENT_KV_FORMAT_VERSION;
 import static org.apache.fluss.config.ConfigOptions.DEFAULT_LISTENER_NAME;
+import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_3;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createPartition;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newAlterTableRequest;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newCreateDatabaseRequest;
@@ -682,6 +684,72 @@ class TableManagerITCase {
         assertThat(tsNodes)
                 .containsExactlyInAnyOrderElementsOf(
                         FLUSS_CLUSTER_EXTENSION.getTabletServerNodes());
+    }
+
+    @Test
+    void testCreateRowTTLTableDefaultsToKvFormatVersion3() throws Exception {
+        AdminReadOnlyGateway gateway = getAdminOnlyGateway(true);
+        AdminGateway adminGateway = getAdminGateway();
+
+        String db1 = "db_row_ttl";
+        String tb1 = "tb_row_ttl";
+        TablePath tablePath = TablePath.of(db1, tb1);
+        adminGateway.createDatabase(newCreateDatabaseRequest(db1, false)).get();
+
+        TableDescriptor tableDescriptor =
+                newPkTable()
+                        .withProperties(
+                                Collections.singletonMap(
+                                        ConfigOptions.TABLE_KV_ROW_TTL.key(), "1 h"));
+        adminGateway.createTable(newCreateTableRequest(tablePath, tableDescriptor, false)).get();
+
+        GetTableInfoResponse response =
+                gateway.getTableInfo(newGetTableInfoRequest(tablePath)).get();
+        TableDescriptor gottenTable = TableDescriptor.fromJsonBytes(response.getTableJson());
+
+        assertThat(gottenTable.getProperties())
+                .containsEntry(
+                        ConfigOptions.TABLE_KV_FORMAT_VERSION.key(),
+                        String.valueOf(KV_FORMAT_VERSION_3));
+    }
+
+    @Test
+    void testCreateEventTimeRowTTLTableStoresTimeColumnId() throws Exception {
+        AdminReadOnlyGateway gateway = getAdminOnlyGateway(true);
+        AdminGateway adminGateway = getAdminGateway();
+
+        String db1 = "db_event_time_row_ttl";
+        String tb1 = "tb_event_time_row_ttl";
+        TablePath tablePath = TablePath.of(db1, tb1);
+        adminGateway.createDatabase(newCreateDatabaseRequest(db1, false)).get();
+
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("event_time", DataTypes.BIGINT())
+                        .column("name", DataTypes.STRING())
+                        .primaryKey("id")
+                        .build();
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .distributedBy(3, "id")
+                        .property(ConfigOptions.TABLE_KV_ROW_TTL.key(), "1 h")
+                        .property(ConfigOptions.TABLE_KV_ROW_TTL_TIME_COLUMN.key(), "event_time")
+                        .build();
+        adminGateway.createTable(newCreateTableRequest(tablePath, tableDescriptor, false)).get();
+
+        GetTableInfoResponse response =
+                gateway.getTableInfo(newGetTableInfoRequest(tablePath)).get();
+        TableDescriptor gottenTable = TableDescriptor.fromJsonBytes(response.getTableJson());
+
+        assertThat(gottenTable.getProperties())
+                .containsEntry(
+                        ConfigOptions.TABLE_KV_FORMAT_VERSION.key(),
+                        String.valueOf(KV_FORMAT_VERSION_3))
+                .containsEntry(
+                        TableConfig.KV_ROW_TTL_TIME_COLUMN_ID_KEY,
+                        String.valueOf(schema.getColumn("event_time").getColumnId()));
     }
 
     @Test

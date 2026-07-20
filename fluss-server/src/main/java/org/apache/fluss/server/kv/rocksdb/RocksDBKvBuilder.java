@@ -24,6 +24,8 @@ import org.apache.fluss.server.utils.ResourceGuard;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.IOUtils;
 
+import org.rocksdb.AbstractCompactionFilter;
+import org.rocksdb.AbstractCompactionFilterFactory;
 import org.rocksdb.ColumnFamilyHandle;
 import org.rocksdb.ColumnFamilyOptions;
 import org.rocksdb.NativeLibraryLoader;
@@ -74,6 +76,25 @@ public class RocksDBKvBuilder {
         this.optionsContainer = rocksDBResourceContainer;
         this.instanceBasePath = instanceBasePath;
         this.instanceRocksDBPath = getInstanceRocksDBPath(instanceBasePath);
+    }
+
+    /**
+     * Sets the compaction filter factory and transfers its ownership to this builder.
+     *
+     * <p>The factory is closed with the built {@link RocksDBKv}, or when setup or building fails.
+     */
+    @SuppressWarnings("rawtypes")
+    public RocksDBKvBuilder setCompactionFilterFactory(
+            AbstractCompactionFilterFactory<? extends AbstractCompactionFilter<?>> factory) {
+        try {
+            columnFamilyOptions.setCompactionFilterFactory(
+                    (AbstractCompactionFilterFactory) factory);
+            optionsContainer.registerCloseableResource(factory);
+        } catch (RuntimeException | Error e) {
+            IOUtils.closeQuietly(factory);
+            throw e;
+        }
+        return this;
     }
 
     public RocksDBKv build() throws KvBuildingException {

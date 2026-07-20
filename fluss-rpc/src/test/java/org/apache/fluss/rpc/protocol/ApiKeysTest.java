@@ -38,4 +38,20 @@ class ApiKeysTest {
             assertThat(api.highestSupportedVersion).isGreaterThanOrEqualTo((short) 0);
         }
     }
+
+    @Test
+    void testSnapshotAndScanApisUseVersionOneForRowTTLAwareClients() {
+        assertThat(ApiKeys.GET_LATEST_KV_SNAPSHOTS.highestSupportedVersion).isEqualTo((short) 1);
+        assertThat(ApiKeys.GET_KV_SNAPSHOT_METADATA.highestSupportedVersion).isEqualTo((short) 1);
+        assertThat(ApiKeys.ACQUIRE_KV_SNAPSHOT_LEASE.highestSupportedVersion).isEqualTo((short) 1);
+        assertThat(ApiKeys.SCAN_KV.highestSupportedVersion).isEqualTo((short) 1);
+        assertThat(ApiKeys.LIMIT_SCAN.highestSupportedVersion).isEqualTo((short) 1);
+    }
+
+    @Test
+    void testRawKvApisUseVersionTwoForRowTTLAwareClients() {
+        assertThat(ApiKeys.PUT_KV.highestSupportedVersion).isEqualTo((short) 2);
+        assertThat(ApiKeys.LOOKUP.highestSupportedVersion).isEqualTo((short) 2);
+        assertThat(ApiKeys.PREFIX_LOOKUP.highestSupportedVersion).isEqualTo((short) 2);
+    }
 }

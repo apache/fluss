@@ -90,6 +90,7 @@ import org.apache.fluss.server.metadata.PartitionMetadata;
 import org.apache.fluss.server.metadata.PartitionNegativeCache;
 import org.apache.fluss.server.metadata.ServerMetadataCache;
 import org.apache.fluss.server.metadata.TableMetadata;
+import org.apache.fluss.server.replica.ReplicaManager;
 import org.apache.fluss.server.tablet.TabletService;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
@@ -182,6 +183,9 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     }
 
     public abstract void authorizeTable(OperationType operationType, long tableId);
+
+    /** Returns table information for a table id known by the concrete server role. */
+    protected abstract TableInfo getTableInfo(long tableId);
 
     public void authorizeDatabase(OperationType operationType, String databaseName) {
         if (authorizer != null) {
@@ -381,6 +385,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                             + tablePath
                             + "' is a partitioned table, but partition name is not provided.");
         }
+        validateClientVersionForPkTable(ApiKeys.GET_LATEST_KV_SNAPSHOTS, tableInfo);
 
         try {
             // get table id
@@ -424,6 +429,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
             GetKvSnapshotMetadataRequest request) {
         long tableId = request.getTableId();
         authorizeTable(OperationType.DESCRIBE, tableId);
+        validateClientVersionForPkTable(ApiKeys.GET_KV_SNAPSHOT_METADATA, tableId);
 
         TableBucket tableBucket =
                 new TableBucket(
@@ -447,6 +453,21 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                             tableBucket, snapshotId, e.getMessage()),
                     e);
         }
+    }
+
+    /** Validates whether the current client API version can access this primary-key table. */
+    protected void validateClientVersionForPkTable(ApiKeys apiKey, TableInfo tableInfo) {
+        ReplicaManager.validateClientVersionForPkTable(
+                apiKey, currentSession().getApiVersion(), tableInfo);
+    }
+
+    /** Validates current API version for a table id, avoiding metadata lookup when safe. */
+    protected void validateClientVersionForPkTable(ApiKeys apiKey, long tableId) {
+        if (ReplicaManager.canSkipClientVersionValidation(
+                apiKey, currentSession().getApiVersion())) {
+            return;
+        }
+        validateClientVersionForPkTable(apiKey, getTableInfo(tableId));
     }
 
     @Override

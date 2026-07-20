@@ -794,7 +794,7 @@ public class ReplicaManager implements ServerReconfigurable {
             TableBucket tb = entry.getKey();
             try {
                 Replica replica = getReplicaOrException(tb);
-                validateClientVersionForPkTable(apiVersion, replica.getTableInfo());
+                validateClientVersionForPkTable(ApiKeys.LOOKUP, apiVersion, replica.getTableInfo());
                 tableMetrics = replica.tableMetrics();
                 tableMetrics.totalLookupRequests().inc();
                 lookupResultForBucketMap.put(
@@ -920,7 +920,8 @@ public class ReplicaManager implements ServerReconfigurable {
             List<List<byte[]>> resultForBucket = new ArrayList<>();
             try {
                 Replica replica = getReplicaOrException(tb);
-                validateClientVersionForPkTable(apiVersion, replica.getTableInfo());
+                validateClientVersionForPkTable(
+                        ApiKeys.PREFIX_LOOKUP, apiVersion, replica.getTableInfo());
                 tableMetrics = replica.tableMetrics();
                 tableMetrics.totalPrefixLookupRequests().inc();
                 for (byte[] prefixKey : entry.getValue()) {
@@ -1347,7 +1348,7 @@ public class ReplicaManager implements ServerReconfigurable {
             try {
                 LOG.trace("Put records to local kv tablet for table bucket {}", tb);
                 Replica replica = getReplicaOrException(tb);
-                validateClientVersionForPkTable(apiVersion, replica.getTableInfo());
+                validateClientVersionForPkTable(ApiKeys.PUT_KV, apiVersion, replica.getTableInfo());
                 tableMetrics = replica.tableMetrics();
                 tableMetrics.totalPutKvRequests().inc();
                 LogAppendInfo appendInfo =
@@ -1405,6 +1406,7 @@ public class ReplicaManager implements ServerReconfigurable {
     public void limitScan(
             TableBucket tableBucket,
             int limit,
+            short apiVersion,
             Consumer<LimitScanResultForBucket> responseCallback) {
         LimitScanResultForBucket limitScanResultForBucket;
         TableMetricGroup tableMetrics = null;
@@ -1413,6 +1415,8 @@ public class ReplicaManager implements ServerReconfigurable {
             tableMetrics = replica.tableMetrics();
             tableMetrics.totalLimitScanRequests().inc();
             if (replica.isKvTable()) {
+                validateClientVersionForPkTable(
+                        ApiKeys.LIMIT_SCAN, apiVersion, replica.getTableInfo());
                 limitScanResultForBucket =
                         new LimitScanResultForBucket(tableBucket, replica.limitKvScan(limit));
             } else {
@@ -2208,26 +2212,65 @@ public class ReplicaManager implements ServerReconfigurable {
         checkpointHighWatermarks();
     }
 
-    private void validateClientVersionForPkTable(int apiVersion, TableInfo tableInfo) {
-        if (apiVersion > 0) {
+    /**
+     * Returns whether this API version is new enough to access any primary-key table without
+     * reading table-specific compatibility metadata.
+     */
+    public static boolean canSkipClientVersionValidation(ApiKeys apiKey, int apiVersion) {
+        return apiVersion >= Math.max(1, requiredApiVersionForRowTTL(apiKey));
+    }
+
+    /** Validates whether a client API version can access this primary-key table. */
+    public static void validateClientVersionForPkTable(
+            ApiKeys apiKey, int apiVersion, TableInfo tableInfo) {
+        if (canSkipClientVersionValidation(apiKey, apiVersion)) {
             return;
         }
 
-        // in the old version
         TableConfig tableConfig = tableInfo.getTableConfig();
-        // is with datalake format
-        if (tableConfig.getDataLakeFormat().isPresent()) {
-            Optional<Integer> kvFormatVersion = tableConfig.getKvFormatVersion();
-            if (kvFormatVersion.isPresent()
-                    && kvFormatVersion.get() == KV_FORMAT_VERSION_2
-                    && !tableInfo.isDefaultBucketKey()) {
+        Optional<Integer> kvFormatVersion = tableConfig.getKvFormatVersion();
+        if (apiVersion < 1
+                && tableConfig.getDataLakeFormat().isPresent()
+                && kvFormatVersion.isPresent()
+                && kvFormatVersion.get() == KV_FORMAT_VERSION_2
+                && !tableInfo.isDefaultBucketKey()) {
+            throw new UnsupportedVersionException(
+                    String.format(
+                            "Client API version %d is not supported for table '%s'. "
+                                    + "This table uses new key encoding strategy (kv format version %d). "
+                                    + "Please upgrade your Fluss client to a newer version.",
+                            apiVersion, tableInfo.getTablePath(), kvFormatVersion.get()));
+        }
+
+        if (tableConfig.getRowTTL().isPresent()) {
+            int requiredVersion = requiredApiVersionForRowTTL(apiKey);
+            if (apiVersion < requiredVersion) {
                 throw new UnsupportedVersionException(
                         String.format(
-                                "Client API version %d is not supported for table '%s'. "
-                                        + "This table uses new key encoding strategy (kv format version %d). "
+                                "Client API version %d is not supported for table '%s' and API '%s'. "
+                                        + "This table has row TTL enabled. "
+                                        + "It requires API version %d or higher. "
                                         + "Please upgrade your Fluss client to a newer version.",
-                                apiVersion, tableInfo.getTablePath(), kvFormatVersion.get()));
+                                apiVersion, tableInfo.getTablePath(), apiKey, requiredVersion));
             }
+        }
+    }
+
+    private static int requiredApiVersionForRowTTL(ApiKeys apiKey) {
+        switch (apiKey) {
+            case PUT_KV:
+            case LOOKUP:
+            case PREFIX_LOOKUP:
+                return 2;
+            case GET_LATEST_KV_SNAPSHOTS:
+            case GET_KV_SNAPSHOT_METADATA:
+            case ACQUIRE_KV_SNAPSHOT_LEASE:
+            case LIMIT_SCAN:
+            case SCAN_KV:
+                return 1;
+            default:
+                throw new IllegalArgumentException(
+                        "Unsupported primary-key table client version check for API " + apiKey);
         }
     }
 

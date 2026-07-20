@@ -221,7 +221,8 @@ public class ReplicaTestBase {
                         zkClient,
                         logManager,
                         TestingMetricGroups.TABLET_SERVER_METRICS,
-                        localDiskManager);
+                        localDiskManager,
+                        manualClock);
         kvManager.startup();
 
         serverMetadataCache =

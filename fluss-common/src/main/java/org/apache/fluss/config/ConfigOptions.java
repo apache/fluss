@@ -26,6 +26,7 @@ import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.MergeEngineType;
+import org.apache.fluss.metadata.RowTtlChangelogMode;
 import org.apache.fluss.utils.ArrayUtils;
 
 import java.lang.reflect.Field;
@@ -56,7 +57,9 @@ public class ConfigOptions {
     public static final String DEFAULT_LISTENER_NAME = "FLUSS";
 
     public static final int KV_FORMAT_VERSION_2 = 2;
+    public static final int KV_FORMAT_VERSION_3 = 3;
     public static final int CURRENT_KV_FORMAT_VERSION = KV_FORMAT_VERSION_2;
+    public static final int MAX_KV_FORMAT_VERSION = KV_FORMAT_VERSION_3;
 
     @Internal
     public static final String[] PARENT_FIRST_LOGGING_PATTERNS =
@@ -1655,7 +1658,9 @@ public class ConfigOptions {
                                     + "when bucket key differs from primary key, which ensures proper prefix lookup support. "
                                     + "When bucket key equals primary key (default bucket key), it still uses datalake's encoder "
                                     + "for optimization (encoded bytes can be reused for bucket calculation). "
-                                    + "Bucket key encoding always uses datalake's encoder to align with datalake bucket calculation.");
+                                    + "Bucket key encoding always uses datalake's encoder to align with datalake bucket calculation. "
+                                    + "(3) Version 3: TTL-enabled primary key tables encode a Fluss-owned TTL timestamp "
+                                    + "before the row payload so compaction filters can clean up expired rows.");
 
     public static final ConfigOption<Boolean> TABLE_KV_STANDBY_REPLICA_ENABLED =
             key("table.kv.standby-replica.enabled")
@@ -1667,6 +1672,33 @@ public class ConfigOptions {
                                     + "Automatically set to true by the coordinator during table creation for new PK tables. "
                                     + "Tables created before this option was introduced are treated as disabled. "
                                     + "Can be dynamically enabled via ALTER TABLE.");
+
+    public static final ConfigOption<Duration> TABLE_KV_ROW_TTL =
+            key("table.kv.row.ttl")
+                    .durationType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The best-effort row-level TTL for primary key tables. "
+                                    + "If not set, row-level TTL is disabled. "
+                                    + "Expired rows may remain visible until RocksDB compaction removes them.");
+
+    public static final ConfigOption<RowTtlChangelogMode> TABLE_KV_ROW_TTL_CHANGELOG_MODE =
+            key("table.kv.row.ttl.changelog-mode")
+                    .enumType(RowTtlChangelogMode.class)
+                    .defaultValue(RowTtlChangelogMode.NONE)
+                    .withDescription(
+                            "The changelog mode for row-level TTL cleanup. "
+                                    + "Only 'none' is supported in this version, which means TTL cleanup does not emit delete records.");
+
+    public static final ConfigOption<String> TABLE_KV_ROW_TTL_TIME_COLUMN =
+            key("table.kv.row.ttl.time-column")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The event-time column for row-level TTL. "
+                                    + "If not set, row-level TTL uses processing time. "
+                                    + "If set, the column must be BIGINT epoch milliseconds or TIMESTAMP_LTZ. "
+                                    + "Rows with null event-time values do not expire through TTL.");
 
     public static final ConfigOption<Boolean> TABLE_AUTO_PARTITION_ENABLED =
             key("table.auto-partition.enabled")
