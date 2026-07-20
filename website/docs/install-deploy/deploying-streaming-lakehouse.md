@@ -87,7 +87,7 @@ datalake.enabled: true
 datalake.format: hudi
 datalake.hudi.mode: hms
 datalake.hudi.catalog.path: hdfs:///warehouse/hudi
-datalake.hudi.hive.metastore.uris: thrift://<hive-metastore-host>:9083
+datalake.hudi.hadoop.hive.metastore.uris: thrift://<hive-metastore-host>:9083
 ```
 
 </TabItem>
@@ -147,7 +147,8 @@ Add JARs to `${FLUSS_HOME}/plugins/<format>/` based on your configuration:
 | Scenario | Required JAR |
 |----------|--------------|
 | Hudi lake connector | [fluss-lake-hudi-$FLUSS_VERSION$.jar](https://repo1.maven.org/maven2/org/apache/fluss/fluss-lake-hudi/$FLUSS_VERSION$/fluss-lake-hudi-$FLUSS_VERSION$.jar) |
-| Hudi Flink runtime | [hudi-flink1.20-bundle-1.1.0.jar](https://repo.maven.apache.org/maven2/org/apache/hudi/hudi-flink1.20-bundle/1.1.0/hudi-flink1.20-bundle-1.1.0.jar), matching your Flink runtime |
+| Hudi Flink bundle | [hudi-flink1.20-bundle-1.1.0.jar](https://repo.maven.apache.org/maven2/org/apache/hudi/hudi-flink1.20-bundle/1.1.0/hudi-flink1.20-bundle-1.1.0.jar), matching the Flink version used by the Hudi integration |
+| Hudi Flink dependencies | `flink-core`, `flink-table-common`, `flink-table-api-java`, and `flink-table-runtime`, matching the Hudi Flink bundle |
 | Hudi Hive Metastore catalog | Hive and Hadoop dependencies required by your environment |
 
 </TabItem>

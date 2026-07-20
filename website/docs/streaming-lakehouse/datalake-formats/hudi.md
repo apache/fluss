@@ -62,11 +62,13 @@ The directory configured by `datalake.hudi.catalog.path` must exist and be acces
 
 Fluss processes Hudi configurations by stripping the `datalake.hudi.` prefix and passing the remaining options to Hudi.
 For example, `datalake.hudi.catalog.path` is passed to Hudi as `catalog.path`.
+Cluster-level Hudi catalog options use the `datalake.hudi.*` prefix, while table-level Hudi options use the `hudi.*` prefix.
+Fluss strips the corresponding prefix before passing these options to Hudi.
 
 Fluss supports the Hudi catalog modes implemented by the connector:
 
 - `dfs`: Hudi DFS catalog. Tables are stored under `${catalog.path}/${database_name}/${table_name}`.
-- `hms`: Hudi Hive Metastore catalog. Configure Hive Metastore access through Hudi/Hadoop options, for example `hive.conf.dir` or `hive.metastore.uris`.
+- `hms`: Hudi Hive Metastore catalog. Configure Hive Metastore access through Hudi/Hadoop options, for example `hive.conf.dir` or `hadoop.hive.metastore.uris`.
 
 Example using Hive Metastore catalog mode:
 
@@ -75,7 +77,7 @@ datalake.enabled: true
 datalake.format: hudi
 datalake.hudi.mode: hms
 datalake.hudi.catalog.path: hdfs:///warehouse/hudi
-datalake.hudi.hive.metastore.uris: thrift://<hive-metastore-host>:9083
+datalake.hudi.hadoop.hive.metastore.uris: thrift://<hive-metastore-host>:9083
 ```
 
 ### Prepare Server-Side JARs
@@ -83,7 +85,8 @@ datalake.hudi.hive.metastore.uris: thrift://<hive-metastore-host>:9083
 Put the following JARs into `${FLUSS_HOME}/plugins/hudi/` before starting the Fluss servers:
 
 - [fluss-lake-hudi-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-lake-hudi/$FLUSS_VERSION$/fluss-lake-hudi-$FLUSS_VERSION$.jar)
-- The Hudi Flink bundle matching your runtime. For Flink 1.20, use [hudi-flink1.20-bundle-1.1.0.jar](https://repo.maven.apache.org/maven2/org/apache/hudi/hudi-flink1.20-bundle/1.1.0/hudi-flink1.20-bundle-1.1.0.jar).
+- The Hudi Flink bundle matching the Flink version used by the Hudi integration. For Flink 1.20, use [hudi-flink1.20-bundle-1.1.0.jar](https://repo.maven.apache.org/maven2/org/apache/hudi/hudi-flink1.20-bundle/1.1.0/hudi-flink1.20-bundle-1.1.0.jar).
+- Flink core and table runtime JARs matching the Hudi Flink bundle, including `flink-core`, `flink-table-common`, `flink-table-api-java`, and `flink-table-runtime`.
 - Any Hadoop, Hive, or filesystem dependencies required by your Hudi catalog and table storage.
 
 Restart Fluss after changing the plugin directory.
@@ -118,7 +121,7 @@ For Hive Metastore catalog mode:
     --datalake.format hudi \
     --datalake.hudi.mode hms \
     --datalake.hudi.catalog.path hdfs:///warehouse/hudi \
-    --datalake.hudi.hive.metastore.uris thrift://<hive-metastore-host>:9083
+    --datalake.hudi.hadoop.hive.metastore.uris thrift://<hive-metastore-host>:9083
 ```
 
 Then, the datalake tiering service continuously tiers data from Fluss to Hudi. The table option `table.datalake.freshness` controls the target freshness of Hudi tables. By default, the data freshness is 3 minutes.
@@ -324,7 +327,7 @@ CREATE CATALOG hudi_catalog WITH (
     'type' = 'hudi',
     'mode' = 'hms',
     'catalog.path' = 'hdfs:///warehouse/hudi',
-    'hive.metastore.uris' = 'thrift://<hive-metastore-host>:9083'
+    'hadoop.hive.metastore.uris' = 'thrift://<hive-metastore-host>:9083'
 );
 ```
 

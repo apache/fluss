@@ -1799,7 +1799,7 @@ public class ConfigOptions {
                     .noDefaultValue()
                     .withDescription(
                             "The data lake format of the table specifies the tiered Lakehouse storage format. Currently, supported formats are `paimon`, `iceberg`, `hudi`, and `lance`. "
-                                    + "In the future, more kinds of data lake format will be supported, such as DeltaLake. "
+                                    + "In the future, more kinds of data lake formats will be supported, such as DeltaLake. "
                                     + "Once the `table.datalake.format` property is configured, Fluss adopts the key encoding and bucketing strategy used by the corresponding data lake format. "
                                     + "This ensures consistency in key encoding and bucketing, enabling seamless **Union Read** functionality across Fluss and Lakehouse. "
                                     + "The `table.datalake.format` can be pre-defined before enabling `table.datalake.enabled`. This allows the data lake feature to be dynamically enabled on the table without requiring table recreation. "
