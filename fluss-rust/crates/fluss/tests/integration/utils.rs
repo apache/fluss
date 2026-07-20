@@ -26,7 +26,6 @@ use fluss::row::FlussArray;
 use fluss::row::binary_array::FlussArrayWriter;
 use fluss::rpc::message::OffsetSpec;
 use std::collections::HashMap;
-use std::future::Future;
 use std::sync::Arc;
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -226,6 +225,43 @@ pub fn make_int_array(values: &[Option<i32>]) -> FlussArray {
         }
     }
     writer.complete().expect("Failed to build int array")
+}
+
+// ─── Poll helpers ────────────────────────────────────────────────────────────
+
+pub const DEFAULT_POLL_TIMEOUT: Duration = Duration::from_secs(10);
+pub const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(500);
+
+/// Polls repeatedly, accumulating items until `expected_count` is reached or `timeout` elapses.
+pub async fn poll_until_count<T>(
+    expected_count: usize,
+    timeout: Duration,
+    poll_interval: Duration,
+    mut poll_fn: impl AsyncFnMut(Duration) -> Vec<T>,
+) -> Vec<T> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    let mut accumulated = Vec::new();
+    while accumulated.len() < expected_count && tokio::time::Instant::now() < deadline {
+        let items = poll_fn(poll_interval).await;
+        accumulated.extend(items);
+    }
+    accumulated
+}
+
+/// Polls repeatedly until a non-empty result is returned, or `timeout` elapses.
+pub async fn poll_until_nonempty<T>(
+    timeout: Duration,
+    poll_interval: Duration,
+    mut poll_fn: impl AsyncFnMut(Duration) -> Vec<T>,
+) -> Vec<T> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    while tokio::time::Instant::now() < deadline {
+        let items = poll_fn(poll_interval).await;
+        if !items.is_empty() {
+            return items;
+        }
+    }
+    Vec::new()
 }
 
 pub fn extract_ids_from_batches(batches: &[ScanBatch]) -> Vec<i32> {

@@ -19,10 +19,11 @@
 #[cfg(test)]
 mod table_test {
     use crate::integration::utils::{
-        ColumnPlan, array_dt_basics_columns, as_row_type, create_partitions, create_table,
-        dt_array_int, dt_map_string_int, dt_row_seq_label, extract_ids_from_batches,
+        ColumnPlan, DEFAULT_POLL_TIMEOUT, array_dt_basics_columns, as_row_type, create_partitions,
+        create_table, dt_array_int, dt_map_string_int, dt_row_seq_label, extract_ids_from_batches,
         get_shared_cluster, make_int_array, make_string_array, map_dt_basics_columns,
-        row_dt_basics_columns, scalar_dt_columns, wait_for_partitions_ready, wait_for_table_ready,
+        poll_until_count, poll_until_nonempty, row_dt_basics_columns, scalar_dt_columns,
+        wait_for_partitions_ready, wait_for_table_ready,
     };
     use arrow::array::record_batch;
     use fluss::client::{EARLIEST_OFFSET, FlussTable, TableScan};
@@ -108,21 +109,27 @@ mod table_test {
         }
 
         // Poll for records across all buckets
-        let mut collected: Vec<(i32, String)> = Vec::new();
-        let start_time = std::time::Instant::now();
-        while collected.len() < 6 && start_time.elapsed() < Duration::from_secs(10) {
-            let scan_records = log_scanner
-                .poll(Duration::from_millis(500))
-                .await
-                .expect("Failed to poll records");
-            for rec in scan_records {
-                let row = rec.row();
-                collected.push((
-                    row.get_int(0).unwrap(),
-                    row.get_string(1).unwrap().to_string(),
-                ));
-            }
-        }
+        let mut collected = poll_until_count(
+            6,
+            DEFAULT_POLL_TIMEOUT,
+            Duration::from_millis(500),
+            async |d| {
+                log_scanner
+                    .poll(d)
+                    .await
+                    .expect("Failed to poll records")
+                    .into_iter()
+                    .map(|rec| {
+                        let row = rec.row();
+                        (
+                            row.get_int(0).unwrap(),
+                            row.get_string(1).unwrap().to_string(),
+                        )
+                    })
+                    .collect()
+            },
+        )
+        .await;
 
         assert_eq!(collected.len(), 6, "Expected 6 records");
 
@@ -260,17 +267,21 @@ mod table_test {
             .await
             .expect("Failed to subscribe");
 
-        let mut record_timestamps: Vec<i64> = Vec::new();
-        let scan_start = std::time::Instant::now();
-        while record_timestamps.len() < 3 && scan_start.elapsed() < Duration::from_secs(10) {
-            let scan_records = log_scanner
-                .poll(Duration::from_millis(500))
-                .await
-                .expect("Failed to poll records");
-            for rec in scan_records {
-                record_timestamps.push(rec.timestamp());
-            }
-        }
+        let record_timestamps = poll_until_count(
+            3,
+            DEFAULT_POLL_TIMEOUT,
+            Duration::from_millis(500),
+            async |d| {
+                log_scanner
+                    .poll(d)
+                    .await
+                    .expect("Failed to poll records")
+                    .into_iter()
+                    .map(|rec| rec.timestamp())
+                    .collect()
+            },
+        )
+        .await;
         assert_eq!(record_timestamps.len(), 3, "Expected 3 record timestamps");
 
         let min_ts = *record_timestamps.iter().min().unwrap();
@@ -511,12 +522,12 @@ mod table_test {
 
         // poll may return partial results if not all batches are available yet,
         // so we accumulate across multiple polls until we have the expected count.
-        let mut all_ids = Vec::new();
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-        while all_ids.len() < 6 && tokio::time::Instant::now() < deadline {
-            let batches = scanner.poll(Duration::from_secs(5)).await.unwrap();
-            all_ids.extend(extract_ids_from_batches(&batches));
-        }
+        let all_ids =
+            poll_until_count(6, DEFAULT_POLL_TIMEOUT, Duration::from_secs(5), async |d| {
+                let batches = scanner.poll(d).await.unwrap();
+                extract_ids_from_batches(&batches)
+            })
+            .await;
 
         // Test 2: Order should be preserved across multiple batches
         assert_eq!(all_ids, vec![1, 2, 3, 4, 5, 6]);
@@ -528,12 +539,12 @@ mod table_test {
             .unwrap();
         writer.flush().await.unwrap();
 
-        let mut new_ids = Vec::new();
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-        while new_ids.len() < 2 && tokio::time::Instant::now() < deadline {
-            let more = scanner.poll(Duration::from_secs(5)).await.unwrap();
-            new_ids.extend(extract_ids_from_batches(&more));
-        }
+        let new_ids =
+            poll_until_count(2, DEFAULT_POLL_TIMEOUT, Duration::from_secs(5), async |d| {
+                let more = scanner.poll(d).await.unwrap();
+                extract_ids_from_batches(&more)
+            })
+            .await;
 
         // Test 3: Subsequent polls should not return duplicate data (offset continuation)
         assert_eq!(new_ids, vec![7, 8]);
@@ -542,12 +553,12 @@ mod table_test {
         // Server returns all records from start of batch, but client truncates to subscription offset
         let trunc_scanner = table.new_scan().create_record_batch_log_scanner().unwrap();
         trunc_scanner.subscribe(0, 3).await.unwrap();
-        let mut trunc_ids = Vec::new();
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-        while trunc_ids.len() < 5 && tokio::time::Instant::now() < deadline {
-            let trunc_batches = trunc_scanner.poll(Duration::from_secs(5)).await.unwrap();
-            trunc_ids.extend(extract_ids_from_batches(&trunc_batches));
-        }
+        let trunc_ids =
+            poll_until_count(5, DEFAULT_POLL_TIMEOUT, Duration::from_secs(5), async |d| {
+                let trunc_batches = trunc_scanner.poll(d).await.unwrap();
+                extract_ids_from_batches(&trunc_batches)
+            })
+            .await;
 
         // Subscribing from offset 3 should return [4,5,6,7,8], not [1,2,3,4,5,6,7,8]
         assert_eq!(trunc_ids, vec![4, 5, 6, 7, 8]);
@@ -560,11 +571,11 @@ mod table_test {
             .create_record_batch_log_scanner()
             .unwrap();
         proj.subscribe(0, 0).await.unwrap();
-        let mut proj_batches = Vec::new();
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-        while proj_batches.is_empty() && tokio::time::Instant::now() < deadline {
-            proj_batches = proj.poll(Duration::from_secs(5)).await.unwrap();
-        }
+        let proj_batches =
+            poll_until_nonempty(DEFAULT_POLL_TIMEOUT, Duration::from_secs(5), async |d| {
+                proj.poll(d).await.unwrap()
+            })
+            .await;
         assert!(
             !proj_batches.is_empty(),
             "Expected at least one batch from projection scanner"
@@ -726,24 +737,28 @@ mod table_test {
             .map(|(id, region, val)| (id, region.to_string(), val))
             .collect();
 
-        let mut collected_records: Vec<(i32, String, i64)> = Vec::new();
-        let start_time = std::time::Instant::now();
-        while collected_records.len() < expected_records.len()
-            && start_time.elapsed() < Duration::from_secs(10)
-        {
-            let records = log_scanner
-                .poll(Duration::from_millis(500))
-                .await
-                .expect("Failed to poll log scanner");
-            for rec in records {
-                let row = rec.row();
-                collected_records.push((
-                    row.get_int(0).unwrap(),
-                    row.get_string(1).unwrap().to_string(),
-                    row.get_long(2).unwrap(),
-                ));
-            }
-        }
+        let mut collected_records = poll_until_count(
+            expected_records.len(),
+            DEFAULT_POLL_TIMEOUT,
+            Duration::from_millis(500),
+            async |d| {
+                log_scanner
+                    .poll(d)
+                    .await
+                    .expect("Failed to poll log scanner")
+                    .into_iter()
+                    .map(|rec| {
+                        let row = rec.row();
+                        (
+                            row.get_int(0).unwrap(),
+                            row.get_string(1).unwrap().to_string(),
+                            row.get_long(2).unwrap(),
+                        )
+                    })
+                    .collect()
+            },
+        )
+        .await;
 
         assert_eq!(
             collected_records.len(),
@@ -784,22 +799,28 @@ mod table_test {
             .await
             .expect("Failed to unsubscribe from EU partition");
 
-        let mut records_after_unsubscribe: Vec<(i32, String, i64)> = Vec::new();
-        let unsub_deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while records_after_unsubscribe.len() < 4 && std::time::Instant::now() < unsub_deadline {
-            let records = log_scanner_unsub
-                .poll(Duration::from_millis(300))
-                .await
-                .expect("Failed to poll after unsubscribe");
-            for rec in records {
-                let row = rec.row();
-                records_after_unsubscribe.push((
-                    row.get_int(0).unwrap(),
-                    row.get_string(1).unwrap().to_string(),
-                    row.get_long(2).unwrap(),
-                ));
-            }
-        }
+        let records_after_unsubscribe = poll_until_count(
+            4,
+            Duration::from_secs(5),
+            Duration::from_millis(300),
+            async |d| {
+                log_scanner_unsub
+                    .poll(d)
+                    .await
+                    .expect("Failed to poll after unsubscribe")
+                    .into_iter()
+                    .map(|rec| {
+                        let row = rec.row();
+                        (
+                            row.get_int(0).unwrap(),
+                            row.get_string(1).unwrap().to_string(),
+                            row.get_long(2).unwrap(),
+                        )
+                    })
+                    .collect()
+            },
+        )
+        .await;
 
         assert!(
             records_after_unsubscribe.iter().all(|r| r.1 == "US"),
@@ -834,24 +855,28 @@ mod table_test {
             .await
             .expect("Failed to batch subscribe to partitions");
 
-        let mut batch_collected: Vec<(i32, String, i64)> = Vec::new();
-        let batch_start = std::time::Instant::now();
-        while batch_collected.len() < expected_records.len()
-            && batch_start.elapsed() < Duration::from_secs(10)
-        {
-            let records = log_scanner_batch
-                .poll(Duration::from_millis(500))
-                .await
-                .expect("Failed to poll after batch partition subscribe");
-            for rec in records {
-                let row = rec.row();
-                batch_collected.push((
-                    row.get_int(0).unwrap(),
-                    row.get_string(1).unwrap().to_string(),
-                    row.get_long(2).unwrap(),
-                ));
-            }
-        }
+        let mut batch_collected = poll_until_count(
+            expected_records.len(),
+            DEFAULT_POLL_TIMEOUT,
+            Duration::from_millis(500),
+            async |d| {
+                log_scanner_batch
+                    .poll(d)
+                    .await
+                    .expect("Failed to poll after batch partition subscribe")
+                    .into_iter()
+                    .map(|rec| {
+                        let row = rec.row();
+                        (
+                            row.get_int(0).unwrap(),
+                            row.get_string(1).unwrap().to_string(),
+                            row.get_long(2).unwrap(),
+                        )
+                    })
+                    .collect()
+            },
+        )
+        .await;
         assert_eq!(
             batch_collected.len(),
             expected_records.len(),
@@ -2034,21 +2059,27 @@ mod table_test {
         writer_v0.flush().await.expect("flush");
 
         // 4. Poll old-schema records
-        let mut old_records: Vec<(i32, String)> = Vec::new();
-        let start = std::time::Instant::now();
-        while old_records.len() < 3 && start.elapsed() < Duration::from_secs(10) {
-            let recs = log_scanner
-                .poll(Duration::from_millis(500))
-                .await
-                .expect("poll");
-            for rec in recs {
-                let row = rec.row();
-                old_records.push((
-                    row.get_int(0).unwrap(),
-                    row.get_string(1).unwrap().to_string(),
-                ));
-            }
-        }
+        let mut old_records = poll_until_count(
+            3,
+            DEFAULT_POLL_TIMEOUT,
+            Duration::from_millis(500),
+            async |d| {
+                log_scanner
+                    .poll(d)
+                    .await
+                    .expect("poll")
+                    .into_iter()
+                    .map(|rec| {
+                        let row = rec.row();
+                        (
+                            row.get_int(0).unwrap(),
+                            row.get_string(1).unwrap().to_string(),
+                        )
+                    })
+                    .collect()
+            },
+        )
+        .await;
         assert_eq!(old_records.len(), 3, "Expected 3 old-schema records");
         old_records.sort_by_key(|r| r.0);
         assert_eq!(
@@ -2108,25 +2139,32 @@ mod table_test {
 
         // 7. Continue reading from the SAME scanner — it should handle schema
         //    evolution and return the new-schema records with the extra column.
-        let mut new_records: Vec<(i32, String, Option<i32>)> = Vec::new();
-        let start = std::time::Instant::now();
-        while new_records.len() < 3 && start.elapsed() < Duration::from_secs(10) {
-            let recs = log_scanner
-                .poll(Duration::from_millis(500))
-                .await
-                .expect("poll");
-            for rec in recs {
-                let row = rec.row();
-                let id = row.get_int(0).unwrap();
-                let name = row.get_string(1).unwrap().to_string();
-                let age = if row.get_field_count() > 2 && !row.is_null_at(2).unwrap_or(true) {
-                    Some(row.get_int(2).unwrap())
-                } else {
-                    None
-                };
-                new_records.push((id, name, age));
-            }
-        }
+        let mut new_records = poll_until_count(
+            3,
+            DEFAULT_POLL_TIMEOUT,
+            Duration::from_millis(500),
+            async |d| {
+                log_scanner
+                    .poll(d)
+                    .await
+                    .expect("poll")
+                    .into_iter()
+                    .map(|rec| {
+                        let row = rec.row();
+                        let id = row.get_int(0).unwrap();
+                        let name = row.get_string(1).unwrap().to_string();
+                        let age = if row.get_field_count() > 2 && !row.is_null_at(2).unwrap_or(true)
+                        {
+                            Some(row.get_int(2).unwrap())
+                        } else {
+                            None
+                        };
+                        (id, name, age)
+                    })
+                    .collect()
+            },
+        )
+        .await;
         assert_eq!(new_records.len(), 3, "Expected 3 new-schema records");
         new_records.sort_by_key(|r| r.0);
         assert_eq!(
