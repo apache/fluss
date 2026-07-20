@@ -241,6 +241,142 @@ public class Flink22LookupShuffleITCase extends FlinkTestBase {
         assertResultsIgnoreOrder(tEnv.executeSql(withoutShuffle).collect(), expected, true);
     }
 
+    @Test
+    void testLookupShuffleOnPrefixKeyLookup() throws Exception {
+        String dim = "dim_prefix";
+        // primary key (name, id), bucket key = name (a strict prefix of the PK). A lookup on the
+        // bucket key alone is a prefix lookup, which must still be shuffled by the bucket key.
+        tEnv.executeSql(
+                String.format(
+                        "create table %s ("
+                                + "  name varchar not null,"
+                                + "  id int not null,"
+                                + "  address varchar,"
+                                + "  primary key (name, id) NOT ENFORCED"
+                                + ") with ('bucket.num' = '3', 'bucket.key' = 'name',"
+                                + " 'lookup.async' = 'false')",
+                        dim));
+        try (Table dimTable = conn.getTable(TablePath.of(DEFAULT_DB, dim))) {
+            UpsertWriter writer = dimTable.newUpsert().createWriter();
+            writer.upsert(row("name1", 1, "address1"));
+            writer.upsert(row("name1", 5, "address5"));
+            writer.upsert(row("name2", 2, "address2"));
+            writer.upsert(row("name0", 10, "address4"));
+            writer.flush();
+        }
+
+        registerNonPartitionedSrc();
+
+        // prefix lookup on the bucket key (name) returns every dim row sharing that name
+        List<String> expected =
+                Arrays.asList(
+                        "+I[1, name1, address1]",
+                        "+I[1, name1, address5]",
+                        "+I[2, name2, address2]",
+                        "+I[10, name0, address4]");
+        String columns = "src.a, src.b, %s.address";
+        String from = "FROM src JOIN %s FOR SYSTEM_TIME AS OF src.proc ON src.b = %s.name";
+
+        String withShuffle =
+                String.format(
+                        "SELECT /*+ LOOKUP('table' = '%s', 'shuffle' = 'true') */ "
+                                + columns
+                                + " "
+                                + from,
+                        dim,
+                        dim,
+                        dim,
+                        dim);
+        String withoutShuffle = String.format("SELECT " + columns + " " + from, dim, dim, dim);
+
+        // The prefix lookup must actually be shuffled by the custom partitioner (before this
+        // change prefix lookups were excluded and produced no shuffle at all).
+        assertThat(usesCustomShufflePartitioner(withShuffle))
+                .as("prefix lookup probe stream should be repartitioned by the Fluss partitioner")
+                .isTrue();
+        assertThat(usesCustomShufflePartitioner(withoutShuffle))
+                .as("no custom partitioner without the shuffle hint")
+                .isFalse();
+
+        assertResultsIgnoreOrder(tEnv.executeSql(withShuffle).collect(), expected, true);
+        assertResultsIgnoreOrder(tEnv.executeSql(withoutShuffle).collect(), expected, true);
+    }
+
+    @Test
+    void testLookupShuffleOnPartitionedPrefixKeyLookup() throws Exception {
+        String dim = "dim_prefix_part";
+        // partitioned table; primary key (name, id, p_date), bucket key = name (a strict prefix of
+        // the PK). A lookup on the bucket key + partition key (name, p_date) is a partitioned
+        // prefix
+        // lookup, which must still be shuffled by the bucket key.
+        tEnv.executeSql(
+                String.format(
+                        "create table %s ("
+                                + "  name varchar not null,"
+                                + "  id int not null,"
+                                + "  address varchar,"
+                                + "  p_date varchar,"
+                                + "  primary key (name, id, p_date) NOT ENFORCED"
+                                + ") partitioned by (p_date) with ("
+                                + " 'bucket.num' = '3', 'bucket.key' = 'name', 'lookup.async' = 'false',"
+                                + " 'table.auto-partition.enabled' = 'true',"
+                                + " 'table.auto-partition.time-unit' = 'year')",
+                        dim));
+
+        TablePath dimPath = TablePath.of(DEFAULT_DB, dim);
+        Map<Long, String> partitionNameById =
+                waitUntilPartitions(FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(), dimPath);
+        Iterator<String> partitionIterator = partitionNameById.values().iterator();
+        String partition1 = partitionIterator.next();
+        String partition2 = partitionIterator.next();
+
+        try (Table dimTable = conn.getTable(dimPath)) {
+            UpsertWriter writer = dimTable.newUpsert().createWriter();
+            writer.upsert(row("name1", 1, "address1", partition1));
+            writer.upsert(row("name1", 5, "address5", partition1));
+            writer.upsert(row("name2", 2, "address2", partition1));
+            writer.upsert(row("name0", 10, "address4", partition2));
+            writer.flush();
+        }
+
+        registerPartitionedSrc(partition1, partition2);
+
+        // prefix lookup on bucket key + partition key (name, p_date)
+        List<String> expected =
+                Arrays.asList(
+                        "+I[1, name1, address1]",
+                        "+I[1, name1, address5]",
+                        "+I[2, name2, address2]",
+                        "+I[10, name0, address4]");
+        String columns = "src.a, src.b, %s.address";
+        String from =
+                "FROM src JOIN %s FOR SYSTEM_TIME AS OF src.proc ON src.b = %s.name"
+                        + " AND src.p_date = %s.p_date";
+
+        String withShuffle =
+                String.format(
+                        "SELECT /*+ LOOKUP('table' = '%s', 'shuffle' = 'true') */ "
+                                + columns
+                                + " "
+                                + from,
+                        dim,
+                        dim,
+                        dim,
+                        dim,
+                        dim);
+        String withoutShuffle = String.format("SELECT " + columns + " " + from, dim, dim, dim, dim);
+
+        assertThat(usesCustomShufflePartitioner(withShuffle))
+                .as("partitioned prefix lookup should use the Fluss custom partitioner")
+                .isTrue();
+        assertThat(usesCustomShufflePartitioner(withoutShuffle))
+                .as("no custom partitioner without the shuffle hint")
+                .isFalse();
+
+        assertResultsIgnoreOrder(tEnv.executeSql(withShuffle).collect(), expected, true);
+        assertResultsIgnoreOrder(tEnv.executeSql(withoutShuffle).collect(), expected, true);
+    }
+
     /**
      * Builds the {@link StreamGraph} for the given query and reports whether the probe stream
      * feeding the lookup join is repartitioned by Fluss' custom {@code InputDataPartitioner} (which
