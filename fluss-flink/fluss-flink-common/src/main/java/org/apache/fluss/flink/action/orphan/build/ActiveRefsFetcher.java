@@ -284,7 +284,7 @@ public final class ActiveRefsFetcher {
                 remoteFsOpRateLimiter.acquire();
                 metadataBytes = metadataReader.read(metadataPath);
             } catch (FileNotFoundException e) {
-                return KvSharedSstFetchResult.failed(
+                return KvSharedSstFetchResult.notFound(
                         String.format(
                                 "Snapshot metadata not found %s: %s",
                                 metadataPath,

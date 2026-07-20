@@ -355,6 +355,7 @@ class ActiveRefsFetcherTest {
                 fetcher.fetchKvSharedSstFileNames(kvTabletDir, activeSnapDirs);
 
         assertThat(result.allMetadataReadOk()).isFalse();
+        assertThat(result.metadataNotFound()).isTrue();
         assertThat(result.failureReason()).contains("Snapshot metadata not found");
         assertThat(result.sharedSstFileNames()).isEmpty();
     }
@@ -376,6 +377,7 @@ class ActiveRefsFetcherTest {
                 fetcher.fetchKvSharedSstFileNames(kvTabletDir, activeSnapDirs);
 
         assertThat(result.allMetadataReadOk()).isFalse();
+        assertThat(result.metadataNotFound()).isFalse();
         assertThat(result.failureReason()).contains("connection reset");
         assertThat(result.sharedSstFileNames()).isEmpty();
     }
@@ -398,6 +400,7 @@ class ActiveRefsFetcherTest {
                 fetcher.fetchKvSharedSstFileNames(kvTabletDir, activeSnapDirs);
 
         assertThat(result.allMetadataReadOk()).isFalse();
+        assertThat(result.metadataNotFound()).isFalse();
         assertThat(result.failureReason()).contains("Failed to parse snapshot metadata");
     }
 

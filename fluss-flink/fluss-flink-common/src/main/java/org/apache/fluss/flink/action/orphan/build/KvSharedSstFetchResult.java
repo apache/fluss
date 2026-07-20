@@ -44,19 +44,24 @@ import java.util.Set;
 public final class KvSharedSstFetchResult {
 
     private final boolean ok;
+    private final boolean metadataNotFound;
     private final Set<String> sharedSstFileNames;
     @Nullable private final String failureReason;
 
     private KvSharedSstFetchResult(
-            boolean ok, Set<String> sharedSstFileNames, @Nullable String failureReason) {
+            boolean ok,
+            boolean metadataNotFound,
+            Set<String> sharedSstFileNames,
+            @Nullable String failureReason) {
         this.ok = ok;
+        this.metadataNotFound = metadataNotFound;
         this.sharedSstFileNames = Collections.unmodifiableSet(new HashSet<>(sharedSstFileNames));
         this.failureReason = failureReason;
     }
 
     /** All active snapshot metadata reads succeeded; the active set is complete. */
     public static KvSharedSstFetchResult ok(Set<String> sharedSstFileNames) {
-        return new KvSharedSstFetchResult(true, sharedSstFileNames, null);
+        return new KvSharedSstFetchResult(true, false, sharedSstFileNames, null);
     }
 
     /**
@@ -64,12 +69,22 @@ public final class KvSharedSstFetchResult {
      * must be skipped for this bucket.
      */
     public static KvSharedSstFetchResult failed(String reason) {
-        return new KvSharedSstFetchResult(false, Collections.emptySet(), reason);
+        return new KvSharedSstFetchResult(false, false, Collections.emptySet(), reason);
+    }
+
+    /** Snapshot metadata disappeared after the active-snapshot view was obtained. */
+    public static KvSharedSstFetchResult notFound(String reason) {
+        return new KvSharedSstFetchResult(false, true, Collections.emptySet(), reason);
     }
 
     /** Whether all metadata reads completed successfully. */
     public boolean allMetadataReadOk() {
         return ok;
+    }
+
+    /** Whether the failure was caused by missing snapshot metadata. */
+    public boolean metadataNotFound() {
+        return metadataNotFound;
     }
 
     /**
