@@ -20,7 +20,7 @@ package org.apache.fluss.flink.adapter;
 import org.apache.flink.table.catalog.Interval;
 import org.apache.flink.table.catalog.IntervalFreshness;
 
-/** An adapter for {@link IntervalFreshness} for flink2.3. */
+/** An adapter for {@link IntervalFreshness} for Flink 2.3. */
 public class IntervalFreshnessAdapter {
 
     public static TimeUnitAdapter timeUnit(String name) {
@@ -35,7 +35,7 @@ public class IntervalFreshnessAdapter {
         return intervalFreshness.getTimeUnit().name();
     }
 
-    /** An adapter for {@link Interval.TimeUnit} for flink2.3. */
+    /** An adapter for {@link Interval.TimeUnit} for Flink 2.3. */
     public static class TimeUnitAdapter {
         private final Interval.TimeUnit timeUnit;
 

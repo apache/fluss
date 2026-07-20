@@ -81,6 +81,13 @@
 
         <dependency>
             <groupId>org.apache.fluss</groupId>
+            <artifactId>fluss-flink-2.3</artifactId>
+            <version>${project.version}</version>
+            <scope>compile</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-flink-2.2</artifactId>
             <version>${project.version}</version>
             <scope>compile</scope>
