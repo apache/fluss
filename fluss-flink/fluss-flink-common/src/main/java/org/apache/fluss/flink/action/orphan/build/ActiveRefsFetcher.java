@@ -324,6 +324,47 @@ public final class ActiveRefsFetcher {
         return KvSharedSstFetchResult.ok(sharedSstFileNames);
     }
 
+    /**
+     * Fetches active shared SST names and refreshes the target's snapshot view once when snapshot
+     * metadata has concurrently disappeared.
+     *
+     * <p>A successful refresh replaces {@code activeSnapDirsByBucket} for subsequent buckets. A
+     * second metadata miss, a generic metadata failure, or a failed refresh is returned without
+     * further retry.
+     */
+    public KvSharedSstFetchResult fetchKvSharedSstFileNamesWithRefresh(
+            long tableId,
+            @Nullable Long partitionId,
+            int bucketId,
+            FsPath kvTabletDir,
+            Map<Integer, Set<String>> activeSnapDirsByBucket) {
+        Set<String> activeSnapDirs =
+                activeSnapDirsByBucket.getOrDefault(bucketId, Collections.emptySet());
+        if (activeSnapDirs.isEmpty()) {
+            return KvSharedSstFetchResult.ok(Collections.emptySet());
+        }
+
+        KvSharedSstFetchResult result = fetchKvSharedSstFileNames(kvTabletDir, activeSnapDirs);
+        if (result.allMetadataReadOk() || !result.metadataNotFound()) {
+            return result;
+        }
+
+        KvActiveRefsFetchResult refreshed = fetchKvActiveSnapDirs(tableId, partitionId);
+        if (!refreshed.listOk()) {
+            return KvSharedSstFetchResult.failed(
+                    "Failed to refresh active KV snapshots: " + refreshed.listFailureReason());
+        }
+
+        activeSnapDirsByBucket.clear();
+        activeSnapDirsByBucket.putAll(refreshed.activeSnapDirsByBucket());
+        Set<String> refreshedSnapDirs =
+                activeSnapDirsByBucket.getOrDefault(bucketId, Collections.emptySet());
+        if (refreshedSnapDirs.isEmpty()) {
+            return KvSharedSstFetchResult.ok(Collections.emptySet());
+        }
+        return fetchKvSharedSstFileNames(kvTabletDir, refreshedSnapDirs);
+    }
+
     private static String formatRpcFailureReason(
             long tableId, @Nullable Long partitionId, @Nullable Throwable cause) {
         String reason =

@@ -57,6 +57,7 @@ import javax.annotation.Nullable;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -397,7 +398,7 @@ public final class ScopeEnumeratorFunction extends ProcessFunction<Integer, Clea
             KvActiveRefsFetchResult kvResult =
                     fetcher.fetchKvActiveSnapDirs(liveTable.tableId, partitionId);
             if (kvResult.listOk()) {
-                kvActiveByBucket = kvResult.activeSnapDirsByBucket();
+                kvActiveByBucket = new HashMap<>(kvResult.activeSnapDirsByBucket());
                 kvTargetOk = true;
             } else {
                 audit.logSkipKvTarget(liveTable.tableId, partitionId, kvResult.listFailureReason());
@@ -456,24 +457,20 @@ public final class ScopeEnumeratorFunction extends ProcessFunction<Integer, Clea
                                         tableBucket)
                                 .toString();
                 kvActiveSnaps = kvActiveByBucket.getOrDefault(bucketId, Collections.emptySet());
-                if (kvActiveSnaps.isEmpty()) {
-                    // The successful ListKvSnapshots response is authoritative: this bucket has
-                    // no active snapshots, hence no active shared SST references.
-                    kvSharedSstRefsComplete = true;
-                } else {
-                    KvSharedSstFetchResult sstResult =
-                            fetcher.fetchKvSharedSstFileNames(
-                                    new FsPath(kvTabletDir), kvActiveSnaps);
-                    if (sstResult.allMetadataReadOk()) {
-                        kvSharedSstFileNames = sstResult.sharedSstFileNames();
-                        kvSharedSstRefsComplete = true;
-                    } else {
-                        audit.logSkipKvSharedSst(
+                KvSharedSstFetchResult sstResult =
+                        fetcher.fetchKvSharedSstFileNamesWithRefresh(
                                 liveTable.tableId,
                                 partitionId,
                                 bucketId,
-                                sstResult.failureReason());
-                    }
+                                new FsPath(kvTabletDir),
+                                kvActiveByBucket);
+                kvActiveSnaps = kvActiveByBucket.getOrDefault(bucketId, Collections.emptySet());
+                if (sstResult.allMetadataReadOk()) {
+                    kvSharedSstFileNames = sstResult.sharedSstFileNames();
+                    kvSharedSstRefsComplete = true;
+                } else {
+                    audit.logSkipKvSharedSst(
+                            liveTable.tableId, partitionId, bucketId, sstResult.failureReason());
                 }
             }
 
