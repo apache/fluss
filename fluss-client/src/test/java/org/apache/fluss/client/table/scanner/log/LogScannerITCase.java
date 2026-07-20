@@ -25,9 +25,11 @@ import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.exception.FetchException;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.predicate.PredicateBuilder;
 import org.apache.fluss.record.ArrowBatchData;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.row.GenericRow;
@@ -89,6 +91,36 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
             }
             assertThat(rowList).hasSize(recordSize);
             assertThat(rowList).containsExactlyInAnyOrderElementsOf(expectedRows);
+        }
+    }
+
+    @Test
+    void testPollReturnsProgressOnlyRecords() throws Exception {
+        TablePath tablePath = TablePath.of("test_db_1", "test_log_scanner_progress_only");
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(DATA1_SCHEMA)
+                        .distributedBy(1)
+                        .logFormat(LogFormat.ARROW)
+                        .build();
+        long tableId = createTable(tablePath, descriptor, false);
+        waitAllReplicasReady(tableId, 1);
+
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+        try (Table table = conn.getTable(tablePath)) {
+            appendRows(table, 1, 5);
+
+            try (LogScanner logScanner =
+                    table.newScan()
+                            .filter(
+                                    new PredicateBuilder(DATA1_SCHEMA.getRowType())
+                                            .greaterThan(0, 5))
+                            .createLogScanner()) {
+                logScanner.subscribeFromBeginning(0);
+
+                ScanRecords scanRecords = pollUntilProgressOnly(logScanner, tableBucket);
+                assertThat(scanRecords.consumedUpToOffset(tableBucket)).isGreaterThan(0L);
+            }
         }
     }
 
@@ -567,5 +599,34 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
             }
         }
         assertThat(count).isEqualTo(expectedRecords);
+    }
+
+    private static ScanRecords pollUntilProgressOnly(
+            LogScanner logScanner, TableBucket tableBucket) {
+        long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
+        ScanRecords scanRecords = ScanRecords.EMPTY;
+        while (System.nanoTime() < deadline) {
+            scanRecords = logScanner.poll(Duration.ofSeconds(1));
+            if (scanRecords.isEmpty()
+                    && scanRecords.hasProgress()
+                    && scanRecords.buckets().contains(tableBucket)) {
+                assertThat(scanRecords.count()).isEqualTo(0);
+                assertThat(scanRecords.records(tableBucket)).isEmpty();
+                return scanRecords;
+            }
+        }
+        assertThat(scanRecords.hasProgress())
+                .as("Timed out waiting for progress-only poll")
+                .isTrue();
+        return scanRecords;
+    }
+
+    private static void appendRows(Table table, int fromInclusive, int toInclusive)
+            throws Exception {
+        AppendWriter writer = table.newAppend().createWriter();
+        for (int i = fromInclusive; i <= toInclusive; i++) {
+            writer.append(row(i, "value-" + i)).get();
+        }
+        writer.flush();
     }
 }

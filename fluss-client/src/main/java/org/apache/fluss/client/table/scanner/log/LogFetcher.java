@@ -176,6 +176,13 @@ public class LogFetcher implements Closeable {
         }
     }
 
+    void unregisterTable(long tableId) {
+        TableReadContext tableReadContext = tableReadContexts.remove(tableId);
+        if (tableReadContext != null) {
+            tableReadContext.close();
+        }
+    }
+
     /**
      * Return whether we have any completed fetches that are fetch-able. This method is thread-safe.
      *
@@ -668,6 +675,11 @@ public class LogFetcher implements Closeable {
     @VisibleForTesting
     int getCompletedFetchesSize() {
         return logFetchBuffer.bufferedBuckets().size();
+    }
+
+    @VisibleForTesting
+    int getRegisteredTableCount() {
+        return tableReadContexts.size();
     }
 
     /** Per-table context holding read contexts, projection, and predicate info. */

@@ -23,7 +23,10 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.utils.AbstractIterator;
 
+import javax.annotation.Nullable;
+
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -41,20 +44,26 @@ import java.util.Set;
 @PublicEvolving
 public class MultiTableRecords implements Iterable<MultiTableRecord> {
 
-    public static final MultiTableRecords EMPTY = new MultiTableRecords(Collections.emptyMap());
+    public static final MultiTableRecords EMPTY =
+            new MultiTableRecords(Collections.emptyMap(), Collections.emptyMap());
 
     private final Map<TablePath, Map<TableBucket, List<MultiTableRecord>>> records;
 
-    public MultiTableRecords(Map<TablePath, Map<TableBucket, List<MultiTableRecord>>> records) {
+    private final Map<TableBucket, Long> consumedUpToOffsets;
+
+    MultiTableRecords(
+            Map<TablePath, Map<TableBucket, List<MultiTableRecord>>> records,
+            Map<TableBucket, Long> consumedUpToOffsets) {
         this.records = records;
+        this.consumedUpToOffsets = consumedUpToOffsets;
     }
 
-    /** All tables with records in this result set. */
+    /** All tables with records or scanner progress in this result set. */
     public Set<TablePath> tablePaths() {
         return Collections.unmodifiableSet(records.keySet());
     }
 
-    /** All buckets with records for a given table. */
+    /** All buckets with records or scanner progress for a given table. */
     public Set<TableBucket> buckets(TablePath tablePath) {
         Map<TableBucket, List<MultiTableRecord>> byBucket = records.get(tablePath);
         if (byBucket == null) {
@@ -101,8 +110,39 @@ public class MultiTableRecords implements Iterable<MultiTableRecord> {
         return count;
     }
 
+    /** Returns {@code true} if this {@code MultiTableRecords} contains no materialized records. */
     public boolean isEmpty() {
-        return records.isEmpty();
+        return count() == 0;
+    }
+
+    /**
+     * Returns {@code true} if this {@code MultiTableRecords} carries any scanner progress.
+     *
+     * <p>A result may have progress even when {@link #isEmpty()} is {@code true}, for example when
+     * a bucket returns no materialized records but advances its consumed offset.
+     */
+    public boolean hasProgress() {
+        if (!consumedUpToOffsets.isEmpty()) {
+            return true;
+        }
+        for (Map<TableBucket, List<MultiTableRecord>> byBucket : records.values()) {
+            if (!byBucket.isEmpty()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Get the exclusive upper bound of offsets consumed for the given bucket in this poll round.
+     *
+     * @param bucket the bucket to query
+     * @return the exclusive upper bound offset, or {@code null} if the bucket was not polled in
+     *     this round
+     */
+    @Nullable
+    public Long consumedUpToOffset(TableBucket bucket) {
+        return consumedUpToOffsets.get(bucket);
     }
 
     /** Iterate over every record across all tables. */
@@ -123,11 +163,20 @@ public class MultiTableRecords implements Iterable<MultiTableRecord> {
     public static final class Builder {
         private final Map<TablePath, Map<TableBucket, List<MultiTableRecord>>> records =
                 new LinkedHashMap<>();
+        private final Map<TableBucket, Long> consumedUpToOffsets = new LinkedHashMap<>();
 
         public Builder add(TablePath tablePath, TableBucket bucket, MultiTableRecord record) {
             records.computeIfAbsent(tablePath, k -> new LinkedHashMap<>())
-                    .computeIfAbsent(bucket, k -> new java.util.ArrayList<>())
+                    .computeIfAbsent(bucket, k -> new ArrayList<>())
                     .add(record);
+            return this;
+        }
+
+        public Builder addConsumedUpToOffset(
+                TableBucket bucket, @Nullable Long consumedUpToOffset) {
+            if (consumedUpToOffset != null) {
+                consumedUpToOffsets.put(bucket, consumedUpToOffset);
+            }
             return this;
         }
 
@@ -136,10 +185,10 @@ public class MultiTableRecords implements Iterable<MultiTableRecord> {
         }
 
         public MultiTableRecords build() {
-            if (records.isEmpty()) {
+            if (records.isEmpty() && consumedUpToOffsets.isEmpty()) {
                 return EMPTY;
             }
-            return new MultiTableRecords(records);
+            return new MultiTableRecords(records, consumedUpToOffsets);
         }
     }
 

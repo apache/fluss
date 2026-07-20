@@ -18,6 +18,7 @@
 package org.apache.fluss.client.table.scanner.log;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.metadata.ClientSchemaGetter;
 import org.apache.fluss.client.metadata.MetadataUpdater;
@@ -116,8 +117,10 @@ public class MultiTableLogScannerImpl extends AbstractLogScanner<MultiTableRecor
             Admin admin,
             LogScannerStatus logScannerStatus,
             ScannerMetricGroup scannerMetricGroup) {
-        super(
+        this(
                 scannerName,
+                metadataUpdater,
+                admin,
                 logScannerStatus,
                 new LogFetcher(
                         scannerName,
@@ -128,6 +131,17 @@ public class MultiTableLogScannerImpl extends AbstractLogScanner<MultiTableRecor
                         remoteFileDownloader,
                         LogRecordReadContext.SchemaResolution.DYNAMIC),
                 scannerMetricGroup);
+    }
+
+    @VisibleForTesting
+    MultiTableLogScannerImpl(
+            String scannerName,
+            MetadataUpdater metadataUpdater,
+            Admin admin,
+            LogScannerStatus logScannerStatus,
+            LogFetcher logFetcher,
+            ScannerMetricGroup scannerMetricGroup) {
+        super(scannerName, logScannerStatus, logFetcher, scannerMetricGroup);
         this.metadataUpdater = metadataUpdater;
         this.admin = admin;
     }
@@ -151,7 +165,7 @@ public class MultiTableLogScannerImpl extends AbstractLogScanner<MultiTableRecor
     public void subscribe(TablePath tablePath, int bucket, long offset) {
         acquireAndEnsureOpen();
         try {
-            TableInfo tableInfo = registerIfAbsent(tablePath);
+            TableInfo tableInfo = getTableInfo(tablePath);
             if (tableInfo.isPartitioned()) {
                 throw new IllegalStateException(
                         "Table "
@@ -160,6 +174,7 @@ public class MultiTableLogScannerImpl extends AbstractLogScanner<MultiTableRecor
                                 + "\"subscribe(TablePath, long partitionId, int bucket, long offset)\" "
                                 + "to subscribe a partitioned bucket instead.");
             }
+            registerIfAbsent(tablePath, tableInfo);
             TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), bucket);
             metadataUpdater.checkAndUpdateTableMetadata(Collections.singleton(tablePath));
             logScannerStatus.assignScanBuckets(Collections.singletonMap(tableBucket, offset));
@@ -194,7 +209,7 @@ public class MultiTableLogScannerImpl extends AbstractLogScanner<MultiTableRecor
     public void subscribe(TablePath tablePath, long partitionId, int bucket, long offset) {
         acquireAndEnsureOpen();
         try {
-            TableInfo tableInfo = registerIfAbsent(tablePath);
+            TableInfo tableInfo = getTableInfo(tablePath);
             if (!tableInfo.isPartitioned()) {
                 throw new IllegalStateException(
                         "Table "
@@ -203,6 +218,7 @@ public class MultiTableLogScannerImpl extends AbstractLogScanner<MultiTableRecor
                                 + "\"subscribe(TablePath, int bucket, long offset)\" "
                                 + "to subscribe a non-partitioned bucket instead.");
             }
+            registerIfAbsent(tablePath, tableInfo);
             TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), partitionId, bucket);
             metadataUpdater.checkAndUpdateTableMetadata(Collections.singleton(tablePath));
             metadataUpdater.checkAndUpdatePartitionMetadata(
@@ -235,14 +251,13 @@ public class MultiTableLogScannerImpl extends AbstractLogScanner<MultiTableRecor
      * Register the table on the underlying {@link LogFetcher} if not yet registered. Must be called
      * under the acquire-lock. Phase 1 always registers with no projection / filter.
      */
-    private TableInfo registerIfAbsent(TablePath tablePath) {
+    private void registerIfAbsent(TablePath tablePath, TableInfo tableInfo) {
         TableInfo cached = registeredByPath.get(tablePath);
         if (cached != null) {
             checkTableIdNotChanged(tablePath, cached);
-            return cached;
+            return;
         }
 
-        TableInfo tableInfo = resolveTableInfo(tablePath);
         TableScanSpec spec = new TableScanSpec(tableInfo, null, null);
         SchemaGetter schemaGetter =
                 new ClientSchemaGetter(tablePath, tableInfo.getSchemaInfo(), admin);
@@ -250,7 +265,15 @@ public class MultiTableLogScannerImpl extends AbstractLogScanner<MultiTableRecor
         registeredByPath.put(tablePath, tableInfo);
         pathByTableId.put(tableInfo.getTableId(), tablePath);
         schemaGetters.put(tableInfo.getTableId(), schemaGetter);
-        return tableInfo;
+    }
+
+    private TableInfo getTableInfo(TablePath tablePath) {
+        TableInfo cached = registeredByPath.get(tablePath);
+        if (cached != null) {
+            checkTableIdNotChanged(tablePath, cached);
+            return cached;
+        }
+        return resolveTableInfo(tablePath);
     }
 
     /**
@@ -278,6 +301,7 @@ public class MultiTableLogScannerImpl extends AbstractLogScanner<MultiTableRecor
             if (evicted != null) {
                 pathByTableId.remove(evicted.getTableId());
                 schemaGetters.remove(evicted.getTableId());
+                logFetcher.unregisterTable(evicted.getTableId());
             }
         }
     }
@@ -335,6 +359,7 @@ public class MultiTableLogScannerImpl extends AbstractLogScanner<MultiTableRecor
                                 "Dropping records for unknown tableId %s in bucket %s",
                                 tableId, bucket));
             }
+            builder.addConsumedUpToOffset(bucket, scanRecords.consumedUpToOffset(bucket));
             List<ScanRecord> records = scanRecords.records(bucket);
             for (ScanRecord scanRecord : records) {
                 // The SchemaGetter is consumed by LogFetcher while decoding records: it resolves

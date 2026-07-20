@@ -73,10 +73,10 @@ abstract class AbstractLogScanner<R> implements AutoCloseable {
      * Template poll loop shared by all concrete scanners.
      *
      * <ul>
-     *   <li>If {@link #pollForFetches()} returns a non-empty batch, {@link #toResult(ScanRecords)}
-     *       is invoked to produce the concrete result type.
-     *   <li>If the batch is empty, we wait on {@link LogFetcher#awaitNotEmpty(long)} until either
-     *       data arrives, the timeout elapses, or {@link #wakeup()} is called.
+     *   <li>If {@link #pollForFetches()} returns a batch with scanner progress, {@link
+     *       #toResult(ScanRecords)} is invoked to produce the concrete result type.
+     *   <li>If the batch has no progress, we wait on {@link LogFetcher#awaitNotEmpty(long)} until
+     *       either data arrives, the timeout elapses, or {@link #wakeup()} is called.
      *   <li>Any empty/timeout/wakeup path returns {@link #emptyResult()}.
      * </ul>
      */
@@ -92,7 +92,7 @@ abstract class AbstractLogScanner<R> implements AutoCloseable {
             long startNanos = System.nanoTime();
             do {
                 ScanRecords scanRecords = pollForFetches();
-                if (scanRecords.isEmpty()) {
+                if (!scanRecords.hasProgress()) {
                     try {
                         if (!logFetcher.awaitNotEmpty(startNanos + timeoutNanos)) {
                             // no data in buffer within the timeout
@@ -119,7 +119,7 @@ abstract class AbstractLogScanner<R> implements AutoCloseable {
 
     private ScanRecords pollForFetches() {
         ScanRecords scanRecords = logFetcher.collectFetch();
-        if (!scanRecords.isEmpty()) {
+        if (scanRecords.hasProgress()) {
             return scanRecords;
         }
 

@@ -160,7 +160,7 @@ public class LogRecordReadContext
                 dataRowType = rowType;
                 selectedFields = projection.getProjection();
             }
-            target = new ReadTarget(schemaId, dataRowType, selectedFields, readAsTargetSchema);
+            target = new ReadTarget(schemaId, dataRowType, selectedFields);
         }
 
         if (logFormat == LogFormat.ARROW) {
@@ -224,7 +224,7 @@ public class LogRecordReadContext
     public static LogRecordReadContext createArrowReadContext(
             RowType rowType, int schemaId, SchemaGetter schemaGetter) {
         int[] selectedFields = IntStream.range(0, rowType.getFieldCount()).toArray();
-        ReadTarget target = new ReadTarget(schemaId, rowType, selectedFields, true);
+        ReadTarget target = new ReadTarget(schemaId, rowType, selectedFields);
         return createArrowReadContext(
                 -1L, target, false, schemaGetter, new ChunkedAllocationManager.ChunkedFactory());
     }
@@ -236,7 +236,7 @@ public class LogRecordReadContext
             SchemaGetter schemaGetter,
             boolean projectionPushDowned) {
         int[] selectedFields = IntStream.range(0, rowType.getFieldCount()).toArray();
-        ReadTarget target = new ReadTarget(schemaId, rowType, selectedFields, true);
+        ReadTarget target = new ReadTarget(schemaId, rowType, selectedFields);
         return createArrowReadContext(
                 -1L,
                 target,
@@ -256,7 +256,7 @@ public class LogRecordReadContext
     public static LogRecordReadContext createIndexedReadContext(
             RowType rowType, int schemaId, SchemaGetter schemaGetter) {
         int[] selectedFields = IntStream.range(0, rowType.getFieldCount()).toArray();
-        ReadTarget target = new ReadTarget(schemaId, rowType, selectedFields, true);
+        ReadTarget target = new ReadTarget(schemaId, rowType, selectedFields);
         return createIndexedReadContext(-1L, target, schemaGetter);
     }
 
@@ -264,7 +264,7 @@ public class LogRecordReadContext
     public static LogRecordReadContext createCompactedRowReadContext(
             RowType rowType, int schemaId, SchemaGetter schemaGetter) {
         int[] selectedFields = IntStream.range(0, rowType.getFieldCount()).toArray();
-        ReadTarget target = new ReadTarget(schemaId, rowType, selectedFields, false);
+        ReadTarget target = new ReadTarget(schemaId, rowType, selectedFields);
         return createCompactedRowReadContext(-1L, target, schemaGetter);
     }
 
@@ -348,11 +348,6 @@ public class LogRecordReadContext
             return null;
         }
         return projectedRow.getIndexMapping();
-    }
-
-    @Override
-    public long getTableId() {
-        return tableId;
     }
 
     @Override
@@ -528,19 +523,11 @@ public class LogRecordReadContext
         /** Pre-built field getters corresponding to {@link #selectedFields}. */
         final FieldGetter[] fieldGetters;
 
-        /** Whether to project records from other schemas to this target schema. */
-        final boolean readAsTargetSchema;
-
-        ReadTarget(
-                int schemaId,
-                RowType dataRowType,
-                int[] selectedFields,
-                boolean readAsTargetSchema) {
+        ReadTarget(int schemaId, RowType dataRowType, int[] selectedFields) {
             this.schemaId = schemaId;
             this.dataRowType = dataRowType;
             this.selectedFields = selectedFields;
             this.fieldGetters = buildProjectedFieldGetters(dataRowType, selectedFields);
-            this.readAsTargetSchema = readAsTargetSchema;
         }
     }
 }

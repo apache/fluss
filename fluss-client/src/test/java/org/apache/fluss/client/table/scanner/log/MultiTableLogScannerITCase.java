@@ -19,7 +19,10 @@ package org.apache.fluss.client.table.scanner.log;
 
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
+import org.apache.fluss.client.FlussConnection;
 import org.apache.fluss.client.admin.ClientToServerITCaseBase;
+import org.apache.fluss.client.metadata.ClientSchemaGetter;
+import org.apache.fluss.client.metrics.TestingScannerMetricGroup;
 import org.apache.fluss.client.table.MultiTable;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.MultiTableRecord;
@@ -28,17 +31,22 @@ import org.apache.fluss.client.table.writer.MultiTableWriteRecord;
 import org.apache.fluss.client.table.writer.MultiTableWriter;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.predicate.PredicateBuilder;
 import org.apache.fluss.record.ChangeType;
+import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
@@ -55,6 +63,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /** ITCase for {@link MultiTableLogScannerImpl}. */
 public class MultiTableLogScannerITCase extends ClientToServerITCaseBase {
 
+    private static final String TEST_DB = "test_db";
+
     private static final Schema LOG_SCHEMA =
             Schema.newBuilder()
                     .column("id", DataTypes.INT())
@@ -68,9 +78,17 @@ public class MultiTableLogScannerITCase extends ClientToServerITCaseBase {
                     .column("score", DataTypes.BIGINT())
                     .build();
 
+    @AfterEach
+    protected void teardown() throws Exception {
+        if (admin != null) {
+            admin.dropDatabase(TEST_DB, true, true);
+        }
+        super.teardown();
+    }
+
     @Test
     void testSingleTableSubscribeAndPoll() throws Exception {
-        TablePath tablePath = TablePath.of("test_db", "multi_scanner_single");
+        TablePath tablePath = TablePath.of(TEST_DB, "multi_scanner_single");
         TableDescriptor descriptor =
                 TableDescriptor.builder().schema(LOG_SCHEMA).distributedBy(1).build();
         long tableId = createTable(tablePath, descriptor, false);
@@ -111,9 +129,102 @@ public class MultiTableLogScannerITCase extends ClientToServerITCaseBase {
     }
 
     @Test
+    void testPollReturnsProgressOnlyRecords() throws Exception {
+        TablePath tablePath = TablePath.of(TEST_DB, "multi_scanner_progress_only");
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(LOG_SCHEMA)
+                        .distributedBy(1)
+                        .logFormat(LogFormat.ARROW)
+                        .build();
+        long tableId = createTable(tablePath, descriptor, false);
+        waitAllReplicasReady(tableId, 1);
+
+        try (Table table = conn.getTable(tablePath)) {
+            appendRows(table, 1, 5);
+        }
+
+        TableInfo tableInfo = admin.getTableInfo(tablePath).get();
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+        TestingScannerMetricGroup scannerMetricGroup = TestingScannerMetricGroup.newInstance();
+        LogScannerStatus logScannerStatus = new LogScannerStatus();
+        LogFetcher logFetcher =
+                createTestingLogFetcher(
+                        "multi-table-progress-only-scanner", logScannerStatus, scannerMetricGroup);
+        logFetcher.registerTable(
+                new TableScanSpec(
+                        tableInfo,
+                        null,
+                        new PredicateBuilder(LOG_SCHEMA.getRowType()).greaterThan(0, 5)),
+                new ClientSchemaGetter(tablePath, tableInfo.getSchemaInfo(), admin));
+
+        try (MultiTableLogScanner scanner =
+                createTestingScanner(
+                        "multi-table-progress-only-scanner",
+                        logScannerStatus,
+                        logFetcher,
+                        scannerMetricGroup)) {
+            scanner.subscribeFromBeginning(tablePath, 0);
+            assertThat(logFetcher.getRegisteredTableCount()).isEqualTo(1);
+
+            MultiTableRecords records = pollUntilProgressOnly(scanner, tablePath, tableBucket);
+            assertThat(records.consumedUpToOffset(tableBucket)).isGreaterThan(0L);
+
+            scanner.unsubscribe(tablePath, 0);
+            assertThat(logFetcher.getRegisteredTableCount()).isEqualTo(0);
+        }
+    }
+
+    @Test
+    void testWrongOverloadSubscribeDoesNotRegisterTable() throws Exception {
+        TablePath partitionedPath =
+                TablePath.of(TEST_DB, "multi_scanner_wrong_overload_partitioned");
+        Schema partitionedSchema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("pt", DataTypes.STRING())
+                        .build();
+        createTable(
+                partitionedPath,
+                TableDescriptor.builder()
+                        .schema(partitionedSchema)
+                        .distributedBy(1)
+                        .partitionedBy("pt")
+                        .build(),
+                false);
+
+        TablePath nonPartitionedPath =
+                TablePath.of(TEST_DB, "multi_scanner_wrong_overload_non_partitioned");
+        createTable(
+                nonPartitionedPath,
+                TableDescriptor.builder().schema(LOG_SCHEMA).distributedBy(1).build(),
+                true);
+
+        String scannerName = "multi-table-wrong-overload-scanner";
+        TestingScannerMetricGroup scannerMetricGroup = TestingScannerMetricGroup.newInstance();
+        LogScannerStatus logScannerStatus = new LogScannerStatus();
+        LogFetcher logFetcher =
+                createTestingLogFetcher(scannerName, logScannerStatus, scannerMetricGroup);
+
+        try (MultiTableLogScanner scanner =
+                createTestingScanner(
+                        scannerName, logScannerStatus, logFetcher, scannerMetricGroup)) {
+            assertThatThrownBy(() -> scanner.subscribe(partitionedPath, 0, 0L))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("is a partitioned table");
+            assertThat(logFetcher.getRegisteredTableCount()).isEqualTo(0);
+
+            assertThatThrownBy(() -> scanner.subscribe(nonPartitionedPath, 1L, 0, 0L))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("is not a partitioned table");
+            assertThat(logFetcher.getRegisteredTableCount()).isEqualTo(0);
+        }
+    }
+
+    @Test
     void testMultipleTableSubscribeAndPoll() throws Exception {
-        TablePath tablePath1 = TablePath.of("test_db", "multi_scanner_t1");
-        TablePath tablePath2 = TablePath.of("test_db", "multi_scanner_t2");
+        TablePath tablePath1 = TablePath.of(TEST_DB, "multi_scanner_t1");
+        TablePath tablePath2 = TablePath.of(TEST_DB, "multi_scanner_t2");
         TableDescriptor descriptor1 =
                 TableDescriptor.builder().schema(LOG_SCHEMA).distributedBy(1).build();
         TableDescriptor descriptor2 =
@@ -186,7 +297,7 @@ public class MultiTableLogScannerITCase extends ClientToServerITCaseBase {
 
     @Test
     void testUnsubscribe() throws Exception {
-        TablePath tablePath = TablePath.of("test_db", "multi_scanner_unsub");
+        TablePath tablePath = TablePath.of(TEST_DB, "multi_scanner_unsub");
         TableDescriptor descriptor =
                 TableDescriptor.builder().schema(LOG_SCHEMA).distributedBy(2).build();
         long tableId = createTable(tablePath, descriptor, false);
@@ -244,7 +355,7 @@ public class MultiTableLogScannerITCase extends ClientToServerITCaseBase {
 
     @Test
     void testPollWithoutSubscription() throws Exception {
-        TablePath tablePath = TablePath.of("test_db", "multi_scanner_no_sub");
+        TablePath tablePath = TablePath.of(TEST_DB, "multi_scanner_no_sub");
         TableDescriptor descriptor =
                 TableDescriptor.builder().schema(LOG_SCHEMA).distributedBy(1).build();
         createTable(tablePath, descriptor, false);
@@ -259,7 +370,7 @@ public class MultiTableLogScannerITCase extends ClientToServerITCaseBase {
 
     @Test
     void testPollAfterClose() throws Exception {
-        TablePath tablePath = TablePath.of("test_db", "multi_scanner_closed");
+        TablePath tablePath = TablePath.of(TEST_DB, "multi_scanner_closed");
         TableDescriptor descriptor =
                 TableDescriptor.builder().schema(LOG_SCHEMA).distributedBy(1).build();
         createTable(tablePath, descriptor, false);
@@ -275,7 +386,7 @@ public class MultiTableLogScannerITCase extends ClientToServerITCaseBase {
     @Test
     void testPartitionedTableSubscribeAndPoll() throws Exception {
         // Create a partitioned log table with partition key "pt".
-        TablePath tablePath = TablePath.of("test_db", "multi_scanner_partitioned");
+        TablePath tablePath = TablePath.of(TEST_DB, "multi_scanner_partitioned");
         Schema schema =
                 Schema.newBuilder()
                         .column("id", DataTypes.INT())
@@ -360,7 +471,7 @@ public class MultiTableLogScannerITCase extends ClientToServerITCaseBase {
     @Test
     void testPartitionedAndNonPartitionedMixed() throws Exception {
         // Table 1: partitioned log table.
-        TablePath tablePath1 = TablePath.of("test_db", "multi_scanner_part_mix1");
+        TablePath tablePath1 = TablePath.of(TEST_DB, "multi_scanner_part_mix1");
         Schema schema1 =
                 Schema.newBuilder()
                         .column("id", DataTypes.INT())
@@ -450,7 +561,7 @@ public class MultiTableLogScannerITCase extends ClientToServerITCaseBase {
 
     @Test
     void testMultipleBucketsOfSameTable() throws Exception {
-        TablePath tablePath = TablePath.of("test_db", "multi_scanner_buckets");
+        TablePath tablePath = TablePath.of(TEST_DB, "multi_scanner_buckets");
         int bucketCount = 3;
         TableDescriptor descriptor =
                 TableDescriptor.builder().schema(LOG_SCHEMA).distributedBy(bucketCount).build();
@@ -491,7 +602,7 @@ public class MultiTableLogScannerITCase extends ClientToServerITCaseBase {
 
     @Test
     void testReadDataBeforeAndAfterAddColumn() throws Exception {
-        TablePath tablePath = TablePath.of("test_db", "multi_scanner_add_col");
+        TablePath tablePath = TablePath.of(TEST_DB, "multi_scanner_add_col");
         TableDescriptor descriptor =
                 TableDescriptor.builder().schema(LOG_SCHEMA).distributedBy(1).build();
         long tableId = createTable(tablePath, descriptor, false);
@@ -570,7 +681,7 @@ public class MultiTableLogScannerITCase extends ClientToServerITCaseBase {
         // the same path must detect the tableId change (once the shared connection metadata learns
         // the new id) and fail fast. Recovery: unsubscribe all stale buckets (which evicts the
         // cached registration) and subscribe again, which re-resolves the recreated table.
-        TablePath tablePath = TablePath.of("test_db", "multi_scanner_drop_recreate");
+        TablePath tablePath = TablePath.of(TEST_DB, "multi_scanner_drop_recreate");
         TableDescriptor descriptor =
                 TableDescriptor.builder().schema(LOG_SCHEMA).distributedBy(1).build();
         long oldTableId = createTable(tablePath, descriptor, false);
@@ -624,5 +735,61 @@ public class MultiTableLogScannerITCase extends ClientToServerITCaseBase {
             }
             assertThat(actualRows).containsExactly(recreatedRow);
         }
+    }
+
+    private static MultiTableRecords pollUntilProgressOnly(
+            MultiTableLogScanner scanner, TablePath tablePath, TableBucket tableBucket) {
+        long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
+        MultiTableRecords records = MultiTableRecords.EMPTY;
+        while (System.nanoTime() < deadline) {
+            records = scanner.poll(Duration.ofSeconds(1));
+            if (records.isEmpty()
+                    && records.hasProgress()
+                    && records.buckets(tablePath).contains(tableBucket)) {
+                assertThat(records.count()).isEqualTo(0);
+                assertThat(records.records(tablePath, tableBucket)).isEmpty();
+                return records;
+            }
+        }
+        assertThat(records.hasProgress()).as("Timed out waiting for progress-only poll").isTrue();
+        return records;
+    }
+
+    private LogFetcher createTestingLogFetcher(
+            String scannerName,
+            LogScannerStatus logScannerStatus,
+            TestingScannerMetricGroup scannerMetricGroup) {
+        FlussConnection flussConnection = (FlussConnection) conn;
+        return new LogFetcher(
+                scannerName,
+                logScannerStatus,
+                clientConf,
+                flussConnection.getMetadataUpdater(),
+                scannerMetricGroup,
+                flussConnection.getOrCreateRemoteFileDownloader(),
+                LogRecordReadContext.SchemaResolution.DYNAMIC);
+    }
+
+    private MultiTableLogScanner createTestingScanner(
+            String scannerName,
+            LogScannerStatus logScannerStatus,
+            LogFetcher logFetcher,
+            TestingScannerMetricGroup scannerMetricGroup) {
+        return new MultiTableLogScannerImpl(
+                scannerName,
+                ((FlussConnection) conn).getMetadataUpdater(),
+                admin,
+                logScannerStatus,
+                logFetcher,
+                scannerMetricGroup);
+    }
+
+    private static void appendRows(Table table, int fromInclusive, int toInclusive)
+            throws Exception {
+        AppendWriter writer = table.newAppend().createWriter();
+        for (int i = fromInclusive; i <= toInclusive; i++) {
+            writer.append(row(i, "value-" + i)).get();
+        }
+        writer.flush();
     }
 }
