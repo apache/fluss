@@ -563,19 +563,9 @@ public class FlinkTableSource
         return bucketKeyIndexes;
     }
 
-    /** Returns the indexes of the primary-key columns within the table output row. */
-    protected int[] primaryKeyIndexes() {
-        return primaryKeyIndexes;
-    }
-
     /** Returns the Flink logical row type produced by this source. */
     protected org.apache.flink.table.types.logical.RowType tableOutputType() {
         return tableOutputType;
-    }
-
-    /** Returns the raw table options (used to read e.g. the bucket number). */
-    protected Map<String, String> tableOptions() {
-        return tableOptions;
     }
 
     /** Returns the table config, e.g. to resolve the data lake format for bucketing. */

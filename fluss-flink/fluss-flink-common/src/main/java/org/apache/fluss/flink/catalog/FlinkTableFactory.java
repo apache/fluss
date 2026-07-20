@@ -171,7 +171,9 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                         tableOptions.get(toFlinkOption(ConfigOptions.TABLE_DATALAKE_ENABLED)),
                         tableOptions.get(toFlinkOption(ConfigOptions.TABLE_MERGE_ENGINE)),
                         context.getCatalogTable().getOptions(),
-                        leaseContext));
+                        leaseContext),
+                tableOptions,
+                primaryKeyIndexes.length > 0 && bucketKeyIndexes.length > 0);
     }
 
     @Override

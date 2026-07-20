@@ -19,6 +19,8 @@ package org.apache.fluss.flink.adapter;
 
 import org.apache.fluss.flink.source.FlinkTableSource;
 
+import org.apache.flink.configuration.ReadableConfig;
+
 /**
  * Adapter that optionally wraps a {@link FlinkTableSource} with a version-specific ability.
  *
@@ -33,7 +35,17 @@ public class LookupShuffleSourceAdapter {
 
     private LookupShuffleSourceAdapter() {}
 
-    public static FlinkTableSource maybeWithCustomShuffle(FlinkTableSource source) {
+    /**
+     * Optionally wraps the source with a version-specific custom lookup shuffle ability.
+     *
+     * @param source source to wrap
+     * @param tableOptions resolved table options
+     * @param lookupShuffleEligible whether the table has the primary-key and bucket-key metadata
+     *     required by the custom lookup shuffle
+     * @return the source unchanged for Flink 1.x
+     */
+    public static FlinkTableSource maybeWithCustomShuffle(
+            FlinkTableSource source, ReadableConfig tableOptions, boolean lookupShuffleEligible) {
         return source;
     }
 }

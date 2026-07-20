@@ -32,17 +32,22 @@ import javax.annotation.Nullable;
 
 import java.util.List;
 
+import static org.apache.fluss.utils.Preconditions.checkArgument;
+
 /**
- * Partitions the lookup-join probe stream by Fluss bucket key, consistent with the client-side
- * bucketing used by {@code PrimaryKeyLookuper} (bucket key encoding + {@link BucketingFunction}).
- * Rows mapping to the same Fluss bucket are always routed to the same partition.
+ * Partitions the lookup-join probe stream by Fluss bucket, consistent with the client-side
+ * bucketing used by {@code PrimaryKeyLookuper}/{@code PrefixKeyLookuper} (bucket key encoding +
+ * {@link BucketingFunction}). Rows mapping to the same Fluss bucket are always routed to the same
+ * partition.
  */
 public class FlussLookupInputPartitioner implements InputDataPartitioner {
 
     private static final long serialVersionUID = 1L;
 
     private final LookupNormalizer normalizer;
-    // Flink row type of the normalized lookup key row (primary key in Fluss key order).
+    // Flink row type of the normalized lookup key row (the expected lookup keys in Fluss key order,
+    // i.e. the full primary key for a primary-key lookup, or the bucket keys + partition keys for a
+    // prefix lookup).
     private final RowType keyFlinkRowType;
     private final List<String> bucketKeyNames;
     @Nullable private final DataLakeFormat lakeFormat;
@@ -52,6 +57,15 @@ public class FlussLookupInputPartitioner implements InputDataPartitioner {
     private transient BucketingFunction bucketingFunction;
     private transient FlinkAsFlussRow reuseRow;
 
+    /**
+     * Creates a partitioner consistent with Fluss client-side bucket routing.
+     *
+     * @param normalizer normalizes Flink lookup keys into Fluss lookup-key order
+     * @param keyFlinkRowType row type of the normalized lookup key
+     * @param bucketKeyNames bucket-key field names within the normalized lookup key
+     * @param lakeFormat optional lake format that defines key encoding and bucketing behavior
+     * @param numBuckets positive number of buckets in the Fluss table
+     */
     public FlussLookupInputPartitioner(
             LookupNormalizer normalizer,
             RowType keyFlinkRowType,
@@ -62,6 +76,7 @@ public class FlussLookupInputPartitioner implements InputDataPartitioner {
         this.keyFlinkRowType = keyFlinkRowType;
         this.bucketKeyNames = bucketKeyNames;
         this.lakeFormat = lakeFormat;
+        checkArgument(numBuckets > 0, "numBuckets must be positive, but was %s.", numBuckets);
         this.numBuckets = numBuckets;
     }
 
@@ -80,13 +95,13 @@ public class FlussLookupInputPartitioner implements InputDataPartitioner {
     @Override
     public int partition(RowData joinKeys, int numPartitions) {
         ensureInitialized();
-        // normalize the projected join keys into Fluss primary key order
+        // normalize the projected join keys into the Fluss key order
         RowData normalizedKey = normalizer.normalizeLookupKey(joinKeys);
         InternalRow flussKeyRow = reuseRow.replace(normalizedKey);
         byte[] bucketKeyBytes = bucketKeyEncoder.encodeKey(flussKeyRow);
+        // BucketingFunction always returns a non-negative bucket id.
         int bucketId = bucketingFunction.bucketing(bucketKeyBytes, numBuckets);
-        int p = bucketId % numPartitions;
-        return p < 0 ? p + numPartitions : p;
+        return bucketId % numPartitions;
     }
 
     @Override
