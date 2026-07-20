@@ -387,7 +387,8 @@ The same pattern works with Sealed Secrets, HashiCorp Vault Agent Injector (prod
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `secrets.mounts` | Secrets mounted as files under `/etc/fluss/secrets/<name>`, entries of `{name, secretName}` | `[]` |
+| `secrets.basePath` | Base directory for secret mounts | `/etc/fluss/secrets` |
+| `secrets.mounts` | Secrets mounted as files under `<basePath>/<name>`, entries of `{name, secretName}` | `[]` |
 | `secrets.env` | Secret values injected as env vars via `secretKeyRef`, entries of `{name, secretName, key}` | `[]` |
 
 Any `configurationOverrides` value can reference a secret through a
@@ -409,6 +410,19 @@ secrets:
 configurationOverrides:
   datalake.paimon.s3.access-key: ${directory:/etc/fluss/secrets/paimon-creds:access-key}
   datalake.paimon.s3.secret-key: ${directory:/etc/fluss/secrets/paimon-creds:secret-key}
+```
+
+Alternatively, a value can be injected as an environment variable:
+
+```yaml
+secrets:
+  env:
+    - name: PAIMON_S3_ACCESS_KEY
+      secretName: fluss-paimon-creds
+      key: access-key
+
+configurationOverrides:
+  datalake.paimon.s3.access-key: ${env:PAIMON_S3_ACCESS_KEY}
 ```
 
 To rotate a secret, update the Kubernetes Secret and restart the pods

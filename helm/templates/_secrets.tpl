@@ -31,7 +31,7 @@ true
 Base directory under which each secret mount gets its own subdirectory.
 */}}
 {{- define "fluss.secrets.basePath" -}}
-/etc/fluss/secrets
+{{- .Values.secrets.basePath | default "/etc/fluss/secrets" | trimSuffix "/" -}}
 {{- end -}}
 
 {{/*
@@ -113,6 +113,9 @@ Usage:
 */}}
 {{- define "fluss.secrets.validateError" -}}
 {{- $errMessages := list -}}
+{{- if and .Values.secrets.mounts (not (hasPrefix "/" (include "fluss.secrets.basePath" .))) -}}
+{{- $errMessages = append $errMessages "secrets.basePath must be an absolute path." -}}
+{{- end -}}
 {{- $names := list -}}
 {{- range .Values.secrets.mounts -}}
 {{- if or (not .name) (not .secretName) -}}

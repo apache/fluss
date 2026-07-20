@@ -147,9 +147,10 @@ listeners:
     port: 9124
 
 # Secrets referenced from configurationOverrides via config provider markers:
-# mounts are read with ${directory:/etc/fluss/secrets/<name>:<key>}, env entries
-# with ${env:<NAME>}. The chart generates the matching config.providers lines.
+# mounts are read with ${directory:<basePath>/<name>:<key>}, env entries with
+# ${env:<NAME>}. The chart generates the matching config.providers lines.
 secrets:
+  basePath: /etc/fluss/secrets
   # - name: paimon-creds
   #   secretName: fluss-paimon-creds
   mounts: []
