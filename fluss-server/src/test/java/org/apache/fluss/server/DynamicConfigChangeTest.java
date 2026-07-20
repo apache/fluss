@@ -630,8 +630,7 @@ public class DynamicConfigChangeTest {
         Configuration configuration = new Configuration();
         configuration.set(ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS, 1);
 
-        DynamicConfigManager dynamicConfigManager =
-                new DynamicConfigManager(zookeeperClient, configuration, true);
+        DynamicConfigManager dynamicConfigManager = createManager(configuration);
 
         AtomicInteger reconfiguredValue = new AtomicInteger();
         dynamicConfigManager.register(
@@ -703,8 +702,7 @@ public class DynamicConfigChangeTest {
         Configuration configuration = new Configuration();
         configuration.set(ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS, 1);
 
-        DynamicConfigManager dynamicConfigManager =
-                new DynamicConfigManager(zookeeperClient, configuration, true);
+        DynamicConfigManager dynamicConfigManager = createManager(configuration);
 
         AtomicInteger reconfiguredValue = new AtomicInteger();
         dynamicConfigManager.register(
@@ -756,8 +754,7 @@ public class DynamicConfigChangeTest {
         Configuration configuration = new Configuration();
         configuration.set(ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS, 1);
 
-        DynamicConfigManager dynamicConfigManager =
-                new DynamicConfigManager(zookeeperClient, configuration, true);
+        DynamicConfigManager dynamicConfigManager = createManager(configuration);
         dynamicConfigManager.startup();
         dynamicConfigManager.alterConfigs(
                 Collections.singletonList(
