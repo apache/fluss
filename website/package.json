@@ -20,6 +20,7 @@
     "@docusaurus/plugin-client-redirects": "^3.9.2",
     "@docusaurus/plugin-pwa": "^3.9.2",
     "@docusaurus/preset-classic": "^3.9.2",
+    "@docusaurus/theme-mermaid": "^3.10.1",
     "@fontsource-variable/geist": "^5.2.8",
     "@fontsource-variable/geist-mono": "^5.2.7",
     "@mdx-js/react": "^3.0.0",
