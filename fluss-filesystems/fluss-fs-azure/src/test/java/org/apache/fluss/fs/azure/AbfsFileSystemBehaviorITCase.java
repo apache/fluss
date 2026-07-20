@@ -34,6 +34,7 @@ import java.net.URI;
 class AbfsFileSystemBehaviorITCase extends FileSystemBehaviorTestSuite {
 
     private static final String CONFIG_PREFIX = "fs.azure.account";
+    private static final String HNS_ENABLED = CONFIG_PREFIX + ".hns.enabled";
     private static final String CLIENT_ID = "testClientId";
     private static final String CLIENT_SECRET = "testClientSecret";
 
@@ -53,6 +54,7 @@ class AbfsFileSystemBehaviorITCase extends FileSystemBehaviorTestSuite {
                 CONFIG_PREFIX + ".oauth2.client.endpoint",
                 ENDPOINT_PREFIX + mockAuthServer.getPort());
         configuration.setString(CONFIG_PREFIX + ".key", AZURE_ACCOUNT_KEY);
+        configuration.setBoolean(HNS_ENABLED, false);
         FileSystem.initialize(configuration, null);
     }
 
