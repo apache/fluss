@@ -103,8 +103,9 @@ inline std::shared_ptr<arrow::DataType> to_arrow_type(const DataType& dt) {
     }
 }
 
-/// True if the type is (or nests) a MAP/ROW the flat FFI column can't express,
-/// so it must route through Arrow. Array-of-scalar stays on the flat path.
+/// True if the type is (or nests) a MAP/ROW. The data-writer path uses this to
+/// route compound element/key/value types through Arrow; array-of-scalar uses
+/// the flat writer path.
 inline bool is_compound(const DataType& dt) {
     switch (dt.id()) {
         case TypeId::Map:
@@ -117,16 +118,6 @@ inline bool is_compound(const DataType& dt) {
         default:
             return false;
     }
-}
-
-inline std::shared_ptr<arrow::Schema> columns_to_arrow_schema(const std::vector<Column>& columns) {
-    std::vector<std::shared_ptr<arrow::Field>> fields;
-    fields.reserve(columns.size());
-    for (const auto& col : columns) {
-        fields.push_back(
-            arrow::field(col.name, to_arrow_type(col.data_type), col.data_type.nullable()));
-    }
-    return arrow::schema(std::move(fields));
 }
 
 /// Exports an Arrow schema to a heap FFI_ArrowSchema; the Rust bridge takes

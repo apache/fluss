@@ -43,6 +43,8 @@ public class MetricNames {
     public static final String LAKE_TABLE_COUNT = "lakeTableCount";
     public static final String BUCKET_COUNT = "bucketCount";
     public static final String PARTITION_COUNT = "partitionCount";
+    public static final String KV_LEADER_REPLICA_COUNT = "kvLeaderReplicaCount";
+    public static final String KV_LEADER_REPLICA_CAPACITY = "kvLeaderReplicaCapacity";
     public static final String REPLICAS_TO_DELETE_COUNT = "replicasToDeleteCount";
     public static final String PENDING_LEADER_ACTIVATION_COUNT = "pendingLeaderActivationCount";
 
@@ -67,6 +69,7 @@ public class MetricNames {
 
     // for lake tiering table-level metrics
     public static final String LAKE_TIERING_TABLE_TIER_LAG = "tierLag";
+    public static final String LAKE_TIERING_TABLE_TIERED_TIMESTAMP = "tieredTimestamp";
     public static final String LAKE_TIERING_TABLE_TIER_DURATION = "tierDuration";
     public static final String LAKE_TIERING_TABLE_FAILURES_TOTAL = "failuresTotal";
     public static final String LAKE_TIERING_TABLE_FILE_SIZE = "fileSize";
@@ -231,6 +234,7 @@ public class MetricNames {
 
     // for tablet
     public static final String LAKE_PENDING_RECORDS = "pendingRecords";
+    public static final String LAKE_PENDING_RECORDS_LAG = "pendingRecordsLag";
 
     // for log tablet
     public static final String LOG_NUM_SEGMENTS = "numSegments";

@@ -82,5 +82,17 @@ defmodule Fluss.TableDescriptorTest do
         TableDescriptor.new!(schema, bogus: 1)
       end
     end
+
+    test "accepts complex types and nullability wrappers" do
+      schema =
+        Schema.new()
+        |> Schema.column("tags", {:array, :string})
+        |> Schema.column("scores", {:array, {:not_null, :int}})
+        |> Schema.column("attrs", {:map, :string, :int})
+        |> Schema.column("point", {:row, [{"x", :int}, {"y", :int}]})
+        |> Schema.column("deep", {:array, {:map, :string, {:row, [{"a", :int}]}}})
+
+      assert is_reference(TableDescriptor.new!(schema))
+    end
   end
 end

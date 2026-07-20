@@ -71,6 +71,24 @@ public class ConfigOptions {
     // ------------------------------------------------------------------------
     //  ConfigOptions for Fluss Cluster
     // ------------------------------------------------------------------------
+    public static final ConfigOption<List<String>> CONFIG_PROVIDERS =
+            key("config.providers")
+                    .stringType()
+                    .asList()
+                    .defaultValues()
+                    .withDescription(
+                            "A comma-separated list of config provider identifiers to enable, e.g. "
+                                    + "'directory,env'. Config providers resolve indirection markers of the "
+                                    + "form ${provider:[path:]key} in configuration values at load time, so "
+                                    + "secrets can be kept out of the configuration file (e.g. in a mounted "
+                                    + "Kubernetes Secret or an environment variable). Built-in providers: "
+                                    + "'directory' (${directory:/dir:file}, reads the file content), 'env' "
+                                    + "(${env:VAR}, reads an environment variable) and 'file' "
+                                    + "(${file:/path/to/file.properties:key}, reads a single property). "
+                                    + "Providers are configured via config.providers.<identifier>.param.<param> "
+                                    + "keys; the filesystem-reading providers require the 'allowed.paths' "
+                                    + "parameter restricting which paths they may read.");
+
     public static final ConfigOption<Integer> DEFAULT_BUCKET_NUMBER =
             key("default.bucket.number")
                     .intType()
@@ -324,6 +342,16 @@ public class ConfigOptions {
                                     + "and each super user should be specified in the format `principal_type:principal_name`, e.g., `User:admin;User:bob`. "
                                     + "This configuration is critical for defining administrative privileges in the system.");
 
+    public static final ConfigOption<Boolean> SECURITY_ACL_PRINCIPAL_IGNORE_CASE =
+            key("security.acl.principal.ignore-case")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether to perform case-insensitive matching on principal name and type "
+                                    + "during ACL authorization checks. When set to true, principals "
+                                    + "such as 'User:Admin' and 'user:admin' will be treated as the same principal. "
+                                    + "Default is false for strict case-sensitive matching.");
+
     public static final ConfigOption<Integer> MAX_BUCKET_NUM =
             key("max.bucket.num")
                     .intType()
@@ -334,6 +362,18 @@ public class ConfigOptions {
                                     + "The default value is 4096. "
                                     + "This default is capped to reduce the risk that an assignment znode exceeds "
                                     + "ZooKeeper's packet size limit.");
+
+    public static final ConfigOption<MemorySize> KV_LEADER_REPLICA_MEMORY_RESERVED =
+            key("kv.leader-replica.memory-reserved")
+                    .memoryType()
+                    .defaultValue(MemorySize.ZERO)
+                    .withDescription(
+                            "The estimated memory consumption of each KV leader replica, "
+                                    + "used by the CoordinatorServer to calculate the cluster-level "
+                                    + "KV leader replica capacity. This value does not reserve or "
+                                    + "enforce memory on the tablet server. The default value of 0 "
+                                    + "disables memory-based KV leader replica capacity control. "
+                                    + "Set a positive value to enable it.");
 
     /**
      * The network address and port the server binds to for accepting connections.
@@ -401,10 +441,23 @@ public class ConfigOptions {
                     .doubleType()
                     .defaultValue(0.85)
                     .withDescription(
-                            "Reject writes when the tablet server data disk usage exceeds this ratio. "
-                                    + "Writes resume after the usage drops below (ratio - 0.10). "
+                            "Reject writes when the tablet server data disk usage reaches this ratio. "
+                                    + "Writes resume when the usage reaches or drops below "
+                                    + "server.data-disk.write-recover-ratio. "
                                     + "Set to 1.0 to disable the disk-usage protection entirely. "
-                                    + "The valid range is (0.1, 1.0].");
+                                    + "The valid range is "
+                                    + "(server.data-disk.write-recover-ratio, 1.0]. When lowering "
+                                    + "both ratios dynamically, update them in the same request or "
+                                    + "lower server.data-disk.write-recover-ratio first.");
+
+    public static final ConfigOption<Double> SERVER_DATA_DISK_WRITE_RECOVER_RATIO =
+            key("server.data-disk.write-recover-ratio")
+                    .doubleType()
+                    .defaultValue(0.80)
+                    .withDescription(
+                            "Resume writes when the tablet server data disk usage reaches or "
+                                    + "drops below this ratio. The valid range is "
+                                    + "(0.0, server.data-disk.write-limit-ratio).");
 
     public static final ConfigOption<Duration> SERVER_DATA_DISK_CHECK_INTERVAL =
             key("server.data-disk.check-interval")
@@ -559,6 +612,26 @@ public class ConfigOptions {
                                     + "Each listener can be associated with a specific authentication protocol. "
                                     + "Listeners not included in the map will use PLAINTEXT by default, which does not require authentication.");
 
+    public static final ConfigOption<Map<String, String>> SERVER_SASL_CREDENTIALS =
+            key("security.sasl.plain.credentials")
+                    .mapType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Map of user credentials for SASL/PLAIN authentication in 'username:password' format. "
+                                    + "For example: 'admin:admin-secret,bob:bob-secret'. "
+                                    + "This is syntactic sugar that auto-generates the JAAS config string.");
+
+    public static final ConfigOption<String> SERVER_SASL_PLAIN_JAAS_CONFIG =
+            key("security.sasl.plain.jaas.config")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "JAAS configuration string for server-side SASL/PLAIN authentication. "
+                                    + "The value should use PlainLoginModule and define users with "
+                                    + "'user_<username>=\"<password>\"' options. This option is generated "
+                                    + "from 'security.sasl.plain.credentials' when that credential map is set, "
+                                    + "and can also be configured directly for compatibility.");
+
     public static final ConfigOption<Integer> TABLET_SERVER_ID =
             key("tablet-server.id")
                     .intType()
@@ -572,6 +645,28 @@ public class ConfigOptions {
                     .withDescription(
                             "The rack for the tabletServer. This will be used in rack aware bucket assignment "
                                     + "for fault tolerance. Examples: `RACK1`, `cn-hangzhou-server10`");
+
+    public static final ConfigOption<Double> TABLET_SERVER_ADVERTISED_RESOURCE_CPU_CORES =
+            key("tablet-server.advertised-resource.cpu-cores")
+                    .doubleType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The CPU capacity, in cores, that this tablet server advertises to the "
+                                    + "CoordinatorServer for resource reporting. This option does not limit "
+                                    + "CPU usage or configure a cgroup CPU quota. If not configured, the tablet "
+                                    + "server detects the value from cgroup CPU quota or the JVM runtime.");
+
+    public static final ConfigOption<MemorySize> TABLET_SERVER_ADVERTISED_RESOURCE_MEMORY_SIZE =
+            key("tablet-server.advertised-resource.memory-size")
+                    .memoryType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The memory capacity that this tablet server advertises to the CoordinatorServer "
+                                    + "for resource reporting and cluster-level KV leader replica capacity "
+                                    + "estimation. This option does not configure JVM heap size, reserve memory, "
+                                    + "or enforce a process or container memory limit. It represents total usable "
+                                    + "capacity, not current memory usage or free memory. If not configured, the "
+                                    + "tablet server detects the value from cgroup or operating system information.");
 
     public static final ConfigOption<String> DATA_DIR =
             key("data.dir")
@@ -1630,13 +1725,31 @@ public class ConfigOptions {
                                     + "If the value is `HOUR`, the partition format for "
                                     + "auto created is yyyyMMddHH. "
                                     + "If the value is `DAY`, the partition format for "
-                                    + "auto created is yyyyMMdd. "
+                                    + "auto created is yyyyMMdd by default. "
                                     + "If the value is `MONTH`, the partition format for "
                                     + "auto created is yyyyMM. "
                                     + "If the value is `QUARTER`, the partition format for "
                                     + "auto created is yyyyQ. "
                                     + "If the value is `YEAR`, the partition format for "
-                                    + "auto created is yyyy.");
+                                    + "auto created is yyyy. The default format can be overridden "
+                                    + "by `table.auto-partition.time-format`.");
+
+    public static final ConfigOption<String> TABLE_AUTO_PARTITION_TIME_FORMAT =
+            key("table.auto-partition.time-format")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The DateTimeFormatter pattern for auto-created partitions. "
+                                    + "By default, the format is determined by `table.auto-partition.time-unit`: "
+                                    + "`yyyy` for YEAR, `yyyyQ` for QUARTER, `yyyyMM` for MONTH, "
+                                    + "`yyyyMMdd` for DAY, and `yyyyMMddHH` for HOUR. "
+                                    + "A custom format must list time fields from the largest to the smallest unit, "
+                                    + "include every field required by the configured time unit, and use fixed-width numeric fields. "
+                                    + "For example, `yyyy-MM-dd` is valid for DAY, while `MM-yyyy`, `yyyy-MM`, and `yyyy-M-dd` are invalid. "
+                                    + "The generated partition value must also satisfy Fluss partition-name restrictions: "
+                                    + "at most 200 ASCII alphanumeric, underscore, or hyphen characters, without the reserved `__` prefix. "
+                                    + "Optional pattern sections using `[` and `]` are not supported. "
+                                    + "The format is retained when auto partitioning is disabled and continues to validate manually created partitions.");
 
     public static final ConfigOption<String> TABLE_AUTO_PARTITION_TIMEZONE =
             key("table.auto-partition.time-zone")

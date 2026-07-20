@@ -47,6 +47,26 @@ import static org.assertj.core.api.Assertions.assertThat;
 class CoordinatorContextTest {
 
     @Test
+    void testKvBucketsAreTrackedIdempotently() {
+        CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
+        TableBucket first = new TableBucket(1L, 0);
+        TableBucket second = new TableBucket(1L, 1);
+
+        context.addKvBuckets(Arrays.asList(first, second));
+        context.addKvBuckets(Arrays.asList(first, second));
+
+        assertThat(context.getKvBucketCount()).isEqualTo(2);
+
+        context.removeKvBuckets(Collections.singleton(first));
+        context.removeKvBuckets(Collections.singleton(first));
+
+        assertThat(context.getKvBucketCount()).isEqualTo(1);
+
+        context.resetContext();
+        assertThat(context.getKvBucketCount()).isZero();
+    }
+
+    @Test
     void testGetLakeTableCount() {
         CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
 

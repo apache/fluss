@@ -548,6 +548,7 @@ public class MetadataManager {
 
                 // reuse the same validate logic with the createTable() method
                 validateTableDescriptor(newDescriptor);
+
                 // pre alter table properties, e.g. create lake table in lake storage if it's to
                 // enable datalake for the table
                 preAlterTableProperties(
@@ -909,7 +910,7 @@ public class MetadataManager {
         }
     }
 
-    private Optional<PartitionRegistration> getOptionalPartitionRegistration(
+    Optional<PartitionRegistration> getOptionalPartitionRegistration(
             TablePath tablePath, String partitionName) {
         try {
             return zookeeperClient.getPartition(tablePath, partitionName);

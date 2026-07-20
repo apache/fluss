@@ -19,6 +19,7 @@ package org.apache.fluss.utils;
 
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
+import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
@@ -101,29 +102,33 @@ public class PartitionUtils {
     @VisibleForTesting
     static void validatePartitionValues(List<String> partitionValues, boolean isCreate) {
         for (String value : partitionValues) {
-            String invalidNameError = detectInvalidName(value);
-            if (invalidNameError != null || (isCreate && validatePrefix(value) != null)) {
+            String invalidReason = getInvalidPartitionValueReason(value, isCreate);
+            if (invalidReason != null) {
                 throw new InvalidPartitionException(
-                        "The partition value "
-                                + value
-                                + " is invalid: "
-                                + (invalidNameError != null
-                                        ? invalidNameError
-                                        : validatePrefix(value)));
+                        "The partition value " + value + " is invalid: " + invalidReason);
             }
         }
     }
 
+    private static String getInvalidPartitionValueReason(String value, boolean isCreate) {
+        String invalidNameError = detectInvalidName(value);
+        return invalidNameError != null
+                ? invalidNameError
+                : isCreate ? validatePrefix(value) : null;
+    }
+
     /**
-     * Validates that the partition time value in the given {@link PartitionSpec} is valid and not
-     * out-of-date when auto-partition is enabled. Throws {@link InvalidPartitionException} if the
-     * format doesn't match or the partition is older than the earliest retained one.
+     * Validates that the partition time value in the given {@link PartitionSpec} matches the
+     * configured time format. When auto-partition is enabled, this also validates that the
+     * partition is not out-of-date. Throws {@link InvalidPartitionException} if either validation
+     * fails.
      */
     public static void validateAutoPartitionTime(
             PartitionSpec partitionSpec,
             List<String> partitionKeys,
             AutoPartitionStrategy autoPartitionStrategy) {
-        if (!autoPartitionStrategy.isAutoPartitionEnabled()) {
+        if (!autoPartitionStrategy.isAutoPartitionEnabled()
+                && autoPartitionStrategy.timeFormat() == null) {
             return;
         }
         String autoPartitionKey =
@@ -132,19 +137,28 @@ public class PartitionUtils {
                         : partitionKeys.get(0);
         String partitionTime = partitionSpec.getSpecMap().get(autoPartitionKey);
         AutoPartitionTimeUnit timeUnit = autoPartitionStrategy.timeUnit();
-        if (partitionTime == null || !isValidPartitionTime(partitionTime, timeUnit)) {
+        if (partitionTime == null
+                || !isValidPartitionTime(partitionTime, timeUnit, autoPartitionStrategy)) {
             throw new InvalidPartitionException(
                     String.format(
                             "Partition value '%s' does not match the expected format '%s' "
                                     + "for auto-partition time unit '%s'.",
-                            partitionTime, getPartitionTimeFormat(timeUnit), timeUnit));
+                            partitionTime,
+                            getPartitionTimeFormat(timeUnit, autoPartitionStrategy),
+                            timeUnit));
+        }
+        if (!autoPartitionStrategy.isAutoPartitionEnabled()) {
+            return;
         }
         ZonedDateTime currentZonedDateTime =
                 ZonedDateTime.ofInstant(Instant.now(), autoPartitionStrategy.timeZone().toZoneId());
         // Get the earliest partition time that needs to be retained.
         String lastRetainPartitionTime =
                 generateAutoPartitionTime(
-                        currentZonedDateTime, -autoPartitionStrategy.numToRetain(), timeUnit);
+                        currentZonedDateTime,
+                        -autoPartitionStrategy.numToRetain(),
+                        timeUnit,
+                        autoPartitionStrategy);
         if (lastRetainPartitionTime.compareTo(partitionTime) > 0) {
             throw new InvalidPartitionException(
                     String.format(
@@ -171,30 +185,68 @@ public class PartitionUtils {
             ZonedDateTime current,
             int offset,
             AutoPartitionTimeUnit timeUnit) {
-        String autoPartitionFieldSpec = generateAutoPartitionTime(current, offset, timeUnit);
+        return generateAutoPartition(
+                partitionKeys,
+                current,
+                offset,
+                timeUnit,
+                AutoPartitionStrategy.from(new Configuration()));
+    }
+
+    public static ResolvedPartitionSpec generateAutoPartition(
+            List<String> partitionKeys,
+            ZonedDateTime current,
+            int offset,
+            AutoPartitionTimeUnit timeUnit,
+            AutoPartitionStrategy autoPartitionStrategy) {
+        String autoPartitionFieldSpec =
+                generateAutoPartitionTime(current, offset, timeUnit, autoPartitionStrategy);
 
         return ResolvedPartitionSpec.fromPartitionName(partitionKeys, autoPartitionFieldSpec);
     }
 
     public static String generateAutoPartitionTime(
             ZonedDateTime current, int offset, AutoPartitionTimeUnit timeUnit) {
+        return generateAutoPartitionTime(
+                current, offset, timeUnit, AutoPartitionStrategy.from(new Configuration()));
+    }
+
+    public static String generateAutoPartitionTime(
+            ZonedDateTime current,
+            int offset,
+            AutoPartitionTimeUnit timeUnit,
+            AutoPartitionStrategy autoPartitionStrategy) {
         String autoPartitionFieldSpec;
         switch (timeUnit) {
             case YEAR:
-                autoPartitionFieldSpec = getFormattedTime(current.plusYears(offset), YEAR_FORMAT);
+                autoPartitionFieldSpec =
+                        getFormattedTime(
+                                current.plusYears(offset),
+                                getPartitionTimeFormat(timeUnit, autoPartitionStrategy));
                 break;
             case QUARTER:
                 autoPartitionFieldSpec =
-                        getFormattedTime(current.plusMonths(offset * 3L), QUARTER_FORMAT);
+                        getFormattedTime(
+                                current.plusMonths(offset * 3L),
+                                getPartitionTimeFormat(timeUnit, autoPartitionStrategy));
                 break;
             case MONTH:
-                autoPartitionFieldSpec = getFormattedTime(current.plusMonths(offset), MONTH_FORMAT);
+                autoPartitionFieldSpec =
+                        getFormattedTime(
+                                current.plusMonths(offset),
+                                getPartitionTimeFormat(timeUnit, autoPartitionStrategy));
                 break;
             case DAY:
-                autoPartitionFieldSpec = getFormattedTime(current.plusDays(offset), DAY_FORMAT);
+                autoPartitionFieldSpec =
+                        getFormattedTime(
+                                current.plusDays(offset),
+                                getPartitionTimeFormat(timeUnit, autoPartitionStrategy));
                 break;
             case HOUR:
-                autoPartitionFieldSpec = getFormattedTime(current.plusHours(offset), HOUR_FORMAT);
+                autoPartitionFieldSpec =
+                        getFormattedTime(
+                                current.plusHours(offset),
+                                getPartitionTimeFormat(timeUnit, autoPartitionStrategy));
                 break;
             default:
                 throw new IllegalArgumentException("Unsupported time unit: " + timeUnit);
@@ -202,8 +254,178 @@ public class PartitionUtils {
         return autoPartitionFieldSpec;
     }
 
+    /**
+     * Validates that a custom time format preserves time order under string comparison.
+     *
+     * @param timeUnit the auto-partition time unit
+     * @param autoPartitionStrategy the auto-partition strategy containing the custom format
+     * @throws IllegalArgumentException if the pattern is invalid or does not preserve time order
+     */
+    public static void validateTimeFormat(
+            AutoPartitionTimeUnit timeUnit, AutoPartitionStrategy autoPartitionStrategy) {
+        String timeFormat = autoPartitionStrategy.timeFormat();
+        if (timeFormat == null) {
+            return;
+        }
+        try {
+            DateTimeFormatter.ofPattern(timeFormat);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException(
+                    String.format("Invalid date-time format pattern '%s'.", timeFormat), e);
+        }
+        validateTimeFields(timeFormat, timeUnit);
+        validateTimeFormatPartitionValue(timeFormat, autoPartitionStrategy);
+    }
+
+    private static void validateTimeFormatPartitionValue(
+            String timeFormat, AutoPartitionStrategy autoPartitionStrategy) {
+        ZonedDateTime representativeTime =
+                ZonedDateTime.of(
+                        2024, 11, 11, 11, 0, 0, 0, autoPartitionStrategy.timeZone().toZoneId());
+        String partitionValue = getFormattedTime(representativeTime, timeFormat);
+        String invalidReason = getInvalidPartitionValueReason(partitionValue, true);
+        if (invalidReason != null) {
+            throw new IllegalArgumentException(
+                    String.format(
+                            "Time format '%s' generates invalid partition value '%s': %s.",
+                            timeFormat, partitionValue, invalidReason));
+        }
+    }
+
+    private static void validateTimeFields(String timeFormat, AutoPartitionTimeUnit timeUnit) {
+        List<TimeFormatField> expectedFields = getExpectedTimeFormatFields(timeUnit);
+        List<TimeFormatField> actualFields = new ArrayList<>();
+        boolean inLiteral = false;
+        for (int index = 0; index < timeFormat.length(); ) {
+            char patternChar = timeFormat.charAt(index);
+            if (patternChar == '\'') {
+                if (index + 1 < timeFormat.length() && timeFormat.charAt(index + 1) == '\'') {
+                    index += 2;
+                } else {
+                    inLiteral = !inLiteral;
+                    index++;
+                }
+                continue;
+            }
+            if (!inLiteral && (patternChar == '[' || patternChar == ']')) {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Time format '%s' must not contain optional sections ('[' or ']').",
+                                timeFormat));
+            }
+            if (inLiteral || !isAsciiLetter(patternChar)) {
+                index++;
+                continue;
+            }
+
+            int end = index + 1;
+            while (end < timeFormat.length() && timeFormat.charAt(end) == patternChar) {
+                end++;
+            }
+            TimeFormatField field = TimeFormatField.fromPattern(patternChar);
+            if (field == null) {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Time format '%s' contains unsupported time field '%s'.",
+                                timeFormat, patternChar));
+            }
+            field.validateWidth(timeFormat, end - index);
+            actualFields.add(field);
+            index = end;
+        }
+
+        if (!actualFields.equals(expectedFields)) {
+            throw new IllegalArgumentException(
+                    String.format(
+                            "Time format '%s' must contain fields %s in this order for time unit '%s', but found %s.",
+                            timeFormat, expectedFields, timeUnit, actualFields));
+        }
+    }
+
+    private static boolean isAsciiLetter(char character) {
+        return (character >= 'A' && character <= 'Z') || (character >= 'a' && character <= 'z');
+    }
+
+    private static List<TimeFormatField> getExpectedTimeFormatFields(
+            AutoPartitionTimeUnit timeUnit) {
+        switch (timeUnit) {
+            case YEAR:
+                return Arrays.asList(TimeFormatField.YEAR);
+            case QUARTER:
+                return Arrays.asList(TimeFormatField.YEAR, TimeFormatField.QUARTER);
+            case MONTH:
+                return Arrays.asList(TimeFormatField.YEAR, TimeFormatField.MONTH);
+            case DAY:
+                return Arrays.asList(
+                        TimeFormatField.YEAR, TimeFormatField.MONTH, TimeFormatField.DAY);
+            case HOUR:
+                return Arrays.asList(
+                        TimeFormatField.YEAR,
+                        TimeFormatField.MONTH,
+                        TimeFormatField.DAY,
+                        TimeFormatField.HOUR);
+            default:
+                throw new IllegalArgumentException("Unsupported time unit: " + timeUnit);
+        }
+    }
+
+    private enum TimeFormatField {
+        YEAR("year", 4),
+        QUARTER("quarter", 1),
+        MONTH("month", 2),
+        DAY("day", 2),
+        HOUR("hour", 2);
+
+        private final String name;
+        private final int width;
+
+        TimeFormatField(String name, int width) {
+            this.name = name;
+            this.width = width;
+        }
+
+        private static TimeFormatField fromPattern(char patternChar) {
+            switch (patternChar) {
+                case 'y':
+                case 'u':
+                    return YEAR;
+                case 'Q':
+                case 'q':
+                    return QUARTER;
+                case 'M':
+                case 'L':
+                    return MONTH;
+                case 'd':
+                    return DAY;
+                case 'H':
+                    return HOUR;
+                default:
+                    return null;
+            }
+        }
+
+        private void validateWidth(String timeFormat, int actualWidth) {
+            if (actualWidth != width) {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Time field '%s' in format '%s' must have fixed width %d, but found %d.",
+                                name, timeFormat, width, actualWidth));
+            }
+        }
+
+        @Override
+        public String toString() {
+            return name;
+        }
+    }
+
     /** Returns the time string format pattern for the given time unit. */
-    private static String getPartitionTimeFormat(AutoPartitionTimeUnit timeUnit) {
+    private static String getPartitionTimeFormat(
+            AutoPartitionTimeUnit timeUnit, AutoPartitionStrategy autoPartitionStrategy) {
+        String timeFormat = autoPartitionStrategy.timeFormat();
+        if (timeFormat != null) {
+            return timeFormat;
+        }
         switch (timeUnit) {
             case YEAR:
                 return YEAR_FORMAT;
@@ -223,9 +445,13 @@ public class PartitionUtils {
     /**
      * Returns true if the given time string matches the format expected for the given time unit.
      */
-    private static boolean isValidPartitionTime(String time, AutoPartitionTimeUnit timeUnit) {
+    private static boolean isValidPartitionTime(
+            String time,
+            AutoPartitionTimeUnit timeUnit,
+            AutoPartitionStrategy autoPartitionStrategy) {
         try {
-            DateTimeFormatter.ofPattern(getPartitionTimeFormat(timeUnit)).parse(time);
+            DateTimeFormatter.ofPattern(getPartitionTimeFormat(timeUnit, autoPartitionStrategy))
+                    .parse(time);
             return true;
         } catch (DateTimeParseException e) {
             return false;

@@ -206,19 +206,21 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
         LOG.info("Shutting down KvManager");
         isShutdown = true;
         List<KvTablet> kvs = new ArrayList<>(currentKvs.values());
-        for (KvTablet kvTablet : kvs) {
-            try {
-                kvTablet.close();
-            } catch (Exception e) {
-                LOG.warn("Exception while closing kv tablet {}.", kvTablet.getTableBucket(), e);
-            }
-        }
+        closeTabletsConcurrently(kvs, "kv-tablet-closing", this::closeKvTablet).join();
         arrowBufferAllocator.close();
         memorySegmentPool.close();
         if (sharedRocksDBRateLimiter != null) {
             sharedRocksDBRateLimiter.close();
         }
         LOG.info("Shut down KvManager complete.");
+    }
+
+    private void closeKvTablet(KvTablet kvTablet) {
+        try {
+            kvTablet.close();
+        } catch (Exception e) {
+            LOG.warn("Exception while closing kv tablet {}.", kvTablet.getTableBucket(), e);
+        }
     }
 
     /**

@@ -45,7 +45,7 @@ use crate::rpc::{RpcClient, ServerConnection};
 
 use crate::error::{Error, Result};
 use crate::proto::GetTableInfoResponse;
-use crate::{BucketId, PartitionId, TableId};
+use crate::{BucketId, PartitionId, SnapshotId, TableId};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::task::JoinHandle;
@@ -595,7 +595,7 @@ impl FlussAdmin {
         table_id: TableId,
         partition_id: Option<PartitionId>,
         bucket_id: BucketId,
-        snapshot_id: i64,
+        snapshot_id: SnapshotId,
     ) -> Result<KvSnapshotMetadata> {
         let response = self
             .admin_gateway()
@@ -633,7 +633,7 @@ impl FlussAdmin {
     pub async fn get_lake_snapshot(
         &self,
         table_path: &TablePath,
-        snapshot_id: Option<i64>,
+        snapshot_id: Option<SnapshotId>,
         readable: Option<bool>,
     ) -> Result<LakeSnapshotInfo> {
         let response = self

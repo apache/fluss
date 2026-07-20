@@ -19,6 +19,9 @@ use crate::ffi;
 use anyhow::{Result, anyhow};
 use arrow::array::Array;
 use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
+use fcore::metadata::{
+    ArrayType, Column, DataField, DataType, DataTypes, DecimalType, MapType, RowType,
+};
 use fcore::row::Datum;
 use fluss as fcore;
 use std::borrow::Cow;
@@ -44,229 +47,186 @@ pub const DATA_TYPE_ARRAY: i32 = 17;
 pub const DATA_TYPE_MAP: i32 = 18;
 pub const DATA_TYPE_ROW: i32 = 19;
 
-/// Separates scalar and array type specs so each variant only carries
-/// the fields it actually needs — no zeroed-out placeholders.
-enum FfiDataTypeSpec {
-    Scalar {
-        data_type: i32,
-        precision: u32,
-        scale: u32,
-        nullable: bool,
-    },
-    Array {
-        element_data_type: i32,
-        element_precision: u32,
-        element_scale: u32,
-        array_nesting: u32,
-        /// `nesting` entries for each ARRAY wrapper (outermost first) plus
-        /// one trailing entry for the leaf scalar. Length = `nesting + 1`.
-        array_nullability: Vec<u8>,
-    },
-}
-
-fn ffi_column_to_core_data_type(col: &ffi::FfiColumn) -> Result<fcore::metadata::DataType> {
-    if col.data_type == DATA_TYPE_ARRAY {
-        ffi_data_type_to_core(FfiDataTypeSpec::Array {
-            element_data_type: col.element_data_type,
-            element_precision: col.element_precision as u32,
-            element_scale: col.element_scale as u32,
-            array_nesting: col.array_nesting.max(0) as u32,
-            array_nullability: col.array_nullability.clone(),
-        })
-    } else {
-        ffi_data_type_to_core(FfiDataTypeSpec::Scalar {
-            data_type: col.data_type,
-            precision: col.precision as u32,
-            scale: col.scale as u32,
-            nullable: col.nullable,
-        })
-    }
-}
-
-fn type_precision_scale(dt: &fcore::metadata::DataType) -> (i32, i32) {
-    match dt {
-        fcore::metadata::DataType::Decimal(d) => (d.precision() as i32, d.scale() as i32),
-        fcore::metadata::DataType::Timestamp(ts) => (ts.precision() as i32, 0),
-        fcore::metadata::DataType::TimestampLTz(ts) => (ts.precision() as i32, 0),
-        fcore::metadata::DataType::Char(ch) => (ch.length() as i32, 0),
-        fcore::metadata::DataType::Binary(bin) => (bin.length() as i32, 0),
-        _ => (0, 0),
-    }
-}
-
-struct FlattenedLeafType {
-    nesting: i32,
-    leaf_type: i32,
-    leaf_precision: i32,
-    leaf_scale: i32,
-    /// `nesting` entries for ARRAY wrappers (outermost first) plus one
-    /// trailing entry for the leaf scalar. Length = `nesting + 1`.
-    array_nullability: Vec<u8>,
-}
-
-fn flatten_array_leaf_type(dt: &fcore::metadata::DataType) -> Result<FlattenedLeafType> {
-    let mut nesting = 0_i32;
-    let mut leaf = dt;
-    let mut array_nullability = Vec::new();
-    while let fcore::metadata::DataType::Array(at) = leaf {
-        nesting += 1;
-        array_nullability.push(u8::from(leaf.is_nullable()));
-        leaf = at.get_element_type();
-    }
-    if nesting == 0 {
-        return Err(anyhow!("Expected ARRAY data type, got {dt}"));
-    }
-    let leaf_type = core_data_type_to_ffi(leaf);
-    if leaf_type == 0 {
+fn ffi_column_to_core_data_type(col: &ffi::FfiColumn) -> Result<DataType> {
+    let mut cursor = 0usize;
+    let dt = nodes_to_data_type(&col.type_nodes, &mut cursor)?;
+    if cursor != col.type_nodes.len() {
         return Err(anyhow!(
-            "Unsupported ARRAY leaf type for C++ bindings: {leaf}"
-        ));
-    }
-    array_nullability.push(u8::from(leaf.is_nullable()));
-    let (leaf_precision, leaf_scale) = type_precision_scale(leaf);
-    Ok(FlattenedLeafType {
-        nesting,
-        leaf_type,
-        leaf_precision,
-        leaf_scale,
-        array_nullability,
-    })
-}
-
-fn build_array_type_from_leaf(
-    element_data_type: i32,
-    element_precision: u32,
-    element_scale: u32,
-    array_nesting: u32,
-    array_nullability: &[u8],
-) -> Result<fcore::metadata::DataType> {
-    if array_nesting == 0 {
-        return Err(anyhow!("ARRAY nesting must be >= 1"));
-    }
-    let leaf_nullable = array_nullability
-        .get(array_nesting as usize)
-        .map(|v| *v != 0)
-        .unwrap_or(true);
-    let mut dt = ffi_data_type_to_core(FfiDataTypeSpec::Scalar {
-        data_type: element_data_type,
-        precision: element_precision,
-        scale: element_scale,
-        nullable: leaf_nullable,
-    })?;
-    for i in (0..array_nesting).rev() {
-        let nullable = array_nullability
-            .get(i as usize)
-            .map(|v| *v != 0)
-            .unwrap_or(true);
-        dt = fcore::metadata::DataType::Array(fcore::metadata::ArrayType::with_nullable(
-            nullable, dt,
+            "Column '{}': type tree has {} trailing nodes",
+            col.name,
+            col.type_nodes.len() - cursor
         ));
     }
     Ok(dt)
 }
 
-fn ffi_data_type_to_core(spec: FfiDataTypeSpec) -> Result<fcore::metadata::DataType> {
-    match spec {
-        FfiDataTypeSpec::Scalar {
-            data_type,
-            precision,
-            scale,
-            nullable,
-        } => {
-            let dt = match data_type {
-                DATA_TYPE_BOOLEAN => fcore::metadata::DataTypes::boolean(),
-                DATA_TYPE_TINYINT => fcore::metadata::DataTypes::tinyint(),
-                DATA_TYPE_SMALLINT => fcore::metadata::DataTypes::smallint(),
-                DATA_TYPE_INT => fcore::metadata::DataTypes::int(),
-                DATA_TYPE_BIGINT => fcore::metadata::DataTypes::bigint(),
-                DATA_TYPE_FLOAT => fcore::metadata::DataTypes::float(),
-                DATA_TYPE_DOUBLE => fcore::metadata::DataTypes::double(),
-                DATA_TYPE_STRING => fcore::metadata::DataTypes::string(),
-                DATA_TYPE_BYTES => fcore::metadata::DataTypes::bytes(),
-                DATA_TYPE_DATE => fcore::metadata::DataTypes::date(),
-                DATA_TYPE_TIME => fcore::metadata::DataTypes::time(),
-                DATA_TYPE_TIMESTAMP => {
-                    fcore::metadata::DataTypes::timestamp_with_precision(precision)
-                }
-                DATA_TYPE_TIMESTAMP_LTZ => {
-                    fcore::metadata::DataTypes::timestamp_ltz_with_precision(precision)
-                }
-                DATA_TYPE_DECIMAL => {
-                    let dt = fcore::metadata::DecimalType::new(precision, scale)?;
-                    fcore::metadata::DataType::Decimal(dt)
-                }
-                DATA_TYPE_CHAR => fcore::metadata::DataTypes::char(precision),
-                DATA_TYPE_BINARY => fcore::metadata::DataTypes::binary(precision as usize),
-                _ => return Err(anyhow!("Unknown data type: {}", data_type)),
-            };
-            if nullable {
-                Ok(dt)
-            } else {
-                Ok(dt.as_non_nullable())
-            }
+/// Reconstruct one type from a preorder node arena, advancing `cursor` past
+/// the consumed nodes. Mirrors the C++ `data_type_to_nodes` encoder.
+fn nodes_to_data_type(nodes: &[ffi::FfiTypeNode], cursor: &mut usize) -> Result<DataType> {
+    let node = nodes
+        .get(*cursor)
+        .ok_or_else(|| anyhow!("type tree ended before all nodes were read"))?;
+    *cursor += 1;
+
+    if node.precision < 0 || node.scale < 0 {
+        return Err(anyhow!(
+            "type node precision and scale must be non-negative"
+        ));
+    }
+    let precision = node.precision as u32;
+    let scale = node.scale as u32;
+
+    let dt = match node.type_id {
+        DATA_TYPE_ARRAY => {
+            let element = nodes_to_data_type(nodes, cursor)?;
+            DataType::Array(ArrayType::with_nullable(node.nullable, element))
         }
-        FfiDataTypeSpec::Array {
-            element_data_type,
-            element_precision,
-            element_scale,
-            array_nesting,
-            ref array_nullability,
-        } => build_array_type_from_leaf(
-            element_data_type,
-            element_precision,
-            element_scale,
-            array_nesting,
-            array_nullability,
-        ),
-    }
-}
-
-pub fn core_data_type_to_ffi(dt: &fcore::metadata::DataType) -> i32 {
-    match dt {
-        fcore::metadata::DataType::Boolean(_) => DATA_TYPE_BOOLEAN,
-        fcore::metadata::DataType::TinyInt(_) => DATA_TYPE_TINYINT,
-        fcore::metadata::DataType::SmallInt(_) => DATA_TYPE_SMALLINT,
-        fcore::metadata::DataType::Int(_) => DATA_TYPE_INT,
-        fcore::metadata::DataType::BigInt(_) => DATA_TYPE_BIGINT,
-        fcore::metadata::DataType::Float(_) => DATA_TYPE_FLOAT,
-        fcore::metadata::DataType::Double(_) => DATA_TYPE_DOUBLE,
-        fcore::metadata::DataType::String(_) => DATA_TYPE_STRING,
-        fcore::metadata::DataType::Bytes(_) => DATA_TYPE_BYTES,
-        fcore::metadata::DataType::Date(_) => DATA_TYPE_DATE,
-        fcore::metadata::DataType::Time(_) => DATA_TYPE_TIME,
-        fcore::metadata::DataType::Timestamp(_) => DATA_TYPE_TIMESTAMP,
-        fcore::metadata::DataType::TimestampLTz(_) => DATA_TYPE_TIMESTAMP_LTZ,
-        fcore::metadata::DataType::Decimal(_) => DATA_TYPE_DECIMAL,
-        fcore::metadata::DataType::Char(_) => DATA_TYPE_CHAR,
-        fcore::metadata::DataType::Binary(_) => DATA_TYPE_BINARY,
-        fcore::metadata::DataType::Array(_) => DATA_TYPE_ARRAY,
-        fcore::metadata::DataType::Map(_) => DATA_TYPE_MAP,
-        fcore::metadata::DataType::Row(_) => DATA_TYPE_ROW,
-    }
-}
-
-fn core_column_to_ffi(col: &fcore::metadata::Column) -> ffi::FfiColumn {
-    let (precision, scale) = type_precision_scale(col.data_type());
-
-    let flat = match col.data_type() {
-        fcore::metadata::DataType::Array(_) => flatten_array_leaf_type(col.data_type()).ok(),
-        _ => None,
+        DATA_TYPE_MAP => {
+            let key = nodes_to_data_type(nodes, cursor)?;
+            let value = nodes_to_data_type(nodes, cursor)?;
+            DataType::Map(MapType::with_nullable(node.nullable, key, value))
+        }
+        DATA_TYPE_ROW => {
+            let mut fields = Vec::with_capacity(node.child_count as usize);
+            for _ in 0..node.child_count {
+                let field_name = nodes
+                    .get(*cursor)
+                    .ok_or_else(|| anyhow!("ROW field missing from type tree"))?
+                    .field_name
+                    .clone();
+                let field_type = nodes_to_data_type(nodes, cursor)?;
+                // C++ ROW columns carry no per-field description.
+                fields.push(DataField::new(field_name, field_type, None));
+            }
+            DataType::Row(RowType::with_nullable(node.nullable, fields))
+        }
+        scalar => return scalar_to_core(scalar, precision, scale, node.nullable),
     };
+    Ok(dt)
+}
 
-    ffi::FfiColumn {
-        name: col.name().to_string(),
-        data_type: core_data_type_to_ffi(col.data_type()),
-        nullable: col.data_type().is_nullable(),
-        comment: col.comment().unwrap_or("").to_string(),
+fn type_precision_scale(dt: &DataType) -> (i32, i32) {
+    match dt {
+        DataType::Decimal(d) => (d.precision() as i32, d.scale() as i32),
+        DataType::Time(t) => (t.precision() as i32, 0),
+        DataType::Timestamp(ts) => (ts.precision() as i32, 0),
+        DataType::TimestampLTz(ts) => (ts.precision() as i32, 0),
+        DataType::Char(ch) => (ch.length() as i32, 0),
+        DataType::Binary(bin) => (bin.length() as i32, 0),
+        _ => (0, 0),
+    }
+}
+
+fn scalar_to_core(data_type: i32, precision: u32, scale: u32, nullable: bool) -> Result<DataType> {
+    let dt = match data_type {
+        DATA_TYPE_BOOLEAN => DataTypes::boolean(),
+        DATA_TYPE_TINYINT => DataTypes::tinyint(),
+        DATA_TYPE_SMALLINT => DataTypes::smallint(),
+        DATA_TYPE_INT => DataTypes::int(),
+        DATA_TYPE_BIGINT => DataTypes::bigint(),
+        DATA_TYPE_FLOAT => DataTypes::float(),
+        DATA_TYPE_DOUBLE => DataTypes::double(),
+        DATA_TYPE_STRING => DataTypes::string(),
+        DATA_TYPE_BYTES => DataTypes::bytes(),
+        DATA_TYPE_DATE => DataTypes::date(),
+        DATA_TYPE_TIME => DataTypes::time_with_precision(precision),
+        DATA_TYPE_TIMESTAMP => DataTypes::timestamp_with_precision(precision),
+        DATA_TYPE_TIMESTAMP_LTZ => DataTypes::timestamp_ltz_with_precision(precision),
+        DATA_TYPE_DECIMAL => DataType::Decimal(DecimalType::new(precision, scale)?),
+        DATA_TYPE_CHAR => DataTypes::char(precision),
+        DATA_TYPE_BINARY => DataTypes::binary(precision as usize),
+        _ => return Err(anyhow!("Unknown data type: {}", data_type)),
+    };
+    if nullable {
+        Ok(dt)
+    } else {
+        Ok(dt.as_non_nullable())
+    }
+}
+
+/// Serialize a type tree to a preorder node arena. Mirrors the C++
+/// `nodes_to_data_type` decoder; `field_name` is set only for ROW fields.
+fn core_data_type_to_nodes(dt: &DataType, field_name: &str, out: &mut Vec<ffi::FfiTypeNode>) {
+    let (precision, scale) = type_precision_scale(dt);
+    let child_count = match dt {
+        DataType::Array(_) => 1,
+        DataType::Map(_) => 2,
+        DataType::Row(rt) => rt.fields().len() as u32,
+        _ => 0,
+    };
+    out.push(ffi::FfiTypeNode {
+        type_id: core_data_type_to_ffi(dt),
+        nullable: dt.is_nullable(),
         precision,
         scale,
-        array_nesting: flat.as_ref().map_or(0, |f| f.nesting),
-        array_nullability: flat
-            .as_ref()
-            .map_or_else(Vec::new, |f| f.array_nullability.clone()),
-        element_data_type: flat.as_ref().map_or(0, |f| f.leaf_type),
-        element_precision: flat.as_ref().map_or(0, |f| f.leaf_precision),
-        element_scale: flat.as_ref().map_or(0, |f| f.leaf_scale),
+        field_name: field_name.to_string(),
+        child_count,
+    });
+    match dt {
+        DataType::Array(at) => core_data_type_to_nodes(at.get_element_type(), "", out),
+        DataType::Map(mt) => {
+            core_data_type_to_nodes(mt.key_type(), "", out);
+            core_data_type_to_nodes(mt.value_type(), "", out);
+        }
+        DataType::Row(rt) => {
+            for field in rt.fields() {
+                core_data_type_to_nodes(field.data_type(), field.name(), out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Build a nested `ARRAY<…<scalar>>` from a flat leaf description. Used by the
+/// data-writer path (`element_type_from_ffi`), which carries array-of-scalar
+/// element types without a full node arena.
+fn build_array_type_from_leaf(
+    element_data_type: i32,
+    element_precision: u32,
+    element_scale: u32,
+    array_nesting: u32,
+) -> Result<DataType> {
+    if array_nesting == 0 {
+        return Err(anyhow!("ARRAY nesting must be >= 1"));
+    }
+    let mut dt = scalar_to_core(element_data_type, element_precision, element_scale, true)?;
+    for _ in 0..array_nesting {
+        dt = DataType::Array(ArrayType::new(dt));
+    }
+    Ok(dt)
+}
+
+pub fn core_data_type_to_ffi(dt: &DataType) -> i32 {
+    match dt {
+        DataType::Boolean(_) => DATA_TYPE_BOOLEAN,
+        DataType::TinyInt(_) => DATA_TYPE_TINYINT,
+        DataType::SmallInt(_) => DATA_TYPE_SMALLINT,
+        DataType::Int(_) => DATA_TYPE_INT,
+        DataType::BigInt(_) => DATA_TYPE_BIGINT,
+        DataType::Float(_) => DATA_TYPE_FLOAT,
+        DataType::Double(_) => DATA_TYPE_DOUBLE,
+        DataType::String(_) => DATA_TYPE_STRING,
+        DataType::Bytes(_) => DATA_TYPE_BYTES,
+        DataType::Date(_) => DATA_TYPE_DATE,
+        DataType::Time(_) => DATA_TYPE_TIME,
+        DataType::Timestamp(_) => DATA_TYPE_TIMESTAMP,
+        DataType::TimestampLTz(_) => DATA_TYPE_TIMESTAMP_LTZ,
+        DataType::Decimal(_) => DATA_TYPE_DECIMAL,
+        DataType::Char(_) => DATA_TYPE_CHAR,
+        DataType::Binary(_) => DATA_TYPE_BINARY,
+        DataType::Array(_) => DATA_TYPE_ARRAY,
+        DataType::Map(_) => DATA_TYPE_MAP,
+        DataType::Row(_) => DATA_TYPE_ROW,
+    }
+}
+
+fn core_column_to_ffi(col: &Column) -> ffi::FfiColumn {
+    let mut type_nodes = Vec::new();
+    core_data_type_to_nodes(col.data_type(), "", &mut type_nodes);
+    ffi::FfiColumn {
+        name: col.name().to_string(),
+        comment: col.comment().unwrap_or("").to_string(),
+        type_nodes,
     }
 }
 
@@ -276,12 +236,6 @@ pub fn ffi_descriptor_to_core(
     let mut schema_builder = fcore::metadata::Schema::builder();
 
     for col in &descriptor.schema.columns {
-        if col.precision < 0 || col.scale < 0 || col.array_nesting < 0 {
-            return Err(anyhow!(
-                "Column '{}': precision, scale, and array_nesting must be non-negative",
-                col.name
-            ));
-        }
         let dt = ffi_column_to_core_data_type(col)?;
         schema_builder = schema_builder.column(&col.name, dt);
         if !col.comment.is_empty() {
@@ -298,7 +252,7 @@ pub fn ffi_descriptor_to_core(
 
 /// Assemble a core `TableDescriptor` from a pre-built `Schema` plus the
 /// descriptor's table-level metadata (partition/bucket keys, properties,
-/// comment). Shared by the flat-column and Arrow-schema create-table paths.
+/// comment).
 fn build_descriptor(
     schema: fcore::metadata::Schema,
     descriptor: &ffi::FfiTableDescriptor,
@@ -334,34 +288,6 @@ fn build_descriptor(
     }
 
     Ok(builder.build()?)
-}
-
-/// Build a core `TableDescriptor` whose columns come from an Arrow schema
-/// imported over the C Data Interface. Lets C++ define nested MAP/ROW columns
-/// the flat `FfiColumn` encoding can't express, reusing core's canonical
-/// `from_arrow_field` converter rather than a second conversion copy.
-///
-/// # Safety
-/// `schema_ptr` must be a valid `FFI_ArrowSchema` heap pointer exported by C++
-/// (e.g. via `arrow::ExportSchema`); ownership is taken and released here.
-pub unsafe fn arrow_ffi_to_core_descriptor(
-    schema_ptr: usize,
-    descriptor: &ffi::FfiTableDescriptor,
-) -> Result<fcore::metadata::TableDescriptor> {
-    let ffi_schema = unsafe { Box::from_raw(schema_ptr as *mut arrow::ffi::FFI_ArrowSchema) };
-    let arrow_schema = arrow::datatypes::Schema::try_from(ffi_schema.as_ref())
-        .map_err(|e| anyhow!("Failed to import Arrow schema: {e}"))?;
-
-    let mut schema_builder = fcore::metadata::Schema::builder();
-    for field in arrow_schema.fields() {
-        let dt = fcore::record::from_arrow_field(field.as_ref())?;
-        schema_builder = schema_builder.column(field.name(), dt);
-    }
-    if !descriptor.schema.primary_keys.is_empty() {
-        schema_builder = schema_builder.primary_key(descriptor.schema.primary_keys.clone());
-    }
-
-    build_descriptor(schema_builder.build()?, descriptor)
 }
 
 /// Import a heap `FFI_ArrowSchema` (exported by C++) and return its fields as
@@ -474,15 +400,9 @@ pub fn element_type_from_ffi(
     array_nesting: u32,
 ) -> Result<fcore::metadata::DataType> {
     if array_nesting == 0 {
-        ffi_data_type_to_core(FfiDataTypeSpec::Scalar {
-            data_type: leaf_dt,
-            precision,
-            scale,
-            nullable: true,
-        })
+        scalar_to_core(leaf_dt, precision, scale, true)
     } else {
-        let array_nullability = vec![1u8; (array_nesting + 1) as usize];
-        build_array_type_from_leaf(leaf_dt, precision, scale, array_nesting, &array_nullability)
+        build_array_type_from_leaf(leaf_dt, precision, scale, array_nesting)
     }
 }
 

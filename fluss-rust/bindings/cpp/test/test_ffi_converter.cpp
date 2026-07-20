@@ -18,223 +18,226 @@
  */
 
 #include <gtest/gtest.h>
+
 #include <stdexcept>
 
 #include "ffi_converter.hpp"
 
 namespace {
 
-fluss::ffi::FfiColumn MakeArrayColumn(int32_t nesting, int32_t element_type,
-                                      bool nullable = true, bool leaf_nullable = true,
-                                      std::vector<uint8_t> per_level_nullability = {}) {
-    fluss::ffi::FfiColumn col;
-    col.name = rust::String("bad_array");
-    col.data_type = static_cast<int32_t>(fluss::TypeId::Array);
-    col.nullable = nullable;
-    col.comment = rust::String("");
-    col.precision = 0;
-    col.scale = 0;
-    col.array_nesting = nesting;
-    if (!per_level_nullability.empty()) {
-        for (auto v : per_level_nullability) {
-            col.array_nullability.push_back(v);
-        }
-    } else {
-        for (int32_t i = 0; i < nesting; ++i) {
-            col.array_nullability.push_back((i == 0 ? nullable : true) ? 1 : 0);
-        }
-        col.array_nullability.push_back(leaf_nullable ? 1 : 0);
-    }
-    col.element_data_type = element_type;
-    col.element_precision = 0;
-    col.element_scale = 0;
-    return col;
+using fluss::Column;
+using fluss::DataType;
+using fluss::TypeId;
+
+// Encode a column to the FFI node arena and decode it back, exercising the
+// full create-table / get-table-info type transport.
+Column RoundTrip(const Column& col) {
+    auto ffi_col = fluss::utils::to_ffi_column(col);
+    return fluss::utils::from_ffi_column(ffi_col);
 }
 
-fluss::ffi::FfiColumn MakeScalarColumn(const char* name, fluss::TypeId type_id,
-                                       bool nullable = true, int32_t precision = 0,
-                                       int32_t scale = 0) {
-    fluss::ffi::FfiColumn col;
-    col.name = rust::String(name);
-    col.data_type = static_cast<int32_t>(type_id);
-    col.nullable = nullable;
-    col.comment = rust::String("");
-    col.precision = precision;
-    col.scale = scale;
-    col.array_nesting = 0;
-    col.element_data_type = 0;
-    col.element_precision = 0;
-    col.element_scale = 0;
-    return col;
+fluss::ffi::FfiTypeNode Node(int32_t type_id, uint32_t child_count = 0, bool nullable = true,
+                             int32_t precision = 0, int32_t scale = 0,
+                             const char* field_name = "") {
+    fluss::ffi::FfiTypeNode n;
+    n.type_id = type_id;
+    n.nullable = nullable;
+    n.precision = precision;
+    n.scale = scale;
+    n.field_name = rust::String(field_name);
+    n.child_count = child_count;
+    return n;
 }
 
 }  // namespace
 
-TEST(FfiConverterTest, RejectsArrayWithoutElementType) {
-    auto col = MakeArrayColumn(1, 0);
-    EXPECT_THROW((void)fluss::utils::from_ffi_column(col), std::runtime_error);
-}
+// --- DataType value semantics ---
 
-TEST(FfiConverterTest, RejectsArrayWithArrayLeafType) {
-    auto col = MakeArrayColumn(2, static_cast<int32_t>(fluss::TypeId::Array));
-    EXPECT_THROW((void)fluss::utils::from_ffi_column(col), std::runtime_error);
-}
-
-TEST(FfiConverterTest, RejectsArrayWithUnknownLeafType) {
-    auto col = MakeArrayColumn(1, 999);
-    EXPECT_THROW((void)fluss::utils::from_ffi_column(col), std::runtime_error);
-}
-
-TEST(FfiConverterTest, SupportsLegacyOneLevelArrayMetadata) {
-    auto col = MakeArrayColumn(0, static_cast<int32_t>(fluss::TypeId::Int));
-    auto converted = fluss::utils::from_ffi_column(col);
-    EXPECT_EQ(converted.data_type.id(), fluss::TypeId::Array);
-    ASSERT_NE(converted.data_type.element_type(), nullptr);
-    EXPECT_EQ(converted.data_type.element_type()->id(), fluss::TypeId::Int);
-}
-
-// --- Nullability tests ---
-
-TEST(DataTypeTest, DefaultNullable) {
-    auto dt = fluss::DataType::Int();
-    EXPECT_TRUE(dt.nullable());
-}
+TEST(DataTypeTest, DefaultNullable) { EXPECT_TRUE(DataType::Int().nullable()); }
 
 TEST(DataTypeTest, NotNullMethod) {
-    auto dt = fluss::DataType::Int().NotNull();
+    auto dt = DataType::Int().NotNull();
     EXPECT_FALSE(dt.nullable());
-    EXPECT_EQ(dt.id(), fluss::TypeId::Int);
+    EXPECT_EQ(dt.id(), TypeId::Int);
 }
 
 TEST(DataTypeTest, NotNullPreservesPrecisionScale) {
-    auto dt = fluss::DataType::Decimal(10, 2).NotNull();
+    auto dt = DataType::Decimal(10, 2).NotNull();
     EXPECT_FALSE(dt.nullable());
     EXPECT_EQ(dt.precision(), 10);
     EXPECT_EQ(dt.scale(), 2);
 }
 
-TEST(DataTypeTest, ArrayElementNullability) {
-    auto dt = fluss::DataType::Array(fluss::DataType::Int().NotNull());
-    EXPECT_TRUE(dt.nullable());
-    ASSERT_NE(dt.element_type(), nullptr);
-    EXPECT_FALSE(dt.element_type()->nullable());
-}
+// --- Node-arena round trips ---
 
-TEST(DataTypeTest, NotNullArrayNullableElement) {
-    auto dt = fluss::DataType::Array(fluss::DataType::Int()).NotNull();
-    EXPECT_FALSE(dt.nullable());
-    ASSERT_NE(dt.element_type(), nullptr);
-    EXPECT_TRUE(dt.element_type()->nullable());
-}
-
-TEST(DataTypeTest, NotNullArrayNotNullElement) {
-    auto dt = fluss::DataType::Array(fluss::DataType::Int().NotNull()).NotNull();
-    EXPECT_FALSE(dt.nullable());
-    ASSERT_NE(dt.element_type(), nullptr);
-    EXPECT_FALSE(dt.element_type()->nullable());
-}
-
-TEST(FfiConverterTest, ScalarNullableRoundTrip) {
-    fluss::Column col{"id", fluss::DataType::Int(), ""};
-    auto ffi_col = fluss::utils::to_ffi_column(col);
-    EXPECT_TRUE(ffi_col.nullable);
-    auto back = fluss::utils::from_ffi_column(ffi_col);
+TEST(FfiConverterTest, ScalarRoundTrip) {
+    Column col{"id", DataType::Int(), "primary id"};
+    auto back = RoundTrip(col);
+    EXPECT_EQ(back.name, "id");
+    EXPECT_EQ(back.comment, "primary id");
+    EXPECT_EQ(back.data_type.id(), TypeId::Int);
     EXPECT_TRUE(back.data_type.nullable());
 }
 
 TEST(FfiConverterTest, ScalarNotNullRoundTrip) {
-    fluss::Column col{"id", fluss::DataType::Int().NotNull(), ""};
-    auto ffi_col = fluss::utils::to_ffi_column(col);
-    EXPECT_FALSE(ffi_col.nullable);
-    auto back = fluss::utils::from_ffi_column(ffi_col);
+    auto back = RoundTrip(Column{"id", DataType::Int().NotNull(), ""});
+    EXPECT_EQ(back.data_type.id(), TypeId::Int);
     EXPECT_FALSE(back.data_type.nullable());
 }
 
-TEST(FfiConverterTest, ArrayNotNullElementRoundTrip) {
-    fluss::Column col{"tags", fluss::DataType::Array(fluss::DataType::String().NotNull()), ""};
-    auto ffi_col = fluss::utils::to_ffi_column(col);
-    EXPECT_TRUE(ffi_col.nullable);
-    ASSERT_EQ(ffi_col.array_nullability.size(), 2u);
-    EXPECT_EQ(ffi_col.array_nullability[1], 0);
-    auto back = fluss::utils::from_ffi_column(ffi_col);
-    EXPECT_TRUE(back.data_type.nullable());
-    ASSERT_NE(back.data_type.element_type(), nullptr);
-    EXPECT_FALSE(back.data_type.element_type()->nullable());
+TEST(FfiConverterTest, DecimalPrecisionScalePreserved) {
+    auto back = RoundTrip(Column{"amount", DataType::Decimal(18, 4), ""});
+    EXPECT_EQ(back.data_type.id(), TypeId::Decimal);
+    EXPECT_EQ(back.data_type.precision(), 18);
+    EXPECT_EQ(back.data_type.scale(), 4);
 }
 
-TEST(FfiConverterTest, NotNullArrayNullableElementRoundTrip) {
-    fluss::Column col{"ids", fluss::DataType::Array(fluss::DataType::Int()).NotNull(), ""};
-    auto ffi_col = fluss::utils::to_ffi_column(col);
-    EXPECT_FALSE(ffi_col.nullable);
-    ASSERT_EQ(ffi_col.array_nullability.size(), 2u);
-    EXPECT_EQ(ffi_col.array_nullability[1], 1);
-    auto back = fluss::utils::from_ffi_column(ffi_col);
-    EXPECT_FALSE(back.data_type.nullable());
-    ASSERT_NE(back.data_type.element_type(), nullptr);
-    EXPECT_TRUE(back.data_type.element_type()->nullable());
+// Non-canonical precisions are exactly what the old Arrow-schema path quantized;
+// the node arena must preserve them.
+TEST(FfiConverterTest, TimestampPrecisionPreserved) {
+    auto back = RoundTrip(Column{"ts", DataType::Timestamp(2), ""});
+    EXPECT_EQ(back.data_type.id(), TypeId::Timestamp);
+    EXPECT_EQ(back.data_type.precision(), 2);
+
+    auto ltz = RoundTrip(Column{"ts_ltz", DataType::TimestampLtz(9), ""});
+    EXPECT_EQ(ltz.data_type.id(), TypeId::TimestampLtz);
+    EXPECT_EQ(ltz.data_type.precision(), 9);
 }
 
-TEST(FfiConverterTest, NotNullArrayNotNullElementRoundTrip) {
-    fluss::Column col{
-        "strict_ids",
-        fluss::DataType::Array(fluss::DataType::Int().NotNull()).NotNull(),
-        "",
-    };
-    auto ffi_col = fluss::utils::to_ffi_column(col);
-    EXPECT_FALSE(ffi_col.nullable);
-    ASSERT_EQ(ffi_col.array_nullability.size(), 2u);
-    EXPECT_EQ(ffi_col.array_nullability[1], 0);
-    auto back = fluss::utils::from_ffi_column(ffi_col);
-    EXPECT_FALSE(back.data_type.nullable());
-    ASSERT_NE(back.data_type.element_type(), nullptr);
-    EXPECT_FALSE(back.data_type.element_type()->nullable());
+TEST(FfiConverterTest, TimePrecisionPreserved) {
+    auto back = RoundTrip(Column{"t", DataType::Time(3), ""});
+    EXPECT_EQ(back.data_type.id(), TypeId::Time);
+    EXPECT_EQ(back.data_type.precision(), 3);
 }
 
-TEST(FfiConverterTest, NestedArrayIntermediateNullabilityRoundTrip) {
-    fluss::Column col{
-        "nested",
-        fluss::DataType::Array(fluss::DataType::Array(fluss::DataType::Int()).NotNull()),
-        "",
-    };
-    auto ffi_col = fluss::utils::to_ffi_column(col);
-    auto back = fluss::utils::from_ffi_column(ffi_col);
+TEST(FfiConverterTest, CharBinaryLengthPreserved) {
+    auto ch = RoundTrip(Column{"code", DataType::Char(12), ""});
+    EXPECT_EQ(ch.data_type.id(), TypeId::Char);
+    EXPECT_EQ(ch.data_type.precision(), 12);
 
+    auto bin = RoundTrip(Column{"hash", DataType::Binary(32), ""});
+    EXPECT_EQ(bin.data_type.id(), TypeId::Binary);
+    EXPECT_EQ(bin.data_type.precision(), 32);
+}
+
+TEST(FfiConverterTest, ArrayRoundTrip) {
+    auto back = RoundTrip(Column{"tags", DataType::Array(DataType::String()), ""});
+    EXPECT_EQ(back.data_type.id(), TypeId::Array);
+    ASSERT_NE(back.data_type.element_type(), nullptr);
+    EXPECT_EQ(back.data_type.element_type()->id(), TypeId::String);
+}
+
+TEST(FfiConverterTest, NestedArrayPerLevelNullabilityRoundTrip) {
+    // array<array<int NOT NULL> NOT NULL> (outer nullable)
+    Column col{"nested",
+               DataType::Array(DataType::Array(DataType::Int().NotNull()).NotNull()), ""};
+    auto back = RoundTrip(col);
     EXPECT_TRUE(back.data_type.nullable());
     ASSERT_NE(back.data_type.element_type(), nullptr);
     EXPECT_FALSE(back.data_type.element_type()->nullable());
     ASSERT_NE(back.data_type.element_type()->element_type(), nullptr);
-    EXPECT_TRUE(back.data_type.element_type()->element_type()->nullable());
-}
-
-TEST(FfiConverterTest, NestedArrayAllLevelsNullabilityRoundTrip) {
-    fluss::Column col{
-        "strict_nested",
-        fluss::DataType::Array(
-            fluss::DataType::Array(fluss::DataType::Int().NotNull()).NotNull())
-            .NotNull(),
-        "",
-    };
-    auto ffi_col = fluss::utils::to_ffi_column(col);
-    auto back = fluss::utils::from_ffi_column(ffi_col);
-
-    EXPECT_FALSE(back.data_type.nullable());
-    ASSERT_NE(back.data_type.element_type(), nullptr);
-    EXPECT_FALSE(back.data_type.element_type()->nullable());
-    ASSERT_NE(back.data_type.element_type()->element_type(), nullptr);
+    EXPECT_EQ(back.data_type.element_type()->element_type()->id(), TypeId::Int);
     EXPECT_FALSE(back.data_type.element_type()->element_type()->nullable());
 }
 
-TEST(FfiConverterTest, FfiColumnNonNullableScalarReconstructed) {
-    auto col = MakeScalarColumn("id", fluss::TypeId::Int, false);
-    auto converted = fluss::utils::from_ffi_column(col);
-    EXPECT_FALSE(converted.data_type.nullable());
-    EXPECT_EQ(converted.data_type.id(), fluss::TypeId::Int);
+TEST(FfiConverterTest, MapRoundTrip) {
+    Column col{"attrs", DataType::Map(DataType::String(), DataType::Int().NotNull()), ""};
+    auto back = RoundTrip(col);
+    EXPECT_EQ(back.data_type.id(), TypeId::Map);
+    ASSERT_NE(back.data_type.key_type(), nullptr);
+    ASSERT_NE(back.data_type.value_type(), nullptr);
+    EXPECT_EQ(back.data_type.key_type()->id(), TypeId::String);
+    EXPECT_EQ(back.data_type.value_type()->id(), TypeId::Int);
+    EXPECT_FALSE(back.data_type.value_type()->nullable());
 }
 
-TEST(FfiConverterTest, FfiColumnNonNullableArrayReconstructed) {
-    auto col = MakeArrayColumn(1, static_cast<int32_t>(fluss::TypeId::String), false, false);
-    auto converted = fluss::utils::from_ffi_column(col);
-    EXPECT_FALSE(converted.data_type.nullable());
-    ASSERT_NE(converted.data_type.element_type(), nullptr);
-    EXPECT_FALSE(converted.data_type.element_type()->nullable());
+TEST(FfiConverterTest, RowRoundTrip) {
+    Column col{"profile",
+               DataType::Row({{"age", DataType::Int().NotNull()}, {"city", DataType::String()}}),
+               "user profile"};
+    auto back = RoundTrip(col);
+    EXPECT_EQ(back.comment, "user profile");
+    EXPECT_EQ(back.data_type.id(), TypeId::Row);
+    ASSERT_EQ(back.data_type.field_count(), 2u);
+    EXPECT_EQ(back.data_type.field_name(0), "age");
+    ASSERT_NE(back.data_type.field_type(0), nullptr);
+    EXPECT_EQ(back.data_type.field_type(0)->id(), TypeId::Int);
+    EXPECT_FALSE(back.data_type.field_type(0)->nullable());
+    EXPECT_EQ(back.data_type.field_name(1), "city");
+    EXPECT_EQ(back.data_type.field_type(1)->id(), TypeId::String);
+    EXPECT_TRUE(back.data_type.field_type(1)->nullable());
+}
+
+// array<map<string, row<amount: decimal(18,4), ts: timestamp(3)>>> — every kind
+// of nesting plus precision-bearing leaves, round-tripped exactly.
+TEST(FfiConverterTest, DeeplyNestedRoundTrip) {
+    auto row = DataType::Row({{"amount", DataType::Decimal(18, 4)}, {"ts", DataType::Timestamp(3)}});
+    Column col{"events", DataType::Array(DataType::Map(DataType::String(), std::move(row))), ""};
+    auto back = RoundTrip(col);
+
+    ASSERT_EQ(back.data_type.id(), TypeId::Array);
+    const DataType* map = back.data_type.element_type();
+    ASSERT_NE(map, nullptr);
+    ASSERT_EQ(map->id(), TypeId::Map);
+    EXPECT_EQ(map->key_type()->id(), TypeId::String);
+    const DataType* inner = map->value_type();
+    ASSERT_NE(inner, nullptr);
+    ASSERT_EQ(inner->id(), TypeId::Row);
+    ASSERT_EQ(inner->field_count(), 2u);
+    EXPECT_EQ(inner->field_name(0), "amount");
+    EXPECT_EQ(inner->field_type(0)->precision(), 18);
+    EXPECT_EQ(inner->field_type(0)->scale(), 4);
+    EXPECT_EQ(inner->field_name(1), "ts");
+    EXPECT_EQ(inner->field_type(1)->precision(), 3);
+}
+
+TEST(FfiConverterTest, NodeArenaShape) {
+    EXPECT_EQ(fluss::utils::to_ffi_column(Column{"a", DataType::Int(), ""}).type_nodes.size(), 1u);
+    EXPECT_EQ(
+        fluss::utils::to_ffi_column(Column{"a", DataType::Array(DataType::Int()), ""}).type_nodes.size(),
+        2u);
+    EXPECT_EQ(fluss::utils::to_ffi_column(
+                  Column{"a", DataType::Map(DataType::String(), DataType::Int()), ""})
+                  .type_nodes.size(),
+              3u);
+    EXPECT_EQ(fluss::utils::to_ffi_column(
+                  Column{"a", DataType::Row({{"x", DataType::Int()}, {"y", DataType::String()}}), ""})
+                  .type_nodes.size(),
+              3u);
+}
+
+// --- Decoder rejects malformed arenas ---
+
+TEST(FfiConverterTest, RejectsEmptyTypeTree) {
+    fluss::ffi::FfiColumn col;
+    col.name = rust::String("broken");
+    col.comment = rust::String("");
+    EXPECT_THROW((void)fluss::utils::from_ffi_column(col), std::runtime_error);
+}
+
+TEST(FfiConverterTest, RejectsUnknownTypeId) {
+    fluss::ffi::FfiColumn col;
+    col.name = rust::String("broken");
+    col.comment = rust::String("");
+    col.type_nodes.push_back(Node(999));
+    EXPECT_THROW((void)fluss::utils::from_ffi_column(col), std::runtime_error);
+}
+
+TEST(FfiConverterTest, RejectsTrailingNodes) {
+    fluss::ffi::FfiColumn col;
+    col.name = rust::String("broken");
+    col.comment = rust::String("");
+    col.type_nodes.push_back(Node(static_cast<int32_t>(TypeId::Int)));
+    col.type_nodes.push_back(Node(static_cast<int32_t>(TypeId::Int)));
+    EXPECT_THROW((void)fluss::utils::from_ffi_column(col), std::runtime_error);
+}
+
+TEST(FfiConverterTest, RejectsRowMissingField) {
+    fluss::ffi::FfiColumn col;
+    col.name = rust::String("broken");
+    col.comment = rust::String("");
+    // ROW claims two fields but only one follows.
+    col.type_nodes.push_back(Node(static_cast<int32_t>(TypeId::Row), /*child_count=*/2));
+    col.type_nodes.push_back(Node(static_cast<int32_t>(TypeId::Int), 0, true, 0, 0, "x"));
+    EXPECT_THROW((void)fluss::utils::from_ffi_column(col), std::runtime_error);
 }

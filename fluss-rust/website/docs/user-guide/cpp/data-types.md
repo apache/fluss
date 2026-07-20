@@ -85,12 +85,9 @@ auto schema = fluss::Schema::NewBuilder()
     .Build();
 ```
 
-:::note Arrow escape hatch
-If you already have an `arrow::Schema`, pass it directly with
-`fluss::Schema::FromArrow(arrow_schema, /*primary_keys=*/{"id"})`. It's
-equivalent — the native factories above lower to the same Arrow types
-internally, without pulling Arrow into your code.
-:::
+Column types are sent to the server exactly as declared: precision, scale,
+length, per-level nullability, and `ROW` field names all round-trip losslessly
+through `CreateTable` and `GetTableInfo`.
 
 ## GenericRow Setters
 

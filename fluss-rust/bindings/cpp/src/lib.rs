@@ -90,18 +90,29 @@ mod ffi {
         table_name: String,
     }
 
+    // One node of a type tree, serialized in preorder. A column's type is the
+    // sequence of nodes starting at its root; ARRAY is followed by its element
+    // subtree, MAP by its key then value subtrees, ROW by its `child_count`
+    // field subtrees (each field node carries its `field_name`). This carries
+    // the full recursive type losslessly — exact precision/scale/length,
+    // nullability at every level, and ROW field names.
+    struct FfiTypeNode {
+        type_id: i32,
+        nullable: bool,
+        // Decimal/Timestamp/TimestampLtz precision, or Char/Binary length; 0 otherwise.
+        precision: i32,
+        // Decimal scale; 0 otherwise.
+        scale: i32,
+        // Field name when this node is a ROW field; empty otherwise.
+        field_name: String,
+        // Immediate children: 0 scalar, 1 ARRAY, 2 MAP, N ROW fields.
+        child_count: u32,
+    }
+
     struct FfiColumn {
         name: String,
-        data_type: i32,
-        nullable: bool,
         comment: String,
-        precision: i32,
-        scale: i32,
-        array_nesting: i32,
-        array_nullability: Vec<u8>,
-        element_data_type: i32,
-        element_precision: i32,
-        element_scale: i32,
+        type_nodes: Vec<FfiTypeNode>,
     }
 
     struct FfiSchema {
@@ -315,17 +326,6 @@ mod ffi {
             self: &Admin,
             table_path: &FfiTablePath,
             descriptor: &FfiTableDescriptor,
-            ignore_if_exists: bool,
-        ) -> FfiResult;
-        // Create a table whose columns come from an Arrow schema (C Data
-        // Interface pointer), supporting nested MAP/ROW columns. `descriptor`
-        // supplies primary keys + table-level metadata; its `schema.columns`
-        // are ignored in favour of `arrow_schema_ptr`.
-        fn create_table_arrow(
-            self: &Admin,
-            table_path: &FfiTablePath,
-            descriptor: &FfiTableDescriptor,
-            arrow_schema_ptr: usize,
             ignore_if_exists: bool,
         ) -> FfiResult;
         fn drop_table(
@@ -1065,38 +1065,6 @@ impl Admin {
             Ok(d) => d,
             Err(e) => return client_err(e.to_string()),
         };
-
-        let result = RUNTIME.block_on(async {
-            self.inner
-                .create_table(&path, &core_descriptor, ignore_if_exists)
-                .await
-        });
-
-        match result {
-            Ok(_) => ok_result(),
-            Err(e) => err_from_core_error(&e),
-        }
-    }
-
-    fn create_table_arrow(
-        &self,
-        table_path: &ffi::FfiTablePath,
-        descriptor: &ffi::FfiTableDescriptor,
-        arrow_schema_ptr: usize,
-        ignore_if_exists: bool,
-    ) -> ffi::FfiResult {
-        let path = fcore::metadata::TablePath::new(
-            table_path.database_name.clone(),
-            table_path.table_name.clone(),
-        );
-
-        // Safety: C++ exports the schema via `arrow::ExportSchema` into a heap
-        // `FFI_ArrowSchema` whose pointer is passed here; ownership transfers.
-        let core_descriptor =
-            match unsafe { types::arrow_ffi_to_core_descriptor(arrow_schema_ptr, descriptor) } {
-                Ok(d) => d,
-                Err(e) => return client_err(e.to_string()),
-            };
 
         let result = RUNTIME.block_on(async {
             self.inner

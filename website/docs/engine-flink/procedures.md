@@ -246,6 +246,78 @@ CALL sys.set_cluster_configs(
 );
 ```
 
+### append_cluster_configs
+
+Append values to list-type or map-type cluster configurations dynamically.
+
+**Syntax:**
+
+```sql
+-- Append collection configuration values
+CALL [catalog_name.]sys.append_cluster_configs(
+  config_pairs => 'key1', 'value1' [, 'key2', 'value2' ...]
+)
+```
+
+**Parameters:**
+
+- `config_pairs`(required): For key-value pairs in configuration items, the number of parameters must be even.
+
+**Important Notes:**
+
+- APPEND operations are only supported for list-type or map-type configuration keys
+- For map-type configurations, values must use the `map-key:map-value` format
+- Appending a map entry whose key already exists is rejected
+
+**Example:**
+
+```sql title="Flink SQL"
+-- Use the Fluss catalog (replace 'fluss_catalog' with your catalog name if different)
+USE fluss_catalog;
+
+-- Add a SASL Plain credential
+CALL sys.append_cluster_configs(
+  config_pairs => 'security.sasl.plain.credentials', 'bob:bob-secret'
+);
+```
+
+### subtract_cluster_configs
+
+Subtract values from list-type or map-type cluster configurations dynamically.
+
+**Syntax:**
+
+```sql
+-- Subtract collection configuration values
+CALL [catalog_name.]sys.subtract_cluster_configs(
+  config_pairs => 'key1', 'value1' [, 'key2', 'value2' ...]
+)
+```
+
+**Parameters:**
+
+- `config_pairs`(required): For key-value pairs in configuration items, the number of parameters must be even.
+
+**Important Notes:**
+
+- SUBTRACT operations are only supported for list-type or map-type configuration keys
+- For list-type configurations, SUBTRACT removes the exact list value
+- For map-type configurations, values must use the `map-key:map-value` format, but removal is matched only by `map-key`; the supplied `map-value` is ignored for matching
+- Subtracting a list value or map key that does not exist is a no-op
+
+**Example:**
+
+```sql title="Flink SQL"
+-- Use the Fluss catalog (replace 'fluss_catalog' with your catalog name if different)
+USE fluss_catalog;
+
+-- Remove user "bob" from the SASL Plain credentials map.
+-- This removes the "bob" entry even if the stored secret is different.
+CALL sys.subtract_cluster_configs(
+  config_pairs => 'security.sasl.plain.credentials', 'bob:any-secret'
+);
+```
+
 ### reset_cluster_configs
 
 reset cluster configurations dynamically.

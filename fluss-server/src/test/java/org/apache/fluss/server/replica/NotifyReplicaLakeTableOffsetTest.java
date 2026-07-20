@@ -18,18 +18,27 @@
 package org.apache.fluss.server.replica;
 
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.rpc.messages.NotifyLakeTableOffsetResponse;
 import org.apache.fluss.server.entity.LakeBucketOffset;
 import org.apache.fluss.server.entity.NotifyLakeTableOffsetData;
 
 import org.assertj.core.api.AssertionsForClassTypes;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.time.Duration;
 import java.util.Collections;
 import java.util.concurrent.CompletableFuture;
 
+import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
+import static org.apache.fluss.record.TestData.DATA1;
+import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
+import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
+import static org.apache.fluss.testutils.DataTestUtils.createRecordsWithoutBaseLogOffset;
+import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for notify replica lakehouse data info. */
 class NotifyReplicaLakeTableOffsetTest extends ReplicaTestBase {
@@ -46,6 +55,37 @@ class NotifyReplicaLakeTableOffsetTest extends ReplicaTestBase {
         notifyAndVerify(tb, replica, 1, 0L, 20L, System.currentTimeMillis());
         // notify again
         notifyAndVerify(tb, replica, 2, 20L, 30L, System.currentTimeMillis());
+    }
+
+    @Test
+    void testNotifyLakeTableOffsetClearsPendingRecordsLagWhenCaughtUp() throws Exception {
+        TableBucket tb = makeTableBucket(false);
+        makeLogTableAsLeader(tb, false);
+        Replica replica = replicaManager.getReplicaOrException(tb);
+        replica.updateIsDataLakeEnabled(true);
+
+        long initialTimestamp = manualClock.milliseconds();
+        MemoryLogRecords records =
+                createRecordsWithoutBaseLogOffset(
+                        DATA1_ROW_TYPE,
+                        DEFAULT_SCHEMA_ID,
+                        0,
+                        initialTimestamp,
+                        CURRENT_LOG_MAGIC_VALUE,
+                        DATA1,
+                        replica.getLogFormat());
+        replica.appendRecordsToLeader(records, 0);
+        replica.getLogTablet().updateHighWatermark(replica.getLocalLogEndOffset());
+
+        manualClock.advanceTime(Duration.ofSeconds(30));
+        assertThat(replica.getLogTablet().getPendingRecordsLag(manualClock.milliseconds()))
+                .isEqualTo(Duration.ofSeconds(30).toMillis());
+
+        notifyAndVerify(tb, replica, 1, 0L, replica.getLocalLogEndOffset(), initialTimestamp);
+
+        assertThat(replica.getLogTablet().getPendingRecordsLag(manualClock.milliseconds()))
+                .isZero();
+        assertThat(replica.getLogTablet().getEstimatedPendingStartTimeMs()).isEqualTo(-1L);
     }
 
     private void notifyAndVerify(

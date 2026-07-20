@@ -24,6 +24,12 @@ defmodule Fluss.Schema do
 
   Parameterized types: `{:decimal, precision, scale}`, `{:char, length}`, `{:binary, length}`
 
+  Complex types: `{:array, dt}`, `{:map, key_dt, value_dt}`, `{:row, [{name, dt}]}`
+  (e.g. `{:row, [{"x", :int}, {"y", :string}]}`).
+
+  Nullability: types are nullable by default; wrap as `{:not_null, dt}` to mark
+  non-null at any depth — e.g. `{:array, {:not_null, :int}}`.
+
   ## Examples
 
       schema =
@@ -53,6 +59,10 @@ defmodule Fluss.Schema do
           | {:decimal, non_neg_integer(), non_neg_integer()}
           | {:char, non_neg_integer()}
           | {:binary, non_neg_integer()}
+          | {:array, data_type()}
+          | {:map, data_type(), data_type()}
+          | {:row, [{String.t(), data_type()}]}
+          | {:not_null, data_type()}
 
   @type t :: %__MODULE__{
           columns: [{String.t(), data_type()}],

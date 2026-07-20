@@ -119,6 +119,7 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
     }
 
     private final Set<FlussPrincipal> superUsers;
+    private final boolean principalIgnoreCase;
 
     private final ZooKeeperClient zooKeeperClient;
     private final ZkNodeChangeNotificationWatcher aclChangeNotificationWatcher;
@@ -134,6 +135,8 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
     public DefaultAuthorizer(AuthorizationPlugin.Context context) {
         Configuration configuration = context.getConfiguration();
         this.superUsers = parseSuperUsers(configuration);
+        this.principalIgnoreCase =
+                configuration.get(ConfigOptions.SECURITY_ACL_PRINCIPAL_IGNORE_CASE);
         if (context.getZooKeeperClient().isPresent()) {
             this.zooKeeperClient = context.getZooKeeperClient().get();
         } else {
@@ -167,12 +170,21 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
     @Override
     public boolean authorizeAction(Session session, Action action) {
         FlussPrincipal principal = session.getPrincipal();
-        return superUsers.contains(principal)
+        return isSuperUser(principal)
                 || aclsAllowAccess(
                         action.getResource(),
                         principal,
                         action.getOperation(),
                         session.getInetAddress().getHostAddress());
+    }
+
+    private boolean isSuperUser(FlussPrincipal principal) {
+        for (FlussPrincipal superUser : superUsers) {
+            if (superUser.matches(principal, principalIgnoreCase)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @Override
@@ -514,9 +526,12 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
                 .filter(
                         acl ->
                                 acl.getPermissionType() == permissionType
-                                        && (acl.getPrincipal().equals(principal)
+                                        && (acl.getPrincipal()
+                                                        .matches(principal, principalIgnoreCase)
                                                 || acl.getPrincipal()
-                                                        .equals(FlussPrincipal.WILD_CARD_PRINCIPAL))
+                                                        .matches(
+                                                                FlussPrincipal.WILD_CARD_PRINCIPAL,
+                                                                principalIgnoreCase))
                                         && (operation == acl.getOperationType()
                                                 || acl.getOperationType() == OperationType.ALL)
                                         && (acl.getHost().equals(AccessControlEntry.WILD_CARD_HOST)
@@ -599,7 +614,7 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
                     // The minimum granularity of ACL operation permissions is Database.
                     authorize(
                             session,
-                            OperationType.ALTER,
+                            OperationType.ALL,
                             resource.getType() != ResourceType.TABLE
                                     ? resource
                                     : Resource.database(

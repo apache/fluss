@@ -429,6 +429,7 @@ pub struct TableScan {
     metadata: Arc<fcore::client::Metadata>,
     table_info: fcore::metadata::TableInfo,
     projection: Option<ProjectionType>,
+    fixed_schema: bool,
     limit: Option<i32>,
 }
 
@@ -461,6 +462,19 @@ impl TableScan {
     ///     Self for method chaining.
     pub fn project_by_name(mut slf: PyRefMut<'_, Self>, names: Vec<String>) -> PyRefMut<'_, Self> {
         slf.projection = Some(ProjectionType::Names(names));
+        slf
+    }
+
+    /// Control whether schema-evolved log batches are aligned to the scanner schema.
+    ///
+    /// When enabled, batches written with older schemas are padded/projected to
+    /// the schema captured when the scanner is created. When disabled, batches
+    /// keep their write-time schema.
+    pub fn with_fixed_schema(
+        mut slf: PyRefMut<'_, Self>,
+        fixed_schema: bool,
+    ) -> PyRefMut<'_, Self> {
+        slf.fixed_schema = fixed_schema;
         slf
     }
 
@@ -566,12 +580,14 @@ impl TableScan {
         let metadata = self.metadata.clone();
         let table_info = self.table_info.clone();
         let projection = self.projection.clone();
+        let fixed_schema = self.fixed_schema;
 
         future_into_py(py, async move {
             let fluss_table = fcore::client::FlussTable::new(&conn, metadata, table_info.clone());
 
             let projection_indices = resolve_projection_indices(&projection, &table_info)?;
-            let table_scan = apply_projection(fluss_table.new_scan(), projection)?;
+            let table_scan = apply_projection(fluss_table.new_scan(), projection)?
+                .with_fixed_schema(fixed_schema);
 
             let admin = conn
                 .get_admin()
@@ -699,6 +715,7 @@ impl FlussTable {
             metadata: self.metadata.clone(),
             table_info: self.table_info.clone(),
             projection: None,
+            fixed_schema: false,
             limit: None,
         }
     }

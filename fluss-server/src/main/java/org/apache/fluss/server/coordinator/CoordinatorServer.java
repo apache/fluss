@@ -40,7 +40,7 @@ import org.apache.fluss.server.metadata.ServerMetadataCache;
 import org.apache.fluss.server.metrics.ServerMetricUtils;
 import org.apache.fluss.server.metrics.group.CoordinatorMetricGroup;
 import org.apache.fluss.server.metrics.group.LakeTieringMetricGroup;
-import org.apache.fluss.server.storage.DiskWriteLimitRatioValidator;
+import org.apache.fluss.server.storage.DiskWriteLimitConfigValidator;
 import org.apache.fluss.server.zk.ZkEpoch;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperUtils;
@@ -165,6 +165,9 @@ public class CoordinatorServer extends ServerBase {
     @GuardedBy("lock")
     private KvSnapshotLeaseManager kvSnapshotLeaseManager;
 
+    @GuardedBy("lock")
+    private ReplicaCapacityController replicaCapacityController;
+
     public CoordinatorServer(Configuration conf) {
         this(conf, SystemClock.getInstance());
     }
@@ -240,19 +243,11 @@ public class CoordinatorServer extends ServerBase {
 
             this.lakeCatalogDynamicLoader = new LakeCatalogDynamicLoader(conf, pluginManager, true);
             this.remoteDirDynamicLoader = new RemoteDirDynamicLoader(conf);
-
-            this.dynamicConfigManager = new DynamicConfigManager(zkClient, conf, true);
-
-            // Register server reconfigurable components
-            dynamicConfigManager.register(lakeCatalogDynamicLoader);
-            dynamicConfigManager.register(remoteDirDynamicLoader);
-
-            // Register stateless validators for coordinator-side upfront validation
-            dynamicConfigManager.registerValidator(new DiskWriteLimitRatioValidator());
-
-            dynamicConfigManager.startup();
-
             this.metadataCache = new CoordinatorMetadataCache();
+            this.replicaCapacityController =
+                    new ReplicaCapacityController(conf, metadataCache, serverMetricGroup);
+
+            this.dynamicConfigManager = new DynamicConfigManager(zkClient, conf);
 
             this.authorizer = AuthorizerLoader.createAuthorizer(conf, zkClient, pluginManager);
             if (authorizer != null) {
@@ -295,7 +290,8 @@ public class CoordinatorServer extends ServerBase {
                             dynamicConfigManager,
                             ioExecutor,
                             kvSnapshotLeaseManager,
-                            coordinatorLeaderElection);
+                            coordinatorLeaderElection,
+                            replicaCapacityController);
 
             this.rpcServer =
                     RpcServer.create(
@@ -305,6 +301,15 @@ public class CoordinatorServer extends ServerBase {
                             serverMetricGroup,
                             RequestsMetrics.createCoordinatorServerRequestMetrics(
                                     serverMetricGroup));
+            // Register server reconfigurable components
+            dynamicConfigManager.register(lakeCatalogDynamicLoader);
+            dynamicConfigManager.register(remoteDirDynamicLoader);
+            dynamicConfigManager.register(replicaCapacityController);
+            // Register stateless validators for coordinator-side upfront validation
+            dynamicConfigManager.register(new DiskWriteLimitConfigValidator());
+            rpcServer.getServerReconfigurables().forEach(dynamicConfigManager::register);
+            dynamicConfigManager.startup();
+
             rpcServer.start();
 
             registerCoordinatorServer();
@@ -326,7 +331,11 @@ public class CoordinatorServer extends ServerBase {
 
             this.autoPartitionManager =
                     new AutoPartitionManager(
-                            metadataCache, metadataManager, remoteDirDynamicLoader, conf);
+                            metadataCache,
+                            metadataManager,
+                            remoteDirDynamicLoader,
+                            conf,
+                            replicaCapacityController);
             autoPartitionManager.start();
 
             // start coordinator event processor after we register coordinator leader to zk
@@ -340,6 +349,7 @@ public class CoordinatorServer extends ServerBase {
                             metadataCache,
                             coordinatorChannelManager,
                             coordinatorContext,
+                            replicaCapacityController,
                             autoPartitionManager,
                             lakeTableTieringManager,
                             serverMetricGroup,
@@ -351,6 +361,10 @@ public class CoordinatorServer extends ServerBase {
                             clock);
             dynamicConfigManager.register(coordinatorEventProcessor.getRebalanceManager());
             coordinatorEventProcessor.startup();
+
+            // As the active leader, this server is the sole writer of dynamic configs and holds the
+            // latest values, so stop consuming change notifications to avoid rolling a value back.
+            dynamicConfigManager.pauseListening();
 
             createDefaultDatabase();
         }
@@ -421,6 +435,14 @@ public class CoordinatorServer extends ServerBase {
                 }
             } catch (Throwable t) {
                 LOG.warn("Failed to close client metric group", t);
+            }
+
+            try {
+                // Back to standby: resume consuming config-change notifications and re-sync from
+                // ZooKeeper to pick up any changes the new leader made while we were not listening.
+                dynamicConfigManager.resumeListening();
+            } catch (Throwable t) {
+                LOG.warn("Failed to resume dynamic config listening", t);
             }
 
             LOG.info("Coordinator leader services cleaned up successfully.");
@@ -547,9 +569,26 @@ public class CoordinatorServer extends ServerBase {
         }
     }
 
+    @VisibleForTesting
+    ReplicaCapacityController getReplicaCapacityController() {
+        return replicaCapacityController;
+    }
+
     CompletableFuture<Void> stopServices() {
+        // Closing the leader election may wait for cleanupCoordinatorLeader(), which acquires
+        // lock. Close it before entering the synchronized shutdown section to avoid deadlock.
+        Throwable leaderElectionException = null;
+        try {
+            if (coordinatorLeaderElection != null) {
+                coordinatorLeaderElection.close();
+                coordinatorLeaderElection = null;
+            }
+        } catch (Throwable t) {
+            leaderElectionException = t;
+        }
+
         synchronized (lock) {
-            Throwable exception = null;
+            Throwable exception = leaderElectionException;
 
             try {
                 // We must shut down the scheduler early because otherwise, the scheduler could
@@ -661,14 +700,6 @@ public class CoordinatorServer extends ServerBase {
                     kvSnapshotLeaseManager.close();
                 }
 
-            } catch (Throwable t) {
-                exception = ExceptionUtils.firstOrSuppressed(t, exception);
-            }
-
-            try {
-                if (coordinatorLeaderElection != null) {
-                    coordinatorLeaderElection.close();
-                }
             } catch (Throwable t) {
                 exception = ExceptionUtils.firstOrSuppressed(t, exception);
             }

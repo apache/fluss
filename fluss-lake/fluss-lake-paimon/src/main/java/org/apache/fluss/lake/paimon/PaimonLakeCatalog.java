@@ -32,6 +32,7 @@ import org.apache.paimon.catalog.Catalog;
 import org.apache.paimon.catalog.CatalogContext;
 import org.apache.paimon.catalog.CatalogFactory;
 import org.apache.paimon.catalog.Identifier;
+import org.apache.paimon.fs.Path;
 import org.apache.paimon.options.Options;
 import org.apache.paimon.schema.Schema;
 import org.apache.paimon.schema.SchemaChange;
@@ -42,6 +43,7 @@ import org.apache.paimon.types.DataTypes;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -59,6 +61,7 @@ import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
 public class PaimonLakeCatalog implements LakeCatalog {
 
     private static final Logger LOG = LoggerFactory.getLogger(PaimonLakeCatalog.class);
+    private static final String PAIMON_PATH_KEY = "paimon.path";
     public static final LinkedHashMap<String, DataType> SYSTEM_COLUMNS = new LinkedHashMap<>();
 
     static {
@@ -115,6 +118,14 @@ public class PaimonLakeCatalog implements LakeCatalog {
         try {
             Table table = paimonCatalog.getTable(toPaimon(tablePath));
             FileStoreTable fileStoreTable = (FileStoreTable) table;
+            List<TableChange> changesToApply =
+                    validateAndFilterPaimonPathChanges(fileStoreTable.location(), tableChanges);
+
+            // Avoid creating a new Paimon schema version for a path-only no-op.
+            if (changesToApply.isEmpty()) {
+                return;
+            }
+
             Schema currentPaimonSchema = fileStoreTable.schema().toSchema();
 
             List<SchemaChange> paimonSchemaChanges;
@@ -122,13 +133,13 @@ public class PaimonLakeCatalog implements LakeCatalog {
                     currentPaimonSchema, toPaimonSchema(context.getCurrentTable()))) {
                 // if the paimon schema is same as current fluss schema, directly apply all the
                 // changes.
-                paimonSchemaChanges = toPaimonSchemaChanges(tableChanges);
+                paimonSchemaChanges = toPaimonSchemaChanges(changesToApply);
             } else if (isPaimonSchemaCompatible(
                     currentPaimonSchema, toPaimonSchema(context.getExpectedTable()))) {
                 // if the schema is same as applied fluss schema , skip adding columns.
                 paimonSchemaChanges =
                         toPaimonSchemaChanges(
-                                tableChanges.stream()
+                                changesToApply.stream()
                                         .filter(
                                                 tableChange ->
                                                         !(tableChange
@@ -155,6 +166,41 @@ public class PaimonLakeCatalog implements LakeCatalog {
         } catch (Catalog.TableNotExistException e) {
             throw new TableNotExistException("Table " + tablePath + " does not exist.");
         }
+    }
+
+    private static List<TableChange> validateAndFilterPaimonPathChanges(
+            Path currentLocation, List<TableChange> tableChanges) {
+        List<TableChange> changesToApply = new ArrayList<>(tableChanges.size());
+
+        // `paimon.path` is create-time-only because changing it does not migrate existing data.
+        // It may be repeated after table creation when enabling lake in the same ALTER. Treat an
+        // equivalent path as a no-op, but reject any actual path change.
+        for (TableChange tableChange : tableChanges) {
+            if (tableChange instanceof TableChange.SetOption) {
+                TableChange.SetOption setOption = (TableChange.SetOption) tableChange;
+                if (PAIMON_PATH_KEY.equals(setOption.getKey())) {
+                    if (currentLocation.equals(new Path(setOption.getValue()))) {
+                        continue;
+                    }
+                    throw invalidPaimonPathChangeException();
+                }
+            } else if (tableChange instanceof TableChange.ResetOption) {
+                TableChange.ResetOption resetOption = (TableChange.ResetOption) tableChange;
+                if (PAIMON_PATH_KEY.equals(resetOption.getKey())) {
+                    throw invalidPaimonPathChangeException();
+                }
+            }
+            changesToApply.add(tableChange);
+        }
+
+        return changesToApply;
+    }
+
+    private static InvalidAlterTableException invalidPaimonPathChangeException() {
+        return new InvalidAlterTableException(
+                String.format(
+                        "'%s' can only be altered before the Paimon table is created.",
+                        PAIMON_PATH_KEY));
     }
 
     private void createTable(TablePath tablePath, Schema schema, boolean isCreatingFlussTable)

@@ -842,7 +842,7 @@ public final class KvTablet {
     }
 
     public void close() throws Exception {
-        LOG.info("close kv tablet {} for table {}.", tableBucket, physicalPath);
+        LOG.debug("close kv tablet {} for table {}.", tableBucket, physicalPath);
         inWriteLock(
                 kvLock,
                 () -> {

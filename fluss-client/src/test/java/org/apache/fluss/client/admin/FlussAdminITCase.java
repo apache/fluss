@@ -38,6 +38,7 @@ import org.apache.fluss.exception.DatabaseAlreadyExistException;
 import org.apache.fluss.exception.DatabaseNotEmptyException;
 import org.apache.fluss.exception.DatabaseNotExistException;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidDatabaseException;
 import org.apache.fluss.exception.InvalidPartitionException;
@@ -1150,6 +1151,46 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
     }
 
     @Test
+    void testKvSnapshotLeaseAfterCoordinatorServerRestart() throws Exception {
+        long tableId = admin.getTableInfo(DEFAULT_TABLE_PATH).get().getTableId();
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+        Map<TableBucket, Long> snapshots = Collections.singletonMap(tableBucket, 0L);
+        KvSnapshotLease lease = admin.createKvSnapshotLease("test-retry-kv-snapshot-lease", 60000L);
+        ZooKeeperClient zkClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
+
+        // Restart the coordinator server so that the lease uses a stale cached address.
+        restartCoordinatorServer(zkClient);
+
+        lease.acquireSnapshots(snapshots).get();
+        assertThat(zkClient.getKvSnapshotLeaseMetadata(lease.leaseId())).isPresent();
+
+        // Verify that release also refreshes metadata and retries against the new coordinator.
+        restartCoordinatorServer(zkClient);
+
+        lease.releaseSnapshots(Collections.singleton(tableBucket)).get();
+        assertThat(zkClient.getKvSnapshotLeaseMetadata(lease.leaseId())).isNotPresent();
+
+        // Recreate the lease before verifying drop with another stale coordinator address.
+        lease.acquireSnapshots(snapshots).get();
+        assertThat(zkClient.getKvSnapshotLeaseMetadata(lease.leaseId())).isPresent();
+
+        restartCoordinatorServer(zkClient);
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
+
+        lease.dropLease().get();
+        assertThat(zkClient.getKvSnapshotLeaseMetadata(lease.leaseId())).isNotPresent();
+    }
+
+    private void restartCoordinatorServer(ZooKeeperClient zkClient) throws Exception {
+        FLUSS_CLUSTER_EXTENSION.stopCoordinatorServer();
+        waitUntil(
+                () -> !zkClient.getCoordinatorLeaderAddress().isPresent(),
+                Duration.ofMinutes(1),
+                "Coordinator server node still exists in ZooKeeper");
+        FLUSS_CLUSTER_EXTENSION.startCoordinatorServer();
+    }
+
+    @Test
     void testListPartitionInfosByPartitionSpec() throws Exception {
         String dbName = DEFAULT_TABLE_PATH.getDatabaseName();
 
@@ -1455,6 +1496,204 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
     }
 
     @Test
+    void testTimeFormatOptionForAutoPartitionedTable() throws Exception {
+        String dbName = DEFAULT_TABLE_PATH.getDatabaseName();
+
+        TableDescriptor nonDayTable =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.STRING())
+                                        .column("pt", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(3, "id")
+                        .partitionedBy("pt")
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
+                        .property(
+                                ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
+                                AutoPartitionTimeUnit.MONTH)
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_TIME_FORMAT, "MM-yyyy")
+                        .build();
+        assertThatThrownBy(
+                        () ->
+                                admin.createTable(
+                                                TablePath.of(
+                                                        dbName,
+                                                        "test_invalid_auto_partition_day_format_non_day"),
+                                                nonDayTable,
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining(ConfigOptions.TABLE_AUTO_PARTITION_TIME_FORMAT.key())
+                .hasMessageContaining("must contain fields [year, month] in this order")
+                .hasMessageContaining("MONTH");
+
+        TableDescriptor disabledAutoPartitionTable =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.STRING())
+                                        .column("pt", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(3, "id")
+                        .partitionedBy("pt")
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_TIME_FORMAT, "yyyy-MM-dd")
+                        .build();
+        admin.createTable(
+                        TablePath.of(dbName, "test_auto_partition_time_format_disabled"),
+                        disabledAutoPartitionTable,
+                        false)
+                .get();
+
+        TableDescriptor datePartitionKeyWithCompactDayFormat =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.STRING())
+                                        .column("pt", DataTypes.DATE())
+                                        .build())
+                        .distributedBy(3, "id")
+                        .partitionedBy("pt")
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
+                        .property(
+                                ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
+                                AutoPartitionTimeUnit.DAY)
+                        .build();
+        assertThatThrownBy(
+                        () ->
+                                admin.createTable(
+                                                TablePath.of(
+                                                        dbName,
+                                                        "test_invalid_auto_partition_day_format_date_key"),
+                                                datePartitionKeyWithCompactDayFormat,
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining(ConfigOptions.TABLE_AUTO_PARTITION_TIME_FORMAT.key())
+                .hasMessageContaining("yyyy-MM-dd")
+                .hasMessageContaining("DATE");
+
+        TableDescriptor datePartitionKeyWithMonthUnit =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.STRING())
+                                        .column("pt", DataTypes.DATE())
+                                        .build())
+                        .distributedBy(3, "id")
+                        .partitionedBy("pt")
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
+                        .property(
+                                ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
+                                AutoPartitionTimeUnit.MONTH)
+                        .build();
+        assertThatThrownBy(
+                        () ->
+                                admin.createTable(
+                                                TablePath.of(
+                                                        dbName,
+                                                        "test_invalid_auto_partition_month_unit_date_key"),
+                                                datePartitionKeyWithMonthUnit,
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT.key())
+                .hasMessageContaining(AutoPartitionTimeUnit.DAY.name())
+                .hasMessageContaining("DATE");
+
+        TableDescriptor validDashedDayFormatTable =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.STRING())
+                                        .column("pt", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(3, "id")
+                        .partitionedBy("pt")
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
+                        .property(
+                                ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
+                                AutoPartitionTimeUnit.DAY)
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_TIME_FORMAT, "yyyy-MM-dd")
+                        .build();
+        TablePath tablePath = TablePath.of(dbName, "test_invalid_auto_partition_day_format_alter");
+        admin.createTable(tablePath, validDashedDayFormatTable, false).get();
+
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                tablePath,
+                                                Collections.singletonList(
+                                                        TableChange.set(
+                                                                ConfigOptions
+                                                                        .TABLE_AUTO_PARTITION_TIME_FORMAT
+                                                                        .key(),
+                                                                "yyyyMMdd")),
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining(ConfigOptions.TABLE_AUTO_PARTITION_TIME_FORMAT.key());
+
+        admin.alterTable(
+                        tablePath,
+                        Collections.singletonList(
+                                TableChange.set(
+                                        ConfigOptions.TABLE_AUTO_PARTITION_ENABLED.key(), "false")),
+                        false)
+                .get();
+        assertThatThrownBy(
+                        () ->
+                                admin.createPartition(
+                                                tablePath,
+                                                newPartitionSpec("pt", "20000101"),
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(InvalidPartitionException.class)
+                .hasMessageContaining("yyyy-MM-dd");
+        admin.createPartition(tablePath, newPartitionSpec("pt", "2000-01-01"), false).get();
+
+        TableDescriptor disabledDateDayTable =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.STRING())
+                                        .column("pt", DataTypes.DATE())
+                                        .build())
+                        .distributedBy(3, "id")
+                        .partitionedBy("pt")
+                        .property(
+                                ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
+                                AutoPartitionTimeUnit.DAY)
+                        .build();
+        TablePath disabledDateDayTablePath =
+                TablePath.of(dbName, "test_invalid_auto_partition_day_format_enable");
+        admin.createTable(disabledDateDayTablePath, disabledDateDayTable, false).get();
+
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                disabledDateDayTablePath,
+                                                Collections.singletonList(
+                                                        TableChange.set(
+                                                                ConfigOptions
+                                                                        .TABLE_AUTO_PARTITION_ENABLED
+                                                                        .key(),
+                                                                "true")),
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining(ConfigOptions.TABLE_AUTO_PARTITION_TIME_FORMAT.key())
+                .hasMessageContaining("yyyy-MM-dd")
+                .hasMessageContaining("DATE");
+    }
+
+    @Test
     void testCreateInvalidPartitionForAutoPartitionedTable() throws Exception {
         String dbName = DEFAULT_TABLE_PATH.getDatabaseName();
         // numToRetain defaults to 7; with DAY unit, anything older than (today - 7 days) is
@@ -1652,76 +1891,92 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
     }
 
     @Test
-    void testDynamicDiskWriteLimitRatio() throws Exception {
-        // Valid value should succeed
-        admin.alterClusterConfigs(
-                        Collections.singletonList(
-                                new AlterConfig(
-                                        ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO.key(),
-                                        "0.15",
-                                        AlterConfigOpType.SET)))
-                .get();
-        assertConfigEntry(
-                ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO.key(),
-                "0.15",
-                ConfigEntry.ConfigSource.DYNAMIC_SERVER_CONFIG);
+    void testDynamicDiskWriteLimitRatios() throws Exception {
+        try {
+            // Both ratios can be lowered atomically when their relationship remains valid.
+            admin.alterClusterConfigs(
+                            Arrays.asList(
+                                    new AlterConfig(
+                                            ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO.key(),
+                                            "0.95",
+                                            AlterConfigOpType.SET),
+                                    new AlterConfig(
+                                            ConfigOptions.SERVER_DATA_DISK_WRITE_RECOVER_RATIO
+                                                    .key(),
+                                            "0.90",
+                                            AlterConfigOpType.SET)))
+                    .get();
+            assertConfigEntry(
+                    ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO.key(),
+                    "0.95",
+                    ConfigEntry.ConfigSource.DYNAMIC_SERVER_CONFIG);
+            assertConfigEntry(
+                    ConfigOptions.SERVER_DATA_DISK_WRITE_RECOVER_RATIO.key(),
+                    "0.90",
+                    ConfigEntry.ConfigSource.DYNAMIC_SERVER_CONFIG);
 
-        // Invalid value: 0.0 (must be > 0.1)
-        assertThatThrownBy(
-                        () ->
-                                admin.alterClusterConfigs(
-                                                Collections.singletonList(
-                                                        new AlterConfig(
-                                                                ConfigOptions
-                                                                        .SERVER_DATA_DISK_WRITE_LIMIT_RATIO
-                                                                        .key(),
-                                                                "0.0",
-                                                                AlterConfigOpType.SET)))
-                                        .get())
-                .cause()
-                .isInstanceOf(ConfigException.class)
-                .hasMessageContaining("must be within (0.1, 1.0]");
+            // Invalid value: 0.0 (must be greater than the recover ratio).
+            assertThatThrownBy(
+                            () ->
+                                    admin.alterClusterConfigs(
+                                                    Collections.singletonList(
+                                                            new AlterConfig(
+                                                                    ConfigOptions
+                                                                            .SERVER_DATA_DISK_WRITE_LIMIT_RATIO
+                                                                            .key(),
+                                                                    "0.0",
+                                                                    AlterConfigOpType.SET)))
+                                            .get())
+                    .cause()
+                    .isInstanceOf(ConfigException.class)
+                    .hasMessageContaining("Invalid disk write-limit configuration");
+            // Invalid value: 0.90 (must be strictly greater than the recover ratio).
+            assertThatThrownBy(
+                            () ->
+                                    admin.alterClusterConfigs(
+                                                    Collections.singletonList(
+                                                            new AlterConfig(
+                                                                    ConfigOptions
+                                                                            .SERVER_DATA_DISK_WRITE_LIMIT_RATIO
+                                                                            .key(),
+                                                                    "0.90",
+                                                                    AlterConfigOpType.SET)))
+                                            .get())
+                    .cause()
+                    .isInstanceOf(ConfigException.class)
+                    .hasMessageContaining("Invalid disk write-limit configuration");
 
-        // Invalid value: 0.1 (boundary, must be > 0.1)
-        assertThatThrownBy(
-                        () ->
-                                admin.alterClusterConfigs(
-                                                Collections.singletonList(
-                                                        new AlterConfig(
-                                                                ConfigOptions
-                                                                        .SERVER_DATA_DISK_WRITE_LIMIT_RATIO
-                                                                        .key(),
-                                                                "0.1",
-                                                                AlterConfigOpType.SET)))
-                                        .get())
-                .cause()
-                .isInstanceOf(ConfigException.class)
-                .hasMessageContaining("must be within (0.1, 1.0]");
+            // Invalid value: 1.5 (must be <= 1.0)
+            assertThatThrownBy(
+                            () ->
+                                    admin.alterClusterConfigs(
+                                                    Collections.singletonList(
+                                                            new AlterConfig(
+                                                                    ConfigOptions
+                                                                            .SERVER_DATA_DISK_WRITE_LIMIT_RATIO
+                                                                            .key(),
+                                                                    "1.5",
+                                                                    AlterConfigOpType.SET)))
+                                            .get())
+                    .cause()
+                    .isInstanceOf(ConfigException.class)
+                    .hasMessageContaining("Invalid disk write-limit configuration");
 
-        // Invalid value: 1.5 (must be <= 1.0)
-        assertThatThrownBy(
-                        () ->
-                                admin.alterClusterConfigs(
-                                                Collections.singletonList(
-                                                        new AlterConfig(
-                                                                ConfigOptions
-                                                                        .SERVER_DATA_DISK_WRITE_LIMIT_RATIO
-                                                                        .key(),
-                                                                "1.5",
-                                                                AlterConfigOpType.SET)))
-                                        .get())
-                .cause()
-                .isInstanceOf(ConfigException.class)
-                .hasMessageContaining("must be within (0.1, 1.0]");
-
-        // Reset should succeed (restores default)
-        admin.alterClusterConfigs(
-                        Collections.singletonList(
-                                new AlterConfig(
-                                        ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO.key(),
-                                        null,
-                                        AlterConfigOpType.DELETE)))
-                .get();
+        } finally {
+            // Reset both ratios in one request so the default relationship remains valid.
+            admin.alterClusterConfigs(
+                            Arrays.asList(
+                                    new AlterConfig(
+                                            ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO.key(),
+                                            null,
+                                            AlterConfigOpType.DELETE),
+                                    new AlterConfig(
+                                            ConfigOptions.SERVER_DATA_DISK_WRITE_RECOVER_RATIO
+                                                    .key(),
+                                            null,
+                                            AlterConfigOpType.DELETE)))
+                    .get();
+        }
     }
 
     @Test

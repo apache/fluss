@@ -21,13 +21,17 @@ import org.apache.fluss.config.{ConfigOptions, Configuration}
 import org.apache.fluss.lake.lakestorage.LakeStoragePluginSetUp
 import org.apache.fluss.lake.source.{LakeSource, LakeSplit}
 import org.apache.fluss.metadata.TablePath
+import org.apache.fluss.predicate.{Predicate => FlussPredicate}
 import org.apache.fluss.utils.PropertiesUtils
 
+import org.apache.spark.internal.Logging
+
 import java.util
+import java.util.Collections
 
 import scala.collection.JavaConverters._
 
-object FlussLakeUtils {
+object FlussLakeUtils extends Logging {
 
   /**
    * Paimon DLF supports multiple authentication schemes (see
@@ -69,4 +73,19 @@ object FlussLakeUtils {
   def lakeProjection(projection: Array[Int]): Array[Array[Int]] = {
     projection.map(i => Array(i))
   }
+
+  def applyLakeFilters(
+      lakeSource: LakeSource[LakeSplit],
+      predicates: java.util.List[FlussPredicate]): LakeSource.FilterPushDownResult = {
+    val result = lakeSource.withFilters(predicates)
+    logInfo(
+      s"Lake source accepted ${result.acceptedPredicates()}, " +
+        s"remaining ${result.remainingPredicates()}")
+    result
+  }
+
+  def applyLakeFilters(
+      lakeSource: LakeSource[LakeSplit],
+      predicate: FlussPredicate): LakeSource.FilterPushDownResult =
+    applyLakeFilters(lakeSource, Collections.singletonList(predicate))
 }

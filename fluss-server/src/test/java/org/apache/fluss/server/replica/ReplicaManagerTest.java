@@ -516,7 +516,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 .isInstanceOf(DiskWriteLockedException.class)
                 .hasMessageContaining("data disk usage");
 
-        // recover when usage drops below (limit - 0.10) -> 0.75
+        // recover when usage drops below (limit - 0.05) -> 0.80
         replicaManager.getDiskUsageMonitor().update(0.50);
         assertThat(replicaManager.isDiskWriteLocked()).isFalse();
 

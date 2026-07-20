@@ -304,7 +304,7 @@ class DataType {
     static DataType String() { return DataType(TypeId::String); }
     static DataType Bytes() { return DataType(TypeId::Bytes); }
     static DataType Date() { return DataType(TypeId::Date); }
-    static DataType Time() { return DataType(TypeId::Time); }
+    static DataType Time(int32_t precision = 0) { return DataType(TypeId::Time, precision, 0); }
     static DataType Timestamp(int32_t precision = 6) {
         return DataType(TypeId::Timestamp, precision, 0);
     }
@@ -434,10 +434,6 @@ struct Column {
 struct Schema {
     std::vector<Column> columns;
     std::vector<std::string> primary_keys;
-    /// When set (via FromArrow), the table's column types come from this Arrow
-    /// schema instead of `columns` — the only way to express nested MAP/ROW
-    /// columns. `columns` stays empty in that case.
-    std::shared_ptr<arrow::Schema> arrow_schema;
 
     class Builder {
        public:
@@ -459,15 +455,6 @@ struct Schema {
     };
 
     static Builder NewBuilder() { return Builder(); }
-
-    /// Build a Schema whose column types come from an Arrow schema. Use this
-    /// for tables with nested MAP/ROW columns (`arrow::map()`, `arrow::struct_()`);
-    /// `Admin::CreateTable` routes Arrow-backed schemas through the C Data
-    /// Interface automatically.
-    static Schema FromArrow(std::shared_ptr<arrow::Schema> arrow_schema,
-                            std::vector<std::string> primary_keys = {}) {
-        return Schema{{}, std::move(primary_keys), std::move(arrow_schema)};
-    }
 };
 
 struct TableDescriptor {
@@ -1457,9 +1444,9 @@ class Admin {
 
     bool Available() const;
 
-    /// Creates a table. For nested MAP/ROW columns, build `descriptor`'s schema
-    /// via `Schema::FromArrow(...)` — `CreateTable` routes Arrow-backed schemas
-    /// through the C Data Interface automatically.
+    /// Creates a table. Column types — including nested ARRAY/MAP/ROW built
+    /// with `DataType::Array`/`Map`/`Row` — are carried to the server exactly
+    /// as declared (precision, scale, length, nullability, and field names).
     Result CreateTable(const TablePath& table_path, const TableDescriptor& descriptor,
                        bool ignore_if_exists = false);
 

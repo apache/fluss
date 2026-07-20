@@ -406,9 +406,14 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>Gauge</td>
     </tr>
     <tr>
-      <td rowspan="7">lakeTiering_table</td>
+      <td rowspan="8">lakeTiering_table</td>
       <td>tierLag</td>
       <td>Time in milliseconds since the last successful tiering operation for this table. For newly registered tables that have never completed a tiering round, the lag is measured from the time the table was registered.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>tieredTimestamp</td>
+      <td>The epoch timestamp (in milliseconds) of the last successful tiering operation for this table. For newly registered tables that have never completed a tiering round, this is the time the table was registered.</td>
       <td>Gauge</td>
     </tr>
     <tr>
@@ -880,7 +885,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>Gauge</td>
     </tr>
      <tr>
-      <td rowspan="2">table_bucket_lakeTiering</td>
+      <td rowspan="3">table_bucket_lakeTiering</td>
       <td>pendingRecords</td>
       <td>The number of records lag between the latest log record and the latest tiered lake log record for this table bucket. Returns -1 if row count is disabled (WAL mode or v0.9 old table) and no tiering has completed.</td>
       <td>Gauge</td>
@@ -888,6 +893,11 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
      <tr>
       <td>timestampLag</td>
       <td>The timestamp lag between the latest log record and the latest tiered lake log record for this table bucket, in milliseconds.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>pendingRecordsLag</td>
+      <td>The elapsed time, in milliseconds, since the oldest committed record in this table bucket became pending for lake tiering. Returns 0 when no committed records are pending lake tiering.</td>
       <td>Gauge</td>
     </tr>
     <tr>

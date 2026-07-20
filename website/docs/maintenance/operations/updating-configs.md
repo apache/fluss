@@ -75,7 +75,7 @@ CALL sys.set_cluster_configs(
 );
 ```
 
-See [Procedures](engine-flink/procedures.md#cluster-configuration-procedures) for detailed documentation on `set_cluster_configs`, `reset_cluster_configs`, and `get_cluster_configs` procedures.
+See [Procedures](engine-flink/procedures.md#cluster-configuration-procedures) for detailed documentation on `get_cluster_configs`, `set_cluster_configs`, `append_cluster_configs`, `subtract_cluster_configs`, and `reset_cluster_configs` procedures.
 
 </TabItem>
 </Tabs>

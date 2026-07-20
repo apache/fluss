@@ -79,6 +79,34 @@ public class FlussPrincipal implements Principal {
         return Objects.hash(name, type);
     }
 
+    /**
+     * Tests whether this principal matches another principal, with optional case-insensitive
+     * comparison for both name and type.
+     *
+     * @param other the other principal to match against
+     * @param ignoreCase if {@code true}, name and type are compared case-insensitively
+     * @return {@code true} if the principals match
+     */
+    public boolean matches(FlussPrincipal other, boolean ignoreCase) {
+        if (other == null) {
+            return false;
+        }
+        if (!ignoreCase) {
+            return this.equals(other);
+        }
+        return equalsIgnoreCase(name, other.name) && equalsIgnoreCase(type, other.type);
+    }
+
+    private static boolean equalsIgnoreCase(String a, String b) {
+        if (a == b) {
+            return true;
+        }
+        if (a == null || b == null) {
+            return false;
+        }
+        return a.equalsIgnoreCase(b);
+    }
+
     @Override
     public String toString() {
         return "FlussPrincipal{" + "name='" + name + '\'' + ", type='" + type + '\'' + '}';

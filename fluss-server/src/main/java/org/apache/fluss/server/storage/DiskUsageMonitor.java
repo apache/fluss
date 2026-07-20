@@ -30,38 +30,36 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /**
  * Periodically samples the local data disk usage ratio and toggles the tablet server write-lock
- * state with a fixed 10% hysteresis: writes are locked when the usage reaches the configured
- * write-limit ratio and resume only after the usage drops below {@code (limit - 0.10)}. The monitor
- * is single-state and intended to be driven by a scheduler thread; it never blocks.
+ * state with a configurable hysteresis: writes are locked when the usage reaches the configured
+ * write-limit ratio and resume only after the usage reaches or drops below the configured
+ * write-recover ratio. The monitor is single-state and intended to be driven by a scheduler thread;
+ * it never blocks.
  */
 @Internal
 public final class DiskUsageMonitor {
-
-    /** Fixed hysteresis between the lock and unlock thresholds. */
-    public static final double RECOVER_GAP = 0.10;
 
     private static final Logger LOG = LoggerFactory.getLogger(DiskUsageMonitor.class);
 
     private final int serverId;
     private final DiskUsageCollector collector;
     private volatile double writeLimitRatio;
-    private volatile double recoverThreshold;
+    private volatile double writeRecoverRatio;
     private final Listener listener;
 
     private volatile boolean locked;
     private volatile double lastUsageRatio;
 
     public DiskUsageMonitor(
-            int serverId, DiskUsageCollector collector, double writeLimitRatio, Listener listener) {
-        checkArgument(
-                writeLimitRatio > 0.0 && writeLimitRatio <= 1.0,
-                "%s must be within (0.0, 1.0], but was %s",
-                "server.data-disk.write-limit-ratio",
-                writeLimitRatio);
+            int serverId,
+            DiskUsageCollector collector,
+            double writeLimitRatio,
+            double writeRecoverRatio,
+            Listener listener) {
+        checkValidWriteLimitConfig(writeLimitRatio, writeRecoverRatio);
         this.serverId = serverId;
         this.collector = checkNotNull(collector, "collector");
         this.writeLimitRatio = writeLimitRatio;
-        this.recoverThreshold = Math.max(0.0, writeLimitRatio - RECOVER_GAP);
+        this.writeRecoverRatio = writeRecoverRatio;
         this.listener = checkNotNull(listener, "listener");
     }
 
@@ -85,7 +83,7 @@ public final class DiskUsageMonitor {
                     serverId,
                     String.format("%.4f", usage * 100),
                     String.format("%.2f", writeLimitRatio * 100),
-                    String.format("%.2f", recoverThreshold * 100),
+                    String.format("%.2f", writeRecoverRatio * 100),
                     locked);
         }
         update(usage);
@@ -108,19 +106,19 @@ public final class DiskUsageMonitor {
             locked = true;
             LOG.warn(
                     "TabletServer {} disk usage reached {}% (limit {}%); rejecting writes "
-                            + "until usage drops below {}%.",
+                            + "until usage reaches or drops below {}%.",
                     serverId,
                     String.format("%.2f", usage * 100),
                     String.format("%.2f", writeLimitRatio * 100),
-                    String.format("%.2f", recoverThreshold * 100));
-        } else if (wasLocked && usage <= recoverThreshold) {
+                    String.format("%.2f", writeRecoverRatio * 100));
+        } else if (wasLocked && usage <= writeRecoverRatio) {
             locked = false;
             LOG.info(
                     "TabletServer {} disk usage dropped to {}% (recover threshold {}%); "
                             + "resuming writes.",
                     serverId,
                     String.format("%.2f", usage * 100),
-                    String.format("%.2f", recoverThreshold * 100));
+                    String.format("%.2f", writeRecoverRatio * 100));
         }
         listener.onSample(lastUsageRatio, locked);
     }
@@ -137,23 +135,39 @@ public final class DiskUsageMonitor {
         return writeLimitRatio;
     }
 
-    public double getRecoverThreshold() {
-        return recoverThreshold;
+    public double getWriteRecoverRatio() {
+        return writeRecoverRatio;
     }
 
     /**
-     * Dynamically updates the write-limit ratio and the derived recover threshold. The new ratio
-     * takes effect on the next {@link #runOnce()} invocation or {@link #update(double)} call.
+     * Dynamically updates the write-limit and write-recover ratios. The new values take effect on
+     * the next {@link #runOnce()} invocation or {@link #update(double)} call.
      *
-     * @param newRatio the new write-limit ratio, must be within (0.0, 1.0]
+     * @param newRatio the new write-limit ratio, must be within (newRecoverRatio, 1.0]
+     * @param newRecoverRatio the new write-recover ratio, must be within (0.0, newRatio)
+     */
+    public void updateWriteLimitConfig(double newRatio, double newRecoverRatio) {
+        checkValidWriteLimitConfig(newRatio, newRecoverRatio);
+        this.writeLimitRatio = newRatio;
+        this.writeRecoverRatio = newRecoverRatio;
+    }
+
+    /**
+     * Dynamically updates the write-limit ratio while keeping the current write-recover ratio.
+     *
+     * @param newRatio the new write-limit ratio, must be greater than the current write-recover
+     *     ratio and no greater than 1.0
      */
     public void updateWriteLimitRatio(double newRatio) {
-        checkArgument(
-                newRatio > 0.0 && newRatio <= 1.0,
-                "server.data-disk.write-limit-ratio must be within (0.0, 1.0], but was %s",
-                newRatio);
-        this.writeLimitRatio = newRatio;
-        this.recoverThreshold = Math.max(0.0, newRatio - RECOVER_GAP);
+        updateWriteLimitConfig(newRatio, writeRecoverRatio);
+    }
+
+    private static void checkValidWriteLimitConfig(
+            double writeLimitRatio, double writeRecoverRatio) {
+        String validationError =
+                DiskWriteLimitConfigValidator.getValidationError(
+                        writeLimitRatio, writeRecoverRatio);
+        checkArgument(validationError == null, validationError);
     }
 
     /** Receives every sample for downstream state synchronization (e.g. metrics gauges). */

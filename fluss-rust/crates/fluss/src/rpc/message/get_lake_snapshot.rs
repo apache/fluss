@@ -20,7 +20,7 @@ use crate::rpc::api_key::ApiKey;
 use crate::rpc::convert::to_table_path;
 use crate::rpc::frame::{ReadError, WriteError};
 use crate::rpc::message::{ReadType, RequestBody, WriteType};
-use crate::{impl_read_type, impl_write_type, proto};
+use crate::{SnapshotId, impl_read_type, impl_write_type, proto};
 use bytes::{Buf, BufMut};
 use prost::Message;
 
@@ -30,7 +30,11 @@ pub struct GetLakeSnapshotRequest {
 }
 
 impl GetLakeSnapshotRequest {
-    pub fn new(table_path: &TablePath, snapshot_id: Option<i64>, readable: Option<bool>) -> Self {
+    pub fn new(
+        table_path: &TablePath,
+        snapshot_id: Option<SnapshotId>,
+        readable: Option<bool>,
+    ) -> Self {
         GetLakeSnapshotRequest {
             inner_request: proto::GetLakeSnapshotRequest {
                 table_path: to_table_path(table_path),

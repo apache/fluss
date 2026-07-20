@@ -29,6 +29,8 @@
 
 #include "test_utils.h"
 
+using fluss::DataType;
+
 class LogTableTest : public ::testing::Test {
    protected:
     fluss::Admin& admin() { return fluss_test::FlussTestEnvironment::Instance()->GetAdmin(); }
@@ -45,8 +47,8 @@ TEST_F(LogTableTest, AppendRecordBatchAndScan) {
     fluss::TablePath table_path("fluss", "test_append_record_batch_and_scan_cpp");
 
     auto schema = fluss::Schema::NewBuilder()
-                      .AddColumn("c1", fluss::DataType::Int())
-                      .AddColumn("c2", fluss::DataType::String())
+                      .AddColumn("c1", DataType::Int())
+                      .AddColumn("c2", DataType::String())
                       .Build();
 
     auto table_descriptor = fluss::TableDescriptor::NewBuilder()
@@ -178,8 +180,8 @@ TEST_F(LogTableTest, LimitScan) {
     fluss::TablePath table_path("fluss", "test_limit_scan_cpp");
 
     auto schema = fluss::Schema::NewBuilder()
-                      .AddColumn("c1", fluss::DataType::Int())
-                      .AddColumn("c2", fluss::DataType::String())
+                      .AddColumn("c1", DataType::Int())
+                      .AddColumn("c2", DataType::String())
                       .Build();
 
     auto table_descriptor = fluss::TableDescriptor::NewBuilder()
@@ -253,9 +255,9 @@ TEST_F(LogTableTest, LimitScanProjection) {
     fluss::TablePath table_path("fluss", "test_limit_scan_projection_cpp");
 
     auto schema = fluss::Schema::NewBuilder()
-                      .AddColumn("c1", fluss::DataType::Int())
-                      .AddColumn("c2", fluss::DataType::String())
-                      .AddColumn("c3", fluss::DataType::BigInt())
+                      .AddColumn("c1", DataType::Int())
+                      .AddColumn("c2", DataType::String())
+                      .AddColumn("c3", DataType::BigInt())
                       .Build();
 
     auto table_descriptor = fluss::TableDescriptor::NewBuilder()
@@ -319,7 +321,7 @@ TEST_F(LogTableTest, LimitScanErrors) {
 
     fluss::TablePath table_path("fluss", "test_limit_scan_errors_cpp");
 
-    auto schema = fluss::Schema::NewBuilder().AddColumn("c1", fluss::DataType::Int()).Build();
+    auto schema = fluss::Schema::NewBuilder().AddColumn("c1", DataType::Int()).Build();
     auto table_descriptor = fluss::TableDescriptor::NewBuilder()
                                 .SetSchema(schema)
                                 .SetBucketCount(1)
@@ -384,8 +386,8 @@ TEST_F(LogTableTest, ListOffsets) {
     fluss::TablePath table_path("fluss", "test_list_offsets_cpp");
 
     auto schema = fluss::Schema::NewBuilder()
-                      .AddColumn("id", fluss::DataType::Int())
-                      .AddColumn("name", fluss::DataType::String())
+                      .AddColumn("id", DataType::Int())
+                      .AddColumn("name", DataType::String())
                       .Build();
 
     auto table_descriptor = fluss::TableDescriptor::NewBuilder()
@@ -476,9 +478,9 @@ TEST_F(LogTableTest, TestProject) {
     fluss::TablePath table_path("fluss", "test_project_cpp");
 
     auto schema = fluss::Schema::NewBuilder()
-                      .AddColumn("col_a", fluss::DataType::Int())
-                      .AddColumn("col_b", fluss::DataType::String())
-                      .AddColumn("col_c", fluss::DataType::Int())
+                      .AddColumn("col_a", DataType::Int())
+                      .AddColumn("col_b", DataType::String())
+                      .AddColumn("col_c", DataType::Int())
                       .Build();
 
     auto table_descriptor = fluss::TableDescriptor::NewBuilder()
@@ -591,8 +593,8 @@ TEST_F(LogTableTest, TestPollBatches) {
     fluss::TablePath table_path("fluss", "test_poll_batches_cpp");
 
     auto schema = fluss::Schema::NewBuilder()
-                      .AddColumn("id", fluss::DataType::Int())
-                      .AddColumn("name", fluss::DataType::String())
+                      .AddColumn("id", DataType::Int())
+                      .AddColumn("name", DataType::String())
                       .Build();
 
     auto table_descriptor = fluss::TableDescriptor::NewBuilder()
@@ -711,22 +713,22 @@ TEST_F(LogTableTest, AllSupportedDatatypes) {
     // Create a log table with all supported datatypes
     auto schema =
         fluss::Schema::NewBuilder()
-            .AddColumn("col_tinyint", fluss::DataType::TinyInt())
-            .AddColumn("col_smallint", fluss::DataType::SmallInt())
-            .AddColumn("col_int", fluss::DataType::Int())
-            .AddColumn("col_bigint", fluss::DataType::BigInt())
-            .AddColumn("col_float", fluss::DataType::Float())
-            .AddColumn("col_double", fluss::DataType::Double())
-            .AddColumn("col_boolean", fluss::DataType::Boolean())
-            .AddColumn("col_char", fluss::DataType::Char(10))
-            .AddColumn("col_string", fluss::DataType::String())
-            .AddColumn("col_decimal", fluss::DataType::Decimal(10, 2))
-            .AddColumn("col_date", fluss::DataType::Date())
-            .AddColumn("col_time", fluss::DataType::Time())
-            .AddColumn("col_timestamp", fluss::DataType::Timestamp())
-            .AddColumn("col_timestamp_ltz", fluss::DataType::TimestampLtz())
-            .AddColumn("col_bytes", fluss::DataType::Bytes())
-            .AddColumn("col_binary", fluss::DataType::Binary(4))
+            .AddColumn("col_tinyint", DataType::TinyInt())
+            .AddColumn("col_smallint", DataType::SmallInt())
+            .AddColumn("col_int", DataType::Int())
+            .AddColumn("col_bigint", DataType::BigInt())
+            .AddColumn("col_float", DataType::Float())
+            .AddColumn("col_double", DataType::Double())
+            .AddColumn("col_boolean", DataType::Boolean())
+            .AddColumn("col_char", DataType::Char(10))
+            .AddColumn("col_string", DataType::String())
+            .AddColumn("col_decimal", DataType::Decimal(10, 2))
+            .AddColumn("col_date", DataType::Date())
+            .AddColumn("col_time", DataType::Time())
+            .AddColumn("col_timestamp", DataType::Timestamp())
+            .AddColumn("col_timestamp_ltz", DataType::TimestampLtz())
+            .AddColumn("col_bytes", DataType::Bytes())
+            .AddColumn("col_binary", DataType::Binary(4))
             .Build();
 
     auto table_descriptor = fluss::TableDescriptor::NewBuilder()
@@ -862,9 +864,9 @@ TEST_F(LogTableTest, PartitionedTableAppendScan) {
 
     // Create a partitioned log table
     auto schema = fluss::Schema::NewBuilder()
-                      .AddColumn("id", fluss::DataType::Int())
-                      .AddColumn("region", fluss::DataType::String())
-                      .AddColumn("value", fluss::DataType::BigInt())
+                      .AddColumn("id", DataType::Int())
+                      .AddColumn("region", DataType::String())
+                      .AddColumn("value", DataType::BigInt())
                       .Build();
 
     auto table_descriptor = fluss::TableDescriptor::NewBuilder()
@@ -1049,9 +1051,9 @@ TEST_F(LogTableTest, AppendAndScanWithArray) {
     fluss::TablePath table_path("fluss", "test_append_scan_with_array_cpp");
 
     auto schema = fluss::Schema::NewBuilder()
-                      .AddColumn("id", fluss::DataType::Int())
-                      .AddColumn("tags", fluss::DataType::Array(fluss::DataType::String()))
-                      .AddColumn("scores", fluss::DataType::Array(fluss::DataType::Int()))
+                      .AddColumn("id", DataType::Int())
+                      .AddColumn("tags", DataType::Array(DataType::String()))
+                      .AddColumn("scores", DataType::Array(DataType::Int()))
                       .Build();
 
     auto table_descriptor = fluss::TableDescriptor::NewBuilder()
@@ -1084,12 +1086,12 @@ TEST_F(LogTableTest, AppendAndScanWithArray) {
         auto row = table.NewRow();
         row.Set("id", 1);
 
-        fluss::ArrayWriter tags(2, fluss::DataType::String());
+        fluss::ArrayWriter tags(2, DataType::String());
         tags.SetString(0, "hello");
         tags.SetString(1, "world");
         row.SetArray(1, std::move(tags));
 
-        fluss::ArrayWriter scores(3, fluss::DataType::Int());
+        fluss::ArrayWriter scores(3, DataType::Int());
         scores.SetInt32(0, 10);
         scores.SetInt32(1, 20);
         scores.SetInt32(2, 30);
@@ -1101,11 +1103,11 @@ TEST_F(LogTableTest, AppendAndScanWithArray) {
         auto row = table.NewRow();
         row.Set("id", 2);
 
-        fluss::ArrayWriter tags(1, fluss::DataType::String());
+        fluss::ArrayWriter tags(1, DataType::String());
         tags.SetNull(0);
         row.SetArray(1, std::move(tags));
 
-        fluss::ArrayWriter scores(0, fluss::DataType::Int());
+        fluss::ArrayWriter scores(0, DataType::Int());
         row.SetArray(2, std::move(scores));
 
         ASSERT_OK(append_writer.Append(row));
@@ -1178,14 +1180,13 @@ TEST_F(LogTableTest, AppendAndScanWithMapAndRow) {
 
     fluss::TablePath table_path("fluss", "test_append_scan_map_row_cpp");
 
-    // MAP / ROW columns can't be built with the flat schema builder.
-    auto arrow_schema = arrow::schema({
-        arrow::field("id", arrow::int32()),
-        arrow::field("attrs", arrow::map(arrow::utf8(), arrow::int32())),
-        arrow::field("nested", arrow::struct_({arrow::field("seq", arrow::int32()),
-                                               arrow::field("label", arrow::utf8())})),
-    });
-    auto schema = fluss::Schema::FromArrow(arrow_schema);
+    auto schema =
+        fluss::Schema::NewBuilder()
+            .AddColumn("id", DataType::Int())
+            .AddColumn("attrs", DataType::Map(DataType::String(), DataType::Int()))
+            .AddColumn("nested", DataType::Row({{"seq", DataType::Int()},
+                                                {"label", DataType::String()}}))
+            .Build();
 
     auto table_descriptor = fluss::TableDescriptor::NewBuilder()
                                 .SetSchema(schema)
@@ -1203,7 +1204,7 @@ TEST_F(LogTableTest, AppendAndScanWithMapAndRow) {
         auto row = table.NewRow();
         row.Set("id", 1);
 
-        fluss::MapWriter attrs(2, fluss::DataType::String(), fluss::DataType::Int());
+        fluss::MapWriter attrs(2, DataType::String(), DataType::Int());
         attrs.SetKeyString("a");
         attrs.SetValueInt32(1);
         attrs.Commit();
@@ -1267,15 +1268,15 @@ TEST_F(LogTableTest, ProjectionWithCompoundTypes) {
 
     fluss::TablePath table_path("fluss", "test_log_projection_compound_cpp");
 
-    auto arrow_schema = arrow::schema({
-        arrow::field("id", arrow::int32()),
-        arrow::field("nested", arrow::struct_({arrow::field("seq", arrow::int32()),
-                                               arrow::field("label", arrow::utf8())})),
-        arrow::field("attrs", arrow::map(arrow::utf8(), arrow::int32())),
-        arrow::field("tags", arrow::list(arrow::utf8())),
-        arrow::field("extra", arrow::utf8()),
-    });
-    auto schema = fluss::Schema::FromArrow(arrow_schema);
+    auto schema =
+        fluss::Schema::NewBuilder()
+            .AddColumn("id", DataType::Int())
+            .AddColumn("nested", DataType::Row({{"seq", DataType::Int()},
+                                                {"label", DataType::String()}}))
+            .AddColumn("attrs", DataType::Map(DataType::String(), DataType::Int()))
+            .AddColumn("tags", DataType::Array(DataType::String()))
+            .AddColumn("extra", DataType::String())
+            .Build();
 
     auto table_descriptor = fluss::TableDescriptor::NewBuilder()
                                 .SetSchema(schema)
@@ -1296,7 +1297,7 @@ TEST_F(LogTableTest, ProjectionWithCompoundTypes) {
         nested.SetInt32(0, 42);
         nested.SetString(1, "hello");
         row.SetRow(1, std::move(nested));
-        fluss::MapWriter attrs(2, fluss::DataType::String(), fluss::DataType::Int());
+        fluss::MapWriter attrs(2, DataType::String(), DataType::Int());
         attrs.SetKeyString("x");
         attrs.SetValueInt32(1);
         attrs.Commit();
@@ -1304,7 +1305,7 @@ TEST_F(LogTableTest, ProjectionWithCompoundTypes) {
         attrs.SetValueInt32(2);
         attrs.Commit();
         row.SetMap(2, std::move(attrs));
-        fluss::ArrayWriter tags(2, fluss::DataType::String());
+        fluss::ArrayWriter tags(2, DataType::String());
         tags.SetString(0, "alpha");
         tags.SetString(1, "beta");
         row.SetArray(3, std::move(tags));
@@ -1365,9 +1366,9 @@ TEST_F(LogTableTest, AppendAndScanWithNestedArray) {
 
     auto schema =
         fluss::Schema::NewBuilder()
-            .AddColumn("id", fluss::DataType::Int())
+            .AddColumn("id", DataType::Int())
             .AddColumn("matrix",
-                        fluss::DataType::Array(fluss::DataType::Array(fluss::DataType::Int())))
+                        DataType::Array(DataType::Array(DataType::Int())))
             .Build();
 
     auto table_descriptor = fluss::TableDescriptor::NewBuilder()
@@ -1389,15 +1390,15 @@ TEST_F(LogTableTest, AppendAndScanWithNestedArray) {
         auto row = table.NewRow();
         row.Set("id", 1);
 
-        fluss::ArrayWriter inner1(2, fluss::DataType::Int());
+        fluss::ArrayWriter inner1(2, DataType::Int());
         inner1.SetInt32(0, 1);
         inner1.SetInt32(1, 2);
 
-        fluss::ArrayWriter inner2(2, fluss::DataType::Int());
+        fluss::ArrayWriter inner2(2, DataType::Int());
         inner2.SetInt32(0, 3);
         inner2.SetInt32(1, 4);
 
-        fluss::ArrayWriter outer(2, fluss::DataType::Array(fluss::DataType::Int()));
+        fluss::ArrayWriter outer(2, DataType::Array(DataType::Int()));
         outer.SetArray(0, std::move(inner1));
         outer.SetArray(1, std::move(inner2));
 
@@ -1460,12 +1461,12 @@ TEST_F(LogTableTest, AppendAndScanWithArrayRichTypes) {
 
     auto schema =
         fluss::Schema::NewBuilder()
-            .AddColumn("id", fluss::DataType::Int())
-            .AddColumn("arr_bytes", fluss::DataType::Array(fluss::DataType::Bytes()))
-            .AddColumn("arr_date", fluss::DataType::Array(fluss::DataType::Date()))
-            .AddColumn("arr_time", fluss::DataType::Array(fluss::DataType::Time()))
-            .AddColumn("arr_ts", fluss::DataType::Array(fluss::DataType::Timestamp(6)))
-            .AddColumn("arr_decimal", fluss::DataType::Array(fluss::DataType::Decimal(10, 2)))
+            .AddColumn("id", DataType::Int())
+            .AddColumn("arr_bytes", DataType::Array(DataType::Bytes()))
+            .AddColumn("arr_date", DataType::Array(DataType::Date()))
+            .AddColumn("arr_time", DataType::Array(DataType::Time()))
+            .AddColumn("arr_ts", DataType::Array(DataType::Timestamp(6)))
+            .AddColumn("arr_decimal", DataType::Array(DataType::Decimal(10, 2)))
             .Build();
 
     auto table_descriptor = fluss::TableDescriptor::NewBuilder()
@@ -1485,28 +1486,28 @@ TEST_F(LogTableTest, AppendAndScanWithArrayRichTypes) {
         auto row = table.NewRow();
         row.Set("id", 1);
 
-        fluss::ArrayWriter arr_bytes(2, fluss::DataType::Bytes());
+        fluss::ArrayWriter arr_bytes(2, DataType::Bytes());
         arr_bytes.SetBytes(0, std::vector<uint8_t>{0x10, 0x20, 0x30});
         arr_bytes.SetNull(1);
         row.SetArray(1, std::move(arr_bytes));
 
-        fluss::ArrayWriter arr_date(2, fluss::DataType::Date());
+        fluss::ArrayWriter arr_date(2, DataType::Date());
         auto d0 = fluss::Date::FromDays(20000);
         arr_date.SetDate(0, d0);
         arr_date.SetNull(1);
         row.SetArray(2, std::move(arr_date));
 
-        fluss::ArrayWriter arr_time(1, fluss::DataType::Time());
+        fluss::ArrayWriter arr_time(1, DataType::Time());
         auto t0 = fluss::Time::FromMillis(3600000);
         arr_time.SetTime(0, t0);
         row.SetArray(3, std::move(arr_time));
 
-        fluss::ArrayWriter arr_ts(1, fluss::DataType::Timestamp(6));
+        fluss::ArrayWriter arr_ts(1, DataType::Timestamp(6));
         auto ts0 = fluss::Timestamp::FromMillisNanos(1769163227123, 456000);
         arr_ts.SetTimestampNtz(0, ts0);
         row.SetArray(4, std::move(arr_ts));
 
-        fluss::ArrayWriter arr_decimal(2, fluss::DataType::Decimal(10, 2));
+        fluss::ArrayWriter arr_decimal(2, DataType::Decimal(10, 2));
         arr_decimal.SetDecimal(0, "123.45");
         arr_decimal.SetNull(1);
         row.SetArray(5, std::move(arr_decimal));
@@ -1566,7 +1567,7 @@ TEST_F(LogTableTest, AppendAndScanWithArrayRichTypes) {
 TEST_F(LogTableTest, ArrayApiValidationErrors) {
     // Type mismatch setter should fail through FFI Result propagation.
     {
-        fluss::ArrayWriter bool_array(1, fluss::DataType::Boolean());
+        fluss::ArrayWriter bool_array(1, DataType::Boolean());
         bool threw = false;
         try {
             bool_array.SetInt32(0, 42);
@@ -1581,8 +1582,8 @@ TEST_F(LogTableTest, ArrayApiValidationErrors) {
     fluss::TablePath table_path("fluss", "test_array_api_validation_errors_cpp");
 
     auto schema = fluss::Schema::NewBuilder()
-                      .AddColumn("id", fluss::DataType::Int())
-                      .AddColumn("vals", fluss::DataType::Array(fluss::DataType::Int()))
+                      .AddColumn("id", DataType::Int())
+                      .AddColumn("vals", DataType::Array(DataType::Int()))
                       .Build();
     auto table_descriptor = fluss::TableDescriptor::NewBuilder()
                                 .SetSchema(schema)
@@ -1598,7 +1599,7 @@ TEST_F(LogTableTest, ArrayApiValidationErrors) {
     ASSERT_OK(table.NewAppend().CreateWriter(append_writer));
     auto row = table.NewRow();
     row.Set("id", 1);
-    fluss::ArrayWriter vals(2, fluss::DataType::Int());
+    fluss::ArrayWriter vals(2, DataType::Int());
     vals.SetInt32(0, 7);
     vals.SetNull(1);
     row.SetArray(1, std::move(vals));
@@ -1659,13 +1660,13 @@ TEST_F(LogTableTest, AppendAndScanWithArrayEncodingEdgeCases) {
 
     auto schema =
         fluss::Schema::NewBuilder()
-            .AddColumn("id", fluss::DataType::Int())
-            .AddColumn("arr_long_str", fluss::DataType::Array(fluss::DataType::String()))
-            .AddColumn("arr_big_decimal", fluss::DataType::Array(fluss::DataType::Decimal(22, 5)))
-            .AddColumn("arr_ts_nano", fluss::DataType::Array(fluss::DataType::Timestamp(9)))
-            .AddColumn("arr_float", fluss::DataType::Array(fluss::DataType::Float()))
-            .AddColumn("arr_double", fluss::DataType::Array(fluss::DataType::Double()))
-            .AddColumn("arr_binary", fluss::DataType::Array(fluss::DataType::Binary(4)))
+            .AddColumn("id", DataType::Int())
+            .AddColumn("arr_long_str", DataType::Array(DataType::String()))
+            .AddColumn("arr_big_decimal", DataType::Array(DataType::Decimal(22, 5)))
+            .AddColumn("arr_ts_nano", DataType::Array(DataType::Timestamp(9)))
+            .AddColumn("arr_float", DataType::Array(DataType::Float()))
+            .AddColumn("arr_double", DataType::Array(DataType::Double()))
+            .AddColumn("arr_binary", DataType::Array(DataType::Binary(4)))
             .Build();
 
     auto table_descriptor = fluss::TableDescriptor::NewBuilder()
@@ -1686,38 +1687,38 @@ TEST_F(LogTableTest, AppendAndScanWithArrayEncodingEdgeCases) {
         row.Set("id", 1);
 
         // >= 8 bytes forces the heap-pointer variable-length path (threshold: 7)
-        fluss::ArrayWriter arr_long_str(2, fluss::DataType::String());
+        fluss::ArrayWriter arr_long_str(2, DataType::String());
         arr_long_str.SetString(0, "abcdefgh");
         arr_long_str.SetString(1, "this is a much longer string that definitely exceeds inline");
         row.SetArray(1, std::move(arr_long_str));
 
         // precision > 18 forces non-compact decimal encoding
-        fluss::ArrayWriter arr_big_decimal(2, fluss::DataType::Decimal(22, 5));
+        fluss::ArrayWriter arr_big_decimal(2, DataType::Decimal(22, 5));
         arr_big_decimal.SetDecimal(0, "12345678901234567.12345");
         arr_big_decimal.SetDecimal(1, "-99999999999999999.99999");
         row.SetArray(2, std::move(arr_big_decimal));
 
         // precision > 3 forces non-compact timestamp (millis + nanos-of-millis)
-        fluss::ArrayWriter arr_ts_nano(1, fluss::DataType::Timestamp(9));
+        fluss::ArrayWriter arr_ts_nano(1, DataType::Timestamp(9));
         auto ts_nano = fluss::Timestamp::FromMillisNanos(1769163227123, 456789);
         arr_ts_nano.SetTimestampNtz(0, ts_nano);
         row.SetArray(3, std::move(arr_ts_nano));
 
         // IEEE 754 special values: NaN, +Infinity, -Infinity
-        fluss::ArrayWriter arr_float(3, fluss::DataType::Float());
+        fluss::ArrayWriter arr_float(3, DataType::Float());
         arr_float.SetFloat32(0, std::numeric_limits<float>::quiet_NaN());
         arr_float.SetFloat32(1, std::numeric_limits<float>::infinity());
         arr_float.SetFloat32(2, -std::numeric_limits<float>::infinity());
         row.SetArray(4, std::move(arr_float));
 
-        fluss::ArrayWriter arr_double(3, fluss::DataType::Double());
+        fluss::ArrayWriter arr_double(3, DataType::Double());
         arr_double.SetFloat64(0, std::numeric_limits<double>::quiet_NaN());
         arr_double.SetFloat64(1, std::numeric_limits<double>::infinity());
         arr_double.SetFloat64(2, -std::numeric_limits<double>::infinity());
         row.SetArray(5, std::move(arr_double));
 
         // Fixed-length binary
-        fluss::ArrayWriter arr_binary(2, fluss::DataType::Binary(4));
+        fluss::ArrayWriter arr_binary(2, DataType::Binary(4));
         arr_binary.SetBytes(0, std::vector<uint8_t>{0xDE, 0xAD, 0xBE, 0xEF});
         arr_binary.SetNull(1);
         row.SetArray(6, std::move(arr_binary));
@@ -1795,7 +1796,7 @@ TEST_F(LogTableTest, AppendAndScanWithArrayEncodingEdgeCases) {
 TEST_F(LogTableTest, ArrayWriterOverflowDetection) {
     // SetInt32 on TINYINT array must throw when value overflows i8 range (-128..127)
     {
-        fluss::ArrayWriter tinyint_arr(1, fluss::DataType::TinyInt());
+        fluss::ArrayWriter tinyint_arr(1, DataType::TinyInt());
         EXPECT_EQ(tinyint_arr.Size(), 1u);
         bool threw = false;
         try {
@@ -1810,7 +1811,7 @@ TEST_F(LogTableTest, ArrayWriterOverflowDetection) {
 
     // SetInt32 on SMALLINT array must throw when value overflows i16 range (-32768..32767)
     {
-        fluss::ArrayWriter smallint_arr(1, fluss::DataType::SmallInt());
+        fluss::ArrayWriter smallint_arr(1, DataType::SmallInt());
         bool threw = false;
         try {
             smallint_arr.SetInt32(0, 40000);
@@ -1824,7 +1825,7 @@ TEST_F(LogTableTest, ArrayWriterOverflowDetection) {
 
     // Negative overflow: -200 doesn't fit TINYINT
     {
-        fluss::ArrayWriter tinyint_arr(1, fluss::DataType::TinyInt());
+        fluss::ArrayWriter tinyint_arr(1, DataType::TinyInt());
         bool threw = false;
         try {
             tinyint_arr.SetInt32(0, -200);
@@ -1836,15 +1837,15 @@ TEST_F(LogTableTest, ArrayWriterOverflowDetection) {
 
     // Values within range must succeed
     {
-        fluss::ArrayWriter tinyint_arr(1, fluss::DataType::TinyInt());
+        fluss::ArrayWriter tinyint_arr(1, DataType::TinyInt());
         EXPECT_NO_THROW(tinyint_arr.SetInt32(0, 127));
     }
     {
-        fluss::ArrayWriter tinyint_arr(1, fluss::DataType::TinyInt());
+        fluss::ArrayWriter tinyint_arr(1, DataType::TinyInt());
         EXPECT_NO_THROW(tinyint_arr.SetInt32(0, -128));
     }
     {
-        fluss::ArrayWriter smallint_arr(1, fluss::DataType::SmallInt());
+        fluss::ArrayWriter smallint_arr(1, DataType::SmallInt());
         EXPECT_NO_THROW(smallint_arr.SetInt32(0, 32767));
     }
 }
@@ -1855,7 +1856,7 @@ TEST_F(LogTableTest, MapWriterOverflowDetection) {
 
     // TINYINT map value overflowing i8 (-128..127) must throw.
     {
-        fluss::MapWriter m(1, fluss::DataType::String(), fluss::DataType::TinyInt());
+        fluss::MapWriter m(1, DataType::String(), DataType::TinyInt());
         bool threw = false;
         try {
             m.SetValueInt32(1000);
@@ -1868,7 +1869,7 @@ TEST_F(LogTableTest, MapWriterOverflowDetection) {
 
     // SMALLINT map value overflowing i16 must throw.
     {
-        fluss::MapWriter m(1, fluss::DataType::String(), fluss::DataType::SmallInt());
+        fluss::MapWriter m(1, DataType::String(), DataType::SmallInt());
         bool threw = false;
         try {
             m.SetValueInt32(40000);
@@ -1881,7 +1882,7 @@ TEST_F(LogTableTest, MapWriterOverflowDetection) {
 
     // Keys are checked the same way: a TINYINT key out of range throws.
     {
-        fluss::MapWriter m(1, fluss::DataType::TinyInt(), fluss::DataType::Int());
+        fluss::MapWriter m(1, DataType::TinyInt(), DataType::Int());
         bool threw = false;
         try {
             m.SetKeyInt32(-200);
@@ -1894,7 +1895,7 @@ TEST_F(LogTableTest, MapWriterOverflowDetection) {
 
     // In-range key and value must succeed.
     {
-        fluss::MapWriter m(1, fluss::DataType::TinyInt(), fluss::DataType::SmallInt());
+        fluss::MapWriter m(1, DataType::TinyInt(), DataType::SmallInt());
         EXPECT_NO_THROW(m.SetKeyInt32(127));
         EXPECT_NO_THROW(m.SetValueInt32(32767));
     }
@@ -1908,13 +1909,13 @@ TEST_F(LogTableTest, NullabilityPreservedInTableInfo) {
 
     auto schema =
         fluss::Schema::NewBuilder()
-            .AddColumn("id", fluss::DataType::Int())
-            .AddColumn("name", fluss::DataType::String())
-            .AddColumn("tags", fluss::DataType::Array(fluss::DataType::String().NotNull()))
-            .AddColumn("ids", fluss::DataType::Array(fluss::DataType::Int()).NotNull())
+            .AddColumn("id", DataType::Int())
+            .AddColumn("name", DataType::String())
+            .AddColumn("tags", DataType::Array(DataType::String().NotNull()))
+            .AddColumn("ids", DataType::Array(DataType::Int()).NotNull())
             .AddColumn("nested",
-                       fluss::DataType::Array(
-                           fluss::DataType::Array(fluss::DataType::Int()).NotNull()))
+                       DataType::Array(
+                           DataType::Array(DataType::Int()).NotNull()))
             .SetPrimaryKeys({"id"})
             .Build();
 
@@ -1959,6 +1960,64 @@ TEST_F(LogTableTest, NullabilityPreservedInTableInfo) {
     EXPECT_FALSE(info.schema.columns[4].data_type.element_type()->nullable());
     ASSERT_NE(info.schema.columns[4].data_type.element_type()->element_type(), nullptr);
     EXPECT_TRUE(info.schema.columns[4].data_type.element_type()->element_type()->nullable());
+
+    ASSERT_OK(adm.DropTable(table_path, false));
+}
+
+// Precision, scale, length, and column comments survive CreateTable -> GetTableInfo.
+TEST_F(LogTableTest, ScalarTypeMetadataPreservedInTableInfo) {
+    auto& adm = admin();
+    auto& conn = connection();
+
+    fluss::TablePath table_path("fluss", "test_scalar_type_metadata_table_info_cpp");
+
+    auto schema = fluss::Schema::NewBuilder()
+                      .AddColumn("id", DataType::Int(), "primary id")
+                      .AddColumn("code", DataType::Char(12))
+                      .AddColumn("hash", DataType::Binary(32))
+                      .AddColumn("amount", DataType::Decimal(18, 4), "money amount")
+                      .AddColumn("event_time", DataType::Time(3))
+                      .AddColumn("event_ts", DataType::Timestamp(9))
+                      .Build();
+
+    auto table_descriptor = fluss::TableDescriptor::NewBuilder()
+                                .SetSchema(schema)
+                                .SetProperty("table.replication.factor", "1")
+                                .Build();
+
+    fluss_test::CreateTable(adm, table_path, table_descriptor);
+
+    fluss::Table table;
+    ASSERT_OK(conn.GetTable(table_path, table));
+    auto info = table.GetTableInfo();
+
+    ASSERT_EQ(info.schema.columns.size(), 6u);
+
+    // column comment
+    EXPECT_EQ(info.schema.columns[0].name, "id");
+    EXPECT_EQ(info.schema.columns[0].comment, "primary id");
+
+    // CHAR length
+    EXPECT_EQ(info.schema.columns[1].data_type.id(), fluss::TypeId::Char);
+    EXPECT_EQ(info.schema.columns[1].data_type.precision(), 12);
+
+    // BINARY length
+    EXPECT_EQ(info.schema.columns[2].data_type.id(), fluss::TypeId::Binary);
+    EXPECT_EQ(info.schema.columns[2].data_type.precision(), 32);
+
+    // DECIMAL precision + scale, and comment
+    EXPECT_EQ(info.schema.columns[3].data_type.id(), fluss::TypeId::Decimal);
+    EXPECT_EQ(info.schema.columns[3].data_type.precision(), 18);
+    EXPECT_EQ(info.schema.columns[3].data_type.scale(), 4);
+    EXPECT_EQ(info.schema.columns[3].comment, "money amount");
+
+    // TIME precision
+    EXPECT_EQ(info.schema.columns[4].data_type.id(), fluss::TypeId::Time);
+    EXPECT_EQ(info.schema.columns[4].data_type.precision(), 3);
+
+    // TIMESTAMP precision
+    EXPECT_EQ(info.schema.columns[5].data_type.id(), fluss::TypeId::Timestamp);
+    EXPECT_EQ(info.schema.columns[5].data_type.precision(), 9);
 
     ASSERT_OK(adm.DropTable(table_path, false));
 }

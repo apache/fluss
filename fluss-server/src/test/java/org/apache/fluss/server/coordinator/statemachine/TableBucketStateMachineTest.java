@@ -33,6 +33,7 @@ import org.apache.fluss.server.coordinator.CoordinatorTestUtils;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.LakeTableTieringManager;
 import org.apache.fluss.server.coordinator.MetadataManager;
+import org.apache.fluss.server.coordinator.ReplicaCapacityController;
 import org.apache.fluss.server.coordinator.TestCoordinatorChannelManager;
 import org.apache.fluss.server.coordinator.event.CoordinatorEventManager;
 import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseManager;
@@ -41,12 +42,14 @@ import org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElection.Co
 import org.apache.fluss.server.coordinator.statemachine.TableBucketStateMachine.ElectionResult;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
+import org.apache.fluss.server.zk.CuratorFrameworkWithUnhandledErrorListener;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZkEpoch;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.ZkVersion;
+import org.apache.fluss.shaded.curator5.org.apache.curator.retry.ExponentialBackoffRetry;
 import org.apache.fluss.shaded.guava32.com.google.common.collect.Sets;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.utils.clock.SystemClock;
@@ -62,9 +65,14 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.time.Duration;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 
@@ -77,6 +85,9 @@ import static org.apache.fluss.server.coordinator.statemachine.BucketState.NonEx
 import static org.apache.fluss.server.coordinator.statemachine.BucketState.OfflineBucket;
 import static org.apache.fluss.server.coordinator.statemachine.BucketState.OnlineBucket;
 import static org.apache.fluss.server.coordinator.statemachine.TableBucketStateMachine.initReplicaLeaderElection;
+import static org.apache.fluss.server.zk.ZooKeeperUtils.startZookeeperClient;
+import static org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFrameworkFactory.Builder;
+import static org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFrameworkFactory.builder;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -94,6 +105,7 @@ class TableBucketStateMachineTest {
     private TestCoordinatorChannelManager testCoordinatorChannelManager;
     private CoordinatorRequestBatch coordinatorRequestBatch;
     private AutoPartitionManager autoPartitionManager;
+    private ReplicaCapacityController replicaCapacityController;
     private LakeTableTieringManager lakeTableTieringManager;
     private CoordinatorMetadataCache serverMetadataCache;
     private KvSnapshotLeaseManager kvSnapshotLeaseManager;
@@ -124,6 +136,9 @@ class TableBucketStateMachineTest {
                         },
                         coordinatorContext);
         serverMetadataCache = new CoordinatorMetadataCache();
+        replicaCapacityController =
+                new ReplicaCapacityController(
+                        conf, serverMetadataCache, TestingMetricGroups.COORDINATOR_METRICS);
         autoPartitionManager =
                 new AutoPartitionManager(
                         serverMetadataCache,
@@ -132,7 +147,8 @@ class TableBucketStateMachineTest {
                                 new Configuration(),
                                 new LakeCatalogDynamicLoader(new Configuration(), null, true)),
                         new RemoteDirDynamicLoader(conf),
-                        new Configuration());
+                        conf,
+                        replicaCapacityController);
         lakeTableTieringManager =
                 new LakeTableTieringManager(TestingMetricGroups.LAKE_TIERING_METRICS);
 
@@ -316,6 +332,7 @@ class TableBucketStateMachineTest {
                                         new Configuration(),
                                         TestingClientMetricGroup.newInstance())),
                         coordinatorContext,
+                        replicaCapacityController,
                         autoPartitionManager,
                         lakeTableTieringManager,
                         TestingMetricGroups.COORDINATOR_METRICS,
@@ -403,11 +420,15 @@ class TableBucketStateMachineTest {
     }
 
     @Test
-    void testStateChangeForTabletServerControlledShutdown() {
+    void testStateChangeForTabletServerControlledShutdown() throws Exception {
         TableBucketStateMachine tableBucketStateMachine = createTableBucketStateMachine();
         long tableId = 7;
         TablePath fakeTablePath = TablePath.of("db1", "t2");
-        TableBucket tb = new TableBucket(tableId, 0);
+        Set<TableBucket> tableBuckets =
+                Sets.newHashSet(
+                        new TableBucket(tableId, 0),
+                        new TableBucket(tableId, 1),
+                        new TableBucket(tableId, 2));
 
         // init coordinator context.
         coordinatorContext.putTableInfo(
@@ -420,8 +441,12 @@ class TableBucketStateMachineTest {
                         System.currentTimeMillis(),
                         System.currentTimeMillis()));
         coordinatorContext.putTablePath(tableId, fakeTablePath);
-        coordinatorContext.updateBucketReplicaAssignment(tb, Arrays.asList(0, 1, 2));
-        coordinatorContext.putBucketState(tb, NewBucket);
+        tableBuckets.forEach(
+                tableBucket -> {
+                    coordinatorContext.updateBucketReplicaAssignment(
+                            tableBucket, Arrays.asList(0, 1, 2));
+                    coordinatorContext.putBucketState(tableBucket, NewBucket);
+                });
 
         List<Integer> aliveServers = Arrays.asList(0, 1, 2);
         coordinatorContext.setLiveTabletServers(createServers(aliveServers));
@@ -429,15 +454,32 @@ class TableBucketStateMachineTest {
                 coordinatorContext, testCoordinatorChannelManager);
 
         // check state is online.
-        tableBucketStateMachine.handleStateChange(Collections.singleton(tb), OnlineBucket);
-        assertThat(coordinatorContext.getBucketState(tb)).isEqualTo(OnlineBucket);
+        tableBucketStateMachine.handleStateChange(tableBuckets, OnlineBucket);
+        assertThat(tableBuckets)
+                .allSatisfy(
+                        tableBucket ->
+                                assertThat(coordinatorContext.getBucketState(tableBucket))
+                                        .isEqualTo(OnlineBucket));
         assertThat(coordinatorContext.liveTabletServerSet())
                 .containsExactlyInAnyOrderElementsOf(aliveServers);
         assertThat(coordinatorContext.shuttingDownTabletServers()).isEmpty();
         assertThat(coordinatorContext.liveOrShuttingDownTabletServers())
                 .containsExactlyInAnyOrderElementsOf(aliveServers);
 
-        int oldLeader = coordinatorContext.getBucketLeaderAndIsr(tb).get().leader();
+        int oldLeader =
+                coordinatorContext
+                        .getBucketLeaderAndIsr(tableBuckets.iterator().next())
+                        .get()
+                        .leader();
+        assertThat(tableBuckets)
+                .allSatisfy(
+                        tableBucket ->
+                                assertThat(
+                                                coordinatorContext
+                                                        .getBucketLeaderAndIsr(tableBucket)
+                                                        .get()
+                                                        .leader())
+                                        .isEqualTo(oldLeader));
         aliveServers =
                 aliveServers.stream().filter(s -> s != oldLeader).collect(Collectors.toList());
 
@@ -452,10 +494,239 @@ class TableBucketStateMachineTest {
 
         // handle state change for controlled shutdown.
         tableBucketStateMachine.handleStateChange(
-                Collections.singleton(tb), OnlineBucket, new ControlledShutdownLeaderElection());
-        assertThat(coordinatorContext.getBucketState(tb)).isEqualTo(OnlineBucket);
-        assertThat(coordinatorContext.getBucketLeaderAndIsr(tb).get().leader())
-                .isNotEqualTo(oldLeader);
+                tableBuckets, OnlineBucket, new ControlledShutdownLeaderElection());
+        assertThat(tableBuckets)
+                .allSatisfy(
+                        tableBucket -> {
+                            assertThat(coordinatorContext.getBucketState(tableBucket))
+                                    .isEqualTo(OnlineBucket);
+                            assertThat(
+                                            coordinatorContext
+                                                    .getBucketLeaderAndIsr(tableBucket)
+                                                    .get()
+                                                    .leader())
+                                    .isNotEqualTo(oldLeader);
+                        });
+        for (TableBucket tableBucket : tableBuckets) {
+            assertThat(zookeeperClient.getLeaderAndIsr(tableBucket))
+                    .hasValue(coordinatorContext.getBucketLeaderAndIsr(tableBucket).get());
+        }
+    }
+
+    @Test
+    void testControlledShutdownWithMixedBucketStates() {
+        long tableId = 10;
+        TablePath tablePath = TablePath.of("db1", "mixed-bucket-states");
+        TableBucket onlineBucket = new TableBucket(tableId, 0);
+        TableBucket newBucket = new TableBucket(tableId, 1);
+        Set<TableBucket> tableBuckets = Sets.newHashSet(onlineBucket, newBucket);
+        List<Integer> assignedServers = Arrays.asList(0, 1, 2);
+        LeaderAndIsr originalLeaderAndIsr =
+                new LeaderAndIsr(
+                        0,
+                        0,
+                        assignedServers,
+                        Collections.emptyList(),
+                        coordinatorContext.getCoordinatorEpoch(),
+                        0);
+        LeaderAndIsr expectedOnlineLeaderAndIsr =
+                originalLeaderAndIsr.newLeaderAndIsr(
+                        1, Arrays.asList(1, 2), Collections.emptyList());
+        LeaderAndIsr expectedNewLeaderAndIsr =
+                new LeaderAndIsr(
+                        1,
+                        0,
+                        Arrays.asList(1, 2),
+                        Collections.emptyList(),
+                        coordinatorContext.getCoordinatorEpoch(),
+                        0);
+
+        coordinatorContext.putTableInfo(
+                TableInfo.of(
+                        tablePath,
+                        tableId,
+                        0,
+                        DATA1_TABLE_DESCRIPTOR,
+                        DEFAULT_REMOTE_DATA_DIR,
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis()));
+        coordinatorContext.putTablePath(tableId, tablePath);
+        tableBuckets.forEach(
+                tableBucket ->
+                        coordinatorContext.updateBucketReplicaAssignment(
+                                tableBucket, assignedServers));
+        coordinatorContext.putBucketLeaderAndIsr(onlineBucket, originalLeaderAndIsr);
+        coordinatorContext.putBucketState(onlineBucket, OnlineBucket);
+        coordinatorContext.putBucketState(newBucket, NewBucket);
+        coordinatorContext.setLiveTabletServers(createServers(assignedServers));
+        coordinatorContext.shuttingDownTabletServers().add(0);
+        makeSendLeaderAndStopRequestAlwaysSuccess(
+                coordinatorContext, testCoordinatorChannelManager);
+
+        try (TestingZooKeeperClient testingZooKeeperClient =
+                new TestingZooKeeperClient(
+                        Collections.singletonMap(onlineBucket, originalLeaderAndIsr),
+                        Collections.emptyMap(),
+                        false)) {
+            TableBucketStateMachine tableBucketStateMachine =
+                    new TableBucketStateMachine(
+                            coordinatorContext, coordinatorRequestBatch, testingZooKeeperClient);
+            tableBucketStateMachine.handleStateChange(
+                    tableBuckets, OnlineBucket, new ControlledShutdownLeaderElection());
+
+            assertThat(coordinatorContext.getBucketState(onlineBucket)).isEqualTo(OnlineBucket);
+            assertThat(coordinatorContext.getBucketState(newBucket)).isEqualTo(OnlineBucket);
+            assertThat(coordinatorContext.getBucketLeaderAndIsr(onlineBucket))
+                    .hasValue(expectedOnlineLeaderAndIsr);
+            assertThat(coordinatorContext.getBucketLeaderAndIsr(newBucket))
+                    .hasValue(expectedNewLeaderAndIsr);
+            assertThat(testingZooKeeperClient.batchUpdates)
+                    .containsExactlyEntriesOf(
+                            Collections.singletonMap(onlineBucket, expectedOnlineLeaderAndIsr));
+            assertThat(testingZooKeeperClient.registeredLeaderAndIsrs)
+                    .containsExactlyEntriesOf(
+                            Collections.singletonMap(newBucket, expectedNewLeaderAndIsr));
+        }
+    }
+
+    @Test
+    void testControlledShutdownFallsBackToIndividualUpdates() {
+        long tableId = 8;
+        TablePath tablePath = TablePath.of("db1", "fallback");
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+        List<Integer> aliveServers = Arrays.asList(0, 1, 2);
+        LeaderAndIsr originalLeaderAndIsr =
+                new LeaderAndIsr(
+                        0,
+                        0,
+                        aliveServers,
+                        Collections.emptyList(),
+                        coordinatorContext.getCoordinatorEpoch(),
+                        0);
+
+        coordinatorContext.putTableInfo(
+                TableInfo.of(
+                        tablePath,
+                        tableId,
+                        0,
+                        DATA1_TABLE_DESCRIPTOR,
+                        DEFAULT_REMOTE_DATA_DIR,
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis()));
+        coordinatorContext.putTablePath(tableId, tablePath);
+        coordinatorContext.updateBucketReplicaAssignment(tableBucket, aliveServers);
+        coordinatorContext.putBucketLeaderAndIsr(tableBucket, originalLeaderAndIsr);
+        coordinatorContext.putBucketState(tableBucket, OnlineBucket);
+        coordinatorContext.setLiveTabletServers(createServers(aliveServers));
+        coordinatorContext.shuttingDownTabletServers().add(0);
+        makeSendLeaderAndStopRequestAlwaysSuccess(
+                coordinatorContext, testCoordinatorChannelManager);
+
+        try (TestingZooKeeperClient testingZooKeeperClient =
+                new TestingZooKeeperClient(
+                        Collections.singletonMap(tableBucket, originalLeaderAndIsr),
+                        Collections.emptyMap(),
+                        true)) {
+            TableBucketStateMachine tableBucketStateMachine =
+                    new TableBucketStateMachine(
+                            coordinatorContext, coordinatorRequestBatch, testingZooKeeperClient);
+            tableBucketStateMachine.handleStateChange(
+                    Collections.singleton(tableBucket),
+                    OnlineBucket,
+                    new ControlledShutdownLeaderElection());
+
+            LeaderAndIsr updatedLeaderAndIsr =
+                    coordinatorContext.getBucketLeaderAndIsr(tableBucket).get();
+            assertThat(updatedLeaderAndIsr.leader()).isNotEqualTo(0);
+            assertThat(testingZooKeeperClient.batchReadBuckets).containsExactly(tableBucket);
+            assertThat(testingZooKeeperClient.batchUpdates)
+                    .containsExactlyEntriesOf(
+                            Collections.singletonMap(tableBucket, updatedLeaderAndIsr));
+            assertThat(testingZooKeeperClient.batchUpdateZkVersion)
+                    .isEqualTo(zkEpoch.getCoordinatorEpochZkVersion());
+            assertThat(testingZooKeeperClient.individualReadBuckets).isEmpty();
+            assertThat(testingZooKeeperClient.individualUpdates)
+                    .containsExactlyEntriesOf(
+                            Collections.singletonMap(tableBucket, updatedLeaderAndIsr));
+            assertThat(testingZooKeeperClient.individualUpdateZkVersions)
+                    .containsEntry(tableBucket, zkEpoch.getCoordinatorEpochZkVersion());
+        }
+    }
+
+    @Test
+    void testControlledShutdownRetriesMissingBatchReadResultIndividually() {
+        long tableId = 9;
+        TablePath tablePath = TablePath.of("db1", "partial-batch-read");
+        TableBucket batchUpdatedBucket = new TableBucket(tableId, 0);
+        TableBucket individuallyRetriedBucket = new TableBucket(tableId, 1);
+        Set<TableBucket> tableBuckets =
+                Sets.newHashSet(batchUpdatedBucket, individuallyRetriedBucket);
+        List<Integer> aliveServers = Arrays.asList(0, 1, 2);
+        LeaderAndIsr originalLeaderAndIsr =
+                new LeaderAndIsr(
+                        0,
+                        0,
+                        aliveServers,
+                        Collections.emptyList(),
+                        coordinatorContext.getCoordinatorEpoch(),
+                        0);
+        LeaderAndIsr expectedLeaderAndIsr =
+                originalLeaderAndIsr.newLeaderAndIsr(
+                        1, Arrays.asList(1, 2), Collections.emptyList());
+
+        coordinatorContext.putTableInfo(
+                TableInfo.of(
+                        tablePath,
+                        tableId,
+                        0,
+                        DATA1_TABLE_DESCRIPTOR,
+                        DEFAULT_REMOTE_DATA_DIR,
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis()));
+        coordinatorContext.putTablePath(tableId, tablePath);
+        tableBuckets.forEach(
+                tableBucket -> {
+                    coordinatorContext.updateBucketReplicaAssignment(tableBucket, aliveServers);
+                    coordinatorContext.putBucketLeaderAndIsr(tableBucket, originalLeaderAndIsr);
+                    coordinatorContext.putBucketState(tableBucket, OnlineBucket);
+                });
+        coordinatorContext.setLiveTabletServers(createServers(aliveServers));
+        coordinatorContext.shuttingDownTabletServers().add(0);
+        makeSendLeaderAndStopRequestAlwaysSuccess(
+                coordinatorContext, testCoordinatorChannelManager);
+
+        try (TestingZooKeeperClient testingZooKeeperClient =
+                new TestingZooKeeperClient(
+                        Collections.singletonMap(batchUpdatedBucket, originalLeaderAndIsr),
+                        Collections.singletonMap(individuallyRetriedBucket, originalLeaderAndIsr),
+                        false)) {
+            TableBucketStateMachine tableBucketStateMachine =
+                    new TableBucketStateMachine(
+                            coordinatorContext, coordinatorRequestBatch, testingZooKeeperClient);
+            tableBucketStateMachine.handleStateChange(
+                    tableBuckets, OnlineBucket, new ControlledShutdownLeaderElection());
+
+            assertThat(coordinatorContext.getBucketLeaderAndIsr(batchUpdatedBucket))
+                    .hasValue(expectedLeaderAndIsr);
+            assertThat(coordinatorContext.getBucketLeaderAndIsr(individuallyRetriedBucket))
+                    .hasValue(expectedLeaderAndIsr);
+            assertThat(testingZooKeeperClient.batchReadBuckets)
+                    .containsExactlyInAnyOrderElementsOf(tableBuckets);
+            assertThat(testingZooKeeperClient.batchUpdates)
+                    .containsExactlyEntriesOf(
+                            Collections.singletonMap(batchUpdatedBucket, expectedLeaderAndIsr));
+            assertThat(testingZooKeeperClient.batchUpdateZkVersion)
+                    .isEqualTo(zkEpoch.getCoordinatorEpochZkVersion());
+            assertThat(testingZooKeeperClient.individualReadBuckets)
+                    .containsExactly(individuallyRetriedBucket);
+            assertThat(testingZooKeeperClient.individualUpdates)
+                    .containsExactlyEntriesOf(
+                            Collections.singletonMap(
+                                    individuallyRetriedBucket, expectedLeaderAndIsr));
+            assertThat(testingZooKeeperClient.individualUpdateZkVersions)
+                    .containsEntry(
+                            individuallyRetriedBucket, zkEpoch.getCoordinatorEpochZkVersion());
+        }
     }
 
     @Test
@@ -534,5 +805,82 @@ class TableBucketStateMachineTest {
     private TableBucketStateMachine createTableBucketStateMachine() {
         return new TableBucketStateMachine(
                 coordinatorContext, coordinatorRequestBatch, zookeeperClient);
+    }
+
+    private static final class TestingZooKeeperClient extends ZooKeeperClient {
+
+        private final Map<TableBucket, LeaderAndIsr> batchReadResults;
+        private final Map<TableBucket, LeaderAndIsr> individualReadResults;
+        private final boolean failBatchUpdate;
+        private final Set<TableBucket> batchReadBuckets = new HashSet<>();
+        private final Set<TableBucket> individualReadBuckets = new HashSet<>();
+        private final Map<TableBucket, LeaderAndIsr> batchUpdates = new HashMap<>();
+        private final Map<TableBucket, LeaderAndIsr> individualUpdates = new HashMap<>();
+        private final Map<TableBucket, Integer> individualUpdateZkVersions = new HashMap<>();
+        private final Map<TableBucket, LeaderAndIsr> registeredLeaderAndIsrs = new HashMap<>();
+        private int batchUpdateZkVersion;
+
+        private TestingZooKeeperClient(
+                Map<TableBucket, LeaderAndIsr> batchReadResults,
+                Map<TableBucket, LeaderAndIsr> individualReadResults,
+                boolean failBatchUpdate) {
+            super(createCuratorFrameworkWrapper(), createConfiguration());
+            this.batchReadResults = new HashMap<>(batchReadResults);
+            this.individualReadResults = new HashMap<>(individualReadResults);
+            this.failBatchUpdate = failBatchUpdate;
+        }
+
+        @Override
+        public Map<TableBucket, LeaderAndIsr> getLeaderAndIsrs(
+                Collection<TableBucket> tableBuckets) {
+            batchReadBuckets.addAll(tableBuckets);
+            return new HashMap<>(batchReadResults);
+        }
+
+        @Override
+        public Optional<LeaderAndIsr> getLeaderAndIsr(TableBucket tableBucket) {
+            individualReadBuckets.add(tableBucket);
+            return Optional.ofNullable(individualReadResults.get(tableBucket));
+        }
+
+        @Override
+        public void batchUpdateLeaderAndIsr(
+                Map<TableBucket, LeaderAndIsr> leaderAndIsrs, int expectedZkVersion) {
+            batchUpdates.putAll(leaderAndIsrs);
+            batchUpdateZkVersion = expectedZkVersion;
+            if (failBatchUpdate) {
+                throw new RuntimeException("Expected batch update failure");
+            }
+        }
+
+        @Override
+        public void updateLeaderAndIsr(
+                TableBucket tableBucket, LeaderAndIsr leaderAndIsr, int expectedZkVersion) {
+            individualUpdates.put(tableBucket, leaderAndIsr);
+            individualUpdateZkVersions.put(tableBucket, expectedZkVersion);
+        }
+
+        @Override
+        public void registerLeaderAndIsr(
+                TableBucket tableBucket, LeaderAndIsr leaderAndIsr, int expectedZkVersion) {
+            registeredLeaderAndIsrs.put(tableBucket, leaderAndIsr);
+        }
+
+        private static CuratorFrameworkWithUnhandledErrorListener createCuratorFrameworkWrapper() {
+            Builder builder =
+                    builder()
+                            .connectString(
+                                    ZOO_KEEPER_EXTENSION_WRAPPER
+                                            .getCustomExtension()
+                                            .getConnectString())
+                            .retryPolicy(new ExponentialBackoffRetry(1000, 3));
+            return startZookeeperClient(builder, NOPErrorHandler.INSTANCE);
+        }
+
+        private static Configuration createConfiguration() {
+            Configuration configuration = new Configuration();
+            configuration.set(ConfigOptions.REMOTE_DATA_DIR, DEFAULT_REMOTE_DATA_DIR);
+            return configuration;
+        }
     }
 }

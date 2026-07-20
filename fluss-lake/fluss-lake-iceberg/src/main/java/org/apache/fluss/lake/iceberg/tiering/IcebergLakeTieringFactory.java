@@ -23,13 +23,22 @@ import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.lake.writer.LakeWriter;
+import org.apache.fluss.lake.writer.TieringTableValidator;
 import org.apache.fluss.lake.writer.WriterInitContext;
+import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.utils.IOUtils;
+
+import org.apache.iceberg.Table;
+import org.apache.iceberg.catalog.Catalog;
 
 import java.io.IOException;
 
+import static org.apache.fluss.lake.iceberg.utils.IcebergConversions.toIceberg;
+
 /** Implementation of {@link LakeTieringFactory} for Iceberg. */
 public class IcebergLakeTieringFactory
-        implements LakeTieringFactory<IcebergWriteResult, IcebergCommittable> {
+        implements LakeTieringFactory<IcebergWriteResult, IcebergCommittable>,
+                TieringTableValidator {
 
     private static final long serialVersionUID = 1L;
 
@@ -43,6 +52,20 @@ public class IcebergLakeTieringFactory
     public LakeWriter<IcebergWriteResult> createLakeWriter(WriterInitContext writerInitContext)
             throws IOException {
         return new IcebergLakeWriter(icebergCatalogProvider, writerInitContext);
+    }
+
+    @Override
+    public void validateTable(TableInfo tableInfo) throws IOException {
+        Catalog icebergCatalog = icebergCatalogProvider.get();
+        try {
+            Table icebergTable = icebergCatalog.loadTable(toIceberg(tableInfo.getTablePath()));
+            IcebergPartitionSpecValidator.validate(icebergTable, tableInfo);
+        } finally {
+            if (icebergCatalog instanceof AutoCloseable) {
+                IOUtils.closeQuietly(
+                        (AutoCloseable) icebergCatalog, "iceberg-catalog-table-validator");
+            }
+        }
     }
 
     @Override

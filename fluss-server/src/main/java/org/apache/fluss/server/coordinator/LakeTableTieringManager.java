@@ -280,6 +280,11 @@ public class LakeTableTieringManager implements AutoCloseable {
                                     return r != null ? clock.milliseconds() - r.tieredTime : -1L;
                                 }));
 
+        // tieredTimestamp: epoch timestamp (ms) of the last successful tiering
+        tableMetricGroup.gauge(
+                MetricNames.LAKE_TIERING_TABLE_TIERED_TIMESTAMP,
+                () -> inReadLock(lock, () -> getLastResultField(tableId, r -> r.tieredTime)));
+
         // tierDuration: duration of last tiering job
         tableMetricGroup.gauge(
                 MetricNames.LAKE_TIERING_TABLE_TIER_DURATION,

@@ -741,8 +741,11 @@ impl RecordAccumulator {
         }
     }
 
-    #[cfg(test)]
-    fn estimated_batch_size(&self, table_path: &Arc<PhysicalTablePath>) -> Option<usize> {
+    #[cfg(any(test, feature = "integration_tests"))]
+    pub(crate) fn estimated_batch_size(
+        &self,
+        table_path: &Arc<PhysicalTablePath>,
+    ) -> Option<usize> {
         self.write_batches
             .get(table_path)?
             .dynamic_batch_size
@@ -877,7 +880,7 @@ impl RecordAccumulator {
         self.memory_limiter.close();
         // Complete batches still in deques (not yet drained).
         for mut entry in self.write_batches.iter_mut() {
-            for (_bucket_id, deque) in entry.value_mut().batches.iter_mut() {
+            for deque in entry.value_mut().batches.values_mut() {
                 let mut dq = deque.lock();
                 while let Some(batch) = dq.pop_front() {
                     batch.complete(Err(error.clone()));
@@ -928,7 +931,7 @@ impl RecordAccumulator {
 
     pub fn has_undrained(&self) -> bool {
         for entry in self.write_batches.iter() {
-            for (_, batch_deque) in entry.value().batches.iter() {
+            for batch_deque in entry.value().batches.values() {
                 if !batch_deque.lock().is_empty() {
                     return true;
                 }

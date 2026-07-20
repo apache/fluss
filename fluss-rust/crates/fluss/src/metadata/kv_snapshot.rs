@@ -19,7 +19,7 @@ use crate::proto::{
     AcquireKvSnapshotLeaseResponse, GetKvSnapshotMetadataResponse, GetLatestKvSnapshotsResponse,
     ListKvSnapshotsResponse, PbKvSnapshot, PbRemotePathAndLocalFile,
 };
-use crate::{BucketId, PartitionId, TableId};
+use crate::{BucketId, PartitionId, SnapshotId, TableId};
 
 use crate::metadata::KvSnapshotLeaseForTable;
 
@@ -27,7 +27,7 @@ use crate::metadata::KvSnapshotLeaseForTable;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KvSnapshot {
     pub bucket_id: BucketId,
-    pub snapshot_id: Option<i64>,
+    pub snapshot_id: Option<SnapshotId>,
     pub log_offset: Option<i64>,
 }
 

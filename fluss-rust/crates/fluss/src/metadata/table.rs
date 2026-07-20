@@ -22,7 +22,7 @@ use crate::metadata::DataLakeFormat;
 use crate::metadata::datatype::{
     DataField, DataType, RowType, UNASSIGNED_FIELD_ID, reassign_field_ids,
 };
-use crate::{BucketId, PartitionId, TableId};
+use crate::{BucketId, PartitionId, SnapshotId, TableId};
 use core::fmt;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -1501,19 +1501,19 @@ impl Display for TableBucket {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LakeSnapshot {
-    pub snapshot_id: i64,
+    pub snapshot_id: SnapshotId,
     pub table_buckets_offset: HashMap<TableBucket, i64>,
 }
 
 impl LakeSnapshot {
-    pub fn new(snapshot_id: i64, table_buckets_offset: HashMap<TableBucket, i64>) -> Self {
+    pub fn new(snapshot_id: SnapshotId, table_buckets_offset: HashMap<TableBucket, i64>) -> Self {
         Self {
             snapshot_id,
             table_buckets_offset,
         }
     }
 
-    pub fn snapshot_id(&self) -> i64 {
+    pub fn snapshot_id(&self) -> SnapshotId {
         self.snapshot_id
     }
 

@@ -22,7 +22,7 @@ import org.apache.fluss.flink.tiering.LakeTieringJobBuilder
 import org.apache.fluss.flink.tiering.source.TieringSourceOptions
 import org.apache.fluss.metadata.{DataLakeFormat, TableBucket}
 import org.apache.fluss.spark.FlussSparkTestBase
-import org.apache.fluss.spark.read.{FlussLakeAppendScan, FlussLakeUpsertScan, FlussScan}
+import org.apache.fluss.spark.read.{FlussAppendScan, FlussScan, FlussUpsertScan}
 
 import org.apache.flink.api.common.RuntimeExecutionMode
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment
@@ -166,8 +166,8 @@ abstract class SparkLakeTableReadTestBase extends FlussSparkTestBase {
       }
     scans
       .collect {
-        case upsert: FlussLakeUpsertScan => upsert
-        case append: FlussLakeAppendScan => append
+        case upsert: FlussUpsertScan => upsert
+        case append: FlussAppendScan => append
       }
       .flatMap(_.toBatch.planInputPartitions())
       .toArray

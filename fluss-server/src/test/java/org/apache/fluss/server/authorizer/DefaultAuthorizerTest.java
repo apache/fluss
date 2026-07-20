@@ -19,6 +19,7 @@ package org.apache.fluss.server.authorizer;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.AuthorizationException;
 import org.apache.fluss.rpc.netty.server.Session;
 import org.apache.fluss.security.acl.AccessControlEntry;
 import org.apache.fluss.security.acl.AccessControlEntryFilter;
@@ -205,6 +206,56 @@ public class DefaultAuthorizerTest {
     }
 
     @Test
+    void testAclModificationRequiresAllPermission() throws Exception {
+        Resource resource = Resource.database("database1");
+        Session alterSession = createSession("alter-user", "192.168.1.1");
+        Session allSession = createSession("all-user", "192.168.1.1");
+        AclBinding targetAcl = createAclBinding(resource, "target-user", "*", READ);
+
+        authorizer.addAcls(
+                createRootUserSession(),
+                Arrays.asList(
+                        createAclBinding(resource, "alter-user", "*", ALTER),
+                        createAclBinding(resource, "all-user", "*", OperationType.ALL)));
+
+        assertThatThrownBy(
+                        () ->
+                                authorizer.addAcls(
+                                        alterSession, Collections.singletonList(targetAcl)))
+                .isInstanceOf(AuthorizationException.class)
+                .hasMessageContaining("operate ALL on resource");
+
+        List<AclCreateResult> createResults =
+                authorizer.addAcls(allSession, Collections.singletonList(targetAcl));
+        assertThat(createResults).hasSize(1);
+        assertThat(createResults.get(0).exception()).isNotPresent();
+        assertThat(listAcls(authorizer, resource)).contains(targetAcl.getAccessControlEntry());
+
+        AclBindingFilter targetAclFilter =
+                new AclBindingFilter(
+                        new ResourceFilter(DATABASE, "database1"),
+                        new AccessControlEntryFilter(
+                                targetAcl.getAccessControlEntry().getPrincipal(),
+                                "*",
+                                READ,
+                                PermissionType.ALLOW));
+        assertThatThrownBy(
+                        () ->
+                                authorizer.dropAcls(
+                                        alterSession, Collections.singletonList(targetAclFilter)))
+                .isInstanceOf(AuthorizationException.class)
+                .hasMessageContaining("operate ALL on resource");
+
+        List<AclDeleteResult> deleteResults =
+                authorizer.dropAcls(allSession, Collections.singletonList(targetAclFilter));
+        assertThat(deleteResults).hasSize(1);
+        assertThat(deleteResults.get(0).error()).isNotPresent();
+        assertThat(deleteResults.get(0).aclBindingDeleteResults())
+                .extracting(AclDeleteResult.AclBindingDeleteResult::aclBinding)
+                .containsExactly(targetAcl);
+    }
+
+    @Test
     void testAuthorizerNoZkConfig() {
         Configuration configuration =
                 new Configuration().set(ConfigOptions.AUTHORIZER_ENABLED, true);
@@ -221,6 +272,35 @@ public class DefaultAuthorizerTest {
                 .isFalse();
         assertThat(authorizer.isAuthorized(superUserSession, READ, Resource.database("database1")))
                 .isTrue();
+    }
+
+    @Test
+    void testPrincipalIgnoreCaseMatchesConfiguredUser() throws Exception {
+        // The setup configures USER:root as a super user with full access. USER:user1 has no
+        // matching ACLs and is not a super user, so READ on database1 should always be denied.
+        // The root session intentionally uses user:ROOT to verify case-sensitive matching first.
+        Session normalUserSession = createSession("USER", "user1", "192.168.1.1");
+        Session superUserSession = createSession("user", "ROOT", "192.168.1.1");
+        assertThat(authorizer.isAuthorized(normalUserSession, READ, Resource.database("database1")))
+                .isFalse();
+        assertThat(authorizer.isAuthorized(superUserSession, READ, Resource.database("database1")))
+                .isFalse();
+        Configuration ignoreCaseConfiguration = new Configuration(configuration);
+        ignoreCaseConfiguration.setBoolean(ConfigOptions.SECURITY_ACL_PRINCIPAL_IGNORE_CASE, true);
+        try (Authorizer ignoreCaseAuthorizer =
+                AuthorizerLoader.createAuthorizer(ignoreCaseConfiguration, zooKeeperClient, null)) {
+            assertThat(ignoreCaseAuthorizer).isNotNull();
+            // Enabling ignore-case lets user:ROOT match the configured USER:root super user, but it
+            // does not grant privileges to USER:user1.
+            assertThat(
+                            ignoreCaseAuthorizer.isAuthorized(
+                                    normalUserSession, READ, Resource.database("database1")))
+                    .isFalse();
+            assertThat(
+                            ignoreCaseAuthorizer.isAuthorized(
+                                    superUserSession, READ, Resource.database("database1")))
+                    .isTrue();
+        }
     }
 
     @Test
@@ -664,12 +744,16 @@ public class DefaultAuthorizerTest {
     }
 
     private Session createSession(String username, String host) throws Exception {
+        return createSession("USER", username, host);
+    }
+
+    private Session createSession(String userType, String username, String host) throws Exception {
         return new Session(
                 (byte) 1,
                 "FLUSS",
                 false,
                 InetAddress.getByName(host),
-                new FlussPrincipal(username, "USER"));
+                new FlussPrincipal(username, userType));
     }
 
     private AclBinding createAclBinding(

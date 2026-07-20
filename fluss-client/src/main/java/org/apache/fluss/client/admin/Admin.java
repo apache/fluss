@@ -575,8 +575,8 @@ public interface Admin extends AutoCloseable {
     /**
      * Creates multiple ACL entries in a single atomic operation.
      *
-     * <p>1. Validates the user has 'alter' permission on the resource. 2. Creates the ACL entries
-     * if valid and permitted.
+     * <p>1. Validates the user has 'ALL' permission on the resource. 2. Creates the ACL entries if
+     * valid and permitted.
      *
      * <p>Each entry in {@code aclBindings} must have a valid principal, operation and permission.
      *
@@ -588,7 +588,7 @@ public interface Admin extends AutoCloseable {
     /**
      * Removes multiple ACL entries in a single atomic operation.
      *
-     * <p>1. Validates the user has 'alter' permission on the resource. 2. Removes entries only if
+     * <p>1. Validates the user has 'ALL' permission on the resource. 2. Removes entries only if
      * they exactly match the provided entries (principal, operation, permission). 3. Does not
      * remove entries if any of the ACL entries do not exist.
      *
