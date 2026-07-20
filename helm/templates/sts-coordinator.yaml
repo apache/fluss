@@ -22,6 +22,10 @@ metadata:
   name: coordinator-server
   labels:
   {{- include "fluss.labels" . | nindent 4 }}
+  {{- with .Values.coordinator.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   serviceName: coordinator-server-hs
   replicas: {{ .Values.coordinator.numberOfReplicas }}

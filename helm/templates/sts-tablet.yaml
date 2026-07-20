@@ -22,6 +22,10 @@ metadata:
   name: tablet-server
   labels:
   {{- include "fluss.labels" . | nindent 4 }}
+  {{- with .Values.tablet.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   serviceName: tablet-server-hs
   replicas: {{ .Values.tablet.numberOfReplicas }}

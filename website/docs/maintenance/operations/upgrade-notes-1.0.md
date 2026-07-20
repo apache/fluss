@@ -5,6 +5,14 @@ sidebar_position: 4
 
 # Upgrade Notes from v0.9 to v1.0
 
+## Authorization Changes
+
+### ACL Modification Requires `ALL` Permission
+
+Starting in v1.0, creating or dropping ACLs requires `ALL` permission on the target resource. In previous versions, users with `ALTER` permission could modify ACLs.
+
+Before upgrading, review any users, roles, scripts, or automation that call `createAcls`, `dropAcls`, `CALL sys.add_acl`, or `CALL sys.drop_acl`. Grant `ALL` permission to principals that should continue managing ACLs after the upgrade.
+
 ## Cluster Configuration Changes
 
 ### New `datalake.enabled` Cluster Configuration

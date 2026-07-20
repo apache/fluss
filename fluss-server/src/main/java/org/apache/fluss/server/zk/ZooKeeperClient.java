@@ -612,12 +612,14 @@ public class ZooKeeperClient implements AutoCloseable {
             return;
         }
 
+        long startTimeMs = System.currentTimeMillis();
+        int transactionCount = 0;
         List<CuratorOp> ops = new ArrayList<>(leaderAndIsrList.size());
         for (Map.Entry<TableBucket, LeaderAndIsr> entry : leaderAndIsrList.entrySet()) {
             TableBucket tableBucket = entry.getKey();
             LeaderAndIsr leaderAndIsr = entry.getValue();
 
-            LOG.info("Batch Update {} for bucket {} in Zookeeper.", leaderAndIsr, tableBucket);
+            LOG.debug("Batch update {} for bucket {} in ZooKeeper.", leaderAndIsr, tableBucket);
             String path = LeaderAndIsrZNode.path(tableBucket);
             byte[] data = LeaderAndIsrZNode.encode(leaderAndIsr);
             CuratorOp updateOp = zkClient.transactionOp().setData().forPath(path, data);
@@ -625,13 +627,20 @@ public class ZooKeeperClient implements AutoCloseable {
             if (ops.size() == MAX_BATCH_SIZE) {
                 List<CuratorOp> wrapOps = wrapRequestsWithEpochCheck(ops, expectedZkVersion);
                 zkClient.transaction().forOperations(wrapOps);
+                transactionCount++;
                 ops.clear();
             }
         }
         if (!ops.isEmpty()) {
             List<CuratorOp> wrapOps = wrapRequestsWithEpochCheck(ops, expectedZkVersion);
             zkClient.transaction().forOperations(wrapOps);
+            transactionCount++;
         }
+        LOG.info(
+                "Batch updated LeaderAndIsr for {} buckets in {} ZooKeeper transactions in {} ms.",
+                leaderAndIsrList.size(),
+                transactionCount,
+                System.currentTimeMillis() - startTimeMs);
     }
 
     protected void deleteLeaderAndIsr(TableBucket tableBucket) throws Exception {

@@ -1143,4 +1143,42 @@ public class DynamicConfigChangeTest {
         assertThat(zkConfig.get(ConfigOptions.SERVER_SASL_CREDENTIALS.key()))
                 .isEqualTo("bob:bob-secret");
     }
+
+    @Test
+    void testRejectProviderMarkerInDynamicConfig() throws Exception {
+        Configuration configuration = new Configuration();
+        DynamicConfigManager dynamicConfigManager =
+                new DynamicConfigManager(zookeeperClient, configuration);
+        dynamicConfigManager.startup();
+
+        assertThatThrownBy(
+                        () ->
+                                dynamicConfigManager.alterConfigs(
+                                        Collections.singletonList(
+                                                new AlterConfig(
+                                                        "datalake.paimon.s3.secret-key",
+                                                        "${directory:/etc/fluss/secrets:s3-secret-key}",
+                                                        AlterConfigOpType.SET))))
+                .isInstanceOf(ConfigException.class)
+                .hasMessageContaining("resolved at startup only");
+    }
+
+    @Test
+    void testDescribeConfigsRedactsProviderResolvedValues() throws Exception {
+        Configuration configuration = new Configuration();
+        // key name intentionally does not match the sensitive-key heuristics
+        configuration.setString("datalake.paimon.custom.value", "raw-secret");
+        configuration.markSensitive("datalake.paimon.custom.value");
+
+        DynamicConfigManager dynamicConfigManager =
+                new DynamicConfigManager(zookeeperClient, configuration);
+        dynamicConfigManager.startup();
+
+        ConfigEntry entry =
+                dynamicConfigManager.describeConfigs().stream()
+                        .filter(e -> e.key().equals("datalake.paimon.custom.value"))
+                        .findFirst()
+                        .get();
+        assertThat(entry.value()).isEqualTo("******");
+    }
 }

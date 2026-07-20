@@ -20,12 +20,14 @@ package org.apache.fluss.flink.tiering;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.provider.ConfigProviders;
 import org.apache.fluss.flink.adapter.MultipleParameterToolAdapter;
 
 import org.apache.flink.configuration.JobManagerOptions;
 import org.apache.flink.core.execution.JobClient;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 
+import java.util.HashMap;
 import java.util.Map;
 import java.util.ServiceLoader;
 
@@ -58,7 +60,7 @@ public class FlussLakeTiering {
     public FlussLakeTiering(String[] args) {
         // parse params
         final MultipleParameterToolAdapter params = MultipleParameterToolAdapter.fromArgs(args);
-        Map<String, String> paramsMap = params.toMap();
+        Map<String, String> paramsMap = resolveConfigProviders(params.toMap());
 
         // extract fluss config
         Map<String, String> flussConfigMap = extractAndRemovePrefix(paramsMap, FLUSS_CONF_PREFIX);
@@ -98,6 +100,13 @@ public class FlussLakeTiering {
         flinkConfig.set(JobManagerOptions.EXECUTION_FAILOVER_STRATEGY, FULL_RESTART_STRATEGY_NAME);
 
         execEnv = StreamExecutionEnvironment.getExecutionEnvironment(flinkConfig);
+    }
+
+    /** Resolves {@code ${provider:...}} markers in all parameters before prefix extraction. */
+    private static Map<String, String> resolveConfigProviders(Map<String, String> paramsMap) {
+        Configuration params = Configuration.fromMap(paramsMap);
+        ConfigProviders.resolve(params);
+        return new HashMap<>(params.toMap());
     }
 
     protected void run() throws Exception {

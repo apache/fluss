@@ -292,6 +292,27 @@ final class LogManagerTest extends LogTestBase {
         assertThat(new File(dataDir, CLEAN_SHUTDOWN_FILE).exists()).isFalse();
     }
 
+    @Test
+    @Tag(ServerTestTags.JBOD_MULTI_DIR_TAG)
+    void testSkipCleanShutdownMarkerForDataDirWithFailedLogClose() throws Exception {
+        File failedDataDir = new File(tempDir, "data-1");
+        File healthyDataDir = new File(tempDir, "data-2");
+        initTableBuckets(null);
+
+        LogTablet failedLog = createLog(tablePath1, tableBucket1, failedDataDir);
+        failedLog.appendAsLeader(genMemoryLogRecordsByObject(DATA1));
+        createLog(tablePath2, tableBucket2, healthyDataDir)
+                .appendAsLeader(genMemoryLogRecordsByObject(DATA1));
+
+        // Make the shutdown flush fail by closing the underlying file channels first.
+        failedLog.close();
+        logManager.shutdown();
+        logManager = null;
+
+        assertThat(new File(failedDataDir, CLEAN_SHUTDOWN_FILE)).doesNotExist();
+        assertThat(new File(healthyDataDir, CLEAN_SHUTDOWN_FILE)).exists();
+    }
+
     @ParameterizedTest
     @MethodSource("partitionProvider")
     void testSameTableNameInDifferentDb(String partitionName) throws Exception {

@@ -2323,6 +2323,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
     private ControlledShutdownResponse tryProcessControlledShutdown(
             ControlledShutdownEvent controlledShutdownEvent) {
+        long startTimeMs = System.currentTimeMillis();
         ControlledShutdownResponse response = new ControlledShutdownResponse();
 
         // TODO here we need to check tabletServerEpoch, avoid to receive controlled shutdown
@@ -2346,8 +2347,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 coordinatorContext.shuttingDownTabletServers());
         LOG.debug("All live tabletServers: {}", coordinatorContext.liveTabletServerSet());
 
+        Set<TableBucketReplica> replicasOnTabletServer =
+                coordinatorContext.replicasOnTabletServer(tabletServerId);
         List<TableBucketReplica> replicasToActOn =
-                coordinatorContext.replicasOnTabletServer(tabletServerId).stream()
+                replicasOnTabletServer.stream()
                         .filter(
                                 replica -> {
                                     TableBucket tableBucket = replica.getTableBucket();
@@ -2371,20 +2374,39 @@ public class CoordinatorEventProcessor implements EventProcessor {
             }
         }
 
+        long leaderMigrationStartTimeMs = System.currentTimeMillis();
         tableBucketStateMachine.handleStateChange(
                 bucketsLedByServer, OnlineBucket, new ControlledShutdownLeaderElection());
+        LOG.info(
+                "Processed controlled shutdown leader state changes for {} buckets on tabletServer {} in {} ms.",
+                bucketsLedByServer.size(),
+                tabletServerId,
+                System.currentTimeMillis() - leaderMigrationStartTimeMs);
 
         // TODO need send stop request to the leader?
 
         // If the tabletServer is a follower, updates the isr in ZK and notifies the current leader.
+        long followerOfflineStartTimeMs = System.currentTimeMillis();
         replicaStateMachine.handleStateChanges(replicasFollowedByServer, OfflineReplica);
+        LOG.info(
+                "Processed {} follower replica offline transitions for controlled shutdown of tabletServer {} in {} ms.",
+                replicasFollowedByServer.size(),
+                tabletServerId,
+                System.currentTimeMillis() - followerOfflineStartTimeMs);
 
         // Return the list of buckets that are still being managed by the controlled shutdown
         // tabletServer after leader migration.
+        Set<TableBucket> remainingLeaderBuckets =
+                coordinatorContext.getBucketsWithLeaderIn(tabletServerId);
         response.addAllRemainingLeaderBuckets(
-                coordinatorContext.getBucketsWithLeaderIn(tabletServerId).stream()
+                remainingLeaderBuckets.stream()
                         .map(ServerRpcMessageUtils::fromTableBucket)
                         .collect(Collectors.toList()));
+        LOG.info(
+                "Completed controlled shutdown for tabletServer {} in {} ms; {} leader buckets remain.",
+                tabletServerId,
+                System.currentTimeMillis() - startTimeMs,
+                remainingLeaderBuckets.size());
         return response;
     }
 

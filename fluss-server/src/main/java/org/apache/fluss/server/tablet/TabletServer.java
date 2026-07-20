@@ -70,6 +70,7 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -431,7 +432,7 @@ public class TabletServer extends ServerBase {
                 exception = ExceptionUtils.firstOrSuppressed(t, exception);
             }
 
-            final Collection<CompletableFuture<Void>> terminationFutures = new ArrayList<>(2);
+            final Collection<CompletableFuture<Void>> terminationFutures = new ArrayList<>(1);
             try {
                 if (metricRegistry != null) {
                     terminationFutures.add(metricRegistry.closeAsync());
@@ -440,12 +441,24 @@ public class TabletServer extends ServerBase {
                 exception = ExceptionUtils.firstOrSuppressed(t, exception);
             }
 
+            CompletableFuture<Void> rpcServerTerminationFuture =
+                    CompletableFuture.completedFuture(null);
             try {
-                if (rpcServer != null) {
-                    terminationFutures.add(rpcServer.closeAsync());
-                }
+                rpcServerTerminationFuture = shutdownRpcServer();
             } catch (Throwable t) {
                 exception = ExceptionUtils.firstOrSuppressed(t, exception);
+            }
+
+            // Stop dispatching new RPC calls and drain the request processors before shutting down
+            // the components that can access tablets. RPC calls may leave delayed operations
+            // behind; ReplicaManager is shut down below before the tablet managers to stop those
+            // operations as well as snapshot and replica-fetcher activity.
+            try {
+                rpcServerTerminationFuture.join();
+            } catch (Throwable t) {
+                exception =
+                        ExceptionUtils.firstOrSuppressed(
+                                ExceptionUtils.stripCompletionException(t), exception);
             }
 
             try {
@@ -489,23 +502,23 @@ public class TabletServer extends ServerBase {
                 if (scannerManager != null) {
                     scannerManager.close();
                 }
+            } catch (Throwable t) {
+                exception = ExceptionUtils.firstOrSuppressed(t, exception);
+            }
 
-                if (kvManager != null) {
-                    kvManager.shutdown();
-                }
+            try {
+                shutdownReplicaManager();
+            } catch (Throwable t) {
+                exception = ExceptionUtils.firstOrSuppressed(t, exception);
+            }
 
-                if (remoteLogManager != null) {
-                    remoteLogManager.close();
-                }
+            try {
+                shutdownTabletManagers();
+            } catch (Throwable t) {
+                exception = ExceptionUtils.firstOrSuppressed(t, exception);
+            }
 
-                if (logManager != null) {
-                    logManager.shutdown();
-                }
-
-                if (replicaManager != null) {
-                    replicaManager.shutdown();
-                }
-
+            try {
                 if (localDiskManager != null) {
                     localDiskManager.close();
                 }
@@ -541,7 +554,38 @@ public class TabletServer extends ServerBase {
         }
     }
 
+    @VisibleForTesting
+    CompletableFuture<Void> shutdownRpcServer() {
+        if (rpcServer != null) {
+            return rpcServer.closeAsync();
+        }
+        return CompletableFuture.completedFuture(null);
+    }
+
+    @VisibleForTesting
+    void shutdownReplicaManager() throws InterruptedException {
+        if (replicaManager != null) {
+            replicaManager.shutdown();
+        }
+    }
+
+    @VisibleForTesting
+    void shutdownTabletManagers() throws IOException {
+        if (kvManager != null) {
+            kvManager.shutdown();
+        }
+
+        if (remoteLogManager != null) {
+            remoteLogManager.close();
+        }
+
+        if (logManager != null) {
+            logManager.shutdown();
+        }
+    }
+
     private void controlledShutDown() {
+        long startTime = System.currentTimeMillis();
         LOG.info("Starting controlled shutdown.");
 
         // We request the CoordinatorServer to do a controlled shutdown. On failure, we backoff for
@@ -597,6 +641,11 @@ public class TabletServer extends ServerBase {
             LOG.warn(
                     "Proceeding to do an unclean shutdown as all the controlled shutdown attempts failed.");
         }
+
+        LOG.info(
+                "Controlled shutdown attempts finished in {} ms, succeeded: {}.",
+                System.currentTimeMillis() - startTime,
+                shutdownSucceeded);
     }
 
     @Override
