@@ -1566,16 +1566,12 @@ public class ReplicaManager implements ServerReconfigurable {
                 return new FetchLogResultForBucket(
                         tb, remoteLogFetchInfo, replica.getLogHighWatermark());
             }
-            return new FetchLogResultForBucket(
-                    tb,
-                    ApiError.fromThrowable(
-                            new LogOffsetOutOfRangeException(
-                                    String.format(
-                                            "The fetch offset %s is covered by remote log range for table bucket %s, "
-                                                    + "but no remote log segment is available.",
-                                            normalizedFetchOffset, tb))));
+            // Remote log is expected to cover the offset, but segments/manifest may not be ready yet.
+            // REMOTE_FIRST is a preference, so fall back to local reads.
+            return null;
         } catch (Exception e) {
-            return new FetchLogResultForBucket(tb, ApiError.fromThrowable(e));
+            // Fall back to local reads on remote fetch failures.
+            return null;
         }
     }
 
