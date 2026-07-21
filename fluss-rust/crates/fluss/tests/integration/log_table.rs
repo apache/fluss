@@ -2345,4 +2345,64 @@ mod table_test {
 
         admin.drop_table(&table_path, false).await.expect("drop");
     }
+
+    /// An empty first batch must not lock in a sticky assigner and break later keyed appends.
+    #[tokio::test]
+    async fn append_empty_batch_first_keeps_key_distribution() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("admin");
+
+        let table_path = TablePath::new("fluss", "test_log_append_empty_first");
+        let descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("c1", DataTypes::int())
+                    .column("c2", DataTypes::string())
+                    .build()
+                    .expect("schema"),
+            )
+            .distributed_by(Some(3), vec!["c1".to_string()])
+            .build()
+            .expect("descriptor");
+        create_table(&admin, &table_path, &descriptor).await;
+        wait_for_table_buckets_ready(&admin, &table_path, &[0, 1, 2]).await;
+
+        let table = connection.get_table(&table_path).await.expect("table");
+        let writer = table
+            .new_append()
+            .expect("append")
+            .create_writer()
+            .expect("writer");
+
+        let empty = record_batch!(("c1", Int32, [1]), ("c2", Utf8, ["x"]))
+            .unwrap()
+            .slice(0, 0);
+        writer
+            .append_arrow_batch(empty)
+            .expect("append empty batch");
+
+        let batch = record_batch!(
+            ("c1", Int32, [1, 2, 3, 4, 5, 6, 7, 8, 9]),
+            ("c2", Utf8, ["a", "b", "c", "d", "e", "f", "g", "h", "i"])
+        )
+        .unwrap();
+        writer.append_arrow_batch(batch).expect("append batch");
+        writer.flush().await.expect("flush");
+
+        let offsets = admin
+            .list_offsets(&table_path, &[0, 1, 2], OffsetSpec::Latest)
+            .await
+            .expect("list offsets");
+
+        let total: i64 = offsets.values().sum();
+        assert_eq!(total, 9, "all rows must be persisted, got {offsets:?}");
+        let non_empty = offsets.values().filter(|&&o| o > 0).count();
+        assert!(
+            non_empty >= 2,
+            "keyed rows must still spread across buckets after an empty first batch, got {offsets:?}"
+        );
+
+        admin.drop_table(&table_path, false).await.expect("drop");
+    }
 }

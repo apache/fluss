@@ -170,7 +170,11 @@ impl AppendWriter {
     /// A [`WriteResultFuture`] that can be awaited to wait for server acknowledgment,
     /// or dropped for fire-and-forget behavior (use `flush()` to ensure delivery).
     pub fn append_arrow_batch(&self, batch: RecordBatch) -> Result<WriteResultFuture> {
-        let physical_table_path = if self.partition_getter.is_some() && batch.num_rows() > 0 {
+        if batch.num_rows() == 0 {
+            // Nothing to write; also avoids a keyless send to a bucket-key table.
+            return Ok(WriteResultFuture::join(Vec::new()));
+        }
+        let physical_table_path = if self.partition_getter.is_some() {
             let first_row = ColumnarRow::new(
                 Arc::new(batch.clone()),
                 Arc::new(self.table_info.row_type.clone()),
@@ -189,17 +193,16 @@ impl AppendWriter {
         let Some(router) = self.bucket_router.as_ref() else {
             return self.send_arrow_batch(batch, physical_table_path, None);
         };
-        if batch.num_rows() == 0 {
-            return self.send_arrow_batch(batch, physical_table_path, None);
-        }
 
         // Group rows by bucket, keeping one key per bucket (it hashes back there).
         let num_buckets = self.table_info.get_num_buckets();
         let batch_arc = Arc::new(batch.clone());
         let row_type = Arc::new(self.table_info.row_type.clone());
         let mut groups: HashMap<i32, (Vec<u32>, Bytes)> = HashMap::new();
+        // Reuse one row view; ColumnarRow::new re-downcasts every column.
+        let mut row = ColumnarRow::new(Arc::clone(&batch_arc), Arc::clone(&row_type), 0, None)?;
         for i in 0..batch.num_rows() {
-            let row = ColumnarRow::new(Arc::clone(&batch_arc), Arc::clone(&row_type), i, None)?;
+            row.set_row_id(i);
             let (bucket, key) = router.bucket_of(&row, num_buckets)?;
             groups
                 .entry(bucket)
