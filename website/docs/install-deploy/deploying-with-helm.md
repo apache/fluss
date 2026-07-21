@@ -430,6 +430,8 @@ The same pattern works with Sealed Secrets, HashiCorp Vault Agent Injector (prod
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
+| `coordinator.annotations` | Annotations to add to the CoordinatorServer StatefulSet | `{}` |
+| `coordinator.service.annotations` | Annotations to add to the CoordinatorServer headless Service | `{}` |
 | `coordinator.extraVolumes` | Extra volumes to add to the CoordinatorServer pod spec | `[]` |
 | `coordinator.extraVolumeMounts` | Extra volume mounts to add to the coordinator container | `[]` |
 | `coordinator.initContainers` | Init containers to run before the coordinator container starts | `[]` |
@@ -440,6 +442,8 @@ The same pattern works with Sealed Secrets, HashiCorp Vault Agent Injector (prod
 | `coordinator.podDisruptionBudget.enabled` | Enable PodDisruptionBudget for CoordinatorServer | `false` |
 | `coordinator.podDisruptionBudget.minAvailable` | Minimum available coordinator pods during disruption | Not set |
 | `coordinator.podDisruptionBudget.maxUnavailable` | Maximum unavailable coordinator pods during disruption | Not set |
+| `tablet.annotations` | Annotations to add to the TabletServer StatefulSet | `{}` |
+| `tablet.service.annotations` | Annotations to add to the TabletServer headless Service | `{}` |
 | `tablet.extraVolumes` | Extra volumes to add to TabletServer pod specs | `[]` |
 | `tablet.extraVolumeMounts` | Extra volume mounts to add to the tablet container | `[]` |
 | `tablet.initContainers` | Init containers to run before the tablet container starts | `[]` |
@@ -450,6 +454,19 @@ The same pattern works with Sealed Secrets, HashiCorp Vault Agent Injector (prod
 | `tablet.podDisruptionBudget.enabled` | Enable PodDisruptionBudget for TabletServer | `false` |
 | `tablet.podDisruptionBudget.minAvailable` | Minimum available tablet server pods during disruption | Not set |
 | `tablet.podDisruptionBudget.maxUnavailable` | Maximum unavailable tablet server pods during disruption | Not set |
+
+Workload and service annotations are where controllers such as
+[Reloader](https://github.com/stakater/Reloader) (restart on Secret change) or Argo CD
+(sync-waves) hook in:
+
+```yaml
+coordinator:
+  annotations:
+    secret.reloader.stakater.com/reload: fluss-internal-sasl
+tablet:
+  annotations:
+    secret.reloader.stakater.com/reload: fluss-internal-sasl
+```
 
 ## Advanced Configuration
 
