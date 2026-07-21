@@ -36,11 +36,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        module: [ core, flink-1.x, flink-2.x, spark3, spark3-scala213, lake ]
+        module: [ core, flink1, flink2, spark3, spark3-scala213, lake ]
         include:
-          - module: flink-1.x
+          - module: flink1
             test-profile: "test-flink"
-          - module: flink-2.x
+          - module: flink2
             test-profile: "test-flink"
           - module: spark3-scala213
             scala-profile: "-Pscala-2.13"

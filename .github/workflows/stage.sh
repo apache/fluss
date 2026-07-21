@@ -18,8 +18,8 @@
 ################################################################################
 
 STAGE_CORE="core"
-STAGE_FLINK1="flink-1.x"
-STAGE_FLINK2="flink-2.x"
+STAGE_FLINK1="flink1"
+STAGE_FLINK2="flink2"
 STAGE_SPARK="spark3"
 STAGE_SPARK_SCALA213="spark3-scala213"
 STAGE_LAKE="lake"
