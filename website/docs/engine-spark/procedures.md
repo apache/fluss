@@ -87,6 +87,69 @@ CALL sys.get_cluster_configs();
 CALL sys.get_cluster_configs(config_keys => ARRAY('kv.rocksdb.shared-rate-limiter.bytes-per-sec', 'datalake.format'));
 ```
 
+### set_cluster_configs
+
+Set cluster configuration values dynamically. The changes are validated, persisted, and applied to all servers without requiring a restart.
+
+**Syntax:**
+
+```sql
+CALL [catalog_name.]sys.set_cluster_configs(config_pairs => ARRAY('key1', 'value1', 'key2', 'value2'))
+```
+
+**Parameters:**
+
+- `config_pairs` (required): Array of configuration key-value pairs. Keys and values must alternate (key1, value1, key2, value2, ...).
+
+**Returns:** A table with columns:
+
+- `config_key`: The configuration key that was set
+- `config_value`: The value that was set
+- `result`: A message indicating the result of the operation
+
+**Example:**
+
+```sql title="Spark SQL"
+-- Set a single configuration
+CALL sys.set_cluster_configs(config_pairs => ARRAY('kv.rocksdb.shared-rate-limiter.bytes-per-sec', '200MB'));
+
+-- Set multiple configurations at once
+CALL sys.set_cluster_configs(config_pairs => ARRAY('kv.rocksdb.shared-rate-limiter.bytes-per-sec', '200MB', 'datalake.format', 'paimon'));
+```
+
+:::note
+Not all configurations support dynamic changes. The server will validate the change and reject it if the configuration cannot be modified dynamically or if the new value is invalid.
+:::
+
+### reset_cluster_configs
+
+Reset cluster configurations to their default values. The changes are validated, persisted, and applied to all servers without requiring a restart.
+
+**Syntax:**
+
+```sql
+CALL [catalog_name.]sys.reset_cluster_configs(config_keys => ARRAY('key1', 'key2'))
+```
+
+**Parameters:**
+
+- `config_keys` (required): Array of configuration keys to reset to their default values.
+
+**Returns:** A table with columns:
+
+- `config_key`: The configuration key that was reset
+- `result`: A message indicating the result of the operation
+
+**Example:**
+
+```sql title="Spark SQL"
+-- Reset a single configuration
+CALL sys.reset_cluster_configs(config_keys => ARRAY('kv.rocksdb.shared-rate-limiter.bytes-per-sec'));
+
+-- Reset multiple configurations at once
+CALL sys.reset_cluster_configs(config_keys => ARRAY('kv.rocksdb.shared-rate-limiter.bytes-per-sec', 'datalake.format'));
+```
+
 ## Error Handling
 
 Procedures will throw exceptions in the following cases:
