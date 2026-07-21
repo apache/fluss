@@ -54,7 +54,8 @@ MODULES_LAKE="\
 fluss-lake,\
 fluss-lake/fluss-lake-paimon,\
 fluss-lake/fluss-lake-iceberg,\
-fluss-lake/fluss-lake-lance
+fluss-lake/fluss-lake-lance,\
+fluss-lake/fluss-lake-hudi
 "
 
 function get_test_modules_for_stage() {
