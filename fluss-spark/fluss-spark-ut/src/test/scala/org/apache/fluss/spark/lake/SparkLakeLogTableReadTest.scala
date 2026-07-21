@@ -685,6 +685,7 @@ abstract class SparkLakeLogTableReadTest extends SparkLakeTableReadTestBase {
 
 }
 
+@SparkLakeTest
 class SparkLakePaimonLogTableReadTest extends SparkLakeLogTableReadTest {
   override protected def dataLakeFormat: DataLakeFormat = DataLakeFormat.PAIMON
 
@@ -707,6 +708,7 @@ class SparkLakePaimonLogTableReadTest extends SparkLakeLogTableReadTest {
   }
 }
 
+@SparkLakeTest
 class SparkLakeIcebergLogTableReadTest extends SparkLakeLogTableReadTest {
   override protected def dataLakeFormat: DataLakeFormat = DataLakeFormat.ICEBERG
 

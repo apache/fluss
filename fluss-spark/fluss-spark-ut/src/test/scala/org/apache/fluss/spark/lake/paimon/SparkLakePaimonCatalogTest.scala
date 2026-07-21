@@ -25,6 +25,7 @@ import org.apache.fluss.metadata.TableDescriptor.{BUCKET_COLUMN_NAME, OFFSET_COL
 import org.apache.fluss.server.utils.LakeStorageUtils
 import org.apache.fluss.spark.SparkCatalogTest
 import org.apache.fluss.spark.SparkConnectorOptions.{BUCKET_KEY, BUCKET_NUMBER, PRIMARY_KEY}
+import org.apache.fluss.spark.lake.SparkLakeTest
 
 import org.scalatest.matchers.must.Matchers.contain
 import org.scalatest.matchers.should.Matchers.{a, convertToAnyShouldWrapper}
@@ -33,6 +34,7 @@ import java.nio.file.Files
 
 import scala.collection.JavaConverters._
 
+@SparkLakeTest
 class SparkLakePaimonCatalogTest extends SparkCatalogTest {
 
   private var paimonCatalog: org.apache.paimon.catalog.Catalog = _

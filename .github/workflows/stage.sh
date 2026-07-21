@@ -21,8 +21,11 @@ STAGE_CORE="core"
 STAGE_FLINK1="flink1"
 STAGE_FLINK2="flink2"
 STAGE_SPARK="spark3"
+STAGE_SPARK_LAKE="spark3-lake"
 STAGE_SPARK_SCALA213="spark3-scala213"
 STAGE_LAKE="lake"
+
+SPARK_LAKE_TEST_TAG="org.apache.fluss.spark.lake.SparkLakeTest"
 
 MODULES_FLINK1="\
 fluss-flink/fluss-flink-1.20,\
@@ -85,10 +88,13 @@ function get_test_modules_for_stage() {
             echo "-pl fluss-test-coverage,$modules_flink2"
         ;;
         (${STAGE_SPARK})
-            echo "-pl fluss-test-coverage,$modules_spark3"
+            echo "-DtagsToExclude=$SPARK_LAKE_TEST_TAG -pl fluss-test-coverage,$modules_spark3"
+        ;;
+        (${STAGE_SPARK_LAKE})
+            echo "-DtagsToInclude=$SPARK_LAKE_TEST_TAG -pl fluss-test-coverage,$modules_spark3"
         ;;
         (${STAGE_SPARK_SCALA213})
-            echo "-Pscala-2.13 -pl fluss-test-coverage,$modules_spark3"
+            echo "-Pscala-2.13 -DtagsToExclude=$SPARK_LAKE_TEST_TAG -pl fluss-test-coverage,$modules_spark3"
         ;;
         (${STAGE_LAKE})
             echo "-pl fluss-test-coverage,$modules_lake"

@@ -551,6 +551,7 @@ abstract class SparkLakePrimaryKeyTableReadTestBase extends SparkLakeTableReadTe
 
 }
 
+@SparkLakeTest
 class SparkLakePaimonPrimaryKeyTableReadTest extends SparkLakePrimaryKeyTableReadTestBase {
 
   override protected def dataLakeFormat: DataLakeFormat = DataLakeFormat.PAIMON
