@@ -25,8 +25,10 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.sink.serializer.FlussSerializationSchema;
 import org.apache.fluss.flink.sink.shuffle.DistributionMode;
+import org.apache.fluss.flink.sink.undo.RecoveryAction;
 import org.apache.fluss.flink.sink.writer.FlinkSinkWriter;
 import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -34,6 +36,8 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.flink.table.types.logical.RowType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import javax.annotation.Nullable;
 
 import java.util.Arrays;
 import java.util.HashMap;
@@ -209,7 +213,8 @@ public class FlussSinkBuilder<InputT> {
 
         boolean isUpsert = tableInfo.hasPrimaryKey();
 
-        // Detect if this is an aggregation table that needs undo recovery
+        // Keep the recovery compatibility transform for every aggregation table. The selected
+        // action determines whether it performs undo recovery or acts as a no-op shell.
         MergeEngineType mergeEngineType =
                 tableInfo.getTableConfig().getMergeEngineType().orElse(null);
         boolean enableUndoRecovery = mergeEngineType == MergeEngineType.AGGREGATION;
@@ -224,6 +229,7 @@ public class FlussSinkBuilder<InputT> {
                             tableRowType.getFieldNames(),
                             tableInfo.getPrimaryKeys(),
                             partialUpdateColumns);
+            RecoveryAction recoveryAction = determineRecoveryAction(tableInfo, targetColumnIndexes);
             writerBuilder =
                     new FlinkSink.UpsertSinkWriterBuilder<>(
                             tablePath,
@@ -237,6 +243,7 @@ public class FlussSinkBuilder<InputT> {
                             distributionMode,
                             serializationSchema,
                             enableUndoRecovery,
+                            recoveryAction,
                             producerId);
         } else {
             LOG.info("Initializing Fluss append sink writer ...");
@@ -268,6 +275,20 @@ public class FlussSinkBuilder<InputT> {
     }
 
     // -------------- Test-visible helper methods --------------
+    static RecoveryAction determineRecoveryAction(
+            TableInfo tableInfo, @Nullable int[] targetColumnIndexes) {
+        MergeEngineType mergeEngineType =
+                tableInfo.getTableConfig().getMergeEngineType().orElse(null);
+        if (mergeEngineType != MergeEngineType.AGGREGATION) {
+            return RecoveryAction.UNDO;
+        }
+
+        DeleteBehavior deleteBehavior =
+                tableInfo.getTableConfig().getDeleteBehavior().orElse(DeleteBehavior.ALLOW);
+        return AggregationRecoveryDecider.decide(
+                tableInfo.getSchema(), targetColumnIndexes, deleteBehavior, false, false);
+    }
+
     /**
      * Computes target column indexes for partial updates. If {@code specifiedColumns} is null or
      * empty, returns null indicating full update. Validates that all primary key columns are
