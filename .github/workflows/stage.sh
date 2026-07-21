@@ -35,6 +35,7 @@ fluss-flink/fluss-flink-common,\
 fluss-flink/fluss-flink-2.2\
 "
 
+# Skip Flink 1.19 to reduce PR CI time; consider covering it in a daily CI run.
 MODULES_EXCLUDED_FROM_TEST="fluss-flink/fluss-flink-1.19"
 
 MODULES_COMMON_SPARK="\
