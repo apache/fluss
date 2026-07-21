@@ -17,14 +17,13 @@
 
 package org.apache.fluss.rpc.protocol;
 
-import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.annotation.PublicEvolving;
 
 /** Read preference for fetch log requests. */
-@Internal
+@PublicEvolving
 public enum FetchLogReadPreference {
     LOCAL_FIRST(0, "local-first"),
     REMOTE_FIRST(1, "remote-first");
-
     private final int value;
     private final String name;
 
