@@ -1566,7 +1566,8 @@ public class ReplicaManager implements ServerReconfigurable {
                 return new FetchLogResultForBucket(
                         tb, remoteLogFetchInfo, replica.getLogHighWatermark());
             }
-            // Remote log is expected to cover the offset, but segments/manifest may not be ready yet.
+            // Remote log is expected to cover the offset, but segments/manifest may not be ready
+            // yet.
             // REMOTE_FIRST is a preference, so fall back to local reads.
             return null;
         } catch (Exception e) {

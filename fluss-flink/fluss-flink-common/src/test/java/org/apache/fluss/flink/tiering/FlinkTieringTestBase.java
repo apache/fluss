@@ -173,6 +173,15 @@ class FlinkTieringTestBase {
         return TestingValuesLake.getResults(tablePath.toString());
     }
 
+    protected TieringJobScope startTieringJob(StreamExecutionEnvironment execEnv) throws Exception {
+        return new TieringJobScope(buildTieringJob(execEnv));
+    }
+
+    protected TieringJobScope startTieringJob(
+            StreamExecutionEnvironment execEnv, Configuration lakeTieringConfig) throws Exception {
+        return new TieringJobScope(buildTieringJob(execEnv, lakeTieringConfig));
+    }
+
     protected JobClient buildTieringJob(StreamExecutionEnvironment execEnv) throws Exception {
         return buildTieringJob(execEnv, new Configuration());
     }
@@ -189,5 +198,35 @@ class FlinkTieringTestBase {
                         lakeTieringConfig,
                         DataLakeFormat.LANCE.toString())
                 .build();
+    }
+
+    /**
+     * A try-with-resources scope that starts a tiering job and cancels it when closed.
+     *
+     * <p>Example:
+     *
+     * <pre>{@code
+     * try (TieringJobScope tiering = startTieringJob(execEnv)) {
+     *     assertReplicaStatus(tableBucket, expectedLogEndOffset);
+     * }
+     * }</pre>
+     */
+    protected static final class TieringJobScope implements AutoCloseable {
+
+        private final JobClient jobClient;
+
+        private TieringJobScope(JobClient jobClient) {
+            this.jobClient = jobClient;
+        }
+
+        /** Returns the underlying Flink job client. */
+        public JobClient client() {
+            return jobClient;
+        }
+
+        @Override
+        public void close() throws Exception {
+            jobClient.cancel().get();
+        }
     }
 }

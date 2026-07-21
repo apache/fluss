@@ -34,15 +34,11 @@ import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.ExceptionUtils;
 
 import org.apache.flink.api.common.RuntimeExecutionMode;
-import org.apache.flink.core.execution.JobClient;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.MethodOrderer;
-import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.TestMethodOrder;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -56,7 +52,6 @@ import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** The IT case for tiering. */
-@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 abstract class TieringITCase extends FlinkTieringTestBase {
 
     @BeforeAll
@@ -79,7 +74,6 @@ abstract class TieringITCase extends FlinkTieringTestBase {
     }
 
     @Test
-    @Order(1)
     void testTieringReachMaxDuration() throws Exception {
         TablePath logTablePath = TablePath.of("fluss", "logtable");
         createTable(logTablePath, false);
@@ -105,9 +99,7 @@ abstract class TieringITCase extends FlinkTieringTestBase {
 
         // set tiering duration to a small value for testing purpose
         Configuration lakeTieringConfig = new Configuration();
-        JobClient jobClient = buildTieringJob(execEnv, lakeTieringConfig);
-
-        try {
+        try (TieringJobScope ignored = startTieringJob(execEnv, lakeTieringConfig)) {
             // verify the tiered records is less than the table total record to
             // make sure tiering is forced to complete when reach max duration
             LakeSnapshot logTableLakeSnapshot = waitLakeSnapshot(logTablePath);
@@ -119,13 +111,10 @@ abstract class TieringITCase extends FlinkTieringTestBase {
             LakeSnapshot pkTableLakeSnapshot = waitLakeSnapshot(pkTablePath);
             tieredRecords = countTieredRecords(pkTableLakeSnapshot);
             assertThat(tieredRecords).isLessThan(recordCount);
-        } finally {
-            jobClient.cancel().get();
         }
     }
 
     @Test
-    @Order(2)
     void testTieringReadsRemoteFirstAndSwitchesToLocalTail() throws Exception {
         TablePath tablePath = TablePath.of("fluss", "remote_first_log_table");
         Schema schema =
@@ -163,8 +152,7 @@ abstract class TieringITCase extends FlinkTieringTestBase {
 
         long localBytesOutBefore =
                 replica.tableMetrics().getServerMetricGroup().bytesOut().getCount();
-        JobClient jobClient = buildTieringJob(execEnv);
-        try {
+        try (TieringJobScope ignored = startTieringJob(execEnv)) {
             assertReplicaStatus(tableBucket, expectedRows.size());
             assertRows(tablePath, expectedRows);
 
@@ -172,8 +160,6 @@ abstract class TieringITCase extends FlinkTieringTestBase {
                     replica.tableMetrics().getServerMetricGroup().bytesOut().getCount()
                             - localBytesOutBefore;
             assertThat(localBytesOut).isEqualTo(localTailBytes);
-        } finally {
-            jobClient.cancel().get();
         }
     }
 
