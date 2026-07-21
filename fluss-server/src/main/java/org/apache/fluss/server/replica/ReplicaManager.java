@@ -1364,9 +1364,6 @@ public class ReplicaManager implements ServerReconfigurable {
                 // metric for kv
                 tableMetrics.incKvMessageIn(entry.getValue().getRecordCount());
                 tableMetrics.incKvBytesIn(entry.getValue().sizeInBytes());
-                // metric for cdc log of kv
-                tableMetrics.incLogBytesIn(appendInfo.validBytes());
-                tableMetrics.incLogMessageIn(appendInfo.numMessages());
             } catch (Exception e) {
                 if (isUnexpectedException(e)) {
                     LOG.error("Error put records to local kv on replica {}", tb, e);
