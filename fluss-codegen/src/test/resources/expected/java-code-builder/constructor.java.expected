@@ -1,0 +1,6 @@
+public class TestClass {
+  public TestClass(int value, String name) throws Exception {
+    this.value = value;
+    this.name = name;
+  }
+}
