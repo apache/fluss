@@ -42,6 +42,7 @@ import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.ArrowBatchData;
 import org.apache.fluss.utils.CloseableIterator;
+import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.function.SupplierWithException;
 
 import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
@@ -56,6 +57,7 @@ import javax.annotation.Nullable;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -622,7 +624,14 @@ public class TieringSplitReader<WriteResult>
         LakeWriter<WriteResult> lakeWriter = lakeWriters.remove(bucket);
         WriteResult writeResult = null;
         if (lakeWriter != null) {
-            writeResult = lakeWriter.complete();
+            try {
+                writeResult = lakeWriter.complete();
+            } catch (Exception e) {
+                // make sure the lake writer is always closed to release resources
+                // when complete fails, otherwise resources like arrow buffers leak
+                IOUtils.closeQuietly(lakeWriter, "lake writer for bucket " + bucket);
+                throw e;
+            }
             lakeWriter.close();
         }
         return toTableBucketWriteResult(
@@ -721,6 +730,10 @@ public class TieringSplitReader<WriteResult>
     }
 
     private void finishCurrentTable() throws IOException {
+        // defensive cleanup: lake writers should have been completed and closed when
+        // their splits finished, close any residual writers before closing the log
+        // scanner since their resources may be allocated from the scanner
+        closeAllLakeWriters();
         try {
             if (currentLogScanner != null) {
                 currentLogScanner.close();
@@ -776,14 +789,35 @@ public class TieringSplitReader<WriteResult>
 
     @Override
     public void close() throws Exception {
-        if (currentLogScanner != null) {
-            currentLogScanner.close();
-        }
-        if (currentTable != null) {
-            currentTable.close();
-        }
+        // lake writers must be closed before the log scanner since their resources
+        // (e.g. arrow buffers) may be allocated from the scanner;
+        // the connection is owned and closed by TieringSourceReader
+        List<AutoCloseable> closeables = new ArrayList<>(lakeWriters.values());
+        closeables.add(currentSnapshotSplitReader);
+        closeables.add(currentLogScanner);
+        closeables.add(currentTable);
 
-        // don't need to close connection, will be closed by TieringSourceReader
+        // clear the fields to make close() idempotent
+        lakeWriters.clear();
+        currentSnapshotSplitReader = null;
+        currentLogScanner = null;
+        currentTable = null;
+
+        IOUtils.closeAll(closeables);
+    }
+
+    private void closeAllLakeWriters() {
+        if (lakeWriters.isEmpty()) {
+            return;
+        }
+        LOG.warn(
+                "{} lake writer(s) of table {} are still in-flight, closing them.",
+                lakeWriters.size(),
+                currentTablePath);
+        for (Map.Entry<TableBucket, LakeWriter<WriteResult>> entry : lakeWriters.entrySet()) {
+            IOUtils.closeQuietly(entry.getValue(), "lake writer for bucket " + entry.getKey());
+        }
+        lakeWriters.clear();
     }
 
     private void subscribeLog(TieringLogSplit logSplit) {

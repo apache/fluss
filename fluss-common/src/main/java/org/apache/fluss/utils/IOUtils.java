@@ -107,6 +107,31 @@ public class IOUtils {
         return copyBytes(in, out, BLOCKSIZE, close);
     }
 
+    /**
+     * Closes all non-null {@link AutoCloseable} objects in the parameter, suppressing exceptions.
+     * Exception will be emitted after calling close() on every object.
+     *
+     * @param closeables iterable with closeables to close.
+     * @throws Exception collected exceptions that occurred during closing
+     */
+    public static void closeAll(Iterable<? extends AutoCloseable> closeables) throws Exception {
+        if (null != closeables) {
+            Exception collectedExceptions = null;
+            for (AutoCloseable closeable : closeables) {
+                try {
+                    if (null != closeable) {
+                        closeable.close();
+                    }
+                } catch (Exception e) {
+                    collectedExceptions = ExceptionUtils.firstOrSuppressed(e, collectedExceptions);
+                }
+            }
+            if (null != collectedExceptions) {
+                throw collectedExceptions;
+            }
+        }
+    }
+
     /** Closes all elements in the iterable with closeQuietly(). */
     public static void closeAllQuietly(Iterable<? extends AutoCloseable> closeables) {
         if (null != closeables) {

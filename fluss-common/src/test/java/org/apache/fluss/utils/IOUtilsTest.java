@@ -25,6 +25,7 @@ import java.io.IOException;
 import java.util.Arrays;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link org.apache.fluss.utils.IOUtils}. */
 class IOUtilsTest {
@@ -38,6 +39,23 @@ class IOUtilsTest {
         IOUtils.closeQuietly(withoutException);
         // test close with multi-instances
         IOUtils.closeAllQuietly(Arrays.asList(withException, withoutException));
+    }
+
+    @Test
+    void testCloseAll() throws Exception {
+        // null iterable and null elements should be tolerated
+        IOUtils.closeAll(null);
+        IOUtils.closeAll(Arrays.asList(null, new CloserWithoutException()));
+
+        // every closeable should be closed even if one fails, and the first
+        // exception should be thrown with the others suppressed
+        CloserWithException failing1 = new CloserWithException();
+        CloserWithException failing2 = new CloserWithException();
+        CloserWithoutException succeeding = new CloserWithoutException();
+        assertThatThrownBy(() -> IOUtils.closeAll(Arrays.asList(failing1, succeeding, failing2)))
+                .hasMessage("Fail to close")
+                .satisfies(t -> assertThat(t.getSuppressed()).hasSize(1));
+        assertThat(succeeding.closed).isTrue();
     }
 
     @Test
@@ -81,9 +99,13 @@ class IOUtilsTest {
     }
 
     private static class CloserWithoutException implements AutoCloseable {
+
+        private boolean closed;
+
         @Override
         public void close() throws Exception {
             // don't throw exception
+            closed = true;
         }
     }
 }
