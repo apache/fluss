@@ -153,7 +153,8 @@ public class LogRecordReadContext
         // TODO: use a more reasonable memory limit
         BufferAllocator allocator =
                 BufferAllocatorUtil.createBufferAllocator(allocationManagerFactory);
-        FieldGetter[] fieldGetters = buildProjectedFieldGetters(dataRowType, selectedFields);
+        FieldGetter[] fieldGetters =
+                buildProjectedFieldGetters(dataRowType, selectedFields, LogFormat.ARROW);
         return new LogRecordReadContext(
                 LogFormat.ARROW,
                 dataRowType,
@@ -239,7 +240,8 @@ public class LogRecordReadContext
      */
     public static LogRecordReadContext createIndexedReadContext(
             RowType rowType, int schemaId, int[] selectedFields, SchemaGetter schemaGetter) {
-        FieldGetter[] fieldGetters = buildProjectedFieldGetters(rowType, selectedFields);
+        FieldGetter[] fieldGetters =
+                buildProjectedFieldGetters(rowType, selectedFields, LogFormat.INDEXED);
         // for INDEXED log format, the projection is NEVER push downed to the server side
         return new LogRecordReadContext(
                 LogFormat.INDEXED, rowType, schemaId, null, fieldGetters, false, schemaGetter);
@@ -270,7 +272,8 @@ public class LogRecordReadContext
             int schemaId,
             int[] selectedFields,
             @Nullable SchemaGetter schemaGetter) {
-        FieldGetter[] fieldGetters = buildProjectedFieldGetters(rowType, selectedFields);
+        FieldGetter[] fieldGetters =
+                buildProjectedFieldGetters(rowType, selectedFields, LogFormat.COMPACTED);
         // for COMPACTED log format, the projection is NEVER push downed to the server side
         return new LogRecordReadContext(
                 LogFormat.COMPACTED, rowType, schemaId, null, fieldGetters, false, schemaGetter);
@@ -476,14 +479,17 @@ public class LogRecordReadContext
         return targetSchemaId == schemaId || isProjectionPushDowned();
     }
 
-    private static FieldGetter[] buildProjectedFieldGetters(RowType rowType, int[] selectedFields) {
+    private static FieldGetter[] buildProjectedFieldGetters(
+            RowType rowType, int[] selectedFields, LogFormat logFormat) {
+        // ARROW already copies strings during deserialization;
+        // other formats reference pooled network buffers and need explicit copying.
+        boolean copyStrings = logFormat != LogFormat.ARROW;
         List<DataType> dataTypeList = rowType.getChildren();
         FieldGetter[] fieldGetters = new FieldGetter[selectedFields.length];
         for (int i = 0; i < fieldGetters.length; i++) {
-            // build deep field getter to support nested types
             fieldGetters[i] =
                     InternalRow.createDeepFieldGetter(
-                            dataTypeList.get(selectedFields[i]), selectedFields[i]);
+                            dataTypeList.get(selectedFields[i]), selectedFields[i], copyStrings);
         }
         return fieldGetters;
     }
