@@ -39,9 +39,9 @@ jobs:
         module: [ core, flink1, flink2, spark3, spark3-scala213, lake ]
         include:
           - module: flink1
-            test-profile: "test-flink"
+            test-profile: "test-flink1"
           - module: flink2
-            test-profile: "test-flink"
+            test-profile: "test-flink2"
           - module: spark3-scala213
             scala-profile: "-Pscala-2.13"
             test-profile: "test-spark3"
