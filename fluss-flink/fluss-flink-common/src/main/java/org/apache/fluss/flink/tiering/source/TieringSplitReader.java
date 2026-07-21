@@ -818,6 +818,8 @@ public class TieringSplitReader<WriteResult>
             IOUtils.closeQuietly(entry.getValue(), "lake writer for bucket " + entry.getKey());
         }
         lakeWriters.clear();
+
+        // don't need to close connection, will be closed by TieringSourceReader
     }
 
     private void subscribeLog(TieringLogSplit logSplit) {
