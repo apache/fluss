@@ -800,6 +800,29 @@ public interface Admin extends AutoCloseable {
     CompletableFuture<ClusterHealth> getClusterHealth();
 
     /**
+     * Describe the replica load of each tablet server in the cluster asynchronously.
+     *
+     * <p>The returned list contains {@link TabletServerDescription} counters per tablet server.
+     * Live tablet servers are always included, even when they host no replicas.
+     *
+     * <p>This API is designed for operational tooling (e.g., a Kubernetes operator):
+     *
+     * <ul>
+     *   <li>scale-in safety gate - a tablet server may only be removed once its {@code numReplicas}
+     *       is {@code 0}, since terminating a non-empty server causes under-replication or data
+     *       unavailability;
+     *   <li>rolling-upgrade gate - only proceed to the next server when the previous one is green
+     *       again ({@code inSyncReplicas == numReplicas && activeLeaderReplicas ==
+     *       numLeaderReplicas});
+     *   <li>reporting per-server tablet load in cluster status.
+     * </ul>
+     *
+     * @return a {@link CompletableFuture} that completes with the per tablet server replica loads.
+     * @since 1.0
+     */
+    CompletableFuture<List<TabletServerDescription>> describeTabletServers();
+
+    /**
      * List per-bucket remote log manifest entries for a table or partition scope.
      *
      * @param tableId the table to query

@@ -60,6 +60,8 @@ import org.apache.fluss.rpc.messages.DeleteProducerOffsetsRequest;
 import org.apache.fluss.rpc.messages.DeleteProducerOffsetsResponse;
 import org.apache.fluss.rpc.messages.DescribeClusterConfigsRequest;
 import org.apache.fluss.rpc.messages.DescribeClusterConfigsResponse;
+import org.apache.fluss.rpc.messages.DescribeTabletServersRequest;
+import org.apache.fluss.rpc.messages.DescribeTabletServersResponse;
 import org.apache.fluss.rpc.messages.DropAclsRequest;
 import org.apache.fluss.rpc.messages.DropAclsResponse;
 import org.apache.fluss.rpc.messages.DropDatabaseRequest;
@@ -482,6 +484,12 @@ public class TestCoordinatorGateway implements CoordinatorGateway {
     @Override
     public CompletableFuture<GetClusterHealthResponse> getClusterHealth(
             GetClusterHealthRequest request) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public CompletableFuture<DescribeTabletServersResponse> describeTabletServers(
+            DescribeTabletServersRequest request) {
         throw new UnsupportedOperationException();
     }
 
