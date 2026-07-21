@@ -8,7 +8,7 @@ import TabItem from '@theme/TabItem';
 
 # Deploying Streaming Lakehouse
 
-This guide covers how to deploy a Fluss cluster with Streaming Lakehouse capabilities. For conceptual overview, see [Lakehouse Overview](../streaming-lakehouse/overview.md).
+This guide covers how to deploy a Fluss cluster with Streaming Lakehouse capabilities. For conceptual overview, see [Lakehouse Overview](../streaming-lakehouse/overview.mdx).
 
 ## Prerequisites
 
