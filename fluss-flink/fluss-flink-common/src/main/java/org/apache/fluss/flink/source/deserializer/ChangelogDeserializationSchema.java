@@ -25,6 +25,8 @@ import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.runtime.typeutils.InternalTypeInfo;
 
+import javax.annotation.Nullable;
+
 import static org.apache.fluss.flink.utils.FlinkConversions.toFlinkRowType;
 
 /**
@@ -39,14 +41,31 @@ public class ChangelogDeserializationSchema implements FlussDeserializationSchem
      */
     private transient ChangelogRowConverter converter;
 
-    /** Creates a new ChangelogDeserializationSchema. */
-    public ChangelogDeserializationSchema() {}
+    /**
+     * Optional projection over the base changelog row {@code [_change_type, _log_offset,
+     * _commit_timestamp, <scanned data columns>]}, or {@code null} for no projection.
+     */
+    @Nullable private final int[] baseRowProjection;
+
+    /** Creates a new ChangelogDeserializationSchema without projection. */
+    public ChangelogDeserializationSchema() {
+        this(null);
+    }
+
+    /**
+     * Creates a new ChangelogDeserializationSchema.
+     *
+     * @param baseRowProjection projection over the base changelog row, or {@code null} for none
+     */
+    public ChangelogDeserializationSchema(@Nullable int[] baseRowProjection) {
+        this.baseRowProjection = baseRowProjection;
+    }
 
     /** Initializes the deserialization schema. */
     @Override
     public void open(InitializationContext context) throws Exception {
         if (converter == null) {
-            this.converter = new ChangelogRowConverter(context.getRowSchema());
+            this.converter = new ChangelogRowConverter(context.getRowSchema(), baseRowProjection);
         }
     }
 
@@ -67,9 +86,10 @@ public class ChangelogDeserializationSchema implements FlussDeserializationSchem
      */
     @Override
     public TypeInformation<RowData> getProducedType(RowType rowSchema) {
-        // Build the output type with metadata columns
+        // Build the output type with metadata columns, honoring the projection when present
         org.apache.flink.table.types.logical.RowType outputType =
-                ChangelogRowConverter.buildChangelogRowType(toFlinkRowType(rowSchema));
+                ChangelogRowConverter.buildProducedRowType(
+                        toFlinkRowType(rowSchema), baseRowProjection);
         return InternalTypeInfo.of(outputType);
     }
 }

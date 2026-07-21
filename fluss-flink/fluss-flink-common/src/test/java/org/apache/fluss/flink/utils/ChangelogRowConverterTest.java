@@ -185,6 +185,40 @@ class ChangelogRowConverterTest {
                 .isEqualTo(StringData.fromString("insert"));
     }
 
+    @Test
+    void testProjectionEmitsSelectedColumnsInOrder() throws Exception {
+        // Project the base changelog row
+        // [_change_type(0), _log_offset(1), _commit_timestamp(2), id(3), name(4), amount(5)]
+        // down to [_log_offset, amount, id] to verify subsetting + reordering.
+        ChangelogRowConverter projected =
+                new ChangelogRowConverter(testRowType, new int[] {1, 5, 3});
+
+        org.apache.flink.table.types.logical.RowType producedType = projected.getProducedType();
+        assertThat(producedType.getFieldNames()).containsExactly("_log_offset", "amount", "id");
+
+        RowData result =
+                projected.convert(createLogRecord(ChangeType.INSERT, 100L, 1, "Alice", 5000L));
+
+        assertThat(result.getArity()).isEqualTo(3);
+        assertThat(result.getRowKind()).isEqualTo(RowKind.INSERT);
+        assertThat(result.getLong(0)).isEqualTo(100L); // _log_offset
+        assertThat(result.getLong(1)).isEqualTo(5000L); // amount
+        assertThat(result.getInt(2)).isEqualTo(1); // id
+    }
+
+    @Test
+    void testProjectionMetadataOnly() throws Exception {
+        // Project only the _change_type metadata column.
+        ChangelogRowConverter projected = new ChangelogRowConverter(testRowType, new int[] {0});
+
+        assertThat(projected.getProducedType().getFieldNames()).containsExactly("_change_type");
+
+        RowData result =
+                projected.convert(createLogRecord(ChangeType.DELETE, 300L, 3, "Charlie", 1000L));
+        assertThat(result.getArity()).isEqualTo(1);
+        assertThat(result.getString(0)).isEqualTo(StringData.fromString("delete"));
+    }
+
     private LogRecord createLogRecord(
             ChangeType changeType, long offset, int id, String name, long amount) throws Exception {
         // Create an IndexedRow with test data

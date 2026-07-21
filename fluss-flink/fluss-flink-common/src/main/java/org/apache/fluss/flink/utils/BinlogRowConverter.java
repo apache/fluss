@@ -26,6 +26,7 @@ import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.data.StringData;
 import org.apache.flink.table.data.TimestampData;
+import org.apache.flink.table.data.utils.ProjectedRowData;
 import org.apache.flink.table.types.logical.BigIntType;
 import org.apache.flink.table.types.logical.LocalZonedTimestampType;
 import org.apache.flink.table.types.logical.VarCharType;
@@ -46,15 +47,35 @@ public class BinlogRowConverter implements RecordToFlinkRowConverter {
     private final org.apache.flink.table.types.logical.RowType producedType;
 
     /**
+     * Optional top-level projection over the binlog row {@code [_change_type, _log_offset,
+     * _commit_timestamp, before, after]}. When non-null, the converter emits exactly those columns
+     * in that order; {@code null} means the full binlog row is emitted. Nested pruning inside
+     * before/after is not supported, so the underlying data scan always reads all columns.
+     */
+    @Nullable private final int[] projectedTopLevel;
+
+    /**
      * Buffer for the UPDATE_BEFORE (-U) record pending merge with the next UPDATE_AFTER (+U)
      * record. Null when no update is in progress.
      */
     @Nullable private LogRecord pendingUpdateBefore;
 
-    /** Creates a new BinlogRowConverter. */
+    /** Creates a new BinlogRowConverter without projection. */
     public BinlogRowConverter(RowType rowType) {
+        this(rowType, null);
+    }
+
+    /**
+     * Creates a new BinlogRowConverter.
+     *
+     * @param rowType the data columns scanned from Fluss (always the full set)
+     * @param projectedTopLevel top-level projection over the binlog row, or {@code null} for none
+     */
+    public BinlogRowConverter(RowType rowType, @Nullable int[] projectedTopLevel) {
         this.baseConverter = new FlussRowToFlinkRowConverter(rowType);
-        this.producedType = buildBinlogRowType(FlinkConversions.toFlinkRowType(rowType));
+        this.projectedTopLevel = projectedTopLevel;
+        this.producedType =
+                buildProducedRowType(FlinkConversions.toFlinkRowType(rowType), projectedTopLevel);
     }
 
     /** Converts a LogRecord to a binlog RowData with nested before/after structure. */
@@ -137,7 +158,10 @@ public class BinlogRowConverter implements RecordToFlinkRowConverter {
         row.setField(3, before);
         row.setField(4, after);
         row.setRowKind(RowKind.INSERT);
-        return row;
+        if (projectedTopLevel == null) {
+            return row;
+        }
+        return ProjectedRowData.from(projectedTopLevel).replaceRow(row);
     }
 
     /**
@@ -169,6 +193,29 @@ public class BinlogRowConverter implements RecordToFlinkRowConverter {
                 new org.apache.flink.table.types.logical.RowType.RowField(
                         TableDescriptor.AFTER_COLUMN, nullableRowType));
 
+        return new org.apache.flink.table.types.logical.RowType(fields);
+    }
+
+    /**
+     * Builds the produced Flink RowType for a binlog scan: the full binlog row type when {@code
+     * projectedTopLevel} is null, otherwise the projected top-level subset selected in the
+     * requested order.
+     *
+     * @param originalDataType the data columns row type
+     * @param projectedTopLevel top-level projection over the binlog row, or {@code null} for none
+     * @return the produced row type
+     */
+    public static org.apache.flink.table.types.logical.RowType buildProducedRowType(
+            org.apache.flink.table.types.logical.RowType originalDataType,
+            @Nullable int[] projectedTopLevel) {
+        org.apache.flink.table.types.logical.RowType full = buildBinlogRowType(originalDataType);
+        if (projectedTopLevel == null) {
+            return full;
+        }
+        List<org.apache.flink.table.types.logical.RowType.RowField> fields = new ArrayList<>();
+        for (int idx : projectedTopLevel) {
+            fields.add(full.getFields().get(idx));
+        }
         return new org.apache.flink.table.types.logical.RowType(fields);
     }
 }

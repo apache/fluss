@@ -46,14 +46,31 @@ public class BinlogDeserializationSchema implements FlussDeserializationSchema<R
      */
     private transient BinlogRowConverter converter;
 
-    /** Creates a new BinlogDeserializationSchema. */
-    public BinlogDeserializationSchema() {}
+    /**
+     * Optional top-level projection over the binlog row {@code [_change_type, _log_offset,
+     * _commit_timestamp, before, after]}, or {@code null} for no projection.
+     */
+    @Nullable private final int[] projectedTopLevel;
+
+    /** Creates a new BinlogDeserializationSchema without projection. */
+    public BinlogDeserializationSchema() {
+        this(null);
+    }
+
+    /**
+     * Creates a new BinlogDeserializationSchema.
+     *
+     * @param projectedTopLevel top-level projection over the binlog row, or {@code null} for none
+     */
+    public BinlogDeserializationSchema(@Nullable int[] projectedTopLevel) {
+        this.projectedTopLevel = projectedTopLevel;
+    }
 
     /** Initializes the deserialization schema. */
     @Override
     public void open(InitializationContext context) throws Exception {
         if (converter == null) {
-            this.converter = new BinlogRowConverter(context.getRowSchema());
+            this.converter = new BinlogRowConverter(context.getRowSchema(), projectedTopLevel);
         }
     }
 
@@ -77,9 +94,10 @@ public class BinlogDeserializationSchema implements FlussDeserializationSchema<R
      */
     @Override
     public TypeInformation<RowData> getProducedType(RowType rowSchema) {
-        // Build the output type with nested before/after ROW columns
+        // Build the output type with nested before/after ROW columns, honoring the projection
         org.apache.flink.table.types.logical.RowType outputType =
-                BinlogRowConverter.buildBinlogRowType(toFlinkRowType(rowSchema));
+                BinlogRowConverter.buildProducedRowType(
+                        toFlinkRowType(rowSchema), projectedTopLevel);
         return InternalTypeInfo.of(outputType);
     }
 }

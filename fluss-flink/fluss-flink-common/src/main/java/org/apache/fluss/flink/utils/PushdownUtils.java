@@ -26,6 +26,8 @@ import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.batch.BatchScanner;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.StatisticsColumnsConfig;
+import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.flink.source.lookup.FlinkLookupFunction;
@@ -35,12 +37,17 @@ import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metadata.TableStats;
+import org.apache.fluss.predicate.CompoundPredicate;
+import org.apache.fluss.predicate.LeafPredicate;
+import org.apache.fluss.predicate.Predicate;
+import org.apache.fluss.predicate.PredicateVisitor;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.types.DataTypeChecks;
 
 import org.apache.flink.table.api.TableException;
 import org.apache.flink.table.data.DecimalData;
@@ -67,8 +74,10 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -449,6 +458,76 @@ public class PushdownUtils {
     }
 
     // ------------------------------------------------------------------------------------------
+
+    /**
+     * Computes the set of column names that have statistics available for filter pushdown, based on
+     * the table's statistics configuration. Returns an empty set when statistics collection is
+     * disabled.
+     *
+     * @param flussRowType the row type whose columns are considered
+     * @param tableConfig the table configuration carrying the statistics settings
+     * @return the set of column names that have statistics available
+     */
+    public static Set<String> computeAvailableStatsColumns(
+            org.apache.fluss.types.RowType flussRowType, TableConfig tableConfig) {
+        StatisticsColumnsConfig statsConfig = tableConfig.getStatisticsColumns();
+        if (!statsConfig.isEnabled()) {
+            return Collections.emptySet();
+        }
+
+        Set<String> columns = new HashSet<>();
+        if (statsConfig.getMode() == StatisticsColumnsConfig.Mode.ALL) {
+            for (int i = 0; i < flussRowType.getFieldCount(); i++) {
+                if (DataTypeChecks.isSupportedStatisticsType(flussRowType.getTypeAt(i))) {
+                    columns.add(flussRowType.getFieldNames().get(i));
+                }
+            }
+        } else {
+            for (String columnName : statsConfig.getColumns()) {
+                int columnIndex = flussRowType.getFieldNames().indexOf(columnName);
+                if (columnIndex >= 0
+                        && DataTypeChecks.isSupportedStatisticsType(
+                                flussRowType.getTypeAt(columnIndex))) {
+                    columns.add(columnName);
+                }
+            }
+        }
+        return columns;
+    }
+
+    /**
+     * Checks if a predicate can benefit from statistics based on the available statistics columns.
+     * A compound predicate is usable only if all of its children are usable.
+     *
+     * @param predicate the predicate to check
+     * @param rowType the row type the predicate indexes into
+     * @param availableStatsColumns the columns that have statistics available
+     * @return true if the predicate can use statistics
+     */
+    public static boolean canPredicateUseStatistics(
+            Predicate predicate,
+            org.apache.fluss.types.RowType rowType,
+            Set<String> availableStatsColumns) {
+        class StatisticsUsageVisitor implements PredicateVisitor<Boolean> {
+            @Override
+            public Boolean visit(LeafPredicate leaf) {
+                String fieldName = rowType.getFieldNames().get(leaf.index());
+                return availableStatsColumns.contains(fieldName);
+            }
+
+            @Override
+            public Boolean visit(CompoundPredicate compound) {
+                for (Predicate child : compound.children()) {
+                    if (!child.visit(this)) {
+                        return false;
+                    }
+                }
+                return true;
+            }
+        }
+
+        return predicate.visit(new StatisticsUsageVisitor());
+    }
 
     /** A structure represents a source field equal literal expression. */
     public static class FieldEqual implements Serializable {
