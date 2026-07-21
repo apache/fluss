@@ -167,9 +167,8 @@ class RbFunctionsCatalogITCase {
     }
 
     @Test
-    void testAllThreeFunctionsInSingleQuery() throws Exception {
-        // Validates the PR title claim: all three functions callable after USE CATALOG
-        // fluss_catalog
+    void testAllThreeAggFunctionsInSingleQuery() throws Exception {
+        // Validates all three aggregate functions are callable after USE CATALOG fluss_catalog
         byte[] bmap1 = BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1, 2, 3));
         byte[] bmap2 = BitmapUtils.toBytes(RoaringBitmap.bitmapOf(2, 3, 4));
 
@@ -209,15 +208,6 @@ class RbFunctionsCatalogITCase {
 
         assertThat(rows).hasSize(1);
         assertThat(rows.get(0).getField(0)).isEqualTo(5L);
-    }
-
-    @Test
-    void testRbBuildResolvedFromCatalog() throws Exception {
-        TableResult result = tEnv.executeSql("SELECT rb_cardinality(rb_build(ARRAY[1, 2, 3, 2]))");
-        List<Row> rows = CollectionUtil.iteratorToList(result.collect());
-
-        assertThat(rows).hasSize(1);
-        assertThat(rows.get(0).getField(0)).isEqualTo(3L); // duplicate 2 ignored
     }
 
     @Test

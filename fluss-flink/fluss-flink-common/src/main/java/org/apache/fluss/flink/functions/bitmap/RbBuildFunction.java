@@ -29,8 +29,12 @@ import java.io.IOException;
  *
  * <p>Builds a serialized {@link RoaringBitmap} from an array of 32-bit integer values. Unlike
  * {@code rb_build_agg}, this function operates on a single array value within a row rather than
- * aggregating across rows. Null elements in the array are ignored. Returns {@code null} if the
- * input is null or all elements are null.
+ * aggregating across rows. Null elements in the array are ignored.
+ *
+ * <p>Returns {@code null} only when the input array itself is null. A non-null array always
+ * produces serialized bitmap bytes, even when the result is empty (an empty array or an array
+ * containing only null elements), because the array was explicitly provided by the caller. This
+ * mirrors the null-vs-empty semantics of the scalar {@code rb_and}/{@code rb_or} functions.
  */
 public class RbBuildFunction extends ScalarFunction {
 
@@ -40,7 +44,7 @@ public class RbBuildFunction extends ScalarFunction {
      */
     @Nullable
     public byte[] eval(@Nullable Integer[] values) throws IOException {
-        if (values == null || values.length == 0) {
+        if (values == null) {
             return null;
         }
         RoaringBitmap bitmap = new RoaringBitmap();
@@ -49,6 +53,6 @@ public class RbBuildFunction extends ScalarFunction {
                 bitmap.add(v);
             }
         }
-        return bitmap.isEmpty() ? null : BitmapUtils.toBytes(bitmap);
+        return BitmapUtils.toBytes(bitmap);
     }
 }

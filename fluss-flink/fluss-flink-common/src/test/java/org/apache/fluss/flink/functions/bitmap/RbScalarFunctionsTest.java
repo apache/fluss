@@ -72,11 +72,28 @@ class RbScalarFunctionsTest {
     }
 
     @Test
-    void testBuildNullInputs() throws IOException {
+    void testBuildNullInputReturnsNull() throws IOException {
+        // Only a null array yields null; a non-null array always produces bytes.
+        assertThat(new RbBuildFunction().eval((Integer[]) null)).isNull();
+    }
+
+    @Test
+    void testBuildEmptyArrayReturnsEmptyBitmap() throws IOException {
+        // An explicitly provided empty array produces an empty bitmap, not null,
+        // mirroring the null-vs-empty semantics of scalar rb_and/rb_or.
         RbBuildFunction fn = new RbBuildFunction();
-        assertThat(fn.eval((Integer[]) null)).isNull();
-        assertThat(fn.eval(new Integer[0])).isNull();
-        assertThat(fn.eval(new Integer[] {null, null})).isNull(); // all null values
+        byte[] result = fn.eval(new Integer[0]);
+        assertThat(result).isNotNull();
+        assertThat(BitmapUtils.fromBytes(result).isEmpty()).isTrue();
+    }
+
+    @Test
+    void testBuildAllNullElementsReturnsEmptyBitmap() throws IOException {
+        // Null elements are ignored; an all-null array is still an empty (non-null) bitmap.
+        RbBuildFunction fn = new RbBuildFunction();
+        byte[] result = fn.eval(new Integer[] {null, null});
+        assertThat(result).isNotNull();
+        assertThat(BitmapUtils.fromBytes(result).isEmpty()).isTrue();
     }
 
     @Test
