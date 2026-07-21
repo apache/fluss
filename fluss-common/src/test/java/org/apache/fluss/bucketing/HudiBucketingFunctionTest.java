@@ -42,7 +42,7 @@ import static org.apache.fluss.row.encode.hudi.HudiKeyEncoder.NULL_RECORDKEY_PLA
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** Unit test for {@link HudiBucketingFunction}. */
+/** Unit tests for {@link HudiBucketingFunction}. */
 class HudiBucketingFunctionTest {
 
     @Test
