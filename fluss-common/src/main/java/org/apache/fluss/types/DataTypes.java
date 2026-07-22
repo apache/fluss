@@ -311,6 +311,16 @@ public class DataTypes {
         return new MapType(keyType, valueType);
     }
 
+    /**
+     * Data type of a semi-structured variant value. A variant can hold any data type including
+     * primitives, strings, arrays, and objects (similar to JSON).
+     *
+     * @see VariantType
+     */
+    public static VariantType VARIANT() {
+        return new VariantType();
+    }
+
     public static DataField FIELD(String name, DataType type) {
         return new DataField(name, type);
     }

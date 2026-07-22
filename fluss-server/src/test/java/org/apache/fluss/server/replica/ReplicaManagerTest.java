@@ -20,12 +20,15 @@ package org.apache.fluss.server.replica;
 import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.compression.ArrowCompressionInfo;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.DiskWriteLockedException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidRequiredAcksException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
+import org.apache.fluss.memory.ManagedPagedOutputView;
+import org.apache.fluss.memory.TestingMemorySegmentPool;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
@@ -36,6 +39,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.ChangeType;
+import org.apache.fluss.record.DefaultLogRecordBatch;
 import org.apache.fluss.record.DefaultValueRecordBatch;
 import org.apache.fluss.record.KvRecord;
 import org.apache.fluss.record.KvRecordBatch;
@@ -45,8 +49,11 @@ import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.record.MemoryLogRecordsArrowBuilder;
 import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.arrow.ArrowWriter;
+import org.apache.fluss.row.arrow.ArrowWriterPool;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
 import org.apache.fluss.row.encode.ValueDecoder;
 import org.apache.fluss.row.encode.ValueEncoder;
@@ -82,10 +89,15 @@ import org.apache.fluss.server.testutils.ServerTestTags;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.TableRegistration;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
 import org.apache.fluss.testutils.DataTestUtils;
 import org.apache.fluss.types.DataField;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.types.variant.ShreddedField;
+import org.apache.fluss.types.variant.ShreddingSchema;
+import org.apache.fluss.types.variant.Variant;
 import org.apache.fluss.utils.CloseableIterator;
 import org.apache.fluss.utils.types.Tuple2;
 
@@ -137,6 +149,12 @@ import static org.apache.fluss.record.TestData.DATA_1_WITH_KEY_AND_VALUE;
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static org.apache.fluss.record.TestData.EXPECTED_LOG_RESULTS_FOR_DATA_1_WITH_PK;
+import static org.apache.fluss.record.TestData.VARIANT_DATA;
+import static org.apache.fluss.record.TestData.VARIANT_PHYSICAL_TABLE_PATH;
+import static org.apache.fluss.record.TestData.VARIANT_ROW_TYPE;
+import static org.apache.fluss.record.TestData.VARIANT_SCHEMA;
+import static org.apache.fluss.record.TestData.VARIANT_TABLE_ID;
+import static org.apache.fluss.record.TestData.VARIANT_TABLE_PATH;
 import static org.apache.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
 import static org.apache.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_ID;
 import static org.apache.fluss.server.metadata.TableMetadata.DELETED_TABLE_ID;
@@ -2345,6 +2363,220 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 assertThat(prefixValueList.get(j)).isEqualTo(expectedValueList.get(j));
             }
         }
+    }
+
+    @Test
+    void testProduceAndFetchVariantLog() throws Exception {
+        SchemaGetter schemaGetter =
+                serverMetadataCache.subscribeWithInitialSchema(
+                        VARIANT_TABLE_PATH, VARIANT_TABLE_ID, DEFAULT_SCHEMA_ID, VARIANT_SCHEMA);
+        TableBucket tb = new TableBucket(VARIANT_TABLE_ID, 0);
+        makeLogTableAsLeader(VARIANT_PHYSICAL_TABLE_PATH, tb);
+
+        // Produce variant data.
+        CompletableFuture<List<ProduceLogResultForBucket>> future = new CompletableFuture<>();
+        replicaManager.appendRecordsToLog(
+                20000,
+                1,
+                Collections.singletonMap(
+                        tb,
+                        genMemoryLogRecordsByObject(
+                                VARIANT_ROW_TYPE, DEFAULT_SCHEMA_ID, (byte) 2, VARIANT_DATA)),
+                null,
+                future::complete);
+        assertThat(future.get())
+                .containsOnly(new ProduceLogResultForBucket(tb, 0, (long) VARIANT_DATA.size()));
+
+        // Fetch and verify variant data.
+        CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> fetchFuture =
+                new CompletableFuture<>();
+        replicaManager.fetchLogRecords(
+                buildFetchParams(-1),
+                Collections.singletonMap(tb, new FetchReqInfo(tb.getTableId(), 0L, 1024 * 1024)),
+                null,
+                fetchFuture::complete);
+        Map<TableBucket, FetchLogResultForBucket> result = fetchFuture.get();
+        assertThat(result).hasSize(1);
+        FetchLogResultForBucket resultForBucket = result.get(tb);
+        assertThat(resultForBucket.getHighWatermark()).isEqualTo((long) VARIANT_DATA.size());
+        LogRecords records = resultForBucket.records();
+        assertThat(records).isNotNull();
+        assertLogRecordsEquals(VARIANT_ROW_TYPE, records, VARIANT_DATA, schemaGetter);
+    }
+
+    @Test
+    void testFetchVariantLogWithColumnProjection() throws Exception {
+        SchemaGetter schemaGetter =
+                serverMetadataCache.subscribeWithInitialSchema(
+                        VARIANT_TABLE_PATH, VARIANT_TABLE_ID, DEFAULT_SCHEMA_ID, VARIANT_SCHEMA);
+        TableBucket tb = new TableBucket(VARIANT_TABLE_ID, 1);
+        makeLogTableAsLeader(VARIANT_PHYSICAL_TABLE_PATH, tb);
+
+        // Produce variant data.
+        CompletableFuture<List<ProduceLogResultForBucket>> future = new CompletableFuture<>();
+        replicaManager.appendRecordsToLog(
+                20000,
+                1,
+                Collections.singletonMap(
+                        tb,
+                        genMemoryLogRecordsByObject(
+                                VARIANT_ROW_TYPE, DEFAULT_SCHEMA_ID, (byte) 2, VARIANT_DATA)),
+                null,
+                future::complete);
+        assertThat(future.get())
+                .containsOnly(new ProduceLogResultForBucket(tb, 0, (long) VARIANT_DATA.size()));
+
+        // Fetch with column projection [1] (only the variant column "data").
+        CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> fetchFuture =
+                new CompletableFuture<>();
+        replicaManager.fetchLogRecords(
+                buildFetchParams(-1),
+                Collections.singletonMap(
+                        tb, new FetchReqInfo(tb.getTableId(), 0L, 1024 * 1024, new int[] {1})),
+                null,
+                fetchFuture::complete);
+        Map<TableBucket, FetchLogResultForBucket> result = fetchFuture.get();
+        assertThat(result).hasSize(1);
+        FetchLogResultForBucket resultForBucket = result.get(tb);
+        assertThat(resultForBucket.getHighWatermark()).isEqualTo((long) VARIANT_DATA.size());
+
+        // Verify projected records only contain the variant column.
+        RowType projectedType = DataTypes.ROW(new DataField("data", DataTypes.VARIANT()));
+        LogRecords records = resultForBucket.records();
+        assertThat(records).isNotNull();
+        LogRecordReadContext readContext =
+                LogRecordReadContext.createArrowReadContext(
+                        projectedType, DEFAULT_SCHEMA_ID, schemaGetter, true);
+        int i = 0;
+        for (LogRecordBatch batch : records.batches()) {
+            try (CloseableIterator<LogRecord> iter = batch.records(readContext)) {
+                while (iter.hasNext()) {
+                    LogRecord record = iter.next();
+                    Variant expectedVariant = (Variant) VARIANT_DATA.get(i)[1];
+                    Variant actualVariant = record.getRow().getVariant(0);
+                    assertThat(actualVariant).isEqualTo(expectedVariant);
+                    i++;
+                }
+            }
+        }
+        readContext.close();
+        assertThat(i).isEqualTo(VARIANT_DATA.size());
+    }
+
+    @Test
+    void testFetchVariantLogWithShreddingProjection() throws Exception {
+        SchemaGetter schemaGetter =
+                serverMetadataCache.subscribeWithInitialSchema(
+                        VARIANT_TABLE_PATH, VARIANT_TABLE_ID, DEFAULT_SCHEMA_ID, VARIANT_SCHEMA);
+        TableBucket tb = new TableBucket(VARIANT_TABLE_ID, 2);
+        makeLogTableAsLeader(VARIANT_PHYSICAL_TABLE_PATH, tb);
+
+        // Create shredded MemoryLogRecords with shredding for "name"(STRING) and "age"(INT).
+        ShreddingSchema shreddingSchema =
+                new ShreddingSchema(
+                        "data",
+                        Arrays.asList(
+                                new ShreddedField("name", DataTypes.STRING()),
+                                new ShreddedField("age", DataTypes.INT())));
+        Map<String, ShreddingSchema> shreddingSchemas =
+                Collections.singletonMap("data", shreddingSchema);
+
+        MemoryLogRecords shreddedRecords;
+        try (BufferAllocator allocator = new RootAllocator(Integer.MAX_VALUE);
+                ArrowWriterPool pool = new ArrowWriterPool(allocator)) {
+            ArrowWriter writer =
+                    pool.getOrCreateWriter(
+                            VARIANT_TABLE_ID,
+                            DEFAULT_SCHEMA_ID,
+                            Integer.MAX_VALUE,
+                            VARIANT_ROW_TYPE,
+                            ArrowCompressionInfo.DEFAULT_COMPRESSION,
+                            shreddingSchemas);
+            MemoryLogRecordsArrowBuilder builder =
+                    MemoryLogRecordsArrowBuilder.builder(
+                            0L,
+                            (byte) 2,
+                            DEFAULT_SCHEMA_ID,
+                            writer,
+                            new ManagedPagedOutputView(new TestingMemorySegmentPool(10 * 1024)));
+            for (Object[] objs : VARIANT_DATA) {
+                builder.append(ChangeType.APPEND_ONLY, DataTestUtils.row(VARIANT_ROW_TYPE, objs));
+            }
+            builder.close();
+            shreddedRecords = MemoryLogRecords.pointToBytesView(builder.build());
+            ((DefaultLogRecordBatch) shreddedRecords.batches().iterator().next())
+                    .setCommitTimestamp(System.currentTimeMillis());
+            shreddedRecords.ensureValid((byte) 2);
+        }
+
+        // Produce shredded variant data.
+        CompletableFuture<List<ProduceLogResultForBucket>> future = new CompletableFuture<>();
+        replicaManager.appendRecordsToLog(
+                20000, 1, Collections.singletonMap(tb, shreddedRecords), null, future::complete);
+        assertThat(future.get())
+                .containsOnly(new ProduceLogResultForBucket(tb, 0, (long) VARIANT_DATA.size()));
+
+        // Fetch with column projection [1] + variant sub-field projection {1 -> ["name"]}.
+        Map<Integer, List<String>> variantFieldProjection = new HashMap<>();
+        variantFieldProjection.put(1, Collections.singletonList("name"));
+
+        CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> fetchFuture =
+                new CompletableFuture<>();
+        replicaManager.fetchLogRecords(
+                buildFetchParams(-1),
+                Collections.singletonMap(
+                        tb,
+                        new FetchReqInfo(
+                                tb.getTableId(),
+                                0L,
+                                1024 * 1024,
+                                new int[] {1},
+                                variantFieldProjection)),
+                null,
+                fetchFuture::complete);
+        Map<TableBucket, FetchLogResultForBucket> result = fetchFuture.get();
+        assertThat(result).hasSize(1);
+        FetchLogResultForBucket resultForBucket = result.get(tb);
+        assertThat(resultForBucket.getHighWatermark()).isEqualTo((long) VARIANT_DATA.size());
+
+        // Verify projected records contain the requested shredded sub-field. V1 keeps residual
+        // metadata/value, so non-shredded residual fields remain available.
+        RowType projectedType = DataTypes.ROW(new DataField("data", DataTypes.VARIANT()));
+        LogRecords records = resultForBucket.records();
+        assertThat(records).isNotNull();
+        LogRecordReadContext readContext =
+                LogRecordReadContext.createArrowReadContext(
+                        projectedType, DEFAULT_SCHEMA_ID, schemaGetter, true);
+        int i = 0;
+        for (LogRecordBatch batch : records.batches()) {
+            try (CloseableIterator<LogRecord> iter = batch.records(readContext)) {
+                while (iter.hasNext()) {
+                    LogRecord record = iter.next();
+                    Variant actualVariant = record.getRow().getVariant(0);
+                    Variant expectedVariant = (Variant) VARIANT_DATA.get(i)[1];
+                    assertThat(actualVariant.getFieldByName("name").getString())
+                            .isEqualTo(expectedVariant.getFieldByName("name").getString());
+                    assertThat(actualVariant.getFieldByName("age")).isNull();
+                    Variant expectedCity = expectedVariant.getFieldByName("city");
+                    if (expectedCity == null) {
+                        assertThat(actualVariant.getFieldByName("city")).isNull();
+                    } else {
+                        assertThat(actualVariant.getFieldByName("city").getString())
+                                .isEqualTo(expectedCity.getString());
+                    }
+                    Variant expectedExtra = expectedVariant.getFieldByName("extra");
+                    if (expectedExtra == null) {
+                        assertThat(actualVariant.getFieldByName("extra")).isNull();
+                    } else {
+                        assertThat(actualVariant.getFieldByName("extra").getBoolean())
+                                .isEqualTo(expectedExtra.getBoolean());
+                    }
+                    i++;
+                }
+            }
+        }
+        readContext.close();
+        assertThat(i).isEqualTo(VARIANT_DATA.size());
     }
 
     @Test

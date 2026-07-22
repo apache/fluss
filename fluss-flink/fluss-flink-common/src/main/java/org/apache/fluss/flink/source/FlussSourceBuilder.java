@@ -308,6 +308,7 @@ public class FlussSourceBuilder<OUT> {
         }
 
         if (this.projectedFieldNames != null && this.projectedFieldNames.length > 0) {
+            // Use user-visible row type (excludes internal shredded columns like $v.x)
             RowType rowType = tableInfo.getRowType();
             List<String> allFieldNames = rowType.getFieldNames();
 
@@ -343,6 +344,7 @@ public class FlussSourceBuilder<OUT> {
         boolean isPartitioned = !tableInfo.getPartitionKeys().isEmpty();
         boolean hasPrimaryKey = !tableInfo.getPrimaryKeys().isEmpty();
 
+        // Use user-visible row type (excludes internal shredded columns like $v.x)
         RowType sourceOutputType =
                 projectedFields != null
                         ? tableInfo.getRowType().project(projectedFields)

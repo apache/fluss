@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.metrics.ScannerMetricGroup;
+import org.apache.fluss.client.table.scanner.ProjectionParser.ProjectedField;
 import org.apache.fluss.client.table.scanner.RemoteFileDownloader;
 import org.apache.fluss.cluster.BucketLocation;
 import org.apache.fluss.config.ConfigOptions;
@@ -42,6 +43,7 @@ import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.remote.RemoteLogFetchInfo;
 import org.apache.fluss.remote.RemoteLogSegment;
+import org.apache.fluss.row.arrow.vectors.FlatColumnSpec;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
@@ -50,11 +52,16 @@ import org.apache.fluss.rpc.messages.PbFetchLogReqForBucket;
 import org.apache.fluss.rpc.messages.PbFetchLogReqForTable;
 import org.apache.fluss.rpc.messages.PbFetchLogRespForBucket;
 import org.apache.fluss.rpc.messages.PbFetchLogRespForTable;
+import org.apache.fluss.rpc.messages.PbVariantFieldProjection;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.util.PredicateMessageUtils;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ChunkedAllocationManager;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
+import org.apache.fluss.types.DataField;
+import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.Projection;
 
@@ -99,6 +106,12 @@ public class LogFetcher implements Closeable {
     @Nullable private final Projection projection;
     @Nullable private final org.apache.fluss.rpc.messages.PbPredicate cachedPbPredicate;
     private final int filterSchemaId;
+    /**
+     * Variant sub-field projection hints. Maps top-level table column index to desired top-level
+     * Variant field names. Null means no sub-field projection.
+     */
+    @Nullable private final Map<Integer, List<String>> variantFieldProjection;
+
     private final int maxFetchBytes;
     private final int maxBucketFetchBytes;
     private final int minFetchBytes;
@@ -123,6 +136,33 @@ public class LogFetcher implements Closeable {
             TableInfo tableInfo,
             @Nullable Projection projection,
             @Nullable Predicate recordBatchFilter,
+            @Nullable Map<Integer, List<String>> variantFieldProjection,
+            LogScannerStatus logScannerStatus,
+            Configuration conf,
+            MetadataUpdater metadataUpdater,
+            ScannerMetricGroup scannerMetricGroup,
+            RemoteFileDownloader remoteFileDownloader,
+            SchemaGetter schemaGetter) {
+        this(
+                tableInfo,
+                projection,
+                recordBatchFilter,
+                variantFieldProjection,
+                null,
+                logScannerStatus,
+                conf,
+                metadataUpdater,
+                scannerMetricGroup,
+                remoteFileDownloader,
+                schemaGetter);
+    }
+
+    public LogFetcher(
+            TableInfo tableInfo,
+            @Nullable Projection projection,
+            @Nullable Predicate recordBatchFilter,
+            @Nullable Map<Integer, List<String>> variantFieldProjection,
+            @Nullable List<ProjectedField> projectedSubFields,
             LogScannerStatus logScannerStatus,
             Configuration conf,
             MetadataUpdater metadataUpdater,
@@ -132,12 +172,64 @@ public class LogFetcher implements Closeable {
         this.tablePath = tableInfo.getTablePath();
         this.isPartitioned = tableInfo.isPartitioned();
         this.chunkedFactory = new ChunkedAllocationManager.ChunkedFactory();
+
+        // Translate logical projected fields to (flatOutputRowType, flatColumnSpecs) when the
+        // projection contains Variant sub-field expressions. The flat layout is what user code
+        // sees through the row, while the physical projection (servers + Arrow batch) stays the
+        // same.
+        RowType flatOutputRowType = null;
+        List<FlatColumnSpec> flatColumnSpecs = null;
+        if (projectedSubFields != null && !projectedSubFields.isEmpty()) {
+            RowType physicalProjectedRowType =
+                    projection != null
+                            ? projection.projectInOrder(tableInfo.getRowType())
+                            : tableInfo.getRowType();
+            List<DataField> flatFields = new ArrayList<>(projectedSubFields.size());
+            flatColumnSpecs = new ArrayList<>(projectedSubFields.size());
+            for (ProjectedField pf : projectedSubFields) {
+                int physicalIndex = pf.getSourceProjectedPosition();
+                if (pf.isCastField()) {
+                    // Typed sub-field: expose as a top-level scalar column with the cast type.
+                    DataType castType = pf.getCastType();
+                    flatColumnSpecs.add(
+                            FlatColumnSpec.ofShreddedSubField(
+                                    physicalIndex, pf.getSubFieldName(), castType));
+                    flatFields.add(new DataField(pf.getDisplayName(), castType));
+                } else {
+                    if (pf.isSubField()) {
+                        // Untyped sub-field: expose the selected top-level field as Variant.
+                        flatColumnSpecs.add(
+                                FlatColumnSpec.ofVariantSubField(
+                                        physicalIndex, pf.getSubFieldName()));
+                        flatFields.add(new DataField(pf.getDisplayName(), DataTypes.VARIANT()));
+                    } else {
+                        DataType physicalType = physicalProjectedRowType.getTypeAt(physicalIndex);
+                        flatColumnSpecs.add(FlatColumnSpec.ofPhysical(physicalIndex));
+                        flatFields.add(new DataField(pf.getDisplayName(), physicalType));
+                    }
+                }
+            }
+            flatOutputRowType = new RowType(flatFields);
+        }
+
         this.readContext =
                 LogRecordReadContext.createReadContext(
-                        tableInfo, false, projection, schemaGetter, chunkedFactory);
+                        tableInfo,
+                        false,
+                        projection,
+                        schemaGetter,
+                        chunkedFactory,
+                        flatOutputRowType,
+                        flatColumnSpecs);
         this.remoteReadContext =
                 LogRecordReadContext.createReadContext(
-                        tableInfo, true, projection, schemaGetter, chunkedFactory);
+                        tableInfo,
+                        true,
+                        projection,
+                        schemaGetter,
+                        chunkedFactory,
+                        flatOutputRowType,
+                        flatColumnSpecs);
         this.projection = projection;
         this.cachedPbPredicate =
                 recordBatchFilter != null
@@ -145,6 +237,7 @@ public class LogFetcher implements Closeable {
                                 recordBatchFilter, tableInfo.getRowType())
                         : null;
         this.filterSchemaId = tableInfo.getSchemaId();
+        this.variantFieldProjection = variantFieldProjection;
         this.logScannerStatus = logScannerStatus;
         this.maxFetchBytes =
                 (int) conf.get(ConfigOptions.CLIENT_SCANNER_LOG_FETCH_MAX_BYTES).getBytes();
@@ -567,15 +660,26 @@ public class LogFetcher implements Closeable {
                                 new PbFetchLogReqForTable().setTableId(finalTableId);
                         if (readContext.isProjectionPushDowned()) {
                             assert projection != null;
+                            int[] projectedFields = projection.getProjectionInOrder();
                             reqForTable
                                     .setProjectionPushdownEnabled(true)
-                                    .setProjectedFields(projection.getProjectionInOrder());
+                                    .setProjectedFields(projectedFields);
                         } else {
                             reqForTable.setProjectionPushdownEnabled(false);
                         }
                         if (cachedPbPredicate != null) {
                             reqForTable.setFilterPredicate(cachedPbPredicate);
                             reqForTable.setFilterSchemaId(filterSchemaId);
+                        }
+                        // Serialize variant sub-field projection hints if present
+                        if (variantFieldProjection != null && !variantFieldProjection.isEmpty()) {
+                            variantFieldProjection.forEach(
+                                    (colIdx, fieldNames) -> {
+                                        PbVariantFieldProjection vfp =
+                                                reqForTable.addVariantFieldProjection();
+                                        vfp.setColumnIndex(colIdx);
+                                        vfp.addAllFieldNames(fieldNames);
+                                    });
                         }
                         reqForTable.addAllBucketsReqs(reqForBuckets);
                         fetchLogRequest.addAllTablesReqs(Collections.singletonList(reqForTable));

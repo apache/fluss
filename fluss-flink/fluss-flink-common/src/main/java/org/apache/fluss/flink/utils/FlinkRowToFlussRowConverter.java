@@ -17,6 +17,7 @@
 
 package org.apache.fluss.flink.utils;
 
+import org.apache.fluss.flink.adapter.VariantAdapter;
 import org.apache.fluss.flink.row.FlinkAsFlussArray;
 import org.apache.fluss.flink.row.FlinkAsFlussMap;
 import org.apache.fluss.flink.row.FlinkAsFlussRow;
@@ -30,6 +31,7 @@ import org.apache.fluss.row.encode.IndexedRowEncoder;
 import org.apache.fluss.row.encode.RowEncoder;
 import org.apache.fluss.row.indexed.IndexedRow;
 import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.variant.Variant;
 
 import org.apache.flink.table.data.ArrayData;
 import org.apache.flink.table.data.DecimalData;
@@ -187,6 +189,16 @@ public class FlinkRowToFlussRowConverter implements AutoCloseable {
             case ROW:
                 return flinkField -> new FlinkAsFlussRow((RowData) flinkField);
             default:
+                // Check for Variant type by name since it's only available in Flink 2.1+
+                // and not present in the LogicalTypeRoot enum of older Flink versions
+                if ("VARIANT".equals(flinkDataType.getTypeRoot().name())) {
+                    // Use VariantAdapter instead of reflection to access BinaryVariant.
+                    return flinkField -> {
+                        byte[] metadata = VariantAdapter.getMetadata(flinkField);
+                        byte[] value = VariantAdapter.getValue(flinkField);
+                        return new Variant(metadata, value);
+                    };
+                }
                 throw new UnsupportedOperationException(
                         "Fluss Unsupported data type: " + flinkDataType);
         }

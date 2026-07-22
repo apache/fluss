@@ -17,6 +17,7 @@
 
 package org.apache.fluss.flink.row;
 
+import org.apache.fluss.flink.adapter.VariantAdapter;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.InternalArray;
@@ -24,6 +25,7 @@ import org.apache.fluss.row.InternalMap;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.types.variant.Variant;
 
 import org.apache.flink.table.data.DecimalData;
 import org.apache.flink.table.data.RowData;
@@ -152,5 +154,16 @@ public class FlinkAsFlussRow implements InternalRow {
     @Override
     public InternalRow getRow(int pos, int numFields) {
         return new FlinkAsFlussRow(flinkRow.getRow(pos, numFields));
+    }
+
+    @Override
+    public Variant getVariant(int pos) {
+        // Use VariantAdapter to access Flink's BinaryVariant without reflection.
+        // Directly pass raw byte arrays from Flink's BinaryVariant to Fluss's Variant.
+        // VariantUtil supports variable-width Parquet Variant encoding.
+        Object flinkVariant = VariantAdapter.getVariantFromRow(flinkRow, pos);
+        byte[] metadata = VariantAdapter.getMetadata(flinkVariant);
+        byte[] value = VariantAdapter.getValue(flinkVariant);
+        return new Variant(metadata, value);
     }
 }

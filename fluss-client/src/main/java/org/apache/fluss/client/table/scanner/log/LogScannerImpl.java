@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.metrics.ScannerMetricGroup;
+import org.apache.fluss.client.table.scanner.ProjectionParser.ProjectedField;
 import org.apache.fluss.client.table.scanner.RemoteFileDownloader;
 import org.apache.fluss.client.table.scanner.Scan;
 import org.apache.fluss.config.Configuration;
@@ -44,6 +45,8 @@ import java.io.IOException;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.ConcurrentModificationException;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
@@ -90,7 +93,32 @@ public class LogScannerImpl implements LogScanner {
             RemoteFileDownloader remoteFileDownloader,
             @Nullable int[] projectedFields,
             SchemaGetter schemaGetter,
-            @Nullable Predicate recordBatchFilter) {
+            @Nullable Predicate recordBatchFilter,
+            @Nullable Map<Integer, List<String>> variantFieldProjection) {
+        this(
+                conf,
+                tableInfo,
+                metadataUpdater,
+                clientMetricGroup,
+                remoteFileDownloader,
+                projectedFields,
+                schemaGetter,
+                recordBatchFilter,
+                variantFieldProjection,
+                null);
+    }
+
+    public LogScannerImpl(
+            Configuration conf,
+            TableInfo tableInfo,
+            MetadataUpdater metadataUpdater,
+            ClientMetricGroup clientMetricGroup,
+            RemoteFileDownloader remoteFileDownloader,
+            @Nullable int[] projectedFields,
+            SchemaGetter schemaGetter,
+            @Nullable Predicate recordBatchFilter,
+            @Nullable Map<Integer, List<String>> variantFieldProjection,
+            @Nullable List<ProjectedField> projectedSubFields) {
         this.tablePath = tableInfo.getTablePath();
         this.tableId = tableInfo.getTableId();
         this.isPartitionedTable = tableInfo.isPartitioned();
@@ -108,6 +136,8 @@ public class LogScannerImpl implements LogScanner {
                         tableInfo,
                         projection,
                         recordBatchFilter,
+                        variantFieldProjection,
+                        projectedSubFields,
                         logScannerStatus,
                         conf,
                         metadataUpdater,
@@ -122,6 +152,8 @@ public class LogScannerImpl implements LogScanner {
      */
     @Nullable
     private Projection sanityProjection(@Nullable int[] projectedFields, TableInfo tableInfo) {
+        // Validate against the user-visible row type (excludes internal shredded columns like $v.x)
+        // so that projection indices from callers (e.g. Flink) stay within user-visible bounds.
         RowType tableRowType = tableInfo.getRowType();
         if (projectedFields != null) {
             for (int projectedField : projectedFields) {

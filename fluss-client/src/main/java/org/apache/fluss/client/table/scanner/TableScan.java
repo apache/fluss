@@ -20,6 +20,7 @@ package org.apache.fluss.client.table.scanner;
 import org.apache.fluss.client.FlussConnection;
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.metadata.KvSnapshotMetadata;
+import org.apache.fluss.client.table.scanner.ProjectionParser.ProjectedField;
 import org.apache.fluss.client.table.scanner.batch.BatchScanner;
 import org.apache.fluss.client.table.scanner.batch.CompositeBatchScanner;
 import org.apache.fluss.client.table.scanner.batch.KvBatchScanner;
@@ -43,6 +44,7 @@ import javax.annotation.Nullable;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -58,12 +60,19 @@ public class TableScan implements Scan {
 
     /** The limited row number to read. No limit if is null. */
     @Nullable private final Integer limit;
+    /** Variant sub-field projection hints. Null means no sub-field projection. */
+    @Nullable private final Map<Integer, List<String>> variantFieldProjection;
+
+    /**
+     * Flat (logical) projected schema descriptors. Null means no flat projection (legacy behavior).
+     */
+    @Nullable private final List<ProjectedField> projectedSubFields;
 
     /** The record batch filter to apply. No filter if is null. */
     @Nullable private final Predicate recordBatchFilter;
 
     public TableScan(FlussConnection conn, TableInfo tableInfo, SchemaGetter schemaGetter) {
-        this(conn, tableInfo, schemaGetter, null, null, null);
+        this(conn, tableInfo, schemaGetter, null, null, null, null, null);
     }
 
     private TableScan(
@@ -72,50 +81,72 @@ public class TableScan implements Scan {
             SchemaGetter schemaGetter,
             @Nullable int[] projectedColumns,
             @Nullable Integer limit,
-            @Nullable Predicate recordBatchFilter) {
+            @Nullable Predicate recordBatchFilter,
+            @Nullable Map<Integer, List<String>> variantFieldProjection,
+            @Nullable List<ProjectedField> projectedSubFields) {
         this.conn = conn;
         this.tableInfo = tableInfo;
         this.projectedColumns = projectedColumns;
         this.limit = limit;
         this.schemaGetter = schemaGetter;
         this.recordBatchFilter = recordBatchFilter;
+        this.variantFieldProjection = variantFieldProjection;
+        this.projectedSubFields = projectedSubFields;
     }
 
     @Override
     public Scan project(@Nullable int[] projectedColumns) {
         return new TableScan(
-                conn, tableInfo, schemaGetter, projectedColumns, limit, recordBatchFilter);
+                conn,
+                tableInfo,
+                schemaGetter,
+                projectedColumns,
+                limit,
+                recordBatchFilter,
+                variantFieldProjection,
+                projectedSubFields);
     }
 
     @Override
     public Scan project(List<String> projectedColumnNames) {
-        int[] columnIndexes = new int[projectedColumnNames.size()];
         RowType rowType = tableInfo.getRowType();
-        for (int i = 0; i < projectedColumnNames.size(); i++) {
-            int index = rowType.getFieldIndex(projectedColumnNames.get(i));
-            if (index < 0) {
-                throw new IllegalArgumentException(
-                        String.format(
-                                "Field '%s' not found in table schema. Available fields: %s, Table: %s",
-                                projectedColumnNames.get(i),
-                                rowType.getFieldNames(),
-                                tableInfo.getTablePath()));
-            }
-            columnIndexes[i] = index;
-        }
+        ProjectionParser.ParsedProjection parsed =
+                ProjectionParser.parse(projectedColumnNames, rowType);
         return new TableScan(
-                conn, tableInfo, schemaGetter, columnIndexes, limit, recordBatchFilter);
+                conn,
+                tableInfo,
+                schemaGetter,
+                parsed.getProjectedColumns(),
+                limit,
+                recordBatchFilter,
+                parsed.getVariantFieldProjection(),
+                parsed.getProjectedFields());
     }
 
     @Override
     public Scan limit(int rowNumber) {
         return new TableScan(
-                conn, tableInfo, schemaGetter, projectedColumns, rowNumber, recordBatchFilter);
+                conn,
+                tableInfo,
+                schemaGetter,
+                projectedColumns,
+                rowNumber,
+                recordBatchFilter,
+                variantFieldProjection,
+                projectedSubFields);
     }
 
     @Override
     public Scan filter(@Nullable Predicate predicate) {
-        return new TableScan(conn, tableInfo, schemaGetter, projectedColumns, limit, predicate);
+        return new TableScan(
+                conn,
+                tableInfo,
+                schemaGetter,
+                projectedColumns,
+                limit,
+                predicate,
+                variantFieldProjection,
+                projectedSubFields);
     }
 
     @Override
@@ -135,6 +166,15 @@ public class TableScan implements Scan {
                                     + "Table: %s, current log format: %s",
                             tableInfo.getTablePath(), tableInfo.getTableConfig().getLogFormat()));
         }
+        if (projectedSubFields != null
+                && !projectedSubFields.isEmpty()
+                && tableInfo.getTableConfig().getLogFormat() != LogFormat.ARROW) {
+            throw new UnsupportedOperationException(
+                    String.format(
+                            "Variant sub-field projection is only supported for ARROW log format. "
+                                    + "Table: %s, current log format: %s",
+                            tableInfo.getTablePath(), tableInfo.getTableConfig().getLogFormat()));
+        }
 
         return new LogScannerImpl(
                 conn.getConfiguration(),
@@ -144,7 +184,9 @@ public class TableScan implements Scan {
                 conn.getOrCreateRemoteFileDownloader(),
                 projectedColumns,
                 schemaGetter,
-                recordBatchFilter);
+                recordBatchFilter,
+                variantFieldProjection,
+                projectedSubFields);
     }
 
     @Override
@@ -161,6 +203,7 @@ public class TableScan implements Scan {
                             "BatchScanner doesn't support filter pushdown. Table: %s, bucket: %s",
                             tableInfo.getTablePath(), tableBucket));
         }
+        checkVariantSubFieldProjectionUnsupported("BatchScanner");
         if (tableInfo.hasPrimaryKey() && limit == null) {
             return new KvBatchScanner(
                     tableInfo,
@@ -206,6 +249,7 @@ public class TableScan implements Scan {
                             "Currently, SnapshotBatchScanner doesn't support limit pushdown. Table: %s, bucket: %s, snapshot ID: %d, requested limit: %d",
                             tableInfo.getTablePath(), tableBucket, snapshotId, limit));
         }
+        checkVariantSubFieldProjectionUnsupported("SnapshotBatchScanner");
         String scannerTmpDir =
                 conn.getConfiguration().getString(ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR);
         Admin admin = conn.getAdmin();
@@ -240,6 +284,7 @@ public class TableScan implements Scan {
                             "BatchScanner doesn't support filter pushdown. Table: %s",
                             tableInfo.getTablePath()));
         }
+        checkVariantSubFieldProjectionUnsupported("BatchScanner");
         int bucketCount = tableInfo.getNumBuckets();
         List<TableBucket> tableBuckets;
         if (tableInfo.isPartitioned()) {
@@ -273,5 +318,15 @@ public class TableScan implements Scan {
         List<BatchScanner> scanners =
                 tableBuckets.stream().map(this::createBatchScanner).collect(Collectors.toList());
         return new CompositeBatchScanner(scanners, limit);
+    }
+
+    private void checkVariantSubFieldProjectionUnsupported(String scannerName) {
+        if (projectedSubFields != null && !projectedSubFields.isEmpty()) {
+            throw new UnsupportedOperationException(
+                    String.format(
+                            "%s doesn't support Variant sub-field projection yet. "
+                                    + "Use LogScanner for top-level Variant sub-field projection. Table: %s",
+                            scannerName, tableInfo.getTablePath()));
+        }
     }
 }

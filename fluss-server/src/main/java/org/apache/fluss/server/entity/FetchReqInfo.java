@@ -22,6 +22,8 @@ import org.apache.fluss.annotation.Internal;
 import javax.annotation.Nullable;
 
 import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 /** The structure of fetch data. */
@@ -30,19 +32,34 @@ public final class FetchReqInfo {
     private final long tableId;
     private final long fetchOffset;
     @Nullable private final int[] projectFields;
+    /**
+     * Variant sub-field projection hints. Maps top-level table column index to the list of
+     * top-level Variant field names to project. Null means no sub-field projection.
+     */
+    @Nullable private final Map<Integer, List<String>> variantFieldProjection;
 
     private int maxBytes;
 
     public FetchReqInfo(long tableId, long fetchOffset, int maxBytes) {
-        this(tableId, fetchOffset, maxBytes, null);
+        this(tableId, fetchOffset, maxBytes, null, null);
     }
 
     public FetchReqInfo(
             long tableId, long fetchOffset, int maxBytes, @Nullable int[] projectFields) {
+        this(tableId, fetchOffset, maxBytes, projectFields, null);
+    }
+
+    public FetchReqInfo(
+            long tableId,
+            long fetchOffset,
+            int maxBytes,
+            @Nullable int[] projectFields,
+            @Nullable Map<Integer, List<String>> variantFieldProjection) {
         this.tableId = tableId;
         this.fetchOffset = fetchOffset;
         this.maxBytes = maxBytes;
         this.projectFields = projectFields;
+        this.variantFieldProjection = variantFieldProjection;
     }
 
     public long getTableId() {
@@ -64,6 +81,11 @@ public final class FetchReqInfo {
     @Nullable
     public int[] getProjectFields() {
         return projectFields;
+    }
+
+    @Nullable
+    public Map<Integer, List<String>> getVariantFieldProjection() {
+        return variantFieldProjection;
     }
 
     @Override

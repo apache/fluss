@@ -22,6 +22,9 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.columnar.ColumnVector;
 import org.apache.fluss.row.columnar.ColumnarRow;
 import org.apache.fluss.row.columnar.VectorizedColumnBatch;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
+
+import javax.annotation.Nullable;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
@@ -36,9 +39,21 @@ public class ArrowReader {
 
     private final int rowCount;
 
+    /**
+     * Optional VectorSchemaRoot owned by this reader (created for shredded batches). Will be closed
+     * when {@link #close()} is called.
+     */
+    @Nullable private final VectorSchemaRoot ownedRoot;
+
     public ArrowReader(ColumnVector[] columnVectors, int rowCount) {
+        this(columnVectors, rowCount, null);
+    }
+
+    public ArrowReader(
+            ColumnVector[] columnVectors, int rowCount, @Nullable VectorSchemaRoot ownedRoot) {
         this.columnVectors = checkNotNull(columnVectors);
         this.rowCount = rowCount;
+        this.ownedRoot = ownedRoot;
     }
 
     public int getRowCount() {
@@ -48,5 +63,12 @@ public class ArrowReader {
     /** Read the {@link InternalRow} from underlying Arrow format data. */
     public ColumnarRow read(int rowId) {
         return new ColumnarRow(new VectorizedColumnBatch(columnVectors), rowId);
+    }
+
+    /** Releases any owned resources (e.g., VectorSchemaRoot created for shredded batches). */
+    public void close() {
+        if (ownedRoot != null) {
+            ownedRoot.close();
+        }
     }
 }

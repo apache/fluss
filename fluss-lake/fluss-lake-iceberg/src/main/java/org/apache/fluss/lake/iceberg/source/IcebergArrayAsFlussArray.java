@@ -25,6 +25,7 @@ import org.apache.fluss.row.InternalMap;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.types.variant.Variant;
 import org.apache.fluss.utils.BytesUtils;
 
 import java.math.BigDecimal;
@@ -156,6 +157,11 @@ public class IcebergArrayAsFlussArray implements InternalArray {
     @Override
     public InternalRow getRow(int pos, int numFields) {
         throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public Variant getVariant(int pos) {
+        throw new UnsupportedOperationException("Variant type is not supported in Iceberg.");
     }
 
     @Override

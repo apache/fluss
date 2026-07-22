@@ -165,7 +165,7 @@ public class ChunkedAllocationManager extends AllocationManager {
         if (chunk != null) {
             chunk.releaseSubAllocation();
         } else {
-            MemoryUtil.UNSAFE.freeMemory(directAddress);
+            MemoryUtil.freeMemory(directAddress);
         }
     }
 
@@ -199,7 +199,7 @@ public class ChunkedAllocationManager extends AllocationManager {
         final ChunkedFactory factory;
 
         Chunk(long capacity, ChunkedFactory factory) {
-            this.address = MemoryUtil.UNSAFE.allocateMemory(capacity);
+            this.address = MemoryUtil.allocateMemory(capacity);
             this.capacity = capacity;
             this.used = 0;
             this.factory = factory;
@@ -268,7 +268,7 @@ public class ChunkedAllocationManager extends AllocationManager {
 
         /** Frees the underlying native memory. */
         void destroy() {
-            MemoryUtil.UNSAFE.freeMemory(address);
+            MemoryUtil.freeMemory(address);
         }
     }
 
@@ -321,7 +321,7 @@ public class ChunkedAllocationManager extends AllocationManager {
                 BufferAllocator accountingAllocator, long size) {
             if (size > chunkSize) {
                 // Large allocation: give it its own memory region.
-                long address = MemoryUtil.UNSAFE.allocateMemory(size);
+                long address = MemoryUtil.allocateMemory(size);
                 return new ChunkedAllocationManager(accountingAllocator, address, size);
             }
 
@@ -339,7 +339,7 @@ public class ChunkedAllocationManager extends AllocationManager {
 
         @Override
         public ArrowBuf empty() {
-            return NettyAllocationManager.EMPTY_BUFFER;
+            return DefaultAllocationManagerOption.getDefaultAllocationManagerFactory().empty();
         }
 
         /**

@@ -17,6 +17,7 @@
 
 package org.apache.fluss.flink.row;
 
+import org.apache.fluss.flink.adapter.VariantAdapter;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.InternalArray;
@@ -25,6 +26,7 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.variant.Variant;
 
 import org.apache.flink.table.data.ArrayData;
 import org.apache.flink.table.data.TimestampData;
@@ -174,6 +176,15 @@ public class FlinkAsFlussArray implements InternalArray {
     @Override
     public InternalRow getRow(int pos, int numFields) {
         return new FlinkAsFlussRow(flinkArray.getRow(pos, numFields));
+    }
+
+    @Override
+    public Variant getVariant(int pos) {
+        // Use VariantAdapter to access Flink's BinaryVariant without reflection.
+        Object flinkVariant = VariantAdapter.getVariantFromArray(flinkArray, pos);
+        byte[] metadata = VariantAdapter.getMetadata(flinkVariant);
+        byte[] value = VariantAdapter.getValue(flinkVariant);
+        return new Variant(metadata, value);
     }
 
     @SuppressWarnings("unchecked")

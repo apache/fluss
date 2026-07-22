@@ -37,6 +37,7 @@ import org.apache.fluss.types.StringType;
 import org.apache.fluss.types.TimeType;
 import org.apache.fluss.types.TimestampType;
 import org.apache.fluss.types.TinyIntType;
+import org.apache.fluss.types.VariantType;
 
 import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.types.DataType;
@@ -178,6 +179,11 @@ public class FlussDataTypeToHudiDataType implements DataTypeVisitor<DataType> {
             fields[i] = DataTypes.FIELD(fieldName, fieldType);
         }
         return withNullability(DataTypes.ROW(fields), rowType.isNullable());
+    }
+
+    @Override
+    public DataType visit(VariantType variantType) {
+        throw new UnsupportedOperationException("Variant type is not supported in Hudi.");
     }
 
     private DataType withNullability(DataType flinkDataType, boolean nullable) {

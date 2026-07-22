@@ -24,6 +24,7 @@ import org.apache.fluss.row.InternalMap;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.types.variant.Variant;
 
 import org.apache.flink.table.data.ArrayData;
 import org.apache.flink.table.data.DecimalData;
@@ -150,6 +151,11 @@ public class HudiArrayAsFlussArray implements InternalArray {
     public InternalRow getRow(int pos, int numFields) {
         RowData nestedRow = hudiArray.getRow(pos, numFields);
         return nestedRow == null ? null : new HudiRowAsFlussRow(nestedRow, false);
+    }
+
+    @Override
+    public Variant getVariant(int pos) {
+        throw new UnsupportedOperationException("Variant type is not supported in Hudi.");
     }
 
     @Override

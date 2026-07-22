@@ -18,6 +18,7 @@
 package org.apache.fluss.spark.row
 
 import org.apache.fluss.row.{BinaryString, Decimal, InternalMap, InternalRow => FlussInternalRow, TimestampLtz, TimestampNtz}
+import org.apache.fluss.types.variant.Variant
 
 import org.apache.spark.sql.catalyst.{InternalRow => SparkInternalRow}
 import org.apache.spark.sql.types.{MapType => SparkMapType, StructType}
@@ -130,5 +131,13 @@ class SparkAsFlussRow(schema: StructType) extends FlussInternalRow with Serializ
     val sparkMapData = row.getMap(pos)
     val mapType = schema.fields(pos).dataType.asInstanceOf[SparkMapType]
     SparkAsFlussMap(sparkMapData, mapType)
+  }
+
+  /** Returns the variant value at the given position. */
+  override def getVariant(pos: Int): Variant = {
+    // TODO: FIP-36 §6 Spark Connector Integration is deferred to a follow-up PR.
+    //  Spark 3.x has no native Variant type; full support (including read/write of
+    //  Spark 4.0+ VariantType -> Fluss Variant) will land in the fluss-spark-4.0 module.
+    throw new UnsupportedOperationException("Variant type is not supported in Spark 3.x.")
   }
 }

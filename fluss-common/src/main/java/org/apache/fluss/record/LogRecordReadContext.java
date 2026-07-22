@@ -26,6 +26,7 @@ import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.InternalRow.FieldGetter;
 import org.apache.fluss.row.ProjectedRow;
+import org.apache.fluss.row.arrow.vectors.FlatColumnSpec;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.AllocationManager;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocatorUtil;
@@ -52,7 +53,7 @@ public class LogRecordReadContext
 
     // the log format of the table
     private final LogFormat logFormat;
-    // the schema of the date read form server or remote. (which is projected in the server side)
+    // the schema of the data read from server or remote
     private final RowType dataRowType;
     // the static schemaId of the table, should support dynamic schema evolution in the future
     private final int targetSchemaId;
@@ -67,6 +68,10 @@ public class LogRecordReadContext
     private final SchemaGetter schemaGetter;
     private final ConcurrentHashMap<Integer, VectorSchemaRoot> vectorSchemaRootMap =
             new ConcurrentHashMap<>();
+    // optional flat output row type when typed Variant sub-field projection is in effect
+    @Nullable private final RowType flatOutputRowType;
+    // optional flat ColumnVector layout fed to the Arrow reader
+    @Nullable private final List<FlatColumnSpec> flatColumnSpecs;
     private final Object unshadedArrowResourceLock = new Object();
 
     public static LogRecordReadContext createReadContext(
@@ -97,13 +102,45 @@ public class LogRecordReadContext
             @Nullable Projection projection,
             SchemaGetter schemaGetter,
             AllocationManager.Factory allocationManagerFactory) {
+        return createReadContext(
+                tableInfo,
+                readFromRemote,
+                projection,
+                schemaGetter,
+                allocationManagerFactory,
+                null,
+                null);
+    }
+
+    /**
+     * Creates a {@link LogRecordReadContext} that may flatten typed Variant sub-fields into
+     * top-level scalar columns. When {@code flatOutputRowType} and {@code flatColumnSpecs} are both
+     * non-null, the per-record {@link FieldGetter} array is built on the flat schema, and the
+     * returned context exposes the flat layout via {@link #getFlatColumnSpecs(int)} so that the
+     * underlying {@link org.apache.fluss.row.arrow.ArrowReader} produces flat rows directly.
+     *
+     * <p>Both flat parameters must be supplied together (or both null). The {@code flatColumnSpecs}
+     * entries reference physical positions in the (already projected) Arrow schema sent by the
+     * server.
+     */
+    public static LogRecordReadContext createReadContext(
+            TableInfo tableInfo,
+            boolean readFromRemote,
+            @Nullable Projection projection,
+            SchemaGetter schemaGetter,
+            AllocationManager.Factory allocationManagerFactory,
+            @Nullable RowType flatOutputRowType,
+            @Nullable List<FlatColumnSpec> flatColumnSpecs) {
+        if ((flatOutputRowType == null) != (flatColumnSpecs == null)) {
+            throw new IllegalArgumentException(
+                    "flatOutputRowType and flatColumnSpecs must be either both null or both non-null.");
+        }
         RowType rowType = tableInfo.getRowType();
         LogFormat logFormat = tableInfo.getTableConfig().getLogFormat();
         // only for arrow log format, the projection can be push downed to the server side
         boolean projectionPushDowned = projection != null && logFormat == LogFormat.ARROW;
         int schemaId = tableInfo.getSchemaId();
         if (projection == null) {
-            // set a default dummy projection to simplify code
             projection = Projection.of(IntStream.range(0, rowType.getFieldCount()).toArray());
         }
 
@@ -118,7 +155,9 @@ public class LogRecordReadContext
                         selectedFields,
                         false,
                         schemaGetter,
-                        allocationManagerFactory);
+                        allocationManagerFactory,
+                        flatOutputRowType,
+                        flatColumnSpecs);
             } else {
                 // arrow data that returned from server has been projected (in order)
                 RowType projectedRowType = projection.projectInOrder(rowType);
@@ -130,7 +169,9 @@ public class LogRecordReadContext
                         selectedFields,
                         projectionPushDowned,
                         schemaGetter,
-                        allocationManagerFactory);
+                        allocationManagerFactory,
+                        flatOutputRowType,
+                        flatColumnSpecs);
             }
         } else if (logFormat == LogFormat.INDEXED) {
             int[] selectedFields = projection.getProjection();
@@ -150,10 +191,38 @@ public class LogRecordReadContext
             boolean projectionPushDowned,
             SchemaGetter schemaGetter,
             AllocationManager.Factory allocationManagerFactory) {
+        return createArrowReadContext(
+                dataRowType,
+                schemaId,
+                selectedFields,
+                projectionPushDowned,
+                schemaGetter,
+                allocationManagerFactory,
+                null,
+                null);
+    }
+
+    private static LogRecordReadContext createArrowReadContext(
+            RowType dataRowType,
+            int schemaId,
+            int[] selectedFields,
+            boolean projectionPushDowned,
+            SchemaGetter schemaGetter,
+            AllocationManager.Factory allocationManagerFactory,
+            @Nullable RowType flatOutputRowType,
+            @Nullable List<FlatColumnSpec> flatColumnSpecs) {
         // TODO: use a more reasonable memory limit
         BufferAllocator allocator =
                 BufferAllocatorUtil.createBufferAllocator(allocationManagerFactory);
-        FieldGetter[] fieldGetters = buildProjectedFieldGetters(dataRowType, selectedFields);
+        FieldGetter[] fieldGetters;
+        if (flatOutputRowType != null) {
+            // Build identity field getters over the flat output row so the user-facing layout
+            // matches the flat ColumnVector array produced by the Arrow reader.
+            int[] flatSelected = IntStream.range(0, flatOutputRowType.getFieldCount()).toArray();
+            fieldGetters = buildProjectedFieldGetters(flatOutputRowType, flatSelected);
+        } else {
+            fieldGetters = buildProjectedFieldGetters(dataRowType, selectedFields);
+        }
         return new LogRecordReadContext(
                 LogFormat.ARROW,
                 dataRowType,
@@ -161,7 +230,9 @@ public class LogRecordReadContext
                 allocator,
                 fieldGetters,
                 projectionPushDowned,
-                schemaGetter);
+                schemaGetter,
+                flatOutputRowType,
+                flatColumnSpecs);
     }
 
     /**
@@ -284,6 +355,28 @@ public class LogRecordReadContext
             FieldGetter[] selectedFieldGetters,
             boolean projectionPushDowned,
             SchemaGetter schemaGetter) {
+        this(
+                logFormat,
+                targetDataRowType,
+                targetSchemaId,
+                bufferAllocator,
+                selectedFieldGetters,
+                projectionPushDowned,
+                schemaGetter,
+                null,
+                null);
+    }
+
+    private LogRecordReadContext(
+            LogFormat logFormat,
+            RowType targetDataRowType,
+            int targetSchemaId,
+            BufferAllocator bufferAllocator,
+            FieldGetter[] selectedFieldGetters,
+            boolean projectionPushDowned,
+            SchemaGetter schemaGetter,
+            @Nullable RowType flatOutputRowType,
+            @Nullable List<FlatColumnSpec> flatColumnSpecs) {
         this.logFormat = logFormat;
         this.dataRowType = targetDataRowType;
         this.targetSchemaId = targetSchemaId;
@@ -291,6 +384,8 @@ public class LogRecordReadContext
         this.selectedFieldGetters = selectedFieldGetters;
         this.projectionPushDowned = projectionPushDowned;
         this.schemaGetter = schemaGetter;
+        this.flatOutputRowType = flatOutputRowType;
+        this.flatColumnSpecs = flatColumnSpecs;
     }
 
     @Override
@@ -300,10 +395,13 @@ public class LogRecordReadContext
 
     @Override
     public RowType getRowType(int schemaId) {
-        if (isSameRowType(schemaId)) {
+        if (targetSchemaId == schemaId) {
             return dataRowType;
         }
-
+        if (projectionPushDowned) {
+            // Non-shredding pushdown: all schemas have the same projected shape
+            return dataRowType;
+        }
         Schema schema = schemaGetter.getSchema(schemaId);
         return schema.getRowType();
     }
@@ -369,6 +467,26 @@ public class LogRecordReadContext
                     "Only Arrow log format provides unshaded Arrow resources.");
         }
         return new UnshadedArrowBatchAccessImpl(schemaId);
+    }
+
+    @Nullable
+    @Override
+    public List<FlatColumnSpec> getFlatColumnSpecs(int schemaId) {
+        if (flatColumnSpecs == null) {
+            return null;
+        }
+        // The flat virtual layout is only valid for the target schema id; older schemas fall back
+        // to the regular projected layout.
+        return targetSchemaId == schemaId ? flatColumnSpecs : null;
+    }
+
+    /**
+     * The flat row type seen by users when typed Variant sub-field projection is in effect, or
+     * {@code null} otherwise.
+     */
+    @Nullable
+    public RowType getFlatOutputRowType() {
+        return flatOutputRowType;
     }
 
     @Nullable

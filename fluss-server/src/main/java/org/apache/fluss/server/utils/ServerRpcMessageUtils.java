@@ -161,6 +161,7 @@ import org.apache.fluss.rpc.messages.PbTableStatsReqForBucket;
 import org.apache.fluss.rpc.messages.PbTableStatsRespForBucket;
 import org.apache.fluss.rpc.messages.PbValue;
 import org.apache.fluss.rpc.messages.PbValueList;
+import org.apache.fluss.rpc.messages.PbVariantFieldProjection;
 import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.messages.PrefixLookupResponse;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
@@ -973,6 +974,27 @@ public class ServerRpcMessageUtils {
                 projectionFields = null;
             }
 
+            // Extract variant sub-field projection hints
+            final Map<Integer, List<String>> variantFieldProjection;
+            if (fetchLogReqForTable.getVariantFieldProjectionsCount() > 0) {
+                Map<Integer, List<String>> projections = new HashMap<>();
+                for (int vi = 0; vi < fetchLogReqForTable.getVariantFieldProjectionsCount(); vi++) {
+                    PbVariantFieldProjection vfp =
+                            fetchLogReqForTable.getVariantFieldProjectionAt(vi);
+                    if (!vfp.hasColumnIndex()) {
+                        // Forward compatibility: a future client may identify columns with a field
+                        // that this server version does not understand yet.
+                        continue;
+                    }
+                    if (!vfp.getFieldNamesList().isEmpty()) {
+                        projections.put(vfp.getColumnIndex(), vfp.getFieldNamesList());
+                    }
+                }
+                variantFieldProjection = projections.isEmpty() ? null : projections;
+            } else {
+                variantFieldProjection = null;
+            }
+
             List<PbFetchLogReqForBucket> bucketsReqsList = fetchLogReqForTable.getBucketsReqsList();
             for (PbFetchLogReqForBucket fetchLogReqForBucket : bucketsReqsList) {
                 int bucketId = fetchLogReqForBucket.getBucketId();
@@ -987,7 +1009,8 @@ public class ServerRpcMessageUtils {
                                 tableId,
                                 fetchLogReqForBucket.getFetchOffset(),
                                 fetchLogReqForBucket.getMaxFetchBytes(),
-                                projectionFields));
+                                projectionFields,
+                                variantFieldProjection));
             }
         }
 
