@@ -92,7 +92,7 @@ class SparkLogTableReadTest extends FlussSparkTestBase {
              |(1200L, 270L, 607, NULL)
              |""".stripMargin)
 
-      // COUNT(*) / COUNT(1) — empty projection case (regression test for #2724)
+      // COUNT(*) / COUNT(1) — empty projection case
       checkAnswer(sql(s"SELECT COUNT(*) FROM $DEFAULT_DATABASE.t"), Row(9L) :: Nil)
       checkAnswer(sql(s"SELECT COUNT(1) FROM $DEFAULT_DATABASE.t"), Row(9L) :: Nil)
 

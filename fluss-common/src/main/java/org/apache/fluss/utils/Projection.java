@@ -21,6 +21,7 @@ import org.apache.fluss.types.RowType;
 
 import java.util.Arrays;
 
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
 /**
@@ -51,6 +52,9 @@ public class Projection {
 
     /** Create a {@link Projection} of the provided {@code indexes}. */
     public static Projection of(int[] indexes) {
+        checkArgument(
+                indexes != null && indexes.length > 0,
+                "Projection must select at least one column, but got an empty projection.");
         return new Projection(indexes);
     }
 

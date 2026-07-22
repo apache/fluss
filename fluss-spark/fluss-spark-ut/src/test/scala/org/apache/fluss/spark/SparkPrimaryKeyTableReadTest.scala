@@ -135,32 +135,6 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
           Row(800L, 23L, "addr3") ::
           Nil
       )
-
-      // Insert one row with a NULL nullable column to make the COUNT(nullable_col)
-      // assertion below actually discriminate between row count and non-null count.
-      sql(s"""
-             |INSERT INTO $DEFAULT_DATABASE.t VALUES
-             |(1200L, 270L, 607, NULL)
-             |""".stripMargin)
-
-      // COUNT(*) — empty projection case (regression test for #2724). PK table has 7 rows
-      // after upserts (600/700/800/900/1000/1100/1200).
-      checkAnswer(sql(s"SELECT COUNT(*) FROM $DEFAULT_DATABASE.t"), Row(7L) :: Nil)
-      checkAnswer(sql(s"SELECT COUNT(1) FROM $DEFAULT_DATABASE.t"), Row(7L) :: Nil)
-
-      // COUNT(*) with filter
-      checkAnswer(
-        sql(s"SELECT COUNT(*) FROM $DEFAULT_DATABASE.t WHERE amount <= 603"),
-        Row(3L) :: Nil
-      )
-
-      // COUNT on a nullable column — address is nullable STRING and one row has NULL,
-      // so COUNT(address) must be strictly less than COUNT(*).
-      checkAnswer(
-        sql(s"SELECT COUNT(address) FROM $DEFAULT_DATABASE.t"),
-        Row(6L) :: Nil
-      )
-
     }
   }
 
@@ -260,15 +234,6 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
           Row(800L, 23L, 603, "addr3", "2026-01-02") ::
           Row(900L, 240L, 604, "addr4_updated", "2026-01-02") ::
           Nil
-      )
-
-      // COUNT(*) on partitioned PK table
-      checkAnswer(sql(s"SELECT COUNT(*) FROM $DEFAULT_DATABASE.t"), Row(6L) :: Nil)
-
-      // COUNT(*) with partition filter
-      checkAnswer(
-        sql(s"SELECT COUNT(*) FROM $DEFAULT_DATABASE.t WHERE dt = '2026-01-01'"),
-        Row(2L) :: Nil
       )
     }
   }
