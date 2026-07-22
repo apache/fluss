@@ -126,6 +126,15 @@ class TableSchemaTest {
     }
 
     @Test
+    void testPrimaryKeyHashCodeMatchesEquals() {
+        Schema.PrimaryKey primaryKey = new Schema.PrimaryKey("pk", Arrays.asList("f0", "f1"));
+        Schema.PrimaryKey samePrimaryKey = new Schema.PrimaryKey("pk", Arrays.asList("f0", "f1"));
+
+        assertThat(primaryKey).isEqualTo(samePrimaryKey);
+        assertThat(primaryKey.hashCode()).isEqualTo(samePrimaryKey.hashCode());
+    }
+
+    @Test
     void testReassignFieldId() {
         // Schema.Builder.column will reassign field id in flatten order.
         Schema schema =
