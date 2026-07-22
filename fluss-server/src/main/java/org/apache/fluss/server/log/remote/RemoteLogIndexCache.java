@@ -324,7 +324,9 @@ public class RemoteLogIndexCache implements Closeable {
     private Cache<UUID, Entry> initEmptyCache(long maxSize) {
         return Caffeine.newBuilder()
                 .maximumWeight(maxSize)
-                .weigher((UUID key, Entry entry) -> (int) entry.entrySizeBytes)
+                .weigher(
+                        (UUID key, Entry entry) ->
+                                (int) Math.min(entry.entrySizeBytes, Integer.MAX_VALUE))
                 // This listener is invoked each time an entry is being automatically removed due to
                 // eviction. The cache will invoke this listener during the atomic operation to
                 // remove the entry (refer: https://github.com/ben-manes/caffeine/wiki/Removal),
@@ -568,7 +570,8 @@ public class RemoteLogIndexCache implements Closeable {
         }
 
         private long estimatedEntrySize() {
-            return inReadLock(entryLock, offsetIndex::sizeInBytes);
+            return inReadLock(
+                    entryLock, () -> (long) offsetIndex.sizeInBytes() + timeIndex.sizeInBytes());
         }
 
         public OffsetPosition lookupOffset(long targetOffset) {
