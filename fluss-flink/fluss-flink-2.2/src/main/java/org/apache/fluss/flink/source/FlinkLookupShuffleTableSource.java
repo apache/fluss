@@ -68,8 +68,6 @@ public class FlinkLookupShuffleTableSource extends FlinkTableSource
 
     @Override
     public DynamicTableSource copy() {
-        // Copy once via the copy constructor; this preserves the subtype (and thus the ability) and
-        // the stashed lookup normalizer carried over by the base copy constructor.
         return new FlinkLookupShuffleTableSource(this, numBuckets);
     }
 
@@ -90,11 +88,6 @@ public class FlinkLookupShuffleTableSource extends FlinkTableSource
                 bucketKeyIndexes.length > 0,
                 "Fluss custom lookup shuffle was enabled for a table without a bucket key.");
 
-        // The normalized lookup key row is the expected lookup keys in Fluss key order: the full
-        // primary key for a primary-key lookup, or the bucket keys + partition keys for a prefix
-        // lookup on the bucket key. Both are shuffled by the same bucket-key routing, so build the
-        // key row type from the normalizer's expected-key indexes (this is what makes prefix
-        // lookups shuffle rather than being excluded).
         RowType keyFlinkRowType =
                 FlinkUtils.projectRowType(tableOutputType(), normalizer.getLookupKeyIndexes());
 
@@ -104,10 +97,24 @@ public class FlinkLookupShuffleTableSource extends FlinkTableSource
             bucketKeyNames.add(allNames.get(idx));
         }
 
+        // Partitioned tables route by (partitionId, bucketId): rows with the same bucket id but
+        // different partitions target different tablets, so the partition keys must join the bucket
+        // key in the channel computation to avoid collapsing them onto one subtask.
+        int[] partitionKeyIndexes = partitionKeyIndexes();
+        List<String> partitionKeyNames = new ArrayList<>(partitionKeyIndexes.length);
+        for (int idx : partitionKeyIndexes) {
+            partitionKeyNames.add(allNames.get(idx));
+        }
+
         DataLakeFormat lakeFormat = tableConfigInternal().getDataLakeFormat().orElse(null);
 
         return Optional.of(
                 new FlussLookupInputPartitioner(
-                        normalizer, keyFlinkRowType, bucketKeyNames, lakeFormat, numBuckets));
+                        normalizer,
+                        keyFlinkRowType,
+                        bucketKeyNames,
+                        partitionKeyNames,
+                        lakeFormat,
+                        numBuckets));
     }
 }

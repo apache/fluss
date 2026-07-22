@@ -47,9 +47,11 @@ import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.apache.flink.table.api.config.ExecutionConfigOptions;
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
+import org.apache.flink.table.data.StringData;
 import org.apache.flink.table.types.logical.IntType;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.RowType;
+import org.apache.flink.table.types.logical.VarCharType;
 import org.apache.flink.types.Row;
 import org.apache.flink.util.CloseableIterator;
 import org.junit.jupiter.api.AfterEach;
@@ -82,8 +84,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  *       FlinkLookupShuffleTableSource} (validating the getLookupRuntimeProvider -&gt;
  *       getPartitioner call order the implementation relies on),
  *   <li>the {@code FlussLookupInputPartitioner} is serialized and executed on task managers, and
- *   <li>results stay correct with the shuffle applied, including for partitioned primary-key
- *       tables.
+ *   <li>results stay correct with the shuffle applied, including for nullable probe keys and
+ *       partitioned primary-key tables.
  * </ul>
  */
 public class Flink22LookupShuffleITCase extends FlinkTestBase {
@@ -173,6 +175,44 @@ public class Flink22LookupShuffleITCase extends FlinkTestBase {
         assertResultsIgnoreOrder(tEnv.executeSql(withShuffle).collect(), expected, true);
         // parity: same results without the shuffle
         assertResultsIgnoreOrder(tEnv.executeSql(withoutShuffle).collect(), expected, true);
+    }
+
+    @Test
+    void testLeftLookupShuffleWithNullProbeKey() throws Exception {
+        String dim = "dim_nullable_probe";
+        tEnv.executeSql(
+                String.format(
+                        "create table %s ("
+                                + "  id int not null,"
+                                + "  name varchar,"
+                                + "  primary key (id) NOT ENFORCED"
+                                + ") with ('bucket.num' = '3', 'bucket.key' = 'id',"
+                                + " 'lookup.async' = 'false')",
+                        dim));
+        try (Table dimTable = conn.getTable(TablePath.of(DEFAULT_DB, dim))) {
+            UpsertWriter writer = dimTable.newUpsert().createWriter();
+            writer.upsert(row(1, "name1"));
+            writer.flush();
+        }
+
+        registerNullableKeySrc();
+
+        String query =
+                String.format(
+                        "SELECT /*+ LOOKUP('table' = '%s', 'shuffle' = 'true') */ "
+                                + "src.id, src.payload, %s.name "
+                                + "FROM nullable_src AS src "
+                                + "LEFT JOIN %s FOR SYSTEM_TIME AS OF src.proc "
+                                + "ON src.id = %s.id",
+                        dim, dim, dim, dim);
+
+        assertThat(usesCustomShufflePartitioner(query))
+                .as("nullable probe stream should use the Fluss custom partitioner")
+                .isTrue();
+        assertResultsIgnoreOrder(
+                tEnv.executeSql(query).collect(),
+                Arrays.asList("+I[1, matched, name1]", "+I[null, null-key, null]"),
+                true);
     }
 
     @Test
@@ -416,6 +456,7 @@ public class Flink22LookupShuffleITCase extends FlinkTestBase {
                         normalizer,
                         keyRowType,
                         Collections.singletonList("id"),
+                        Collections.emptyList(),
                         /* lakeFormat */ null,
                         numBuckets);
 
@@ -467,6 +508,59 @@ public class Flink22LookupShuffleITCase extends FlinkTestBase {
                 .isGreaterThan(1);
     }
 
+    @Test
+    void testPartitionedTableSpreadsAcrossSubtasks() throws Exception {
+        // A partitioned table with bucket.num == 1: every row has bucketId 0, so routing by bucket
+        // alone would send all probe rows to subtask 0. Partition-aware routing must spread the
+        // partitions across subtasks while keeping each (partition, bucket) co-located.
+        int numBuckets = 1;
+        int parallelism = 4;
+        execEnv.setParallelism(parallelism);
+
+        RowType keyRowType =
+                RowType.of(
+                        new LogicalType[] {
+                            new IntType(false), new VarCharType(false, Integer.MAX_VALUE)
+                        },
+                        new String[] {"id", "p_date"});
+        LookupNormalizer normalizer =
+                LookupNormalizer.createPrimaryKeyLookupNormalizer(new int[] {0, 1}, keyRowType);
+        FlussLookupInputPartitioner flussPartitioner =
+                new FlussLookupInputPartitioner(
+                        normalizer,
+                        keyRowType,
+                        Collections.singletonList("id"),
+                        Collections.singletonList("p_date"),
+                        /* lakeFormat */ null,
+                        numBuckets);
+
+        List<Row> rows = new ArrayList<>();
+        for (int p = 0; p < 12; p++) {
+            rows.add(Row.of(1, "2024-" + p));
+        }
+
+        DataStream<Row> tagged =
+                execEnv.fromCollection(rows)
+                        .returns(Types.ROW(Types.INT, Types.STRING))
+                        .partitionCustom(
+                                new DelegatingPartitioner(flussPartitioner),
+                                new PartitionKeySelector())
+                        .map(new PartitionSubtaskTagger())
+                        .returns(Types.ROW(Types.INT, Types.STRING));
+
+        Map<String, Integer> subtaskByPartition = new HashMap<>();
+        try (CloseableIterator<Row> it = tagged.executeAndCollect()) {
+            while (it.hasNext()) {
+                Row r = it.next();
+                subtaskByPartition.put((String) r.getField(1), (Integer) r.getField(0));
+            }
+        }
+
+        assertThat(new HashSet<>(subtaskByPartition.values()).size())
+                .as("partitions sharing bucket id 0 must not all collapse onto subtask 0")
+                .isGreaterThan(1);
+    }
+
     /** Independently computes the Fluss bucket id for an int key, mirroring the client routing. */
     private static int flussBucketOf(int id, int numBuckets) {
         RowType keyRowType =
@@ -500,11 +594,29 @@ public class Flink22LookupShuffleITCase extends FlinkTestBase {
         }
     }
 
+    /** Builds the (id, p_date) lookup key row for a partitioned table. */
+    private static class PartitionKeySelector implements KeySelector<Row, RowData> {
+        @Override
+        public RowData getKey(Row row) {
+            return GenericRowData.of(
+                    (Integer) row.getField(0), StringData.fromString((String) row.getField(1)));
+        }
+    }
+
     /** Tags each element with the subtask index that processed it. */
     private static class SubtaskTagger extends RichMapFunction<Integer, Row> {
         @Override
         public Row map(Integer id) {
             return Row.of(getRuntimeContext().getTaskInfo().getIndexOfThisSubtask(), id);
+        }
+    }
+
+    /** Tags each partitioned row with the subtask index that processed it. */
+    private static class PartitionSubtaskTagger extends RichMapFunction<Row, Row> {
+        @Override
+        public Row map(Row row) {
+            return Row.of(
+                    getRuntimeContext().getTaskInfo().getIndexOfThisSubtask(), row.getField(1));
         }
     }
 
@@ -528,6 +640,22 @@ public class Flink22LookupShuffleITCase extends FlinkTestBase {
                         .build();
         DataStream<Row> srcDs = execEnv.fromCollection(testData).returns(typeInfo);
         tEnv.createTemporaryView("src", tEnv.fromDataStream(srcDs, schema));
+    }
+
+    private void registerNullableKeySrc() {
+        List<Row> testData = Arrays.asList(Row.of(1, "matched"), Row.of(null, "null-key"));
+        RowTypeInfo typeInfo =
+                new RowTypeInfo(
+                        new TypeInformation[] {Types.INT, Types.STRING},
+                        new String[] {"id", "payload"});
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("payload", DataTypes.STRING())
+                        .columnByExpression("proc", "PROCTIME()")
+                        .build();
+        DataStream<Row> srcDs = execEnv.fromCollection(testData).returns(typeInfo);
+        tEnv.createTemporaryView("nullable_src", tEnv.fromDataStream(srcDs, schema));
     }
 
     private void registerPartitionedSrc(String partition1, String partition2) {

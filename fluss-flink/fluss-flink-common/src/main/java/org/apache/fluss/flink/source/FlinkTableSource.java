@@ -273,9 +273,9 @@ public class FlinkTableSource
     }
 
     /**
-     * Copy constructor: the single source of truth for cloning this source's state. Used by {@link
-     * #copy()} and by version-specific subclasses (e.g. the Flink 2.x custom-lookup-shuffle
-     * variant) to wrap an already-built source while preserving all state.
+     * Copy constructor used by {@link #copy()} and by version-specific subclasses (e.g. the Flink
+     * 2.x custom-lookup-shuffle variant) to wrap an already-built source while preserving its
+     * state, including the stashed lookup normalizer.
      */
     protected FlinkTableSource(FlinkTableSource other) {
         this.tablePath = other.tablePath;
@@ -550,9 +550,6 @@ public class FlinkTableSource
 
     @Override
     public DynamicTableSource copy() {
-        // Single source of truth for state copying: the copy constructor. It also carries over the
-        // stashed lookup normalizer, so a copy made between getLookupRuntimeProvider() and
-        // getPartitioner() (Flink 2.x custom lookup shuffle) does not silently disable the shuffle.
         return new FlinkTableSource(this);
     }
 
@@ -561,6 +558,11 @@ public class FlinkTableSource
     /** Returns the indexes of the bucket-key columns within the table output row. */
     protected int[] bucketKeyIndexes() {
         return bucketKeyIndexes;
+    }
+
+    /** Returns the indexes of the partition-key columns within the table output row. */
+    protected int[] partitionKeyIndexes() {
+        return partitionKeyIndexes;
     }
 
     /** Returns the Flink logical row type produced by this source. */
