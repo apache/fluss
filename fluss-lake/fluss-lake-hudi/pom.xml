@@ -26,7 +26,7 @@
     </parent>
 
     <artifactId>fluss-lake-hudi</artifactId>
-    <name>Apache Fluss (Incubating) : Lake : Hudi</name>
+    <name>Apache Fluss : Lake : Hudi</name>
 
     <packaging>jar</packaging>
 

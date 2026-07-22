@@ -27,7 +27,7 @@
     </parent>
 
     <artifactId>fluss-dist</artifactId>
-    <name>Apache Fluss (Incubating) : Dist</name>
+    <name>Apache Fluss : Dist</name>
     <packaging>jar</packaging>
 
     <dependencies>

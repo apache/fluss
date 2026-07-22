@@ -28,7 +28,7 @@
     </parent>
 
     <artifactId>fluss-metrics</artifactId>
-    <name>Apache Fluss (Incubating) : Metrics :</name>
+    <name>Apache Fluss : Metrics :</name>
     <packaging>pom</packaging>
 
     <modules>

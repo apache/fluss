@@ -72,7 +72,6 @@ make_binary_release() {
   cd fluss-dist/target/fluss-${RELEASE_VERSION}-bin
   cp ${FLUSS_DIR}/LICENSE-bin ./fluss-${RELEASE_VERSION}/LICENSE
   cp ${FLUSS_DIR}/NOTICE-bin ./fluss-${RELEASE_VERSION}/NOTICE
-  cp ${FLUSS_DIR}/DISCLAIMER ./fluss-${RELEASE_VERSION}/DISCLAIMER
 
   tar $TAR_OPTIONS -czf "${dir_name}.tgz" fluss-*
 

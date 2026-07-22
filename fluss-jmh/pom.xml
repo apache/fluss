@@ -27,7 +27,7 @@
     </parent>
 
     <artifactId>fluss-jmh</artifactId>
-    <name>Apache Fluss (Incubating) : JMH</name>
+    <name>Apache Fluss : JMH</name>
     <packaging>jar</packaging>
 
     <dependencies>

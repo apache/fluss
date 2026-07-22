@@ -29,7 +29,7 @@
     </parent>
 
     <artifactId>fluss-ci-tools</artifactId>
-    <name>Apache Fluss (Incubating) : CI : Tools</name>
+    <name>Apache Fluss : CI : Tools</name>
 
     <dependencies>
 

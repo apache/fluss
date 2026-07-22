@@ -27,7 +27,7 @@
     </parent>
 
     <artifactId>fluss-spark-3.4_${scala.binary.version}</artifactId>
-    <name>Apache Fluss (Incubating) : Engine Spark : 3.4</name>
+    <name>Apache Fluss : Engine Spark : 3.4</name>
 
     <properties>
         <spark.version>3.4.3</spark.version>

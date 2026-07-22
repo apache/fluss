@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Apache Fluss (Incubating) Official Rust Client
+//! Apache Fluss Official Rust Client
 //!
-//! Official Rust client library for [Apache Fluss (Incubating)](https://fluss.apache.org/).
+//! Official Rust client library for [Apache Fluss](https://fluss.apache.org/).
 //! It supports **primary key (KV) tables** (upsert + lookup) and **log tables** (append + scan).
 //!
 //! # Examples

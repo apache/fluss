@@ -27,7 +27,7 @@
     </parent>
 
     <artifactId>fluss-test-utils</artifactId>
-    <name>Apache Fluss (Incubating) : Test utils</name>
+    <name>Apache Fluss : Test utils</name>
     <packaging>jar</packaging>
 
     <dependencies>

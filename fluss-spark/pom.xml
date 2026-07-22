@@ -28,7 +28,7 @@
     </parent>
 
     <artifactId>fluss-spark</artifactId>
-    <name>Apache Fluss (Incubating) : Engine Spark :</name>
+    <name>Apache Fluss : Engine Spark :</name>
     <packaging>pom</packaging>
 
     <properties>

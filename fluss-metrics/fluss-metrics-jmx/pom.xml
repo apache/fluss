@@ -28,7 +28,7 @@
     </parent>
 
     <artifactId>fluss-metrics-jmx</artifactId>
-    <name>Apache Fluss (Incubating) : Metrics : JMX</name>
+    <name>Apache Fluss : Metrics : JMX</name>
 
     <properties>
         <!-- required by JmxServer -->

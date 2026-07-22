@@ -27,7 +27,7 @@
     </parent>
 
     <artifactId>fluss-filesystems</artifactId>
-    <name>Apache Fluss (Incubating) : FileSystems :</name>
+    <name>Apache Fluss : FileSystems :</name>
     <modules>
         <module>fluss-fs-hadoop</module>
         <module>fluss-fs-hadoop-shaded</module>

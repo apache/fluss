@@ -17,7 +17,7 @@
 
 defmodule Fluss do
   @moduledoc """
-  Elixir client for Apache Fluss (Incubating).
+  Elixir client for Apache Fluss.
 
   ## Examples
 

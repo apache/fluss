@@ -28,7 +28,7 @@
     </parent>
 
     <artifactId>fluss-fs-hadoop-shaded</artifactId>
-    <name>Apache Fluss (Incubating) : FileSystems : Hadoop FS shaded</name>
+    <name>Apache Fluss : FileSystems : Hadoop FS shaded</name>
 
     <packaging>jar</packaging>
 
