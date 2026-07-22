@@ -50,6 +50,13 @@ The build script will be:
 mvn clean install -DskipTests -T 1C
 ```
 
+If you need to compile artifacts that target Java 8 bytecode, enable the
+`java8` Maven profile:
+
+```bash
+mvn clean install -DskipTests -Pjava8
+```
+
 **NOTE**:
 - For local testing, it's recommend to use directory `${project}/build-target` in project.
 - For deploying distributed cluster, it's recommend to use binary file named `fluss-xxx-bin.tgz`, the file is in directory `${project}/fluss-dist/target`.
