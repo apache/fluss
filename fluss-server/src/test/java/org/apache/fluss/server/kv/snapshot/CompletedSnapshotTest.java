@@ -105,6 +105,28 @@ class CompletedSnapshotTest {
         assertThat(snapshot.getKvSnapshotHandle().getSnapshotSize()).isEqualTo(400L);
     }
 
+    @Test
+    void testIsSnapshotDataNotExists() {
+        assertThat(
+                        CompletedSnapshot.isSnapshotDataNotExists(
+                                new IOException(
+                                        CompletedSnapshot.SNAPSHOT_DATA_NOT_EXISTS_ERROR_MESSAGE)))
+                .isTrue();
+        assertThat(
+                        CompletedSnapshot.isSnapshotDataNotExists(
+                                new IOException("File does not exist: /remote/snapshot/CURRENT")))
+                .isTrue();
+        assertThat(
+                        CompletedSnapshot.isSnapshotDataNotExists(
+                                new IOException(
+                                        "Failed to download snapshot.",
+                                        new IOException(
+                                                "File does not exist: /remote/snapshot/CURRENT"))))
+                .isTrue();
+        assertThat(CompletedSnapshot.isSnapshotDataNotExists(new IOException("Access denied")))
+                .isFalse();
+    }
+
     private void checkCompletedSnapshotCleanUp(
             Path snapshotPath, KvSnapshotHandle kvSnapshotHandle, boolean isShareFileShouldDelete) {
         // private should be deleted, but the local file should still remain

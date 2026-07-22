@@ -186,6 +186,18 @@ class CompletedSnapshotStoreManagerTest {
 
     @Test
     void testMetadataInconsistencyWithMetadataNotExistsException() throws Exception {
+        testMetadataInconsistencyWithMetadataNotExistsException(
+                CompletedSnapshot.SNAPSHOT_DATA_NOT_EXISTS_ERROR_MESSAGE);
+    }
+
+    @Test
+    void testMetadataInconsistencyWithHadoopFileDoesNotExistException() throws Exception {
+        testMetadataInconsistencyWithMetadataNotExistsException(
+                "File does not exist: /remote/snapshot/CURRENT");
+    }
+
+    private void testMetadataInconsistencyWithMetadataNotExistsException(String errorMessage)
+            throws Exception {
         // setup test data with mixed valid and invalid snapshots
         TableBucket tableBucket = new TableBucket(1, 1);
         CompletedSnapshot validSnapshot =
@@ -196,7 +208,7 @@ class CompletedSnapshotStoreManagerTest {
         CompletedSnapshot invalidSnapshot =
                 KvTestUtils.mockCompletedSnapshot(tempDir, tableBucket, 2L);
         TestingCompletedSnapshotHandle invalidSnapshotHandle =
-                new TestingCompletedSnapshotHandleWithFileNotFound(invalidSnapshot);
+                new TestingCompletedSnapshotHandleWithFileNotFound(invalidSnapshot, errorMessage);
 
         // create CompletedSnapshotHandleStore with real implementations
         CompletedSnapshotHandleStore completedSnapshotHandleStore =
@@ -284,14 +296,17 @@ class CompletedSnapshotStoreManagerTest {
     private static class TestingCompletedSnapshotHandleWithFileNotFound
             extends TestingCompletedSnapshotHandle {
 
-        public TestingCompletedSnapshotHandleWithFileNotFound(CompletedSnapshot snapshot) {
+        private final String errorMessage;
+
+        public TestingCompletedSnapshotHandleWithFileNotFound(
+                CompletedSnapshot snapshot, String errorMessage) {
             super(snapshot, false);
+            this.errorMessage = errorMessage;
         }
 
         @Override
         public CompletedSnapshot retrieveCompleteSnapshot() throws IOException {
-            throw new FileNotFoundException(
-                    CompletedSnapshot.SNAPSHOT_DATA_NOT_EXISTS_ERROR_MESSAGE);
+            throw new FileNotFoundException(errorMessage);
         }
     }
 
