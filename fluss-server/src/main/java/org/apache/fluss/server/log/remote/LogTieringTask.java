@@ -43,6 +43,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.OptionalLong;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeCommitRemoteLogManifestRequest;
 
@@ -57,6 +58,7 @@ public class LogTieringTask implements Runnable {
     private final PhysicalTablePath physicalTablePath;
     private final TableBucket tableBucket;
     private final RemoteLogStorage remoteLogStorage;
+    private final RemoteLogIndexCache remoteLogIndexCache;
     private final CoordinatorGateway coordinatorGateway;
     private final Clock clock;
     private final int maxUploadSegmentsPerTask;
@@ -71,6 +73,7 @@ public class LogTieringTask implements Runnable {
             Replica replica,
             RemoteLogTablet remoteLog,
             RemoteLogStorage remoteLogStorage,
+            RemoteLogIndexCache remoteLogIndexCache,
             CoordinatorGateway coordinatorGateway,
             Clock clock,
             int maxUploadSegmentsPerTask) {
@@ -79,6 +82,7 @@ public class LogTieringTask implements Runnable {
         this.physicalTablePath = replica.getPhysicalTablePath();
         this.tableBucket = replica.getTableBucket();
         this.remoteLogStorage = remoteLogStorage;
+        this.remoteLogIndexCache = remoteLogIndexCache;
         this.coordinatorGateway = coordinatorGateway;
         this.clock = clock;
         this.maxUploadSegmentsPerTask = maxUploadSegmentsPerTask;
@@ -154,6 +158,11 @@ public class LogTieringTask implements Runnable {
 
                 if (success) {
                     if (!expiredRemoteLogSegments.isEmpty()) {
+                        // Release the mmap-backed local indexes before deleting the remote files.
+                        remoteLogIndexCache.removeAll(
+                                expiredRemoteLogSegments.stream()
+                                        .map(RemoteLogSegment::remoteLogSegmentId)
+                                        .collect(Collectors.toList()));
                         // 3. For these expiredRemoteLogSegments, we will delete remote log
                         // segment files from remote after commit the remote log manifest.
                         // TODO introduce the read reference count to avoid deleting remote log
