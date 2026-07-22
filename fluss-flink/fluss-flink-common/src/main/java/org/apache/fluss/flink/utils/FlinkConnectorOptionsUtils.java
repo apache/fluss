@@ -23,6 +23,7 @@ import org.apache.fluss.flink.FlinkConnectorOptions.ScanStartupMode;
 import org.apache.fluss.flink.sink.shuffle.DistributionMode;
 import org.apache.fluss.metadata.MergeEngineType;
 
+import org.apache.flink.configuration.ConfigurationUtils;
 import org.apache.flink.configuration.ReadableConfig;
 import org.apache.flink.table.api.ValidationException;
 import org.apache.flink.table.api.config.TableConfigOptions;
@@ -199,23 +200,15 @@ public class FlinkConnectorOptionsUtils {
 
     public static String getClientScannerIoTmpDir(
             Configuration flussConf, org.apache.flink.configuration.Configuration flinkConfig) {
-        return getClientScannerIoTmpDir(flussConf, flinkConfig, 0);
-    }
-
-    public static String getClientScannerIoTmpDir(
-            Configuration flussConf,
-            org.apache.flink.configuration.Configuration flinkConfig,
-            int taskIndex) {
         return flussConf
                 .getOptional(CLIENT_SCANNER_IO_TMP_DIR)
                 .orElseGet(
-                        () -> {
-                            String[] flinkTmpDirs =
-                                    org.apache.flink.configuration.ConfigurationUtils
-                                            .parseTempDirectories(flinkConfig);
-                            int idx = Math.floorMod(taskIndex, flinkTmpDirs.length);
-                            return new File(flinkTmpDirs[idx], "fluss").getAbsolutePath();
-                        });
+                        () ->
+                                new File(
+                                                ConfigurationUtils.getRandomTempDirectory(
+                                                        flinkConfig),
+                                                "fluss")
+                                        .getAbsolutePath());
     }
 
     /** Fluss startup options. * */

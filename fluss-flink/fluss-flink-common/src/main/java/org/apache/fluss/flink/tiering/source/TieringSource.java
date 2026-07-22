@@ -112,13 +112,11 @@ public class TieringSource<WriteResult>
             SourceReaderContext sourceReaderContext) {
         FutureCompletingBlockingQueue<RecordsWithSplitIds<TableBucketWriteResult<WriteResult>>>
                 elementsQueue = new FutureCompletingBlockingQueue<>();
-        flussConf.set(
+        Configuration readerConf = new Configuration(flussConf);
+        readerConf.set(
                 CLIENT_SCANNER_IO_TMP_DIR,
-                getClientScannerIoTmpDir(
-                        flussConf,
-                        sourceReaderContext.getConfiguration(),
-                        sourceReaderContext.getIndexOfSubtask()));
-        Connection connection = ConnectionFactory.createConnection(flussConf);
+                getClientScannerIoTmpDir(readerConf, sourceReaderContext.getConfiguration()));
+        Connection connection = ConnectionFactory.createConnection(readerConf);
         return new TieringSourceReader<>(
                 elementsQueue, sourceReaderContext, connection, lakeTieringFactory);
     }
