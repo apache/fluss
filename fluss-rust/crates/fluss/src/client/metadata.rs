@@ -22,7 +22,7 @@ use crate::metadata::{PhysicalTablePath, TableBucket, TablePath};
 use crate::proto::MetadataResponse;
 use crate::rpc::message::UpdateMetadataRequest;
 use crate::rpc::{RpcClient, ServerConnection};
-use log::info;
+use log::{info, warn};
 use parking_lot::RwLock;
 use std::collections::HashSet;
 use std::net::{SocketAddr, ToSocketAddrs};
@@ -94,11 +94,7 @@ impl Metadata {
         for bootstrap in bootstrap_servers.split(',') {
             let bootstrap = bootstrap.trim();
             if bootstrap.is_empty() {
-                return Err(Error::IllegalArgument {
-                    message: format!(
-                        "Invalid bootstrap servers '{bootstrap_servers}': empty bootstrap server"
-                    ),
-                });
+                continue;
             }
             bootstraps.push(BootstrapServer {
                 raw: bootstrap.to_string(),
@@ -117,13 +113,20 @@ impl Metadata {
 
     async fn init_cluster(bootstrap_servers: &str, connections: Arc<RpcClient>) -> Result<Cluster> {
         let bootstraps = Self::parse_bootstrap_servers(bootstrap_servers)?;
+        let bootstrap_count = bootstraps.len();
         let mut errors = Vec::new();
         let mut last_connection_error = None;
 
-        for bootstrap in bootstraps {
+        for (index, bootstrap) in bootstraps.into_iter().enumerate() {
             let socket_address = match bootstrap.address {
                 Ok(socket_address) => socket_address,
                 Err(err) => {
+                    if index + 1 < bootstrap_count {
+                        warn!(
+                            "Failed to resolve bootstrap server '{}', trying the next server: {err}",
+                            bootstrap.raw
+                        );
+                    }
                     errors.push(format!("{}: {err}", bootstrap.raw));
                     continue;
                 }
@@ -138,7 +141,13 @@ impl Metadata {
             match Self::fetch_cluster_from_bootstrap(&server_node, connections.clone()).await {
                 Ok(cluster) => return Ok(cluster),
                 Err(err) => {
-                    errors.push(format!("{socket_address}: {err}"));
+                    if index + 1 < bootstrap_count {
+                        warn!(
+                            "Failed to initialize cluster from bootstrap server '{}', trying the next server: {err}",
+                            bootstrap.raw
+                        );
+                    }
+                    errors.push(format!("{}: {err}", bootstrap.raw));
                     last_connection_error = Some(err);
                 }
             }
@@ -157,6 +166,10 @@ impl Metadata {
         last_connection_error: Option<Error>,
     ) -> Error {
         if let Some(error) = last_connection_error {
+            warn!(
+                "Unable to initialize cluster from bootstrap servers '{bootstrap_servers}': {}",
+                errors.join("; ")
+            );
             return error;
         }
 
@@ -508,13 +521,17 @@ mod tests {
     }
 
     #[test]
-    fn parse_bootstrap_rejects_empty_comma_separated_entries() {
-        let err = Metadata::parse_bootstrap_servers("127.0.0.1:8080, , localhost:9090")
-            .expect_err("empty bootstrap entries should be rejected");
+    fn parse_bootstrap_ignores_empty_comma_separated_entries() {
+        let bootstraps =
+            Metadata::parse_bootstrap_servers("127.0.0.1:8080, , localhost:9090,").unwrap();
 
-        assert!(
-            err.to_string().contains("empty bootstrap server"),
-            "unexpected error: {err}"
-        );
+        assert_eq!(bootstraps.len(), 2);
+        assert_eq!(bootstraps[0].raw, "127.0.0.1:8080");
+        assert_eq!(bootstraps[1].raw, "localhost:9090");
+    }
+
+    #[test]
+    fn parse_bootstrap_rejects_config_without_servers() {
+        assert!(Metadata::parse_bootstrap_servers(" , ").is_err());
     }
 }

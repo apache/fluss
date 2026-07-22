@@ -557,6 +557,19 @@ mod admin_test {
     }
 
     #[tokio::test]
+    async fn test_bootstrap_server_failover() {
+        let cluster = get_shared_cluster();
+        let bootstrap_servers = format!("127.0.0.1:1,{}", cluster.plaintext_bootstrap_servers());
+
+        FlussConnection::new(Config {
+            bootstrap_servers,
+            ..Default::default()
+        })
+        .await
+        .expect("should fall back to the second bootstrap server");
+    }
+
+    #[tokio::test]
     async fn test_error_table_not_partitioned() {
         let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
