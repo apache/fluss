@@ -36,6 +36,12 @@ pub struct Metadata {
     cluster_version_tx: watch::Sender<u64>,
 }
 
+#[derive(Debug)]
+struct BootstrapServer {
+    raw: String,
+    address: Result<SocketAddr>,
+}
+
 impl Metadata {
     pub async fn new(bootstrap: &str, connections: Arc<RpcClient>) -> Result<Self> {
         let cluster = Self::init_cluster(bootstrap, connections.clone()).await?;
@@ -57,12 +63,12 @@ impl Metadata {
             .send_modify(|v| *v = v.wrapping_add(1));
     }
 
-    fn parse_bootstrap(boot_strap: &str) -> Result<SocketAddr> {
+    fn parse_bootstrap(bootstrap: &str) -> Result<SocketAddr> {
         // Resolve all socket addresses and deterministically choose one.
-        let addrs = boot_strap
+        let addrs = bootstrap
             .to_socket_addrs()
             .map_err(|e| Error::IllegalArgument {
-                message: format!("Invalid bootstrap address '{boot_strap}': {e}"),
+                message: format!("Invalid bootstrap address '{bootstrap}': {e}"),
             })?;
 
         // Prefer IPv4 addresses; if none are available, fall back to the first IPv6.
@@ -77,20 +83,95 @@ impl Metadata {
         }
 
         let addr = ipv6_candidate.ok_or_else(|| Error::IllegalArgument {
-            message: format!("Unable to resolve bootstrap address '{boot_strap}'"),
+            message: format!("Unable to resolve bootstrap address '{bootstrap}'"),
         })?;
         Ok(addr)
     }
 
-    async fn init_cluster(boot_strap: &str, connections: Arc<RpcClient>) -> Result<Cluster> {
-        let socket_address = Self::parse_bootstrap(boot_strap)?;
-        let server_node = ServerNode::new(
-            -1,
-            socket_address.ip().to_string(),
-            socket_address.port() as u32,
-            ServerType::Unknown,
+    fn parse_bootstrap_servers(bootstrap_servers: &str) -> Result<Vec<BootstrapServer>> {
+        let mut bootstraps = Vec::new();
+
+        for bootstrap in bootstrap_servers.split(',') {
+            let bootstrap = bootstrap.trim();
+            if bootstrap.is_empty() {
+                return Err(Error::IllegalArgument {
+                    message: format!(
+                        "Invalid bootstrap servers '{bootstrap_servers}': empty bootstrap server"
+                    ),
+                });
+            }
+            bootstraps.push(BootstrapServer {
+                raw: bootstrap.to_string(),
+                address: Self::parse_bootstrap(bootstrap),
+            });
+        }
+
+        if bootstraps.is_empty() {
+            return Err(Error::IllegalArgument {
+                message: "No bootstrap servers configured".to_string(),
+            });
+        }
+
+        Ok(bootstraps)
+    }
+
+    async fn init_cluster(bootstrap_servers: &str, connections: Arc<RpcClient>) -> Result<Cluster> {
+        let bootstraps = Self::parse_bootstrap_servers(bootstrap_servers)?;
+        let mut errors = Vec::new();
+        let mut last_connection_error = None;
+
+        for bootstrap in bootstraps {
+            let socket_address = match bootstrap.address {
+                Ok(socket_address) => socket_address,
+                Err(err) => {
+                    errors.push(format!("{}: {err}", bootstrap.raw));
+                    continue;
+                }
+            };
+            let server_node = ServerNode::new(
+                -1,
+                socket_address.ip().to_string(),
+                socket_address.port() as u32,
+                ServerType::Unknown,
+            );
+
+            match Self::fetch_cluster_from_bootstrap(&server_node, connections.clone()).await {
+                Ok(cluster) => return Ok(cluster),
+                Err(err) => {
+                    errors.push(format!("{socket_address}: {err}"));
+                    last_connection_error = Some(err);
+                }
+            }
+        }
+
+        Err(Self::bootstrap_initialization_error(
+            bootstrap_servers,
+            errors,
+            last_connection_error,
+        ))
+    }
+
+    fn bootstrap_initialization_error(
+        bootstrap_servers: &str,
+        errors: Vec<String>,
+        last_connection_error: Option<Error>,
+    ) -> Error {
+        if let Some(error) = last_connection_error {
+            return error;
+        }
+
+        let message = format!(
+            "Unable to initialize cluster from bootstrap servers '{bootstrap_servers}': {}",
+            errors.join("; ")
         );
-        let con = connections.get_connection(&server_node).await?;
+        Error::IllegalArgument { message }
+    }
+
+    async fn fetch_cluster_from_bootstrap(
+        server_node: &ServerNode,
+        connections: Arc<RpcClient>,
+    ) -> Result<Cluster> {
+        let con = connections.get_connection(server_node).await?;
 
         let response = con
             .request(UpdateMetadataRequest::new(
@@ -315,6 +396,7 @@ impl Metadata {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::ApiError;
     use crate::metadata::{TableBucket, TablePath};
     use crate::test_utils::build_cluster_arc;
 
@@ -342,29 +424,97 @@ mod tests {
     }
 
     #[test]
+    fn bootstrap_failure_preserves_last_connection_error() {
+        let authentication_error = Error::FlussAPIError {
+            api_error: ApiError {
+                code: FlussError::AuthenticateException.code(),
+                message: "Authentication failed".to_string(),
+            },
+        };
+
+        let error = Metadata::bootstrap_initialization_error(
+            "127.0.0.1:9123",
+            vec!["127.0.0.1:9123: Authentication failed".to_string()],
+            Some(authentication_error),
+        );
+
+        assert_eq!(error.api_error(), Some(FlussError::AuthenticateException));
+    }
+
+    #[test]
     fn parse_bootstrap_variants() {
         // valid IP
-        let addr = Metadata::parse_bootstrap("127.0.0.1:8080").unwrap();
+        let bootstraps = Metadata::parse_bootstrap_servers("127.0.0.1:8080").unwrap();
+        let addr = bootstraps[0].address.as_ref().unwrap();
+        assert_eq!(addr.ip().to_string(), "127.0.0.1");
         assert_eq!(addr.port(), 8080);
 
         // valid hostname
-        let addr = Metadata::parse_bootstrap("localhost:9090").unwrap();
+        let bootstraps = Metadata::parse_bootstrap_servers("localhost:9090").unwrap();
+        let addr = bootstraps[0].address.as_ref().unwrap();
+        assert_eq!(addr.ip().to_string(), "127.0.0.1");
         assert_eq!(addr.port(), 9090);
 
         // valid IPv6 address
-        let addr = Metadata::parse_bootstrap("[::1]:8080").unwrap();
+        let bootstraps = Metadata::parse_bootstrap_servers("[::1]:8080").unwrap();
+        let addr = bootstraps[0].address.as_ref().unwrap();
+        assert_eq!(addr.ip().to_string(), "::1");
         assert_eq!(addr.port(), 8080);
 
-        // invalid input: missing port
-        assert!(Metadata::parse_bootstrap("localhost").is_err());
+        // invalid input: missing port is preserved as an entry-level parse error
+        let bootstraps = Metadata::parse_bootstrap_servers("localhost").unwrap();
+        assert!(bootstraps[0].address.is_err());
 
-        // invalid input: out-of-range port
-        assert!(Metadata::parse_bootstrap("localhost:99999").is_err());
+        // invalid input: out-of-range port is preserved as an entry-level parse error
+        let bootstraps = Metadata::parse_bootstrap_servers("localhost:99999").unwrap();
+        assert!(bootstraps[0].address.is_err());
 
         // invalid input: empty string
-        assert!(Metadata::parse_bootstrap("").is_err());
+        assert!(Metadata::parse_bootstrap_servers("").is_err());
 
-        // invalid input: nonsensical address
-        assert!(Metadata::parse_bootstrap("invalid_address").is_err());
+        // invalid input: nonsensical address is preserved as an entry-level parse error
+        let bootstraps = Metadata::parse_bootstrap_servers("invalid_address").unwrap();
+        assert!(bootstraps[0].address.is_err());
+    }
+
+    #[test]
+    fn parse_bootstrap_accepts_comma_separated_servers() {
+        let bootstraps =
+            Metadata::parse_bootstrap_servers("127.0.0.1:8080, localhost:9090, [::1]:7070")
+                .unwrap();
+
+        assert_eq!(bootstraps.len(), 3);
+        let first = bootstraps[0].address.as_ref().unwrap();
+        assert_eq!(first.ip().to_string(), "127.0.0.1");
+        assert_eq!(first.port(), 8080);
+        let second = bootstraps[1].address.as_ref().unwrap();
+        assert_eq!(second.ip().to_string(), "127.0.0.1");
+        assert_eq!(second.port(), 9090);
+        let third = bootstraps[2].address.as_ref().unwrap();
+        assert_eq!(third.ip().to_string(), "::1");
+        assert_eq!(third.port(), 7070);
+    }
+
+    #[test]
+    fn parse_bootstrap_preserves_later_entries_when_one_entry_is_unresolvable() {
+        let bootstraps =
+            Metadata::parse_bootstrap_servers("invalid_address:8080, 127.0.0.1:9090").unwrap();
+
+        assert_eq!(bootstraps.len(), 2);
+        assert!(bootstraps[0].address.is_err());
+        let addr = bootstraps[1].address.as_ref().unwrap();
+        assert_eq!(addr.ip().to_string(), "127.0.0.1");
+        assert_eq!(addr.port(), 9090);
+    }
+
+    #[test]
+    fn parse_bootstrap_rejects_empty_comma_separated_entries() {
+        let err = Metadata::parse_bootstrap_servers("127.0.0.1:8080, , localhost:9090")
+            .expect_err("empty bootstrap entries should be rejected");
+
+        assert!(
+            err.to_string().contains("empty bootstrap server"),
+            "unexpected error: {err}"
+        );
     }
 }
