@@ -347,7 +347,9 @@ public class ConfigOptions {
                                     + "KV leader replica capacity. This value does not reserve or "
                                     + "enforce memory on the tablet server. The default value of 0 "
                                     + "disables memory-based KV leader replica capacity control. "
-                                    + "Set a positive value to enable it.");
+                                    + "Set a positive value to enable it. When enabled, the recommended "
+                                    + "value is 8 MB, based on the measured memory consumption of an "
+                                    + "empty KV leader replica.");
 
     /**
      * The network address and port the server binds to for accepting connections.

@@ -83,8 +83,9 @@ KV leader replica capacity protection is a coordinator-side admission guard that
 leader replica capacity from TabletServer memory and rejects new KV table or partition creation once that capacity
 would be exceeded.
 
-The feature is **disabled by default** and is considered an advanced/opt-in feature. Enable it once you have a
-sense of how much memory each KV leader replica costs in your environment.
+The feature is **disabled by default** and is considered an advanced/opt-in feature. When enabling it, the
+recommended value is **8 MB per KV leader replica**, based on the measured memory consumption of an empty KV
+leader replica. Adjust the value if measurements from your workload show a different per-replica footprint.
 
 ### When to Enable It
 
@@ -108,13 +109,15 @@ The feature is controlled entirely by a single option, `kv.leader-replica.memory
 # Disabled (default)
 kv.leader-replica.memory-reserved: 0
 
-# Enabled: reserve an estimated 512MB per KV leader replica
-kv.leader-replica.memory-reserved: 512mb
+# Enabled with the recommended estimate of 8MB per KV leader replica
+kv.leader-replica.memory-reserved: 8mb
 ```
 
 - `0` (the default) disables memory-based KV leader replica capacity control entirely.
 - A positive value enables it, and is used as the estimated memory cost of a single KV leader replica when
   calculating the cluster-level capacity (see [How Capacity Is Calculated](#how-capacity-is-calculated) below).
+- `8mb` is the recommended value when enabling the feature, based on the measured memory consumption of an empty
+  KV leader replica. Tune it if your workload measurements indicate a different per-replica memory footprint.
 - Negative values are invalid and are rejected at both static startup and dynamic reconfiguration time.
 
 :::tip
@@ -158,12 +161,12 @@ follows:
    unknown servers.
 5. `kvLeaderReplicaCapacity = totalEstimatedMemory / kv.leader-replica.memory-reserved`.
 
-For example, with `kv.leader-replica.memory-reserved: 1gb` and 4 live TabletServers where 3 report 32GB each and
+For example, with `kv.leader-replica.memory-reserved: 8mb` and 4 live TabletServers where 3 report 32GB each and
 one reports no memory:
 - 3 out of 4 servers report memory, so the limit is enabled (more than half).
 - The unknown server is assumed to have the average of the known servers: 32GB.
 - Total estimated memory = 32GB × 4 = 128GB.
-- Capacity = 128GB / 1GB = 128 KV leader replicas.
+- Capacity = 128GB / 8MB = 16,384 KV leader replicas.
 
 The capacity is recalculated on demand from the current live TabletServer set and is not persisted; it is
 recomputed on CoordinatorServer leadership startup and whenever a table or partition creation request is checked.
@@ -181,7 +184,7 @@ Not enough KV leader replica capacity. observedKvLeaderReplicaCount=<count>, req
 
 If you hit this error, you can:
 - Increase capacity by adding TabletServers or more memory per TabletServer.
-- Raise `kv.leader-replica.memory-reserved` only if your existing estimate was too conservative — raising it
+- Raise `kv.leader-replica.memory-reserved` only if your existing estimate was too low — raising it
   without cause lowers the effective capacity.
 - Temporarily disable the limit (set `kv.leader-replica.memory-reserved` to `0`) if you need to proceed
   immediately, then re-tune before re-enabling.
@@ -198,20 +201,17 @@ The CoordinatorServer exposes two gauges for monitoring:
 Monitor `kvLeaderReplicaCount` against `kvLeaderReplicaCapacity` to anticipate when a cluster is approaching its
 limit before requests start failing.
 
-### Example: Enabling, Tuning, and Disabling
+### Example: Enabling and Disabling
 
 ```yaml title="conf/server.yaml"
-# Step 1: Enable with an initial conservative estimate per KV leader replica
-kv.leader-replica.memory-reserved: 1gb
+# Step 1: Enable with the recommended estimate per KV leader replica
+kv.leader-replica.memory-reserved: 8mb
 
 # Step 2 (optional): Override auto-detected resource reporting on a TabletServer
 # with constrained cgroup visibility
 tablet-server.advertised-resource.memory-size: 64gb
 tablet-server.advertised-resource.cpu-cores: 16
 
-# Step 3: Tune down once real per-replica memory usage is measured
-kv.leader-replica.memory-reserved: 256mb
-
-# Step 4: Disable if no longer needed
+# Step 3: Disable if no longer needed
 kv.leader-replica.memory-reserved: 0
 ```
