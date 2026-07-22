@@ -70,6 +70,7 @@ public class ScanRecordsTest {
         // No records and no progress: both isEmpty() and buckets() must be empty.
         ScanRecords trulyEmpty = ScanRecords.EMPTY;
         assertThat(trulyEmpty.isEmpty()).isTrue();
+        assertThat(trulyEmpty.hasProgress()).isFalse();
         assertThat(trulyEmpty.buckets()).isEmpty();
 
         // Progress-only round: isEmpty() stays true (no materialized records),
@@ -83,6 +84,7 @@ public class ScanRecordsTest {
         progressOffsets.put(emptyBucket, 10L);
         ScanRecords progressOnly = new ScanRecords(progressRecords, progressOffsets);
         assertThat(progressOnly.isEmpty()).isTrue();
+        assertThat(progressOnly.hasProgress()).isTrue();
         assertThat(progressOnly.buckets()).containsExactlyInAnyOrder(tb, emptyBucket);
         assertThat(progressOnly.records(emptyBucket)).isEmpty();
         assertThat(progressOnly.consumedUpToOffset(tb)).isEqualTo(42L);
@@ -98,6 +100,7 @@ public class ScanRecordsTest {
                         new ScanRecord(0L, 1000L, ChangeType.INSERT, row(1, "a"))));
         ScanRecords withRecords = new ScanRecords(matRecords);
         assertThat(withRecords.isEmpty()).isFalse();
+        assertThat(withRecords.hasProgress()).isTrue();
         assertThat(withRecords.buckets()).containsExactly(tb);
         assertThat(withRecords.consumedUpToOffset(tb)).isNull();
     }

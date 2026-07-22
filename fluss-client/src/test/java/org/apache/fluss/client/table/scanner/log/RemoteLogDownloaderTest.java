@@ -87,7 +87,11 @@ class RemoteLogDownloaderTest {
         RemoteFileDownloader remoteFileDownloader = new RemoteFileDownloader(1);
         RemoteLogDownloader remoteLogDownloader =
                 new RemoteLogDownloader(
-                        DATA1_TABLE_PATH, conf, remoteFileDownloader, scannerMetricGroup, 10L);
+                        DATA1_TABLE_PATH.toString(),
+                        conf,
+                        remoteFileDownloader,
+                        scannerMetricGroup,
+                        10L);
         try {
             // trigger auto download.
             remoteLogDownloader.start();
@@ -165,7 +169,7 @@ class RemoteLogDownloaderTest {
         TestRemoteFileDownloader fileDownloader = new TestRemoteFileDownloader(4);
         RemoteLogDownloader remoteLogDownloader =
                 new RemoteLogDownloader(
-                        DATA1_TABLE_PATH,
+                        DATA1_TABLE_PATH.toString(),
                         conf, // max 4 pre-fetch num
                         fileDownloader,
                         scannerMetricGroup,
@@ -337,7 +341,7 @@ class RemoteLogDownloaderTest {
         BlockingFileDownloader fileDownloader = new BlockingFileDownloader(4);
         RemoteLogDownloader downloader =
                 new RemoteLogDownloader(
-                        DATA1_TABLE_PATH, conf, fileDownloader, scannerMetricGroup, 10L);
+                        DATA1_TABLE_PATH.toString(), conf, fileDownloader, scannerMetricGroup, 10L);
 
         try {
             TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);

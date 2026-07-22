@@ -104,6 +104,16 @@ public class ScanRecords implements Iterable<ScanRecord> {
         return count() == 0;
     }
 
+    /**
+     * Returns {@code true} if this {@code ScanRecords} carries any scanner progress.
+     *
+     * <p>A result may have progress even when {@link #isEmpty()} is {@code true}, for example when
+     * a bucket returns no materialized records but advances its consumed offset.
+     */
+    public boolean hasProgress() {
+        return !records.isEmpty() || !consumedUpToOffsets.isEmpty();
+    }
+
     @Override
     public Iterator<ScanRecord> iterator() {
         return new ConcatenatedIterable(records.values()).iterator();

@@ -181,7 +181,12 @@ public class LimitBatchScanner implements BatchScanner {
         } else {
             LogRecordReadContext readContext =
                     LogRecordReadContext.createReadContext(
-                            tableInfo, false, null, schemaGetter, chunkedFactory);
+                            tableInfo,
+                            false,
+                            LogRecordReadContext.SchemaResolution.TARGET,
+                            null,
+                            schemaGetter,
+                            chunkedFactory);
             LogRecords records = MemoryLogRecords.pointToByteBuffer(recordsBuffer);
             for (LogRecordBatch logRecordBatch : records.batches()) {
                 // A batch of log record maybe little more than limit, thus we need slice the

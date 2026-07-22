@@ -15,42 +15,17 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.client.table.scanner.log;
+package org.apache.fluss.client.table.scanner;
 
 import org.apache.fluss.annotation.PublicEvolving;
 
-import javax.annotation.Nullable;
-
 /**
- * Used to describe the operation to scan log data by {@link LogScanner} to a table.
+ * Reads current data from multiple tables through a single client.
  *
- * @since 0.1
+ * <p>NOTE: planned for a future release; declared as a placeholder for forward compatibility. There
+ * is no concrete implementation today.
+ *
+ * @since 0.7
  */
 @PublicEvolving
-public class LogScan {
-
-    /** The projected fields to do projection. No projection if is null. */
-    @Nullable private final int[] projectedFields;
-
-    public LogScan() {
-        this(null);
-    }
-
-    private LogScan(@Nullable int[] projectedFields) {
-        this.projectedFields = projectedFields;
-    }
-
-    /**
-     * Returns a new instance of LogScan description with column projection.
-     *
-     * @param projectedFields the projection fields
-     */
-    public LogScan withProjectedFields(int[] projectedFields) {
-        return new LogScan(projectedFields);
-    }
-
-    @Nullable
-    public int[] getProjectedFields() {
-        return projectedFields;
-    }
-}
+public interface MultiTableBatchScanner extends AutoCloseable {}
