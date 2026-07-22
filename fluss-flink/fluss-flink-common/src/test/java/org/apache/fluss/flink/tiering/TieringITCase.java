@@ -21,6 +21,7 @@ package org.apache.fluss.flink.tiering;
 import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
+import org.apache.fluss.lake.values.TestingValuesLake;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.BinaryString;
@@ -43,6 +44,8 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -114,6 +117,52 @@ abstract class TieringITCase extends FlinkTieringTestBase {
         }
     }
 
+    @Test
+    void testTieringTableDropped() throws Exception {
+        // Create a table with write-pause so the writer is slow enough
+        // for us to drop the table while the reader is actively writing
+        TablePath tableToDrop = TablePath.of("fluss", "droptable");
+        createTable(tableToDrop, false);
+
+        int recordCount = 6;
+        List<InternalRow> rows = new ArrayList<>();
+        for (int i = 0; i < recordCount; i++) {
+            rows.add(GenericRow.of(i, BinaryString.fromString("v" + i)));
+        }
+        writeRows(tableToDrop, rows, true);
+
+        // Register latch to detect when the writer starts writing to the drop table
+        CountDownLatch writeLatch = TestingValuesLake.awaitFirstWrite(tableToDrop.toString());
+
+        Configuration lakeTieringConfig = new Configuration();
+        JobClient jobClient = buildTieringJob(execEnv, lakeTieringConfig);
+
+        try {
+            // Wait until the reader is actively writing to the drop table
+            assertThat(writeLatch.await(30, TimeUnit.SECONDS)).isTrue();
+
+            // Drop the table while the reader is actively writing
+            admin.dropTable(tableToDrop, false).get();
+
+            // Create a new table (without write-pause) after the drop,
+            // write data and verify it gets tiered successfully.
+            // This proves the full drop handling chain completed:
+            // reader cancelled -> committer skipped commit -> enumerator freed slot
+            TablePath tableToKeep = TablePath.of("fluss", "keeptable");
+            createTableNoPause(tableToKeep, false);
+            writeRows(tableToKeep, rows, true);
+
+            LakeSnapshot snapshot = waitLakeSnapshot(tableToKeep);
+            assertThat(countTieredRecords(snapshot)).isEqualTo(recordCount);
+
+            // Verify no data was committed for the dropped table,
+            // proving TieringCommitOperator correctly skipped the commit
+            assertThat(TestingValuesLake.getResults(tableToDrop.toString())).isEmpty();
+        } finally {
+            jobClient.cancel();
+        }
+    }
+
     private long countTieredRecords(LakeSnapshot lakeSnapshot) {
         return lakeSnapshot.getTableBucketsOffset().values().stream()
                 .mapToLong(Long::longValue)
@@ -153,5 +202,20 @@ abstract class TieringITCase extends FlinkTieringTestBase {
                 Collections.singletonList("a"),
                 schemaBuilder.build(),
                 customProperties);
+    }
+
+    private void createTableNoPause(TablePath tablePath, boolean isPrimaryKeyTable)
+            throws Exception {
+        Schema.Builder schemaBuilder =
+                Schema.newBuilder().column("a", DataTypes.INT()).column("b", DataTypes.STRING());
+        if (isPrimaryKeyTable) {
+            schemaBuilder.primaryKey("a");
+        }
+        createTable(
+                tablePath,
+                3,
+                Collections.singletonList("a"),
+                schemaBuilder.build(),
+                Collections.emptyMap());
     }
 }

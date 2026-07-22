@@ -94,6 +94,7 @@ public class TieringSplitReader<WriteResult>
     private final Map<Long, Set<TieringSplit>> pendingTieringSplits;
 
     private final Set<Long> reachTieringMaxDurationTables;
+    private final Set<Long> droppedTables;
 
     private final Map<TableBucket, LakeWriter<WriteResult>> lakeWriters;
     private final Connection connection;
@@ -148,6 +149,7 @@ public class TieringSplitReader<WriteResult>
         this.lakeWriters = new HashMap<>();
         this.currentPendingSnapshotSplits = new ArrayDeque<>();
         this.reachTieringMaxDurationTables = new HashSet<>();
+        this.droppedTables = new HashSet<>();
         this.pollTimeout = pollTimeout;
         this.tieringMetrics = tieringMetrics;
         this.unshadedArrowAvailable = checkUnshadedArrowAvailable(userClassLoader);
@@ -165,6 +167,13 @@ public class TieringSplitReader<WriteResult>
             currentEmptySplits.clear();
             return records;
         }
+
+        // Check droppedTables BEFORE checkSplitOrStartNext to quickly respond to already-marked
+        // current table
+        if (currentTableId != null && droppedTables.contains(currentTableId)) {
+            return forceCompleteDroppedTable();
+        }
+
         checkSplitOrStartNext();
 
         // may read snapshot firstly
@@ -288,6 +297,25 @@ public class TieringSplitReader<WriteResult>
         }
 
         Set<TieringSplit> pendingSplits = pendingTieringSplits.remove(pendingTableId);
+
+        // If the pending table is already dropped, set minimal table state from split metadata
+        // without calling getOrMoveToTable() to avoid RPC exception (TableNotExistException).
+        // The next fetch() cycle will detect the dropped flag and call forceCompleteDroppedTable().
+        if (droppedTables.contains(pendingTableId)) {
+            TieringSplit firstSplit = pendingSplits.iterator().next();
+            currentTableId = pendingTableId;
+            currentTablePath = firstSplit.getTablePath();
+            currentTableNumberOfSplits = firstSplit.getNumberOfSplits();
+            for (TieringSplit split : pendingSplits) {
+                currentTableSplitsByBucket.put(split.getTableBucket(), split);
+            }
+            LOG.info(
+                    "Table {} is already marked dropped; skip opening table {} and force complete in next fetch cycle.",
+                    pendingTableId,
+                    currentTablePath);
+            return;
+        }
+
         for (TieringSplit split : pendingSplits) {
             getOrMoveToTable(split);
             addSplitToCurrentTable(split);
@@ -632,7 +660,8 @@ public class TieringSplitReader<WriteResult>
                 writeResult,
                 logEndOffset,
                 maxTimestamp,
-                checkNotNull(currentTableNumberOfSplits));
+                checkNotNull(currentTableNumberOfSplits),
+                false);
     }
 
     private TableBucketWriteResultWithSplitIds forEmptySplits(Set<TieringSplit> emptySplits) {
@@ -650,7 +679,8 @@ public class TieringSplitReader<WriteResult>
                             null,
                             UNKNOWN_BUCKET_OFFSET,
                             UNKNOWN_BUCKET_TIMESTAMP,
-                            tieringSplit.getNumberOfSplits()));
+                            tieringSplit.getNumberOfSplits(),
+                            false));
         }
         return new TableBucketWriteResultWithSplitIds(writeResults, finishedSplitIds);
     }
@@ -740,6 +770,7 @@ public class TieringSplitReader<WriteResult>
             throw new IOException("Fail to finish current table.", e);
         }
         reachTieringMaxDurationTables.remove(currentTableId);
+        droppedTables.remove(currentTableId);
         // before switch to a new table, mark all as empty or null
         currentTableId = null;
         currentTablePath = null;
@@ -765,6 +796,85 @@ public class TieringSplitReader<WriteResult>
             LOG.info("Table {} reach tiering max duration, will force to complete.", tableId);
             reachTieringMaxDurationTables.add(tableId);
         }
+    }
+
+    /**
+     * Handle a table being dropped. This will mark the table as dropped, and it will be force
+     * completed with empty results in the next fetch cycle.
+     *
+     * <p>For the currently active table, the dropped flag is set so that {@link #fetch()} detects
+     * it at the start of the next cycle and calls {@link #forceCompleteDroppedTable()}. For tables
+     * in {@code pendingTieringSplits}, the flag is also set here; those splits will be skipped when
+     * they become the active table and the dropped flag is detected.
+     *
+     * @param tableId the id of the dropped table
+     */
+    public void handleTableDropped(long tableId) {
+        LOG.info(
+                "handleTableDropped, tableId: {}, currentTableId: {}, pendingTieringSplits: {}",
+                tableId,
+                currentTableId,
+                pendingTieringSplits);
+        if ((currentTableId != null && currentTableId.equals(tableId))
+                || pendingTieringSplits.containsKey(tableId)) {
+            // Current table is being dropped, mark it for force completion in next fetch
+            LOG.info("Table {} is dropped, will force to complete with empty results.", tableId);
+            droppedTables.add(tableId);
+        }
+    }
+
+    /**
+     * Force complete tiering for a dropped table. This will close any in-progress lake writers
+     * without completing (discarding uncommitted data), then finish all remaining splits with null
+     * write results.
+     */
+    private RecordsWithSplitIds<TableBucketWriteResult<WriteResult>> forceCompleteDroppedTable()
+            throws IOException {
+        LOG.info("Force completing dropped table {}", currentTableId);
+
+        Map<TableBucket, TableBucketWriteResult<WriteResult>> writeResults = new HashMap<>();
+        Map<TableBucket, String> finishedSplitIds = new HashMap<>();
+
+        // Generate empty results for all splits (both log and snapshot)
+        Iterator<Map.Entry<TableBucket, TieringSplit>> splitsIterator =
+                currentTableSplitsByBucket.entrySet().iterator();
+        while (splitsIterator.hasNext()) {
+            Map.Entry<TableBucket, TieringSplit> entry = splitsIterator.next();
+            TableBucket bucket = entry.getKey();
+            TieringSplit split = entry.getValue();
+            if (split != null) {
+                // Close lake writer without complete - discard data for dropped table
+                LakeWriter<WriteResult> lakeWriter = lakeWriters.remove(bucket);
+                if (lakeWriter != null) {
+                    try {
+                        lakeWriter.close();
+                    } catch (Exception e) {
+                        LOG.warn("Failed to close lake writer for bucket {}", bucket, e);
+                    }
+                }
+
+                TableBucketWriteResult<WriteResult> bucketResult =
+                        toTableBucketWriteResult(
+                                split.getTablePath(),
+                                bucket,
+                                split.getPartitionName(),
+                                null,
+                                UNKNOWN_BUCKET_OFFSET,
+                                UNKNOWN_BUCKET_TIMESTAMP,
+                                checkNotNull(currentTableNumberOfSplits),
+                                true);
+                writeResults.put(bucket, bucketResult);
+                finishedSplitIds.put(bucket, split.splitId());
+                LOG.info(
+                        "Split {} is forced to be finished due to table dropped with empty result.",
+                        split.splitId());
+                splitsIterator.remove();
+            }
+        }
+
+        // Note: droppedTables.remove is handled by finishCurrentTable()
+        finishCurrentTable();
+        return new TableBucketWriteResultWithSplitIds(writeResults, finishedSplitIds);
     }
 
     @Override
@@ -822,7 +932,8 @@ public class TieringSplitReader<WriteResult>
             @Nullable WriteResult writeResult,
             long endLogOffset,
             long maxTimestamp,
-            int numberOfSplits) {
+            int numberOfSplits,
+            boolean tableDropped) {
         return new TableBucketWriteResult<>(
                 tablePath,
                 tableBucket,
@@ -830,7 +941,8 @@ public class TieringSplitReader<WriteResult>
                 writeResult,
                 endLogOffset,
                 maxTimestamp,
-                numberOfSplits);
+                numberOfSplits,
+                tableDropped);
     }
 
     private class TableBucketWriteResultWithSplitIds
