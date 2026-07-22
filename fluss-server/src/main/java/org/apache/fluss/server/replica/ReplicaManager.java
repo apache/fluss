@@ -1550,6 +1550,13 @@ public class ReplicaManager implements ServerReconfigurable {
 
     private @Nullable FetchLogResultForBucket tryFetchRemoteFirst(
             Replica replica, long fetchOffset) {
+        if (!replica.isLeader()) {
+            throw new NotLeaderOrFollowerException(
+                    String.format(
+                            "Leader not local for bucket %s on tabletServer %d",
+                            replica.getTableBucket(), serverId));
+        }
+
         TableBucket tb = replica.getTableBucket();
         long normalizedFetchOffset =
                 fetchOffset == FetchParams.FETCH_FROM_EARLIEST_OFFSET
@@ -1571,6 +1578,11 @@ public class ReplicaManager implements ServerReconfigurable {
             // REMOTE_FIRST is a preference, so fall back to local reads.
             return null;
         } catch (Exception e) {
+            LOG.warn(
+                    "Failed to fetch remote log first for replica {} at offset {}; falling back to local reads",
+                    tb,
+                    normalizedFetchOffset,
+                    e);
             // Fall back to local reads on remote fetch failures.
             return null;
         }
