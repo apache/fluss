@@ -683,6 +683,33 @@ public final class Replica {
                 tieredLogLocalSegments);
     }
 
+    /**
+     * Update the ttl in milliseconds for remote log segments. This method is called when the table
+     * configuration {@code table.log.ttl} is altered, so that the new ttl takes effect immediately
+     * for the next round of expired-segment evaluation, without requiring a server restart or table
+     * re-creation.
+     *
+     * @param newTtlMs the new ttl in milliseconds; a non-positive value disables expiration
+     */
+    public void updateLogTtlMs(long newTtlMs) {
+        Optional<Long> oldValueOpt = remoteLogManager.updateLogTtlMs(tableBucket, newTtlMs);
+        if (!oldValueOpt.isPresent()) {
+            LOG.debug(
+                    "RemoteLogTablet for {} is unavailable; skip applying new logTtlMs={} "
+                            + "(remote logging may be disabled or the replica is still initializing).",
+                    tableBucket,
+                    newTtlMs);
+            return;
+        }
+
+        long oldValue = oldValueOpt.get();
+        if (oldValue == newTtlMs) {
+            return;
+        }
+
+        LOG.info("Replica for {} logTtlMs changed from {} to {}", tableBucket, oldValue, newTtlMs);
+    }
+
     private void createKv() {
         try {
             // create a closeable registry for the closable related to kv

@@ -694,6 +694,43 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
 
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
+    void testAlterTableLogTtl(boolean partitionedTable) throws Exception {
+        // 1. Create table with default table.log.ttl (= 7 days)
+        long tableId =
+                registerTableInZkClient(
+                        DATA1_TABLE_PATH,
+                        DATA1_SCHEMA,
+                        201L,
+                        Collections.emptyList(),
+                        Collections.emptyMap());
+        TableBucket tb = makeTableBucket(tableId, partitionedTable);
+        makeLogTableAsLeader(tb, partitionedTable);
+
+        Replica replica = replicaManager.getReplicaOrException(tb);
+        RemoteLogTablet remoteLog = remoteLogManager.remoteLogTablet(tb);
+
+        // Verify initial ttl matches the configured default table.log.ttl
+        long defaultTtlMs = ConfigOptions.TABLE_LOG_TTL.defaultValue().toMillis();
+        assertThat(remoteLog.getTtlMs()).isEqualTo(defaultTtlMs);
+
+        // 2. Update ttl via Replica.updateLogTtlMs (simulating metadata propagation)
+        long newTtlMs = java.time.Duration.ofDays(1).toMillis();
+        replica.updateLogTtlMs(newTtlMs);
+
+        // Verify RemoteLogTablet internal state has been updated
+        assertThat(remoteLog.getTtlMs()).isEqualTo(newTtlMs);
+
+        // 3. Update with the same value should be a no-op
+        replica.updateLogTtlMs(newTtlMs);
+        assertThat(remoteLog.getTtlMs()).isEqualTo(newTtlMs);
+
+        // 4. Disabling expiration via a non-positive ttl should propagate as-is.
+        replica.updateLogTtlMs(-1L);
+        assertThat(remoteLog.getTtlMs()).isEqualTo(-1L);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
     void testCopySegmentPartialFailureCommitsSuccessfulOnes(boolean partitionTable)
             throws Exception {
         TableBucket tb = makeTableBucket(partitionTable);

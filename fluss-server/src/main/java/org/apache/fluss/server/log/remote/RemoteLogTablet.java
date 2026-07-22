@@ -79,7 +79,7 @@ public class RemoteLogTablet {
     /** The lock to protect the remote log segment list. */
     private final ReadWriteLock lock = new ReentrantReadWriteLock();
 
-    private final long ttlMs;
+    private volatile long ttlMs;
 
     /** The registered metrics for remote log. */
     private volatile MetricGroup remoteLogMetrics;
@@ -170,7 +170,12 @@ public class RemoteLogTablet {
      */
     public List<RemoteLogSegment> expiredRemoteLogSegments(
             long currentTimeMs, Long lakeLogEndOffset) {
-        if (!logExpireEnable()) {
+        // Snapshot the volatile ttlMs once so that a concurrent updateTtlMs() cannot change the
+        // comparison base mid-iteration. Otherwise an in-flight change to a non-positive value
+        // (which disables expiration) could make currentTimeMs - ts > ttlMs hold for ALL segments
+        // and result in wrongly deleting every remote segment.
+        final long ttlSnapshotMs = ttlMs;
+        if (ttlSnapshotMs <= 0) {
             return Collections.emptyList();
         }
         return inReadLock(
@@ -180,7 +185,7 @@ public class RemoteLogTablet {
                     for (Map.Entry<Long, Set<UUID>> entry :
                             timestampToRemoteLogSegmentId.entrySet()) {
                         long ts = entry.getKey();
-                        if (currentTimeMs - ts > ttlMs) {
+                        if (currentTimeMs - ts > ttlSnapshotMs) {
                             for (UUID uuid : entry.getValue()) {
                                 RemoteLogSegment segment = idToRemoteLogSegment.get(uuid);
                                 if (lakeLogEndOffset != null) {
@@ -362,8 +367,18 @@ public class RemoteLogTablet {
                 });
     }
 
-    private boolean logExpireEnable() {
-        return ttlMs > 0;
+    /** Returns the current ttl in milliseconds for remote log segments. */
+    public long getTtlMs() {
+        return ttlMs;
+    }
+
+    /**
+     * Update the ttl in milliseconds for remote log segments.
+     *
+     * @param newTtlMs the new ttl in milliseconds; a non-positive value disables expiration
+     */
+    public void updateTtlMs(long newTtlMs) {
+        this.ttlMs = newTtlMs;
     }
 
     private void reset() {
