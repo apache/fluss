@@ -59,7 +59,10 @@ public enum AggFunctionType {
 
     // Roaring bitmap aggregation
     RBM32,
-    RBM64;
+    RBM64,
+
+    // Apache DataSketches aggregation
+    HLL_SKETCH;
 
     // ------------------------------------------------------------------------------------------
 
@@ -120,6 +123,7 @@ public enum AggFunctionType {
                 return new DataTypeRoot[] {DataTypeRoot.BOOLEAN};
             case RBM32:
             case RBM64:
+            case HLL_SKETCH:
                 return new DataTypeRoot[] {DataTypeRoot.BYTES};
             case LISTAGG:
             case STRING_AGG:
