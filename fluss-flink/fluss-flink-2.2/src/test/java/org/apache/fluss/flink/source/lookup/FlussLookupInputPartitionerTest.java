@@ -37,9 +37,11 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -111,7 +113,12 @@ class FlussLookupInputPartitionerTest {
                 LookupNormalizer.createPrimaryKeyLookupNormalizer(new int[] {0}, keyRowType);
         FlussLookupInputPartitioner partitioner =
                 new FlussLookupInputPartitioner(
-                        normalizer, keyRowType, bucketKeyNames, lakeFormat, GOLDEN_NUM_BUCKETS);
+                        normalizer,
+                        keyRowType,
+                        bucketKeyNames,
+                        Collections.emptyList(),
+                        lakeFormat,
+                        GOLDEN_NUM_BUCKETS);
         for (Map.Entry<Integer, Integer> entry : goldenBucketById.entrySet()) {
             int id = entry.getKey();
             int goldenBucket = entry.getValue();
@@ -133,15 +140,28 @@ class FlussLookupInputPartitionerTest {
 
     private static FlussLookupInputPartitioner partitionerFor(
             RowType keyRowType, List<String> bucketKeyNames, int numBuckets) {
+        return partitionerFor(keyRowType, bucketKeyNames, Collections.emptyList(), numBuckets);
+    }
+
+    private static FlussLookupInputPartitioner partitionerFor(
+            RowType keyRowType,
+            List<String> bucketKeyNames,
+            List<String> partitionKeyNames,
+            int numBuckets) {
         // primary key == bucket key -> identity normalizer (no reordering)
-        int[] pkIndexes = new int[bucketKeyNames.size()];
+        int[] pkIndexes = new int[keyRowType.getFieldCount()];
         for (int i = 0; i < pkIndexes.length; i++) {
             pkIndexes[i] = i;
         }
         LookupNormalizer normalizer =
                 LookupNormalizer.createPrimaryKeyLookupNormalizer(pkIndexes, keyRowType);
         return new FlussLookupInputPartitioner(
-                normalizer, keyRowType, bucketKeyNames, /* lakeFormat */ null, numBuckets);
+                normalizer,
+                keyRowType,
+                bucketKeyNames,
+                partitionKeyNames,
+                /* lakeFormat */ null,
+                numBuckets);
     }
 
     @Test
@@ -185,6 +205,20 @@ class FlussLookupInputPartitionerTest {
     }
 
     @Test
+    void testNullLookupKeyUsesStablePartition() {
+        RowType keyRowType =
+                RowType.of(
+                        new LogicalType[] {new IntType(false), new IntType(false)},
+                        new String[] {"id", "region"});
+        FlussLookupInputPartitioner partitioner =
+                partitionerFor(keyRowType, Arrays.asList("id", "region"), 8);
+
+        assertThat(partitioner.partition(GenericRowData.of(null, 1), 4)).isZero();
+        assertThat(partitioner.partition(GenericRowData.of(1, null), 4)).isZero();
+        assertThat(partitioner.partition(GenericRowData.of(null, null), 4)).isZero();
+    }
+
+    @Test
     void testRowsInSameBucketGoToSamePartition() {
         RowType keyRowType = RowType.of(new LogicalType[] {new IntType()}, new String[] {"id"});
         List<String> bucketKeyNames = Collections.singletonList("id");
@@ -206,6 +240,57 @@ class FlussLookupInputPartitionerTest {
                         .as("all ids in bucket %d must share a partition", bucket)
                         .isEqualTo(previous);
             }
+        }
+    }
+
+    @Test
+    void testPartitionedTableSpreadsBucketAcrossPartitions() {
+        // A partitioned table with bucket.num == 1: without partition-aware routing every row would
+        // collapse onto partition 0 (bucketId 0 % numPartitions). Including the partition key must
+        // spread different partitions across subtasks.
+        RowType keyRowType =
+                RowType.of(
+                        new LogicalType[] {
+                            new IntType(false), new VarCharType(false, Integer.MAX_VALUE)
+                        },
+                        new String[] {"id", "p_date"});
+        List<String> bucketKeyNames = Collections.singletonList("id");
+        List<String> partitionKeyNames = Collections.singletonList("p_date");
+        int numBuckets = 1;
+        int numPartitions = 4;
+        FlussLookupInputPartitioner partitioner =
+                partitionerFor(keyRowType, bucketKeyNames, partitionKeyNames, numBuckets);
+
+        Set<Integer> usedPartitions = new HashSet<>();
+        for (int p = 0; p < 20; p++) {
+            RowData key = GenericRowData.of(1, StringData.fromString("2024-" + p));
+            usedPartitions.add(partitioner.partition(key, numPartitions));
+        }
+        assertThat(usedPartitions)
+                .as("partitioned rows sharing bucket id 0 must not collapse onto one subtask")
+                .hasSizeGreaterThan(1);
+    }
+
+    @Test
+    void testPartitionedTableCoLocatesSameTablet() {
+        // Rows targeting the same (partition, bucket) tablet must always land on the same subtask.
+        RowType keyRowType =
+                RowType.of(
+                        new LogicalType[] {
+                            new IntType(false), new VarCharType(false, Integer.MAX_VALUE)
+                        },
+                        new String[] {"id", "p_date"});
+        FlussLookupInputPartitioner partitioner =
+                partitionerFor(
+                        keyRowType,
+                        Collections.singletonList("id"),
+                        Collections.singletonList("p_date"),
+                        4);
+
+        RowData key = GenericRowData.of(7, StringData.fromString("2024-01"));
+        int first = partitioner.partition(key, 4);
+        for (int i = 0; i < 5; i++) {
+            assertThat(partitioner.partition(key, 4)).isEqualTo(first);
         }
     }
 
@@ -359,6 +444,11 @@ class FlussLookupInputPartitionerTest {
             bucketKeyNames.add(allNames.get(idx));
         }
         return new FlussLookupInputPartitioner(
-                normalizer, keyRowType, bucketKeyNames, /* lakeFormat */ null, numBuckets);
+                normalizer,
+                keyRowType,
+                bucketKeyNames,
+                Collections.emptyList(),
+                /* lakeFormat */ null,
+                numBuckets);
     }
 }
