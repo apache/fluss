@@ -64,6 +64,8 @@ import org.apache.flink.table.functions.LookupFunction;
 import org.apache.flink.table.types.logical.DecimalType;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.RowType;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
@@ -88,6 +90,8 @@ import static org.apache.fluss.utils.ExceptionUtils.findThrowable;
 
 /** Utilities for pushdown abilities. */
 public class PushdownUtils {
+    private static final Logger LOG = LoggerFactory.getLogger(PushdownUtils.class);
+
     private static final int MAX_LIMIT_PUSHDOWN = 2048;
 
     /** Extract field equality information from expressions. */
@@ -472,6 +476,7 @@ public class PushdownUtils {
             org.apache.fluss.types.RowType flussRowType, TableConfig tableConfig) {
         StatisticsColumnsConfig statsConfig = tableConfig.getStatisticsColumns();
         if (!statsConfig.isEnabled()) {
+            LOG.debug("Statistics collection is disabled for the table");
             return Collections.emptySet();
         }
 
@@ -485,10 +490,19 @@ public class PushdownUtils {
         } else {
             for (String columnName : statsConfig.getColumns()) {
                 int columnIndex = flussRowType.getFieldNames().indexOf(columnName);
-                if (columnIndex >= 0
-                        && DataTypeChecks.isSupportedStatisticsType(
-                                flussRowType.getTypeAt(columnIndex))) {
-                    columns.add(columnName);
+                if (columnIndex >= 0) {
+                    if (DataTypeChecks.isSupportedStatisticsType(
+                            flussRowType.getTypeAt(columnIndex))) {
+                        columns.add(columnName);
+                    } else {
+                        LOG.trace(
+                                "Configured statistics column '{}' has unsupported type and will be ignored",
+                                columnName);
+                    }
+                } else {
+                    LOG.trace(
+                            "Configured statistics column '{}' does not exist in table schema",
+                            columnName);
                 }
             }
         }
