@@ -638,7 +638,8 @@ public final class FlussClusterExtension
             assertThat(leaderAndIsrOpt).isPresent();
             List<Integer> isr = leaderAndIsrOpt.get().isr();
             for (int replicaId : isr) {
-                ReplicaManager replicaManager = getTabletServerById(replicaId).getReplicaManager();
+                TabletServer tabletServer = getTabletServerOrFail(replicaId, tb);
+                ReplicaManager replicaManager = tabletServer.getReplicaManager();
                 assertThat(replicaManager.getReplica(tb))
                         .isInstanceOf(ReplicaManager.OnlineReplica.class);
             }
@@ -682,7 +683,7 @@ public final class FlussClusterExtension
                     LeaderAndIsr leaderAndIsr = leaderAndIsrOpt.get();
                     List<Integer> isr = leaderAndIsr.isr();
                     for (int replicaId : isr) {
-                        TabletServer tabletServer = getTabletServerById(replicaId);
+                        TabletServer tabletServer = getTabletServerOrFail(replicaId, tableBucket);
                         ReplicaManager replicaManager = tabletServer.getReplicaManager();
                         assertThat(replicaManager.getReplica(tableBucket))
                                 .isInstanceOf(ReplicaManager.OnlineReplica.class);
@@ -695,10 +696,21 @@ public final class FlussClusterExtension
                     }
 
                     int leader = leaderAndIsr.leader();
-                    ReplicaManager replicaManager = getTabletServerById(leader).getReplicaManager();
+                    TabletServer tabletServer = getTabletServerOrFail(leader, tableBucket);
+                    ReplicaManager replicaManager = tabletServer.getReplicaManager();
                     assertThat(replicaManager.getReplicaOrException(tableBucket).isLeader())
                             .isTrue();
                 });
+    }
+
+    private TabletServer getTabletServerOrFail(int serverId, TableBucket tableBucket) {
+        TabletServer tabletServer = getTabletServerById(serverId);
+        assertThat(tabletServer)
+                .as(
+                        "Tablet server %s is still referenced by %s but is not running",
+                        serverId, tableBucket)
+                .isNotNull();
+        return tabletServer;
     }
 
     /**
