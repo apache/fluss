@@ -34,6 +34,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import java.io.File;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.Arrays;
@@ -155,6 +156,24 @@ class RemoteLogIndexCacheTest extends RemoteLogTestBase {
         long resultOffset =
                 rlIndexCache.lookupOffsetForTimestamp(remoteLogSegment, timestampOffset.timestamp);
         assertThat(offsetPosition.getOffset()).isEqualTo(resultOffset);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testInitDeletesOrphanedTmpFiles(boolean partitionTable) throws Exception {
+        LogTablet logTablet = makeLogTabletAndAddSegments(partitionTable);
+        RemoteLogSegment remoteLogSegment = copyLogSegmentToRemote(logTablet, remoteLogStorage, 0);
+
+        rlIndexCache = new RemoteLogIndexCache(1024 * 1024L, remoteLogStorage, tempDir);
+        File offsetIndexFile = rlIndexCache.getIndexEntry(remoteLogSegment).offsetIndex().file();
+        File tmpFile =
+                new File(offsetIndexFile.getParentFile(), offsetIndexFile.getName() + ".tmp");
+        Files.write(tmpFile.toPath(), new byte[] {0});
+
+        rlIndexCache = new RemoteLogIndexCache(1024 * 1024L, remoteLogStorage, tempDir);
+        assertThat(tmpFile).doesNotExist();
+        assertThat(rlIndexCache.getInternalCache().asMap())
+                .containsKey(remoteLogSegment.remoteLogSegmentId());
     }
 
     @ParameterizedTest
