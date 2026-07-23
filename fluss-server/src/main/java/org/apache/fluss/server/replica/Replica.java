@@ -437,9 +437,21 @@ public final class Replica {
 
                             int requestLeaderEpoch = data.getLeaderEpoch();
                             if (requestLeaderEpoch > leaderEpoch) {
+                                boolean isNewLeader = !isLeader();
                                 leaderEpoch = requestLeaderEpoch;
                                 onBecomeNewLeader();
                                 leaderReplicaIdOpt.set(localTabletServerId);
+                                currentTimeMs = clock.milliseconds();
+                                long leaderEndOffset = logTablet.localLogEndOffset();
+                                for (FollowerReplica followerReplica :
+                                        followerReplicasMap.values()) {
+                                    followerReplica.resetFollowerReplicaState(
+                                            currentTimeMs,
+                                            leaderEndOffset,
+                                            isNewLeader,
+                                            data.getIsr()
+                                                    .contains(followerReplica.getFollowerId()));
+                                }
                                 LOG.info(
                                         "TabletServer {} becomes leader for bucket {}",
                                         localTabletServerId,
@@ -1233,7 +1245,8 @@ public final class Replica {
             // Due to code paths accessing followerReplicasMap without a lock, first add the new
             // replicas and then remove the old ones.
             for (Integer replica : followers) {
-                followerReplicasMap.put(replica, new FollowerReplica(replica, tableBucket));
+                followerReplicasMap.computeIfAbsent(
+                        replica, id -> new FollowerReplica(id, tableBucket));
             }
             for (Integer replica : removedReplicas) {
                 followerReplicasMap.remove(replica);

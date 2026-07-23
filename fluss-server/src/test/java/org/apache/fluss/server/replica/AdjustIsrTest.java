@@ -24,7 +24,9 @@ import org.apache.fluss.exception.IneligibleReplicaException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.entity.ProduceLogResultForBucket;
 import org.apache.fluss.server.entity.FetchReqInfo;
+import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.log.FetchParams;
+import org.apache.fluss.server.zk.data.LeaderAndIsr;
 
 import org.junit.jupiter.api.Test;
 
@@ -105,7 +107,7 @@ public class AdjustIsrTest extends ReplicaTestBase {
     }
 
     @Test
-    void testShrinkIsr() {
+    void testShrinkIsr() throws Exception {
         // replica set is 1,2,3 , isr set is 1,2,3.
         TableBucket tb = new TableBucket(DATA1_TABLE_ID, 1);
         makeLogTableAsLeader(tb, Arrays.asList(1, 2, 3), Arrays.asList(1, 2, 3), false);
@@ -113,12 +115,62 @@ public class AdjustIsrTest extends ReplicaTestBase {
         Replica replica = replicaManager.getReplicaOrException(tb);
         assertThat(replica.getIsr()).containsExactlyInAnyOrder(1, 2, 3);
 
-        // retry until shrink follower 2 and 3 out of isr set. As the scheduler will shrink isr
-        // Periodic, follower 2 and 3 don't fetch data from leader, they will be removed from isr
-        // list by the periodic shrink isr scheduler.
-        retry(
-                Duration.ofSeconds(20),
-                () -> assertThat(replica.getIsr()).containsExactlyInAnyOrder(1));
+        replica.appendRecordsToLeader(genMemoryLogRecordsByObject(DATA1), 0);
+        replica.maybeShrinkIsr();
+        assertThat(replica.getIsr()).containsExactlyInAnyOrder(1, 2, 3);
+
+        manualClock.advanceTime(
+                conf.get(ConfigOptions.LOG_REPLICA_MAX_LAG_TIME).toMillis() + 1,
+                TimeUnit.MILLISECONDS);
+        replica.maybeShrinkIsr();
+        assertThat(replica.getIsr()).containsExactlyInAnyOrder(1);
+    }
+
+    @Test
+    void testDoNotShrinkIsrAfterRepeatedNotifyLeaderAndIsr() throws Exception {
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 1);
+        List<Integer> replicas = Arrays.asList(1, 2, 3);
+        makeLogTableAsLeader(tb, replicas, replicas, false);
+
+        Replica replica = replicaManager.getReplicaOrException(tb);
+        replica.appendRecordsToLeader(genMemoryLogRecordsByObject(DATA1), 0);
+        long leaderEndOffset = replica.getLocalLogEndOffset();
+        fetchFromFollower(tb, 2, leaderEndOffset);
+        fetchFromFollower(tb, 3, leaderEndOffset);
+
+        int newBucketEpoch = replica.getBucketEpoch() + 1;
+        notifyLeaderAndIsr(replica, replicas, replica.getLeaderEpoch(), newBucketEpoch);
+        assertThat(replica.getBucketEpoch()).isEqualTo(newBucketEpoch);
+
+        manualClock.advanceTime(
+                conf.get(ConfigOptions.LOG_REPLICA_MAX_LAG_TIME).toMillis() + 1,
+                TimeUnit.MILLISECONDS);
+        replica.maybeShrinkIsr();
+        assertThat(replica.getIsr()).containsExactlyInAnyOrder(1, 2, 3);
+    }
+
+    @Test
+    void testPreserveFollowerStateOnLeaderReelection() throws Exception {
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 1);
+        List<Integer> replicas = Arrays.asList(1, 2, 3);
+        makeLogTableAsLeader(tb, replicas, replicas, false);
+
+        Replica replica = replicaManager.getReplicaOrException(tb);
+        replica.appendRecordsToLeader(genMemoryLogRecordsByObject(DATA1), 0);
+        long leaderEndOffset = replica.getLocalLogEndOffset();
+        fetchFromFollower(tb, 2, leaderEndOffset);
+        fetchFromFollower(tb, 3, leaderEndOffset);
+
+        int newLeaderEpoch = replica.getLeaderEpoch() + 1;
+        testCoordinatorGateway.setCurrentLeaderEpoch(tb, newLeaderEpoch);
+        notifyLeaderAndIsr(replica, replicas, newLeaderEpoch, replica.getBucketEpoch() + 1);
+        assertThat(replica.getLeaderEpoch()).isEqualTo(newLeaderEpoch);
+
+        manualClock.advanceTime(
+                conf.get(ConfigOptions.LOG_REPLICA_MAX_LAG_TIME).toMillis() + 1,
+                TimeUnit.MILLISECONDS);
+        replica.maybeShrinkIsr();
+        assertThat(replica.getIsr()).containsExactlyInAnyOrder(1, 2, 3);
     }
 
     @Test
@@ -179,5 +231,33 @@ public class AdjustIsrTest extends ReplicaTestBase {
                         "Rejecting adjustIsr request for table bucket "
                                 + "TableBucket{tableId=150001, bucket=1} because it specified ineligible replicas [2] "
                                 + "in the new ISR LeaderAndIsr{leader=1, leaderEpoch=0, isr=[1, 2], standbyReplicas=[], coordinatorEpoch=0, bucketEpoch=0}");
+    }
+
+    private void fetchFromFollower(TableBucket tb, int followerId, long fetchOffset) {
+        replicaManager.fetchLogRecords(
+                new FetchParams(
+                        followerId,
+                        (int) conf.get(ConfigOptions.LOG_REPLICA_FETCH_MAX_BYTES).getBytes()),
+                Collections.singletonMap(
+                        tb, new FetchReqInfo(tb.getTableId(), fetchOffset, Integer.MAX_VALUE)),
+                null,
+                result -> {});
+    }
+
+    private void notifyLeaderAndIsr(
+            Replica replica, List<Integer> replicas, int leaderEpoch, int bucketEpoch) {
+        makeLeaderAndFollower(
+                Collections.singletonList(
+                        new NotifyLeaderAndIsrData(
+                                replica.getPhysicalTablePath(),
+                                replica.getTableBucket(),
+                                replicas,
+                                new LeaderAndIsr(
+                                        TABLET_SERVER_ID,
+                                        leaderEpoch,
+                                        replicas,
+                                        Collections.emptyList(),
+                                        replica.getCoordinatorEpoch(),
+                                        bucketEpoch))));
     }
 }
