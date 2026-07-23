@@ -100,17 +100,15 @@ abstract class TieringITCase extends FlinkTieringTestBase {
         // set tiering duration to a small value for testing purpose
         Configuration lakeTieringConfig = new Configuration();
         try (TieringJobScope ignored = startTieringJob(execEnv, lakeTieringConfig)) {
-            // verify the tiered records is less than the table total record to
-            // make sure tiering is forced to complete when reach max duration
-            LakeSnapshot logTableLakeSnapshot = waitLakeSnapshot(logTablePath);
-            long tieredRecords = countTieredRecords(logTableLakeSnapshot);
-            assertThat(tieredRecords).isLessThan(recordCount);
+            // Wait until all records are tiered, then verify that max duration forced tiering to
+            // complete in multiple snapshots.
+            LakeSnapshot logTableLakeSnapshot = waitUntilFullyTiered(logTablePath, recordCount);
+            assertThat(countTieredRecords(logTableLakeSnapshot)).isEqualTo(recordCount);
+            assertThat(logTableLakeSnapshot.getSnapshotId()).isGreaterThan(0L);
 
-            // verify the tiered records is less than the table total record to
-            // make sure tiering is forced to complete when reach max duration
-            LakeSnapshot pkTableLakeSnapshot = waitLakeSnapshot(pkTablePath);
-            tieredRecords = countTieredRecords(pkTableLakeSnapshot);
-            assertThat(tieredRecords).isLessThan(recordCount);
+            LakeSnapshot pkTableLakeSnapshot = waitUntilFullyTiered(pkTablePath, recordCount);
+            assertThat(countTieredRecords(pkTableLakeSnapshot)).isEqualTo(recordCount);
+            assertThat(pkTableLakeSnapshot.getSnapshotId()).isGreaterThan(0L);
         }
     }
 
@@ -195,11 +193,14 @@ abstract class TieringITCase extends FlinkTieringTestBase {
                 .sum();
     }
 
-    private LakeSnapshot waitLakeSnapshot(TablePath tablePath) {
+    private LakeSnapshot waitUntilFullyTiered(TablePath tablePath, long expectedRecordCount) {
         return waitValue(
                 () -> {
                     try {
-                        return Optional.of(admin.getLatestLakeSnapshot(tablePath).get());
+                        LakeSnapshot lakeSnapshot = admin.getLatestLakeSnapshot(tablePath).get();
+                        return countTieredRecords(lakeSnapshot) == expectedRecordCount
+                                ? Optional.of(lakeSnapshot)
+                                : Optional.empty();
                     } catch (Exception e) {
                         if (ExceptionUtils.stripExecutionException(e)
                                 instanceof LakeTableSnapshotNotExistException) {
@@ -209,7 +210,7 @@ abstract class TieringITCase extends FlinkTieringTestBase {
                     }
                 },
                 Duration.ofSeconds(30),
-                "Fail to wait for one round of tiering finish for table " + tablePath);
+                "Fail to wait for tiering to finish for table " + tablePath);
     }
 
     private void createTable(TablePath tablePath, boolean isPrimaryKeyTable) throws Exception {
