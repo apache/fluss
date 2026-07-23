@@ -200,7 +200,7 @@ object FlussScanBuilder {
   /** Convert a Spark required-schema projection back to Fluss column indices. */
   def projectionOf(tableInfo: TableInfo, requiredSchema: Option[StructType]): Array[Int] = {
     val allFields = (0 until tableInfo.getRowType.getFieldCount).toArray
-    requiredSchema match {
+    val projected = requiredSchema match {
       case None => allFields
       case Some(schema) =>
         val columnNameToIndex =
@@ -212,5 +212,8 @@ object FlussScanBuilder {
               throw new IllegalArgumentException(s"Invalid field name: ${f.name}"))
         }
     }
+    // The Fluss server does not currently support empty Arrow projections. Fall back to projecting
+    // the first column so the row count is preserved while still avoiding fetching unnecessary columns.
+    if (projected.isEmpty) Array(0) else projected
   }
 }

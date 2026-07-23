@@ -117,6 +117,10 @@ abstract class SparkLakeLogTableReadTest extends SparkLakeTableReadTestBase {
         sql(s"SELECT name FROM $DEFAULT_DATABASE.t_lake_only ORDER BY name"),
         Row("alpha") :: Row("beta") :: Row("gamma") :: Nil
       )
+
+      // COUNT(*) / COUNT(1) over a lake-only read: empty projection must fall back.
+      checkAnswer(sql(s"SELECT COUNT(*) FROM $DEFAULT_DATABASE.t_lake_only"), Row(3L) :: Nil)
+      checkAnswer(sql(s"SELECT COUNT(1) FROM $DEFAULT_DATABASE.t_lake_only"), Row(3L) :: Nil)
     }
 
     // Test partitioned table
@@ -151,6 +155,19 @@ abstract class SparkLakeLogTableReadTest extends SparkLakeTableReadTestBase {
         Row("alpha", "2026-01-01") ::
           Row("beta", "2026-01-01") ::
           Row("gamma", "2026-01-02") :: Nil
+      )
+
+      // COUNT(*) over a partitioned lake-only read.
+      checkAnswer(
+        sql(s"SELECT COUNT(*) FROM $DEFAULT_DATABASE.t_lake_only_partitioned"),
+        Row(3L) :: Nil
+      )
+
+      // COUNT(*) with a partition filter.
+      checkAnswer(
+        sql(
+          s"SELECT COUNT(*) FROM $DEFAULT_DATABASE.t_lake_only_partitioned WHERE dt = '2026-01-01'"),
+        Row(2L) :: Nil
       )
     }
   }

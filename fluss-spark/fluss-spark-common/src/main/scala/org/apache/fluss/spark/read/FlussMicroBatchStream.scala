@@ -70,15 +70,8 @@ abstract class FlussMicroBatchStream(
   val stoppingOffsetsInitializer: OffsetsInitializer =
     FlussOffsetInitializers.stoppingOffsetsInitializer(false, options, flussConfig)
 
-  protected def projection: Array[Int] = {
-    val columnNameToIndex = tableInfo.getSchema.getColumnNames.asScala.zipWithIndex.toMap
-    readSchema.fields.map {
-      field =>
-        columnNameToIndex.getOrElse(
-          field.name,
-          throw new IllegalArgumentException(s"Invalid field name: ${field.name}"))
-    }
-  }
+  protected def projection: Array[Int] =
+    FlussScanBuilder.projectionOf(tableInfo, Some(readSchema))
 
   override def close(): Unit = {
     if (admin != null) {
