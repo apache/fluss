@@ -18,15 +18,14 @@
 package org.apache.fluss.lake.iceberg.tiering;
 
 import org.apache.fluss.lake.iceberg.maintenance.RewriteDataFileResult;
+import org.apache.fluss.lake.writer.LakeWriteResult;
 
 import org.apache.iceberg.io.WriteResult;
 
 import javax.annotation.Nullable;
 
-import java.io.Serializable;
-
 /** The write result of Iceberg lake writer to pass to committer to commit. */
-public class IcebergWriteResult implements Serializable {
+public class IcebergWriteResult implements LakeWriteResult {
 
     private static final long serialVersionUID = 1L;
 

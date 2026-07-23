@@ -31,8 +31,11 @@ import org.apache.fluss.flink.tiering.source.metrics.TieringMetrics;
 import org.apache.fluss.flink.tiering.source.split.TieringLogSplit;
 import org.apache.fluss.flink.tiering.source.split.TieringSnapshotSplit;
 import org.apache.fluss.flink.tiering.source.split.TieringSplit;
+import org.apache.fluss.flink.tiering.source.watermark.SimpleWatermarkExtractor;
 import org.apache.fluss.lake.batch.ArrowRecordBatch;
+import org.apache.fluss.lake.watermark.WatermarkExtractor;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
+import org.apache.fluss.lake.writer.LakeWriteResult;
 import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.lake.writer.SupportsRecordBatchWrite;
 import org.apache.fluss.metadata.DataLakeFormat;
@@ -73,7 +76,7 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
 /** The {@link SplitReader} implementation which will read Fluss and write to lake. */
-public class TieringSplitReader<WriteResult>
+public class TieringSplitReader<WriteResult extends LakeWriteResult>
         implements SplitReader<TableBucketWriteResult<WriteResult>, TieringSplit> {
 
     private static final Logger LOG = LoggerFactory.getLogger(TieringSplitReader.class);
@@ -104,6 +107,7 @@ public class TieringSplitReader<WriteResult>
     @Nullable private TablePath currentTablePath;
     @Nullable private LogScanner currentLogScanner;
     @Nullable private Table currentTable;
+    @Nullable private WatermarkExtractor currentTableWatermarkExtractor;
 
     private final Queue<TieringSnapshotSplit> currentPendingSnapshotSplits;
     @Nullable private BoundedSplitReader currentSnapshotSplitReader;
@@ -304,6 +308,7 @@ public class TieringSplitReader<WriteResult>
             currentTableId = split.getTableBucket().getTableId();
             currentTableNumberOfSplits = split.getNumberOfSplits();
             TableInfo currentTableInfo = checkNotNull(currentTable).getTableInfo();
+            currentTableWatermarkExtractor = SimpleWatermarkExtractor.create(currentTableInfo);
             // check currentTable's id for the table path is same with table id of the tiering
             // split, if not, it means the tiering split is for a previous dropped table. let's fail
             // directly
@@ -609,7 +614,8 @@ public class TieringSplitReader<WriteResult>
                                     partitionName,
                                     currentTable.getTableInfo(),
                                     splitIndex,
-                                    tieringRoundTimestamp));
+                                    tieringRoundTimestamp,
+                                    currentTableWatermarkExtractor));
             lakeWriters.put(bucket, lakeWriter);
         }
         return lakeWriter;
