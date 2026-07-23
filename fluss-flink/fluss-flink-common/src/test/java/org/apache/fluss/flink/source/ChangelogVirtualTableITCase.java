@@ -559,6 +559,47 @@ abstract class ChangelogVirtualTableITCase {
         rowIter.close();
     }
 
+    @Test
+    public void testShowPartitionsOnChangelogVirtualTable() throws Exception {
+        // Create a partitioned primary key table
+        tEnv.executeSql(
+                "CREATE TABLE partitioned_show_test ("
+                        + "  id INT NOT NULL,"
+                        + "  name STRING,"
+                        + "  region STRING NOT NULL,"
+                        + "  PRIMARY KEY (id, region) NOT ENFORCED"
+                        + ") PARTITIONED BY (region) WITH ('bucket.num' = '1')");
+
+        // Insert data to create partitions
+        CLOCK.advanceTime(Duration.ofMillis(100));
+        tEnv.executeSql(
+                        "INSERT INTO partitioned_show_test VALUES "
+                                + "(1, 'Item-1', 'us'), "
+                                + "(2, 'Item-2', 'eu')")
+                .await();
+
+        // SHOW PARTITIONS on base table — should work
+        List<String> basePartitions = new ArrayList<>();
+        try (CloseableIterator<Row> iter =
+                tEnv.executeSql("SHOW PARTITIONS partitioned_show_test").collect()) {
+            while (iter.hasNext()) {
+                basePartitions.add(iter.next().toString());
+            }
+        }
+        assertThat(basePartitions).containsExactlyInAnyOrder("+I[region=us]", "+I[region=eu]");
+
+        // SHOW PARTITIONS on $changelog virtual table — should return same partitions
+        // Without the fix, this throws TableNotExistException
+        List<String> changelogPartitions = new ArrayList<>();
+        try (CloseableIterator<Row> iter =
+                tEnv.executeSql("SHOW PARTITIONS partitioned_show_test$changelog").collect()) {
+            while (iter.hasNext()) {
+                changelogPartitions.add(iter.next().toString());
+            }
+        }
+        assertThat(changelogPartitions).containsExactlyInAnyOrder("+I[region=us]", "+I[region=eu]");
+    }
+
     private static org.apache.flink.configuration.Configuration getFileBasedCheckpointsConfig(
             File savepointDir) {
         return getFileBasedCheckpointsConfig(savepointDir.toURI().toString());

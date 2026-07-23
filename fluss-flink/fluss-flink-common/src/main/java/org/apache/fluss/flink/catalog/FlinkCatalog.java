@@ -490,7 +490,8 @@ public class FlinkCatalog extends AbstractCatalog {
 
     @Override
     public boolean tableExists(ObjectPath objectPath) throws CatalogException {
-        TablePath tablePath = toTablePath(objectPath);
+        // For virtual tables ($changelog, $binlog), check if the base physical table exists
+        TablePath tablePath = toPhysicalTablePath(objectPath);
         try {
             return admin.tableExists(tablePath).get();
         } catch (Exception e) {
@@ -638,7 +639,8 @@ public class FlinkCatalog extends AbstractCatalog {
         }
 
         try {
-            TablePath tablePath = toTablePath(objectPath);
+            // For virtual tables ($changelog, $binlog), list partitions of the base physical table
+            TablePath tablePath = toPhysicalTablePath(objectPath);
             List<PartitionInfo> partitionInfos;
             if (catalogPartitionSpec != null) {
                 Map<String, String> partitionSpec = catalogPartitionSpec.getPartitionSpec();
@@ -701,6 +703,14 @@ public class FlinkCatalog extends AbstractCatalog {
             throws TableNotExistException, TableNotPartitionedException,
                     PartitionSpecInvalidException, PartitionAlreadyExistsException,
                     CatalogException {
+        // $changelog / $binlog are read-only virtual tables; reject partition mutations.
+        if (isVirtualTable(objectPath)) {
+            throw new UnsupportedOperationException(
+                    String.format(
+                            "Cannot create partition on read-only virtual table %s in %s. "
+                                    + "Please create the partition on the base table instead.",
+                            objectPath, getName()));
+        }
         TablePath tablePath = toTablePath(objectPath);
         PartitionSpec partitionSpec = new PartitionSpec(catalogPartitionSpec.getPartitionSpec());
         try {
@@ -747,6 +757,14 @@ public class FlinkCatalog extends AbstractCatalog {
     public void dropPartition(
             ObjectPath objectPath, CatalogPartitionSpec catalogPartitionSpec, boolean b)
             throws PartitionNotExistException, CatalogException {
+        // $changelog / $binlog are read-only virtual tables; reject partition mutations.
+        if (isVirtualTable(objectPath)) {
+            throw new UnsupportedOperationException(
+                    String.format(
+                            "Cannot drop partition on read-only virtual table %s in %s. "
+                                    + "Please drop the partition on the base table instead.",
+                            objectPath, getName()));
+        }
         PartitionSpec partitionSpec = new PartitionSpec(catalogPartitionSpec.getPartitionSpec());
         try {
             admin.dropPartition(toTablePath(objectPath), partitionSpec, b).get();
@@ -878,6 +896,31 @@ public class FlinkCatalog extends AbstractCatalog {
 
     protected TablePath toTablePath(ObjectPath objectPath) {
         return TablePath.of(objectPath.getDatabaseName(), objectPath.getObjectName());
+    }
+
+    /**
+     * Converts an {@link ObjectPath} to a physical {@link TablePath}, stripping any virtual table
+     * suffix ($changelog, $binlog) if present. This is needed because virtual tables share the same
+     * partitioning and physical storage as their base table, so partition-related operations must
+     * be performed against the base table name.
+     */
+    private TablePath toPhysicalTablePath(ObjectPath objectPath) {
+        String tableName = objectPath.getObjectName();
+        // Strip virtual table suffixes to get the base physical table name
+        if (tableName.endsWith(CHANGELOG_TABLE_SUFFIX)) {
+            tableName =
+                    tableName.substring(0, tableName.length() - CHANGELOG_TABLE_SUFFIX.length());
+        } else if (tableName.endsWith(BINLOG_TABLE_SUFFIX)) {
+            tableName = tableName.substring(0, tableName.length() - BINLOG_TABLE_SUFFIX.length());
+        }
+        return TablePath.of(objectPath.getDatabaseName(), tableName);
+    }
+
+    /** Returns whether the given path refers to a read-only $changelog / $binlog virtual table. */
+    private static boolean isVirtualTable(ObjectPath objectPath) {
+        String tableName = objectPath.getObjectName();
+        return tableName.endsWith(CHANGELOG_TABLE_SUFFIX)
+                || tableName.endsWith(BINLOG_TABLE_SUFFIX);
     }
 
     @Override
