@@ -25,7 +25,6 @@ import org.apache.fluss.flink.source.reader.LeaseContext;
 import org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils;
 import org.apache.fluss.flink.utils.FlinkConversions;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.types.RowType;
 
 import org.apache.flink.annotation.VisibleForTesting;
@@ -69,8 +68,6 @@ public class BinlogFlinkTableSource
     // are whole nested ROWs (nested pruning is out of scope).
     @Nullable private int[] projectedTopLevel;
     private LogicalType producedDataType;
-
-    @Nullable private Predicate partitionFilters;
 
     public BinlogFlinkTableSource(
             TablePath tablePath,
@@ -166,7 +163,9 @@ public class BinlogFlinkTableSource
                         splitPerAssignmentBatchSize,
                         new BinlogDeserializationSchema(projectedTopLevel),
                         streaming,
-                        partitionFilters,
+                        // $binlog data/partition columns are nested inside before/after ROWs, so no
+                        // top-level partition filter is pushable; always scan without one.
+                        null,
                         LeaseContext.DEFAULT);
 
         return SourceProvider.of(source);
@@ -187,7 +186,6 @@ public class BinlogFlinkTableSource
                         tableOptions);
         copy.producedDataType = producedDataType;
         copy.projectedTopLevel = projectedTopLevel;
-        copy.partitionFilters = partitionFilters;
         return copy;
     }
 
@@ -230,11 +228,5 @@ public class BinlogFlinkTableSource
     @VisibleForTesting
     LogicalType getProducedDataType() {
         return producedDataType;
-    }
-
-    @VisibleForTesting
-    @Nullable
-    Predicate getPartitionFilters() {
-        return partitionFilters;
     }
 }

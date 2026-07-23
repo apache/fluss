@@ -127,6 +127,5 @@ class BinlogFlinkTableSourceTest {
         // Binlog data/partition columns are nested and metadata is non-pushable: nothing accepted.
         assertThat(result.getAcceptedFilters()).isEmpty();
         assertThat(result.getRemainingFilters()).containsExactly(filter);
-        assertThat(source.getPartitionFilters()).isNull();
     }
 }
