@@ -691,7 +691,7 @@ public class FlinkCatalog extends AbstractCatalog {
                     CatalogException {
         // $changelog / $binlog are read-only virtual tables; reject partition mutations.
         if (isVirtualTable(objectPath)) {
-            throw new CatalogException(
+            throw new UnsupportedOperationException(
                     String.format(
                             "Cannot create partition on read-only virtual table %s in %s. "
                                     + "Please create the partition on the base table instead.",
@@ -745,7 +745,7 @@ public class FlinkCatalog extends AbstractCatalog {
             throws PartitionNotExistException, CatalogException {
         // $changelog / $binlog are read-only virtual tables; reject partition mutations.
         if (isVirtualTable(objectPath)) {
-            throw new CatalogException(
+            throw new UnsupportedOperationException(
                     String.format(
                             "Cannot drop partition on read-only virtual table %s in %s. "
                                     + "Please drop the partition on the base table instead.",

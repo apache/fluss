@@ -882,13 +882,13 @@ class FlinkCatalogTest {
         CatalogPartitionSpec partSpec2 =
                 new CatalogPartitionSpec(Collections.singletonMap("first", "2"));
         assertThatThrownBy(() -> catalog.createPartition(changelogPath, partSpec2, null, false))
-                .isInstanceOf(CatalogException.class)
+                .isInstanceOf(UnsupportedOperationException.class)
                 .hasMessageContaining("read-only virtual table");
         assertThat(catalog.listPartitions(basePath)).hasSize(1);
 
         // Test dropPartition on $binlog virtual table — should be rejected (read-only)
         assertThatThrownBy(() -> catalog.dropPartition(binlogPath, partSpec, false))
-                .isInstanceOf(CatalogException.class)
+                .isInstanceOf(UnsupportedOperationException.class)
                 .hasMessageContaining("read-only virtual table");
         assertThat(catalog.listPartitions(basePath)).hasSize(1);
 
