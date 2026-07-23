@@ -73,8 +73,23 @@ public class IOUtils {
             return totalBytes;
         } finally {
             if (close) {
-                out.close();
-                in.close();
+                Throwable closeException = null;
+                try {
+                    out.close();
+                } catch (Throwable t) {
+                    closeException = t;
+                }
+                try {
+                    in.close();
+                } catch (Throwable t) {
+                    closeException = ExceptionUtils.firstOrSuppressed(t, closeException);
+                }
+                if (closeException != null) {
+                    if (closeException instanceof IOException) {
+                        throw (IOException) closeException;
+                    }
+                    ExceptionUtils.rethrow(closeException);
+                }
             }
         }
     }
