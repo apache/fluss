@@ -518,7 +518,7 @@ function HomepageHeader({heroRef}: {heroRef: React.RefObject<HTMLElement>}) {
                         <div className={styles.heroCtas}>
                             <Link
                                 className={styles.btnPrimary}
-                                to="/docs/quickstart/flink">
+                                to="/docs/next/quickstart/flink">
                                 Get Started
                                 <span aria-hidden="true">→</span>
                             </Link>

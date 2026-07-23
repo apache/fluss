@@ -293,8 +293,8 @@ const config: Config = {
         {
           title: 'Product',
           items: [
-            {label: 'Documentation', to: '/docs/quickstart/flink'},
-            {label: 'Quickstart', to: '/docs/quickstart/flink'},
+            {label: 'Documentation', to: '/docs/next/quickstart/flink'},
+            {label: 'Quickstart', to: '/docs/next/quickstart/flink'},
             {label: 'Roadmap', to: '/roadmap'},
             {label: 'Downloads', to: '/downloads'},
             {label: 'Blog', to: '/blog'},
