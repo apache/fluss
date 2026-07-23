@@ -31,7 +31,7 @@ SELECT COUNT(*), SUM(amount) FROM orders;
 
 ### Lake-Only Read
 
-To query only the data stored in the data lake, use the `$lake` suffix:
+For formats exposed through the Fluss lake catalog, such as Paimon and Iceberg, use the `$lake` suffix to query only the data stored in the data lake:
 
 ```sql title="Flink SQL"
 -- Lake-only read: queries only tiered data
@@ -40,6 +40,10 @@ SELECT * FROM my_table$lake;
 -- Access lake-specific system tables
 SELECT snapshot_id, total_record_count FROM my_table$lake$snapshots;
 ```
+
+:::note
+The Fluss catalog does not expose Hudi-only tables through the `$lake` suffix yet. Use Hudi's native catalog or another Hudi-compatible engine for Hudi-only reads.
+:::
 
 Lake-only queries are useful when:
 - Real-time freshness is not required
@@ -101,7 +105,7 @@ Key behavior for data retention with Union Read:
 
 | Engine | Union Read | Lake-Only Read |
 |--------|------------|----------------|
-| Apache Flink | ✅ | ✅ Via `$lake` suffix |
+| Apache Flink | ✅ | ✅ Via `$lake` suffix for Paimon/Iceberg; use native catalog for Hudi-only reads |
 | Apache Spark | ✅ | ✅ Via native lake connectors |
 | Trino | ❌ | ✅ Via native lake connectors |
 | StarRocks | ❌ | ✅ Via native lake connectors |
@@ -111,3 +115,4 @@ For Spark union read usage, see [Spark - Reads](../engine-spark/reads.md#lake-en
 External engines can access the tiered lake data directly through native lake format connectors. See the specific data lake format documentation for examples:
 - [Paimon - Reading with other Engines](datalake-formats/paimon.md#reading-with-other-engines)
 - [Iceberg - Reading with other Engines](datalake-formats/iceberg.md#reading-with-other-engines)
+- [Hudi - Read Hudi Tables Directly](datalake-formats/hudi.md#read-hudi-tables-directly)

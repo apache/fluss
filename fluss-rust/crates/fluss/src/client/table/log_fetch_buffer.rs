@@ -139,35 +139,34 @@ impl LogFetchBuffer {
     pub async fn await_not_empty(&self, timeout: Duration) -> Result<bool> {
         let deadline = Instant::now() + timeout;
 
+        // Arm before checking: notify_waiters() stores no permit and only wakes already-armed
+        // waiters, so arming late would drop a notification that races the emptiness check.
+        let notified = self.not_empty_notify.notified();
+        tokio::pin!(notified);
+
         loop {
-            // Check if buffer is not empty
+            notified.as_mut().enable();
+
             if !self.is_empty() {
                 return Ok(true);
             }
 
-            // Check if woken up
             if self.woken_up.swap(false, Ordering::Acquire) {
                 return Err(Error::WakeupError {
                     message: "The await operation was interrupted by wakeup.".to_string(),
                 });
             }
 
-            // Check if timeout
             let now = Instant::now();
             if now >= deadline {
                 return Ok(false);
             }
 
-            // Wait for notification with remaining time
             let remaining = deadline - now;
-            let notified = self.not_empty_notify.notified();
             tokio::select! {
-                _ = tokio::time::sleep(remaining) => {
-                    return Ok(false); // Timeout
-                }
-                _ = notified => {
-                    // Got notification, check again
-                    continue;
+                _ = tokio::time::sleep(remaining) => return Ok(false),
+                _ = notified.as_mut() => {
+                    notified.set(self.not_empty_notify.notified()); // re-arm
                 }
             }
         }
@@ -1062,6 +1061,29 @@ mod tests {
 
         let mut completed = buffer.poll().expect("completed fetch");
         assert!(completed.take_error().is_some());
+    }
+
+    #[tokio::test]
+    async fn await_not_empty_returns_true_when_data_arrives_during_wait() {
+        let buffer = Arc::new(LogFetchBuffer::new(test_resolver().unwrap()));
+        let table_bucket = TableBucket::new(1, 0);
+
+        let producer = Arc::clone(&buffer);
+        let producer_bucket = table_bucket.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            producer.pend(Box::new(ErrorPendingFetch {
+                table_bucket: producer_bucket.clone(),
+            }));
+            producer.try_complete(&producer_bucket);
+        });
+
+        // Timeout far exceeds the producer delay: must return as soon as data lands, and must
+        // not strand until the deadline even if the notification races with the internal check.
+        let start = Instant::now();
+        let result = buffer.await_not_empty(Duration::from_secs(5)).await;
+        assert!(matches!(result, Ok(true)));
+        assert!(start.elapsed() < Duration::from_secs(1));
     }
 
     #[test]

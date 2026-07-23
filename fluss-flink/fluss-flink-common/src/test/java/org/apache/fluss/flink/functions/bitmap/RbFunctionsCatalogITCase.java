@@ -167,9 +167,8 @@ class RbFunctionsCatalogITCase {
     }
 
     @Test
-    void testAllThreeFunctionsInSingleQuery() throws Exception {
-        // Validates the PR title claim: all three functions callable after USE CATALOG
-        // fluss_catalog
+    void testAllThreeAggFunctionsInSingleQuery() throws Exception {
+        // Validates all three aggregate functions are callable after USE CATALOG fluss_catalog
         byte[] bmap1 = BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1, 2, 3));
         byte[] bmap2 = BitmapUtils.toBytes(RoaringBitmap.bitmapOf(2, 3, 4));
 
@@ -193,5 +192,130 @@ class RbFunctionsCatalogITCase {
         assertThat(rows.get(0).getField(1)).isNotNull(); // rb_build_agg
         assertThat(rows.get(0).getField(2)).isNotNull(); // rb_or_agg
         assertThat(rows.get(0).getField(3)).isNotNull(); // rb_and_agg
+    }
+
+    @Test
+    void testRbCardinalityResolvedFromCatalog() throws Exception {
+        byte[] bitmap = BitmapUtils.toBytes(RoaringBitmap.bitmapOf(10, 20, 30, 40, 50));
+
+        Table source =
+                tEnv.fromValues(
+                        DataTypes.ROW(DataTypes.FIELD("bmap", DataTypes.BYTES())), Row.of(bitmap));
+        tEnv.createTemporaryView("bitmaps", source);
+
+        TableResult result = tEnv.executeSql("SELECT rb_cardinality(bmap) FROM bitmaps");
+        List<Row> rows = CollectionUtil.iteratorToList(result.collect());
+
+        assertThat(rows).hasSize(1);
+        assertThat(rows.get(0).getField(0)).isEqualTo(5L);
+    }
+
+    @Test
+    void testRbContainsResolvedFromCatalog() throws Exception {
+        byte[] bitmap = BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1, 2, 3));
+
+        Table source =
+                tEnv.fromValues(
+                        DataTypes.ROW(DataTypes.FIELD("bmap", DataTypes.BYTES())), Row.of(bitmap));
+        tEnv.createTemporaryView("bitmaps", source);
+
+        TableResult result =
+                tEnv.executeSql("SELECT rb_contains(bmap, 2), rb_contains(bmap, 99) FROM bitmaps");
+        List<Row> rows = CollectionUtil.iteratorToList(result.collect());
+
+        assertThat(rows).hasSize(1);
+        assertThat(rows.get(0).getField(0)).isEqualTo(true);
+        assertThat(rows.get(0).getField(1)).isEqualTo(false);
+    }
+
+    @Test
+    void testRbToArrayResolvedFromCatalog() throws Exception {
+        byte[] bitmap = BitmapUtils.toBytes(RoaringBitmap.bitmapOf(3, 1, 2));
+
+        Table source =
+                tEnv.fromValues(
+                        DataTypes.ROW(DataTypes.FIELD("bmap", DataTypes.BYTES())), Row.of(bitmap));
+        tEnv.createTemporaryView("bitmaps", source);
+
+        TableResult result = tEnv.executeSql("SELECT rb_to_array(bmap) FROM bitmaps");
+        List<Row> rows = CollectionUtil.iteratorToList(result.collect());
+
+        assertThat(rows).hasSize(1);
+        Integer[] arr = (Integer[]) rows.get(0).getField(0);
+        assertThat(arr).containsExactly(1, 2, 3); // ascending order
+    }
+
+    @Test
+    void testRbOrScalarResolvedFromCatalog() throws Exception {
+        byte[] left = BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1, 2, 3));
+        byte[] right = BitmapUtils.toBytes(RoaringBitmap.bitmapOf(3, 4, 5));
+
+        Table source =
+                tEnv.fromValues(
+                        DataTypes.ROW(
+                                DataTypes.FIELD("l", DataTypes.BYTES()),
+                                DataTypes.FIELD("r", DataTypes.BYTES())),
+                        Row.of(left, right));
+        tEnv.createTemporaryView("bitmaps", source);
+
+        TableResult result = tEnv.executeSql("SELECT rb_cardinality(rb_or(l, r)) FROM bitmaps");
+        List<Row> rows = CollectionUtil.iteratorToList(result.collect());
+
+        assertThat(rows).hasSize(1);
+        assertThat(rows.get(0).getField(0)).isEqualTo(5L);
+    }
+
+    @Test
+    void testRbAndScalarResolvedFromCatalog() throws Exception {
+        byte[] left = BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1, 2, 3, 4));
+        byte[] right = BitmapUtils.toBytes(RoaringBitmap.bitmapOf(2, 3, 5));
+
+        Table source =
+                tEnv.fromValues(
+                        DataTypes.ROW(
+                                DataTypes.FIELD("l", DataTypes.BYTES()),
+                                DataTypes.FIELD("r", DataTypes.BYTES())),
+                        Row.of(left, right));
+        tEnv.createTemporaryView("bitmaps", source);
+
+        TableResult result = tEnv.executeSql("SELECT rb_cardinality(rb_and(l, r)) FROM bitmaps");
+        List<Row> rows = CollectionUtil.iteratorToList(result.collect());
+
+        assertThat(rows).hasSize(1);
+        assertThat(rows.get(0).getField(0)).isEqualTo(2L); // {2, 3}
+    }
+
+    @Test
+    void testScalarAndAggFunctionsCombined() throws Exception {
+        // Validates the full Phase 1 function set works together:
+        // build a bitmap via rb_build_agg, then query it with scalar functions
+        Table source =
+                tEnv.fromValues(
+                        DataTypes.ROW(
+                                DataTypes.FIELD("k", DataTypes.INT()),
+                                DataTypes.FIELD("v", DataTypes.INT())),
+                        Row.of(1, 10),
+                        Row.of(1, 20),
+                        Row.of(1, 30));
+        tEnv.createTemporaryView("events", source);
+
+        TableResult result =
+                tEnv.executeSql(
+                        "SELECT rb_cardinality(rb_build_agg(v)), "
+                                + "rb_contains(rb_build_agg(v), 20) "
+                                + "FROM events GROUP BY k");
+        List<Row> rows = CollectionUtil.iteratorToList(result.collect());
+
+        assertThat(rows).hasSize(1);
+        assertThat(rows.get(0).getField(0)).isEqualTo(3L);
+        assertThat(rows.get(0).getField(1)).isEqualTo(true);
+    }
+
+    @Test
+    void testRbBuildFromArrayResolvedFromCatalog() throws Exception {
+        TableResult result = tEnv.executeSql("SELECT rb_cardinality(rb_build(ARRAY[1, 2, 3, 2]))");
+        List<Row> rows = CollectionUtil.iteratorToList(result.collect());
+        assertThat(rows).hasSize(1);
+        assertThat(rows.get(0).getField(0)).isEqualTo(3L); // duplicate 2 ignored
     }
 }

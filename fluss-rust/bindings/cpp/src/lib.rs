@@ -543,6 +543,8 @@ mod ffi {
         // AppendWriter
         unsafe fn delete_append_writer(writer: *mut AppendWriter);
         fn append(self: &mut AppendWriter, row: &GenericRowInner) -> FfiPtrResult;
+        // Partition (if partitioned) comes from the first row, so all rows must
+        // share one partition; rows are distributed across buckets by key.
         fn append_arrow_batch(
             self: &mut AppendWriter,
             array_ptr: usize,

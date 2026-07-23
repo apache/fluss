@@ -103,7 +103,6 @@ class FlinkTieringTestBase {
         execEnv = StreamExecutionEnvironment.getExecutionEnvironment();
         execEnv.setRuntimeMode(RuntimeExecutionMode.STREAMING);
         execEnv.setParallelism(2);
-        execEnv.enableCheckpointing(500);
     }
 
     protected long createTable(TablePath tablePath, Schema schema) throws Exception {

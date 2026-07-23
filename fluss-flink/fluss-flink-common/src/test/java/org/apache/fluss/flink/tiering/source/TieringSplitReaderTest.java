@@ -65,6 +65,7 @@ import java.util.stream.Collectors;
 import static org.apache.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** UT for {@link TieringSplitReader}. */
 class TieringSplitReaderTest extends FlinkTestBase {
@@ -73,11 +74,12 @@ class TieringSplitReaderTest extends FlinkTestBase {
     void testTieringTable() throws Exception {
         TablePath tablePath = TablePath.of("fluss", "fluss_test_tiering_one_table");
         long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
+        TestingLakeTieringFactory lakeTieringFactory = new TestingLakeTieringFactory();
         try (Connection connection =
                         ConnectionFactory.createConnection(
                                 FLUSS_CLUSTER_EXTENSION.getClientConfig());
                 TieringSplitReader<TestingWriteResult> tieringSplitReader =
-                        createTieringReader(connection)) {
+                        createTieringReader(connection, lakeTieringFactory)) {
             // test empty splits
             SplitsAddition<TieringSplit> splitsAddition =
                     new SplitsAddition<>(
@@ -161,6 +163,11 @@ class TieringSplitReaderTest extends FlinkTestBase {
             tieringSplitReader.handleSplitsChanges(new SplitsAddition<>(logSplits));
             verifyTieringRows(
                     tieringSplitReader, tableId, expectedRowCount, expectFinishTieringSplits);
+
+            // all created lake writers must be completed and closed with the splits
+            assertThat(lakeTieringFactory.getCreatedLakeWriters()).isNotEmpty();
+            assertThat(lakeTieringFactory.getCreatedLakeWriters())
+                    .allSatisfy(writer -> assertThat(writer.isClosed()).isTrue());
         }
     }
 
@@ -335,6 +342,105 @@ class TieringSplitReaderTest extends FlinkTestBase {
             assertThat(writeResult).isNotNull();
             // expect null write result since no any records written
             assertThat(writeResult.writeResult()).isNull();
+        }
+    }
+
+    /**
+     * Verifies the lake writer is always closed even if {@link LakeWriter#complete()} fails,
+     * otherwise the writer is leaked since it has been removed from the tracking map and can never
+     * be reached again.
+     */
+    @Test
+    void testLakeWriterClosedWhenCompleteFails() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "tiering_close_writer_on_complete_failure");
+        TableDescriptor singleBucketPkTableDescriptor =
+                TableDescriptor.builder()
+                        .schema(DEFAULT_PK_TABLE_SCHEMA)
+                        .distributedBy(1, "id")
+                        .build();
+        long tableId = createTable(tablePath, singleBucketPkTableDescriptor);
+        // the factory creates lake writers whose complete() always throws the given exception
+        TestingLakeTieringFactory lakeTieringFactory =
+                new TestingLakeTieringFactory(null, new IOException("Injected complete failure"));
+        try (Connection connection =
+                        ConnectionFactory.createConnection(
+                                FLUSS_CLUSTER_EXTENSION.getClientConfig());
+                Table table = connection.getTable(tablePath);
+                TieringSplitReader<TestingWriteResult> tieringSplitReader =
+                        createTieringReader(connection, lakeTieringFactory)) {
+            // write 2 records which occupy log offset 0 and 1
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
+            upsertWriter.upsert(row(1, "v1"));
+            upsertWriter.upsert(row(2, "v2"));
+            upsertWriter.flush();
+
+            // add a log split covering all the written records, so that once the split reaches
+            // the stopping offset (2), the reader completes the lake writer
+            TableBucket tableBucket = new TableBucket(tableId, 0);
+            tieringSplitReader.handleSplitsChanges(
+                    new SplitsAddition<>(
+                            Collections.singletonList(
+                                    new TieringLogSplit(
+                                            tablePath, tableBucket, null, EARLIEST_OFFSET, 2, 1))));
+
+            // the injected complete() failure should propagate out of fetch()
+            assertThatThrownBy(
+                            () -> {
+                                for (int i = 0; i < 10; i++) {
+                                    tieringSplitReader.fetch();
+                                }
+                            })
+                    .hasMessageContaining("Injected complete failure");
+
+            // the writer must be closed although complete() failed
+            assertThat(lakeTieringFactory.getCreatedLakeWriters()).hasSize(1);
+            assertThat(lakeTieringFactory.getCreatedLakeWriters().get(0).isClosed()).isTrue();
+        }
+    }
+
+    /**
+     * Verifies {@link TieringSplitReader#close()} closes all in-flight lake writers, which is the
+     * case when the split reader is closed on task failure before the splits finish.
+     */
+    @Test
+    void testCloseClosesAllInFlightLakeWriters() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "tiering_close_in_flight_writers");
+        long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
+        TestingLakeTieringFactory lakeTieringFactory = new TestingLakeTieringFactory();
+        try (Connection connection =
+                        ConnectionFactory.createConnection(
+                                FLUSS_CLUSTER_EXTENSION.getClientConfig());
+                TieringSplitReader<TestingWriteResult> tieringSplitReader =
+                        createTieringReader(connection, lakeTieringFactory)) {
+            Map<TableBucket, List<InternalRow>> rows = putRows(tableId, tablePath, 10);
+
+            // add log splits with a stopping offset beyond the log end offset, so the splits
+            // never finish and the lake writers stay in-flight
+            List<TieringSplit> logSplits = new ArrayList<>();
+            for (Map.Entry<TableBucket, List<InternalRow>> entry : rows.entrySet()) {
+                logSplits.add(
+                        createLogSplit(
+                                tablePath,
+                                tableId,
+                                entry.getKey().getBucket(),
+                                EARLIEST_OFFSET,
+                                entry.getValue().size() + 100));
+            }
+            tieringSplitReader.handleSplitsChanges(new SplitsAddition<>(logSplits));
+
+            // fetch until a lake writer has been created for every bucket with records
+            for (int i = 0;
+                    i < 10 && lakeTieringFactory.getCreatedLakeWriters().size() < rows.size();
+                    i++) {
+                tieringSplitReader.fetch();
+            }
+            assertThat(lakeTieringFactory.getCreatedLakeWriters()).hasSize(rows.size());
+
+            // close the reader while all the writers are still in-flight,
+            // all of them must be closed to avoid resource leaks
+            tieringSplitReader.close();
+            assertThat(lakeTieringFactory.getCreatedLakeWriters())
+                    .allSatisfy(writer -> assertThat(writer.isClosed()).isTrue());
         }
     }
 

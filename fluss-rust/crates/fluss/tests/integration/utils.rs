@@ -230,7 +230,6 @@ pub fn make_int_array(values: &[Option<i32>]) -> FlussArray {
 // ─── Poll helpers ────────────────────────────────────────────────────────────
 
 pub const DEFAULT_POLL_TIMEOUT: Duration = Duration::from_secs(10);
-pub const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(500);
 
 /// Polls repeatedly, accumulating items until `expected_count` is reached or `timeout` elapses.
 pub async fn poll_until_count<T>(

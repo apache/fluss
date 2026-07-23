@@ -162,6 +162,12 @@ impl<'a> WriteRecord<'a> {
         }
     }
 
+    /// Sets the bucket key used to hash-assign this record to a bucket.
+    pub fn with_bucket_key(mut self, bucket_key: Option<Bytes>) -> Self {
+        self.bucket_key = bucket_key;
+        self
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn for_upsert(
         table_info: Arc<TableInfo>,
@@ -251,6 +257,18 @@ impl WriteResultFuture {
             inner: Box::pin(async move {
                 let result = result_handle.wait().await?;
                 result_handle.result(result)
+            }),
+        }
+    }
+
+    pub fn join(handles: Vec<ResultHandle>) -> Self {
+        Self {
+            inner: Box::pin(async move {
+                for handle in handles {
+                    let result = handle.wait().await?;
+                    handle.result(result)?;
+                }
+                Ok(())
             }),
         }
     }

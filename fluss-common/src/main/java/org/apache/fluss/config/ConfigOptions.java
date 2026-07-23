@@ -347,7 +347,9 @@ public class ConfigOptions {
                                     + "KV leader replica capacity. This value does not reserve or "
                                     + "enforce memory on the tablet server. The default value of 0 "
                                     + "disables memory-based KV leader replica capacity control. "
-                                    + "Set a positive value to enable it.");
+                                    + "Set a positive value to enable it. When enabled, the recommended "
+                                    + "value is 8 MB, based on the measured memory consumption of an "
+                                    + "empty KV leader replica.");
 
     /**
      * The network address and port the server binds to for accepting connections.
@@ -1796,8 +1798,8 @@ public class ConfigOptions {
                     .enumType(DataLakeFormat.class)
                     .noDefaultValue()
                     .withDescription(
-                            "The data lake format of the table specifies the tiered Lakehouse storage format. Currently, supported formats are `paimon`, `iceberg`, and `lance`. "
-                                    + "In the future, more kinds of data lake format will be supported, such as DeltaLake or Hudi. "
+                            "The data lake format of the table specifies the tiered Lakehouse storage format. Currently, supported formats are `paimon`, `iceberg`, `hudi`, and `lance`. "
+                                    + "In the future, more kinds of data lake formats will be supported, such as DeltaLake. "
                                     + "Once the `table.datalake.format` property is configured, Fluss adopts the key encoding and bucketing strategy used by the corresponding data lake format. "
                                     + "This ensures consistency in key encoding and bucketing, enabling seamless **Union Read** functionality across Fluss and Lakehouse. "
                                     + "The `table.datalake.format` can be pre-defined before enabling `table.datalake.enabled`. This allows the data lake feature to be dynamically enabled on the table without requiring table recreation. "
@@ -2413,8 +2415,8 @@ public class ConfigOptions {
                     .enumType(DataLakeFormat.class)
                     .noDefaultValue()
                     .withDescription(
-                            "The datalake format used by Fluss as lakehouse storage. Currently, supported formats are Paimon, Iceberg, and Lance. "
-                                    + "In the future, more kinds of data lake format will be supported, such as DeltaLake or Hudi.");
+                            "The datalake format used by Fluss as lakehouse storage. Currently, supported formats are Paimon, Iceberg, Hudi, and Lance. "
+                                    + "In the future, more kinds of data lake format will be supported, such as DeltaLake.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for tiering service
