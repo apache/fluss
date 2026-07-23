@@ -689,8 +689,15 @@ public class FlinkCatalog extends AbstractCatalog {
             throws TableNotExistException, TableNotPartitionedException,
                     PartitionSpecInvalidException, PartitionAlreadyExistsException,
                     CatalogException {
-        // For virtual tables ($changelog, $binlog), operate on the base physical table
-        TablePath tablePath = toPhysicalTablePath(objectPath);
+        // $changelog / $binlog are read-only virtual tables; reject partition mutations.
+        if (isVirtualTable(objectPath)) {
+            throw new CatalogException(
+                    String.format(
+                            "Cannot create partition on read-only virtual table %s in %s. "
+                                    + "Please create the partition on the base table instead.",
+                            objectPath, getName()));
+        }
+        TablePath tablePath = toTablePath(objectPath);
         PartitionSpec partitionSpec = new PartitionSpec(catalogPartitionSpec.getPartitionSpec());
         try {
             admin.createPartition(tablePath, partitionSpec, b).get();
@@ -736,10 +743,17 @@ public class FlinkCatalog extends AbstractCatalog {
     public void dropPartition(
             ObjectPath objectPath, CatalogPartitionSpec catalogPartitionSpec, boolean b)
             throws PartitionNotExistException, CatalogException {
+        // $changelog / $binlog are read-only virtual tables; reject partition mutations.
+        if (isVirtualTable(objectPath)) {
+            throw new CatalogException(
+                    String.format(
+                            "Cannot drop partition on read-only virtual table %s in %s. "
+                                    + "Please drop the partition on the base table instead.",
+                            objectPath, getName()));
+        }
         PartitionSpec partitionSpec = new PartitionSpec(catalogPartitionSpec.getPartitionSpec());
         try {
-            // For virtual tables ($changelog, $binlog), operate on the base physical table
-            admin.dropPartition(toPhysicalTablePath(objectPath), partitionSpec, b).get();
+            admin.dropPartition(toTablePath(objectPath), partitionSpec, b).get();
         } catch (Exception e) {
             Throwable t = ExceptionUtils.stripExecutionException(e);
             if (isPartitionNotExist(t)) {
@@ -875,8 +889,6 @@ public class FlinkCatalog extends AbstractCatalog {
      * suffix ($changelog, $binlog) if present. This is needed because virtual tables share the same
      * partitioning and physical storage as their base table, so partition-related operations must
      * be performed against the base table name.
-     *
-     * <p>For $lake tables, the suffix is also stripped to get the base Fluss table name.
      */
     private TablePath toPhysicalTablePath(ObjectPath objectPath) {
         String tableName = objectPath.getObjectName();
@@ -886,10 +898,15 @@ public class FlinkCatalog extends AbstractCatalog {
                     tableName.substring(0, tableName.length() - CHANGELOG_TABLE_SUFFIX.length());
         } else if (tableName.endsWith(BINLOG_TABLE_SUFFIX)) {
             tableName = tableName.substring(0, tableName.length() - BINLOG_TABLE_SUFFIX.length());
-        } else if (tableName.contains(LAKE_TABLE_SPLITTER)) {
-            tableName = tableName.split("\\" + LAKE_TABLE_SPLITTER)[0];
         }
         return TablePath.of(objectPath.getDatabaseName(), tableName);
+    }
+
+    /** Returns whether the given path refers to a read-only $changelog / $binlog virtual table. */
+    private static boolean isVirtualTable(ObjectPath objectPath) {
+        String tableName = objectPath.getObjectName();
+        return tableName.endsWith(CHANGELOG_TABLE_SUFFIX)
+                || tableName.endsWith(BINLOG_TABLE_SUFFIX);
     }
 
     @Override

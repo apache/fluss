@@ -878,14 +878,18 @@ class FlinkCatalogTest {
         assertThat(binlogPartitions).hasSize(1);
         assertThat(binlogPartitions.get(0).getPartitionSpec()).containsEntry("first", "1");
 
-        // Test createPartition on $changelog virtual table — should work on base table
+        // Test createPartition on $changelog virtual table — should be rejected (read-only)
         CatalogPartitionSpec partSpec2 =
                 new CatalogPartitionSpec(Collections.singletonMap("first", "2"));
-        catalog.createPartition(changelogPath, partSpec2, null, false);
-        assertThat(catalog.listPartitions(basePath)).hasSize(2);
+        assertThatThrownBy(() -> catalog.createPartition(changelogPath, partSpec2, null, false))
+                .isInstanceOf(CatalogException.class)
+                .hasMessageContaining("read-only virtual table");
+        assertThat(catalog.listPartitions(basePath)).hasSize(1);
 
-        // Test dropPartition on $binlog virtual table — should work on base table
-        catalog.dropPartition(binlogPath, partSpec2, false);
+        // Test dropPartition on $binlog virtual table — should be rejected (read-only)
+        assertThatThrownBy(() -> catalog.dropPartition(binlogPath, partSpec, false))
+                .isInstanceOf(CatalogException.class)
+                .hasMessageContaining("read-only virtual table");
         assertThat(catalog.listPartitions(basePath)).hasSize(1);
 
         // Clean up
