@@ -52,6 +52,7 @@ import org.apache.fluss.server.kv.autoinc.AutoIncrementManager;
 import org.apache.fluss.server.kv.autoinc.AutoIncrementUpdater;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.TruncateReason;
+import org.apache.fluss.server.kv.prewrite.KvPreWriteBufferMemoryManager;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKv;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKvBuilder;
 import org.apache.fluss.server.kv.rocksdb.RocksDBResourceContainer;
@@ -169,7 +170,8 @@ public final class KvTablet {
             SchemaGetter schemaGetter,
             ChangelogImage changelogImage,
             @Nullable RocksDBStatistics rocksDBStatistics,
-            AutoIncrementManager autoIncrementManager) {
+            AutoIncrementManager autoIncrementManager,
+            KvPreWriteBufferMemoryManager preWriteBufferMemoryManager) {
         this.physicalPath = physicalPath;
         this.tableBucket = tableBucket;
         this.logTablet = logTablet;
@@ -177,7 +179,9 @@ public final class KvTablet {
         this.rocksDBKv = rocksDBKv;
         this.writeBatchSize = writeBatchSize;
         this.serverMetricGroup = serverMetricGroup;
-        this.kvPreWriteBuffer = new KvPreWriteBuffer(createKvBatchWriter(), serverMetricGroup);
+        this.kvPreWriteBuffer =
+                new KvPreWriteBuffer(
+                        createKvBatchWriter(), serverMetricGroup, preWriteBufferMemoryManager);
         this.logFormat = logFormat;
         this.arrowWriterProvider = new ArrowWriterPool(arrowBufferAllocator);
         this.memorySegmentPool = memorySegmentPool;
@@ -195,6 +199,11 @@ public final class KvTablet {
         this.rowCount = changelogImage == ChangelogImage.WAL ? ROW_COUNT_DISABLED : 0L;
     }
 
+    /**
+     * Creates a KV tablet backed by the tablet-server-wide pre-write buffer memory manager.
+     *
+     * @param preWriteBufferMemoryManager global pre-write buffer memory quota
+     */
     public static KvTablet create(
             PhysicalTablePath tablePath,
             TableBucket tableBucket,
@@ -210,7 +219,8 @@ public final class KvTablet {
             SchemaGetter schemaGetter,
             ChangelogImage changelogImage,
             RateLimiter sharedRateLimiter,
-            AutoIncrementManager autoIncrementManager)
+            AutoIncrementManager autoIncrementManager,
+            KvPreWriteBufferMemoryManager preWriteBufferMemoryManager)
             throws IOException {
         RocksDBKv kv = buildRocksDBKv(serverConf, kvTabletDir, sharedRateLimiter);
 
@@ -243,7 +253,8 @@ public final class KvTablet {
                 schemaGetter,
                 changelogImage,
                 rocksDBStatistics,
-                autoIncrementManager);
+                autoIncrementManager,
+                preWriteBufferMemoryManager);
     }
 
     private static RocksDBKv buildRocksDBKv(
@@ -668,8 +679,6 @@ public final class KvTablet {
     }
 
     public void flush(long exclusiveUpToLogOffset, FatalErrorHandler fatalErrorHandler) {
-        // todo: need to introduce a backpressure mechanism
-        // to avoid too much records in kvPreWriteBuffer
         inWriteLock(
                 kvLock,
                 () -> {
@@ -851,10 +860,14 @@ public final class KvTablet {
                     }
                     // Note: RocksDB metrics lifecycle is managed by TableMetricGroup
                     // No need to close it here
-                    if (rocksDBKv != null) {
-                        rocksDBKv.close();
+                    try {
+                        kvPreWriteBuffer.close();
+                    } finally {
+                        if (rocksDBKv != null) {
+                            rocksDBKv.close();
+                        }
+                        isClosed = true;
                     }
-                    isClosed = true;
                 });
     }
 

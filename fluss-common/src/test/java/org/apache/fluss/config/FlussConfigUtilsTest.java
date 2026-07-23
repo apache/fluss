@@ -192,6 +192,32 @@ class FlussConfigUtilsTest {
     }
 
     @Test
+    void testValidateKvPreWriteBufferMemoryWatermarks() {
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.REMOTE_DATA_DIR, "s3://bucket/path");
+        conf.set(ConfigOptions.TABLET_SERVER_ID, 0);
+        validateTabletConfigs(conf);
+
+        conf.set(ConfigOptions.SERVER_KV_PRE_WRITE_BUFFER_MEMORY_HIGH_WATERMARK_RATIO, 0.0);
+        assertThatThrownBy(() -> validateTabletConfigs(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining(
+                        ConfigOptions.SERVER_KV_PRE_WRITE_BUFFER_MEMORY_HIGH_WATERMARK_RATIO.key())
+                .hasMessageContaining("(0.0, 1.0]");
+
+        conf.set(ConfigOptions.SERVER_KV_PRE_WRITE_BUFFER_MEMORY_HIGH_WATERMARK_RATIO, 0.5);
+        conf.set(ConfigOptions.SERVER_KV_PRE_WRITE_BUFFER_MEMORY_LOW_WATERMARK_RATIO, 0.5);
+        assertThatThrownBy(() -> validateTabletConfigs(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining(
+                        ConfigOptions.SERVER_KV_PRE_WRITE_BUFFER_MEMORY_LOW_WATERMARK_RATIO.key())
+                .hasMessageContaining("[0.0, 0.5)");
+
+        conf.set(ConfigOptions.SERVER_KV_PRE_WRITE_BUFFER_MEMORY_LOW_WATERMARK_RATIO, 0.4);
+        validateTabletConfigs(conf);
+    }
+
+    @Test
     void testValidateLogRetentionCheckInterval() {
         assertThat(ConfigOptions.LOG_RETENTION_CHECK_INTERVAL.key())
                 .isEqualTo("log.retention.check-interval");

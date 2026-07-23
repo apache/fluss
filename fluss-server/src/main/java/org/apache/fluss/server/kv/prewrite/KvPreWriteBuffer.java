@@ -18,6 +18,8 @@
 package org.apache.fluss.server.kv.prewrite;
 
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.exception.KvPreWriteBufferFullException;
+import org.apache.fluss.exception.RecordTooLargeException;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.metrics.Counter;
 import org.apache.fluss.record.ChangeType;
@@ -85,7 +87,13 @@ import static org.apache.fluss.utils.UnsafeUtils.BYTE_ARRAY_BASE_OFFSET;
  * head to tail, it will stop flush.
  */
 @NotThreadSafe
-public class KvPreWriteBuffer implements AutoCloseable {
+public class KvPreWriteBuffer extends KvMemoryConsumer implements AutoCloseable {
+
+    // A conservative estimate of the heap retained by a KvEntry, its Key and Value wrappers, the
+    // linked-list node, and associated object/array headers. The byte-array payloads are accounted
+    // for separately.
+    private static final long ENTRY_OVERHEAD_BYTES = 128L;
+
     private final KvBatchWriter kvBatchWriter;
 
     // a mapping from the key to the kv-entry
@@ -101,8 +109,13 @@ public class KvPreWriteBuffer implements AutoCloseable {
     // the max LSN in the buffer
     private long maxLogSequenceNumber = -1;
 
+    private boolean closed;
+
     public KvPreWriteBuffer(
-            KvBatchWriter kvBatchWriter, TabletServerMetricGroup serverMetricGroup) {
+            KvBatchWriter kvBatchWriter,
+            TabletServerMetricGroup serverMetricGroup,
+            KvPreWriteBufferMemoryManager memoryManager) {
+        super(memoryManager);
         this.kvBatchWriter = kvBatchWriter;
 
         truncateAsDuplicatedCount = serverMetricGroup.kvTruncateAsDuplicatedCount();
@@ -137,6 +150,7 @@ public class KvPreWriteBuffer implements AutoCloseable {
     }
 
     private void doPut(ChangeType changeType, Key key, Value value, long lsn) {
+        checkOpen();
         if (maxLogSequenceNumber >= lsn) {
             throw new IllegalArgumentException(
                     "The log sequence number must be non-decreasing. "
@@ -146,18 +160,55 @@ public class KvPreWriteBuffer implements AutoCloseable {
                             + lsn);
         }
 
-        // create the kv entry with previous pointer if exists, and put the new entry to the map
-        KvEntry kvEntry =
-                kvEntryMap.compute(
-                        key,
-                        (k, v) ->
-                                v == null
-                                        ? KvEntry.of(changeType, key, value, lsn)
-                                        : KvEntry.of(changeType, key, value, lsn, v));
-        // append the entry to the tail of the list for all kv entries
-        allKvEntries.addLast(kvEntry);
-        // update the max lsn
-        maxLogSequenceNumber = lsn;
+        long memorySize = estimateMemorySize(key, value);
+        if (memorySize > memoryManager().highWatermarkBytes()) {
+            throw new RecordTooLargeException(
+                    String.format(
+                            "The KV entry requires %s bytes, which exceeds the pre-write buffer "
+                                    + "high watermark of %s bytes.",
+                            memorySize, memoryManager().highWatermarkBytes()));
+        }
+
+        KvEntry previousEntry = kvEntryMap.get(key);
+        KvEntry kvEntry = new KvEntry(changeType, key, value, lsn, previousEntry);
+        if (!tryAcquireMemory(memorySize)) {
+            throw new KvPreWriteBufferFullException(
+                    String.format(
+                            "Failed to reserve %s bytes in the KV pre-write buffer "
+                                    + "(used: %s, high watermark: %s).",
+                            memorySize,
+                            memoryManager().usedBytes(),
+                            memoryManager().highWatermarkBytes()));
+        }
+
+        boolean completed = false;
+        try {
+            allKvEntries.addLast(kvEntry);
+            kvEntryMap.put(key, kvEntry);
+            if (previousEntry != null) {
+                previousEntry.nextEntry = kvEntry;
+            }
+            maxLogSequenceNumber = lsn;
+            completed = true;
+        } finally {
+            if (!completed) {
+                try {
+                    if (!allKvEntries.isEmpty() && allKvEntries.getLast() == kvEntry) {
+                        allKvEntries.removeLast();
+                    }
+                    if (previousEntry == null) {
+                        kvEntryMap.remove(key, kvEntry);
+                    } else {
+                        kvEntryMap.put(key, previousEntry);
+                        if (previousEntry.nextEntry == kvEntry) {
+                            previousEntry.nextEntry = null;
+                        }
+                    }
+                } finally {
+                    freeMemory(memorySize);
+                }
+            }
+        }
     }
 
     /**
@@ -186,22 +237,29 @@ public class KvPreWriteBuffer implements AutoCloseable {
             truncateAsErrorCount.inc();
         }
 
+        long releasedBytes = 0L;
         Iterator<KvEntry> descIter = allKvEntries.descendingIterator();
         while (descIter.hasNext()) {
             KvEntry entry = descIter.next();
             if (entry.getLogSequenceNumber() < targetLogSequenceNumber) {
-                maxLogSequenceNumber = entry.logSequenceNumber;
                 break;
             }
             descIter.remove();
+            releasedBytes += estimateMemorySize(entry.key, entry.value);
             boolean removed = kvEntryMap.remove(entry.getKey(), entry);
             // if the latest entry is removed, we need to rollback the previous entry to the map
             if (removed && entry.previousEntry != null) {
                 kvEntryMap.put(entry.getKey(), entry.previousEntry);
             }
+            if (entry.previousEntry != null) {
+                entry.previousEntry.nextEntry = null;
+            }
+            entry.previousEntry = null;
         }
-        if (!descIter.hasNext()) {
-            maxLogSequenceNumber = -1;
+        maxLogSequenceNumber =
+                allKvEntries.isEmpty() ? -1 : allKvEntries.getLast().getLogSequenceNumber();
+        if (releasedBytes > 0) {
+            freeMemory(releasedBytes);
         }
     }
 
@@ -215,24 +273,20 @@ public class KvPreWriteBuffer implements AutoCloseable {
     public int flush(long exclusiveUpToLogSequenceNumber) throws IOException {
         int rowCountDiff = 0;
         int flushedCount = 0;
-        for (Iterator<KvEntry> it = allKvEntries.iterator(); it.hasNext(); ) {
-            KvEntry entry = it.next();
+        long releasedBytes = 0L;
+        for (KvEntry entry : allKvEntries) {
             // if find one entry whose sequence number is greater than the given sequence number,
             // break the loop
             if (entry.getLogSequenceNumber() >= exclusiveUpToLogSequenceNumber) {
                 break;
             }
 
-            // first remove the entry from the list
-            it.remove();
-
-            // then write data using write batch writer
+            flushedCount++;
+            releasedBytes += estimateMemorySize(entry.key, entry.value);
             Value value = entry.getValue();
             if (value.value != null) {
-                flushedCount += 1;
                 kvBatchWriter.put(entry.getKey().key, value.value);
             } else {
-                flushedCount += 1;
                 kvBatchWriter.delete(entry.getKey().key);
             }
 
@@ -242,15 +296,22 @@ public class KvPreWriteBuffer implements AutoCloseable {
             } else if (entry.getChangeType() == ChangeType.DELETE) {
                 rowCountDiff -= 1;
             }
-
-            // if the kv entry to be flushed is equal to the one in the kvEntryMap, we
-            // can remove it from the map. Although it's not a must to remove from the map,
-            // we remove it to reduce the memory usage
-            kvEntryMap.remove(entry.getKey(), entry);
         }
-        // flush to underlying kv tablet
+
+        // Only remove entries and release their reservations after all writes have been flushed
+        // successfully. On failure, keeping them in the buffer makes both the data and memory
+        // accounting retryable.
         if (flushedCount > 0) {
             kvBatchWriter.flush();
+            for (int i = 0; i < flushedCount; i++) {
+                KvEntry entry = allKvEntries.removeFirst();
+                kvEntryMap.remove(entry.getKey(), entry);
+                if (entry.nextEntry != null) {
+                    entry.nextEntry.previousEntry = null;
+                    entry.nextEntry = null;
+                }
+            }
+            freeMemory(releasedBytes);
         }
 
         return rowCountDiff;
@@ -273,9 +334,15 @@ public class KvPreWriteBuffer implements AutoCloseable {
 
     @Override
     public void close() throws Exception {
-        if (kvBatchWriter != null) {
-            kvBatchWriter.close();
+        if (closed) {
+            return;
         }
+        closed = true;
+        allKvEntries.clear();
+        kvEntryMap.clear();
+        maxLogSequenceNumber = -1;
+        freeAllMemory();
+        kvBatchWriter.close();
     }
 
     public Counter getTruncateAsDuplicatedCount() {
@@ -284,6 +351,19 @@ public class KvPreWriteBuffer implements AutoCloseable {
 
     public Counter getTruncateAsErrorCount() {
         return truncateAsErrorCount;
+    }
+
+    private static long estimateMemorySize(Key key, Value value) {
+        byte[] valueBytes = value.get();
+        return ENTRY_OVERHEAD_BYTES
+                + key.get().length
+                + (valueBytes == null ? 0 : valueBytes.length);
+    }
+
+    private void checkOpen() {
+        if (closed) {
+            throw new IllegalStateException("The KV pre-write buffer is already closed.");
+        }
     }
 
     // -------------------------------------------------------------------------------------------
@@ -303,9 +383,9 @@ public class KvPreWriteBuffer implements AutoCloseable {
         private final Key key;
         private final Value value;
         private final long logSequenceNumber;
-
         // the previous mapped value in the buffer before this key-value put
-        @Nullable private final KvEntry previousEntry;
+        @Nullable private KvEntry previousEntry;
+        @Nullable private KvEntry nextEntry;
 
         public static KvEntry of(ChangeType changeType, Key key, Value value, long sequenceNumber) {
             return new KvEntry(changeType, key, value, sequenceNumber, null);

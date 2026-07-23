@@ -17,6 +17,7 @@
 
 package org.apache.fluss.rpc.protocol;
 
+import org.apache.fluss.exception.KvPreWriteBufferFullException;
 import org.apache.fluss.exception.NotEnoughReplicasException;
 import org.apache.fluss.exception.TimeoutException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
@@ -62,6 +63,13 @@ public class ApiErrorTest {
                         new NotEnoughReplicasException(notEnoughReplicasErrorMsg),
                         Errors.NOT_ENOUGH_REPLICAS_EXCEPTION,
                         notEnoughReplicasErrorMsg));
+
+        String preWriteBufferFullMessage = "KV pre-write buffer is full.";
+        arguments.add(
+                Arguments.of(
+                        new KvPreWriteBufferFullException(preWriteBufferFullMessage),
+                        Errors.KV_PRE_WRITE_BUFFER_FULL,
+                        preWriteBufferFullMessage));
 
         // avoid populating the error message if it's a generic one
         arguments.add(

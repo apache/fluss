@@ -133,6 +133,33 @@ public class FlussConfigUtils {
         validMinValue(ConfigOptions.TABLET_SERVER_ID, serverId.get(), 0);
     }
 
+    private static void validateKvPreWriteBufferMemoryWatermarks(Configuration conf) {
+        double highWatermarkRatio =
+                conf.get(ConfigOptions.SERVER_KV_PRE_WRITE_BUFFER_MEMORY_HIGH_WATERMARK_RATIO);
+        double lowWatermarkRatio =
+                conf.get(ConfigOptions.SERVER_KV_PRE_WRITE_BUFFER_MEMORY_LOW_WATERMARK_RATIO);
+        if (!(highWatermarkRatio > 0.0 && highWatermarkRatio <= 1.0)) {
+            throw new IllegalConfigurationException(
+                    String.format(
+                            "Invalid configuration for %s: %s. It must be within (0.0, 1.0].",
+                            ConfigOptions.SERVER_KV_PRE_WRITE_BUFFER_MEMORY_HIGH_WATERMARK_RATIO
+                                    .key(),
+                            highWatermarkRatio));
+        }
+        if (!(lowWatermarkRatio >= 0.0 && lowWatermarkRatio < highWatermarkRatio)) {
+            throw new IllegalConfigurationException(
+                    String.format(
+                            "Invalid configuration for %s: %s. It must be within [0.0, %s), "
+                                    + "where %s is the configured high watermark ratio.",
+                            ConfigOptions.SERVER_KV_PRE_WRITE_BUFFER_MEMORY_LOW_WATERMARK_RATIO
+                                    .key(),
+                            lowWatermarkRatio,
+                            highWatermarkRatio,
+                            ConfigOptions.SERVER_KV_PRE_WRITE_BUFFER_MEMORY_HIGH_WATERMARK_RATIO
+                                    .key()));
+        }
+    }
+
     public static void validateRemoteDataDirs(Configuration conf) {
         // Validate remote.data.dirs
         List<String> remoteDataDirs = conf.get(ConfigOptions.REMOTE_DATA_DIRS);
@@ -228,6 +255,8 @@ public class FlussConfigUtils {
                             "Invalid configuration for %s, it must be less than or equal %d bytes.",
                             ConfigOptions.LOG_SEGMENT_FILE_SIZE.key(), Integer.MAX_VALUE));
         }
+
+        validateKvPreWriteBufferMemoryWatermarks(conf);
     }
 
     private static void validMinValue(
