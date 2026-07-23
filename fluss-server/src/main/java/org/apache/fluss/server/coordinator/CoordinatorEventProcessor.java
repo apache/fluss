@@ -2278,6 +2278,16 @@ public class CoordinatorEventProcessor implements EventProcessor {
             CompletableFuture<CommitLakeTableSnapshotResponse> callback) {
         CommitLakeTableSnapshotsData commitLakeTableSnapshotsData =
                 commitLakeTableSnapshotEvent.getCommitLakeTableSnapshotsData();
+        Map<Long, CommitLakeTableSnapshotsData.CommitLakeTableSnapshot>
+                commitLakeTableSnapshotByTableId =
+                        commitLakeTableSnapshotsData.getCommitLakeTableSnapshotByTableId();
+        Set<Long> unavailableTableIds = new HashSet<>();
+        for (Long tableId : commitLakeTableSnapshotByTableId.keySet()) {
+            if (coordinatorContext.getTablePathById(tableId) == null
+                    || coordinatorContext.isTableQueuedForDeletion(tableId)) {
+                unavailableTableIds.add(tableId);
+            }
+        }
         ioExecutor.execute(
                 () -> {
                     try {
@@ -2285,10 +2295,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                                 new CommitLakeTableSnapshotResponse();
                         Set<Long> failedTableIds = new HashSet<>();
                         for (Map.Entry<Long, CommitLakeTableSnapshotsData.CommitLakeTableSnapshot>
-                                entry :
-                                        commitLakeTableSnapshotsData
-                                                .getCommitLakeTableSnapshotByTableId()
-                                                .entrySet()) {
+                                entry : commitLakeTableSnapshotByTableId.entrySet()) {
                             PbCommitLakeTableSnapshotRespForTable tableResp =
                                     response.addTableResp();
                             long tableId = entry.getKey();
@@ -2299,6 +2306,12 @@ public class CoordinatorEventProcessor implements EventProcessor {
                                 if (snapshot.getLakeSnapshotMetadata() == null) {
                                     throw new FlussRuntimeException(
                                             "Lake snapshot metadata is null for table " + tableId);
+                                }
+                                if (unavailableTableIds.contains(tableId)) {
+                                    throw new TableNotExistException(
+                                            "Table "
+                                                    + tableId
+                                                    + " not found or queued for deletion in coordinator context.");
                                 }
                                 lakeTableHelper.registerLakeTableSnapshotV2(
                                         tableId,
