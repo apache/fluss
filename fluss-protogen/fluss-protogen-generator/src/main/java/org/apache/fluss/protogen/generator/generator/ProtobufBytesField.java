@@ -35,7 +35,7 @@ public class ProtobufBytesField extends ProtobufField<Field.Bytes> {
 
     @Override
     public void parse(PrintWriter w) {
-        w.format("_%sLen = ProtoCodecUtils.readVarInt(_buffer);\n", ccName);
+        w.format("_%sLen = ProtoCodecUtils.readBytesLen(_buffer);\n", ccName);
         w.format("%s = new byte[_%sLen];\n", ccName, ccName);
         w.format("_buffer.readBytes(%s);\n", ccName);
     }
