@@ -124,7 +124,7 @@ public class RemoteLogManager implements Closeable {
         this.coordinatorGateway = coordinatorGateway;
         this.logManager = logManager;
         this.remoteLogIndexCachesByDir = new ConcurrentHashMap<>();
-        int cacheSize = (int) conf.get(ConfigOptions.REMOTE_LOG_INDEX_FILE_CACHE_SIZE).getBytes();
+        long cacheSize = conf.get(ConfigOptions.REMOTE_LOG_INDEX_FILE_CACHE_SIZE).getBytes();
         for (File dataDir : localDiskManager.dataDirs()) {
             remoteLogIndexCachesByDir.put(
                     dataDir, new RemoteLogIndexCache(cacheSize, remoteLogStorage, dataDir));
