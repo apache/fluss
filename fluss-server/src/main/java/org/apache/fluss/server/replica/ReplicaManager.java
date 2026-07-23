@@ -1474,6 +1474,22 @@ public class ReplicaManager implements ServerReconfigurable {
                         replica.getArrowCompressionInfo(),
                         fetchReqInfo.getProjectFields(),
                         projectionsCache);
+
+                // If the client prefers remote reads and the offset is covered, return remote fetch
+                // info.
+                if (fetchParams.isRemoteFirstClientFetch()) {
+                    FetchLogResultForBucket remoteFirstFetchResult =
+                            tryFetchRemoteFirst(replica, fetchOffset);
+                    if (remoteFirstFetchResult != null) {
+                        logReadResult.put(
+                                tb,
+                                new LogReadResult(
+                                        remoteFirstFetchResult,
+                                        LogOffsetMetadata.UNKNOWN_OFFSET_METADATA));
+                        continue;
+                    }
+                }
+
                 LogReadInfo readInfo = replica.fetchRecords(fetchParams);
 
                 // Once we read from a non-empty bucket, we stop ignoring request and bucket
@@ -1530,6 +1546,46 @@ public class ReplicaManager implements ServerReconfigurable {
             }
         }
         return logReadResult;
+    }
+
+    private @Nullable FetchLogResultForBucket tryFetchRemoteFirst(
+            Replica replica, long fetchOffset) {
+        if (!replica.isLeader()) {
+            throw new NotLeaderOrFollowerException(
+                    String.format(
+                            "Leader not local for bucket %s on tabletServer %d",
+                            replica.getTableBucket(), serverId));
+        }
+
+        TableBucket tb = replica.getTableBucket();
+        long normalizedFetchOffset =
+                fetchOffset == FetchParams.FETCH_FROM_EARLIEST_OFFSET
+                        ? replica.getLogStartOffset()
+                        : fetchOffset;
+        if (!canFetchFromRemoteLog(replica, normalizedFetchOffset)) {
+            return null;
+        }
+
+        try {
+            RemoteLogFetchInfo remoteLogFetchInfo =
+                    fetchLogFromRemote(replica, normalizedFetchOffset);
+            if (remoteLogFetchInfo != null) {
+                return new FetchLogResultForBucket(
+                        tb, remoteLogFetchInfo, replica.getLogHighWatermark());
+            }
+            // Remote log is expected to cover the offset, but segments/manifest may not be ready
+            // yet.
+            // REMOTE_FIRST is a preference, so fall back to local reads.
+            return null;
+        } catch (Exception e) {
+            LOG.warn(
+                    "Failed to fetch remote log first for replica {} at offset {}; falling back to local reads",
+                    tb,
+                    normalizedFetchOffset,
+                    e);
+            // Fall back to local reads on remote fetch failures.
+            return null;
+        }
     }
 
     private FetchLogResultForBucket handleFetchOutOfRangeException(

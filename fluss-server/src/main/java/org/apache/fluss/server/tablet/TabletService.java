@@ -76,6 +76,7 @@ import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.messages.UpdateMetadataResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.Errors;
+import org.apache.fluss.rpc.protocol.FetchLogReadPreference;
 import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.security.acl.OperationType;
 import org.apache.fluss.security.acl.Resource;
@@ -248,6 +249,10 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     private static FetchParams getFetchParams(FetchLogRequest request) {
         FetchParams fetchParams;
         Map<Long, FilterInfo> tableFilterInfoMap = getTableFilterInfoMap(request);
+        FetchLogReadPreference readPreference =
+                request.hasReadPreference()
+                        ? FetchLogReadPreference.from(request.getReadPreference())
+                        : FetchLogReadPreference.LOCAL_FIRST;
         if (request.hasMinBytes()) {
             fetchParams =
                     new FetchParamsBuilder(request.getFollowerServerId(), request.getMaxBytes())
@@ -257,11 +262,13 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                                             ? request.getMaxWaitMs()
                                             : DEFAULT_MAX_WAIT_MS_WHEN_MIN_BYTES_ENABLE)
                             .withTableFilterInfoMap(tableFilterInfoMap)
+                            .withReadPreference(readPreference)
                             .build();
         } else {
             fetchParams =
                     new FetchParamsBuilder(request.getFollowerServerId(), request.getMaxBytes())
                             .withTableFilterInfoMap(tableFilterInfoMap)
+                            .withReadPreference(readPreference)
                             .build();
         }
 
