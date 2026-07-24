@@ -15,10 +15,9 @@
 # limitations under the License.
 #
 # Create ASF source release artifacts under dist/ (aligned with Fluss release package format):
-#   fluss-rust-{version}-incubating.tgz
-#   fluss-rust-{version}-incubating.tgz.asc
-#   fluss-rust-{version}-incubating.tgz.sha512
-# (Incubator policy requires "incubating" in the artifact name.)
+#   fluss-rust-{version}.tgz
+#   fluss-rust-{version}.tgz.asc
+#   fluss-rust-{version}.tgz.sha512
 # Run from repo root. Check out the release tag first (e.g. git checkout v0.1.0-rc1).
 # Usage: ./scripts/release.sh [version]
 #   If version is omitted, it is read from Cargo.toml (workspace.package.version).
@@ -38,7 +37,7 @@ else
   fi
 fi
 
-PREFIX="fluss-rust-${VERSION}-incubating"
+PREFIX="fluss-rust-${VERSION}"
 DIST_DIR="${REPO_ROOT}/dist"
 TARBALL="${PREFIX}.tgz"
 

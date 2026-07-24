@@ -6,19 +6,19 @@ This document describes how to verify a release candidate (RC) of the **Fluss cl
 
 The release vote email includes links to:
 
-- **Distribution archive:** source tarball (`fluss-rust-${RELEASE_VERSION}-incubating.tgz`) on [dist.apache.org dev](https://dist.apache.org/repos/dist/dev/incubator/fluss/)
-- **Signature file:** `fluss-rust-${RELEASE_VERSION}-incubating.tgz.asc`
-- **Checksum file:** `fluss-rust-${RELEASE_VERSION}-incubating.tgz.sha512`
-- **KEYS file:** [https://downloads.apache.org/incubator/fluss/KEYS](https://downloads.apache.org/incubator/fluss/KEYS)
+- **Distribution archive:** source tarball (`fluss-rust-${RELEASE_VERSION}.tgz`) on [dist.apache.org dev](https://dist.apache.org/repos/dist/dev/fluss/)
+- **Signature file:** `fluss-rust-${RELEASE_VERSION}.tgz.asc`
+- **Checksum file:** `fluss-rust-${RELEASE_VERSION}.tgz.sha512`
+- **KEYS file:** [https://downloads.apache.org/fluss/KEYS](https://downloads.apache.org/fluss/KEYS)
 
-Download the archive (`.tgz`), `.asc`, and `.sha512` from the RC directory (e.g. `fluss-rust-0.1.0-rc1/`) and the KEYS file. Then follow the steps below to verify signatures and checksums.
+Download the archive (`.tgz`), `.asc`, and `.sha512` from the RC directory (e.g. `fluss-rust-1.0.0-rc1/`) and the KEYS file. Then follow the steps below to verify signatures and checksums.
 
 ## Verifying signatures
 
 First, import the keys into your local keyring:
 
 ```bash
-curl https://downloads.apache.org/incubator/fluss/KEYS -o KEYS
+curl https://downloads.apache.org/fluss/KEYS -o KEYS
 gpg --import KEYS
 ```
 
@@ -43,13 +43,13 @@ Next, verify the tarball(s) using the provided `.sha512` file(s). Each `.sha512`
 **On macOS (shasum):**
 
 ```bash
-shasum -a 512 -c fluss-rust-${RELEASE_VERSION}-incubating.tgz.sha512
+shasum -a 512 -c fluss-rust-${RELEASE_VERSION}.tgz.sha512
 ```
 
 **On Linux (sha512sum):**
 
 ```bash
-sha512sum -c fluss-rust-${RELEASE_VERSION}-incubating.tgz.sha512
+sha512sum -c fluss-rust-${RELEASE_VERSION}.tgz.sha512
 ```
 
 If you have multiple archives, run `-c` on each `.sha512` file (or use `shasum -a 512 -c *.sha512` / `sha512sum -c *.sha512`).
@@ -57,7 +57,7 @@ If you have multiple archives, run `-c` on each `.sha512` file (or use `shasum -
 If the verification is successful, you will see a message like this:
 
 ```text
-fluss-rust-0.1.0-incubating.tgz: OK
+fluss-rust-1.0.0.tgz: OK
 ```
 
 ## Verifying build
@@ -65,8 +65,8 @@ fluss-rust-0.1.0-incubating.tgz: OK
 Extract the source release archive and verify that it builds (and optionally that tests pass). You need **Rust** (see [rust-toolchain.toml](https://github.com/apache/fluss/blob/main/fluss-rust/rust-toolchain.toml) for the expected version) and, for full builds, **protobuf** and **Python 3.9+** for bindings.
 
 ```bash
-tar -xzf fluss-rust-${RELEASE_VERSION}-incubating.tgz
-cd fluss-rust-${RELEASE_VERSION}-incubating
+tar -xzf fluss-rust-${RELEASE_VERSION}.tgz
+cd fluss-rust-${RELEASE_VERSION}
 ```
 
 Build the workspace:
@@ -98,17 +98,11 @@ For any user-facing feature included in a release, we aim to ensure it is functi
 - **Python bindings:** See [Python Installation Guide](../user-guide/python/installation.md) for how to add the Python client (for an RC, install from **TestPyPI**: `pip install -i https://test.pypi.org/simple/ pyfluss==${RELEASE_VERSION}`); then write test cases to verify.
 - **C++ bindings:** See [C++ Installation Guide](../user-guide/cpp/installation.md) for how to build and link the C++ client; then write test cases to verify.
 
-## Incubator release checklist
-
-If the project is in incubation, the ASF Incubator provides a release checklist. You can refer to it when verifying the release:
-
-- [Incubator Release Checklist](https://cwiki.apache.org/confluence/display/INCUBATOR/Incubator+Release+Checklist)
-
 ## Voting
 
 Votes are cast by replying to the vote email on the dev mailing list with **+1**, **0**, or **-1**.
 
-In addition to your vote, it is customary to state whether your vote is **binding** or **non-binding**. Only members of the PPMC and mentors have formally binding votes (and the IPMC on the Incubator general list). If unsure, you can state that your vote is non-binding. See [Apache Foundation Voting](https://www.apache.org/foundation/voting.html).
+In addition to your vote, it is customary to state whether your vote is **binding** or **non-binding**. Only members of the PMC have formally binding votes. If unsure, you can state that your vote is non-binding. See [Apache Foundation Voting](https://www.apache.org/foundation/voting.html).
 
 It is recommended to include a short list of what you verified (e.g. signatures, checksums, build, tests, LICENSE/NOTICE). This helps the community see what has been checked and what might still be missing.
 
@@ -120,5 +114,4 @@ It is recommended to include a short list of what you verified (e.g. signatures,
 - [ ] [Verifying build](#verifying-build)
 - [ ] [Verifying LICENSE and NOTICE](#verifying-license-and-notice)
 - [ ] [Testing features](#testing-features)
-- [ ] [Incubator release checklist](#incubator-release-checklist) (if applicable)
 

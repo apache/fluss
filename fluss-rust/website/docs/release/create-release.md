@@ -43,7 +43,7 @@ For GitHub Actions publishing, configure the repository secret `CARGO_REGISTRY_T
 
 **Checklist (one-time)**
 
-- [ ] GPG key set up and published to [KEYS](https://downloads.apache.org/incubator/fluss/KEYS) or Apache account
+- [ ] GPG key set up and published to [KEYS](https://downloads.apache.org/fluss/KEYS) or Apache account
 - [ ] Git configured to use your GPG key for signing tags
 - [ ] GitHub Actions secret `CARGO_REGISTRY_TOKEN` configured for crates.io publishing
 
@@ -207,44 +207,42 @@ just release $RELEASE_VERSION
 
 This creates under `dist/`:
 
-- `fluss-rust-${RELEASE_VERSION}-incubating.tgz`
-- `fluss-rust-${RELEASE_VERSION}-incubating.tgz.sha512`
-- `fluss-rust-${RELEASE_VERSION}-incubating.tgz.asc`
+- `fluss-rust-${RELEASE_VERSION}.tgz`
+- `fluss-rust-${RELEASE_VERSION}.tgz.sha512`
+- `fluss-rust-${RELEASE_VERSION}.tgz.asc`
 
-(Incubator policy requires the word "incubating" in release artifact names.)
-
-Verify with: `gpg --verify dist/fluss-rust-${RELEASE_VERSION}-incubating.tgz.asc dist/fluss-rust-${RELEASE_VERSION}-incubating.tgz`
+Verify with: `gpg --verify dist/fluss-rust-${RELEASE_VERSION}.tgz.asc dist/fluss-rust-${RELEASE_VERSION}.tgz`
 
 ### 4. Stage artifacts to SVN (dist.apache.org dev)
 
 From the **fluss-rust** repo root, check out the Fluss dev area and add the release artifacts.
 
 ```bash
-svn checkout https://dist.apache.org/repos/dist/dev/incubator/fluss fluss-dist-dev --depth=immediates
+svn checkout https://dist.apache.org/repos/dist/dev/fluss fluss-dist-dev --depth=immediates
 cd fluss-dist-dev
 mkdir $SVN_RC_DIR
-cp ../dist/fluss-rust-${RELEASE_VERSION}-incubating.* $SVN_RC_DIR/
+cp ../dist/fluss-rust-${RELEASE_VERSION}.* $SVN_RC_DIR/
 svn add $SVN_RC_DIR
 svn status
 svn commit -m "Add fluss-rust ${RELEASE_VERSION} RC${RC_NUM}"
 ```
 
-Verify: [https://dist.apache.org/repos/dist/dev/incubator/fluss/](https://dist.apache.org/repos/dist/dev/incubator/fluss/)
+Verify: [https://dist.apache.org/repos/dist/dev/fluss/](https://dist.apache.org/repos/dist/dev/fluss/)
 
 ---
 
 **Checklist to proceed to the next step**
 
 - [ ] Source distribution built and signed under `dist/`
-- [ ] Artifacts staged to [dist.apache.org dev](https://dist.apache.org/repos/dist/dev/incubator/fluss/) under `$SVN_RC_DIR`
+- [ ] Artifacts staged to [dist.apache.org dev](https://dist.apache.org/repos/dist/dev/fluss/) under `$SVN_RC_DIR`
 - [ ] RC (or release) tag pushed to GitHub
 - [ ] CI for Release Rust / Release Python succeeded
 
 ## Vote on the release candidate
 
-Share the release candidate for community review. If the project is in incubation, a [two-phase vote](https://incubator.apache.org/cookbook/#two_phase_vote_on_podling_releases) (Fluss community then Incubator PMC) may be required; otherwise one community vote is enough.
+Share the release candidate for community review. As a top-level project, one community vote on the dev@ mailing list is enough; it passes by majority approval with at least three binding +1 votes from PMC members.
 
-### Fluss community vote
+### Community vote
 
 Start the vote on the dev@ mailing list.
 
@@ -262,10 +260,10 @@ Please review and vote on release candidate #${RC_NUM} for Apache Fluss clients 
 [ ] -1 Do not approve (please provide specific comments)
 
 The release candidate (source distribution) is available at:
-* https://dist.apache.org/repos/dist/dev/incubator/fluss/$SVN_RC_DIR/
+* https://dist.apache.org/repos/dist/dev/fluss/$SVN_RC_DIR/
 
 KEYS for signature verification:
-* https://downloads.apache.org/incubator/fluss/KEYS
+* https://downloads.apache.org/fluss/KEYS
 
 Git tag:
 * https://github.com/apache/fluss/releases/tag/$RC_TAG
@@ -276,7 +274,7 @@ PyPI (release) / TestPyPI (RC):
 
 Please download, verify, and test. Verification steps are in [How to Verify a Release Candidate](verifying-a-release-candidate.md).
 
-The vote will be open for at least 72 hours. It is adopted by majority approval with at least 3 PPMC affirmative votes (or as per project policy).
+The vote will be open for at least 72 hours. It is adopted by majority approval with at least 3 PMC affirmative votes.
 
 Thanks,
 Release Manager
@@ -288,16 +286,11 @@ If issues are found, cancel the vote and go to [Fix any issues](#fix-any-issues)
 
 **Body:** Summarize binding and non-binding votes and link to the vote thread.
 
-### Incubator PMC vote (if applicable)
-
-If the project is in incubation, start a vote on general@incubator.apache.org after the Fluss community vote passes. Use the same structure: link to the community vote thread, release candidate URL, KEYS, tag, and ask IPMC to vote within 72 hours. Then send the result to the same list.
-
 ---
 
 **Checklist to proceed to finalization**
 
 - [ ] Community vote passed (at least 3 binding +1, more +1 than -1)
-- [ ] (If incubating) Incubator PMC vote passed
 
 ## Fix any issues
 
@@ -307,7 +300,7 @@ If the vote revealed issues:
 2. Remove the old RC from dist.apache.org dev (optional but recommended):
 
 ```bash
-svn checkout https://dist.apache.org/repos/dist/dev/incubator/fluss fluss-dist-dev --depth=immediates
+svn checkout https://dist.apache.org/repos/dist/dev/fluss fluss-dist-dev --depth=immediates
 cd fluss-dist-dev
 svn remove $SVN_RC_DIR
 svn commit -m "Remove fluss-rust ${RELEASE_VERSION} RC${RC_NUM} (superseded)"
@@ -340,11 +333,11 @@ Move the staged artifacts from dev to release:
 
 ```bash
 svn mv -m "Release fluss-rust ${RELEASE_VERSION}" \
-  https://dist.apache.org/repos/dist/dev/incubator/fluss/$SVN_RC_DIR \
-  https://dist.apache.org/repos/dist/release/incubator/fluss/$SVN_RELEASE_DIR
+  https://dist.apache.org/repos/dist/dev/fluss/$SVN_RC_DIR \
+  https://dist.apache.org/repos/dist/release/fluss/$SVN_RELEASE_DIR
 ```
 
-(Only PPMC members may have write access to the release repository; if you get permission errors, ask on the mailing list.)
+(Only PMC members may have write access to the release repository; if you get permission errors, ask on the mailing list.)
 
 ### 3. Remove old RC(s) from dev (optional)
 
@@ -368,7 +361,7 @@ svn commit -m "Remove RC after release fluss-rust ${RELEASE_VERSION}"
 2. Choose tag `$RELEASE_TAG`.
 3. Set the target to the release branch `release-${RELEASE_VERSION}` (i.e., the branch/commit used to create `$RELEASE_TAG`).
 4. Click **Generate release notes**, then add: notable changes, breaking changes (if any) from component upgrade docs, **official download link** (source archive and verification), and install instructions for fluss-rust, fluss-python, fluss-cpp.
-    - **Download link:** `https://downloads.apache.org/incubator/fluss/fluss-rust-${RELEASE_VERSION}/` (or the project download page). In the release description, include checksums and GPG verification steps.
+    - **Download link:** `https://downloads.apache.org/fluss/fluss-rust-${RELEASE_VERSION}/` (or the project download page). In the release description, include checksums and GPG verification steps.
 5. Click **Publish release**.
 
 ### 6. Update CHANGELOG.md on main
@@ -380,7 +373,7 @@ Add an entry for `$RELEASE_VERSION` with the list of changes (use [Generate Rele
 **Checklist to proceed to promotion**
 
 - [ ] Release tag pushed; CI published to crates.io and PyPI
-- [ ] Source artifacts in [dist release](https://dist.apache.org/repos/dist/release/incubator/fluss/)
+- [ ] Source artifacts in [dist release](https://dist.apache.org/repos/dist/release/fluss/)
 - [ ] GitHub Release created
 - [ ] CHANGELOG.md updated on main
 
@@ -411,8 +404,8 @@ This release includes ...
 (Notable changes; link to CHANGELOG or release notes.)
 
 Download and verification:
-* https://downloads.apache.org/incubator/fluss/$SVN_RELEASE_DIR/
-* KEYS: https://downloads.apache.org/incubator/fluss/KEYS (or https://downloads.apache.org/fluss/KEYS after graduation)
+* https://downloads.apache.org/fluss/$SVN_RELEASE_DIR/
+* KEYS: https://downloads.apache.org/fluss/KEYS
 
 Rust:    cargo add fluss-rs
 Python:  pip install pyfluss

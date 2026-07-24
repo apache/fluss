@@ -26,16 +26,12 @@ runs:
   using: 'composite'
   steps:
     - run: |
+        TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+        CRATE_VERSION=$(sed -n '/^\[workspace.package\]/,/^\[/p' Cargo.toml | grep '^\s*version\s*=' | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+        base() { echo "$1" | sed -E 's/-rc(\.[0-9]+|[0-9]+)$//'; }
+        if [ "$(base "$TAG_VERSION")" != "$(base "$CRATE_VERSION")" ]; then
+          echo "::error::Tag version ($TAG_VERSION) does not match Cargo.toml version ($CRATE_VERSION). Run scripts/bump-version.sh before tagging, or tag the version that is in Cargo.toml."
+          exit 1
+        fi
         echo "Tag and crate version match: $TAG_VERSION"
       shell: bash
-# uncomment for 0.1.0-incubating-rc0, add it back when incubating is not needed anymore
-#    - run: |
-#        TAG_VERSION="${GITHUB_REF#refs/tags/v}"
-#        CRATE_VERSION=$(sed -n '/^\[workspace.package\]/,/^\[/p' Cargo.toml | grep '^\s*version\s*=' | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
-#        base() { echo "$1" | sed -E 's/-rc(\.[0-9]+|[0-9]+)$//'; }
-#        if [ "$(base "$TAG_VERSION")" != "$(base "$CRATE_VERSION")" ]; then
-#          echo "::error::Tag version ($TAG_VERSION) does not match Cargo.toml version ($CRATE_VERSION). Run scripts/bump-version.sh before tagging, or tag the version that is in Cargo.toml."
-#          exit 1
-#        fi
-#        echo "Tag and crate version match: $TAG_VERSION"
-#      shell: bash

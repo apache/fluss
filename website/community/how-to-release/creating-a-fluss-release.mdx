@@ -13,9 +13,9 @@ import TabItem from '@theme/TabItem';
 This is based on the release guide of the [Apache Flink project](https://cwiki.apache.org/confluence/display/FLINK/Creating+a+Flink+Release).
 :::
 
-The Apache Fluss (Incubating) project periodically declares and publishes releases. A release is one or more packages of the project artifact(s) that are approved for general public distribution and use. The Fluss community treats releases with great importance. They are a public face of the project and most users interact with the project only through the releases. Releases are signed off by the entire Fluss community in a public vote.
+The Apache Fluss project periodically declares and publishes releases. A release is one or more packages of the project artifact(s) that are approved for general public distribution and use. The Fluss community treats releases with great importance. They are a public face of the project and most users interact with the project only through the releases. Releases are signed off by the entire Fluss community in a public vote.
 
-Each release is executed by a Release Manager, who is selected/proposed by the Fluss PPMC members. This document describes the process that the Release Manager follows to perform a release. Any changes to this process should be discussed and adopted on the dev@ mailing list.
+Each release is executed by a Release Manager, who is selected/proposed by the Fluss PMC members. This document describes the process that the Release Manager follows to perform a release. Any changes to this process should be discussed and adopted on the dev@ mailing list.
 
 Please remember that publishing software has legal consequences. This guide complements the foundation-wide [Product Release Policy](https://www.apache.org/legal/release-policy.html) and [Release Distribution Policy](https://infra.apache.org/release-distribution.html).
 
@@ -98,11 +98,11 @@ git clone git@github.com:apache/fluss.git
 Set up a few environment variables to simplify commands that follow. (We use bash Unix syntax in this guide.)
 
 ```bash
-RELEASE_VERSION="0.8.0-incubating"
-SHORT_RELEASE_VERSION="0.8"
+RELEASE_VERSION="1.0.0"
+SHORT_RELEASE_VERSION="1.0"
 CURRENT_SNAPSHOT_VERSION="$SHORT_RELEASE_VERSION-SNAPSHOT"
-NEXT_SNAPSHOT_VERSION="0.9-SNAPSHOT"
-SHORT_NEXT_VERSION="0.9"
+NEXT_SNAPSHOT_VERSION="1.1-SNAPSHOT"
+SHORT_NEXT_VERSION="1.1"
 ```
 
 ### 7. Create a release branch
@@ -142,7 +142,7 @@ Update the version in the Helm Chart in:
 - `helm/values.yaml`
 - `helm/README.md`
 
-For a bugfix release you need to update the version in these files. For example, if you are releasing `0.8.1-incubating`, replace the previous version `0.8.0-incubating` with `0.8.1-incubating` in those files.
+For a bugfix release you need to update the version in these files. For example, if you are releasing `1.0.1`, replace the previous version `1.0.0` with `1.0.1` in those files.
 
 And commit/push the version bump:
 
@@ -185,7 +185,7 @@ sidebar_position: 4
 # Upgrade Notes from v0.x to v0.y
 ```
 
-Additionally, for the upgrade notes page of the version currently being released (e.g., `upgrade-notes-0.8.md`), add `sidebar_class_name: hidden` front matter to hide it from the sidebar.
+Additionally, for the upgrade notes page of the version currently being released (e.g., `upgrade-notes-1.0.md`), add `sidebar_class_name: hidden` front matter to hide it from the sidebar.
 
 Commit the documentation changes, and push to the official repository.
 
@@ -197,14 +197,14 @@ $ git push origin main
 
 **(3) Add version item in fluss-versions.json**
 
-Next, add a new version item for the next release version in the `website/fluss-versions.json` file on the `main` branch. The new version item should have the following fields and values (current releasing `0.9.0`, next release `0.10.0` as an example):
+Next, add a new version item for the next release version in the `website/fluss-versions.json` file on the `main` branch. The new version item should have the following fields and values (current releasing `1.0.0`, next release `1.1.0` as an example):
 
 ```json
 {
   "versionName": "next",
-  "fullVersion": "0.10-SNAPSHOT",
-  "shortVersion": "0.10",
-  "dockerVersion": "0.10-SNAPSHOT",
+  "fullVersion": "1.1-SNAPSHOT",
+  "shortVersion": "1.1",
+  "dockerVersion": "1.1-SNAPSHOT",
   "paimonVersion": "1.3.1",
   "paimonVersionShort": "1.3",
   "released": false
@@ -215,10 +215,10 @@ Additionally, update the `fullVersion`, `shortVersion`, and `dockerVersion` fiel
 
 ```json
 {
-    "versionName": "version-0.9",
-    "fullVersion": "0.9.0-incubating",
-    "shortVersion": "0.9",
-    "dockerVersion": "0.9.0-incubating",
+    "versionName": "version-1.0",
+    "fullVersion": "1.0.0",
+    "shortVersion": "1.0",
+    "dockerVersion": "1.0.0",
     "paimonVersion": "1.3.1",
     "paimonVersionShort": "1.3",
     "released": false
@@ -239,7 +239,7 @@ Update the version in the Helm Chart in:
 - `helm/values.yaml`
 - `helm/README.md`
 
-For example, if the next major version is `0.9.0-incubating`, you should replace all the previous version `0.8.0-incubating` to the next release version `0.9.0-incubating`.
+For example, if the next major version is `1.1.0`, you should replace all the previous version `1.0.0` to the next release version `1.1.0`.
 
 And commit/push the version bump:
 
@@ -298,7 +298,7 @@ Create a pull request to update the download links on the Downloads page (`websi
 
 **Checklist to proceed to the next step**
 
-- Release Manager’s GPG key is published to [dist.apache.org](https://dist.apache.org/repos/dist/release/incubator/fluss/KEYS)
+- Release Manager’s GPG key is published to [dist.apache.org](https://dist.apache.org/repos/dist/release/fluss/KEYS)
 - Release Manager’s GPG key is configured in git configuration
 - Release Manager's GPG key is configured as the default gpg key.
 - Release Manager has `org.apache.fluss` listed under `Staging Profiles` in [Apache Nexus repository](https://repository.apache.org/).
@@ -371,25 +371,25 @@ tools $ RELEASE_VERSION=$RELEASE_VERSION RELEASE_CANDIDATE=$RC_NUM releasing/cre
 Now, we should already created the source distribution, binary distribution, and Helm Chart packages for the release candidate.
 Run the `tree releasing/release/` command under the `tools` directory to verify the created files.
 
-Example output for release version `0.8.0-incubating` and RC number `1`:
+Example output for release version `1.0.0` and RC number `1`:
 
 ```bash
 tools $ tree releasing/release
 releasing/release
-├── fluss-0.8.0-incubating-bin.tgz
-├── fluss-0.8.0-incubating-bin.tgz.asc
-├── fluss-0.8.0-incubating-bin.tgz.sha512
-├── fluss-0.8.0-incubating-src.tgz
-├── fluss-0.8.0-incubating-src.tgz.asc
-├── fluss-0.8.0-incubating-src.tgz.sha512
+├── fluss-1.0.0-bin.tgz
+├── fluss-1.0.0-bin.tgz.asc
+├── fluss-1.0.0-bin.tgz.sha512
+├── fluss-1.0.0-src.tgz
+├── fluss-1.0.0-src.tgz.asc
+├── fluss-1.0.0-src.tgz.sha512
 └── helm-chart
-    ├── 0.8.0-incubating-rc1
-    │     ├── fluss-0.8.0-incubating.tgz
-    │     ├── fluss-0.8.0-incubating.tgz.asc
-    │     ├── fluss-0.8.0-incubating.tgz.prov
-    │     ├── fluss-0.8.0-incubating.tgz.prov.asc
-    │     ├── fluss-0.8.0-incubating.tgz.prov.sha512
-    │     └── fluss-0.8.0-incubating.tgz.sha512
+    ├── 1.0.0-rc1
+    │     ├── fluss-1.0.0.tgz
+    │     ├── fluss-1.0.0.tgz.asc
+    │     ├── fluss-1.0.0.tgz.prov
+    │     ├── fluss-1.0.0.tgz.prov.asc
+    │     ├── fluss-1.0.0.tgz.prov.sha512
+    │     └── fluss-1.0.0.tgz.sha512
     └── index.yaml
 
 3 directories, 13 files
@@ -406,7 +406,7 @@ Next, copy the source and binary release files to the dev repository of dist.apa
 ```bash
 tools $ mkdir target
 tools $ cd target
-tools/target $ svn checkout https://dist.apache.org/repos/dist/dev/incubator/fluss --depth=immediates
+tools/target $ svn checkout https://dist.apache.org/repos/dist/dev/fluss --depth=immediates
 ```
 
 (2) Make a directory for the new release:
@@ -442,7 +442,7 @@ tools/target/fluss $ svn add helm-chart
 tools/target/fluss $ svn commit -m "Add fluss-${RELEASE_VERSION}-rc${RC_NUM}"
 ```
 
-(7) Verify the files are present: https://dist.apache.org/repos/dist/dev/incubator/fluss/
+(7) Verify the files are present: https://dist.apache.org/repos/dist/dev/fluss/
 
 
 ### 6. Stage maven artifacts
@@ -456,7 +456,7 @@ tools $ releasing/deploy_staging_jars.sh
 
 Review all staged artifacts in the staging repositories(https://repository.apache.org/#stagingRepositories). They should contain all relevant parts for each module, including pom.xml, jar, test jar, source, test source, javadoc, etc. Carefully review any new artifacts.
 
-Close the staging repository on Apache Nexus. When prompted for a description, enter `Apache Fluss (Incubating), version X, release candidate Y`. You can find the staging repository URL (`https://repository.apache.org/content/repositories/orgapachefluss-[STAGING_ID]/`) once the staging repository is closed successfully.
+Close the staging repository on Apache Nexus. When prompted for a description, enter `Apache Fluss, version X, release candidate Y`. You can find the staging repository URL (`https://repository.apache.org/content/repositories/orgapachefluss-[STAGING_ID]/`) once the staging repository is closed successfully.
 
 ![](../assets/nexus-staging.png)
 
@@ -493,7 +493,7 @@ Verify the RC images are present:
 - https://hub.docker.com/r/apache/fluss/tags
 - https://hub.docker.com/r/apache/fluss-quickstart-flink/tags
 
-Then, update the `dockerVersion` field for the current release RC version in the `website/fluss-versions.json` file on the `main` branch to the value of `${RELEASE_VERSION}_RC${RC_NUM}` (which includes the RC suffix, e.g., `0.8.0-incubating-rc1`). This update should be committed and pushed to the `main` branch.
+Then, update the `dockerVersion` field for the current release RC version in the `website/fluss-versions.json` file on the `main` branch to the value of `${RELEASE_VERSION}_RC${RC_NUM}` (which includes the RC suffix, e.g., `1.0.0-rc1`). This update should be committed and pushed to the `main` branch.
 
 This ensures that the **Quickstart guide** in the documentation references the correct Docker image for the release candidate. This will help developers to easily test the new release candidate using the Quickstart guide.
 
@@ -529,7 +529,7 @@ The final publish to **crates.io** and **PyPI** happens when the release tag is 
 
 **Checklist to proceed to the next step**
 
-- Source & binary & helm-chart distribution deployed to the dev repository of [dist.apache.org](https://dist.apache.org/repos/dist/dev/incubator/fluss/)
+- Source & binary & helm-chart distribution deployed to the dev repository of [dist.apache.org](https://dist.apache.org/repos/dist/dev/fluss/)
 - Maven artifacts deployed to the staging repository of [repository.apache.org](https://repository.apache.org/content/repositories/)
 - RC Docker images pushed to DockerHub ([apache/fluss](https://hub.docker.com/r/apache/fluss/tags), [apache/fluss-quickstart-flink](https://hub.docker.com/r/apache/fluss-quickstart-flink/tags))
 - RC tag pushed to the [official repository](https://github.com/apache/fluss/tags)
@@ -541,20 +541,20 @@ The final publish to **crates.io** and **PyPI** happens when the release tag is 
 
 Once you have built and individually reviewed the release candidate, please share it for the community-wide review. Please review foundation-wide [voting guidelines](https://www.apache.org/foundation/voting.html) for more information.
 
-Fluss is an incubating project, so the release requires a [two-phase vote](https://incubator.apache.org/cookbook/#two_phase_vote_on_podling_releases), first by the Fluss community, and then by the Incubator PMC.
+As a top-level project, Fluss approves a release with a single vote on the dev@ mailing list; it passes by majority approval with at least three binding +1 votes from PMC members.
 
-### Fluss Community Vote
+### Community Vote
 
 Start the review-and-vote thread on the dev@ mailing list. Here’s an email template; please adjust as you see fit.
 
 ```
 From: Release Manager
 To: dev@fluss.apache.org
-Subject: [VOTE] Release Fluss 0.8.0-incubating (RC1)
+Subject: [VOTE] Release Fluss 1.0.0 (RC1)
 
 Hi everyone,
 
-Please review and vote on the release candidate #1 for the Apache Fluss version 0.8.0-incubating, as follows:
+Please review and vote on the release candidate #1 for the Apache Fluss version 1.0.0, as follows:
 [ ] +1, Approve the release
 [ ] -1, Do not approve the release (please provide specific comments)
 
@@ -562,20 +562,20 @@ Please review and vote on the release candidate #1 for the Apache Fluss version 
 The complete staging area is available for your review, includes:
 
 The official source release and binary convenience releases to be deployed to:
-* https://dist.apache.org/repos/dist/dev/incubator/fluss/x.y.z
+* https://dist.apache.org/repos/dist/dev/fluss/x.y.z
 
 Helm charts are available on:
-* https://dist.apache.org/repos/dist/dev/incubator/fluss/helm-chart
-(NB: you have to build the Docker images locally with the version 0.8.0-incubating in order to test Helm charts)
+* https://dist.apache.org/repos/dist/dev/fluss/helm-chart
+(NB: you have to build the Docker images locally with the version 1.0.0 in order to test Helm charts)
 
 All the files are signed with the key with fingerprint FFFFFFFF, you can find the KEYS file here:
-* https://dist.apache.org/repos/dist/release/incubator/fluss/KEYS
+* https://dist.apache.org/repos/dist/release/fluss/KEYS
 
 All artifacts to be deployed to the Maven Central Repository:
 * https://repository.apache.org/content/repositories/orgapachefluss-<ID>/
 
 Git tag for the release:
-* https://github.com/apache/fluss/releases/tag/v0.8.0-incubating-rc1
+* https://github.com/apache/fluss/releases/tag/v1.0.0-rc1
 
 Git commit for the release:
 * https://github.com/apache/fluss/commit/<COMMIT>
@@ -587,7 +587,7 @@ Website pull request for listing the new release on the download page
 * https://github.com/apache/fluss/pull/<ID>
 
 Upgrade note for the new release: 
-* https://github.com/apache/fluss/blob/release-0.8/website/docs/maintenance/operations/upgrade-notes-0.8.md
+* https://github.com/apache/fluss/blob/release-1.0/website/docs/maintenance/operations/upgrade-notes-1.0.md
 
 Docker images for the release candidate:
 * fluss
@@ -597,7 +597,7 @@ Please download, verify and test. To learn more about how to verify:
 https://fluss.apache.org/community/how-to-release/verifying-a-fluss-release/
 
 
-The vote will be open for at least 72 hours. It is adopted by majority approval, with at least 3 PPMC affirmative votes.
+The vote will be open for at least 72 hours. It is adopted by majority approval, with at least 3 PMC affirmative votes.
 
 Thanks,
 Release Manager
@@ -615,7 +615,7 @@ For cancelling a release, the release manager needs to send an email to the rele
 ```
 From: Release Manager
 To: dev@fluss.apache.org
-Subject: [RESULT][VOTE] Release Fluss 0.8.0-incubating (RC1)
+Subject: [RESULT][VOTE] Release Fluss 1.0.0 (RC1)
 
 I'm happy to announce that we have unanimously approved this release.
 
@@ -629,101 +629,12 @@ There are no disapproving votes.
 
 Thanks everyone!
 
-A new vote is starting in the Apache Incubator general mailing list.
-```
-
-### Incubator PMC Vote
-
-Once the Fluss community has approved the release candidate, the release manager should start a vote on the general@incubator.apache.org mailing list to get the approval from the Incubator PMC. Here’s an email template; please adjust as you see fit.
-
-```
-From: Release Manager
-To: general@incubator.apache.org
-Subject: [VOTE] Release Apache Fluss 0.8.0-incubating (RC1)
-
-Hi everyone,
-
-The Apache Fluss community has voted and approved the release of
-Apache Fluss 0.8.0-incubating (RC1). We now kindly request the IPMC
-members to review and vote for this release.
-
-Apache Fluss (Incubating) - A streaming storage built for real-time analytics & AI which can serve as the real-time data layer for Lakehouse architectures.
-
-Fluss community vote thread:
-* https://lists.apache.org/thread/<VOTE THREAD>
-
-Vote result thread:
-* https://lists.apache.org/thread/<VOTE RESULT>
-
-The release candidate:
-* https://dist.apache.org/repos/dist/dev/incubator/fluss/fluss-0.8.0-incubating-rc1/
-
-The helm chart release package:
-* https://dist.apache.org/repos/dist/dev/incubator/fluss/helm-chart/0.8.0-incubating-rc1/
-
-Git tag for the release:
-* https://github.com/apache/fluss/releases/tag/v0.8.0-incubating-rc1
-
-Git commit for the release:
-* https://github.com/apache/fluss/commit/<COMMIT>
-
-Maven staging repository:
-* https://repository.apache.org/content/repositories/orgapachefluss-<ID>/
-
-The artifacts signed with PGP key [FFFFFFFF], corresponding to
-[jark@apache.org], that can be found in keys file:
-https://downloads.apache.org/incubator/fluss/KEYS
-
-Please download, verify and test.
-
-Please vote in the next 72 hours.
-
-[ ] +1 approve
-[ ] +0 no opinion
-[ ] -1 disapprove with the reason
-
-To learn more about Apache Fluss, please see https://fluss.apache.org/
-
-Checklist for reference:
-
-[ ] Download links are valid.
-[ ] Checksums and signatures.
-[ ] LICENSE/NOTICE files exist
-[ ] No unexpected binary files
-[ ] All source files have ASF headers
-[ ] Can compile from source
-
-Thanks!
-
-Regards,
-Release Manager
-```
-
-Binding votes are the votes from the IPMC members. Similar to the previous vote, send the result on the Incubator general mailing list:
-
-```
-From: Release Manager
-To: general@incubator.apache.org
-Subject: [RESULT][VOTE] Release Apache Fluss 0.8.0-incubating (RC1)
-
-I'm happy to announce that we have unanimously approved this release.
-
-There are XXX approving votes, XXX of which are binding:
-* approver 1
-* approver 2
-* approver 3
-* approver 4
-
-There are no disapproving votes.
-
-Thanks everyone!
 ```
 
 -------------
 
 **Checklist to proceed to the finalization step**
-- Community votes to release the proposed candidate, with at least three approving PPMC votes
-- Incubator votes to release the proposed candidate, with at least three approving IPMC votes
+- Community votes to release the proposed candidate, with at least three approving PMC votes
 
 
 
@@ -735,10 +646,10 @@ Code changes should be proposed as standard pull requests to the `main` branch a
 
 Once all issues have been resolved, you should go back and build a new release candidate with these changes.
 
-Before build a new release candidate, remove the old release candidates from https://dist.apache.org/repos/dist/dev/incubator/fluss using Subversion.
+Before build a new release candidate, remove the old release candidates from https://dist.apache.org/repos/dist/dev/fluss using Subversion.
 
 ```bash
-svn checkout https://dist.apache.org/repos/dist/dev/incubator/fluss --depth=immediates
+svn checkout https://dist.apache.org/repos/dist/dev/fluss --depth=immediates
 cd fluss
 svn remove fluss-${RELEASE_VERSION}-rc*
 svn remove helm-chart
@@ -761,15 +672,15 @@ Use the [Apache Nexus](https://repository.apache.org/) repository to release the
 Copy the source and binary releases from the dev repository to the release repository at dist.apache.org using Subversion.
 
 ```bash
-svn move -m "Release Apache Fluss ${RELEASE_VERSION}" https://dist.apache.org/repos/dist/dev/incubator/fluss/fluss-${RELEASE_VERSION}-rc${RC_NUM} https://dist.apache.org/repos/dist/release/incubator/fluss/fluss-${RELEASE_VERSION}
-svn move -m "Release Apache Fluss Helm Chart ${RELEASE_VERSION}" https://dist.apache.org/repos/dist/dev/incubator/fluss/helm-chart/${RELEASE_VERSION}-rc${RC_NUM} https://dist.apache.org/repos/dist/release/incubator/fluss/helm-chart/${RELEASE_VERSION}
+svn move -m "Release Apache Fluss ${RELEASE_VERSION}" https://dist.apache.org/repos/dist/dev/fluss/fluss-${RELEASE_VERSION}-rc${RC_NUM} https://dist.apache.org/repos/dist/release/fluss/fluss-${RELEASE_VERSION}
+svn move -m "Release Apache Fluss Helm Chart ${RELEASE_VERSION}" https://dist.apache.org/repos/dist/dev/fluss/helm-chart/${RELEASE_VERSION}-rc${RC_NUM} https://dist.apache.org/repos/dist/release/fluss/helm-chart/${RELEASE_VERSION}
 ```
-(Note: Only PPMC members have access to the release repository. If you do not have access, ask on the mailing list for assistance.)
+(Note: Only PMC members have access to the release repository. If you do not have access, ask on the mailing list for assistance.)
 
-Then, update the Helm Chart repository index on https://dist.apache.org/repos/dist/release/incubator/fluss/helm-chart/index.yaml:
+Then, update the Helm Chart repository index on https://dist.apache.org/repos/dist/release/fluss/helm-chart/index.yaml:
 
 ```bash
-svn checkout https://dist.apache.org/repos/dist/release/incubator/fluss/helm-chart fluss-dist-release-helm-chart
+svn checkout https://dist.apache.org/repos/dist/release/fluss/helm-chart fluss-dist-release-helm-chart
 cd fluss-dist-release-helm-chart
 helm repo index .
 svn add index.yaml
@@ -778,10 +689,10 @@ svn commit -m "Update Helm index for Apache Fluss ${RELEASE_VERSION} release"
 
 ### 3. Remove old release candidates from dist.apache.org
 
-Remove the old release candidates from https://dist.apache.org/repos/dist/dev/incubator/fluss using Subversion.
+Remove the old release candidates from https://dist.apache.org/repos/dist/dev/fluss using Subversion.
 
 ```bash
-svn checkout https://dist.apache.org/repos/dist/dev/incubator/fluss --depth=immediates
+svn checkout https://dist.apache.org/repos/dist/dev/fluss --depth=immediates
 cd fluss
 svn remove fluss-${RELEASE_VERSION}-rc*
 svn remove helm-chart
@@ -818,10 +729,10 @@ This will refresh the documentation website to reflect that the new version has 
 
 ```json
 {
-  "versionName": "version-0.8",
-  "fullVersion": "0.8.0-incubating",
-  "shortVersion": "0.8",
-  "dockerVersion": "0.8.0-incubating-rc1", // ==> "0.8.0-incubating"
+  "versionName": "version-1.0",
+  "fullVersion": "1.0.0",
+  "shortVersion": "1.0",
+  "dockerVersion": "1.0.0-rc1", // ==> "1.0.0"
   "released": false // ==> true
 }
 ```
@@ -837,9 +748,9 @@ In [GitHub Milestones](https://github.com/apache/fluss/milestones), mark the cur
 
 **Checklist to proceed to the next step**
 - Maven artifacts released and indexed in the Maven Central Repository (usually takes about a day to show up)
-- Source & binary distributions available in the release repository of https://dist.apache.org/repos/dist/release/incubator/fluss/
-- Helm Chart package available in the release repository of https://dist.apache.org/repos/dist/release/incubator/fluss/helm-chart/
-- Dev repository https://dist.apache.org/repos/dist/dev/incubator/fluss/ is empty
+- Source & binary distributions available in the release repository of https://dist.apache.org/repos/dist/release/fluss/
+- Helm Chart package available in the release repository of https://dist.apache.org/repos/dist/release/fluss/helm-chart/
+- Dev repository https://dist.apache.org/repos/dist/dev/fluss/ is empty
 - Release tagged in the source code repository
 - Docker images for the release pushed to DockerHub ([apache/fluss](https://hub.docker.com/r/apache/fluss/tags), [apache/fluss-quickstart-flink](https://hub.docker.com/r/apache/fluss-quickstart-flink/tags))
 - Milestone marked as released in GitHub
@@ -867,21 +778,21 @@ Make sure use the `apache.org` email address associated with your Apache account
 ```
 From: Release Manager
 To: dev@fluss.apache.org, user@fluss.apache.org, announce@apache.org
-Subject: [ANNOUNCE] Apache Fluss 0.8.0-incubating released
+Subject: [ANNOUNCE] Apache Fluss 1.0.0 released
 
-The Apache Fluss community is very happy to announce the release of Apache Fluss 0.8.0-incubating.
+The Apache Fluss community is very happy to announce the release of Apache Fluss 1.0.0.
 
 Apache Fluss is a streaming storage built for real-time analytics & AI which can serve as the real-time data layer for Lakehouse architectures.
 
 The release is available for download at:
-https://downloads.apache.org/incubator/fluss/fluss-0.8.0-incubating/
+https://downloads.apache.org/fluss/fluss-1.0.0/
 
 Maven artifacts for Fluss can be found at:
 
-https://search.maven.org/search?q=g:org.apache.fluss%20AND%20v:0.8.0-incubating
+https://search.maven.org/search?q=g:org.apache.fluss%20AND%20v:1.0.0
 
 Please check out the release blog post for an overview of this release:
-https://fluss.apache.org/blog/releases/0.8/
+https://fluss.apache.org/blog/releases/1.0/
 
 We would like to thank all contributors of the Apache Fluss community who made this release possible!
 
