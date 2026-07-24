@@ -787,7 +787,7 @@ public class ConfigOptions {
             SERVER_KV_PRE_WRITE_BUFFER_MEMORY_HIGH_WATERMARK_RATIO =
                     key("server.kv.pre-write-buffer.memory-high-watermark-ratio")
                             .doubleType()
-                            .defaultValue(0.20)
+                            .defaultValue(0.60)
                             .withDescription(
                                     "The high watermark, as a ratio of the TabletServer JVM maximum heap size, "
                                             + "for the memory shared by all KV pre-write buffers. KV writes "
@@ -799,7 +799,7 @@ public class ConfigOptions {
     public static final ConfigOption<Double> SERVER_KV_PRE_WRITE_BUFFER_MEMORY_LOW_WATERMARK_RATIO =
             key("server.kv.pre-write-buffer.memory-low-watermark-ratio")
                     .doubleType()
-                    .defaultValue(0.15)
+                    .defaultValue(0.50)
                     .withDescription(
                             "The low watermark, as a ratio of the TabletServer JVM maximum heap size, "
                                     + "for the memory shared by all KV pre-write buffers. KV writes "
