@@ -356,18 +356,108 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                     0,
                     Collections.singletonList(
                             new HybridSnapshotLogSplit(
-                                    bucket0, null, 0L, bucketIdToNumRecords.get(0))));
+                                    bucket0,
+                                    null,
+                                    0L,
+                                    0,
+                                    false,
+                                    bucketIdToNumRecords.get(0),
+                                    LogSplit.NO_STOPPING_OFFSET,
+                                    false)));
             expectedAssignment.put(
                     1,
                     Collections.singletonList(
                             new HybridSnapshotLogSplit(
-                                    bucket1, null, 0L, bucketIdToNumRecords.get(1))));
+                                    bucket1,
+                                    null,
+                                    0L,
+                                    0,
+                                    false,
+                                    bucketIdToNumRecords.get(1),
+                                    LogSplit.NO_STOPPING_OFFSET,
+                                    false)));
             expectedAssignment.put(
                     2,
                     Collections.singletonList(
                             new HybridSnapshotLogSplit(
-                                    bucket2, null, 0L, bucketIdToNumRecords.get(2))));
+                                    bucket2,
+                                    null,
+                                    0L,
+                                    0,
+                                    false,
+                                    bucketIdToNumRecords.get(2),
+                                    LogSplit.NO_STOPPING_OFFSET,
+                                    false)));
             checkSplitAssignmentIgnoreSnapshotFiles(expectedAssignment, actualAssignment);
+        }
+    }
+
+    @Test
+    void testBatchPkTableWithSnapshotSplits() throws Throwable {
+        createTable(DEFAULT_TABLE_PATH, DEFAULT_PK_TABLE_DESCRIPTOR);
+        int numSubtasks = 5;
+        putRows(DEFAULT_TABLE_PATH, 10);
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(DEFAULT_TABLE_PATH);
+
+        try (MockSplitEnumeratorContext<SourceSplitBase> context =
+                        new MockSplitEnumeratorContext<>(numSubtasks);
+                FlinkSourceEnumerator enumerator =
+                        new FlinkSourceEnumerator(
+                                DEFAULT_TABLE_PATH,
+                                flussConf,
+                                true,
+                                false,
+                                context,
+                                OffsetsInitializer.full(),
+                                DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
+                                false,
+                                null,
+                                null,
+                                LeaseContext.DEFAULT,
+                                false)) {
+            enumerator.start();
+            for (int i = 0; i < numSubtasks; i++) {
+                registerReader(context, enumerator, i);
+            }
+            context.runNextOneTimeCallable();
+
+            List<SourceSplitBase> assignedSplits =
+                    getReadersAssignments(context).values().stream()
+                            .flatMap(List::stream)
+                            .collect(Collectors.toList());
+            assertThat(assignedSplits).hasSize(DEFAULT_BUCKET_NUM);
+            assertThat(assignedSplits)
+                    .allSatisfy(
+                            split -> {
+                                assertThat(split).isInstanceOf(HybridSnapshotLogSplit.class);
+                                assertThat(split.asHybridSnapshotLogSplit().isBatch()).isTrue();
+                            });
+        }
+    }
+
+    @Test
+    void testBatchPkTableRejectsNonFullStartupMode() throws Throwable {
+        createTable(DEFAULT_TABLE_PATH, DEFAULT_PK_TABLE_DESCRIPTOR);
+        try (MockSplitEnumeratorContext<SourceSplitBase> context =
+                        new MockSplitEnumeratorContext<>(1);
+                FlinkSourceEnumerator enumerator =
+                        new FlinkSourceEnumerator(
+                                DEFAULT_TABLE_PATH,
+                                flussConf,
+                                true,
+                                false,
+                                context,
+                                OffsetsInitializer.earliest(),
+                                DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
+                                false,
+                                null,
+                                null,
+                                LeaseContext.DEFAULT,
+                                false)) {
+            assertThatThrownBy(enumerator::start)
+                    .isInstanceOf(UnsupportedOperationException.class)
+                    .hasMessage(
+                            "Batch mode on primary-key tables only supports full startup mode.");
         }
     }
 
@@ -939,13 +1029,17 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
             // test splits for same non-partitioned bucket, should assign to same task
             TableBucket t1 = new TableBucket(tableId, 0);
             SourceSplitBase s1 = new LogSplit(t1, null, 1);
-            SourceSplitBase s2 = new HybridSnapshotLogSplit(t1, null, 0L, 1);
+            SourceSplitBase s2 =
+                    new HybridSnapshotLogSplit(
+                            t1, null, 0L, 0, false, 1, LogSplit.NO_STOPPING_OFFSET, false);
             assertThat(enumerator.getSplitOwner(s1)).isEqualTo(enumerator.getSplitOwner(s2));
 
             // test splits for same partitioned bucket, should assign to same task
             t1 = new TableBucket(tableId, 1L, 0);
             s1 = new LogSplit(t1, "p1", 1);
-            s2 = new HybridSnapshotLogSplit(t1, "p1", 0L, 2);
+            s2 =
+                    new HybridSnapshotLogSplit(
+                            t1, "p1", 0L, 0, false, 2, LogSplit.NO_STOPPING_OFFSET, false);
             assertThat(enumerator.getSplitOwner(s1)).isEqualTo(enumerator.getSplitOwner(s2));
 
             // test splits for partitioned bucket

@@ -23,6 +23,7 @@ import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.scanner.batch.BatchScanner;
+import org.apache.fluss.client.table.scanner.batch.KvSnapshotAndLogBatchScanner;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.scanner.log.ScanRecords;
 import org.apache.fluss.config.Configuration;
@@ -208,12 +209,16 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
                 HybridSnapshotLogSplit hybridSnapshotLogSplit =
                         sourceSplitBase.asHybridSnapshotLogSplit();
 
-                // if snapshot is not finished, add to pending snapshot splits
-                if (!hybridSnapshotLogSplit.isSnapshotFinished()) {
+                if (hybridSnapshotLogSplit.isBatch()) {
                     boundedSplits.add(sourceSplitBase);
+                } else {
+                    // if snapshot is not finished, add to pending snapshot splits
+                    if (!hybridSnapshotLogSplit.isSnapshotFinished()) {
+                        boundedSplits.add(sourceSplitBase);
+                    }
+                    // still need to subscribe log
+                    subscribeLog(sourceSplitBase, hybridSnapshotLogSplit.getLogStartingOffset());
                 }
-                // still need to subscribe log
-                subscribeLog(sourceSplitBase, hybridSnapshotLogSplit.getLogStartingOffset());
             } else if (sourceSplitBase.isLogSplit()) {
                 subscribeLog(sourceSplitBase, sourceSplitBase.asLogSplit().getStartingOffset());
             } else if (sourceSplitBase.isLakeSplit()) {
@@ -404,14 +409,38 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
         // start to read next snapshot split
         currentBoundedSplit = nextSplit;
         if (currentBoundedSplit.isHybridSnapshotLogSplit()) {
-            SnapshotSplit snapshotSplit = currentBoundedSplit.asHybridSnapshotLogSplit();
-            BatchScanner batchScanner =
-                    table.newScan()
-                            .project(projectedFields)
-                            .createBatchScanner(
-                                    snapshotSplit.getTableBucket(), snapshotSplit.getSnapshotId());
-            currentBoundedSplitReader =
-                    new BoundedSplitReader(batchScanner, snapshotSplit.recordsToSkip());
+            HybridSnapshotLogSplit hybridSnapshotLogSplit =
+                    currentBoundedSplit.asHybridSnapshotLogSplit();
+            if (hybridSnapshotLogSplit.isBatch()) {
+                BatchScanner batchScanner =
+                        new KvSnapshotAndLogBatchScanner(
+                                table,
+                                hybridSnapshotLogSplit.getTableBucket(),
+                                hybridSnapshotLogSplit.getSnapshotId(),
+                                hybridSnapshotLogSplit.getLogStartingOffset(),
+                                hybridSnapshotLogSplit
+                                        .getLogStoppingOffset()
+                                        .orElseThrow(
+                                                () ->
+                                                        new IllegalStateException(
+                                                                "Batch hybrid snapshot log split "
+                                                                        + "must have a stopping "
+                                                                        + "offset.")),
+                                projectedFields);
+                currentBoundedSplitReader =
+                        new BoundedSplitReader(
+                                batchScanner, hybridSnapshotLogSplit.recordsToSkip());
+            } else {
+                SnapshotSplit snapshotSplit = currentBoundedSplit.asHybridSnapshotLogSplit();
+                BatchScanner batchScanner =
+                        table.newScan()
+                                .project(projectedFields)
+                                .createBatchScanner(
+                                        snapshotSplit.getTableBucket(),
+                                        snapshotSplit.getSnapshotId());
+                currentBoundedSplitReader =
+                        new BoundedSplitReader(batchScanner, snapshotSplit.recordsToSkip());
+            }
         } else if (currentBoundedSplit.isLakeSplit()) {
             currentBoundedSplitReader =
                     getLakeSplitReader().getBoundedSplitScanner(currentBoundedSplit);
@@ -530,7 +559,9 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
 
     private FlinkRecordsWithSplitIds finishCurrentBoundedSplit() throws IOException {
         Set<String> finishedSplits =
-                currentBoundedSplit instanceof HybridSnapshotLogSplit
+                (currentBoundedSplit instanceof HybridSnapshotLogSplit
+                                        && !((HybridSnapshotLogSplit) currentBoundedSplit)
+                                                .isBatch())
                                 || (currentBoundedSplit instanceof LakeSnapshotAndFlussLogSplit
                                         && ((LakeSnapshotAndFlussLogSplit) currentBoundedSplit)
                                                 .isStreaming())

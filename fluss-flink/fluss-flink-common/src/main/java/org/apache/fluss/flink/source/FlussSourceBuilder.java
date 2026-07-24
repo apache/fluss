@@ -174,9 +174,11 @@ public class FlussSourceBuilder<OUT> {
 
     /**
      * Builds a bounded source for batch execution. The source reads up to the latest offsets at job
-     * startup and then finishes; combined with the default {@link OffsetsInitializer#full()} on a
-     * datalake-enabled table this performs a bounded union read of the lake snapshot and the Fluss
-     * log. If not called, the source is unbounded (streaming).
+     * startup and then finishes. On datalake-enabled log tables, the default {@link
+     * OffsetsInitializer#full()} performs a bounded union read of the lake snapshot and the Fluss
+     * log. Primary-key tables require full startup mode for batch reads and use Fluss KV snapshots
+     * plus bounded logs. Log tables support all startup modes. If not called, the source is
+     * unbounded (streaming).
      *
      * @return this builder
      */
@@ -353,17 +355,19 @@ public class FlussSourceBuilder<OUT> {
         boolean lakeEnabled = tableInfo.getTableConfig().isDataLakeEnabled();
         boolean fullStartup = offsetsInitializer instanceof SnapshotOffsetsInitializer;
 
-        if (bounded && !(lakeEnabled && fullStartup)) {
+        if (bounded && hasPrimaryKey && !fullStartup) {
             throw new IllegalArgumentException(
                     String.format(
-                            "Bounded (batch) read requires a datalake-enabled table started in "
-                                    + "full mode (OffsetsInitializer.full()), but table '%s' has "
-                                    + "datalake enabled=%s and full startup mode=%s.",
-                            tablePath, lakeEnabled, fullStartup));
+                            "Bounded (batch) read on primary-key tables requires full mode "
+                                    + "(OffsetsInitializer.full()), but table '%s' has full "
+                                    + "startup mode=%s.",
+                            tablePath, fullStartup));
         }
 
         LakeSource<LakeSplit> lakeSource = null;
-        if (lakeEnabled && fullStartup) {
+        // Bounded primary-key scans use Fluss KV snapshots plus bounded logs. Lake union-read is
+        // kept for log tables and streaming reads.
+        if (lakeEnabled && fullStartup && !(bounded && hasPrimaryKey)) {
             lakeSource =
                     LakeSourceUtils.createLakeSource(tablePath, tableInfo.getProperties().toMap());
             if (lakeSource != null) {

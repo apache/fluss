@@ -26,7 +26,6 @@ import org.apache.fluss.client.initializer.OffsetsInitializer;
 import org.apache.fluss.client.initializer.OffsetsInitializer.BucketOffsetsRetriever;
 import org.apache.fluss.client.initializer.SnapshotOffsetsInitializer;
 import org.apache.fluss.client.metadata.KvSnapshots;
-import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.flink.FlinkConnectorOptions;
@@ -575,11 +574,15 @@ public class FlinkSourceEnumerator
     }
 
     private void startInBatchMode() {
-        if (lakeEnabled) {
-            if (lakeSource == null) {
-                throw new IllegalStateException(
-                        "The 'lakeSource' is null in batch mode. It should be set if lake is enabled.");
-            }
+        if (hasPrimaryKey && !(startingOffsetsInitializer instanceof SnapshotOffsetsInitializer)) {
+            throw new UnsupportedOperationException(
+                    "Batch mode on primary-key tables only supports full startup mode.");
+        }
+
+        FlussOnlyBatchSplitGenerator flussOnlyBatchSplitGenerator =
+                createFlussOnlyBatchSplitGenerator();
+        boolean useLakeUnionRead = lakeEnabled && lakeSource != null;
+        if (useLakeUnionRead) {
             context.callAsync(
                     () -> {
                         List<SourceSplitBase> splits = generateHybridLakeFlussSplits();
@@ -589,35 +592,27 @@ public class FlinkSourceEnumerator
                                     "No lake snapshot found for table {},"
                                             + " falling back to Fluss-only splits.",
                                     tablePath);
-                            if (isPartitioned) {
-                                Set<PartitionInfo> partitionInfos = listPartitions();
-                                Collection<Partition> partitions =
-                                        partitionInfos.stream()
-                                                .map(
-                                                        p ->
-                                                                new Partition(
-                                                                        p.getPartitionId(),
-                                                                        p.getPartitionName()))
-                                                .collect(Collectors.toList());
-                                // Use log-only splits to avoid generating mixed split
-                                // types (HybridSnapshotLogSplit + LogSplit) for
-                                // primary-key tables, which is not supported.
-                                splits =
-                                        this.initLogTablePartitionSplits(
-                                                partitions, startingOffsetsInitializer);
-                            } else {
-                                splits = this.getLogSplit(null, null);
-                            }
+                            splits = flussOnlyBatchSplitGenerator.generate();
                         }
                         return splits;
                     },
                     this::handleSplitsAdd);
         } else {
-            throw new UnsupportedOperationException(
-                    String.format(
-                            "Batch only supports when table option '%s' is set to true.",
-                            ConfigOptions.TABLE_DATALAKE_ENABLED));
+            context.callAsync(flussOnlyBatchSplitGenerator::generate, this::handleSplitsAdd);
         }
+    }
+
+    private FlussOnlyBatchSplitGenerator createFlussOnlyBatchSplitGenerator() {
+        return new FlussOnlyBatchSplitGenerator(
+                tableInfo,
+                hasPrimaryKey,
+                isPartitioned,
+                startingOffsetsInitializer,
+                stoppingOffsetsInitializer,
+                bucketOffsetsRetriever,
+                this::listPartitions,
+                this::getLatestKvSnapshotsAndRegister,
+                this::ignoreTableBucket);
     }
 
     private void startInStreamModeForNonPartitionedTable() {
@@ -990,7 +985,14 @@ public class FlinkSourceEnumerator
                         "Log offset should be present if snapshot id is present.");
                 splits.add(
                         new HybridSnapshotLogSplit(
-                                tb, partitionName, snapshotId.getAsLong(), logOffset.getAsLong()));
+                                tb,
+                                partitionName,
+                                snapshotId.getAsLong(),
+                                0,
+                                false,
+                                logOffset.getAsLong(),
+                                LogSplit.NO_STOPPING_OFFSET,
+                                false));
             } else {
                 bucketsNeedInitOffset.add(bucketId);
             }
