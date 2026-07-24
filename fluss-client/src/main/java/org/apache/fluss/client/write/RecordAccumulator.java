@@ -375,7 +375,7 @@ public final class RecordAccumulator {
     }
 
     /** Mark all buckets as ready to send and block until to send is complete. */
-    public void awaitFlushCompletion() throws InterruptedException {
+    public void awaitFlushCompletion() throws Exception {
         try {
             // Obtain a copy of all the incomplete write request result(s) at the time of the
             // flush. We must be careful not to hold a reference to the ProduceBatch(s) so that

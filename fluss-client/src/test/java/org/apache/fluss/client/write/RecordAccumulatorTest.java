@@ -65,6 +65,7 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
@@ -461,6 +462,34 @@ class RecordAccumulatorTest {
         accum.awaitFlushCompletion();
         assertThat(accum.hasUnDrained()).isFalse();
         assertThat(accum.hasIncomplete()).isFalse();
+    }
+
+    @Test
+    void testAwaitFlushCompletionPropagatesBatchFailure() throws Exception {
+        IndexedRow row = indexedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
+        RecordAccumulator accum = createTestRecordAccumulator(4 * 1024, 64 * 1024);
+        accum.append(createRecord(row), writeCallback, cluster, 0, false);
+
+        accum.beginFlush();
+        CompletableFuture<Throwable> flushResult =
+                CompletableFuture.supplyAsync(
+                        () -> {
+                            try {
+                                accum.awaitFlushCompletion();
+                                return null;
+                            } catch (Throwable t) {
+                                return t;
+                            }
+                        });
+
+        Map<Integer, List<ReadyWriteBatch>> results =
+                accum.drain(cluster, accum.ready(cluster).readyNodes, Integer.MAX_VALUE);
+        WriteBatch batch = results.get(node1.id()).get(0).writeBatch();
+        RuntimeException expected = new RuntimeException("write failed");
+        batch.completeExceptionally(expected);
+
+        assertThat(flushResult.get(5, TimeUnit.SECONDS)).isSameAs(expected);
+        accum.deallocate(batch);
     }
 
     @Test
