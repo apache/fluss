@@ -71,6 +71,7 @@ import java.util.stream.Stream;
 
 import static org.apache.fluss.metadata.ResolvedPartitionSpec.fromPartitionName;
 import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
+import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link AutoPartitionManager}. */
@@ -988,6 +989,55 @@ class AutoPartitionManagerTest {
                         "2024091007");
     }
 
+    @Test
+    void testAutoPartitionDoesNotDropHistoricalPartition() throws Exception {
+        ZonedDateTime startTime =
+                LocalDateTime.parse("2024-09-10T00:00:00").atZone(ZoneId.systemDefault());
+        ManualClock clock = new ManualClock(startTime.toInstant().toEpochMilli());
+        ManuallyTriggeredScheduledExecutorService periodicExecutor =
+                new ManuallyTriggeredScheduledExecutorService();
+        AutoPartitionManager autoPartitionManager =
+                new AutoPartitionManager(
+                        new TestingServerMetadataCache(3),
+                        metadataManager,
+                        remoteDirDynamicLoader,
+                        new Configuration(),
+                        disabledCapacityController(),
+                        clock,
+                        periodicExecutor);
+        autoPartitionManager.start();
+
+        // Single partition key table: the partition name is the auto partition value.
+        TableInfo singlePartitionTable = createPartitionedTable(2, 0, AutoPartitionTimeUnit.HOUR);
+        TablePath singlePartitionTablePath = singlePartitionTable.getTablePath();
+        autoPartitionManager.addAutoPartitionTable(singlePartitionTable, true);
+
+        createPartition(singlePartitionTable, "2024090900", autoPartitionManager);
+        createPartition(singlePartitionTable, HISTORICAL_PARTITION_VALUE, autoPartitionManager);
+
+        // Multiple partition keys table: the auto partition value is one segment of the name.
+        TableInfo multiPartitionTable =
+                createPartitionedTable(2, 0, AutoPartitionTimeUnit.HOUR, true, 2);
+        TablePath multiPartitionTablePath = multiPartitionTable.getTablePath();
+        autoPartitionManager.addAutoPartitionTable(multiPartitionTable, true);
+
+        createPartition(multiPartitionTable, "2024090900$1", autoPartitionManager);
+        createPartition(
+                multiPartitionTable, HISTORICAL_PARTITION_VALUE + "$1", autoPartitionManager);
+
+        periodicExecutor.triggerNonPeriodicScheduledTasks();
+
+        Map<String, PartitionRegistration> singleTablePartitions =
+                zookeeperClient.getPartitionRegistrations(singlePartitionTablePath);
+        assertThat(singleTablePartitions.keySet()).contains(HISTORICAL_PARTITION_VALUE);
+        assertThat(singleTablePartitions.keySet()).doesNotContain("2024090900");
+
+        Map<String, PartitionRegistration> multiTablePartitions =
+                zookeeperClient.getPartitionRegistrations(multiPartitionTablePath);
+        assertThat(multiTablePartitions.keySet()).contains(HISTORICAL_PARTITION_VALUE + "$1");
+        assertThat(multiTablePartitions.keySet()).doesNotContain("2024090900$1");
+    }
+
     // ---------------------------------------------------------------------------------------
     // Batch / inflight tests previously housed here have moved to TableLifecycleThrottlerTest.
     // The AutoPartitionManager now drops expired partitions synchronously and the asynchronous
@@ -1151,11 +1201,36 @@ class AutoPartitionManagerTest {
         }
     }
 
+    private void createPartition(
+            TableInfo tableInfo, String partitionName, AutoPartitionManager autoPartitionManager)
+            throws Exception {
+        Map<Integer, BucketAssignment> bucketAssignments =
+                generateAssignment(
+                                tableInfo.getNumBuckets(),
+                                tableInfo.getTableConfig().getReplicationFactor(),
+                                new TabletServerInfo[] {
+                                    new TabletServerInfo(0, "rack0"),
+                                    new TabletServerInfo(1, "rack1"),
+                                    new TabletServerInfo(2, "rack2")
+                                })
+                        .getBucketAssignments();
+        PartitionAssignment partitionAssignment =
+                new PartitionAssignment(tableInfo.getTableId(), bucketAssignments);
+        metadataManager.createPartition(
+                tableInfo.getTablePath(),
+                tableInfo.getTableId(),
+                remoteDataDir,
+                partitionAssignment,
+                fromPartitionName(tableInfo.getPartitionKeys(), partitionName),
+                false);
+        autoPartitionManager.addPartition(tableInfo.getTableId(), partitionName);
+    }
+
     private TableInfo createPartitionedTable(
             int partitionRetentionNum, int partitionPreCreateNum, AutoPartitionTimeUnit timeUnit)
             throws Exception {
         return createPartitionedTable(
-                partitionRetentionNum, partitionPreCreateNum, timeUnit, false, null);
+                partitionRetentionNum, partitionPreCreateNum, timeUnit, false, null, 1);
     }
 
     private TableInfo createPartitionedTable(
@@ -1169,7 +1244,8 @@ class AutoPartitionManagerTest {
                 partitionPreCreateNum,
                 timeUnit,
                 multiplePartitionKeys,
-                null);
+                null,
+                1);
     }
 
     private TableInfo createPartitionedTable(
@@ -1179,7 +1255,39 @@ class AutoPartitionManagerTest {
             boolean multiplePartitionKeys,
             String timeFormat)
             throws Exception {
-        long tableId = 1;
+        return createPartitionedTable(
+                partitionRetentionNum,
+                partitionPreCreateNum,
+                timeUnit,
+                multiplePartitionKeys,
+                timeFormat,
+                1);
+    }
+
+    private TableInfo createPartitionedTable(
+            int partitionRetentionNum,
+            int partitionPreCreateNum,
+            AutoPartitionTimeUnit timeUnit,
+            boolean multiplePartitionKeys,
+            long tableId)
+            throws Exception {
+        return createPartitionedTable(
+                partitionRetentionNum,
+                partitionPreCreateNum,
+                timeUnit,
+                multiplePartitionKeys,
+                null,
+                tableId);
+    }
+
+    private TableInfo createPartitionedTable(
+            int partitionRetentionNum,
+            int partitionPreCreateNum,
+            AutoPartitionTimeUnit timeUnit,
+            boolean multiplePartitionKeys,
+            String timeFormat,
+            long tableId)
+            throws Exception {
         TablePath tablePath =
                 multiplePartitionKeys
                         ? TablePath.of("db", "test_multiple_partition_keys_" + UUID.randomUUID())

@@ -21,6 +21,8 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.metadata.TableBucket;
 
+import javax.annotation.Nullable;
+
 import java.util.ArrayList;
 import java.util.List;
 
@@ -28,13 +30,12 @@ import java.util.List;
 @Internal
 public class LookupBatch {
 
-    /** The table bucket that the lookup operations should fall into. */
-    private final TableBucket tableBucket;
+    private final LookupBatchKey lookupBatchKey;
 
     private final List<LookupQuery> lookups;
 
-    public LookupBatch(TableBucket tableBucket) {
-        this.tableBucket = tableBucket;
+    LookupBatch(LookupBatchKey lookupBatchKey) {
+        this.lookupBatchKey = lookupBatchKey;
         this.lookups = new ArrayList<>();
     }
 
@@ -47,7 +48,15 @@ public class LookupBatch {
     }
 
     public TableBucket tableBucket() {
-        return tableBucket;
+        return lookupBatchKey.tableBucket();
+    }
+
+    public @Nullable String originalPartitionName() {
+        return lookupBatchKey.originalPartitionName();
+    }
+
+    LookupBatchKey lookupBatchKey() {
+        return lookupBatchKey;
     }
 
     /** Complete the lookup operations using given values . */

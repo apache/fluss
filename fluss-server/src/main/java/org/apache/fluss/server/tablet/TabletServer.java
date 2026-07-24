@@ -301,7 +301,8 @@ public class TabletServer extends ServerBase {
                             scannerManager,
                             clock,
                             ioExecutor,
-                            localDiskManager);
+                            localDiskManager,
+                            pluginManager);
             replicaManager.startup();
 
             this.tabletService =

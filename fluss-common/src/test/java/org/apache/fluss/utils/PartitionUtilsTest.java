@@ -21,6 +21,7 @@ import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidPartitionException;
+import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -44,9 +45,13 @@ import static org.apache.fluss.metadata.TablePath.detectInvalidName;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
+import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.apache.fluss.utils.PartitionUtils.convertValueOfType;
 import static org.apache.fluss.utils.PartitionUtils.generateAutoPartition;
+import static org.apache.fluss.utils.PartitionUtils.isHistoricalLookupCandidatePartition;
+import static org.apache.fluss.utils.PartitionUtils.isHistoricalPartitionName;
 import static org.apache.fluss.utils.PartitionUtils.parseValueOfType;
+import static org.apache.fluss.utils.PartitionUtils.toHistoricalPartitionSpec;
 import static org.apache.fluss.utils.PartitionUtils.validateAutoPartitionTime;
 import static org.apache.fluss.utils.PartitionUtils.validatePartitionSpec;
 import static org.apache.fluss.utils.PartitionUtils.validatePartitionValues;
@@ -390,6 +395,119 @@ class PartitionUtilsTest {
                 .isInstanceOf(InvalidPartitionException.class)
                 .hasMessageContaining(outOfDate.toString())
                 .hasMessageContaining(earliestRetained.toString());
+    }
+
+    @Test
+    void testHistoricalPartitionName() {
+        // Single partition key table: the whole partition name is the auto partition value.
+        TableInfo singlePartitionKeyTable =
+                createAutoPartitionedTableInfo(
+                        true, DataLakeFormat.PAIMON, AutoPartitionTimeUnit.DAY, 2, "b", "b");
+
+        assertThat(isHistoricalPartitionName(singlePartitionKeyTable, HISTORICAL_PARTITION_VALUE))
+                .isTrue();
+        assertThat(isHistoricalPartitionName(singlePartitionKeyTable, "20240101")).isFalse();
+        assertThat(
+                        isHistoricalPartitionName(
+                                singlePartitionKeyTable, HISTORICAL_PARTITION_VALUE + "$extra"))
+                .isFalse();
+
+        // Multiple partition key table: the historical value must be on the auto partition key.
+        TableInfo multiplePartitionKeyTable =
+                createAutoPartitionedTableInfo(
+                        true, DataLakeFormat.PAIMON, AutoPartitionTimeUnit.DAY, 2, "b", "a", "b");
+
+        assertThat(
+                        isHistoricalPartitionName(
+                                multiplePartitionKeyTable, "region1$" + HISTORICAL_PARTITION_VALUE))
+                .isTrue();
+        assertThat(
+                        isHistoricalPartitionName(
+                                multiplePartitionKeyTable,
+                                HISTORICAL_PARTITION_VALUE + "$20240101"))
+                .isFalse();
+        assertThat(isHistoricalPartitionName(multiplePartitionKeyTable, "region1$20240101"))
+                .isFalse();
+        assertThat(
+                        isHistoricalPartitionName(
+                                multiplePartitionKeyTable,
+                                "region1$" + HISTORICAL_PARTITION_VALUE + "$extra"))
+                .isFalse();
+    }
+
+    @Test
+    void testToHistoricalPartitionSpec() {
+        TableInfo singlePartitionKeyTable =
+                createAutoPartitionedTableInfo(
+                        true, DataLakeFormat.PAIMON, AutoPartitionTimeUnit.DAY, 2, "b", "b");
+        assertThat(
+                        toHistoricalPartitionSpec(singlePartitionKeyTable, "20240101")
+                                .getPartitionName())
+                .isEqualTo(HISTORICAL_PARTITION_VALUE);
+
+        TableInfo multiplePartitionKeyTable =
+                createAutoPartitionedTableInfo(
+                        true, DataLakeFormat.PAIMON, AutoPartitionTimeUnit.DAY, 2, "b", "a", "b");
+        assertThat(
+                        toHistoricalPartitionSpec(multiplePartitionKeyTable, "region1$20240101")
+                                .getPartitionName())
+                .isEqualTo("region1$" + HISTORICAL_PARTITION_VALUE);
+    }
+
+    @Test
+    void testIsHistoricalLookupCandidatePartition() {
+        Instant now = Instant.parse("2024-01-10T00:00:00Z");
+
+        // Single partition key table: only partitions older than the retention window qualify.
+        TableInfo singlePartitionKeyTable =
+                createAutoPartitionedTableInfo(
+                        true, DataLakeFormat.PAIMON, AutoPartitionTimeUnit.DAY, 2, "b", "b");
+
+        assertThat(isHistoricalLookupCandidatePartition(singlePartitionKeyTable, "20240107", now))
+                .isTrue();
+        assertThat(isHistoricalLookupCandidatePartition(singlePartitionKeyTable, "20240108", now))
+                .isFalse();
+        assertThat(isHistoricalLookupCandidatePartition(singlePartitionKeyTable, "20240110", now))
+                .isFalse();
+        assertThat(isHistoricalLookupCandidatePartition(singlePartitionKeyTable, "20240111", now))
+                .isFalse();
+
+        // Multiple partition key table: the auto partition value is one segment of the name.
+        TableInfo multiplePartitionKeyTable =
+                createAutoPartitionedTableInfo(
+                        true, DataLakeFormat.PAIMON, AutoPartitionTimeUnit.DAY, 2, "b", "a", "b");
+
+        assertThat(
+                        isHistoricalLookupCandidatePartition(
+                                multiplePartitionKeyTable, "region1$20240107", now))
+                .isTrue();
+        assertThat(
+                        isHistoricalLookupCandidatePartition(
+                                multiplePartitionKeyTable, "region1$20240108", now))
+                .isFalse();
+
+        // Invalid partition names are not historical lookup candidates.
+        assertThat(isHistoricalLookupCandidatePartition(singlePartitionKeyTable, "2024-01-07", now))
+                .isFalse();
+        assertThat(
+                        isHistoricalLookupCandidatePartition(
+                                singlePartitionKeyTable, "20240107$extra", now))
+                .isFalse();
+
+        // Historical lookup currently supports Paimon lake tables only.
+        TableInfo icebergLakeTable =
+                createAutoPartitionedTableInfo(
+                        true, DataLakeFormat.ICEBERG, AutoPartitionTimeUnit.DAY, 2, "b", "b");
+
+        assertThat(isHistoricalLookupCandidatePartition(icebergLakeTable, "20240107", now))
+                .isFalse();
+
+        // Non-lake tables cannot serve expired partitions through historical lookup.
+        TableInfo nonLakeTable =
+                createAutoPartitionedTableInfo(
+                        false, DataLakeFormat.PAIMON, AutoPartitionTimeUnit.DAY, 2, "b", "b");
+
+        assertThat(isHistoricalLookupCandidatePartition(nonLakeTable, "20240107", now)).isFalse();
     }
 
     @Test
@@ -776,5 +894,34 @@ class PartitionUtilsTest {
         String str = convertValueOfType(originalValue, type);
         Object parsed = parseValueOfType(str, type);
         assertThat(parsed).isEqualTo(originalValue);
+    }
+
+    private TableInfo createAutoPartitionedTableInfo(
+            boolean dataLakeEnabled,
+            DataLakeFormat dataLakeFormat,
+            AutoPartitionTimeUnit timeUnit,
+            int numToRetain,
+            String autoPartitionKey,
+            String... partitionKeys) {
+        TableDescriptor.Builder tableDescriptorBuilder =
+                TableDescriptor.builder()
+                        .schema(DATA1_SCHEMA)
+                        .distributedBy(3)
+                        .partitionedBy(partitionKeys)
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_KEY, autoPartitionKey)
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, timeUnit)
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_NUM_RETENTION, numToRetain)
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_TIMEZONE, "UTC")
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, dataLakeEnabled)
+                        .property(ConfigOptions.TABLE_DATALAKE_FORMAT, dataLakeFormat);
+        return TableInfo.of(
+                DATA1_TABLE_PATH,
+                1L,
+                1,
+                tableDescriptorBuilder.build(),
+                DEFAULT_REMOTE_DATA_DIR,
+                1L,
+                1L);
     }
 }

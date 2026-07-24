@@ -21,6 +21,8 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 
+import javax.annotation.Nullable;
+
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -39,7 +41,16 @@ public class LookupQuery extends AbstractLookupQuery<byte[]> {
 
     LookupQuery(
             TablePath tablePath, TableBucket tableBucket, byte[] key, boolean insertIfNotExists) {
-        super(tablePath, tableBucket, key);
+        this(tablePath, tableBucket, key, insertIfNotExists, null);
+    }
+
+    LookupQuery(
+            TablePath tablePath,
+            TableBucket tableBucket,
+            byte[] key,
+            boolean insertIfNotExists,
+            @Nullable String originalPartitionName) {
+        super(tablePath, tableBucket, key, originalPartitionName);
         this.future = new CompletableFuture<>();
         this.insertIfNotExists = insertIfNotExists;
     }

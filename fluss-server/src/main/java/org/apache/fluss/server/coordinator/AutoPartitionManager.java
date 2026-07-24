@@ -70,6 +70,7 @@ import java.util.concurrent.locks.ReentrantLock;
 import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
 import static org.apache.fluss.utils.PartitionUtils.generateAutoPartition;
 import static org.apache.fluss.utils.PartitionUtils.generateAutoPartitionTime;
+import static org.apache.fluss.utils.PartitionUtils.isHistoricalPartitionName;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
 
@@ -541,13 +542,14 @@ public class AutoPartitionManager implements AutoCloseable {
                 currentPartitions.headMap(lastRetainPartitionTime).entrySet().iterator();
         while (iterator.hasNext()) {
             Map.Entry<String, Set<String>> entry = iterator.next();
-            dropPartitions(tablePath, partitionKeys, iterator, entry);
+            dropPartitions(tablePath, partitionKeys, autoPartitionStrategy, iterator, entry);
         }
     }
 
     private void dropPartitions(
             TablePath tablePath,
             List<String> partitionKeys,
+            AutoPartitionStrategy autoPartitionStrategy,
             Iterator<Map.Entry<String, Set<String>>> iterator,
             Map.Entry<String, Set<String>> entry) {
         Iterator<String> dropIterator;
@@ -557,8 +559,14 @@ public class AutoPartitionManager implements AutoCloseable {
             dropIterator = entry.getValue().iterator();
         }
 
+        boolean shouldRemoveEntry = true;
         while (dropIterator.hasNext()) {
             String partitionName = dropIterator.next();
+            if (isHistoricalPartitionName(partitionKeys, autoPartitionStrategy, partitionName)) {
+                shouldRemoveEntry = false;
+                continue;
+            }
+
             try {
                 metadataManager.dropPartition(
                         tablePath,
@@ -577,7 +585,12 @@ public class AutoPartitionManager implements AutoCloseable {
                     partitionName,
                     tablePath);
         }
-        iterator.remove();
+        if (entry.getValue() != null && !entry.getValue().isEmpty()) {
+            shouldRemoveEntry = false;
+        }
+        if (shouldRemoveEntry) {
+            iterator.remove();
+        }
     }
 
     @VisibleForTesting

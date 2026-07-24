@@ -22,8 +22,10 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.HistoricalLookupThrottledException;
 import org.apache.fluss.exception.InvalidMetadataException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
+import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.RetriableException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
@@ -37,6 +39,7 @@ import org.apache.fluss.rpc.messages.PbValueList;
 import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.messages.PrefixLookupResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.utils.ExponentialBackoff;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.slf4j.Logger;
@@ -45,8 +48,10 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -81,6 +86,8 @@ class LookupSender implements Runnable {
 
     private final short acks;
 
+    private final ExponentialBackoff historicalThrottleBackoff;
+
     LookupSender(
             MetadataUpdater metadataUpdater,
             LookupQueue lookupQueue,
@@ -95,6 +102,7 @@ class LookupSender implements Runnable {
         this.running = true;
         this.acks = acks;
         this.maxRequestTimeoutMs = maxRequestTimeoutMs;
+        this.historicalThrottleBackoff = new ExponentialBackoff(100L, 2, 5000L, 0.2);
     }
 
     @Override
@@ -169,6 +177,12 @@ class LookupSender implements Runnable {
                 // collecting the tables that need to be updated and then sending them together in
                 // one request.
                 leader = metadataUpdater.leaderFor(lookup.tablePath(), tb);
+            } catch (PartitionNotExistException e) {
+                // Metadata refresh confirmed that the queued lookup carries a deleted partition
+                // id. Complete it instead of repeatedly enqueueing the stale TableBucket; a
+                // primary key lookuper can then reroute by partition name.
+                lookup.future().completeExceptionally(e);
+                continue;
             } catch (Exception e) {
                 // if leader is not found, re-enqueue the lookup to send again.
                 LOG.warn("Failed to lookup the leader for {} when lookup", tb, e);
@@ -198,34 +212,38 @@ class LookupSender implements Runnable {
 
     private void sendLookupRequest(
             int destination, List<AbstractLookupQuery<?>> lookups, boolean insertIfNotExists) {
-        // table id -> (bucket -> lookups)
-        Map<Long, Map<TableBucket, LookupBatch>> lookupByTableId = new HashMap<>();
+        // table id -> (bucket and original partition name -> lookups)
+        Map<Long, Map<LookupBatchKey, LookupBatch>> lookupByTableId = new LinkedHashMap<>();
         for (AbstractLookupQuery<?> abstractLookupQuery : lookups) {
             LookupQuery lookup = (LookupQuery) abstractLookupQuery;
             TableBucket tb = lookup.tableBucket();
             long tableId = tb.getTableId();
+            LookupBatchKey batchKey = new LookupBatchKey(tb, lookup.originalPartitionName());
             lookupByTableId
-                    .computeIfAbsent(tableId, k -> new HashMap<>())
-                    .computeIfAbsent(tb, k -> new LookupBatch(tb))
+                    .computeIfAbsent(tableId, k -> new LinkedHashMap<>())
+                    .computeIfAbsent(batchKey, k -> new LookupBatch(batchKey))
                     .addLookup(lookup);
         }
 
         TabletServerGateway gateway = metadataUpdater.newTabletServerClientForNode(destination);
         if (gateway == null) {
             lookupByTableId.forEach(
-                    (tableId, lookupsByBucket) ->
+                    (tableId, lookupsByBatchKey) ->
                             handleLookupRequestException(
                                     new LeaderNotAvailableException(
                                             "Server "
                                                     + destination
                                                     + " is not found in metadata cache."),
                                     destination,
-                                    lookupsByBucket));
+                                    lookupsByBatchKey.values()));
             return;
         }
 
         lookupByTableId.forEach(
-                (tableId, lookupsByBucket) ->
+                (tableId, lookupsByBatchKey) -> {
+                    List<Map<TableBucket, LookupBatch>> lookupRequestGroups =
+                            packLookupRequestGroups(lookupsByBatchKey.values());
+                    for (Map<TableBucket, LookupBatch> lookupsByBucket : lookupRequestGroups) {
                         sendLookupRequestAndHandleResponse(
                                 destination,
                                 gateway,
@@ -236,7 +254,47 @@ class LookupSender implements Runnable {
                                         acks,
                                         maxRequestTimeoutMs),
                                 tableId,
-                                lookupsByBucket));
+                                lookupsByBucket);
+                    }
+                });
+    }
+
+    /**
+     * Packs lookup batches into RPC request groups so each request has one lookup kind and response
+     * dispatch can still use {@link TableBucket} as the lookup key.
+     *
+     * <p>Normal and historical lookups are sent in separate RPCs. Historical lookups can have
+     * multiple batches with the same target {@link TableBucket} but different original partition
+     * names. The request carries that original partition name, but the response does not. If those
+     * batches were sent in one RPC, two response buckets would have the same {@link TableBucket}
+     * and the client could not map each response back to the right batch.
+     *
+     * <p>To avoid that ambiguity, each request group contains a {@link TableBucket} at most once.
+     */
+    private List<Map<TableBucket, LookupBatch>> packLookupRequestGroups(
+            Collection<LookupBatch> lookupBatches) {
+        List<Map<TableBucket, LookupBatch>> lookupRequestGroups = new ArrayList<>();
+        Map<TableBucket, LookupBatch> currentRequestGroup = new LinkedHashMap<>();
+        boolean currentGroupHistorical = false;
+        for (LookupBatch lookupBatch : lookupBatches) {
+            TableBucket tableBucket = lookupBatch.tableBucket();
+            boolean historicalLookup = lookupBatch.originalPartitionName() != null;
+            boolean tableBucketAlreadyInCurrentGroup = currentRequestGroup.containsKey(tableBucket);
+            boolean differentLookupKind =
+                    !currentRequestGroup.isEmpty() && currentGroupHistorical != historicalLookup;
+            if (tableBucketAlreadyInCurrentGroup || differentLookupKind) {
+                // Start a new RPC when the request kind changes, or when different historical
+                // original partitions map to the same historical TableBucket.
+                lookupRequestGroups.add(currentRequestGroup);
+                currentRequestGroup = new LinkedHashMap<>();
+            }
+            currentRequestGroup.put(tableBucket, lookupBatch);
+            currentGroupHistorical = historicalLookup;
+        }
+        if (!currentRequestGroup.isEmpty()) {
+            lookupRequestGroups.add(currentRequestGroup);
+        }
+        return lookupRequestGroups;
     }
 
     private void sendPrefixLookupRequest(
@@ -302,7 +360,8 @@ class LookupSender implements Runnable {
                 .exceptionally(
                         e -> {
                             try {
-                                handleLookupRequestException(e, destination, lookupsByBucket);
+                                handleLookupRequestException(
+                                        e, destination, lookupsByBucket.values());
                                 return null;
                             } finally {
                                 maxInFlightReuqestsSemaphore.release();
@@ -420,9 +479,9 @@ class LookupSender implements Runnable {
     }
 
     private void handleLookupRequestException(
-            Throwable t, int destination, Map<TableBucket, LookupBatch> lookupsByBucket) {
+            Throwable t, int destination, Collection<LookupBatch> lookupBatches) {
         ApiError error = ApiError.fromThrowable(t);
-        for (LookupBatch lookupBatch : lookupsByBucket.values()) {
+        for (LookupBatch lookupBatch : lookupBatches) {
             handleLookupError(
                     lookupBatch.tableBucket(), destination, error, lookupBatch.lookups(), "lookup");
         }
@@ -443,6 +502,18 @@ class LookupSender implements Runnable {
 
     private void reEnqueueLookup(AbstractLookupQuery<?> lookup) {
         lookupQueue.reEnqueue(lookup);
+    }
+
+    private long prepareRetry(AbstractLookupQuery<?> lookup, Exception exception) {
+        long retryDelayMs = 0;
+        if (exception instanceof HistoricalLookupThrottledException) {
+            retryDelayMs = historicalThrottleBackoff.backoff(lookup.retries());
+            lookup.setNextRetryTimeMs(System.currentTimeMillis() + retryDelayMs);
+        } else {
+            lookup.setNextRetryTimeMs(0);
+        }
+        lookup.incrementRetries();
+        return retryDelayMs;
     }
 
     private boolean canRetry(AbstractLookupQuery<?> lookup, Exception exception) {
@@ -466,7 +537,7 @@ class LookupSender implements Runnable {
             ApiError error,
             List<? extends AbstractLookupQuery<?>> lookups,
             String lookupType) {
-        ApiException exception = error.error().exception();
+        ApiException exception = error.exception();
         LOG.error(
                 "Failed to {} from node {} for bucket {}",
                 lookupType,
@@ -493,14 +564,15 @@ class LookupSender implements Runnable {
         }
 
         for (AbstractLookupQuery<?> lookup : lookups) {
-            if (canRetry(lookup, error.exception())) {
+            if (canRetry(lookup, exception)) {
+                long retryDelayMs = prepareRetry(lookup, exception);
                 LOG.warn(
-                        "Get error {} response on table bucket {}, retrying ({} attempts left). Error: {}",
+                        "Get error {} response on table bucket {}, retrying after {} ms ({} attempts left). Error: {}",
                         lookupType,
                         tableBucket,
+                        retryDelayMs,
                         maxRetries - lookup.retries(),
                         error.formatErrMsg());
-                lookup.incrementRetries();
                 reEnqueueLookup(lookup);
             } else {
                 LOG.warn(
@@ -508,7 +580,7 @@ class LookupSender implements Runnable {
                         lookupType,
                         tableBucket,
                         error.formatErrMsg());
-                lookup.future().completeExceptionally(error.exception());
+                lookup.future().completeExceptionally(exception);
             }
         }
     }

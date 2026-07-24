@@ -29,6 +29,7 @@ import org.apache.fluss.client.table.scanner.batch.BatchScanner;
 import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.client.utils.ClientRpcMessageUtils;
 import org.apache.fluss.cluster.rebalance.ServerTag;
+import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
@@ -41,6 +42,7 @@ import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
 import org.apache.fluss.exception.TableNotPartitionedException;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DatabaseDescriptor;
+import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
@@ -104,6 +106,7 @@ import static org.apache.fluss.security.acl.FlussPrincipal.WILD_CARD_PRINCIPAL;
 import static org.apache.fluss.security.acl.OperationType.READ;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
+import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -407,6 +410,70 @@ public class FlussAuthorizationITCase {
         rootAdmin.createAcls(aclBindings).all().get();
         guestAdmin.createTable(DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR, false).get();
         assertThat(rootAdmin.tableExists(DATA1_TABLE_PATH).get()).isTrue();
+    }
+
+    @Test
+    void testCreateHistoricalPartitionAuthorization() throws Exception {
+        rootAdmin
+                .alterClusterConfigs(
+                        Collections.singletonList(
+                                new AlterConfig(
+                                        DATALAKE_FORMAT.key(),
+                                        DataLakeFormat.PAIMON.toString(),
+                                        AlterConfigOpType.SET)))
+                .get();
+
+        TablePath tablePath =
+                TablePath.of(DATA1_TABLE_PATH.getDatabaseName(), "historical_partition_auth");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(DATA1_SCHEMA)
+                        .distributedBy(1)
+                        .partitionedBy("b")
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_KEY, "b")
+                        .property(
+                                ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
+                                AutoPartitionTimeUnit.DAY)
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .property(ConfigOptions.TABLE_DATALAKE_FORMAT, DataLakeFormat.PAIMON)
+                        .build();
+        rootAdmin.createTable(tablePath, tableDescriptor, false).get();
+
+        PartitionSpec historicalPartitionSpec =
+                new PartitionSpec(Collections.singletonMap("b", HISTORICAL_PARTITION_VALUE));
+        // Creating the historical system partition should require READ permission.
+        assertThatThrownBy(
+                        () ->
+                                guestAdmin
+                                        .createPartition(tablePath, historicalPartitionSpec, true)
+                                        .get())
+                .rootCause()
+                .isInstanceOf(AuthorizationException.class)
+                .hasMessageContaining("operate READ");
+
+        List<AclBinding> readAcl =
+                Collections.singletonList(
+                        new AclBinding(
+                                Resource.table(tablePath),
+                                new AccessControlEntry(
+                                        guestPrincipal, "*", READ, PermissionType.ALLOW)));
+        rootAdmin.createAcls(readAcl).all().get();
+        FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(readAcl, true);
+
+        guestAdmin.createPartition(tablePath, historicalPartitionSpec, true).get();
+
+        PartitionSpec ordinaryPartitionSpec =
+                new PartitionSpec(Collections.singletonMap("b", "20990101"));
+        // Ordinary partition creation should still require WRITE permission.
+        assertThatThrownBy(
+                        () ->
+                                guestAdmin
+                                        .createPartition(tablePath, ordinaryPartitionSpec, true)
+                                        .get())
+                .rootCause()
+                .isInstanceOf(AuthorizationException.class)
+                .hasMessageContaining("operate WRITE");
     }
 
     @Test

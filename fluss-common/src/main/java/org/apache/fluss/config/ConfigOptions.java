@@ -176,6 +176,13 @@ public class ConfigOptions {
                     .withDescription(
                             "The default size of the write buffer for writing the local files to remote file systems.");
 
+    public static final ConfigOption<String> IO_TMP_DIR =
+            key("io.tmpdir")
+                    .stringType()
+                    .defaultValue(System.getProperty("java.io.tmpdir") + "/fluss")
+                    .withDescription(
+                            "Local directory used by Fluss components to store temporary files.");
+
     public static final ConfigOption<List<String>> PLUGIN_ALWAYS_PARENT_FIRST_LOADER_PATTERNS =
             key("plugin.classloader.parent-first-patterns.default")
                     .stringType()
@@ -1147,6 +1154,13 @@ public class ConfigOptions {
                     .defaultValue(500)
                     .withDescription(
                             "The number of queued requests allowed for worker threads, before blocking the I/O threads.");
+
+    public static final ConfigOption<Integer> NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS =
+            key("netty.server.max-queued-historical-requests")
+                    .intType()
+                    .defaultValue(50)
+                    .withDescription(
+                            "The number of historical lookup requests allowed to wait for lake lookup processing before throttling them.");
 
     public static final ConfigOption<MemorySize> NETTY_SERVER_MAX_REQUEST_SIZE =
             key("netty.server.max-request-size")

@@ -18,9 +18,12 @@
 package org.apache.fluss.lake.lakestorage;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.metadata.TablePath;
+
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /**
  * The LakeStorage interface defines how to implement lakehouse storage system such as Paimon and
@@ -50,4 +53,44 @@ public interface LakeStorage {
      * @return a configured lake source instance for the specified table
      */
     LakeSource<?> createLakeSource(TablePath tablePath);
+
+    /**
+     * Creates a table-level point lookuper for the specified lake table.
+     *
+     * @param tablePath the logical path identifying the table in the lakehouse storage
+     * @param context runtime context for creating the lookuper
+     * @return a table-level point lookuper
+     */
+    default LakeTableLookuper createLakeTableLookuper(
+            TablePath tablePath, LookuperContext context) {
+        throw new UnsupportedOperationException(
+                "Point lookup is not supported for this lake storage.");
+    }
+
+    /** Runtime context for creating a lake table lookuper. */
+    final class LookuperContext {
+        private final String ioTmpDir;
+        private final TableConfig tableConfig;
+
+        /**
+         * Creates a lookuper context.
+         *
+         * @param ioTmpDir local directory for temporary files used by the lookuper
+         * @param tableConfig configuration of the Fluss table
+         */
+        public LookuperContext(String ioTmpDir, TableConfig tableConfig) {
+            this.ioTmpDir = checkNotNull(ioTmpDir, "ioTmpDir must not be null.");
+            this.tableConfig = checkNotNull(tableConfig, "tableConfig must not be null.");
+        }
+
+        /** Returns the local directory for temporary files used by the lookuper. */
+        public String ioTmpDir() {
+            return ioTmpDir;
+        }
+
+        /** Returns the configuration of the Fluss table. */
+        public TableConfig tableConfig() {
+            return tableConfig;
+        }
+    }
 }

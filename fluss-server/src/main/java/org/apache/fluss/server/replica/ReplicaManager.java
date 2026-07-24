@@ -26,6 +26,7 @@ import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.exception.FencedLeaderEpochException;
 import org.apache.fluss.exception.InvalidColumnProjectionException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
+import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.InvalidRequiredAcksException;
 import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.exception.LogOffsetOutOfRangeException;
@@ -38,11 +39,13 @@ import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.metrics.groups.MetricGroup;
+import org.apache.fluss.plugin.PluginManager;
 import org.apache.fluss.record.KeyRecordBatch;
 import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.MemoryLogRecords;
@@ -70,6 +73,7 @@ import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.entity.FetchReqInfo;
 import org.apache.fluss.server.entity.LakeBucketOffset;
+import org.apache.fluss.server.entity.LookupDataForBucket;
 import org.apache.fluss.server.entity.NotifyKvSnapshotOffsetData;
 import org.apache.fluss.server.entity.NotifyLakeTableOffsetData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
@@ -138,9 +142,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
@@ -149,6 +155,7 @@ import java.util.stream.Stream;
 
 import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_2;
 import static org.apache.fluss.server.TabletManagerBase.getTableInfo;
+import static org.apache.fluss.utils.PartitionUtils.isHistoricalPartitionName;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
@@ -218,6 +225,8 @@ public class ReplicaManager implements ServerReconfigurable {
 
     private final ScannerManager scannerManager;
 
+    private final HistoricalLakeLookupManager historicalLakeLookupManager;
+
     public ReplicaManager(
             Configuration conf,
             Scheduler scheduler,
@@ -251,6 +260,47 @@ public class ReplicaManager implements ServerReconfigurable {
                 fatalErrorHandler,
                 serverMetricGroup,
                 userMetrics,
+                scannerManager,
+                clock,
+                ioExecutor,
+                localDiskManager,
+                null);
+    }
+
+    public ReplicaManager(
+            Configuration conf,
+            Scheduler scheduler,
+            LogManager logManager,
+            KvManager kvManager,
+            ZooKeeperClient zkClient,
+            int serverId,
+            TabletServerMetadataCache metadataCache,
+            RpcClient rpcClient,
+            CoordinatorGateway coordinatorGateway,
+            CompletedKvSnapshotCommitter completedKvSnapshotCommitter,
+            FatalErrorHandler fatalErrorHandler,
+            TabletServerMetricGroup serverMetricGroup,
+            UserMetrics userMetrics,
+            ScannerManager scannerManager,
+            Clock clock,
+            ExecutorService ioExecutor,
+            LocalDiskManager localDiskManager,
+            @Nullable PluginManager pluginManager)
+            throws IOException {
+        this(
+                conf,
+                scheduler,
+                logManager,
+                kvManager,
+                zkClient,
+                serverId,
+                metadataCache,
+                rpcClient,
+                coordinatorGateway,
+                completedKvSnapshotCommitter,
+                fatalErrorHandler,
+                serverMetricGroup,
+                userMetrics,
                 new RemoteLogManager(
                         conf,
                         zkClient,
@@ -262,7 +312,8 @@ public class ReplicaManager implements ServerReconfigurable {
                 scannerManager,
                 clock,
                 ioExecutor,
-                localDiskManager);
+                localDiskManager,
+                pluginManager);
     }
 
     @VisibleForTesting
@@ -285,6 +336,50 @@ public class ReplicaManager implements ServerReconfigurable {
             Clock clock,
             ExecutorService ioExecutor,
             LocalDiskManager localDiskManager)
+            throws IOException {
+        this(
+                conf,
+                scheduler,
+                logManager,
+                kvManager,
+                zkClient,
+                serverId,
+                metadataCache,
+                rpcClient,
+                coordinatorGateway,
+                completedKvSnapshotCommitter,
+                fatalErrorHandler,
+                serverMetricGroup,
+                userMetrics,
+                remoteLogManager,
+                scannerManager,
+                clock,
+                ioExecutor,
+                localDiskManager,
+                null);
+    }
+
+    @VisibleForTesting
+    ReplicaManager(
+            Configuration conf,
+            Scheduler scheduler,
+            LogManager logManager,
+            KvManager kvManager,
+            ZooKeeperClient zkClient,
+            int serverId,
+            TabletServerMetadataCache metadataCache,
+            RpcClient rpcClient,
+            CoordinatorGateway coordinatorGateway,
+            CompletedKvSnapshotCommitter completedKvSnapshotCommitter,
+            FatalErrorHandler fatalErrorHandler,
+            TabletServerMetricGroup serverMetricGroup,
+            UserMetrics userMetrics,
+            RemoteLogManager remoteLogManager,
+            ScannerManager scannerManager,
+            Clock clock,
+            ExecutorService ioExecutor,
+            LocalDiskManager localDiskManager,
+            @Nullable PluginManager pluginManager)
             throws IOException {
         this.conf = conf;
         this.zkClient = zkClient;
@@ -336,6 +431,9 @@ public class ReplicaManager implements ServerReconfigurable {
         this.ioExecutor = ioExecutor;
         this.minInSyncReplicas = conf.get(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER);
         this.scannerManager = checkNotNull(scannerManager, "scannerManager");
+        this.historicalLakeLookupManager =
+                new HistoricalLakeLookupManager(
+                        conf, pluginManager, ioExecutor, serverId, scheduler);
 
         registerMetrics();
     }
@@ -775,6 +873,52 @@ public class ReplicaManager implements ServerReconfigurable {
         lookups(false, null, null, entriesPerBucket, apiVersion, responseCallback);
     }
 
+    /** Lookup historical lake data for requests that carry original partition names. */
+    public void historicalLookups(
+            List<LookupDataForBucket> lookupData,
+            Consumer<Map<TableBucket, LookupResultForBucket>> responseCallback) {
+        if (lookupData.isEmpty()) {
+            responseCallback.accept(Collections.emptyMap());
+            return;
+        }
+
+        Map<TableBucket, LookupResultForBucket> result = new ConcurrentHashMap<>();
+        AtomicInteger remainingLookups = new AtomicInteger(lookupData.size());
+        for (LookupDataForBucket data : lookupData) {
+            CompletableFuture<LookupResultForBucket> lookupFuture;
+            try {
+                Replica replica = getReplicaOrException(data.tableBucket());
+                if (!isHistoricalPartitionReplica(replica)) {
+                    throw new InvalidPartitionException(
+                            "Historical lookup request must target a historical partition.");
+                }
+                SchemaInfo latestSchemaInfo = replica.getSchemaGetter().getLatestSchemaInfo();
+                lookupFuture =
+                        historicalLakeLookupManager.lookup(
+                                data, replica.getTableInfo(), latestSchemaInfo);
+            } catch (Exception e) {
+                lookupFuture =
+                        CompletableFuture.completedFuture(
+                                new LookupResultForBucket(
+                                        data.tableBucket(), ApiError.fromThrowable(e)));
+            }
+            lookupFuture.whenComplete(
+                    (bucketResult, error) -> {
+                        if (error == null) {
+                            result.put(bucketResult.getTableBucket(), bucketResult);
+                        } else {
+                            result.put(
+                                    data.tableBucket(),
+                                    new LookupResultForBucket(
+                                            data.tableBucket(), ApiError.fromThrowable(error)));
+                        }
+                        if (remainingLookups.decrementAndGet() == 0) {
+                            responseCallback.accept(result);
+                        }
+                    });
+        }
+    }
+
     /**
      * Lookup with multi key from leader replica of the buckets.
      *
@@ -862,6 +1006,12 @@ public class ReplicaManager implements ServerReconfigurable {
             responseCallback.accept(lookupResultForBucketMap);
         }
         LOG.debug("Lookup from local kv in {}ms", System.currentTimeMillis() - startTime);
+    }
+
+    private boolean isHistoricalPartitionReplica(Replica replica) {
+        String partitionName = replica.getPhysicalTablePath().getPartitionName();
+        return partitionName != null
+                && isHistoricalPartitionName(replica.getTableInfo(), partitionName);
     }
 
     /**
@@ -979,6 +1129,9 @@ public class ReplicaManager implements ServerReconfigurable {
 
                     for (StopReplicaData data : stopReplicaDataList) {
                         TableBucket tb = data.getTableBucket();
+                        long tableId = tb.getTableId();
+                        ioExecutor.execute(
+                                () -> historicalLakeLookupManager.invalidateTableLookuper(tableId));
                         HostedReplica hostedReplica = getReplica(tb);
                         if (hostedReplica instanceof NoneReplica) {
                             if (data.isDeleteLocal()) {
@@ -2256,6 +2409,7 @@ public class ReplicaManager implements ServerReconfigurable {
     public void shutdown() throws InterruptedException {
         // Close the resources for snapshot kv
         kvSnapshotResource.close();
+        historicalLakeLookupManager.close();
         replicaFetcherManager.shutdown();
         delayedWriteManager.shutdown();
         delayedFetchLogManager.shutdown();

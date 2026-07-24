@@ -123,6 +123,7 @@ public class ReplicaFetcherThreadTest {
         manualClock = new ManualClock(System.currentTimeMillis());
         Configuration conf = new Configuration();
         tb = new TableBucket(DATA1_TABLE_ID, 0);
+        ioExecutor = Executors.newSingleThreadExecutor();
         leaderLocalDiskManager = createLocalDiskManager(leaderServerId);
         leaderRM = createReplicaManager(leaderServerId, leaderLocalDiskManager);
         followerLocalDiskManager = createLocalDiskManager(followerServerId);
@@ -140,7 +141,6 @@ public class ReplicaFetcherThreadTest {
                         followerRM,
                         new TestingLeaderEndpoint(conf, leaderRM, follower),
                         1000);
-        ioExecutor = Executors.newSingleThreadExecutor();
 
         registerTableInZkClient();
         // make the tb(table, 0) to be leader in leaderRM and to be follower in followerRM.

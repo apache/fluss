@@ -182,6 +182,7 @@ import org.apache.fluss.server.entity.CommitLakeTableSnapshotsData;
 import org.apache.fluss.server.entity.CommitRemoteLogManifestData;
 import org.apache.fluss.server.entity.FetchReqInfo;
 import org.apache.fluss.server.entity.LakeBucketOffset;
+import org.apache.fluss.server.entity.LookupDataForBucket;
 import org.apache.fluss.server.entity.NotifyKvSnapshotOffsetData;
 import org.apache.fluss.server.entity.NotifyLakeTableOffsetData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
@@ -1134,6 +1135,50 @@ public class ServerRpcMessageUtils {
                 keys.add(lookupReqForBucket.getKeyAt(i));
             }
             lookupEntryData.put(tb, keys);
+        }
+        return lookupEntryData;
+    }
+
+    /**
+     * Converts lookup bucket requests for historical partition lookup.
+     *
+     * <p>Unlike normal lookup data, historical lookup must keep the original partition name carried
+     * by each bucket request. The name is later used to resolve the original partition in lake
+     * storage, while the {@link TableBucket} points to the historical system partition.
+     */
+    public static Map<TableBucket, LookupDataForBucket> toHistoricalLookupData(
+            LookupRequest lookupRequest) {
+        long tableId = lookupRequest.getTableId();
+        Map<TableBucket, LookupDataForBucket> lookupEntryData = new HashMap<>();
+        for (PbLookupReqForBucket lookupReqForBucket : lookupRequest.getBucketsReqsList()) {
+            TableBucket tb =
+                    new TableBucket(
+                            tableId,
+                            lookupReqForBucket.hasPartitionId()
+                                    ? lookupReqForBucket.getPartitionId()
+                                    : null,
+                            lookupReqForBucket.getBucketId());
+            List<byte[]> keys = new ArrayList<>(lookupReqForBucket.getKeysCount());
+            for (int i = 0; i < lookupReqForBucket.getKeysCount(); i++) {
+                keys.add(lookupReqForBucket.getKeyAt(i));
+            }
+            LookupDataForBucket lookupData =
+                    new LookupDataForBucket(
+                            tb,
+                            keys,
+                            lookupReqForBucket.hasOriginalPartitionName()
+                                    ? lookupReqForBucket.getOriginalPartitionName()
+                                    : null);
+            LookupDataForBucket previous = lookupEntryData.putIfAbsent(tb, lookupData);
+            if (previous != null) {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Duplicate historical lookup requests for table bucket %s with "
+                                        + "original partitions %s and %s.",
+                                tb,
+                                previous.originalPartitionName(),
+                                lookupData.originalPartitionName()));
+            }
         }
         return lookupEntryData;
     }

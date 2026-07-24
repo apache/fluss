@@ -17,6 +17,7 @@
 
 package org.apache.fluss.client.lookup;
 
+import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
@@ -28,6 +29,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
+
 /** API for configuring and creating {@link Lookuper}. */
 public class TableLookup implements Lookup {
 
@@ -35,6 +38,7 @@ public class TableLookup implements Lookup {
     private final SchemaGetter schemaGetter;
     private final MetadataUpdater metadataUpdater;
     private final LookupClient lookupClient;
+    private final Admin admin;
 
     @Nullable private final List<String> lookupColumnNames;
 
@@ -44,8 +48,9 @@ public class TableLookup implements Lookup {
             TableInfo tableInfo,
             SchemaGetter schemaGetter,
             MetadataUpdater metadataUpdater,
-            LookupClient lookupClient) {
-        this(tableInfo, schemaGetter, metadataUpdater, lookupClient, null, false);
+            LookupClient lookupClient,
+            Admin admin) {
+        this(tableInfo, schemaGetter, metadataUpdater, lookupClient, admin, null, false);
     }
 
     private TableLookup(
@@ -53,12 +58,14 @@ public class TableLookup implements Lookup {
             SchemaGetter schemaGetter,
             MetadataUpdater metadataUpdater,
             LookupClient lookupClient,
+            Admin admin,
             @Nullable List<String> lookupColumnNames,
             boolean insertIfNotExists) {
         this.tableInfo = tableInfo;
         this.schemaGetter = schemaGetter;
         this.metadataUpdater = metadataUpdater;
         this.lookupClient = lookupClient;
+        this.admin = checkNotNull(admin, "admin must not be null.");
         this.lookupColumnNames = lookupColumnNames;
         this.insertIfNotExists = insertIfNotExists;
     }
@@ -66,7 +73,13 @@ public class TableLookup implements Lookup {
     @Override
     public Lookup enableInsertIfNotExists() {
         return new TableLookup(
-                tableInfo, schemaGetter, metadataUpdater, lookupClient, lookupColumnNames, true);
+                tableInfo,
+                schemaGetter,
+                metadataUpdater,
+                lookupClient,
+                admin,
+                lookupColumnNames,
+                true);
     }
 
     @Override
@@ -76,6 +89,7 @@ public class TableLookup implements Lookup {
                 schemaGetter,
                 metadataUpdater,
                 lookupClient,
+                admin,
                 lookupColumnNames,
                 insertIfNotExists);
     }
@@ -109,7 +123,13 @@ public class TableLookup implements Lookup {
                 }
             }
             return new PrimaryKeyLookuper(
-                    tableInfo, schemaGetter, metadataUpdater, lookupClient, insertIfNotExists);
+                    tableInfo,
+                    schemaGetter,
+                    metadataUpdater,
+                    lookupClient,
+                    insertIfNotExists,
+                    admin,
+                    new HistoricalPartitionResolver(metadataUpdater, admin));
         } else {
             // throw exception if the insertIfNotExists is enabled for prefix key lookup, as
             // currently we only support insertIfNotExists for primary key lookup.

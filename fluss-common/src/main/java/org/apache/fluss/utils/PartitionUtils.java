@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidPartitionException;
+import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableInfo;
@@ -40,12 +41,15 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.apache.fluss.metadata.TablePath.detectInvalidName;
 import static org.apache.fluss.metadata.TablePath.validatePrefix;
 
 /** Utils for partition. */
 public class PartitionUtils {
+
+    public static final String HISTORICAL_PARTITION_VALUE = "__historical__";
 
     public static final List<DataTypeRoot> PARTITION_KEY_SUPPORTED_TYPES =
             Arrays.asList(
@@ -166,6 +170,190 @@ public class PartitionUtils {
                                     + "partition is '%s'.",
                             partitionTime, lastRetainPartitionTime));
         }
+    }
+
+    /** Returns the auto partition key index for the partition keys, if it can be resolved. */
+    public static Optional<Integer> getAutoPartitionKeyIndex(
+            List<String> partitionKeys, AutoPartitionStrategy autoPartitionStrategy) {
+        if (!autoPartitionStrategy.isAutoPartitionEnabled() || partitionKeys.isEmpty()) {
+            return Optional.empty();
+        }
+
+        String autoPartitionKey =
+                autoPartitionStrategy.key() != null
+                        ? autoPartitionStrategy.key()
+                        : partitionKeys.get(0);
+        int autoPartitionKeyIndex = partitionKeys.indexOf(autoPartitionKey);
+        if (autoPartitionKeyIndex < 0) {
+            return Optional.empty();
+        }
+        return Optional.of(autoPartitionKeyIndex);
+    }
+
+    /** Returns true if the partition name is a historical system partition for the table. */
+    public static boolean isHistoricalPartitionName(TableInfo tableInfo, String partitionName) {
+        if (!tableInfo.isAutoPartitioned()) {
+            return false;
+        }
+        return isHistoricalPartitionName(
+                tableInfo.getPartitionKeys(),
+                tableInfo.getTableConfig().getAutoPartitionStrategy(),
+                partitionName);
+    }
+
+    /** Returns true if the partition name is a historical system partition. */
+    public static boolean isHistoricalPartitionName(
+            List<String> partitionKeys,
+            AutoPartitionStrategy autoPartitionStrategy,
+            String partitionName) {
+        ResolvedPartitionSpec partitionSpec;
+        try {
+            partitionSpec = ResolvedPartitionSpec.fromPartitionName(partitionKeys, partitionName);
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
+
+        return isHistoricalPartitionSpec(
+                partitionKeys, autoPartitionStrategy, partitionSpec.toPartitionSpec());
+    }
+
+    /** Returns true if the partition spec targets the auto key with the historical value. */
+    public static boolean isHistoricalPartitionSpec(
+            List<String> partitionKeys,
+            AutoPartitionStrategy autoPartitionStrategy,
+            PartitionSpec partitionSpec) {
+        Map<String, String> partitionSpecMap = partitionSpec.getSpecMap();
+        if (partitionKeys.size() != partitionSpecMap.size()) {
+            return false;
+        }
+
+        Optional<Integer> autoPartitionKeyIndex =
+                getAutoPartitionKeyIndex(partitionKeys, autoPartitionStrategy);
+        if (!autoPartitionKeyIndex.isPresent()) {
+            return false;
+        }
+
+        if (!partitionSpecMap.keySet().containsAll(partitionKeys)) {
+            return false;
+        }
+
+        String autoPartitionKey = partitionKeys.get(autoPartitionKeyIndex.get());
+        return HISTORICAL_PARTITION_VALUE.equals(partitionSpecMap.get(autoPartitionKey));
+    }
+
+    /**
+     * Converts an original partition name to the corresponding historical system partition spec.
+     */
+    public static ResolvedPartitionSpec toHistoricalPartitionSpec(
+            TableInfo tableInfo, String originalPartitionName) {
+        AutoPartitionStrategy autoPartitionStrategy =
+                tableInfo.getTableConfig().getAutoPartitionStrategy();
+        Optional<Integer> autoPartitionKeyIndex =
+                getAutoPartitionKeyIndex(tableInfo.getPartitionKeys(), autoPartitionStrategy);
+        if (!autoPartitionKeyIndex.isPresent()) {
+            throw new InvalidPartitionException(
+                    String.format(
+                            "Cannot resolve historical partition for table %s because auto partition key is not available.",
+                            tableInfo.getTablePath()));
+        }
+
+        ResolvedPartitionSpec originalPartitionSpec =
+                ResolvedPartitionSpec.fromPartitionName(
+                        tableInfo.getPartitionKeys(), originalPartitionName);
+        List<String> historicalPartitionValues =
+                new ArrayList<>(originalPartitionSpec.getPartitionValues());
+        historicalPartitionValues.set(autoPartitionKeyIndex.get(), HISTORICAL_PARTITION_VALUE);
+        return new ResolvedPartitionSpec(tableInfo.getPartitionKeys(), historicalPartitionValues);
+    }
+
+    /**
+     * Returns whether a missing physical partition is eligible to fall back to historical lookup.
+     *
+     * <p>The table must be an auto-partitioned Paimon lake table, and the partition must contain a
+     * valid auto-partition time older than the retention window. This method only determines
+     * routing eligibility; it does not verify that the historical partition or requested data
+     * exists.
+     */
+    public static boolean isHistoricalLookupCandidatePartition(
+            TableInfo tableInfo, String partitionName, Instant now) {
+        // Historical lookup only applies to auto-partitioned Paimon lake tables.
+        if (!tableInfo.isAutoPartitioned()) {
+            return false;
+        }
+        if (!tableInfo.getTableConfig().isDataLakeEnabled()) {
+            return false;
+        }
+        if (tableInfo.getTableConfig().getDataLakeFormat().orElse(null) != DataLakeFormat.PAIMON) {
+            return false;
+        }
+
+        ResolvedPartitionSpec partitionSpec;
+        try {
+            partitionSpec =
+                    ResolvedPartitionSpec.fromPartitionName(
+                            tableInfo.getPartitionKeys(), partitionName);
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
+
+        AutoPartitionStrategy autoPartitionStrategy =
+                tableInfo.getTableConfig().getAutoPartitionStrategy();
+        Optional<Integer> autoPartitionKeyIndex =
+                getAutoPartitionKeyIndex(tableInfo.getPartitionKeys(), autoPartitionStrategy);
+        if (!autoPartitionKeyIndex.isPresent()) {
+            return false;
+        }
+
+        // Extract the auto partition value from single-level or multi-level partition names.
+        String autoPartitionValue =
+                partitionSpec.getPartitionValues().get(autoPartitionKeyIndex.get());
+        AutoPartitionTimeUnit timeUnit = autoPartitionStrategy.timeUnit();
+        if (!isValidPartitionTime(autoPartitionValue, timeUnit, autoPartitionStrategy)) {
+            return false;
+        }
+
+        if (autoPartitionStrategy.numToRetain() < 0) {
+            return false;
+        }
+
+        // Only partitions older than the retention window should fall back to historical lookup.
+        ZonedDateTime current =
+                ZonedDateTime.ofInstant(now, autoPartitionStrategy.timeZone().toZoneId());
+        String earliestRetained =
+                generateAutoPartitionTime(
+                        current,
+                        -autoPartitionStrategy.numToRetain(),
+                        timeUnit,
+                        autoPartitionStrategy);
+        return earliestRetained.compareTo(autoPartitionValue) > 0;
+    }
+
+    /**
+     * Validates a historical system partition create request and returns the resolved partition
+     * spec.
+     */
+    public static ResolvedPartitionSpec validateHistoricalPartitionSpec(
+            TablePath tablePath,
+            List<String> partitionKeys,
+            AutoPartitionStrategy autoPartitionStrategy,
+            PartitionSpec partitionSpec) {
+        validatePartitionSpec(tablePath, partitionKeys, partitionSpec, false);
+
+        if (!isHistoricalPartitionSpec(partitionKeys, autoPartitionStrategy, partitionSpec)) {
+            throw new InvalidPartitionException(
+                    String.format(
+                            "Invalid historical partition spec %s for partitioned table %s.",
+                            partitionSpec, tablePath));
+        }
+
+        ResolvedPartitionSpec resolvedPartitionSpec =
+                ResolvedPartitionSpec.fromPartitionSpec(partitionKeys, partitionSpec);
+        int autoKeyIndex = getAutoPartitionKeyIndex(partitionKeys, autoPartitionStrategy).get();
+        List<String> nonAutoPartitionValues =
+                new ArrayList<>(resolvedPartitionSpec.getPartitionValues());
+        nonAutoPartitionValues.remove(autoKeyIndex);
+        validatePartitionValues(nonAutoPartitionValues, true);
+        return resolvedPartitionSpec;
     }
 
     /**
