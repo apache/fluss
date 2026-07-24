@@ -1461,6 +1461,14 @@ public class ConfigOptions {
                             "The maximum time to wait for enough bytes to be available for a fetch log "
                                     + "request from client to response.");
 
+    public static final ConfigOption<Duration> CLIENT_SCANNER_LOG_END_OFFSET_REFRESH_INTERVAL =
+            key("client.scanner.log.end-offset-refresh-interval")
+                    .durationType()
+                    .defaultValue(Duration.ofSeconds(10))
+                    .withDescription(
+                            "The interval for Flink source readers to refresh latest log end offsets "
+                                    + "of subscribed buckets for records lag metrics.");
+
     public static final ConfigOption<MemorySize> CLIENT_SCANNER_LOG_FETCH_MIN_BYTES =
             key("client.scanner.log.fetch.min-bytes")
                     .memoryType()

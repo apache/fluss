@@ -64,10 +64,81 @@ class FlinkSourceReaderMetricsTest {
         assertCurrentOffset(t3, 15513L, metricListener);
     }
 
+    @Test
+    void testRecordsLagTracking() {
+        MetricListener metricListener = new MetricListener();
+        final TableBucket t0 = new TableBucket(0, 0L, 1);
+        final TableBucket t1 = new TableBucket(0, null, 2);
+
+        final FlinkSourceReaderMetrics flinkSourceReaderMetrics =
+                new FlinkSourceReaderMetrics(
+                        InternalSourceReaderMetricGroup.mock(metricListener.getMetricGroup()));
+
+        flinkSourceReaderMetrics.registerTableBucket(t0, "dt=2026-05-19", 100L, null, true);
+        flinkSourceReaderMetrics.recordLogEndOffset(t0, 130L);
+        flinkSourceReaderMetrics.recordLogEndOffset(t0, 135L);
+        flinkSourceReaderMetrics.recordLogEndOffset(t0, 120L);
+
+        flinkSourceReaderMetrics.registerTableBucket(t1, null, 5L, 8L, false);
+        flinkSourceReaderMetrics.recordLogEndOffset(t1, 99L);
+
+        assertRecordsLag(t0, 35L, metricListener);
+        assertLogEndOffset(t0, 135L, metricListener);
+        assertRecordsLag(t1, 3L, metricListener);
+        assertLogEndOffset(t1, 8L, metricListener);
+        assertSourceGauge(
+                FlinkSourceReaderMetrics.RECORDS_LAG_MAX_METRIC_GAUGE, 35L, metricListener);
+        assertSourceGauge(
+                FlinkSourceReaderMetrics.RECORDS_LAG_SUM_METRIC_GAUGE, 38L, metricListener);
+        assertLaggingBuckets(2, metricListener);
+
+        flinkSourceReaderMetrics.recordCurrentOffset(t0, 109L);
+        flinkSourceReaderMetrics.recordCurrentOffset(t1, 7L);
+
+        assertRecordsLag(t0, 25L, metricListener);
+        assertRecordsLag(t1, 0L, metricListener);
+        assertSourceGauge(
+                FlinkSourceReaderMetrics.RECORDS_LAG_MAX_METRIC_GAUGE, 25L, metricListener);
+        assertSourceGauge(
+                FlinkSourceReaderMetrics.RECORDS_LAG_SUM_METRIC_GAUGE, 25L, metricListener);
+        assertLaggingBuckets(1, metricListener);
+
+        flinkSourceReaderMetrics.unregisterTableBucket(t0);
+
+        assertSourceGauge(
+                FlinkSourceReaderMetrics.RECORDS_LAG_MAX_METRIC_GAUGE, 0L, metricListener);
+        assertSourceGauge(
+                FlinkSourceReaderMetrics.RECORDS_LAG_SUM_METRIC_GAUGE, 0L, metricListener);
+        assertLaggingBuckets(0, metricListener);
+    }
+
     // ----------- Assertions --------------
 
     private void assertCurrentOffset(
             TableBucket tb, long expectedOffset, MetricListener metricListener) {
+        assertBucketGauge(
+                tb,
+                FlinkSourceReaderMetrics.CURRENT_OFFSET_METRIC_GAUGE,
+                expectedOffset,
+                metricListener);
+    }
+
+    private void assertLogEndOffset(
+            TableBucket tb, long expectedOffset, MetricListener metricListener) {
+        assertBucketGauge(
+                tb,
+                FlinkSourceReaderMetrics.LOG_END_OFFSET_METRIC_GAUGE,
+                expectedOffset,
+                metricListener);
+    }
+
+    private void assertRecordsLag(TableBucket tb, long expectedLag, MetricListener metricListener) {
+        assertBucketGauge(
+                tb, FlinkSourceReaderMetrics.RECORDS_LAG_METRIC_GAUGE, expectedLag, metricListener);
+    }
+
+    private void assertBucketGauge(
+            TableBucket tb, String metricName, long expectedValue, MetricListener metricListener) {
         final Optional<Gauge<Long>> currentOffsetGauge;
         if (tb.getPartitionId() == null) {
             currentOffsetGauge =
@@ -76,7 +147,7 @@ class FlinkSourceReaderMetricsTest {
                             READER_METRIC_GROUP,
                             BUCKET_GROUP,
                             String.valueOf(tb.getBucket()),
-                            FlinkSourceReaderMetrics.CURRENT_OFFSET_METRIC_GAUGE);
+                            metricName);
         } else {
             currentOffsetGauge =
                     metricListener.getGauge(
@@ -86,10 +157,28 @@ class FlinkSourceReaderMetricsTest {
                             String.valueOf(tb.getPartitionId()),
                             BUCKET_GROUP,
                             String.valueOf(tb.getBucket()),
-                            FlinkSourceReaderMetrics.CURRENT_OFFSET_METRIC_GAUGE);
+                            metricName);
         }
 
         assertThat(currentOffsetGauge).isPresent();
-        assertThat((long) currentOffsetGauge.get().getValue()).isEqualTo(expectedOffset);
+        assertThat((long) currentOffsetGauge.get().getValue()).isEqualTo(expectedValue);
+    }
+
+    private void assertSourceGauge(
+            String metricName, long expectedValue, MetricListener metricListener) {
+        Optional<Gauge<Long>> gauge =
+                metricListener.getGauge(FLUSS_METRIC_GROUP, READER_METRIC_GROUP, metricName);
+        assertThat(gauge).isPresent();
+        assertThat((long) gauge.get().getValue()).isEqualTo(expectedValue);
+    }
+
+    private void assertLaggingBuckets(int expectedValue, MetricListener metricListener) {
+        Optional<Gauge<Integer>> gauge =
+                metricListener.getGauge(
+                        FLUSS_METRIC_GROUP,
+                        READER_METRIC_GROUP,
+                        FlinkSourceReaderMetrics.LAGGING_BUCKETS_METRIC_GAUGE);
+        assertThat(gauge).isPresent();
+        assertThat((int) gauge.get().getValue()).isEqualTo(expectedValue);
     }
 }
