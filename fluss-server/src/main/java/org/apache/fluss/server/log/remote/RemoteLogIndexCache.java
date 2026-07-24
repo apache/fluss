@@ -370,7 +370,7 @@ public class RemoteLogIndexCache implements Closeable {
         try (Stream<Path> paths = Files.list(cacheDir.toPath())) {
             paths.forEach(
                     path -> {
-                        if (path.endsWith(TMP_FILE_SUFFIX)) {
+                        if (path.getFileName().toString().endsWith(TMP_FILE_SUFFIX)) {
                             try {
                                 if (Files.deleteIfExists(path)) {
                                     LOG.debug("Deleted file path {} on cache initialization", path);
