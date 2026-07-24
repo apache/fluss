@@ -9,8 +9,8 @@ sidebar_position: 2
 In Fluss, a **Partitioned Table** organizes data based on one or more partition keys, providing a way to improve query performance and manageability for large datasets. Partitions allow the system to divide data into distinct segments, each corresponding to specific values of the partition keys.
 
 For partitioned tables, Fluss supports three strategies of managing partitions.
-   - **Manual management partitions**, user can create new partitions or drop exists partitions. Learn how to create or drop partitions please refer to [Add Partition](engine-flink/ddl.md#add-partition) and [Drop Partition](engine-flink/ddl.md#drop-partition).
-   - **Auto management partitions**, the partitions will be created based on the auto partitioning rules configured at the time of table creation, and expired partitions are automatically removed, ensuring data not expanding unlimited. See [Auto Partitioning](table-design/data-distribution/partitioning.md#auto-partitioning).
+   - **Manual management partitions**, user can create new partitions or drop existing partitions. Learn how to create or drop partitions please refer to [Add Partition](engine-flink/ddl.md#add-partition) and [Drop Partition](engine-flink/ddl.md#drop-partition).
+   - **Auto management partitions**, the partitions will be created based on the auto partitioning rules configured at the time of table creation, and expired partitions are automatically removed, ensuring data does not expand indefinitely. See [Auto Partitioning](table-design/data-distribution/partitioning.md#auto-partitioning).
    - **Dynamic create partitions**, the partitions will be created automatically based on the data being written to the table. See [Dynamic Partitioning](table-design/data-distribution/partitioning.md#dynamic-partitioning).
    
 These three strategies are orthogonal and can coexist on the same table.
@@ -22,7 +22,7 @@ Partitioned tables (either primary-key table or log table) support configuring p
 For example, in an `Order` primary key table, the partition key can be defined as `(date, region)`. Data will then be stored in partitions corresponding to specific combinations such as `date=2025-04-05, region=US`. Users can leverage partition pruning during streaming queries — such as filtering by `region=US` — to improve read performance through partition pushdown.
 
 ### Key Benefits of Partitioned Tables
-- **Improved Query Performance:** By narrowing down the query scope to specific partitions, the system reads fewer data, reducing query execution time.
+- **Improved Query Performance:** By narrowing down the query scope to specific partitions, the system reads less data, reducing query execution time.
 - **Data Organization:** Partitions help in logically organizing data, making it easier to manage and query.
 - **Scalability:** Partitioning large datasets distributes the data across smaller, manageable chunks, improving scalability.
 

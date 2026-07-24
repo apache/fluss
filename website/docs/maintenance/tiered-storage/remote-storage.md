@@ -34,7 +34,7 @@ Below is the list for all configurations to control the log segments tiered beha
 ### Table configurations about remote log
 
 When local log segments are copied to remote storage, the local log segments will be deleted to reduce local disk cost.
-But sometimes, we want to keep the several latest log segments retain in local, although they have been coped to remote storage for better read performance.
+But sometimes, we want to keep the several latest log segments retain in local, although they have been copied to remote storage for better read performance.
 You can control how many log segments to retain in local by setting the configuration `table.log.tiered.local-segments`(default is 2) per table.
 
 ## Remote snapshot of primary key table

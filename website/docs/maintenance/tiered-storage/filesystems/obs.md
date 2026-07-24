@@ -45,7 +45,7 @@ HuaweiCloud OBS support is not included in the default Fluss distribution. To en
 
 ## Configurations setup
 
-To enabled HuaweiCloud OBS as remote storage, there are some required configurations that must be added to Fluss' `server.yaml`:
+To enable HuaweiCloud OBS as remote storage, there are some required configurations that must be added to Fluss' `server.yaml`:
 
 ```yaml
 # The dir that used to be as the remote storage of Fluss
