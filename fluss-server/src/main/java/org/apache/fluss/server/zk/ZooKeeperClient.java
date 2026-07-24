@@ -1781,7 +1781,8 @@ public class ZooKeeperClient implements AutoCloseable {
         Integer leader = leaderAndIsr != null ? leaderAndIsr.leader() : null;
         Integer leaderEpoch = leaderAndIsr != null ? leaderAndIsr.leaderEpoch() : null;
         List<Integer> replicas = assignment.getBucketAssignments().get(bucketId).getReplicas();
-        return new BucketMetadata(bucketId, leader, leaderEpoch, replicas);
+        List<Integer> isr = leaderAndIsr != null ? leaderAndIsr.isr() : Collections.emptyList();
+        return new BucketMetadata(bucketId, leader, leaderEpoch, replicas, isr);
     }
 
     /** Close the underlying ZooKeeperClient. */

@@ -33,6 +33,7 @@ public final class BucketLocation {
     private final TableBucket tableBucket;
     @Nullable private Integer leader;
     private final int[] replicas;
+    private final int[] isr;
 
     public BucketLocation(
             PhysicalTablePath physicalTablePath,
@@ -40,7 +41,7 @@ public final class BucketLocation {
             int bucketId,
             @Nullable Integer leader,
             int[] replicas) {
-        this(physicalTablePath, new TableBucket(tableId, bucketId), leader, replicas);
+        this(physicalTablePath, new TableBucket(tableId, bucketId), leader, replicas, new int[0]);
     }
 
     public BucketLocation(
@@ -48,10 +49,20 @@ public final class BucketLocation {
             TableBucket tableBucket,
             @Nullable Integer leader,
             int[] replicas) {
+        this(physicalTablePath, tableBucket, leader, replicas, new int[0]);
+    }
+
+    public BucketLocation(
+            PhysicalTablePath physicalTablePath,
+            TableBucket tableBucket,
+            @Nullable Integer leader,
+            int[] replicas,
+            int[] isr) {
         this.physicalTablePath = physicalTablePath;
         this.tableBucket = tableBucket;
         this.leader = leader;
         this.replicas = replicas;
+        this.isr = isr;
     }
 
     public PhysicalTablePath getPhysicalTablePath() {
@@ -79,6 +90,10 @@ public final class BucketLocation {
         return replicas;
     }
 
+    public int[] getIsr() {
+        return isr;
+    }
+
     @Override
     public boolean equals(Object object) {
         if (this == object) {
@@ -91,22 +106,29 @@ public final class BucketLocation {
         return Objects.equals(physicalTablePath, that.physicalTablePath)
                 && Objects.equals(tableBucket, that.tableBucket)
                 && Objects.equals(leader, that.leader)
-                && Objects.deepEquals(replicas, that.replicas);
+                && Objects.deepEquals(replicas, that.replicas)
+                && Objects.deepEquals(isr, that.isr);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(physicalTablePath, tableBucket, leader, Arrays.hashCode(replicas));
+        return Objects.hash(
+                physicalTablePath,
+                tableBucket,
+                leader,
+                Arrays.hashCode(replicas),
+                Arrays.hashCode(isr));
     }
 
     @Override
     public String toString() {
         return String.format(
-                "Bucket(physicalTablePath = %s, %s, leader = %s, replicas = %s)",
+                "Bucket(physicalTablePath = %s, %s, leader = %s, replicas = %s, isr = %s)",
                 physicalTablePath,
                 tableBucket,
                 leader == null ? "none" : leader,
-                formatNodeIds(replicas));
+                formatNodeIds(replicas),
+                formatNodeIds(isr));
     }
 
     /** Format the node ids from each item in the array for display. */

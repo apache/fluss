@@ -1,0 +1,82 @@
+#
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+# Fluss local development cluster
+# Usage:
+#   docker compose -f docker/docker-compose.yml up -d
+#   docker compose -f docker/docker-compose.yml exec coordinator ./bin/fluss-database.sh --bootstrap-server coordinator:9123 --list
+
+services:
+  zookeeper:
+    image: zookeeper:3.8
+    ports:
+      - "2181:2181"
+    environment:
+      ZOO_MY_ID: 1
+
+  coordinator:
+    image: fluss-local
+    depends_on:
+      - zookeeper
+    ports:
+      - "9123:9123"
+    environment:
+      FLUSS_PROPERTIES: |
+        zookeeper.address: zookeeper:2181
+        bind.listeners: FLUSS://coordinator:9123
+        remote.data.dir: /tmp/fluss-remote-data
+    command: coordinatorServer
+
+  tablet-server-0:
+    image: fluss-local
+    depends_on:
+      - coordinator
+    environment:
+      FLUSS_PROPERTIES: |
+        zookeeper.address: zookeeper:2181
+        bind.listeners: FLUSS://tablet-server-0:9123
+        tablet-server.id: 0
+        data.dir: /tmp/fluss-data
+        remote.data.dir: /tmp/fluss-remote-data
+    command: tabletServer
+
+  tablet-server-1:
+    image: fluss-local
+    depends_on:
+      - coordinator
+    environment:
+      FLUSS_PROPERTIES: |
+        zookeeper.address: zookeeper:2181
+        bind.listeners: FLUSS://tablet-server-1:9123
+        tablet-server.id: 1
+        data.dir: /tmp/fluss-data
+        remote.data.dir: /tmp/fluss-remote-data
+    command: tabletServer
+
+  tablet-server-2:
+    image: fluss-local
+    depends_on:
+      - coordinator
+    environment:
+      FLUSS_PROPERTIES: |
+        zookeeper.address: zookeeper:2181
+        bind.listeners: FLUSS://tablet-server-2:9123
+        tablet-server.id: 2
+        data.dir: /tmp/fluss-data
+        remote.data.dir: /tmp/fluss-remote-data
+    command: tabletServer
