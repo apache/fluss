@@ -3310,3 +3310,16 @@ button.clean-btn[class*='toggle'] svg {
 html[data-theme='light'] .navbar__search {
     opacity: 1;
 }
+
+/* =========================================================================
+   Mermaid diagrams
+   ========================================================================= */
+
+/* Mermaid sizes node/edge label boxes assuming its own line-height of 1.5,
+   but the site's paragraph line-height (1.8) also applies inside the SVG's
+   HTML labels — multi-line labels overflow and clip at the bottom. Pin the
+   label line-height back to what mermaid measured with. */
+.docusaurus-mermaid-container foreignObject p {
+  line-height: 1.5;
+  margin: 0;
+}

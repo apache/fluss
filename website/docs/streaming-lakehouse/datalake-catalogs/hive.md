@@ -1,6 +1,6 @@
 ---
 title: Hive Metastore
-sidebar_position: 3
+sidebar_position: 4
 ---
 
 # Hive Metastore
@@ -15,7 +15,7 @@ This guide explains how to configure Fluss to use Hive Metastore as its Iceberg 
 
 When Fluss is configured with Hive Metastore as its Iceberg catalog:
 
-1. **Data ingestion**: Applications write data to Fluss tables using the Fluss client (Java/Python) or Flink SQL. Fluss stores this data in its log tables.
+1. **Data ingestion**: Applications write data to Fluss tables using the Fluss client (Java/Python) or Flink SQL. Fluss stores this data in its tables (log tables or primary key tables).
 2. **Tiering to Iceberg**: A separate Flink job (the tiering service) periodically reads accumulated data from Fluss, converts it to Parquet format, writes the files to HDFS (or S3/OSS), and commits an Iceberg snapshot to the Hive Metastore.
 3. **Query via Spark/Trino/Flink**: Any Iceberg-compatible engine configured with Hive catalog can discover and query the tiered tables through HMS.
 
@@ -51,15 +51,18 @@ flowchart TD
     D3 -->|commit snapshot| C1
     C1 -.->|discover tables| C3
     C2 -.->|read data| C3
+    B2 -->|remote log & KV snapshots| C2
 ```
 
-> **Note**: The tiering service is a Flink job that bridges Fluss's log tables to Iceberg tables in Hive Metastore. Flink is also commonly used for data ingestion (via SQL), but applications can write directly to Fluss using the client library.
+> **Note**: The tiering service is a Flink job that bridges Fluss tables to Iceberg tables in Hive Metastore. Flink is also commonly used for data ingestion (via SQL), but applications can write directly to Fluss using the client library.
 
 ## Prerequisites
 
 ### Java Version
 
-Fluss 0.9.x requires **Java 17 or later** for the Tablet Server.
+Fluss requires **Java 11 or later**, with Java 17 recommended (see [Deploying Fluss](../../install-deploy/deploying-local-cluster.md)).
+
+> **NOTE**: The 0.9.1 release binaries do not run on Java 11 — the Tablet Server fails with `NoSuchMethodError: MappedByteBuffer.duplicate()` because the release was compiled on a newer JDK. Use Java 17+ with the 0.9.1 binaries, or build Fluss from source on JDK 11.
 
 ### Running Hive Metastore
 
@@ -88,7 +91,7 @@ Download and place the following JARs in the `${FLUSS_HOME}/plugins/iceberg/` di
 | 7 | [jackson-databind-2.15.2.jar](https://repo1.maven.org/maven2/com/fasterxml/jackson/core/jackson-databind/2.15.2/jackson-databind-2.15.2.jar) | 1.5 MB | JSON data binding |
 | 8 | [jackson-annotations-2.15.2.jar](https://repo1.maven.org/maven2/com/fasterxml/jackson/core/jackson-annotations/2.15.2/jackson-annotations-2.15.2.jar) | 75 KB | JSON annotations |
 
-> **NOTE**: The Fluss binary distribution already includes `fluss-lake-iceberg-$FLUSS_VERSION$.jar` in `plugins/iceberg/`. You do not need to download it separately  only add the 8 JARs above.
+> **NOTE**: The Fluss binary distribution already includes `fluss-lake-iceberg-$FLUSS_VERSION$.jar` in `plugins/iceberg/`. You do not need to download it separately — only add the 8 JARs above.
 
 > **TIP**: `hive-exec-2.3.10.jar` is a shaded uber JAR that bundles the Hive metastore client, `HiveConf`, Apache Thrift, libfb303, and Guava. Using the full `hive-exec` (not the `-core` variant) avoids needing to track down each transitive dependency individually. Despite its size, it is the simplest way to satisfy all Hive client requirements.
 
@@ -99,7 +102,7 @@ Place the following JARs in `${FLINK_HOME}/lib`:
 1. **All 8 JARs listed above** (iceberg-hive-metastore, hive-exec, hadoop-client-api, hadoop-client-runtime, commons-logging, jackson-core, jackson-databind, jackson-annotations)
 2. **Fluss Flink Connector**: [fluss-flink-1.20-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-flink-1.20/$FLUSS_VERSION$/fluss-flink-1.20-$FLUSS_VERSION$.jar) (pick the version matching your Flink runtime)
 3. **Fluss Lake Iceberg**: [fluss-lake-iceberg-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-lake-iceberg/$FLUSS_VERSION$/fluss-lake-iceberg-$FLUSS_VERSION$.jar)
-4. **Fluss Flink Tiering**: [fluss-flink-tiering-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-flink-tiering/$FLUSS_VERSION$/fluss-flink-tiering-$FLUSS_VERSION$.jar)  the tiering job JAR itself
+4. **Fluss Flink Tiering**: [fluss-flink-tiering-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-flink-tiering/$FLUSS_VERSION$/fluss-flink-tiering-$FLUSS_VERSION$.jar) — the tiering job JAR itself
 
 ### Hadoop Classpath Configuration (HDFS Only)
 
@@ -151,7 +154,7 @@ ${FLINK_HOME}/bin/flink run /path/to/fluss-flink-tiering-$FLUSS_VERSION$.jar \
 
 ## Quick Start (Docker Compose)
 
-This section provides a complete docker-compose setup that runs the entire Hive Metastore integration end-to-end. It starts HMS, ZooKeeper, Fluss, Flink, creates a table, inserts data, tiers it to Iceberg via HMS, and reads it back. No cloud account or Hadoop cluster needed  everything runs locally.
+This section provides a complete docker-compose setup that runs the entire Hive Metastore integration end-to-end. It starts HMS, ZooKeeper, Fluss, Flink, creates a table, inserts data, tiers it to Iceberg via HMS, and reads it back. No cloud account or Hadoop cluster needed — everything runs locally.
 
 **Prerequisites**: Docker and Docker Compose installed.
 
@@ -211,7 +214,7 @@ services:
       - fluss-plugins:/plugins
 
   coordinator:
-    image: apache/fluss:$FLUSS_VERSION$
+    image: apache/fluss:$FLUSS_DOCKER_VERSION$
     command: coordinatorServer
     depends_on:
       zookeeper: { condition: service_healthy }
@@ -239,7 +242,7 @@ services:
       start_period: 30s
 
   tablet-server:
-    image: apache/fluss:$FLUSS_VERSION$
+    image: apache/fluss:$FLUSS_DOCKER_VERSION$
     command: tabletServer
     depends_on:
       coordinator: { condition: service_healthy }
@@ -359,7 +362,7 @@ Run it:
 docker compose up
 ```
 
-Watch the `flink` container logs. After about 3ΓÇô4 minutes (JAR downloads + tiering flush), you should see:
+Watch the `flink` container logs. After about 3–4 minutes (JAR downloads + tiering flush), you should see:
 
 ```
 +----+----------+------------+----------+------------+
@@ -408,7 +411,7 @@ CREATE TABLE daily_events (
 
 Fluss will create a corresponding Iceberg table in the Hive Metastore under the database matching your Fluss namespace. Once data is ingested and the tiering service commits a snapshot, Parquet files appear in the warehouse path and the table becomes queryable via HMS.
 
-> **NOTE**: The database must be created in the Fluss catalog first  Fluss maintains its own database registry in ZooKeeper. The database name in Fluss maps 1:1 to the HMS database name during tiering.
+> **NOTE**: The database must be created in the Fluss catalog first — Fluss maintains its own database registry in ZooKeeper. The database name in Fluss maps 1:1 to the HMS database name during tiering.
 
 ### Query Data with Spark
 
@@ -422,14 +425,15 @@ SELECT * FROM hive_catalog.my_database.daily_events;
 ### Query Data with Flink (Union Read)
 
 ```sql title="Flink SQL"
--- Union read: combines fresh data in Fluss with historical data in Iceberg
 SET 'execution.runtime-mode' = 'streaming';
+
+-- Union read: starts from the Iceberg snapshot in Hive Metastore, then continues with the Fluss changelog
 SELECT * FROM daily_events;
 ```
 
-> **NOTE**: Union reads for **primary key tables** with the Iceberg lake format are not yet supported. If your table has a primary key, query tiered data directly through Spark/Trino (which reads from the Iceberg snapshot in Hive Metastore) or read from the Fluss log only. Union reads work for log tables (append-only, no primary key).
+> **NOTE**: For **primary key tables**, union reads work in **streaming** mode only — **batch** mode is not yet supported with the Iceberg lake format and fails with `UnsupportedOperationException`. In batch you can only query the **tiered data** — which excludes recent changes not yet tiered — either through Spark/Trino against the Iceberg table in Hive Metastore, or via `SELECT ... FROM daily_events$lake` in Flink. Log tables (append-only, no primary key) support union reads in both modes.
 
-For details on union reads and streaming reads, see [Iceberg - Read Tables](../datalake-formats/iceberg.md#read-tables).
+For details on union reads and streaming reads, see [Union Read](../union-read.md) and [Iceberg - Read Tables](../datalake-formats/iceberg.md#read-tables).
 
 ## Troubleshooting
 
@@ -442,11 +446,11 @@ For details on union reads and streaming reads, see [Iceberg - Read Tables](../d
 | `ClassNotFoundException: com.fasterxml.jackson.core.JsonProcessingException` | Missing Jackson | Add `jackson-core`, `jackson-databind`, `jackson-annotations` JARs to `plugins/iceberg/` |
 | `TApplicationException: Invalid method name: 'get_table'` | HMS 4.x incompatibility | Use HMS **2.x or 3.x** (not 4.x). Iceberg's Hive client targets Hive 2.3.x which is incompatible with the HMS 4.x thrift protocol |
 | `NoClassDefFoundError: com/google/common/collect/ImmutableMap` | Missing Guava | Ensure you're using the full `hive-exec-2.3.10.jar` (it bundles Guava internally) |
-| `NoSuchMethodError: MappedByteBuffer.duplicate()` | Java version too old | Fluss 0.9.x requires **Java 17+**. Upgrade from Java 11. |
+| `NoSuchMethodError: MappedByteBuffer.duplicate()` | 0.9.1 release binaries running on Java 11 | Use Java 17+ with the release binaries, or build Fluss from source on JDK 11 |
 
 ## Further Reading
 
-- [Iceberg Integration](../datalake-formats/iceberg.md)  Table mapping, data types, and configurations.
-- [Lakehouse Storage](maintenance/tiered-storage/lakehouse-storage.md)  General tiered storage overview.
-- [AWS Glue Catalog](glue.md)  Alternative Iceberg catalog for AWS environments.
-- [Iceberg Hive Catalog Docs](https://iceberg.apache.org/docs/latest/hive/)  Official Iceberg Hive documentation.
+- [Iceberg Integration](../datalake-formats/iceberg.md) — Table mapping, data types, and configurations.
+- [Lakehouse Storage](maintenance/tiered-storage/lakehouse-storage.md) — General tiered storage overview.
+- [AWS Glue Catalog](glue.md) — Alternative Iceberg catalog for AWS environments.
+- [Iceberg Hive Catalog Docs](https://iceberg.apache.org/docs/latest/hive/) — Official Iceberg Hive documentation.
