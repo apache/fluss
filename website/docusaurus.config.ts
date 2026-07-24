@@ -90,6 +90,38 @@ const config: Config = {
     },
   ],
 
+  // kapa.ai "Ask AI" widget. Modelled on the Apache Doris integration.
+  // Privacy: `data-consent-required` makes kapa show its own consent screen and
+  // withhold all data from its backend until the user explicitly consents (once
+  // per device, remembered by kapa); `data-user-analytics-cookie-enabled=false`
+  // disables analytics cookies. The matching CSP allowances live in .htaccess
+  // (CSP_PROJECT_DOMAINS), coordinated with the ASF privacy team.
+  scripts: [
+    {
+      src: 'https://widget.kapa.ai/kapa-widget.bundle.js',
+      async: true,
+      'data-website-id': '40ccde97-65ed-46d8-81f2-fe8a8a31f9d9',
+      'data-project-name': 'Apache Fluss',
+      'data-project-color': '#06b6d4',
+      // Icon-only (square) mark: the full wordmark gets cropped to "Fl" in
+      // kapa's small logo slot, so use the notext variant.
+      'data-project-logo': '/img/logo/svg/colored_logo_notext.svg',
+      'data-modal-title': 'Ask Apache Fluss AI',
+      'data-modal-image': '/img/logo/svg/colored_logo_notext.svg',
+      'data-modal-disclaimer':
+        'This is a custom LLM with access to the [Apache Fluss documentation](https://fluss.apache.org/docs/). Answers may be inaccurate — always verify against the official docs.',
+      // Hide kapa's own floating button; open the modal from our navbar pill.
+      'data-button-hide': 'true',
+      'data-modal-override-open-selector': '#navbar-ask-ai-btn',
+      // Privacy hardening (see comment above).
+      'data-consent-required': 'true',
+      'data-user-analytics-cookie-enabled': 'false',
+      // Bot protection uses kapa's default reCAPTCHA (CSP: www.google.com,
+      // www.gstatic.com). Do NOT force 'hcaptcha' unless the kapa project is
+      // provisioned for it in the dashboard, or captcha token fetches fail.
+    },
+  ],
+
   // Set the production url of your site here
   url: 'https://fluss.apache.org/',
   // Set the /<baseUrl>/ pathname under which your site is served
@@ -274,6 +306,16 @@ const config: Config = {
         {to: '/community/welcome', label: 'Community', position: 'left'},
         {to: '/roadmap', label: 'Roadmap', position: 'left'},
         {to: '/downloads', label: 'Downloads', position: 'left'},
+        {
+          // "Ask AI" pill that opens the kapa.ai widget. The kapa bundle
+          // (declared in the top-level `scripts` field above) binds its modal
+          // to this button via `data-modal-override-open-selector`, so a plain
+          // HTML button is all that's needed here.
+          type: 'html',
+          position: 'right',
+          value:
+            '<button id="navbar-ask-ai-btn" type="button" class="navbar-ask-ai">Ask AI</button>',
+        },
         {
           type: 'docsVersionDropdown',
           position: 'right',
