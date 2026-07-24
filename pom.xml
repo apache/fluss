@@ -1039,6 +1039,8 @@
                             </importOrder>
 
                             <removeUnusedImports/>
+
+                            <toggleOffOn />
                         </java>
                         <scala>
                             <scalafmt>
