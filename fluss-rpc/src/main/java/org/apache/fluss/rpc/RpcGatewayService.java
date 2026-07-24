@@ -85,4 +85,10 @@ public abstract class RpcGatewayService implements RpcGateway {
 
     /** Shutdown the gateway service, release any resources. */
     public abstract void shutdown();
+
+    /**
+     * Tries to complete all pending delayed actions. Default no-op for services without delayed
+     * action queue.
+     */
+    public void tryCompleteActions() {}
 }
