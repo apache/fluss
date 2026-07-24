@@ -1792,6 +1792,16 @@ public class ConfigOptions {
                             "The number of log segments to retain in local for each table when log tiered storage is enabled. "
                                     + "It must be greater that 0. The default is 2.");
 
+    public static final ConfigOption<Boolean> TABLE_LOG_REMOTE_COPY_ENABLED =
+            key("table.log.remote-copy.enabled")
+                    .booleanType()
+                    .defaultValue(true)
+                    .withDescription(
+                            "Whether remote log segment upload is enabled for the LogTable. "
+                                    + "If false, the LogTable does not upload log segments to remote storage. "
+                                    + "Cluster remote storage configuration is still required. "
+                                    + "This option is only supported for LogTable and is unsupported for primary key tables.");
+
     public static final ConfigOption<Boolean> TABLE_DATALAKE_ENABLED =
             key("table.datalake.enabled")
                     .booleanType()

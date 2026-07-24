@@ -125,6 +125,7 @@ public class TableDescriptorValidation {
         checkArrowCompression(tableConf);
         checkMergeEngine(tableConf, hasPrimaryKey, schema);
         checkDeleteBehavior(tableConf, hasPrimaryKey);
+        checkLogRemoteCopy(tableConf, hasPrimaryKey);
         checkTieredLog(tableConf);
         checkPartition(tableConf, tableDescriptor.getPartitionKeys(), schema.getRowType());
         checkSystemColumns(schema.getRowType());
@@ -447,6 +448,16 @@ public class TableDescriptorValidation {
                                 "Invalid aggregation function for column '%s': %s",
                                 column.getName(), e.getMessage()));
             }
+        }
+    }
+
+    private static void checkLogRemoteCopy(Configuration tableConf, boolean hasPrimaryKey) {
+        if (hasPrimaryKey
+                && tableConf.containsKey(ConfigOptions.TABLE_LOG_REMOTE_COPY_ENABLED.key())) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "'%s' is only supported for LogTable and unsupported for primary key tables.",
+                            ConfigOptions.TABLE_LOG_REMOTE_COPY_ENABLED.key()));
         }
     }
 

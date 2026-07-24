@@ -360,6 +360,10 @@ public final class Replica {
         return tableConfig.isDataLakeEnabled();
     }
 
+    public boolean isLogRemoteCopyEnabled() {
+        return tableConfig.isLogRemoteCopyEnabled();
+    }
+
     public long getLocalLogStartOffset() {
         return logTablet.localLogStartOffset();
     }

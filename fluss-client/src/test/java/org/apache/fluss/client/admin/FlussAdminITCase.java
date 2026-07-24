@@ -2361,6 +2361,163 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
     }
 
     @Test
+    void testCreateLogTableWithLogRemoteCopyDisabled() throws Exception {
+        Schema logTableSchema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("name", DataTypes.STRING())
+                        .column("age", DataTypes.INT())
+                        .build();
+        TablePath tablePath = TablePath.of("test_db", "test_log_table_remote_copy_disabled");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(logTableSchema)
+                        .comment("test log table with remote copy disabled")
+                        .distributedBy(3)
+                        .property(ConfigOptions.TABLE_LOG_REMOTE_COPY_ENABLED.key(), "false")
+                        .build();
+
+        admin.createTable(tablePath, tableDescriptor, false).get();
+
+        TableInfo tableInfo = admin.getTableInfo(tablePath).get();
+        assertThat(tableInfo.toTableDescriptor().getProperties())
+                .containsEntry(ConfigOptions.TABLE_LOG_REMOTE_COPY_ENABLED.key(), "false");
+        assertThat(tableInfo.getTableConfig().isLogRemoteCopyEnabled()).isFalse();
+    }
+
+    @Test
+    void testCreateLogTableWithoutLogRemoteCopyPropertyUsesDefault() throws Exception {
+        Schema logTableSchema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("name", DataTypes.STRING())
+                        .column("age", DataTypes.INT())
+                        .build();
+        TablePath tablePath = TablePath.of("test_db", "test_log_table_remote_copy_default");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(logTableSchema)
+                        .comment("test log table with default remote copy")
+                        .distributedBy(3)
+                        .build();
+
+        admin.createTable(tablePath, tableDescriptor, false).get();
+
+        TableInfo tableInfo = admin.getTableInfo(tablePath).get();
+        assertThat(tableInfo.toTableDescriptor().getProperties())
+                .doesNotContainKey(ConfigOptions.TABLE_LOG_REMOTE_COPY_ENABLED.key());
+        assertThat(tableInfo.getTableConfig().isLogRemoteCopyEnabled()).isTrue();
+    }
+
+    @Test
+    void testCreatePrimaryKeyTableWithLogRemoteCopyEnabledRejected() {
+        TablePath tablePath = TablePath.of("test_db", "test_pk_table_remote_copy_true");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(DEFAULT_SCHEMA)
+                        .comment("test primary key table with remote copy enabled")
+                        .distributedBy(3, "id")
+                        .property(ConfigOptions.TABLE_LOG_REMOTE_COPY_ENABLED.key(), "true")
+                        .build();
+
+        assertThatThrownBy(() -> admin.createTable(tablePath, tableDescriptor, false).get())
+                .cause()
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining(ConfigOptions.TABLE_LOG_REMOTE_COPY_ENABLED.key())
+                .hasMessageContaining("only supported for LogTable");
+    }
+
+    @Test
+    void testCreatePrimaryKeyTableWithLogRemoteCopyDisabledRejected() {
+        TablePath tablePath = TablePath.of("test_db", "test_pk_table_remote_copy_false");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(DEFAULT_SCHEMA)
+                        .comment("test primary key table with remote copy disabled")
+                        .distributedBy(3, "id")
+                        .property(ConfigOptions.TABLE_LOG_REMOTE_COPY_ENABLED.key(), "false")
+                        .build();
+
+        assertThatThrownBy(() -> admin.createTable(tablePath, tableDescriptor, false).get())
+                .cause()
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining(ConfigOptions.TABLE_LOG_REMOTE_COPY_ENABLED.key())
+                .hasMessageContaining("only supported for LogTable");
+    }
+
+    @Test
+    void testAlterTableSetLogRemoteCopyEnabledRejected() throws Exception {
+        Schema logTableSchema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("name", DataTypes.STRING())
+                        .column("age", DataTypes.INT())
+                        .build();
+        TablePath tablePath = TablePath.of("test_db", "test_alter_set_log_remote_copy");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(logTableSchema)
+                        .comment("test alter set log remote copy")
+                        .distributedBy(3)
+                        .build();
+        admin.createTable(tablePath, tableDescriptor, false).get();
+
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                tablePath,
+                                                Collections.singletonList(
+                                                        TableChange.set(
+                                                                ConfigOptions
+                                                                        .TABLE_LOG_REMOTE_COPY_ENABLED
+                                                                        .key(),
+                                                                "false")),
+                                                false)
+                                        .get())
+                .cause()
+                .hasMessageContaining(
+                        "The following options are not supported to alter yet: '"
+                                + ConfigOptions.TABLE_LOG_REMOTE_COPY_ENABLED.key()
+                                + "'.");
+    }
+
+    @Test
+    void testAlterTableResetLogRemoteCopyEnabledRejected() throws Exception {
+        Schema logTableSchema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("name", DataTypes.STRING())
+                        .column("age", DataTypes.INT())
+                        .build();
+        TablePath tablePath = TablePath.of("test_db", "test_alter_reset_log_remote_copy");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(logTableSchema)
+                        .comment("test alter reset log remote copy")
+                        .distributedBy(3)
+                        .property(ConfigOptions.TABLE_LOG_REMOTE_COPY_ENABLED.key(), "false")
+                        .build();
+        admin.createTable(tablePath, tableDescriptor, false).get();
+
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                tablePath,
+                                                Collections.singletonList(
+                                                        TableChange.reset(
+                                                                ConfigOptions
+                                                                        .TABLE_LOG_REMOTE_COPY_ENABLED
+                                                                        .key())),
+                                                false)
+                                        .get())
+                .cause()
+                .hasMessageContaining(
+                        "The following options are not supported to alter yet: '"
+                                + ConfigOptions.TABLE_LOG_REMOTE_COPY_ENABLED.key()
+                                + "'.");
+    }
+
+    @Test
     void testAlterTableTieredLogLocalSegments() throws Exception {
         // 1. Create table with default config = 2
         TablePath tablePath = TablePath.of("test_db", "test_alter_tiered_segments");

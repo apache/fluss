@@ -349,6 +349,21 @@ abstract class FlinkCatalogITCase {
     }
 
     @Test
+    void testShowCreateTableRetainsExplicitLogRemoteCopyDisabled() {
+        tEnv.executeSql(
+                "create table log_table_remote_copy_disabled(a int, b int) with ("
+                        + "'table.log.remote-copy.enabled' = 'false')");
+
+        CloseableIterator<Row> showCreateResult =
+                tEnv.executeSql("show create table log_table_remote_copy_disabled").collect();
+        List<Row> showCreateRows = CollectionUtil.iteratorToList(showCreateResult);
+
+        assertThat(showCreateRows).hasSize(1);
+        String showCreateStatement = (String) showCreateRows.get(0).getField(0);
+        assertThat(showCreateStatement).contains("'table.log.remote-copy.enabled' = 'false'");
+    }
+
+    @Test
     void testPartitionedTable() throws Exception {
         ObjectPath objectPath = new ObjectPath(DEFAULT_DB, "test_partitioned_table");
 
