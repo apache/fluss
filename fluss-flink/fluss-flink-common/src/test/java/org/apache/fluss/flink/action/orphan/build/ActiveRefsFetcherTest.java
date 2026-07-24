@@ -293,6 +293,258 @@ class ActiveRefsFetcherTest {
     }
 
     // -------------------------------------------------------------------------
+    // fetchKvSharedSstFileNames tests
+    // -------------------------------------------------------------------------
+
+    @Test
+    void fetchKvSharedSstFileNamesReadsMetadataAndExtractsFileNames() {
+        FsPath kvTabletDir = new FsPath("oss://b/kv/db/t-7/0");
+        Set<String> activeSnapDirs = new HashSet<>(Arrays.asList("snap-5", "snap-10"));
+
+        String metadataSnap5 =
+                "{\"kv_snapshot_handle\":{\"shared_file_handles\":["
+                        + "{\"kv_file_handle\":{\"path\":\"oss://b/kv/db/t-7/0/shared/remote-a\",\"size\":100},\"local_path\":\"aaa.sst\"},"
+                        + "{\"kv_file_handle\":{\"path\":\"oss://b/kv/db/t-7/0/shared/remote-b\",\"size\":200},\"local_path\":\"bbb.sst\"}"
+                        + "]}}";
+        String metadataSnap10 =
+                "{\"kv_snapshot_handle\":{\"shared_file_handles\":["
+                        + "{\"kv_file_handle\":{\"path\":\"oss://b/kv/db/t-7/0/shared/remote-b\",\"size\":200},\"local_path\":\"different-local.sst\"},"
+                        + "{\"kv_file_handle\":{\"path\":\"oss://b/kv/db/t-7/0/shared/remote-c\",\"size\":300},\"local_path\":\"ccc.sst\"}"
+                        + "]}}";
+
+        StubManifestReader reader = new StubManifestReader();
+        reader.returnBytes(
+                new FsPath("oss://b/kv/db/t-7/0/snap-5/_METADATA"),
+                metadataSnap5.getBytes(StandardCharsets.UTF_8));
+        reader.returnBytes(
+                new FsPath("oss://b/kv/db/t-7/0/snap-10/_METADATA"),
+                metadataSnap10.getBytes(StandardCharsets.UTF_8));
+
+        StubAdmin admin = new StubAdmin(new AtomicInteger());
+        ActiveRefsFetcher fetcher = new ActiveRefsFetcher(admin, reader, /* maxRetries= */ 3);
+
+        KvSharedSstFetchResult result =
+                fetcher.fetchKvSharedSstFileNames(kvTabletDir, activeSnapDirs);
+
+        assertThat(result.allMetadataReadOk()).isTrue();
+        assertThat(result.sharedSstFileNames())
+                .containsExactlyInAnyOrder("remote-a", "remote-b", "remote-c");
+    }
+
+    @Test
+    void fetchKvSharedSstFileNamesReportsFailureOnFileNotFound() {
+        FsPath kvTabletDir = new FsPath("oss://b/kv/db/t-7/0");
+        Set<String> activeSnapDirs = new HashSet<>(Arrays.asList("snap-5", "snap-10"));
+
+        String metadataSnap5 =
+                "{\"kv_snapshot_handle\":{\"shared_file_handles\":["
+                        + "{\"kv_file_handle\":{\"path\":\"oss://b/kv/db/t-7/0/shared/remote-a\",\"size\":100},\"local_path\":\"aaa.sst\"}"
+                        + "]}}";
+
+        StubManifestReader reader = new StubManifestReader();
+        reader.returnBytes(
+                new FsPath("oss://b/kv/db/t-7/0/snap-5/_METADATA"),
+                metadataSnap5.getBytes(StandardCharsets.UTF_8));
+        // snap-10 metadata file not found — concurrent removal
+        reader.failWithNotFound(new FsPath("oss://b/kv/db/t-7/0/snap-10/_METADATA"));
+
+        StubAdmin admin = new StubAdmin(new AtomicInteger());
+        ActiveRefsFetcher fetcher = new ActiveRefsFetcher(admin, reader, /* maxRetries= */ 3);
+
+        KvSharedSstFetchResult result =
+                fetcher.fetchKvSharedSstFileNames(kvTabletDir, activeSnapDirs);
+
+        assertThat(result.allMetadataReadOk()).isFalse();
+        assertThat(result.metadataNotFound()).isTrue();
+        assertThat(result.failureReason()).contains("Snapshot metadata not found");
+        assertThat(result.sharedSstFileNames()).isEmpty();
+    }
+
+    @Test
+    void fetchKvSharedSstFileNamesReportsFailureOnIoError() {
+        FsPath kvTabletDir = new FsPath("oss://b/kv/db/t-7/0");
+        Set<String> activeSnapDirs = new HashSet<>(Arrays.asList("snap-5"));
+
+        StubManifestReader reader = new StubManifestReader();
+        reader.failWithIo(
+                new FsPath("oss://b/kv/db/t-7/0/snap-5/_METADATA"),
+                new IOException("connection reset"));
+
+        StubAdmin admin = new StubAdmin(new AtomicInteger());
+        ActiveRefsFetcher fetcher = new ActiveRefsFetcher(admin, reader, /* maxRetries= */ 3);
+
+        KvSharedSstFetchResult result =
+                fetcher.fetchKvSharedSstFileNames(kvTabletDir, activeSnapDirs);
+
+        assertThat(result.allMetadataReadOk()).isFalse();
+        assertThat(result.metadataNotFound()).isFalse();
+        assertThat(result.failureReason()).contains("connection reset");
+        assertThat(result.sharedSstFileNames()).isEmpty();
+    }
+
+    @Test
+    void fetchKvSharedSstFileNamesReportsFailureOnParseError() {
+        FsPath kvTabletDir = new FsPath("oss://b/kv/db/t-7/0");
+        Set<String> activeSnapDirs = new HashSet<>(Arrays.asList("snap-5"));
+
+        StubManifestReader reader = new StubManifestReader();
+        // Invalid JSON in _METADATA
+        reader.returnBytes(
+                new FsPath("oss://b/kv/db/t-7/0/snap-5/_METADATA"),
+                "not valid json".getBytes(StandardCharsets.UTF_8));
+
+        StubAdmin admin = new StubAdmin(new AtomicInteger());
+        ActiveRefsFetcher fetcher = new ActiveRefsFetcher(admin, reader, /* maxRetries= */ 3);
+
+        KvSharedSstFetchResult result =
+                fetcher.fetchKvSharedSstFileNames(kvTabletDir, activeSnapDirs);
+
+        assertThat(result.allMetadataReadOk()).isFalse();
+        assertThat(result.metadataNotFound()).isFalse();
+        assertThat(result.failureReason()).contains("Failed to parse snapshot metadata");
+    }
+
+    @Test
+    void fetchKvSharedSstFileNamesRefreshesSnapshotViewOnceAfterNotFound() {
+        FsPath kvTabletDir = new FsPath("oss://b/kv/db/t-7/0");
+        Map<Integer, Set<String>> activeByBucket = new HashMap<>();
+        activeByBucket.put(0, Collections.singleton("snap-5"));
+
+        AtomicInteger rpcCalls = new AtomicInteger();
+        StubAdmin admin = new StubAdmin(rpcCalls);
+        admin.queueKvResponse(0, 10L);
+        StubManifestReader reader = new StubManifestReader();
+        reader.failWithNotFound(new FsPath(kvTabletDir, "snap-5/_METADATA"));
+        reader.returnBytes(
+                new FsPath(kvTabletDir, "snap-10/_METADATA"),
+                snapshotMetadata("oss://b/kv/db/t-7/0/shared/remote-b"));
+        ActiveRefsFetcher fetcher = new ActiveRefsFetcher(admin, reader, 1);
+
+        KvSharedSstFetchResult result =
+                fetcher.fetchKvSharedSstFileNamesWithRefresh(
+                        7L, null, 0, kvTabletDir, activeByBucket);
+
+        assertThat(result.allMetadataReadOk()).isTrue();
+        assertThat(result.sharedSstFileNames()).containsExactly("remote-b");
+        assertThat(activeByBucket).containsEntry(0, Collections.singleton("snap-10"));
+        assertThat(rpcCalls).hasValue(1);
+    }
+
+    @Test
+    void fetchKvSharedSstFileNamesStopsAfterSecondNotFound() {
+        FsPath kvTabletDir = new FsPath("oss://b/kv/db/t-7/0");
+        Map<Integer, Set<String>> activeByBucket = new HashMap<>();
+        activeByBucket.put(0, Collections.singleton("snap-5"));
+
+        AtomicInteger rpcCalls = new AtomicInteger();
+        StubAdmin admin = new StubAdmin(rpcCalls);
+        admin.queueKvResponse(0, 10L);
+        StubManifestReader reader = new StubManifestReader();
+        reader.failWithNotFound(new FsPath(kvTabletDir, "snap-5/_METADATA"));
+        reader.failWithNotFound(new FsPath(kvTabletDir, "snap-10/_METADATA"));
+        ActiveRefsFetcher fetcher = new ActiveRefsFetcher(admin, reader, 1);
+
+        KvSharedSstFetchResult result =
+                fetcher.fetchKvSharedSstFileNamesWithRefresh(
+                        7L, null, 0, kvTabletDir, activeByBucket);
+
+        assertThat(result.allMetadataReadOk()).isFalse();
+        assertThat(result.metadataNotFound()).isTrue();
+        assertThat(activeByBucket).containsEntry(0, Collections.singleton("snap-10"));
+        assertThat(rpcCalls).hasValue(1);
+    }
+
+    @Test
+    void fetchKvSharedSstFileNamesDoesNotRefreshAfterGenericIoFailure() {
+        FsPath kvTabletDir = new FsPath("oss://b/kv/db/t-7/0");
+        Map<Integer, Set<String>> activeByBucket = new HashMap<>();
+        activeByBucket.put(0, Collections.singleton("snap-5"));
+
+        AtomicInteger rpcCalls = new AtomicInteger();
+        StubManifestReader reader = new StubManifestReader();
+        reader.failWithIo(new FsPath(kvTabletDir, "snap-5/_METADATA"), new IOException("timeout"));
+        ActiveRefsFetcher fetcher = new ActiveRefsFetcher(new StubAdmin(rpcCalls), reader, 1);
+
+        KvSharedSstFetchResult result =
+                fetcher.fetchKvSharedSstFileNamesWithRefresh(
+                        7L, null, 0, kvTabletDir, activeByBucket);
+
+        assertThat(result.allMetadataReadOk()).isFalse();
+        assertThat(result.metadataNotFound()).isFalse();
+        assertThat(activeByBucket).containsEntry(0, Collections.singleton("snap-5"));
+        assertThat(rpcCalls).hasValue(0);
+    }
+
+    @Test
+    void fetchKvSharedSstFileNamesKeepsOldViewWhenRefreshFails() {
+        FsPath kvTabletDir = new FsPath("oss://b/kv/db/t-7/0");
+        Map<Integer, Set<String>> activeByBucket = new HashMap<>();
+        activeByBucket.put(0, Collections.singleton("snap-5"));
+
+        AtomicInteger rpcCalls = new AtomicInteger();
+        StubManifestReader reader = new StubManifestReader();
+        reader.failWithNotFound(new FsPath(kvTabletDir, "snap-5/_METADATA"));
+        ActiveRefsFetcher fetcher = new ActiveRefsFetcher(new StubAdmin(rpcCalls), reader, 1);
+
+        KvSharedSstFetchResult result =
+                fetcher.fetchKvSharedSstFileNamesWithRefresh(
+                        7L, null, 0, kvTabletDir, activeByBucket);
+
+        assertThat(result.allMetadataReadOk()).isFalse();
+        assertThat(result.failureReason()).contains("Failed to refresh active KV snapshots");
+        assertThat(activeByBucket).containsEntry(0, Collections.singleton("snap-5"));
+        assertThat(rpcCalls).hasValue(1);
+    }
+
+    @Test
+    void fetchKvSharedSstFileNamesAcceptsEmptyRefreshedSnapshotView() {
+        FsPath kvTabletDir = new FsPath("oss://b/kv/db/t-7/0");
+        Map<Integer, Set<String>> activeByBucket = new HashMap<>();
+        activeByBucket.put(0, Collections.singleton("snap-5"));
+
+        AtomicInteger rpcCalls = new AtomicInteger();
+        StubAdmin admin = new StubAdmin(rpcCalls);
+        admin.queueKvResponse(0);
+        StubManifestReader reader = new StubManifestReader();
+        reader.failWithNotFound(new FsPath(kvTabletDir, "snap-5/_METADATA"));
+        ActiveRefsFetcher fetcher = new ActiveRefsFetcher(admin, reader, 1);
+
+        KvSharedSstFetchResult result =
+                fetcher.fetchKvSharedSstFileNamesWithRefresh(
+                        7L, null, 0, kvTabletDir, activeByBucket);
+
+        assertThat(result.allMetadataReadOk()).isTrue();
+        assertThat(result.sharedSstFileNames()).isEmpty();
+        assertThat(activeByBucket).containsEntry(0, Collections.emptySet());
+        assertThat(rpcCalls).hasValue(1);
+    }
+
+    @Test
+    void fetchKvSharedSstFileNamesRejectsPathOutsideCurrentBucket() {
+        FsPath kvTabletDir = new FsPath("oss://b/kv/db/t-7/0");
+        Set<String> activeSnapDirs = Collections.singleton("snap-5");
+        String metadata =
+                "{\"kv_snapshot_handle\":{\"shared_file_handles\":["
+                        + "{\"kv_file_handle\":{\"path\":\"oss://b/kv/db/t-8/0/shared/remote-a\",\"size\":100},\"local_path\":\"aaa.sst\"}"
+                        + "]}}";
+
+        StubManifestReader reader = new StubManifestReader();
+        reader.returnBytes(
+                new FsPath("oss://b/kv/db/t-7/0/snap-5/_METADATA"),
+                metadata.getBytes(StandardCharsets.UTF_8));
+        ActiveRefsFetcher fetcher =
+                new ActiveRefsFetcher(
+                        new StubAdmin(new AtomicInteger()), reader, /* maxRetries= */ 3);
+
+        KvSharedSstFetchResult result =
+                fetcher.fetchKvSharedSstFileNames(kvTabletDir, activeSnapDirs);
+
+        assertThat(result.allMetadataReadOk()).isFalse();
+        assertThat(result.failureReason()).contains("outside the expected bucket directory");
+        assertThat(result.sharedSstFileNames()).isEmpty();
+    }
+
+    // -------------------------------------------------------------------------
     // Test fixtures
     // -------------------------------------------------------------------------
 
@@ -312,6 +564,15 @@ class ActiveRefsFetcherTest {
                 + ",\"max_timestamp\":0,"
                 + "\"size_in_bytes\":1"
                 + "}]}";
+    }
+
+    private static byte[] snapshotMetadata(String remotePath) {
+        return ("{\"kv_snapshot_handle\":{\"shared_file_handles\":["
+                        + "{\"kv_file_handle\":{\"path\":\""
+                        + remotePath
+                        + "\",\"size\":100},\"local_path\":\"local.sst\"}"
+                        + "]}}")
+                .getBytes(StandardCharsets.UTF_8);
     }
 
     /** Queues per-call responses for ListRemoteLogManifests / ListKvSnapshots and tracks calls. */

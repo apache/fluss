@@ -19,7 +19,7 @@
 
 package org.apache.fluss.server.kv.snapshot;
 
-import org.apache.fluss.server.kv.autoinc.AutoIncIDRange;
+import org.apache.fluss.kv.autoinc.AutoIncIDRange;
 
 import javax.annotation.Nullable;
 

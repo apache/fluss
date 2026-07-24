@@ -31,6 +31,7 @@ import org.apache.fluss.flink.action.orphan.RpcErrorClassifier;
 import org.apache.fluss.flink.action.orphan.audit.AuditLogger;
 import org.apache.fluss.flink.action.orphan.build.ActiveRefsFetcher;
 import org.apache.fluss.flink.action.orphan.build.KvActiveRefsFetchResult;
+import org.apache.fluss.flink.action.orphan.build.KvSharedSstFetchResult;
 import org.apache.fluss.flink.action.orphan.build.LogActiveRefsFetchResult;
 import org.apache.fluss.flink.action.orphan.build.MaxKnownIdsTracker;
 import org.apache.fluss.flink.action.orphan.config.OrphanCleanConfig;
@@ -56,6 +57,7 @@ import javax.annotation.Nullable;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -396,7 +398,7 @@ public final class ScopeEnumeratorFunction extends ProcessFunction<Integer, Clea
             KvActiveRefsFetchResult kvResult =
                     fetcher.fetchKvActiveSnapDirs(liveTable.tableId, partitionId);
             if (kvResult.listOk()) {
-                kvActiveByBucket = kvResult.activeSnapDirsByBucket();
+                kvActiveByBucket = new HashMap<>(kvResult.activeSnapDirsByBucket());
                 kvTargetOk = true;
             } else {
                 audit.logSkipKvTarget(liveTable.tableId, partitionId, kvResult.listFailureReason());
@@ -445,16 +447,31 @@ public final class ScopeEnumeratorFunction extends ProcessFunction<Integer, Clea
 
             String kvTabletDir = null;
             Set<String> kvActiveSnaps = Collections.emptySet();
-            if (kvTargetOk && kvActiveByBucket.containsKey(bucketId)) {
+            Set<String> kvSharedSstFileNames = Collections.emptySet();
+            boolean kvSharedSstRefsComplete = false;
+            if (kvTargetOk) {
                 kvTabletDir =
                         FlussPaths.remoteKvTabletDir(
                                         remoteKvDir,
                                         physicalPath(liveTable.tablePath, partitionInfo),
                                         tableBucket)
                                 .toString();
-                kvActiveSnaps = kvActiveByBucket.get(bucketId);
-            } else if (kvTargetOk) {
-                audit.logSkipKvBucket(liveTable.tableId, partitionId, bucketId, "empty_active_set");
+                kvActiveSnaps = kvActiveByBucket.getOrDefault(bucketId, Collections.emptySet());
+                KvSharedSstFetchResult sstResult =
+                        fetcher.fetchKvSharedSstFileNamesWithRefresh(
+                                liveTable.tableId,
+                                partitionId,
+                                bucketId,
+                                new FsPath(kvTabletDir),
+                                kvActiveByBucket);
+                kvActiveSnaps = kvActiveByBucket.getOrDefault(bucketId, Collections.emptySet());
+                if (sstResult.allMetadataReadOk()) {
+                    kvSharedSstFileNames = sstResult.sharedSstFileNames();
+                    kvSharedSstRefsComplete = true;
+                } else {
+                    audit.logSkipKvSharedSst(
+                            liveTable.tableId, partitionId, bucketId, sstResult.failureReason());
+                }
             }
 
             if (logTabletDir == null && kvTabletDir == null) {
@@ -468,6 +485,8 @@ public final class ScopeEnumeratorFunction extends ProcessFunction<Integer, Clea
                             logSegmentRelativePaths,
                             logActiveManifestPaths,
                             kvActiveSnaps,
+                            kvSharedSstFileNames,
+                            kvSharedSstRefsComplete,
                             config.olderThanMillis(),
                             config.dryRun(),
                             config.allowDeleteManifest()));

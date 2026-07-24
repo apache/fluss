@@ -17,6 +17,8 @@
 
 package org.apache.fluss.server.kv.snapshot;
 
+import org.apache.fluss.kv.snapshot.KvFileHandle;
+
 import org.junit.jupiter.api.Test;
 
 import java.util.Collections;

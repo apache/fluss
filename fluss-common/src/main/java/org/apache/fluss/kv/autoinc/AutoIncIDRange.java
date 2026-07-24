@@ -17,7 +17,7 @@
  * under the License.
  */
 
-package org.apache.fluss.server.kv.autoinc;
+package org.apache.fluss.kv.autoinc;
 
 import java.util.Objects;
 

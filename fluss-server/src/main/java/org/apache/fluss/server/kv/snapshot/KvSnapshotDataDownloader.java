@@ -21,6 +21,7 @@ import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.FsPathAndFileName;
 import org.apache.fluss.fs.utils.FileDownloadSpec;
 import org.apache.fluss.fs.utils.FileDownloadUtils;
+import org.apache.fluss.kv.snapshot.KvSnapshotHandle;
 import org.apache.fluss.utils.CloseableRegistry;
 
 import java.util.ArrayList;

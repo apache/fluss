@@ -15,9 +15,8 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.server.utils;
+package org.apache.fluss.kv.snapshot;
 
-import org.apache.fluss.server.kv.snapshot.KvFileHandle;
 import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.function.ThrowingConsumer;
 
@@ -44,6 +43,7 @@ public class SnapshotUtil {
         applyToAllWhileSuppressingExceptions(handlesToDiscard, KvFileHandle::discard);
     }
 
+    /** Quietly discards a single kv file handle, logging any exception. */
     public static void discardKvFileQuietly(KvFileHandle kvFileHandle) {
         if (kvFileHandle == null) {
             return;

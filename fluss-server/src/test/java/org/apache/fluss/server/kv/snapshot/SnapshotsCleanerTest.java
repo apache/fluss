@@ -19,6 +19,10 @@ package org.apache.fluss.server.kv.snapshot;
 
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.kv.snapshot.CompletedSnapshot;
+import org.apache.fluss.kv.snapshot.KvFileHandle;
+import org.apache.fluss.kv.snapshot.KvFileHandleAndLocalPath;
+import org.apache.fluss.kv.snapshot.KvSnapshotHandle;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.utils.concurrent.Executors;
 
@@ -122,7 +126,7 @@ class SnapshotsCleanerTest {
         }
 
         @Override
-        public void discard() {
+        public void discardPrivateFiles() {
             isDiscarded = true;
         }
 
