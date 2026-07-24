@@ -32,7 +32,8 @@ fluss-flink/fluss-flink-1.18\
 MODULES_FLINK2="\
 fluss-flink,\
 fluss-flink/fluss-flink-common,\
-fluss-flink/fluss-flink-2.2\
+fluss-flink/fluss-flink-2.2,\
+fluss-flink/fluss-flink-2.3\
 "
 
 # Skip Flink 1.19 to reduce PR CI time; consider covering it in a daily CI run.
