@@ -33,11 +33,13 @@ import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.KvFormat;
+import org.apache.fluss.metadata.LakeTableUtil;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeRoot;
 import org.apache.fluss.types.RowType;
@@ -130,6 +132,7 @@ public class TableDescriptorValidation {
         checkSystemColumns(schema.getRowType());
         validateStatisticsConfig(tableDescriptor);
         checkTableLakeFormatMatchesCluster(tableConf, clusterDataLakeFormat);
+        checkCustomLakePathSupported(tableConf, clusterDataLakeFormat);
     }
 
     /** Validates the schema after altering table columns. */
@@ -166,6 +169,29 @@ public class TableDescriptorValidation {
                             ConfigOptions.DATALAKE_FORMAT.key(),
                             clusterDataLakeFormat,
                             ConfigOptions.TABLE_DATALAKE_ENABLED.key()));
+        }
+    }
+
+    private static void checkCustomLakePathSupported(
+            Configuration tableConf, @Nullable DataLakeFormat clusterDataLakeFormat) {
+        if (!LakeTableUtil.hasCustomLakePath(tableConf)) {
+            return;
+        }
+
+        tableConf
+                .getOptional(ConfigOptions.TABLE_DATALAKE_DATABASE_NAME)
+                .ifPresent(TablePath::validateDatabaseName);
+        tableConf
+                .getOptional(ConfigOptions.TABLE_DATALAKE_TABLE_NAME)
+                .ifPresent(TablePath::validateTableName);
+
+        DataLakeFormat dataLakeFormat =
+                tableConf
+                        .getOptional(ConfigOptions.TABLE_DATALAKE_FORMAT)
+                        .orElse(clusterDataLakeFormat);
+        if (dataLakeFormat != DataLakeFormat.PAIMON) {
+            throw new InvalidConfigException(
+                    "Custom lake table path is only supported for Paimon.");
         }
     }
 
