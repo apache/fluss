@@ -732,9 +732,12 @@ class DvTableReadableSnapshotRetrieverTest {
         assertThat(readableSnapshotAndOffsets.getReadableOffsets())
                 .isEqualTo(expectedReadableOffsets);
 
-        // After compact 13, all buckets have no L0 in the compacted snapshot, we only need
-        // to keep the previous append snapshot 12
-        assertThat(readableSnapshotAndOffsets.getEarliestSnapshotIdToKeep()).isEqualTo(snapshot12);
+        // All buckets have no L0 in the compacted snapshot, but each bucket's base is anchored to
+        // the previous APPEND of its most recent flush: partition0/bucket0 -> snapshot6 (flushed at
+        // s7, never flushed since), partition1/bucket0 -> snapshot9, partition0/bucket1 ->
+        // snapshot12. The earliest snapshot we must keep is the minimum of these anchors
+        // (snapshot6), since a future recomputation for partition0/bucket0 would trace back to it.
+        assertThat(readableSnapshotAndOffsets.getEarliestSnapshotIdToKeep()).isEqualTo(snapshot6);
     }
 
     private long latestSnapshot(FileStoreTable fileStoreTable) {
