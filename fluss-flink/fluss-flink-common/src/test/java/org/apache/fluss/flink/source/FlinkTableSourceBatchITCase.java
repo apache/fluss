@@ -20,6 +20,7 @@ package org.apache.fluss.flink.source;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.client.table.writer.UpsertWriter;
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.flink.utils.FlinkTestBase;
 import org.apache.fluss.metadata.TablePath;
@@ -40,6 +41,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
@@ -49,6 +51,7 @@ import java.util.Map;
 
 import static org.apache.fluss.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsIgnoreOrder;
+import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.collectBatchRows;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.collectRowsWithTimeout;
 import static org.apache.fluss.server.testutils.FlussClusterExtension.BUILTIN_DATABASE;
 import static org.apache.fluss.testutils.DataTestUtils.row;
@@ -258,8 +261,151 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
         assertThatThrownBy(() -> tEnv.explainSql(query))
                 .isInstanceOf(UnsupportedOperationException.class)
                 .hasMessage(
-                        "Currently, Fluss only support queries on table with datalake enabled"
-                                + " or point queries on primary key when it's in batch execution mode.");
+                        "Batch mode requires either datalake enabled"
+                                + " (set '"
+                                + ConfigOptions.TABLE_DATALAKE_ENABLED.key()
+                                + "' = 'true') or server-side KV scan on a"
+                                + " primary-key table (set '"
+                                + ConfigOptions.CLIENT_SCANNER_KV_SERVER_SIDE_ENABLED.key()
+                                + "' = 'true').");
+    }
+
+    @Test
+    void testKvBatchScanOnPkTable() throws Exception {
+        String tableName = String.format("test_kv_batch_pk_%s", RandomUtils.nextInt());
+        tEnv.executeSql(
+                String.format(
+                        "create table %s ("
+                                + "  id int not null,"
+                                + "  address varchar,"
+                                + "  name varchar,"
+                                + "  primary key (id) NOT ENFORCED)"
+                                + " with ("
+                                + "  'bucket.num' = '4',"
+                                + "  'client.scanner.kv.server-side.enabled' = 'true')",
+                        tableName));
+        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
+            for (int i = 1; i <= 5; i++) {
+                upsertWriter.upsert(row(i, "address" + i, "name" + i));
+            }
+            upsertWriter.flush();
+        }
+
+        CloseableIterator<Row> collected =
+                tEnv.executeSql(String.format("SELECT * FROM %s", tableName)).collect();
+        List<String> expected =
+                Arrays.asList(
+                        "+I[1, address1, name1]",
+                        "+I[2, address2, name2]",
+                        "+I[3, address3, name3]",
+                        "+I[4, address4, name4]",
+                        "+I[5, address5, name5]");
+        assertResultsIgnoreOrder(collected, expected, true);
+    }
+
+    @Test
+    void testKvBatchScanReturnsAllRecords() throws Exception {
+        String tableName = String.format("test_kv_batch_100_%s", RandomUtils.nextInt());
+        tEnv.executeSql(
+                String.format(
+                        "create table %s ("
+                                + "  id int not null,"
+                                + "  name varchar,"
+                                + "  primary key (id) NOT ENFORCED)"
+                                + " with ("
+                                + "  'bucket.num' = '3',"
+                                + "  'client.scanner.kv.server-side.enabled' = 'true')",
+                        tableName));
+        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
+            for (int i = 1; i <= 100; i++) {
+                upsertWriter.upsert(row(i, "name" + i));
+            }
+            upsertWriter.flush();
+        }
+
+        CloseableIterator<Row> collected =
+                tEnv.executeSql(String.format("SELECT * FROM %s", tableName)).collect();
+        List<String> actual = collectRowsWithTimeout(collected, 100);
+
+        List<String> expected = new ArrayList<>();
+        for (int i = 1; i <= 100; i++) {
+            expected.add(String.format("+I[%d, name%d]", i, i));
+        }
+        assertThat(actual).containsExactlyInAnyOrderElementsOf(expected);
+    }
+
+    @Test
+    void testKvBatchScanOnLogTableThrows() throws Exception {
+        String tableName = String.format("test_kv_batch_log_%s", RandomUtils.nextInt());
+        tEnv.executeSql(
+                String.format(
+                        "create table %s ("
+                                + "  id int not null,"
+                                + "  name varchar)"
+                                + " with ("
+                                + "  'bucket.num' = '2',"
+                                + "  'client.scanner.kv.server-side.enabled' = 'true')",
+                        tableName));
+        // The KV scan option is meaningless for log tables; batch mode must still reject them.
+        assertThatThrownBy(() -> tEnv.executeSql(String.format("SELECT * FROM %s", tableName)))
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining("Batch mode requires either datalake enabled")
+                .hasMessageContaining(ConfigOptions.TABLE_DATALAKE_ENABLED.key())
+                .hasMessageContaining(ConfigOptions.CLIENT_SCANNER_KV_SERVER_SIDE_ENABLED.key());
+    }
+
+    @Test
+    void testKvBatchScanWithProjection() throws Exception {
+        String tableName = String.format("test_kv_batch_proj_%s", RandomUtils.nextInt());
+        tEnv.executeSql(
+                String.format(
+                        "create table %s ("
+                                + "  id int not null,"
+                                + "  name varchar,"
+                                + "  region varchar,"
+                                + "  primary key (id) NOT ENFORCED)"
+                                + " with ("
+                                + "  'bucket.num' = '3',"
+                                + "  'client.scanner.kv.server-side.enabled' = 'true')",
+                        tableName));
+        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
+            upsertWriter.upsert(row(1, "Alice", "us-east"));
+            upsertWriter.upsert(row(2, "Bob", "eu-west"));
+            upsertWriter.upsert(row(3, "Carol", "ap-south"));
+            upsertWriter.flush();
+        }
+
+        // Only project two of the three columns.
+        CloseableIterator<Row> collected =
+                tEnv.executeSql(String.format("SELECT id, name FROM %s", tableName)).collect();
+        List<String> expected = Arrays.asList("+I[1, Alice]", "+I[2, Bob]", "+I[3, Carol]");
+        assertResultsIgnoreOrder(collected, expected, true);
+    }
+
+    @Test
+    void testKvBatchScanOnEmptyTable() throws Exception {
+        String tableName = String.format("test_kv_batch_empty_%s", RandomUtils.nextInt());
+        tEnv.executeSql(
+                String.format(
+                        "create table %s ("
+                                + "  id int not null,"
+                                + "  name varchar,"
+                                + "  primary key (id) NOT ENFORCED)"
+                                + " with ("
+                                + "  'bucket.num' = '3',"
+                                + "  'client.scanner.kv.server-side.enabled' = 'true')",
+                        tableName));
+        // No rows written — scan must complete naturally with an empty result set.
+        CloseableIterator<Row> collected =
+                tEnv.executeSql(String.format("SELECT * FROM %s", tableName)).collect();
+        List<String> actual = collectBatchRows(collected);
+        assertThat(actual).isEmpty();
     }
 
     @Test
@@ -428,7 +574,13 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
                                 tEnv.explainSql(
                                         String.format("SELECT COUNT(address) FROM %s", tableName)))
                 .hasMessageContaining(
-                        "Currently, Fluss only support queries on table with datalake enabled or point queries on primary key when it's in batch execution mode.");
+                        "Batch mode requires either datalake enabled"
+                                + " (set '"
+                                + ConfigOptions.TABLE_DATALAKE_ENABLED.key()
+                                + "' = 'true') or server-side KV scan on a"
+                                + " primary-key table (set '"
+                                + ConfigOptions.CLIENT_SCANNER_KV_SERVER_SIDE_ENABLED.key()
+                                + "' = 'true').");
 
         assertThatThrownBy(
                         () ->
@@ -437,7 +589,13 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
                                                 "SELECT COUNT(DISTINCT address) FROM %s",
                                                 tableName)))
                 .hasMessageContaining(
-                        "Currently, Fluss only support queries on table with datalake enabled or point queries on primary key when it's in batch execution mode.");
+                        "Batch mode requires either datalake enabled"
+                                + " (set '"
+                                + ConfigOptions.TABLE_DATALAKE_ENABLED.key()
+                                + "' = 'true') or server-side KV scan on a"
+                                + " primary-key table (set '"
+                                + ConfigOptions.CLIENT_SCANNER_KV_SERVER_SIDE_ENABLED.key()
+                                + "' = 'true').");
 
         // test not push down grouping count.
         assertThatThrownBy(
@@ -448,7 +606,13 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
                                                         tableName))
                                         .wait())
                 .hasMessageContaining(
-                        "Currently, Fluss only support queries on table with datalake enabled or point queries on primary key when it's in batch execution mode.");
+                        "Batch mode requires either datalake enabled"
+                                + " (set '"
+                                + ConfigOptions.TABLE_DATALAKE_ENABLED.key()
+                                + "' = 'true') or server-side KV scan on a"
+                                + " primary-key table (set '"
+                                + ConfigOptions.CLIENT_SCANNER_KV_SERVER_SIDE_ENABLED.key()
+                                + "' = 'true').");
     }
 
     @Test
@@ -505,7 +669,13 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
                                 tEnv.explainSql(
                                         String.format("SELECT COUNT(address) FROM %s", tableName)))
                 .hasMessageContaining(
-                        "Currently, Fluss only support queries on table with datalake enabled or point queries on primary key when it's in batch execution mode.");
+                        "Batch mode requires either datalake enabled"
+                                + " (set '"
+                                + ConfigOptions.TABLE_DATALAKE_ENABLED.key()
+                                + "' = 'true') or server-side KV scan on a"
+                                + " primary-key table (set '"
+                                + ConfigOptions.CLIENT_SCANNER_KV_SERVER_SIDE_ENABLED.key()
+                                + "' = 'true').");
         assertThatThrownBy(
                         () ->
                                 tEnv.explainSql(
@@ -513,7 +683,13 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
                                                 "SELECT COUNT(DISTINCT address) FROM %s",
                                                 tableName)))
                 .hasMessageContaining(
-                        "Currently, Fluss only support queries on table with datalake enabled or point queries on primary key when it's in batch execution mode.");
+                        "Batch mode requires either datalake enabled"
+                                + " (set '"
+                                + ConfigOptions.TABLE_DATALAKE_ENABLED.key()
+                                + "' = 'true') or server-side KV scan on a"
+                                + " primary-key table (set '"
+                                + ConfigOptions.CLIENT_SCANNER_KV_SERVER_SIDE_ENABLED.key()
+                                + "' = 'true').");
 
         // test not push down grouping count.
         assertThatThrownBy(
@@ -524,7 +700,13 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
                                                         tableName))
                                         .wait())
                 .hasMessageContaining(
-                        "Currently, Fluss only support queries on table with datalake enabled or point queries on primary key when it's in batch execution mode.");
+                        "Batch mode requires either datalake enabled"
+                                + " (set '"
+                                + ConfigOptions.TABLE_DATALAKE_ENABLED.key()
+                                + "' = 'true') or server-side KV scan on a"
+                                + " primary-key table (set '"
+                                + ConfigOptions.CLIENT_SCANNER_KV_SERVER_SIDE_ENABLED.key()
+                                + "' = 'true').");
     }
 
     private String prepareSourceTable(String[] keys, String partitionedKey) throws Exception {
