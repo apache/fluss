@@ -203,8 +203,7 @@ public class CompletedSnapshotStoreManager {
                 retrievedSnapshots.add(
                         checkNotNull(snapshotStateHandle.retrieveCompleteSnapshot()));
             } catch (Exception e) {
-                if (e.getMessage()
-                        .contains(CompletedSnapshot.SNAPSHOT_DATA_NOT_EXISTS_ERROR_MESSAGE)) {
+                if (CompletedSnapshot.isSnapshotDataNotExists(e)) {
                     LOG.error(
                             "Metadata not found for snapshot {} of table bucket {}, maybe snapshot already removed or broken.",
                             snapshotStateHandle.getSnapshotId(),
