@@ -29,15 +29,15 @@ import org.apache.fluss.annotation.PublicEvolving;
  * @since 1.0
  */
 @PublicEvolving
-public class KvPreWriteBufferFullException extends RetriableException {
+public class InsufficientKvPreWriteBufferException extends RetriableException {
 
     private static final long serialVersionUID = 1L;
 
-    public KvPreWriteBufferFullException(String message) {
+    public InsufficientKvPreWriteBufferException(String message) {
         super(message);
     }
 
-    public KvPreWriteBufferFullException(String message, Throwable cause) {
+    public InsufficientKvPreWriteBufferException(String message, Throwable cause) {
         super(message, cause);
     }
 }

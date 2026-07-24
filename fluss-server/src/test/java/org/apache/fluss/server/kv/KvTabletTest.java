@@ -20,9 +20,9 @@ package org.apache.fluss.server.kv;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.TableConfig;
+import org.apache.fluss.exception.InsufficientKvPreWriteBufferException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.InvalidTargetColumnException;
-import org.apache.fluss.exception.KvPreWriteBufferFullException;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
 import org.apache.fluss.memory.TestingMemorySegmentPool;
 import org.apache.fluss.metadata.AggFunctions;
@@ -265,7 +265,7 @@ class KvTabletTest {
         KvRecordBatch batch = kvRecordBatchFactory.ofRecords(Collections.singletonList(record));
 
         assertThatThrownBy(() -> kvTablet.putAsLeader(batch, null))
-                .isInstanceOf(KvPreWriteBufferFullException.class);
+                .isInstanceOf(InsufficientKvPreWriteBufferException.class);
         assertThat(logTablet.localLogEndOffset()).isEqualTo(logEndOffsetBeforePut);
         assertThat(kvTablet.getKvPreWriteBuffer().getAllKvEntries()).isEmpty();
         assertThat(memoryManager.usedBytes()).isEqualTo(950L);

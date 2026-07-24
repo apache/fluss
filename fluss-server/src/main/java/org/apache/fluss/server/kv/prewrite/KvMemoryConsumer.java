@@ -45,9 +45,6 @@ abstract class KvMemoryConsumer {
 
     protected final boolean tryAcquireMemory(long bytes) {
         checkArgument(bytes >= 0, "The number of bytes to acquire must not be negative.");
-        if (bytes == 0) {
-            return true;
-        }
         if (!memoryManager.tryReserve(bytes)) {
             return false;
         }

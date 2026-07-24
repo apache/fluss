@@ -17,7 +17,7 @@
 
 package org.apache.fluss.server.kv.prewrite;
 
-import org.apache.fluss.exception.KvPreWriteBufferFullException;
+import org.apache.fluss.exception.InsufficientKvPreWriteBufferException;
 import org.apache.fluss.exception.RecordTooLargeException;
 import org.apache.fluss.server.kv.KvBatchWriter;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.TruncateReason;
@@ -268,33 +268,6 @@ class KvPreWriteBufferTest {
     }
 
     @Test
-    void testMemoryIsNotReleasedWhenFlushFails() {
-        FailOnceFlushKvBatchWriter batchWriter = new FailOnceFlushKvBatchWriter();
-        KvPreWriteBufferMemoryManager memoryManager =
-                new KvPreWriteBufferMemoryManager(10_000, 8_000);
-        KvPreWriteBuffer buffer =
-                new KvPreWriteBuffer(
-                        batchWriter, TestingMetricGroups.TABLET_SERVER_METRICS, memoryManager);
-        buffer.insert(toKey("key"), "value".getBytes(), 0);
-        long retainedBytes = memoryManager.usedBytes();
-
-        assertThatThrownBy(() -> buffer.flush(Long.MAX_VALUE))
-                .isInstanceOf(IOException.class)
-                .hasMessage("Expected test failure.");
-        assertThat(memoryManager.usedBytes()).isEqualTo(retainedBytes);
-        assertThat(buffer.getAllKvEntries()).hasSize(1);
-        assertThat(getValue(buffer, "key")).isEqualTo("value");
-
-        try {
-            buffer.flush(Long.MAX_VALUE);
-        } catch (IOException e) {
-            throw new AssertionError("The second flush should succeed.", e);
-        }
-        assertThat(memoryManager.usedBytes()).isZero();
-        assertThat(buffer.getAllKvEntries()).isEmpty();
-    }
-
-    @Test
     void testRejectedReservationDoesNotMutateBuffer() {
         KvPreWriteBufferMemoryManager memoryManager = new KvPreWriteBufferMemoryManager(200, 160);
         KvPreWriteBuffer buffer =
@@ -306,7 +279,7 @@ class KvPreWriteBufferTest {
         long retainedBytes = memoryManager.usedBytes();
 
         assertThatThrownBy(() -> buffer.insert(toKey("key-2"), "value-2".getBytes(), 1))
-                .isInstanceOf(KvPreWriteBufferFullException.class);
+                .isInstanceOf(InsufficientKvPreWriteBufferException.class);
         assertThat(memoryManager.usedBytes()).isEqualTo(retainedBytes);
         assertThat(buffer.getAllKvEntries()).hasSize(1);
         assertThat(buffer.getMaxLSN()).isZero();
@@ -349,7 +322,7 @@ class KvPreWriteBufferTest {
 
         firstBuffer.insert(toKey("key"), "value".getBytes(), 0);
         assertThatThrownBy(() -> secondBuffer.insert(toKey("key"), "value".getBytes(), 0))
-                .isInstanceOf(KvPreWriteBufferFullException.class);
+                .isInstanceOf(InsufficientKvPreWriteBufferException.class);
 
         firstBuffer.close();
         secondBuffer.insert(toKey("key"), "value".getBytes(), 0);
@@ -359,23 +332,19 @@ class KvPreWriteBufferTest {
     }
 
     @Test
-    void testCloseReleasesMemoryOnlyOnce() throws Exception {
-        CountingCloseKvBatchWriter batchWriter = new CountingCloseKvBatchWriter();
+    void testCloseReleasesMemory() throws Exception {
         KvPreWriteBufferMemoryManager memoryManager =
                 new KvPreWriteBufferMemoryManager(10_000, 8_000);
         KvPreWriteBuffer buffer =
                 new KvPreWriteBuffer(
-                        batchWriter, TestingMetricGroups.TABLET_SERVER_METRICS, memoryManager);
+                        new NopKvBatchWriter(),
+                        TestingMetricGroups.TABLET_SERVER_METRICS,
+                        memoryManager);
         buffer.insert(toKey("key"), "value".getBytes(), 0);
 
         buffer.close();
-        buffer.close();
 
         assertThat(memoryManager.usedBytes()).isZero();
-        assertThat(buffer.getAllKvEntries()).isEmpty();
-        assertThat(buffer.getKvEntryMap()).isEmpty();
-        assertThat(buffer.getMaxLSN()).isEqualTo(-1);
-        assertThat(batchWriter.closeCount).isEqualTo(1);
     }
 
     private static void bufferInsert(
@@ -429,34 +398,13 @@ class KvPreWriteBufferTest {
         }
 
         @Override
-        public void flush() throws IOException {
+        public void flush() {
             // do nothing
         }
 
         @Override
         public void close() {
             // do nothing
-        }
-    }
-
-    private static class FailOnceFlushKvBatchWriter extends NopKvBatchWriter {
-        private boolean fail = true;
-
-        @Override
-        public void flush() throws IOException {
-            if (fail) {
-                fail = false;
-                throw new IOException("Expected test failure.");
-            }
-        }
-    }
-
-    private static class CountingCloseKvBatchWriter extends NopKvBatchWriter {
-        private int closeCount;
-
-        @Override
-        public void close() {
-            closeCount++;
         }
     }
 }

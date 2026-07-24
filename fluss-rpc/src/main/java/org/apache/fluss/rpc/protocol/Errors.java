@@ -33,6 +33,7 @@ import org.apache.fluss.exception.FencedLeaderEpochException;
 import org.apache.fluss.exception.FencedTieringEpochException;
 import org.apache.fluss.exception.IneligibleReplicaException;
 import org.apache.fluss.exception.InsufficientKvLeaderReplicaCapacityException;
+import org.apache.fluss.exception.InsufficientKvPreWriteBufferException;
 import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidColumnProjectionException;
 import org.apache.fluss.exception.InvalidConfigException;
@@ -48,7 +49,6 @@ import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.InvalidTargetColumnException;
 import org.apache.fluss.exception.InvalidTimestampException;
 import org.apache.fluss.exception.InvalidUpdateVersionException;
-import org.apache.fluss.exception.KvPreWriteBufferFullException;
 import org.apache.fluss.exception.KvSnapshotNotExistException;
 import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.exception.LakeStorageNotConfiguredException;
@@ -277,10 +277,10 @@ public enum Errors {
             71,
             "The cluster does not have enough KV leader replica capacity.",
             InsufficientKvLeaderReplicaCapacityException::new),
-    KV_PRE_WRITE_BUFFER_FULL(
+    INSUFFICIENT_KV_PRE_WRITE_BUFFER(
             72,
             "The tablet server KV pre-write buffer high watermark has been reached.",
-            KvPreWriteBufferFullException::new);
+            InsufficientKvPreWriteBufferException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 
