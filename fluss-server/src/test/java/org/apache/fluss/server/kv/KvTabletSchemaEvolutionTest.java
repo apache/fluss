@@ -35,6 +35,7 @@ import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.server.kv.autoinc.AutoIncrementManager;
 import org.apache.fluss.server.kv.autoinc.TestingSequenceGeneratorFactory;
+import org.apache.fluss.server.kv.prewrite.KvPreWriteBufferMemoryManager;
 import org.apache.fluss.server.kv.rowmerger.RowMerger;
 import org.apache.fluss.server.log.FetchIsolation;
 import org.apache.fluss.server.log.LogTablet;
@@ -145,7 +146,8 @@ class KvTabletSchemaEvolutionTest {
                         schemaGetter,
                         tableConf.getChangelogImage(),
                         KvManager.getDefaultRateLimiter(),
-                        autoIncrementManager);
+                        autoIncrementManager,
+                        new KvPreWriteBufferMemoryManager(Long.MAX_VALUE, Long.MAX_VALUE - 1));
     }
 
     @AfterEach

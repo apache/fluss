@@ -784,6 +784,31 @@ public class ConfigOptions {
                                     + ". "
                                     + "This option allows to allocate memory in batches to have better CPU-cached friendliness due to contiguous segments.");
 
+    public static final ConfigOption<Double>
+            SERVER_KV_PRE_WRITE_BUFFER_MEMORY_HIGH_WATERMARK_RATIO =
+                    key("server.kv.pre-write-buffer.memory-high-watermark-ratio")
+                            .doubleType()
+                            .defaultValue(0.60)
+                            .withDescription(
+                                    "The high watermark, as a ratio of the TabletServer JVM maximum heap size, "
+                                            + "for the memory shared by all KV pre-write buffers. KV writes "
+                                            + "are rejected with a retriable error when memory usage reaches this "
+                                            + "watermark. The valid range is "
+                                            + "(server.kv.pre-write-buffer.memory-low-watermark-ratio, 1.0]. "
+                                            + "The default value is 0.20.");
+
+    public static final ConfigOption<Double> SERVER_KV_PRE_WRITE_BUFFER_MEMORY_LOW_WATERMARK_RATIO =
+            key("server.kv.pre-write-buffer.memory-low-watermark-ratio")
+                    .doubleType()
+                    .defaultValue(0.50)
+                    .withDescription(
+                            "The low watermark, as a ratio of the TabletServer JVM maximum heap size, "
+                                    + "for the memory shared by all KV pre-write buffers. KV writes "
+                                    + "resume when memory usage reaches or drops below this watermark. "
+                                    + "The valid range is [0.0, "
+                                    + "server.kv.pre-write-buffer.memory-high-watermark-ratio). "
+                                    + "The default value is 0.15.");
+
     public static final ConfigOption<Duration> SERVER_BUFFER_POOL_WAIT_TIMEOUT =
             key("server.buffer.wait-timeout")
                     .durationType()

@@ -18,6 +18,8 @@
 package org.apache.fluss.server.kv.prewrite;
 
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.exception.InsufficientKvPreWriteBufferException;
+import org.apache.fluss.exception.RecordTooLargeException;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.metrics.Counter;
 import org.apache.fluss.record.ChangeType;
@@ -85,7 +87,13 @@ import static org.apache.fluss.utils.UnsafeUtils.BYTE_ARRAY_BASE_OFFSET;
  * head to tail, it will stop flush.
  */
 @NotThreadSafe
-public class KvPreWriteBuffer implements AutoCloseable {
+public class KvPreWriteBuffer extends KvMemoryConsumer implements AutoCloseable {
+
+    // A conservative estimate of the heap retained by a KvEntry, its Key and Value wrappers, the
+    // linked-list node, and associated object/array headers. The byte-array payloads are accounted
+    // for separately.
+    private static final long ENTRY_OVERHEAD_BYTES = 128L;
+
     private final KvBatchWriter kvBatchWriter;
 
     // a mapping from the key to the kv-entry
@@ -102,7 +110,10 @@ public class KvPreWriteBuffer implements AutoCloseable {
     private long maxLogSequenceNumber = -1;
 
     public KvPreWriteBuffer(
-            KvBatchWriter kvBatchWriter, TabletServerMetricGroup serverMetricGroup) {
+            KvBatchWriter kvBatchWriter,
+            TabletServerMetricGroup serverMetricGroup,
+            KvPreWriteBufferMemoryManager memoryManager) {
+        super(memoryManager);
         this.kvBatchWriter = kvBatchWriter;
 
         truncateAsDuplicatedCount = serverMetricGroup.kvTruncateAsDuplicatedCount();
@@ -144,6 +155,25 @@ public class KvPreWriteBuffer implements AutoCloseable {
                             + maxLogSequenceNumber
                             + ", but the new log sequence number is "
                             + lsn);
+        }
+
+        long memorySize = estimateMemorySize(key, value);
+        if (memorySize > memoryManager().highWatermarkBytes()) {
+            throw new RecordTooLargeException(
+                    String.format(
+                            "The KV entry requires %s bytes, which exceeds the pre-write buffer "
+                                    + "high watermark of %s bytes.",
+                            memorySize, memoryManager().highWatermarkBytes()));
+        }
+
+        if (!tryAcquireMemory(memorySize)) {
+            throw new InsufficientKvPreWriteBufferException(
+                    String.format(
+                            "Failed to reserve %s bytes in the KV pre-write buffer "
+                                    + "(used: %s, high watermark: %s).",
+                            memorySize,
+                            memoryManager().usedBytes(),
+                            memoryManager().highWatermarkBytes()));
         }
 
         // create the kv entry with previous pointer if exists, and put the new entry to the map
@@ -194,6 +224,7 @@ public class KvPreWriteBuffer implements AutoCloseable {
                 break;
             }
             descIter.remove();
+            freeMemory(estimateMemorySize(entry.key, entry.value));
             boolean removed = kvEntryMap.remove(entry.getKey(), entry);
             // if the latest entry is removed, we need to rollback the previous entry to the map
             if (removed && entry.previousEntry != null) {
@@ -247,6 +278,7 @@ public class KvPreWriteBuffer implements AutoCloseable {
             // can remove it from the map. Although it's not a must to remove from the map,
             // we remove it to reduce the memory usage
             kvEntryMap.remove(entry.getKey(), entry);
+            freeMemory(estimateMemorySize(entry.key, entry.value));
         }
         // flush to underlying kv tablet
         if (flushedCount > 0) {
@@ -273,8 +305,12 @@ public class KvPreWriteBuffer implements AutoCloseable {
 
     @Override
     public void close() throws Exception {
-        if (kvBatchWriter != null) {
-            kvBatchWriter.close();
+        try {
+            if (kvBatchWriter != null) {
+                kvBatchWriter.close();
+            }
+        } finally {
+            freeAllMemory();
         }
     }
 
@@ -284,6 +320,13 @@ public class KvPreWriteBuffer implements AutoCloseable {
 
     public Counter getTruncateAsErrorCount() {
         return truncateAsErrorCount;
+    }
+
+    private static long estimateMemorySize(Key key, Value value) {
+        byte[] valueBytes = value.get();
+        return ENTRY_OVERHEAD_BYTES
+                + key.get().length
+                + (valueBytes == null ? 0 : valueBytes.length);
     }
 
     // -------------------------------------------------------------------------------------------

@@ -20,6 +20,7 @@ package org.apache.fluss.server.kv;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.TableConfig;
+import org.apache.fluss.exception.InsufficientKvPreWriteBufferException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.InvalidTargetColumnException;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
@@ -55,6 +56,7 @@ import org.apache.fluss.server.kv.autoinc.TestingSequenceGeneratorFactory;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.Key;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.KvEntry;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.Value;
+import org.apache.fluss.server.kv.prewrite.KvPreWriteBufferMemoryManager;
 import org.apache.fluss.server.kv.rocksdb.RocksDBStatistics;
 import org.apache.fluss.server.kv.rowmerger.RowMerger;
 import org.apache.fluss.server.kv.scan.OpenScanResult;
@@ -151,6 +153,15 @@ class KvTabletTest {
 
     private void initLogTabletAndKvTablet(
             TablePath tablePath, Schema schema, Map<String, String> tableConfig) throws Exception {
+        initLogTabletAndKvTablet(tablePath, schema, tableConfig, null);
+    }
+
+    private void initLogTabletAndKvTablet(
+            TablePath tablePath,
+            Schema schema,
+            Map<String, String> tableConfig,
+            @Nullable KvPreWriteBufferMemoryManager preWriteBufferMemoryManager)
+            throws Exception {
         PhysicalTablePath physicalTablePath = PhysicalTablePath.of(tablePath);
         schemaGetter = new TestingSchemaGetter(new SchemaInfo(schema, schemaId));
         logTablet = createLogTablet(tempLogDir, 0L, physicalTablePath);
@@ -162,7 +173,8 @@ class KvTabletTest {
                         logTablet,
                         tmpKvDir,
                         schemaGetter,
-                        tableConfig);
+                        tableConfig,
+                        preWriteBufferMemoryManager);
     }
 
     private LogTablet createLogTablet(File tempLogDir, long tableId, PhysicalTablePath tablePath)
@@ -193,6 +205,19 @@ class KvTabletTest {
             SchemaGetter schemaGetter,
             Map<String, String> tableConfig)
             throws Exception {
+        return createKvTablet(
+                tablePath, tableBucket, logTablet, tmpKvDir, schemaGetter, tableConfig, null);
+    }
+
+    private KvTablet createKvTablet(
+            PhysicalTablePath tablePath,
+            TableBucket tableBucket,
+            LogTablet logTablet,
+            File tmpKvDir,
+            SchemaGetter schemaGetter,
+            Map<String, String> tableConfig,
+            @Nullable KvPreWriteBufferMemoryManager preWriteBufferMemoryManager)
+            throws Exception {
         TableConfig tableConf = new TableConfig(Configuration.fromMap(tableConfig));
         RowMerger rowMerger = RowMerger.create(tableConf, KvFormat.COMPACTED, schemaGetter);
         AutoIncrementManager autoIncrementManager =
@@ -201,7 +226,10 @@ class KvTabletTest {
                         tablePath.getTablePath(),
                         new TableConfig(new Configuration()),
                         new TestingSequenceGeneratorFactory());
-
+        if (preWriteBufferMemoryManager == null) {
+            preWriteBufferMemoryManager =
+                    new KvPreWriteBufferMemoryManager(Long.MAX_VALUE, Long.MAX_VALUE - 1);
+        }
         return KvTablet.create(
                 tablePath,
                 tableBucket,
@@ -217,7 +245,35 @@ class KvTabletTest {
                 schemaGetter,
                 tableConf.getChangelogImage(),
                 KvManager.getDefaultRateLimiter(),
-                autoIncrementManager);
+                autoIncrementManager,
+                preWriteBufferMemoryManager);
+    }
+
+    @Test
+    void testClientWriteIsRejectedWhenPreWriteBufferIsFull() throws Exception {
+        KvPreWriteBufferMemoryManager memoryManager =
+                new KvPreWriteBufferMemoryManager(1_000L, 800L);
+        initLogTabletAndKvTablet(
+                TablePath.of("testDb", "quota_test"),
+                DATA1_SCHEMA_PK,
+                Collections.emptyMap(),
+                memoryManager);
+
+        assertThat(memoryManager.tryReserve(950L)).isTrue();
+        long logEndOffsetBeforePut = logTablet.localLogEndOffset();
+        KvRecord record = kvRecordFactory.ofRecord("k1".getBytes(), new Object[] {1, "a"});
+        KvRecordBatch batch = kvRecordBatchFactory.ofRecords(Collections.singletonList(record));
+
+        assertThatThrownBy(() -> kvTablet.putAsLeader(batch, null))
+                .isInstanceOf(InsufficientKvPreWriteBufferException.class);
+        assertThat(logTablet.localLogEndOffset()).isEqualTo(logEndOffsetBeforePut);
+        assertThat(kvTablet.getKvPreWriteBuffer().getAllKvEntries()).isEmpty();
+        assertThat(memoryManager.usedBytes()).isEqualTo(950L);
+
+        kvTablet.close();
+        assertThat(memoryManager.usedBytes()).isEqualTo(950L);
+        memoryManager.release(950L);
+        assertThat(memoryManager.usedBytes()).isZero();
     }
 
     @Test

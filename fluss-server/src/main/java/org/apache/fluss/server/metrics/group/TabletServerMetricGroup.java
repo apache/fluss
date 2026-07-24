@@ -30,6 +30,7 @@ import org.apache.fluss.metrics.SimpleCounter;
 import org.apache.fluss.metrics.ThreadSafeSimpleCounter;
 import org.apache.fluss.metrics.groups.AbstractMetricGroup;
 import org.apache.fluss.metrics.registry.MetricRegistry;
+import org.apache.fluss.server.kv.prewrite.KvPreWriteBufferMemoryManager;
 import org.apache.fluss.server.kv.rocksdb.RocksDBStatistics;
 
 import java.util.Map;
@@ -225,6 +226,18 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
 
     public Counter kvTruncateAsErrorCount() {
         return kvTruncateAsErrorCount;
+    }
+
+    /**
+     * Registers TabletServer-wide metrics for the global KV pre-write buffer memory quota.
+     *
+     * @param memoryManager global memory manager shared by all KV pre-write buffers
+     */
+    public void registerKvPreWriteBufferMemoryManager(KvPreWriteBufferMemoryManager memoryManager) {
+        gauge(MetricNames.KV_PRE_WRITE_BUFFER_MEMORY_USAGE, memoryManager::usedBytes);
+        gauge(
+                MetricNames.KV_PRE_WRITE_BUFFER_UNDER_PRESSURE,
+                () -> memoryManager.isUnderPressure() ? 1 : 0);
     }
 
     public Counter isrShrinks() {
