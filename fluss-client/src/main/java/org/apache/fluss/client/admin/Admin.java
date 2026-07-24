@@ -813,7 +813,9 @@ public interface Admin extends AutoCloseable {
      *       unavailability;
      *   <li>rolling-upgrade gate - only proceed to the next server when the previous one is green
      *       again ({@code inSyncReplicas == numReplicas && activeLeaderReplicas ==
-     *       numLeaderReplicas});
+     *       numLeaderReplicas}) and {@link #getClusterHealth()} is not {@link
+     *       ClusterHealthStatus#RED}, since a leaderless bucket may not surface in the per-server
+     *       counters (see {@link TabletServerDescription});
      *   <li>reporting per-server tablet load in cluster status.
      * </ul>
      *

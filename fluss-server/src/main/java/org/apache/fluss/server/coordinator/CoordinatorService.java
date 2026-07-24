@@ -1508,13 +1508,13 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         }
 
         AccessContextEvent<DescribeTabletServersResponse> event =
-                new AccessContextEvent<>(CoordinatorService::describeTabletServers);
+                new AccessContextEvent<>(CoordinatorService::computeTabletServerLoads);
         eventManagerSupplier.get().put(event);
         return event.getResultFuture();
     }
 
     @VisibleForTesting
-    static DescribeTabletServersResponse describeTabletServers(CoordinatorContext ctx) {
+    static DescribeTabletServersResponse computeTabletServerLoads(CoordinatorContext ctx) {
         // sorted by server id for a deterministic response order
         Map<Integer, PbTabletServerLoad> loads = new TreeMap<>();
         // report live and shutting-down servers even if they host no replicas, so that

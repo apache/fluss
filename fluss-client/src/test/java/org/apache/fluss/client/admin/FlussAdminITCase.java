@@ -2870,7 +2870,16 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         waitAllReplicasReady(tableId, 3);
 
         // Phase 1: Cluster is healthy - every live server is reported, hosts replicas of the
-        // created table (replication factor 3 on 3 servers) and is green.
+        // created table (replication factor 3 on 3 servers) and is green. The cluster is shared
+        // with other tests, so wait until residue from them (e.g. a recovering ISR) has settled
+        // before taking the snapshot asserted below.
+        waitUntil(
+                () ->
+                        admin.describeTabletServers().get().stream()
+                                .allMatch(FlussAdminITCase::isServerGreen),
+                Duration.ofMinutes(1),
+                "All tablet servers should be green before the rolling upgrade starts");
+
         List<TabletServerDescription> servers = admin.describeTabletServers().get();
         assertThat(servers).extracting(TabletServerDescription::getServerId).contains(0, 1, 2);
         for (TabletServerDescription server : servers) {

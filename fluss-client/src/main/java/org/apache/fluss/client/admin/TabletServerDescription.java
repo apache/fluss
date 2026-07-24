@@ -39,8 +39,12 @@ import java.util.Objects;
  *
  * <p>Note: a bucket without an elected leader is attributed to no server's {@code
  * numLeaderReplicas}, so the per-server values sum to the cluster-wide {@link
- * ClusterHealth#getNumLeaderReplicas()} only when every bucket has an elected leader. Such buckets
- * still surface through {@code inSyncReplicas < numReplicas} on the assigned servers.
+ * ClusterHealth#getNumLeaderReplicas()} only when every bucket has an elected leader. Such a bucket
+ * does not always surface through {@code inSyncReplicas < numReplicas}: when the last ISR member
+ * goes offline, it is kept in the ISR so that a leader can be re-elected later, and the assigned
+ * servers still look green by the predicate above. A rolling-upgrade gate should therefore
+ * additionally require {@link Admin#getClusterHealth()} to not report {@link
+ * ClusterHealthStatus#RED}, which counts leaderless buckets unconditionally.
  *
  * @since 1.0
  */
