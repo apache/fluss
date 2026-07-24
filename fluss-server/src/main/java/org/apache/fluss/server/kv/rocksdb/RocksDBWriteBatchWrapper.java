@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.kv.rocksdb;
 
+import org.apache.fluss.exception.StorageBackpressureException;
 import org.apache.fluss.metrics.Counter;
 import org.apache.fluss.metrics.Histogram;
 import org.apache.fluss.server.kv.KvBatchWriter;
@@ -24,6 +25,7 @@ import org.apache.fluss.utils.IOUtils;
 
 import org.rocksdb.RocksDB;
 import org.rocksdb.RocksDBException;
+import org.rocksdb.Status;
 import org.rocksdb.WriteBatch;
 import org.rocksdb.WriteOptions;
 import org.slf4j.Logger;
@@ -72,16 +74,34 @@ public class RocksDBWriteBatchWrapper implements KvBatchWriter {
 
     private final Histogram flushLatencyHistogram;
 
+    private final boolean noSlowdown;
+
+    private final Runnable backpressureRejectionCallback;
+
+    private boolean flushFailed;
+
     public RocksDBWriteBatchWrapper(
             @Nonnull RocksDB rocksDB,
             long batchSize,
             Counter flushCount,
             Histogram flushLatencyHistogram) {
+        this(rocksDB, batchSize, flushCount, flushLatencyHistogram, false, () -> {});
+    }
+
+    RocksDBWriteBatchWrapper(
+            @Nonnull RocksDB rocksDB,
+            long batchSize,
+            Counter flushCount,
+            Histogram flushLatencyHistogram,
+            boolean noSlowdown,
+            Runnable backpressureRejectionCallback) {
         checkArgument(batchSize >= 0, "Max batch size have to be no negative.");
         this.db = rocksDB;
         this.batchSize = batchSize;
         this.flushCount = flushCount;
         this.flushLatencyHistogram = flushLatencyHistogram;
+        this.noSlowdown = noSlowdown;
+        this.backpressureRejectionCallback = backpressureRejectionCallback;
         this.toClose = new ArrayList<>(2);
         if (this.batchSize > 0) {
             this.batch =
@@ -91,8 +111,7 @@ public class RocksDBWriteBatchWrapper implements KvBatchWriter {
             this.batch = new WriteBatch(this.capacity * PER_RECORD_BYTES);
         }
         this.toClose.add(this.batch);
-        // Use default write options with disabled WAL
-        this.options = new WriteOptions().setDisableWAL(true);
+        this.options = new WriteOptions().setDisableWAL(true).setNoSlowdown(noSlowdown);
         // We own this object, so we must ensure that we close it.
         this.toClose.add(this.options);
     }
@@ -126,14 +145,32 @@ public class RocksDBWriteBatchWrapper implements KvBatchWriter {
                 flushLatencyHistogram.update((System.nanoTime() - start) / 1_000_000);
                 return;
             } catch (RocksDBException e) {
+                if (noSlowdown && isNoSlowdownRejection(e)) {
+                    flushFailed = true;
+                    backpressureRejectionCallback.run();
+                    throw new StorageBackpressureException(
+                            "RocksDB rejected a KV flush because writes are delayed or stalled.");
+                }
                 lastException = e;
                 // retry
                 LOG.warn("Failed to flush RocksDB, try time is {}, retrying.", tryTime, e);
             }
         }
+        flushFailed = true;
         throw new IOException(
                 "Failed to flush to RocksDB after retrying " + MAX_TRY_TIMES + " times.",
                 lastException);
+    }
+
+    private boolean isNoSlowdownRejection(RocksDBException e) {
+        Status status = e.getStatus();
+        if (status == null) {
+            return false;
+        }
+        Status.Code code = status.getCode();
+        return code == Status.Code.Incomplete
+                || code == Status.Code.Busy
+                || code == Status.Code.TryAgain;
     }
 
     private void flushIfNeeded() throws IOException {
@@ -147,7 +184,7 @@ public class RocksDBWriteBatchWrapper implements KvBatchWriter {
     @Override
     public void close() throws IOException {
         try {
-            if (batch.count() != 0) {
+            if (!flushFailed && batch.count() != 0) {
                 flush();
             }
         } finally {

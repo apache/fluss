@@ -181,7 +181,8 @@ final class DelayedWriteTest extends ReplicaTestBase {
 
         return new DelayedWrite<>(
                 delayMs,
-                new DelayedWriteMetadata<>(-1, bucketStatusMap),
+                new DelayedWriteMetadata<>(
+                        -1, DelayedWrite.CompletionMode.HIGH_WATERMARK, bucketStatusMap),
                 replicaManager,
                 callback,
                 TestingMetricGroups.TABLET_SERVER_METRICS);

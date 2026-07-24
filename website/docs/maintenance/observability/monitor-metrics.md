@@ -1107,6 +1107,36 @@ These metrics use Sum aggregation to show the total value across all tables in a
   </tbody>
 </table>
 
+### KV Backpressure
+
+KV backpressure metrics report the cooperative backpressure signal computed by primary-key tables on top of RocksDB. These metrics are aggregated from all buckets of a table and expose two core signals: peak intensity and cumulative hard rejections.
+
+<table class="table table-bordered">
+  <thead>
+    <tr>
+      <th class="text-left" style={{width: '30pt'}}>Scope</th>
+      <th class="text-left" style={{width: '150pt'}}>Infix</th>
+      <th class="text-left" style={{width: '80pt'}}>Metrics</th>
+      <th class="text-left" style={{width: '300pt'}}>Description</th>
+      <th class="text-left" style={{width: '40pt'}}>Type</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th rowspan="2"><strong>tabletserver</strong></th>
+      <td rowspan="2">table</td>
+      <td>kvBackpressureMaxPressure</td>
+      <td>Maximum normalized backpressure value across all buckets of this table, in <code>[0, 1)</code>. A value approaching <code>1</code> indicates the hottest bucket is close to the storage engine's hard-rejection trigger.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>kvBackpressureRejectionsTotal</td>
+      <td>Total number of write requests rejected with <code>StorageBackpressureException</code> on this table since process start.</td>
+      <td>Counter</td>
+    </tr>
+  </tbody>
+</table>
+
 ### Flink connector standard metrics
 
 When using Flink to read and write, Fluss has implemented some key standard Flink connector metrics 

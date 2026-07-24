@@ -25,6 +25,7 @@ import org.apache.fluss.exception.DeletionDisabledException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.exception.SchemaNotExistException;
+import org.apache.fluss.exception.StorageBackpressureException;
 import org.apache.fluss.memory.MemorySegmentPool;
 import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.DeleteBehavior;
@@ -51,6 +52,7 @@ import org.apache.fluss.server.kv.autoinc.AutoIncIDRange;
 import org.apache.fluss.server.kv.autoinc.AutoIncrementManager;
 import org.apache.fluss.server.kv.autoinc.AutoIncrementUpdater;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer;
+import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.PreparedFlush;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.TruncateReason;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKv;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKvBuilder;
@@ -106,6 +108,10 @@ import static org.apache.fluss.utils.concurrent.LockUtils.inWriteLock;
 @ThreadSafe
 public final class KvTablet {
     private static final Logger LOG = LoggerFactory.getLogger(KvTablet.class);
+
+    private static final long MIN_FLUSH_RETRY_DELAY_MS = 100L;
+
+    private static final long MAX_FLUSH_RETRY_DELAY_MS = 1_000L;
     private static final long ROW_COUNT_DISABLED = -1;
 
     private final PhysicalTablePath physicalPath;
@@ -120,6 +126,8 @@ public final class KvTablet {
     private final RocksDBKv rocksDBKv;
     private final KvPreWriteBuffer kvPreWriteBuffer;
     private final TabletServerMetricGroup serverMetricGroup;
+    private final KvFlushScheduler kvFlushScheduler;
+    private final boolean closeFlushScheduler;
 
     // A lock that guards all modifications to the kv.
     private final ReadWriteLock kvLock = new ReentrantReadWriteLock();
@@ -147,6 +155,19 @@ public final class KvTablet {
      */
     private volatile long flushedLogOffset = 0;
 
+    @GuardedBy("kvLock")
+    private FlushState flushState = FlushState.IDLE;
+
+    @GuardedBy("kvLock")
+    private long requestedFlushOffset = 0;
+
+    @GuardedBy("kvLock")
+    private int flushRetryAttempts = 0;
+
+    private volatile @Nullable Runnable flushCompleteListener;
+
+    private volatile @Nullable FatalErrorHandler asyncFatalErrorHandler;
+
     private volatile long rowCount;
 
     @GuardedBy("kvLock")
@@ -169,6 +190,8 @@ public final class KvTablet {
             SchemaGetter schemaGetter,
             ChangelogImage changelogImage,
             @Nullable RocksDBStatistics rocksDBStatistics,
+            KvFlushScheduler kvFlushScheduler,
+            boolean closeFlushScheduler,
             AutoIncrementManager autoIncrementManager) {
         this.physicalPath = physicalPath;
         this.tableBucket = tableBucket;
@@ -177,6 +200,8 @@ public final class KvTablet {
         this.rocksDBKv = rocksDBKv;
         this.writeBatchSize = writeBatchSize;
         this.serverMetricGroup = serverMetricGroup;
+        this.kvFlushScheduler = kvFlushScheduler;
+        this.closeFlushScheduler = closeFlushScheduler;
         this.kvPreWriteBuffer = new KvPreWriteBuffer(createKvBatchWriter(), serverMetricGroup);
         this.logFormat = logFormat;
         this.arrowWriterProvider = new ArrowWriterPool(arrowBufferAllocator);
@@ -212,6 +237,83 @@ public final class KvTablet {
             RateLimiter sharedRateLimiter,
             AutoIncrementManager autoIncrementManager)
             throws IOException {
+        return create(
+                tablePath,
+                tableBucket,
+                logTablet,
+                kvTabletDir,
+                serverConf,
+                serverMetricGroup,
+                arrowBufferAllocator,
+                memorySegmentPool,
+                kvFormat,
+                rowMerger,
+                arrowCompressionInfo,
+                schemaGetter,
+                changelogImage,
+                sharedRateLimiter,
+                new KvFlushScheduler(serverConf),
+                true,
+                autoIncrementManager);
+    }
+
+    public static KvTablet create(
+            PhysicalTablePath tablePath,
+            TableBucket tableBucket,
+            LogTablet logTablet,
+            File kvTabletDir,
+            Configuration serverConf,
+            TabletServerMetricGroup serverMetricGroup,
+            BufferAllocator arrowBufferAllocator,
+            MemorySegmentPool memorySegmentPool,
+            KvFormat kvFormat,
+            RowMerger rowMerger,
+            ArrowCompressionInfo arrowCompressionInfo,
+            SchemaGetter schemaGetter,
+            ChangelogImage changelogImage,
+            RateLimiter sharedRateLimiter,
+            KvFlushScheduler kvFlushScheduler,
+            AutoIncrementManager autoIncrementManager)
+            throws IOException {
+        return create(
+                tablePath,
+                tableBucket,
+                logTablet,
+                kvTabletDir,
+                serverConf,
+                serverMetricGroup,
+                arrowBufferAllocator,
+                memorySegmentPool,
+                kvFormat,
+                rowMerger,
+                arrowCompressionInfo,
+                schemaGetter,
+                changelogImage,
+                sharedRateLimiter,
+                kvFlushScheduler,
+                false,
+                autoIncrementManager);
+    }
+
+    private static KvTablet create(
+            PhysicalTablePath tablePath,
+            TableBucket tableBucket,
+            LogTablet logTablet,
+            File kvTabletDir,
+            Configuration serverConf,
+            TabletServerMetricGroup serverMetricGroup,
+            BufferAllocator arrowBufferAllocator,
+            MemorySegmentPool memorySegmentPool,
+            KvFormat kvFormat,
+            RowMerger rowMerger,
+            ArrowCompressionInfo arrowCompressionInfo,
+            SchemaGetter schemaGetter,
+            ChangelogImage changelogImage,
+            RateLimiter sharedRateLimiter,
+            KvFlushScheduler kvFlushScheduler,
+            boolean closeFlushScheduler,
+            AutoIncrementManager autoIncrementManager)
+            throws IOException {
         RocksDBKv kv = buildRocksDBKv(serverConf, kvTabletDir, sharedRateLimiter);
 
         // Create RocksDB statistics accessor (will be registered to TableMetricGroup by Replica)
@@ -243,6 +345,8 @@ public final class KvTablet {
                 schemaGetter,
                 changelogImage,
                 rocksDBStatistics,
+                kvFlushScheduler,
+                closeFlushScheduler,
                 autoIncrementManager);
     }
 
@@ -254,9 +358,12 @@ public final class KvTablet {
                 new RocksDBResourceContainer(configuration, kvDir, true, sharedRateLimiter);
         RocksDBKvBuilder rocksDBKvBuilder =
                 new RocksDBKvBuilder(
-                        kvDir,
-                        rocksDBResourceContainer,
-                        rocksDBResourceContainer.getColumnOptions());
+                                kvDir,
+                                rocksDBResourceContainer,
+                                rocksDBResourceContainer.getColumnOptions())
+                        .setFlussL0SlowdownTrigger(
+                                configuration.get(
+                                        ConfigOptions.KV_BACKPRESSURE_L0_SLOWDOWN_TRIGGER));
         return rocksDBKvBuilder.build();
     }
 
@@ -375,6 +482,22 @@ public final class KvTablet {
                 kvLock,
                 () -> {
                     rocksDBKv.checkIfRocksDBClosed();
+
+                    long pendingFlushBytesAfterWrite =
+                            kvPreWriteBuffer.pendingFlushBytes() + kvRecords.sizeInBytes();
+
+                    // Write-path admission gate: reject the request if accepting this batch would
+                    // push the buffered KV view beyond RocksDB's safe write budget.
+                    if (rocksDBKv.wouldExceedFlushBudget(pendingFlushBytesAfterWrite)) {
+                        requestFlushInternal(
+                                Math.max(requestedFlushOffset, logTablet.getHighWatermark()));
+                        throw new StorageBackpressureException(
+                                String.format(
+                                        "Write rejected for %s: flush budget exceeded "
+                                                + "(storage pressure or buffer size limit reached). "
+                                                + "Retry after backoff.",
+                                        tableBucket));
+                    }
 
                     SchemaInfo schemaInfo = schemaGetter.getLatestSchemaInfo();
                     Schema latestSchema = schemaInfo.getSchema();
@@ -667,40 +790,266 @@ public final class KvTablet {
         }
     }
 
+    /**
+     * Synchronously flushes the pre-write buffer up to the given offset. This method delegates to
+     * {@link #requestFlush(long, FatalErrorHandler)} and blocks until the async flush scheduler
+     * completes the flush. Intended for test use only; production code should use {@link
+     * #requestFlush} which is non-blocking.
+     */
+    @VisibleForTesting
     public void flush(long exclusiveUpToLogOffset, FatalErrorHandler fatalErrorHandler) {
-        // todo: need to introduce a backpressure mechanism
-        // to avoid too much records in kvPreWriteBuffer
+        // Tests often pass Long.MAX_VALUE to mean "flush everything". Resolve it to
+        // the actual local log end offset to avoid poisoning flushedLogOffset with
+        // Long.MAX_VALUE, which would cause all subsequent flushes to be silently
+        // skipped by the async path's offset check in requestFlushInternal.
+        final long effectiveFlushOffset =
+                exclusiveUpToLogOffset == Long.MAX_VALUE
+                        ? logTablet.localLogEndOffset()
+                        : exclusiveUpToLogOffset;
+        // Check if already flushed or closed before requesting
+        boolean skipFlush =
+                inReadLock(kvLock, () -> isClosed || effectiveFlushOffset <= flushedLogOffset);
+        if (skipFlush) {
+            return;
+        }
+        requestFlush(effectiveFlushOffset, fatalErrorHandler);
+        // Poll until the flush scheduler finishes processing this tablet (IDLE = done,
+        // STORAGE_BLOCKED = backpressured, either way the scheduler has completed its attempt).
+        long deadline = System.currentTimeMillis() + 30_000;
+        while (System.currentTimeMillis() < deadline) {
+            FlushState state = inReadLock(kvLock, () -> flushState);
+            if (state == FlushState.IDLE || state == FlushState.STORAGE_BLOCKED) {
+                return;
+            }
+            try {
+                Thread.sleep(10);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
+        throw new RuntimeException("Flush did not complete within 30 seconds for " + tableBucket);
+    }
+
+    public void requestFlush(long exclusiveUpToLogOffset, FatalErrorHandler fatalErrorHandler) {
+        asyncFatalErrorHandler = fatalErrorHandler;
+        inWriteLock(kvLock, () -> requestFlushInternal(exclusiveUpToLogOffset));
+    }
+
+    public void setFlushCompleteListener(@Nullable Runnable flushCompleteListener) {
+        this.flushCompleteListener = flushCompleteListener;
+    }
+
+    public long getFlushedLogOffset() {
+        return flushedLogOffset;
+    }
+
+    @GuardedBy("kvLock")
+    private void requestFlushInternal(long exclusiveUpToLogOffset) {
+        if (isClosed || exclusiveUpToLogOffset <= flushedLogOffset) {
+            return;
+        }
+        if (exclusiveUpToLogOffset > requestedFlushOffset) {
+            requestedFlushOffset = exclusiveUpToLogOffset;
+        }
+        if (flushState == FlushState.IDLE) {
+            flushState = FlushState.QUEUED;
+            kvFlushScheduler.enqueue(this);
+        }
+    }
+
+    void requestFlushRetry() {
         inWriteLock(
                 kvLock,
                 () -> {
-                    // when kv manager is closed which means kv tablet is already closed,
-                    // but the tablet server may still handle fetch log request from follower
-                    // as the tablet rpc service is closed asynchronously, then update the watermark
-                    // and then flush the pre-write buffer.
-
-                    // In such case, if the tablet is already closed, we won't flush pre-write
-                    // buffer, just warning it.
-                    if (isClosed) {
-                        LOG.warn(
-                                "The kv tablet for {} is already closed, ignore flushing kv pre-write buffer.",
-                                tableBucket);
-                    } else {
-                        try {
-                            int rowCountDiff = kvPreWriteBuffer.flush(exclusiveUpToLogOffset);
-                            if (exclusiveUpToLogOffset > flushedLogOffset) {
-                                flushedLogOffset = exclusiveUpToLogOffset;
-                            }
-                            if (rowCount != ROW_COUNT_DISABLED) {
-                                // row count is enabled, we update the row count after flush.
-                                long currentRowCount = rowCount;
-                                rowCount = currentRowCount + rowCountDiff;
-                            }
-                        } catch (Throwable t) {
-                            fatalErrorHandler.onFatalError(
-                                    new KvStorageException("Failed to flush kv pre-write buffer."));
-                        }
+                    if (!isClosed && flushState == FlushState.STORAGE_BLOCKED) {
+                        flushState = FlushState.QUEUED;
+                        kvFlushScheduler.enqueue(this);
                     }
                 });
+    }
+
+    void runScheduledFlush() {
+        if (!tryAcquireScheduledFlush()) {
+            return;
+        }
+        boolean madeProgress = false;
+        PreparedFlush preparedFlush = null;
+        boolean flushCompleted = false;
+        try {
+            while (true) {
+                preparedFlush = prepareScheduledFlush();
+                flushCompleted = false;
+                if (preparedFlush == null) {
+                    break;
+                }
+                if (!preparedFlush.isEmpty()) {
+                    writePreparedFlush(preparedFlush);
+                }
+                boolean hasMoreFlushWork = completeScheduledFlush(preparedFlush);
+                flushCompleted = true;
+                madeProgress = true;
+                if (!hasMoreFlushWork) {
+                    break;
+                }
+            }
+        } catch (StorageBackpressureException e) {
+            if (preparedFlush != null && !flushCompleted) {
+                abortScheduledFlush(preparedFlush);
+            }
+            delayScheduledFlush(e);
+        } catch (Throwable t) {
+            if (preparedFlush != null && !flushCompleted) {
+                abortScheduledFlush(preparedFlush);
+            }
+            failScheduledFlush(t);
+        } finally {
+            if (madeProgress) {
+                notifyFlushComplete();
+            }
+        }
+    }
+
+    private boolean tryAcquireScheduledFlush() {
+        return inWriteLock(
+                kvLock,
+                () -> {
+                    if (isClosed || flushState != FlushState.QUEUED) {
+                        return false;
+                    }
+                    flushState = FlushState.RUNNING;
+                    return true;
+                });
+    }
+
+    private @Nullable PreparedFlush prepareScheduledFlush() {
+        return inWriteLock(
+                kvLock,
+                () -> {
+                    if (isClosed) {
+                        flushState = FlushState.IDLE;
+                        return null;
+                    }
+                    long targetOffset = requestedFlushOffset;
+                    if (targetOffset <= flushedLogOffset) {
+                        flushState = FlushState.IDLE;
+                        return null;
+                    }
+                    PreparedFlush preparedFlush;
+                    try {
+                        preparedFlush = kvPreWriteBuffer.prepareFlush(targetOffset);
+                    } catch (IllegalStateException e) {
+                        // Orphaned PREPARED entries from a previous incomplete flush cycle.
+                        // Abort them back to ACTIVE and let the next attempt start clean.
+                        LOG.warn(
+                                "Found orphaned PREPARED entries in {}, aborting.", tableBucket, e);
+                        kvPreWriteBuffer.abortAllPrepared();
+                        flushState = FlushState.STORAGE_BLOCKED;
+                        kvFlushScheduler.retryLater(this);
+                        return null;
+                    }
+                    if (preparedFlush.isEmpty()) {
+                        flushedLogOffset = targetOffset;
+                    }
+                    return preparedFlush;
+                });
+    }
+
+    private void writePreparedFlush(PreparedFlush preparedFlush) throws Exception {
+        try (ResourceGuard.Lease lease = rocksDBKv.getResourceGuard().acquireResource();
+                KvBatchWriter kvBatchWriter = createNoSlowdownKvBatchWriter()) {
+            for (KvPreWriteBuffer.KvEntry entry : preparedFlush.entries()) {
+                KvPreWriteBuffer.Value value = entry.getValue();
+                if (value.get() == null) {
+                    kvBatchWriter.delete(entry.getKey().get());
+                } else {
+                    kvBatchWriter.put(entry.getKey().get(), value.get());
+                }
+            }
+            kvBatchWriter.flush();
+        }
+    }
+
+    private boolean completeScheduledFlush(PreparedFlush preparedFlush) {
+        return inWriteLock(
+                kvLock,
+                () -> {
+                    if (!isClosed) {
+                        int rowCountDiff = kvPreWriteBuffer.completeFlush(preparedFlush);
+                        if (preparedFlush.exclusiveUpToLogSequenceNumber() > flushedLogOffset) {
+                            flushedLogOffset = preparedFlush.exclusiveUpToLogSequenceNumber();
+                        }
+                        if (rowCount != ROW_COUNT_DISABLED) {
+                            rowCount += rowCountDiff;
+                        }
+                        if (!preparedFlush.isEmpty()) {
+                            rocksDBKv.recordWriteSucceeded();
+                        }
+                        resetFlushRetryBackoff();
+                    }
+                    if (!isClosed && requestedFlushOffset > flushedLogOffset) {
+                        flushState = FlushState.RUNNING;
+                        return true;
+                    }
+                    flushState = FlushState.IDLE;
+                    return false;
+                });
+    }
+
+    private void abortScheduledFlush(PreparedFlush preparedFlush) {
+        inWriteLock(kvLock, () -> kvPreWriteBuffer.abortFlush(preparedFlush));
+    }
+
+    private void delayScheduledFlush(StorageBackpressureException e) {
+        LOG.debug("KV flush for {} delayed by RocksDB backpressure.", tableBucket, e);
+        inWriteLock(
+                kvLock,
+                () -> {
+                    if (!isClosed) {
+                        flushState = FlushState.STORAGE_BLOCKED;
+                        kvFlushScheduler.retryLater(this, nextFlushRetryDelayMs());
+                    }
+                });
+    }
+
+    @GuardedBy("kvLock")
+    private long nextFlushRetryDelayMs() {
+        long delay = MIN_FLUSH_RETRY_DELAY_MS;
+        if (flushRetryAttempts > 0) {
+            int shift = Math.min(flushRetryAttempts, 30);
+            delay = MIN_FLUSH_RETRY_DELAY_MS << shift;
+        }
+        if (flushRetryAttempts < 30) {
+            flushRetryAttempts++;
+        }
+        return Math.min(delay, MAX_FLUSH_RETRY_DELAY_MS);
+    }
+
+    @GuardedBy("kvLock")
+    private void resetFlushRetryBackoff() {
+        flushRetryAttempts = 0;
+    }
+
+    private void failScheduledFlush(Throwable t) {
+        inWriteLock(
+                kvLock,
+                () -> {
+                    flushState = FlushState.IDLE;
+                    FatalErrorHandler fatalErrorHandler = asyncFatalErrorHandler;
+                    if (fatalErrorHandler != null) {
+                        fatalErrorHandler.onFatalError(
+                                new KvStorageException("Failed to flush kv pre-write buffer.", t));
+                    } else {
+                        LOG.error("Failed to flush kv pre-write buffer for {}.", tableBucket, t);
+                    }
+                });
+    }
+
+    private void notifyFlushComplete() {
+        Runnable listener = flushCompleteListener;
+        if (listener != null) {
+            listener.run();
+        }
     }
 
     /** put key,value,logOffset into pre-write buffer directly. */
@@ -841,21 +1190,34 @@ public final class KvTablet {
                 serverMetricGroup.kvFlushLatencyHistogram());
     }
 
+    private KvBatchWriter createNoSlowdownKvBatchWriter() {
+        return rocksDBKv.newNoSlowdownWriteBatch(
+                writeBatchSize,
+                serverMetricGroup.kvFlushCount(),
+                serverMetricGroup.kvFlushLatencyHistogram());
+    }
+
     public void close() throws Exception {
-        LOG.debug("close kv tablet {} for table {}.", tableBucket, physicalPath);
-        inWriteLock(
-                kvLock,
-                () -> {
-                    if (isClosed) {
-                        return;
-                    }
-                    // Note: RocksDB metrics lifecycle is managed by TableMetricGroup
-                    // No need to close it here
-                    if (rocksDBKv != null) {
-                        rocksDBKv.close();
-                    }
-                    isClosed = true;
-                });
+        LOG.info("close kv tablet {} for table {}.", tableBucket, physicalPath);
+        boolean shouldClose =
+                inWriteLock(
+                        kvLock,
+                        () -> {
+                            if (isClosed) {
+                                return false;
+                            }
+                            isClosed = true;
+                            flushState = FlushState.IDLE;
+                            return true;
+                        });
+        if (shouldClose && closeFlushScheduler) {
+            kvFlushScheduler.close();
+        }
+        if (shouldClose && rocksDBKv != null) {
+            // Note: RocksDB metrics lifecycle is managed by TableMetricGroup.
+            // Close outside kvLock so an async flush can finish and release its RocksDB lease.
+            rocksDBKv.close();
+        }
     }
 
     /** Completely delete the kv directory and all contents form the file system with no delay. */
@@ -893,5 +1255,17 @@ public final class KvTablet {
     @VisibleForTesting
     public RocksDBKv getRocksDBKv() {
         return rocksDBKv;
+    }
+
+    /** Returns the recent normalized backpressure pressure in {@code [0, 1)}. */
+    public float currentPressure() {
+        return rocksDBKv.currentPressure();
+    }
+
+    private enum FlushState {
+        IDLE,
+        QUEUED,
+        RUNNING,
+        STORAGE_BLOCKED
     }
 }

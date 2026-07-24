@@ -24,8 +24,6 @@ import org.apache.fluss.fs.FsPath;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.annotation.Nullable;
-
 import java.io.IOException;
 import java.util.UUID;
 
@@ -265,16 +263,13 @@ public class SnapshotLocation {
             }
         }
 
-        @Nullable
         public KvFileHandle closeAndGetHandle() throws IOException {
-            // check if there was nothing ever written
-            if (outStream == null && pos == 0) {
-                return null;
-            }
-
             synchronized (this) {
                 if (!closed) {
                     try {
+                        if (outStream == null && pos == 0) {
+                            createStream();
+                        }
                         flushToFile();
 
                         pos = writeBuffer.length;

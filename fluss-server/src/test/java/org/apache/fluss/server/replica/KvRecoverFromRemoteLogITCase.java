@@ -29,6 +29,7 @@ import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.PbLookupRespForBucket;
 import org.apache.fluss.rpc.messages.PutKvRequest;
+import org.apache.fluss.rpc.messages.PutKvResponse;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
@@ -141,7 +142,7 @@ class KvRecoverFromRemoteLogITCase {
                 batch.addAll(genKvRecords(new Object[] {i, "value_" + i}));
             }
             allRecords.addAll(batch);
-            putRecordBatch(tableBucket, originalLeader, toKvRecordBatch(batch)).join();
+            putRecordBatchAndAssertSuccess(tableBucket, originalLeader, toKvRecordBatch(batch));
         }
 
         // Wait for Phase 1 log segments to be copied to remote storage.
@@ -163,7 +164,7 @@ class KvRecoverFromRemoteLogITCase {
                 batch.addAll(genKvRecords(new Object[] {i, "value_" + i}));
             }
             allRecords.addAll(batch);
-            putRecordBatch(tableBucket, originalLeader, toKvRecordBatch(batch)).join();
+            putRecordBatchAndAssertSuccess(tableBucket, originalLeader, toKvRecordBatch(batch));
         }
 
         // Wait until the remote log covers beyond the snapshot offset.
@@ -294,14 +295,15 @@ class KvRecoverFromRemoteLogITCase {
         // Disable auto-snapshot by setting a very long interval.
         // Snapshot will be triggered manually in the test to control the exact timing.
         conf.set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofHours(1));
-        // Tiny write buffer so KV data is flushed immediately.
-        conf.set(ConfigOptions.KV_WRITE_BUFFER_SIZE, MemorySize.parse("1b"));
+        // Keep RocksDB write buffer small for tests, but above normal test batch size so the
+        // backpressure admission gate does not reject successful remote-log recovery writes.
+        conf.set(ConfigOptions.KV_WRITE_BUFFER_SIZE, MemorySize.parse("64kb"));
         // Short max lag time to allow quick ISR shrink/expand.
         conf.set(ConfigOptions.LOG_REPLICA_MAX_LAG_TIME, Duration.ofSeconds(5));
         return conf;
     }
 
-    private CompletableFuture<?> putRecordBatch(
+    private CompletableFuture<PutKvResponse> putRecordBatch(
             TableBucket tableBucket, int leaderServer, KvRecordBatch kvRecordBatch) {
         PutKvRequest putKvRequest =
                 newPutKvRequest(
@@ -309,5 +311,16 @@ class KvRecoverFromRemoteLogITCase {
         TabletServerGateway leaderGateway =
                 FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leaderServer);
         return leaderGateway.putKv(putKvRequest);
+    }
+
+    private void putRecordBatchAndAssertSuccess(
+            TableBucket tableBucket, int leaderServer, KvRecordBatch kvRecordBatch) {
+        PutKvResponse response = putRecordBatch(tableBucket, leaderServer, kvRecordBatch).join();
+        assertThat(response.getBucketsRespsList()).hasSize(1);
+        assertThat(response.getBucketsRespAt(0).hasErrorCode())
+                .as(
+                        "PutKv response should not contain bucket error: %s",
+                        response.getBucketsRespAt(0))
+                .isFalse();
     }
 }

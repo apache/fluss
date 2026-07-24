@@ -56,6 +56,12 @@ public class TableMetricGroup extends AbstractMetricGroup {
     // table-level  metrics for kv, will be null if the table isn't a kv table
     private final @Nullable KvMetricGroup kvMetrics;
 
+    // Cumulative count of write requests rejected by KV backpressure
+    // (StorageBackpressureException),
+    // aggregated across all buckets of this table. Null when the table isn't a KV table, since
+    // backpressure is only emitted by primary-key tables backed by RocksDB.
+    private final @Nullable Counter kvBackpressureRejectedRequests;
+
     public TableMetricGroup(
             MetricRegistry registry,
             TablePath tablePath,
@@ -74,10 +80,15 @@ public class TableMetricGroup extends AbstractMetricGroup {
             logMetrics = new LogMetricGroup(this, TabletType.CDC_LOG);
             // Register RocksDB aggregated metrics for kv tables
             registerRocksDBMetrics();
+            // Register KV backpressure aggregated metrics for kv tables
+            kvBackpressureRejectedRequests = new ThreadSafeSimpleCounter();
+            counter(MetricNames.KV_BACKPRESSURE_REJECTIONS_TOTAL, kvBackpressureRejectedRequests);
+            registerKvBackpressureGauges();
         } else {
             // otherwise, create log produce metrics
             kvMetrics = null;
             logMetrics = new LogMetricGroup(this, TabletType.LOG);
+            kvBackpressureRejectedRequests = null;
         }
     }
 
@@ -226,6 +237,17 @@ public class TableMetricGroup extends AbstractMetricGroup {
         }
     }
 
+    /**
+     * Increment the table-level counter of write requests rejected by KV backpressure ({@code
+     * StorageBackpressureException}). Called by the pre-write KV backpressure gate when the storage
+     * engine has crossed its hard-rejection trigger. No-op for non-KV tables.
+     */
+    public void incKvBackpressureRejectedRequests() {
+        if (kvBackpressureRejectedRequests != null) {
+            kvBackpressureRejectedRequests.inc();
+        }
+    }
+
     // ------------------------------------------------------------------------
     //  bucket groups
     // ------------------------------------------------------------------------
@@ -330,7 +352,6 @@ public class TableMetricGroup extends AbstractMetricGroup {
                                 .mapToLong(RocksDBStatistics::getCompactionTimeMicros)
                                 .max()
                                 .orElse(0L));
-
         // Sum aggregation metrics - track the total value across all buckets
         gauge(
                 MetricNames.ROCKSDB_BYTES_READ_TOTAL,
@@ -388,6 +409,23 @@ public class TableMetricGroup extends AbstractMetricGroup {
                         allRocksDBStatistics()
                                 .mapToLong(RocksDBStatistics::getBlockCachePinnedUsage)
                                 .sum());
+    }
+
+    /**
+     * Register table-level KV backpressure gauge. Reports the peak normalized pressure across all
+     * buckets, in {@code [0, 1)}. Per-bucket pressure values are written from successful PutKv
+     * response sampling; the gauge reads them via {@link
+     * BucketMetricGroup#getKvBackpressureLevel()} without going through RocksDB.
+     */
+    private void registerKvBackpressureGauges() {
+        gauge(
+                MetricNames.KV_BACKPRESSURE_MAX_PRESSURE,
+                () ->
+                        (float)
+                                buckets.values().stream()
+                                        .mapToDouble(BucketMetricGroup::getKvBackpressureLevel)
+                                        .max()
+                                        .orElse(0d));
     }
 
     /** Metric group for specific kind of tablet of a table. */

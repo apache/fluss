@@ -734,7 +734,29 @@ public final class Replica {
     private void mayFlushKv(long newHighWatermark) {
         KvTablet kvTablet = this.kvTablet;
         if (kvTablet != null) {
-            kvTablet.flush(newHighWatermark, fatalErrorHandler);
+            kvTablet.requestFlush(newHighWatermark, fatalErrorHandler);
+        }
+    }
+
+    private void onKvFlushComplete() {
+        boolean leaderHWIncremented =
+                inWriteLock(
+                        leaderIsrUpdateLock,
+                        () -> {
+                            if (!isLeader()) {
+                                return false;
+                            }
+                            try {
+                                return maybeIncrementLeaderHW(logTablet, clock.milliseconds());
+                            } catch (IOException e) {
+                                fatalErrorHandler.onFatalError(e);
+                                return false;
+                            }
+                        });
+        if (leaderHWIncremented) {
+            tryCompleteDelayedOperations();
+        } else {
+            delayedWriteManager.checkAndComplete(new DelayedTableBucketKey(tableBucket));
         }
     }
 
@@ -834,7 +856,10 @@ public final class Replica {
                 tableBucket,
                 endTime - startTime);
 
-        // Register RocksDB statistics to BucketMetricGroup
+        if (kvTablet != null) {
+            kvTablet.setFlushCompleteListener(this::onKvFlushComplete);
+        }
+        // Register RocksDB statistics now that the kv tablet is fully initialized.
         if (kvTablet != null && kvTablet.getRocksDBStatistics() != null) {
             bucketMetricGroup.registerRocksDBStatistics(kvTablet.getRocksDBStatistics());
         }
@@ -1070,6 +1095,27 @@ public final class Replica {
         return logTablet.appendAsFollower(memoryLogRecords);
     }
 
+    /**
+     * Samples the recent backpressure pressure for piggyback on a completed write response. Also
+     * records the value on this bucket's {@link BucketMetricGroup} for table-level aggregation.
+     */
+    public float samplePressureForCompletion() {
+        return inReadLock(
+                leaderIsrUpdateLock,
+                () -> {
+                    if (!isLeader()) {
+                        return 0f;
+                    }
+                    KvTablet kv = this.kvTablet;
+                    if (kv == null) {
+                        return 0f;
+                    }
+                    float pressure = kv.currentPressure();
+                    bucketMetricGroup.recordKvBackpressureLevel(pressure);
+                    return pressure;
+                });
+    }
+
     public LogAppendInfo putRecordsToLeader(
             KvRecordBatch kvRecords,
             @Nullable int[] targetColumns,
@@ -1186,11 +1232,15 @@ public final class Replica {
             }
         }
 
-        // when the watermark can be advanced, we may need to flush kv first if it's kv replica,
-        // and then update highWatermark.
-        // TODO The flushKV and updateHighWatermark need to be atomic operation. See
-        // https://github.com/apache/fluss/issues/513
-        mayFlushKv(newHighWatermark.getMessageOffset());
+        KvTablet currentKv = this.kvTablet;
+        if (currentKv != null
+                && currentKv.getFlushedLogOffset() < newHighWatermark.getMessageOffset()) {
+            // The KV view must be flushed before the log high watermark becomes visible. The flush
+            // itself runs on the shared KV flush scheduler so this RPC worker does not execute
+            // RocksDB writes.
+            mayFlushKv(newHighWatermark.getMessageOffset());
+            return false;
+        }
 
         Optional<LogOffsetMetadata> oldWatermark =
                 leaderLog.maybeIncrementHighWatermark(newHighWatermark);
@@ -1486,9 +1536,9 @@ public final class Replica {
      * reached `requiredOffset` and the second element is an error (which would be `Errors.NONE` for
      * no error).
      *
-     * <p>Note that this method will only be called if requiredAcks = -1, and we are waiting for all
-     * replicas to be fully caught up to the (local) leader's offset corresponding to this
-     * produceLog/PutKv request before we acknowledge the request.
+     * <p>For ProduceLog this method is only used when {@code requiredAcks = -1}. PutKv can also use
+     * this path for non-zero acks so the response waits until the KV flush path has published the
+     * high watermark for the written offset.
      */
     public Tuple2<Boolean, Errors> checkEnoughReplicasReachOffset(long requiredOffset) {
         if (isLeader()) {
@@ -1510,6 +1560,30 @@ public final class Replica {
         } else {
             return Tuple2.of(false, Errors.NOT_LEADER_OR_FOLLOWER);
         }
+    }
+
+    /**
+     * Checks whether the local leader KV view has been flushed to the required offset. Used by
+     * PutKv with {@code acks = 1}: the client should wait for local materialization, but should not
+     * be upgraded to waiting for high watermark replication.
+     */
+    public Tuple2<Boolean, Errors> checkLocalKvFlushedOffset(long requiredOffset) {
+        return inReadLock(
+                leaderIsrUpdateLock,
+                () -> {
+                    if (!isLeader()) {
+                        return Tuple2.of(false, Errors.NOT_LEADER_OR_FOLLOWER);
+                    }
+                    KvTablet kv = this.kvTablet;
+                    if (kv == null) {
+                        return Tuple2.of(false, Errors.UNKNOWN_SERVER_ERROR);
+                    }
+                    if (kv.getFlushedLogOffset() >= requiredOffset) {
+                        return Tuple2.of(true, Errors.NONE);
+                    }
+                    kv.requestFlush(requiredOffset, fatalErrorHandler);
+                    return Tuple2.of(false, Errors.NONE);
+                });
     }
 
     public long getRowCount() {
