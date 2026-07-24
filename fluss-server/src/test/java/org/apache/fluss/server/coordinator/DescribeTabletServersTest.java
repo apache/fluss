@@ -35,7 +35,7 @@ import java.util.Collections;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Tests for {@link CoordinatorService#describeTabletServers(CoordinatorContext)}. */
+/** Tests for {@link CoordinatorService#computeTabletServerLoads(CoordinatorContext)}. */
 class DescribeTabletServersTest {
 
     private CoordinatorContext ctx;
@@ -49,7 +49,7 @@ class DescribeTabletServersTest {
 
     @Test
     void testEmptyClusterReportsLiveServersWithZeroCounters() {
-        DescribeTabletServersResponse resp = CoordinatorService.describeTabletServers(ctx);
+        DescribeTabletServersResponse resp = CoordinatorService.computeTabletServerLoads(ctx);
 
         assertThat(resp.getTabletServersList())
                 .extracting(PbTabletServerLoad::getServerId)
@@ -66,7 +66,7 @@ class DescribeTabletServersTest {
         ctx.putBucketLeaderAndIsr(
                 tb, new LeaderAndIsr(0, 1, Arrays.asList(0, 1, 2), Collections.emptyList(), 0, 1));
 
-        DescribeTabletServersResponse resp = CoordinatorService.describeTabletServers(ctx);
+        DescribeTabletServersResponse resp = CoordinatorService.computeTabletServerLoads(ctx);
 
         assertLoad(resp, 0, 1, 1, 1, 1);
         assertLoad(resp, 1, 1, 1, 0, 0);
@@ -80,7 +80,7 @@ class DescribeTabletServersTest {
         ctx.putBucketLeaderAndIsr(
                 tb, new LeaderAndIsr(0, 1, Arrays.asList(0, 1), Collections.emptyList(), 0, 1));
 
-        DescribeTabletServersResponse resp = CoordinatorService.describeTabletServers(ctx);
+        DescribeTabletServersResponse resp = CoordinatorService.computeTabletServerLoads(ctx);
 
         assertLoad(resp, 0, 1, 1, 1, 1);
         assertLoad(resp, 1, 1, 1, 0, 0);
@@ -95,15 +95,19 @@ class DescribeTabletServersTest {
                 tb, new LeaderAndIsr(0, 1, Arrays.asList(0, 1), Collections.emptyList(), 0, 1));
         ctx.addPendingLeaderActivation(tb);
 
-        assertLoad(CoordinatorService.describeTabletServers(ctx), 0, 1, 1, 1, 0);
+        assertLoad(CoordinatorService.computeTabletServerLoads(ctx), 0, 1, 1, 1, 0);
 
         ctx.clearPendingLeaderActivation(tb);
 
-        assertLoad(CoordinatorService.describeTabletServers(ctx), 0, 1, 1, 1, 1);
+        assertLoad(CoordinatorService.computeTabletServerLoads(ctx), 0, 1, 1, 1, 1);
     }
 
     @Test
     void testNoLeaderBucketAttributesLeadershipToNoServer() {
+        // this is a real state: when the last ISR member goes offline, ReplicaStateMachine keeps
+        // it in the ISR (so a leader can be re-elected later) and sets the leader to NO_LEADER.
+        // Both servers then still report inSync == num, so the per-server green predicate alone
+        // cannot detect the offline bucket - see the TabletServerDescription javadoc.
         TableBucket tb = new TableBucket(1L, 0);
         ctx.updateBucketReplicaAssignment(tb, Arrays.asList(0, 1));
         ctx.putBucketLeaderAndIsr(
@@ -116,7 +120,7 @@ class DescribeTabletServersTest {
                         0,
                         1));
 
-        DescribeTabletServersResponse resp = CoordinatorService.describeTabletServers(ctx);
+        DescribeTabletServersResponse resp = CoordinatorService.computeTabletServerLoads(ctx);
 
         assertLoad(resp, 0, 1, 1, 0, 0);
         assertLoad(resp, 1, 1, 1, 0, 0);
@@ -130,7 +134,7 @@ class DescribeTabletServersTest {
         ctx.putBucketLeaderAndIsr(
                 tb, new LeaderAndIsr(0, 1, Arrays.asList(0, 1), Collections.emptyList(), 0, 1));
 
-        assertLoad(CoordinatorService.describeTabletServers(ctx), 2, 0, 0, 0, 0);
+        assertLoad(CoordinatorService.computeTabletServerLoads(ctx), 2, 0, 0, 0, 0);
     }
 
     @Test
@@ -142,7 +146,7 @@ class DescribeTabletServersTest {
         ctx.putBucketLeaderAndIsr(
                 tb, new LeaderAndIsr(0, 1, Arrays.asList(0, 1), Collections.emptyList(), 0, 1));
 
-        assertLoad(CoordinatorService.describeTabletServers(ctx), 5, 1, 0, 0, 0);
+        assertLoad(CoordinatorService.computeTabletServerLoads(ctx), 5, 1, 0, 0, 0);
     }
 
     @Test
@@ -154,7 +158,7 @@ class DescribeTabletServersTest {
                 new LeaderAndIsr(
                         0, 1, Collections.singletonList(0), Collections.emptyList(), 0, 1));
 
-        DescribeTabletServersResponse resp = CoordinatorService.describeTabletServers(ctx);
+        DescribeTabletServersResponse resp = CoordinatorService.computeTabletServerLoads(ctx);
 
         assertLoad(resp, 0, 1, 1, 1, 1);
         assertLoad(resp, 1, 1, 0, 0, 0);
@@ -180,7 +184,7 @@ class DescribeTabletServersTest {
                 tb3, new LeaderAndIsr(0, 1, Arrays.asList(0, 2), Collections.emptyList(), 0, 1));
         ctx.addPendingLeaderActivation(tb3);
 
-        DescribeTabletServersResponse resp = CoordinatorService.describeTabletServers(ctx);
+        DescribeTabletServersResponse resp = CoordinatorService.computeTabletServerLoads(ctx);
         GetClusterHealthResponse health = CoordinatorService.computeClusterHealth(ctx);
 
         int numReplicas = 0;
