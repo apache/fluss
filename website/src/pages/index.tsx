@@ -489,13 +489,9 @@ function HomepageHeader({heroRef}: {heroRef: React.RefObject<HTMLElement>}) {
                 <div className={styles.heroInner}>
                     <div>
                         {/* Hero badge: previously "Apache Software Foundation ·
-                            Incubating · Apache 2.0" — three paperwork labels that
+                             Apache 2.0" — three paperwork labels that
                             duplicate footer content (Jark feedback, PR #3226).
-                            Replaced with a single value-oriented pill. The
-                            Incubator attribution is preserved in the subhead
-                            below ("Apache Fluss (Incubating) is...") and in the
-                            footer Apache Incubator logo, satisfying ASF brand
-                            guidance. */}
+                            Replaced with a single value-oriented pill.*/}
                         <span className={styles.heroEyebrow}>
                             <span className={styles.dot} />
                             Open Source · Apache 2.0
@@ -507,7 +503,7 @@ function HomepageHeader({heroRef}: {heroRef: React.RefObject<HTMLElement>}) {
                         </h1>
 
                         <p className={styles.heroSubtitle}>
-                            Apache Fluss (Incubating) is an open-source,
+                            Apache Fluss is an open-source,
                             lakehouse-native streaming storage. It collapses the
                             message broker, online KV store, stream-processing
                             state backend, and lakehouse cold store into a

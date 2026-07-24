@@ -18,7 +18,7 @@ A walkthrough of Apache Fluss as table-first columnar streaming storage, coverin
 ---
 
 ### Open by Design: Community as the Foundation of Open Source Data (Panel)
-**Yuxia Luo (Apache Fluss PPMC) with Ethan Guo, Tim Meehan, Prashant Singh & Shawn Chang** • OpenXdata 2026 • April 2026
+**Yuxia Luo (Apache Fluss PMC) with Ethan Guo, Tim Meehan, Prashant Singh & Shawn Chang** • OpenXdata 2026 • April 2026
 
 A cross-project panel on building resilient governance and lowering barriers to contribution in open source data communities, drawing on experience from Apache Fluss, Flink, Iceberg, Hudi, and Presto to discuss what sustainable, community-led development looks like in practice.
 

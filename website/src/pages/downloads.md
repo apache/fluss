@@ -1,10 +1,23 @@
-# Apache Fluss (Incubating) Downloads
+# Apache Fluss Downloads
 
-> Apache Fluss (Incubating) is a streaming storage built for real-time analytics & AI which can serve as the real-time data layer for Lakehouse architectures.
+> Apache Fluss is a streaming storage built for real-time analytics & AI which can serve as the real-time data layer for Lakehouse architectures.
 
-Apache Fluss 0.9.1 is the latest stable release.
+[Apache Fluss 0.9.1 (Incubating)](#apache-fluss-incubating-091) is the latest stable release.
 
-## Apache Fluss 0.9.1
+<!-- TODO: remove comment when 1.0 release is rady
+## Apache Fluss 1.0
+
+Coming soon...
+
+## Verifying Downloads
+
+Downloaded Apache Fluss artifacts can be verified by following [this tutorial](https://www.apache.org/info/verification.html) of the Apache Software Foundation using the Apache Fluss release-signing [KEYS](https://downloads.apache.org/fluss/KEYS).
+
+------------------
+-->
+## Apache Incubator Releases
+
+### Apache Fluss (Incubating) 0.9.1
 
 | Artifact                                                                                                                            | Signature | SHA |
 |-------------------------------------------------------------------------------------------------------------------------------------|---------|---------|
@@ -16,7 +29,7 @@ Read the [release blog](/blog/releases/0.9/) about the new features and signific
 
 ------------------
 
-## Apache Fluss 0.8.0
+### Apache Fluss (Incubating) 0.8.0
 
 | Artifact                                                                                                                            | Signature | SHA |
 |-------------------------------------------------------------------------------------------------------------------------------------|---------|---------|
@@ -28,6 +41,6 @@ Read the [release blog](/blog/releases/0.8/) about the new features and signific
 
 ------------------
 
-## Verifying Downloads
+### Verifying Downloads
 
 Downloaded Apache Fluss (Incubating) artifacts can be verified by following [this tutorial](https://www.apache.org/info/verification.html) of the Apache Software Foundation using the Apache Fluss (Incubating) release-signing [KEYS](https://downloads.apache.org/incubator/fluss/KEYS).
