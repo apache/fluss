@@ -123,7 +123,7 @@ class SparkStreamingTest extends FlussSparkTestBase with StreamTest {
     withTable("t") {
       val tablePath = createTablePath("t")
       spark.sql(s"""
-                   |CREATE TABLE t (id bigint, data string) TBLPROPERTIES("primary.key" = "id")
+                   |CREATE TABLE t (id bigint, data string) TBLPROPERTIES("primaryKey" = "id")
                    |""".stripMargin)
       val table = loadFlussTable(tablePath)
       assert(table.getTableInfo.hasBucketKey)
@@ -157,7 +157,7 @@ class SparkStreamingTest extends FlussSparkTestBase with StreamTest {
       val schema = StructType(Seq(StructField("id", IntegerType), StructField("data", StringType)))
 
       // Test with ProcessAllAvailable
-      testStream(spark.readStream.options(Map("scan.startup.mode" -> "latest")).table(tableName))(
+      testStream(spark.readStream.options(Map("scanStartupMode" -> "latest")).table(tableName))(
         ProcessAllAvailable(),
         CheckLastBatch(),
         StopStream,
@@ -169,7 +169,7 @@ class SparkStreamingTest extends FlussSparkTestBase with StreamTest {
 
       // Test with timed trigger
       val clock = new StreamManualClock
-      testStream(spark.readStream.options(Map("scan.startup.mode" -> "latest")).table(tableName))(
+      testStream(spark.readStream.options(Map("scanStartupMode" -> "latest")).table(tableName))(
         StartStream(trigger = Trigger.ProcessingTime(500), clock),
         AdvanceManualClock(500),
         CheckNewAnswer(),
@@ -198,7 +198,7 @@ class SparkStreamingTest extends FlussSparkTestBase with StreamTest {
           StructField("pt", StringType)))
 
       // Test with ProcessAllAvailable
-      testStream(spark.readStream.options(Map("scan.startup.mode" -> "latest")).table(tableName))(
+      testStream(spark.readStream.options(Map("scanStartupMode" -> "latest")).table(tableName))(
         ProcessAllAvailable(),
         CheckLastBatch(),
         StopStream,
@@ -210,7 +210,7 @@ class SparkStreamingTest extends FlussSparkTestBase with StreamTest {
 
       // Test with timed trigger
       val clock = new StreamManualClock
-      testStream(spark.readStream.options(Map("scan.startup.mode" -> "latest")).table(tableName))(
+      testStream(spark.readStream.options(Map("scanStartupMode" -> "latest")).table(tableName))(
         StartStream(trigger = Trigger.ProcessingTime(500), clock),
         AdvanceManualClock(500),
         CheckNewAnswer(),
@@ -234,7 +234,7 @@ class SparkStreamingTest extends FlussSparkTestBase with StreamTest {
     val tableName = "t"
     withTable(tableName) {
       sql(
-        "CREATE TABLE t (pk1 int, pk2 string, id int, data string) TBLPROPERTIES('primary.key' = 'pk1, pk2',  'bucket.num' = 1)")
+        "CREATE TABLE t (pk1 int, pk2 string, id int, data string) TBLPROPERTIES('primaryKey' = 'pk1, pk2',  'bucketNum' = 1)")
       sql("INSERT INTO t VALUES (1, 'a', 11, 'aa'), (2, 'b', 22, 'bb'), (3, 'c', 33, 'cc')")
 
       val schema = StructType(
@@ -245,7 +245,7 @@ class SparkStreamingTest extends FlussSparkTestBase with StreamTest {
           StructField("data", StringType)))
 
       // Test with ProcessAllAvailable
-      testStream(spark.readStream.options(Map("scan.startup.mode" -> "latest")).table(tableName))(
+      testStream(spark.readStream.options(Map("scanStartupMode" -> "latest")).table(tableName))(
         ProcessAllAvailable(),
         CheckLastBatch(),
         StopStream,
@@ -257,7 +257,7 @@ class SparkStreamingTest extends FlussSparkTestBase with StreamTest {
 
       // Test with timed trigger
       val clock = new StreamManualClock
-      testStream(spark.readStream.options(Map("scan.startup.mode" -> "latest")).table(tableName))(
+      testStream(spark.readStream.options(Map("scanStartupMode" -> "latest")).table(tableName))(
         StartStream(trigger = Trigger.ProcessingTime(500), clock),
         AdvanceManualClock(500),
         CheckNewAnswer(),
@@ -281,7 +281,7 @@ class SparkStreamingTest extends FlussSparkTestBase with StreamTest {
     val tableName = "t"
     withTable(tableName) {
       sql(
-        "CREATE TABLE t (pk1 int, pk2 string, id int, data string, dt string) PARTITIONED BY(dt) TBLPROPERTIES('primary.key' = 'pk1, pk2, dt',  'bucket.num' = 1)")
+        "CREATE TABLE t (pk1 int, pk2 string, id int, data string, dt string) PARTITIONED BY(dt) TBLPROPERTIES('primaryKey' = 'pk1, pk2, dt',  'bucketNum' = 1)")
       sql(
         "INSERT INTO t VALUES (1, 'a', 11, 'aa', 'a'), (2, 'b', 22, 'bb', 'b'), (3, 'c', 33, 'cc', 'b')")
 
@@ -295,7 +295,7 @@ class SparkStreamingTest extends FlussSparkTestBase with StreamTest {
         ))
 
       // Test with ProcessAllAvailable
-      testStream(spark.readStream.options(Map("scan.startup.mode" -> "latest")).table(tableName))(
+      testStream(spark.readStream.options(Map("scanStartupMode" -> "latest")).table(tableName))(
         ProcessAllAvailable(),
         CheckLastBatch(),
         StopStream,
@@ -310,7 +310,7 @@ class SparkStreamingTest extends FlussSparkTestBase with StreamTest {
 
       // Test with timed trigger
       val clock = new StreamManualClock
-      testStream(spark.readStream.options(Map("scan.startup.mode" -> "latest")).table(tableName))(
+      testStream(spark.readStream.options(Map("scanStartupMode" -> "latest")).table(tableName))(
         StartStream(trigger = Trigger.ProcessingTime(500), clock),
         AdvanceManualClock(500),
         CheckNewAnswer(),

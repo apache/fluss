@@ -121,8 +121,8 @@ CREATE TABLE pk_table (
   amount INT,
   address STRING
 ) TBLPROPERTIES (
-  'primary.key' = 'order_id',
-  'bucket.num' = '1'
+  'primaryKey' = 'order_id',
+  'bucketNum' = '1'
 );
 ```
 
@@ -169,8 +169,8 @@ CREATE TABLE part_pk_table (
   address STRING,
   dt STRING
 ) PARTITIONED BY (dt) TBLPROPERTIES (
-  'primary.key' = 'order_id,dt',
-  'bucket.num' = '1'
+  'primaryKey' = 'order_id,dt',
+  'bucketNum' = '1'
 );
 ```
 
@@ -301,7 +301,7 @@ For primary key tables, Fluss by default reads the latest snapshot and merges it
 
 ```sql title="Spark SQL"
 -- Enable read-optimized mode for primary key tables
-SET spark.sql.fluss.read.optimized=true;
+SET spark.sql.fluss.readOptimized=true;
 
 -- Query returns only snapshot data (may be stale)
 SELECT * FROM pk_table;

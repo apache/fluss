@@ -144,8 +144,8 @@ CREATE TABLE pk_table (
   num_orders INT,
   total_amount INT
 ) TBLPROPERTIES (
-  'primary.key' = 'shop_id,user_id',
-  'bucket.num' = '4'
+  'primaryKey' = 'shop_id,user_id',
+  'bucketNum' = '4'
 );
 ```
 
