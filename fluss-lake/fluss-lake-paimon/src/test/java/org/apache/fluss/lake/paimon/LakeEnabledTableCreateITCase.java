@@ -28,6 +28,7 @@ import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.LakeTableAlreadyExistException;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
@@ -1160,7 +1161,13 @@ class LakeEnabledTableCreateITCase {
                                         ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")),
                         false)
                 .get();
-        Table paimonTable = paimonCatalog.getTable(Identifier.create("lake_db", "lake_table"));
+        FileStoreTable paimonTable =
+                (FileStoreTable) paimonCatalog.getTable(Identifier.create("lake_db", "lake_table"));
+        assertThat(paimonTable.options())
+                .containsEntry(
+                        "fluss." + ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key(), "lake_db")
+                .containsEntry(
+                        "fluss." + ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key(), "lake_table");
         Map<String, String> enabledDisabledTableProperties = new HashMap<>(disabledProperties);
         enabledDisabledTableProperties.put(
                 ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key(), "lake_table");
@@ -1202,7 +1209,28 @@ class LakeEnabledTableCreateITCase {
                         .distributedBy(BUCKET_NUM, "c1", "c2")
                         .build();
         admin.createTable(lakeEnabledTablePath, enabledTableDescriptor, false).get();
-        paimonCatalog.getTable(Identifier.create("lake_db", "lake_table_enabled"));
+        FileStoreTable enabledPaimonTable =
+                (FileStoreTable)
+                        paimonCatalog.getTable(Identifier.create("lake_db", "lake_table_enabled"));
+        long schemaId = enabledPaimonTable.schema().id();
+
+        admin.alterTable(
+                        lakeEnabledTablePath,
+                        Arrays.asList(
+                                TableChange.set(
+                                        ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key(),
+                                        "lake_db"),
+                                TableChange.set(
+                                        ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key(),
+                                        "lake_table_enabled"),
+                                TableChange.set("key", "value")),
+                        false)
+                .get();
+        enabledPaimonTable =
+                (FileStoreTable)
+                        paimonCatalog.getTable(Identifier.create("lake_db", "lake_table_enabled"));
+        assertThat(enabledPaimonTable.schema().id()).isGreaterThan(schemaId);
+        assertThat(enabledPaimonTable.options()).containsEntry("fluss.key", "value");
 
         assertThatThrownBy(
                         () ->
@@ -1229,11 +1257,25 @@ class LakeEnabledTableCreateITCase {
                                         ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "false")),
                         false)
                 .get();
-        TableInfo lakeTableWithProgress = admin.getTableInfo(lakeEnabledTablePath).get();
+
+        admin.alterTable(
+                        lakeEnabledTablePath,
+                        Collections.singletonList(
+                                TableChange.set(
+                                        ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key(),
+                                        lakeEnabledTablePath.getTableName())),
+                        false)
+                .get();
+        TableInfo disabledEnabledTable = admin.getTableInfo(lakeEnabledTablePath).get();
+        assertThat(disabledEnabledTable.getProperties().toMap())
+                .containsEntry(
+                        ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key(),
+                        lakeEnabledTablePath.getTableName());
+
         FLUSS_CLUSTER_EXTENSION
                 .getZooKeeperClient()
                 .upsertLakeTable(
-                        lakeTableWithProgress.getTableId(),
+                        disabledEnabledTable.getTableId(),
                         new LakeTable(
                                 new LakeTable.LakeSnapshotMetadata(
                                         1L,
@@ -1242,6 +1284,14 @@ class LakeEnabledTableCreateITCase {
                                                 "lake-path-progress"),
                                         null)),
                         false);
+
+        admin.alterTable(
+                        lakeEnabledTablePath,
+                        Arrays.asList(
+                                TableChange.reset(ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key()),
+                                TableChange.set("key-after-progress", "value")),
+                        false)
+                .get();
 
         assertThatThrownBy(
                         () ->
@@ -1252,7 +1302,7 @@ class LakeEnabledTableCreateITCase {
                                                                 ConfigOptions
                                                                         .TABLE_DATALAKE_TABLE_NAME
                                                                         .key(),
-                                                                "another_lake_table")),
+                                                                "third_lake_table")),
                                                 false)
                                         .get())
                 .cause()
@@ -1260,6 +1310,39 @@ class LakeEnabledTableCreateITCase {
                 .hasMessageContaining(
                         "cannot be altered when 'table.datalake.enabled' is true or the table has tiering progress")
                 .hasMessageContaining(ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key());
+    }
+
+    @Test
+    void testAlterLakePathOptionsOnlyForPaimon() throws Exception {
+        TablePath tablePath = TablePath.of(DATABASE, "non_paimon_lake_path");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("c1", DataTypes.INT())
+                                        .column("c2", DataTypes.STRING())
+                                        .build())
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, false)
+                        .property(ConfigOptions.TABLE_DATALAKE_FORMAT, DataLakeFormat.ICEBERG)
+                        .distributedBy(BUCKET_NUM, "c1", "c2")
+                        .build();
+        admin.createTable(tablePath, tableDescriptor, false).get();
+
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                tablePath,
+                                                Collections.singletonList(
+                                                        TableChange.set(
+                                                                ConfigOptions
+                                                                        .TABLE_DATALAKE_TABLE_NAME
+                                                                        .key(),
+                                                                "lake_table")),
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining("Custom lake table path is only supported for Paimon");
     }
 
     @Test
