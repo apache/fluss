@@ -4,6 +4,8 @@
 
 Apache Fluss 0.9.1 is the latest stable release.
 
+<a id="fluss-connector"></a>
+
 ## Apache Fluss 0.9.1
 
 | Artifact                                                                                                                            | Signature | SHA |
@@ -27,6 +29,14 @@ Read the [release blog](/blog/releases/0.9/) about the new features and signific
 Read the [release blog](/blog/releases/0.8/) about the new features and significant improvements in the Apache Fluss 0.8.0 release.
 
 ------------------
+
+<a id="filesystem-jars"></a>
+
+## Fluss Connector and Filesystem JARs
+
+Fluss connector and filesystem JARs are published to Maven Central. Use the
+artifact names documented in the Flink engine dependencies and tiered-storage
+filesystem guides for your Flink and storage setup.
 
 ## Verifying Downloads
 
