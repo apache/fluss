@@ -2047,6 +2047,14 @@ public class ReplicaManager implements ServerReconfigurable {
                 try {
                     FileUtils.deleteDirectory(kvTabletDir);
                 } catch (IOException e) {
+                    // Keep the log as an anchor so a coordinator retry can re-enter this method
+                    // and finish the cleanup; throwing here prevents the log from being dropped.
+                    LOG.warn(
+                            "Failed to delete orphan KV tablet directory {} for bucket {}, "
+                                    + "keeping the log so the cleanup can be retried later.",
+                            kvTabletDir,
+                            tb,
+                            e);
                     throw new KvStorageException(
                             String.format(
                                     "Failed to delete orphan KV tablet directory %s", kvTabletDir),

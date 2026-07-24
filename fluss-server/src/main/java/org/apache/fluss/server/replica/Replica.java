@@ -104,6 +104,7 @@ import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableRegistry;
+import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.clock.Clock;
@@ -728,6 +729,36 @@ public final class Replica {
             checkNotNull(kvManager);
             kvManager.dropKv(tableBucket);
             kvTablet = null;
+        } else if (isKvTable()) {
+            // The in-memory KvTablet is not open (e.g. a follower replica), but a residual kv
+            // tablet directory may still exist on disk. Remove it so that we do not leave an
+            // orphan kv directory behind after the log is dropped.
+            File kvTabletDir =
+                    FlussPaths.kvTabletDir(logTablet.getDataDir(), physicalPath, tableBucket);
+            if (kvTabletDir.exists()) {
+                try {
+                    FileUtils.deleteDirectory(kvTabletDir);
+                    LOG.info(
+                            "Deleted residual kv tablet directory {} for bucket {} whose kv tablet "
+                                    + "was not open.",
+                            kvTabletDir,
+                            tableBucket);
+                } catch (IOException e) {
+                    // Surface the failure so the caller does not drop the log; the log is kept as
+                    // an anchor so the cleanup can be retried later.
+                    LOG.warn(
+                            "Failed to delete residual kv tablet directory {} for bucket {}, "
+                                    + "keeping the log so the cleanup can be retried later.",
+                            kvTabletDir,
+                            tableBucket,
+                            e);
+                    throw new KvStorageException(
+                            String.format(
+                                    "Failed to delete residual kv tablet directory %s for bucket %s",
+                                    kvTabletDir, tableBucket),
+                            e);
+                }
+            }
         }
     }
 

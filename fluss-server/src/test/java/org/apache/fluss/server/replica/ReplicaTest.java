@@ -126,6 +126,35 @@ final class ReplicaTest extends ReplicaTestBase {
     }
 
     @Test
+    void testDeleteRemovesResidualKvDirWhenKvTabletNotOpen() throws Exception {
+        TableBucket tableBucket = new TableBucket(DATA1_TABLE_ID_PK, 1);
+        Replica kvReplica = makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, tableBucket);
+        makeKvReplicaAsLeader(kvReplica);
+
+        File logDir = kvReplica.getLogTablet().getLogDir();
+        File kvTabletDir =
+                kvReplica.getTabletParentDir().resolve("kv-" + tableBucket.getBucket()).toFile();
+        assertThat(kvTabletDir).exists();
+
+        // Become follower: the in-memory KvTablet is dropped (getKvTablet() == null).
+        makeKvReplicaAsFollower(kvReplica, 1);
+        assertThat(kvReplica.getKvTablet()).isNull();
+
+        // Simulate a residual on-disk kv directory left behind (e.g. a previous dropKv that did
+        // not finish), while the in-memory KvTablet is null - this is the orphan-kv condition.
+        assertThat(kvTabletDir.mkdirs()).isTrue();
+        assertThat(kvTabletDir).exists();
+        assertThat(logDir).exists();
+
+        kvReplica.delete();
+
+        // Even though the in-memory KvTablet was null, the residual kv directory must be removed
+        // (and the log removed too).
+        assertThat(kvTabletDir).doesNotExist();
+        assertThat(logDir).doesNotExist();
+    }
+
+    @Test
     void testAppendRecordsToLeader() throws Exception {
         Replica logReplica =
                 makeLogReplica(DATA1_PHYSICAL_TABLE_PATH, new TableBucket(DATA1_TABLE_ID, 1));
