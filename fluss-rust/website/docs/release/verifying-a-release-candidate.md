@@ -11,7 +11,7 @@ The release vote email includes links to:
 - **Checksum file:** `fluss-rust-${RELEASE_VERSION}.tgz.sha512`
 - **KEYS file:** [https://downloads.apache.org/fluss/KEYS](https://downloads.apache.org/fluss/KEYS)
 
-Download the archive (`.tgz`), `.asc`, and `.sha512` from the RC directory (e.g. `fluss-rust-1.0.0-rc1/`) and the KEYS file. Then follow the steps below to verify signatures and checksums.
+Download the archive (`.tgz`), `.asc`, and `.sha512` from the RC directory (e.g. `fluss-rust-0.1.0-rc1/`) and the KEYS file. Then follow the steps below to verify signatures and checksums.
 
 ## Verifying signatures
 
@@ -57,7 +57,7 @@ If you have multiple archives, run `-c` on each `.sha512` file (or use `shasum -
 If the verification is successful, you will see a message like this:
 
 ```text
-fluss-rust-1.0.0.tgz: OK
+fluss-rust-0.1.0.tgz: OK
 ```
 
 ## Verifying build
