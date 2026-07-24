@@ -91,7 +91,7 @@ class ChangelogRowConverterTest {
                 Arguments.of(ChangeType.DELETE, "delete"),
                 Arguments.of(ChangeType.UPDATE_BEFORE, "update_before"),
                 Arguments.of(ChangeType.UPDATE_AFTER, "update_after"),
-                Arguments.of(ChangeType.APPEND_ONLY, "append_only"));
+                Arguments.of(ChangeType.APPEND_ONLY, "insert"));
     }
 
     @Test
