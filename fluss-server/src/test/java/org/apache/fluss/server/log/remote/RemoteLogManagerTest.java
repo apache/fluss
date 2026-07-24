@@ -25,8 +25,10 @@ import org.apache.fluss.remote.RemoteLogFetchInfo;
 import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.rpc.protocol.FetchLogReadPreference;
 import org.apache.fluss.server.coordinator.TestCoordinatorGateway;
 import org.apache.fluss.server.entity.FetchReqInfo;
+import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.entity.StopReplicaData;
 import org.apache.fluss.server.entity.StopReplicaResultForBucket;
 import org.apache.fluss.server.log.FetchParams;
@@ -34,6 +36,7 @@ import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.replica.ReplicaManager;
 import org.apache.fluss.server.testutils.ServerTestTags;
+import org.apache.fluss.server.zk.data.LeaderAndIsr;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
@@ -59,6 +62,8 @@ import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH_PK;
+import static org.apache.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
+import static org.apache.fluss.server.zk.data.LeaderAndIsr.INITIAL_BUCKET_EPOCH;
 import static org.apache.fluss.server.zk.data.LeaderAndIsr.INITIAL_LEADER_EPOCH;
 import static org.apache.fluss.utils.FlussPaths.remoteLogDir;
 import static org.apache.fluss.utils.FlussPaths.remoteLogTabletDir;
@@ -364,6 +369,100 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         assertThat(resultForBucket.getHighWatermark()).isEqualTo(50L);
         assertThat(resultForBucket.records()).isNotNull();
         assertThat(resultForBucket.fetchFromRemote()).isFalse();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testRemoteFirstFetchPrefersRemoteWhenLocalStillHasRecords(boolean partitionTable)
+            throws Exception {
+        TableBucket tb = makeTableBucket(partitionTable);
+        makeLogTableAsLeader(tb, partitionTable);
+        LogTablet logTablet = replicaManager.getReplicaOrException(tb).getLogTablet();
+        addMultiSegmentsToLogTablet(logTablet, 5);
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+        logTablet.updateRemoteLogEndOffset(40L);
+
+        Map<TableBucket, FetchReqInfo> fetchData =
+                Collections.singletonMap(tb, new FetchReqInfo(tb.getTableId(), 35L, 1024 * 1024));
+
+        CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> localFirstFuture =
+                new CompletableFuture<>();
+        replicaManager.fetchLogRecords(
+                new FetchParams(-1, Integer.MAX_VALUE),
+                fetchData,
+                null,
+                localFirstFuture::complete);
+        FetchLogResultForBucket localFirstResult = localFirstFuture.get().get(tb);
+        assertThat(localFirstResult.getError()).isEqualTo(ApiError.NONE);
+        assertThat(localFirstResult.fetchFromRemote()).isFalse();
+        assertThat(localFirstResult.records()).isNotNull();
+
+        CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> remoteFirstFuture =
+                new CompletableFuture<>();
+        replicaManager.fetchLogRecords(
+                new FetchParams(
+                        -1,
+                        true,
+                        Integer.MAX_VALUE,
+                        -1,
+                        -1,
+                        null,
+                        FetchLogReadPreference.REMOTE_FIRST),
+                fetchData,
+                null,
+                remoteFirstFuture::complete);
+        FetchLogResultForBucket remoteFirstResult = remoteFirstFuture.get().get(tb);
+        assertThat(remoteFirstResult.getError()).isEqualTo(ApiError.NONE);
+        assertThat(remoteFirstResult.fetchFromRemote()).isTrue();
+        assertThat(remoteFirstResult.records()).isNull();
+        assertThat(remoteFirstResult.remoteLogFetchInfo()).isNotNull();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testRemoteFirstFetchRejectsNonLeader(boolean partitionTable) throws Exception {
+        TableBucket tb = makeTableBucket(partitionTable);
+        makeLogTableAsLeader(tb, partitionTable);
+        Replica replica = replicaManager.getReplicaOrException(tb);
+        LogTablet logTablet = replica.getLogTablet();
+        addMultiSegmentsToLogTablet(logTablet, 5);
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+        logTablet.updateRemoteLogEndOffset(40L);
+
+        int newLeaderId = TABLET_SERVER_ID + 1;
+        replica.makeFollower(
+                new NotifyLeaderAndIsrData(
+                        partitionTable
+                                ? DATA1_PHYSICAL_TABLE_PATH_PA_2024
+                                : DATA1_PHYSICAL_TABLE_PATH,
+                        tb,
+                        Arrays.asList(TABLET_SERVER_ID, newLeaderId),
+                        new LeaderAndIsr(
+                                newLeaderId,
+                                INITIAL_LEADER_EPOCH + 1,
+                                Arrays.asList(TABLET_SERVER_ID, newLeaderId),
+                                Collections.emptyList(),
+                                INITIAL_COORDINATOR_EPOCH,
+                                INITIAL_BUCKET_EPOCH + 1)));
+
+        CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> fetchFuture =
+                new CompletableFuture<>();
+        replicaManager.fetchLogRecords(
+                new FetchParams(
+                        -1,
+                        true,
+                        Integer.MAX_VALUE,
+                        -1,
+                        -1,
+                        null,
+                        FetchLogReadPreference.REMOTE_FIRST),
+                Collections.singletonMap(tb, new FetchReqInfo(tb.getTableId(), 35L, 1024 * 1024)),
+                null,
+                fetchFuture::complete);
+
+        FetchLogResultForBucket result = fetchFuture.get().get(tb);
+        assertThat(result.getError().exception()).isInstanceOf(NotLeaderOrFollowerException.class);
+        assertThat(result.fetchFromRemote()).isFalse();
     }
 
     @ParameterizedTest

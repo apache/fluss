@@ -26,8 +26,6 @@ import org.apache.spark.sql.connector.read.{Batch, InputPartition, PartitionRead
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
 
-import scala.collection.JavaConverters._
-
 /**
  * Base class for planner-backed batch scans. The planner (constructed at ScanBuilder-time) opens
  * and releases the Fluss client Connection/Admin itself — scoped to its `plan()` call — and
@@ -47,15 +45,8 @@ abstract class FlussBatch(
     planner: SplitPlanner)
   extends Batch {
 
-  protected def projection: Array[Int] = {
-    val columnNameToIndex = tableInfo.getSchema.getColumnNames.asScala.zipWithIndex.toMap
-    readSchema.fields.map {
-      field =>
-        columnNameToIndex.getOrElse(
-          field.name,
-          throw new IllegalArgumentException(s"Invalid field name: ${field.name}"))
-    }
-  }
+  protected def projection: Array[Int] =
+    FlussScanBuilder.projectionOf(tableInfo, Some(readSchema))
 
   override def planInputPartitions(): Array[InputPartition] = planner.plan()
 }

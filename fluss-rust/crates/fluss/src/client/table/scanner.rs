@@ -2185,6 +2185,7 @@ impl LogFetcher {
                         tables_req: vec![req_for_table],
                         max_wait_ms: Some(self.fetch_wait_max_time_ms),
                         min_bytes: Some(self.fetch_min_bytes),
+                        read_preference: None,
                     };
                     (leader_id, fetch_log_request)
                 })

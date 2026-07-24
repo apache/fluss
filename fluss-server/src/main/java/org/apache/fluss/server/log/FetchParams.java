@@ -23,6 +23,7 @@ import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.record.FileLogProjection;
 import org.apache.fluss.record.ProjectionPushdownCache;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
+import org.apache.fluss.rpc.protocol.FetchLogReadPreference;
 
 import javax.annotation.Nullable;
 
@@ -69,14 +70,50 @@ public final class FetchParams {
     @Nullable private FileLogProjection fileLogProjection;
     private final int minFetchBytes;
     private final long maxWaitMs;
+    private final FetchLogReadPreference readPreference;
     // TODO: add more params like epoch etc.
 
     public FetchParams(int replicaId, int maxFetchBytes) {
-        this(replicaId, true, maxFetchBytes, DEFAULT_MIN_FETCH_BYTES, DEFAULT_MAX_WAIT_MS, null);
+        this(
+                replicaId,
+                true,
+                maxFetchBytes,
+                DEFAULT_MIN_FETCH_BYTES,
+                DEFAULT_MAX_WAIT_MS,
+                null,
+                FetchLogReadPreference.LOCAL_FIRST);
     }
 
     public FetchParams(int replicaId, int maxFetchBytes, int minFetchBytes, long maxWaitMs) {
-        this(replicaId, true, maxFetchBytes, minFetchBytes, maxWaitMs, null);
+        this(
+                replicaId,
+                true,
+                maxFetchBytes,
+                minFetchBytes,
+                maxWaitMs,
+                null,
+                FetchLogReadPreference.LOCAL_FIRST);
+    }
+
+    @VisibleForTesting
+    public FetchParams(
+            int replicaId,
+            boolean fetchOnlyLeader,
+            int maxFetchBytes,
+            int minFetchBytes,
+            long maxWaitMs,
+            @Nullable Map<Long, FilterInfo> tableFilterInfoMap,
+            FetchLogReadPreference readPreference) {
+        this.replicaId = replicaId;
+        this.fetchOnlyLeader = fetchOnlyLeader;
+        this.maxFetchBytes = maxFetchBytes;
+        this.fetchIsolation = FetchIsolation.of(replicaId >= 0);
+        this.minOneMessage = true;
+        this.fetchOffset = -1;
+        this.minFetchBytes = minFetchBytes;
+        this.maxWaitMs = maxWaitMs;
+        this.tableFilterInfoMap = tableFilterInfoMap;
+        this.readPreference = readPreference;
     }
 
     @VisibleForTesting
@@ -87,15 +124,14 @@ public final class FetchParams {
             int minFetchBytes,
             long maxWaitMs,
             @Nullable Map<Long, FilterInfo> tableFilterInfoMap) {
-        this.replicaId = replicaId;
-        this.fetchOnlyLeader = fetchOnlyLeader;
-        this.maxFetchBytes = maxFetchBytes;
-        this.fetchIsolation = FetchIsolation.of(replicaId >= 0);
-        this.minOneMessage = true;
-        this.fetchOffset = -1;
-        this.minFetchBytes = minFetchBytes;
-        this.maxWaitMs = maxWaitMs;
-        this.tableFilterInfoMap = tableFilterInfoMap;
+        this(
+                replicaId,
+                fetchOnlyLeader,
+                maxFetchBytes,
+                minFetchBytes,
+                maxWaitMs,
+                tableFilterInfoMap,
+                FetchLogReadPreference.LOCAL_FIRST);
     }
 
     public void setCurrentFetch(
@@ -183,6 +219,14 @@ public final class FetchParams {
         return replicaId >= 0;
     }
 
+    public FetchLogReadPreference readPreference() {
+        return readPreference;
+    }
+
+    public boolean isRemoteFirstClientFetch() {
+        return !isFromFollower() && readPreference == FetchLogReadPreference.REMOTE_FIRST;
+    }
+
     public boolean fetchOnlyLeader() {
         return isFromFollower() || fetchOnlyLeader;
     }
@@ -204,12 +248,19 @@ public final class FetchParams {
                 && maxFetchBytes == that.maxFetchBytes
                 && minFetchBytes == that.minFetchBytes
                 && maxWaitMs == that.maxWaitMs
+                && readPreference == that.readPreference
                 && Objects.equals(tableFilterInfoMap, that.tableFilterInfoMap);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(replicaId, maxFetchBytes, minFetchBytes, maxWaitMs, tableFilterInfoMap);
+        return Objects.hash(
+                replicaId,
+                maxFetchBytes,
+                minFetchBytes,
+                maxWaitMs,
+                tableFilterInfoMap,
+                readPreference);
     }
 
     @Override
@@ -225,6 +276,8 @@ public final class FetchParams {
                 + maxWaitMs
                 + ", tableFilterInfoMap="
                 + tableFilterInfoMap
+                + ", readPreference="
+                + readPreference
                 + ')';
     }
 }

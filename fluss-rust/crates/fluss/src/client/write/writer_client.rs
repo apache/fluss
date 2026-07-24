@@ -155,12 +155,8 @@ impl WriterClient {
             if let Some(assigner) = self.bucket_assigners.get(table_path) {
                 assigner.clone()
             } else {
-                let assigner = Self::create_bucket_assigner(
-                    table_info,
-                    Arc::clone(table_path),
-                    bucket_key,
-                    &self.config,
-                )?;
+                let assigner =
+                    Self::create_bucket_assigner(table_info, Arc::clone(table_path), &self.config)?;
                 self.bucket_assigners
                     .insert(Arc::clone(table_path), Arc::clone(&assigner));
                 assigner
@@ -232,10 +228,10 @@ impl WriterClient {
     pub fn create_bucket_assigner(
         table_info: &Arc<TableInfo>,
         table_path: Arc<PhysicalTablePath>,
-        bucket_key: Option<&Bytes>,
         config: &Config,
     ) -> Result<Arc<dyn BucketAssigner>> {
-        if bucket_key.is_some() {
+        // Decide from the table's bucket key, not an individual record's key.
+        if table_info.has_bucket_key() {
             let datalake_format = table_info.get_table_config().get_datalake_format()?;
             let function = <dyn BucketingFunction>::of(datalake_format.as_ref());
             Ok(Arc::new(HashBucketAssigner::new(

@@ -16,17 +16,18 @@
 // under the License.
 
 use crate::client::{RowBytes, WriteFormat, WriteRecord, WriteResultFuture, WriterClient};
-use crate::error::Error::{IllegalArgument, UnexpectedError};
+use crate::error::Error::IllegalArgument;
 use crate::error::Result;
 use crate::metadata::{RowType, TableInfo, TablePath};
 use crate::row::InternalRow;
 use crate::row::encode::{KeyEncoder, KeyEncoderFactory, RowEncoder, RowEncoderFactory};
 use crate::row::field_getter::FieldGetter;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use crate::client::table::partition_getter::{PartitionGetter, get_physical_path};
 use bitvec::prelude::bitvec;
 use bytes::Bytes;
+use parking_lot::Mutex;
 
 #[allow(dead_code)]
 pub struct TableUpsert {
@@ -307,34 +308,16 @@ impl UpsertWriter {
     }
 
     fn get_keys(&self, row: &dyn InternalRow) -> Result<(Bytes, Option<Bytes>)> {
-        let key = self
-            .primary_key_encoder
-            .lock()
-            .map_err(|e| UnexpectedError {
-                message: format!("primary_key_encoder lock poisoned: {e}"),
-                source: None,
-            })?
-            .encode_key(row)?;
+        let key = self.primary_key_encoder.lock().encode_key(row)?;
         let bucket_key = match &self.bucket_key_encoder {
-            Some(encoder) => Some(
-                encoder
-                    .lock()
-                    .map_err(|e| UnexpectedError {
-                        message: format!("bucket_key_encoder lock poisoned: {e}"),
-                        source: None,
-                    })?
-                    .encode_key(row)?,
-            ),
+            Some(encoder) => Some(encoder.lock().encode_key(row)?),
             None => Some(key.clone()),
         };
         Ok((key, bucket_key))
     }
 
     fn encode_row<R: InternalRow>(&self, row: &R) -> Result<Bytes> {
-        let mut encoder = self.row_encoder.lock().map_err(|e| UnexpectedError {
-            message: format!("row_encoder lock poisoned: {e}"),
-            source: None,
-        })?;
+        let mut encoder = self.row_encoder.lock();
         encoder.start_new_row()?;
         for (pos, field_getter) in self.field_getters.iter().enumerate() {
             let datum = field_getter.get_field(row)?;

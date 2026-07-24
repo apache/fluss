@@ -112,6 +112,25 @@ class RemoteLogIndexCacheTest extends RemoteLogTestBase {
 
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
+    void testCacheWeightIncludesOffsetAndTimeIndexes(boolean partitionTable) throws Exception {
+        LogTablet logTablet = makeLogTabletAndAddSegments(partitionTable);
+        RemoteLogSegment remoteLogSegment = copyLogSegmentToRemote(logTablet, remoteLogStorage, 0);
+
+        Entry entry = rlIndexCache.getIndexEntry(remoteLogSegment);
+        int expectedWeight = entry.offsetIndex().sizeInBytes() + entry.timeIndex().sizeInBytes();
+
+        assertThat(
+                        rlIndexCache
+                                .getInternalCache()
+                                .policy()
+                                .eviction()
+                                .get()
+                                .weightOf(remoteLogSegment.remoteLogSegmentId()))
+                .hasValue(expectedWeight);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
     void testInitWithCorruptIndex(boolean partitionTable) throws Exception {
         LogTablet logTablet = makeLogTabletAndAddSegments(partitionTable);
         // 1. first upload one segment to remote.

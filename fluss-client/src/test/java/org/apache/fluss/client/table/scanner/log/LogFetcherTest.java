@@ -23,6 +23,7 @@ import org.apache.fluss.client.metadata.TestingMetadataUpdater;
 import org.apache.fluss.client.metrics.TestingScannerMetricGroup;
 import org.apache.fluss.client.table.scanner.RemoteFileDownloader;
 import org.apache.fluss.cluster.BucketLocation;
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -32,9 +33,12 @@ import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.rpc.protocol.FetchLogReadPreference;
 import org.apache.fluss.server.entity.FetchReqInfo;
 import org.apache.fluss.server.tablet.TestTabletServerGateway;
+import org.apache.fluss.utils.IOUtils;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -68,24 +72,29 @@ public class LogFetcherTest {
     @BeforeEach
     public void setup() {
         metadataUpdater = initializeMetadataUpdater();
+        logFetcher = createLogFetcher(new Configuration());
+    }
+
+    @AfterEach
+    public void tearDown() {
+        IOUtils.closeQuietly(logFetcher);
+    }
+
+    private LogFetcher createLogFetcher(Configuration conf) {
         ClientSchemaGetter clientSchemaGetter =
                 new TestingClientSchemaGetter(
-                        DATA1_TABLE_PATH,
-                        new SchemaInfo(DATA1_SCHEMA, 0),
-                        metadataUpdater,
-                        new Configuration());
+                        DATA1_TABLE_PATH, new SchemaInfo(DATA1_SCHEMA, 0), metadataUpdater, conf);
         LogScannerStatus logScannerStatus = initializeLogScannerStatus();
-        logFetcher =
-                new LogFetcher(
-                        DATA1_TABLE_INFO,
-                        null,
-                        null,
-                        logScannerStatus,
-                        new Configuration(),
-                        metadataUpdater,
-                        TestingScannerMetricGroup.newInstance(),
-                        new RemoteFileDownloader(1),
-                        clientSchemaGetter);
+        return new LogFetcher(
+                DATA1_TABLE_INFO,
+                null,
+                null,
+                logScannerStatus,
+                conf,
+                metadataUpdater,
+                TestingScannerMetricGroup.newInstance(),
+                new RemoteFileDownloader(1),
+                clientSchemaGetter);
     }
 
     @Test
@@ -109,6 +118,31 @@ public class LogFetcherTest {
         // When NotLeaderOrFollowerException is received, the bucketLocation will be removed from
         // metadata updater to trigger get the latest bucketLocation in next fetch round.
         assertThat(metadataUpdater.getBucketLocation(tb1)).isNotPresent();
+    }
+
+    @Test
+    void testPrepareFetchLogRequestWithReadPreference() throws Exception {
+        Map<Integer, FetchLogRequest> defaultRequestMap = logFetcher.prepareFetchLogRequests();
+        FetchLogRequest defaultRequest = defaultRequestMap.get(1);
+        assertThat(defaultRequest.hasReadPreference()).isTrue();
+        assertThat(defaultRequest.getReadPreference())
+                .isEqualTo(FetchLogReadPreference.LOCAL_FIRST.value());
+
+        Configuration remoteFirstConf = new Configuration();
+        remoteFirstConf.setString(
+                ConfigOptions.CLIENT_SCANNER_LOG_READ_PREFERENCE.key(),
+                FetchLogReadPreference.REMOTE_FIRST.toString());
+        LogFetcher remoteFirstFetcher = createLogFetcher(remoteFirstConf);
+        try {
+            Map<Integer, FetchLogRequest> remoteFirstRequestMap =
+                    remoteFirstFetcher.prepareFetchLogRequests();
+            FetchLogRequest remoteFirstRequest = remoteFirstRequestMap.get(1);
+            assertThat(remoteFirstRequest.hasReadPreference()).isTrue();
+            assertThat(remoteFirstRequest.getReadPreference())
+                    .isEqualTo(FetchLogReadPreference.REMOTE_FIRST.value());
+        } finally {
+            remoteFirstFetcher.close();
+        }
     }
 
     private LogScannerStatus initializeLogScannerStatus() {

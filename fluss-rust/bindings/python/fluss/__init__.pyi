@@ -721,8 +721,21 @@ class AppendWriter:
             Use flush() to ensure all queued records are sent and acknowledged.
         """
         ...
-    def write_arrow(self, table: pa.Table) -> None: ...
-    def write_arrow_batch(self, batch: pa.RecordBatch) -> WriteResultHandle: ...
+    def write_arrow(self, table: pa.Table) -> None:
+        """Write a PyArrow Table (one batch at a time).
+
+        For a partitioned table, every batch must contain rows of a single
+        partition (see write_arrow_batch()).
+        """
+        ...
+    def write_arrow_batch(self, batch: pa.RecordBatch) -> WriteResultHandle:
+        """Write a PyArrow RecordBatch.
+
+        For a partitioned table the partition is derived from the first row, so
+        all rows must belong to the same partition. Rows are distributed across
+        buckets by their bucket key automatically.
+        """
+        ...
     def write_pandas(self, df: pd.DataFrame) -> None: ...
     async def flush(self) -> None: ...
     async def __aenter__(self) -> AppendWriter:

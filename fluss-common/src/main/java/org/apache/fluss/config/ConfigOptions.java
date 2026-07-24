@@ -26,6 +26,7 @@ import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.MergeEngineType;
+import org.apache.fluss.rpc.protocol.FetchLogReadPreference;
 import org.apache.fluss.utils.ArrayUtils;
 
 import java.lang.reflect.Field;
@@ -1525,6 +1526,13 @@ public class ConfigOptions {
                             "The number of remote log segments to keep in local temp file for LogScanner, "
                                     + "which download from remote storage. The default setting is 4.");
 
+    public static final ConfigOption<FetchLogReadPreference> CLIENT_SCANNER_LOG_READ_PREFERENCE =
+            key("client.scanner.log.read-preference")
+                    .enumType(FetchLogReadPreference.class)
+                    .defaultValue(FetchLogReadPreference.LOCAL_FIRST)
+                    .withDescription(
+                            "The read preference for LogScanner. Supported values are local-first and remote-first.");
+
     public static final ConfigOption<String> CLIENT_SCANNER_IO_TMP_DIR =
             key("client.scanner.io.tmpdir")
                     .stringType()
@@ -1798,8 +1806,8 @@ public class ConfigOptions {
                     .enumType(DataLakeFormat.class)
                     .noDefaultValue()
                     .withDescription(
-                            "The data lake format of the table specifies the tiered Lakehouse storage format. Currently, supported formats are `paimon`, `iceberg`, and `lance`. "
-                                    + "In the future, more kinds of data lake format will be supported, such as DeltaLake or Hudi. "
+                            "The data lake format of the table specifies the tiered Lakehouse storage format. Currently, supported formats are `paimon`, `iceberg`, `hudi`, and `lance`. "
+                                    + "In the future, more kinds of data lake formats will be supported, such as DeltaLake. "
                                     + "Once the `table.datalake.format` property is configured, Fluss adopts the key encoding and bucketing strategy used by the corresponding data lake format. "
                                     + "This ensures consistency in key encoding and bucketing, enabling seamless **Union Read** functionality across Fluss and Lakehouse. "
                                     + "The `table.datalake.format` can be pre-defined before enabling `table.datalake.enabled`. This allows the data lake feature to be dynamically enabled on the table without requiring table recreation. "
@@ -2415,8 +2423,8 @@ public class ConfigOptions {
                     .enumType(DataLakeFormat.class)
                     .noDefaultValue()
                     .withDescription(
-                            "The datalake format used by Fluss as lakehouse storage. Currently, supported formats are Paimon, Iceberg, and Lance. "
-                                    + "In the future, more kinds of data lake format will be supported, such as DeltaLake or Hudi.");
+                            "The datalake format used by Fluss as lakehouse storage. Currently, supported formats are Paimon, Iceberg, Hudi, and Lance. "
+                                    + "In the future, more kinds of data lake format will be supported, such as DeltaLake.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for tiering service

@@ -29,7 +29,7 @@ Configure lakehouse settings in `server.yaml` on all Fluss servers (CoordinatorS
 Fluss follows a simple convention for these keys:
 
 - `datalake.enabled: true` explicitly enables lakehouse capability for the cluster. If it is left unset, configuring `datalake.format` alone also enables it; whenever `datalake.enabled` is `true`, `datalake.format` must also be set.
-- `datalake.format` selects the lake format for the cluster (`paimon`, `iceberg`, or `lance`).
+- `datalake.format` selects the lake format for the cluster (`paimon`, `iceberg`, `hudi`, or `lance`).
 - Format-specific options use the `datalake.<format>.*` prefix. Fluss strips this prefix and passes the remaining keys straight to the corresponding lake catalog/client — for example `datalake.paimon.metastore` becomes `metastore` and `datalake.iceberg.type` becomes `type`. Any option supported by the lake catalog can be set this way.
 - Only configure options for the format selected by `datalake.format`.
 
@@ -69,6 +69,25 @@ datalake.iceberg.jdbc.user: iceberg
 datalake.iceberg.jdbc.password: iceberg
 datalake.iceberg.warehouse: s3://bucket/iceberg
 datalake.iceberg.io-impl: org.apache.iceberg.aws.s3.S3FileIO
+```
+
+</TabItem>
+<TabItem value="hudi" label="Hudi">
+
+```yaml title="server.yaml"
+datalake.enabled: true
+datalake.format: hudi
+datalake.hudi.mode: dfs
+datalake.hudi.catalog.path: /path/to/hudi
+```
+
+For Hive Metastore catalog:
+```yaml title="server.yaml"
+datalake.enabled: true
+datalake.format: hudi
+datalake.hudi.mode: hms
+datalake.hudi.catalog.path: hdfs:///warehouse/hudi
+datalake.hudi.hadoop.hive.metastore.uris: thrift://<hive-metastore-host>:9083
 ```
 
 </TabItem>
@@ -123,6 +142,16 @@ Add JARs to `${FLUSS_HOME}/plugins/<format>/` based on your configuration:
 | Iceberg JDBC catalog | PostgreSQL/MySQL JDBC driver |
 
 </TabItem>
+<TabItem value="hudi" label="Hudi">
+
+| Scenario | Required JAR |
+|----------|--------------|
+| Hudi lake connector | [fluss-lake-hudi-$FLUSS_VERSION$.jar](https://repo1.maven.org/maven2/org/apache/fluss/fluss-lake-hudi/$FLUSS_VERSION$/fluss-lake-hudi-$FLUSS_VERSION$.jar) |
+| Hudi Flink bundle | [hudi-flink1.20-bundle-1.1.0.jar](https://repo.maven.apache.org/maven2/org/apache/hudi/hudi-flink1.20-bundle/1.1.0/hudi-flink1.20-bundle-1.1.0.jar), matching the Flink version used by the Hudi integration |
+| Hudi Flink dependencies | `flink-core`, `flink-table-common`, `flink-table-api-java`, and `flink-table-runtime`, matching the Hudi Flink bundle |
+| Hudi Hive Metastore catalog | Hive and Hadoop dependencies required by your environment |
+
+</TabItem>
 <TabItem value="lance" label="Lance">
 
 Lance support is built into the Fluss distribution. Cloud storage credentials are configured via storage-options.
@@ -159,6 +188,14 @@ Add the following to `${FLINK_HOME}/lib`:
 - [iceberg-flink-runtime-1.20-*.jar](https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-flink-runtime-1.20/)
 - Hadoop client JARs — export `HADOOP_CLASSPATH`, download the pre-bundled [`hadoop-apache-3.3.5-2.jar`](https://repo1.maven.org/maven2/io/trino/hadoop/hadoop-apache/3.3.5-2/hadoop-apache-3.3.5-2.jar), or install a full Hadoop package (see [Iceberg Hadoop Dependencies](../streaming-lakehouse/datalake-formats/iceberg.md#prerequisites-hadoop-dependencies))
 - JDBC driver (if using JDBC catalog)
+
+</TabItem>
+<TabItem value="hudi" label="Hudi">
+
+- [fluss-flink-1.20-$FLUSS_VERSION$.jar](https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-1.20/$FLUSS_VERSION$/fluss-flink-1.20-$FLUSS_VERSION$.jar)
+- [fluss-lake-hudi-$FLUSS_VERSION$.jar](https://repo1.maven.org/maven2/org/apache/fluss/fluss-lake-hudi/$FLUSS_VERSION$/fluss-lake-hudi-$FLUSS_VERSION$.jar)
+- [hudi-flink1.20-bundle-1.1.0.jar](https://repo.maven.apache.org/maven2/org/apache/hudi/hudi-flink1.20-bundle/1.1.0/hudi-flink1.20-bundle-1.1.0.jar), matching your Flink runtime
+- Hadoop, Hive, or filesystem dependencies required by your Hudi catalog and table storage
 
 </TabItem>
 <TabItem value="lance" label="Lance">
@@ -200,6 +237,17 @@ ${FLINK_HOME}/bin/flink run /path/to/fluss-flink-tiering-$FLUSS_VERSION$.jar \
 ```
 
 </TabItem>
+<TabItem value="hudi" label="Hudi">
+
+```shell
+${FLINK_HOME}/bin/flink run /path/to/fluss-flink-tiering-$FLUSS_VERSION$.jar \
+    --fluss.bootstrap.servers localhost:9123 \
+    --datalake.format hudi \
+    --datalake.hudi.mode dfs \
+    --datalake.hudi.catalog.path /tmp/hudi
+```
+
+</TabItem>
 <TabItem value="lance" label="Lance">
 
 ```shell
@@ -237,14 +285,16 @@ CREATE TABLE my_table (
 ## Verification
 
 1. Check the Tiering Service job is running in Flink Web UI
-2. After the freshness interval, query the lake table:
+2. After the freshness interval, query the table:
 
 ```sql title="Flink SQL"
--- Lake-only query
-SELECT * FROM my_table$lake;
-
 -- Union Read (real-time + historical)
 SELECT * FROM my_table;
+
+-- Lake-only query for formats exposed through the Fluss lake catalog
+SELECT * FROM my_table$lake;
 ```
+
+For Hudi lake-only reads, use Hudi's native catalog or another Hudi-compatible engine. The Fluss catalog `$lake` suffix currently exposes Paimon and Iceberg lake tables.
 
 See [Union Read](../streaming-lakehouse/union-read.md) for more details.

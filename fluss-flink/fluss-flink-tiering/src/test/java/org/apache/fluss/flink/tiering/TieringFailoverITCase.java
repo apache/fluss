@@ -18,16 +18,19 @@
 
 package org.apache.fluss.flink.tiering;
 
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.lake.values.TestingValuesLake;
+import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.types.DataTypes;
 
-import org.apache.flink.core.execution.JobClient;
+import org.apache.flink.api.common.RuntimeExecutionMode;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -59,6 +62,24 @@ class TieringFailoverITCase extends FlinkTieringTestBase {
         FlinkTieringTestBase.afterAll();
     }
 
+    @BeforeEach
+    @Override
+    void beforeEach() {
+        String bootstrapServers = String.join(",", clientConf.get(ConfigOptions.BOOTSTRAP_SERVERS));
+        String[] args = {
+            "--fluss.bootstrap.servers",
+            bootstrapServers,
+            "--datalake.format",
+            DataLakeFormat.PAIMON.toString()
+        };
+        FlussLakeTiering tiering = new FlussLakeTiering(args);
+        execEnv = tiering.execEnv;
+        execEnv.setRuntimeMode(RuntimeExecutionMode.STREAMING);
+        execEnv.setParallelism(2);
+
+        assertThat(execEnv.getCheckpointConfig().isCheckpointingEnabled()).isFalse();
+    }
+
     @Test
     void testTiering() throws Exception {
         // create a pk table, write some records and wait until snapshot finished
@@ -71,12 +92,11 @@ class TieringFailoverITCase extends FlinkTieringTestBase {
         writeRows(t1, rows, false);
         FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(t1);
 
-        // fail the first write to the pk table
-        TestingValuesLake.failWhen(t1.toString()).failWriteOnce();
+        // fail the first two writes to the pk table
+        TestingValuesLake.failWhen(t1.toString()).failWriteNext(2);
 
         // then start tiering job
-        JobClient jobClient = buildTieringJob(execEnv);
-        try {
+        try (TieringJobScope ignored = startTieringJob(execEnv)) {
             // check the status of replica after synced
             assertReplicaStatus(t1Bucket, 3);
 
@@ -95,8 +115,6 @@ class TieringFailoverITCase extends FlinkTieringTestBase {
             assertReplicaStatus(t1Bucket, expectedRows.size());
 
             checkDataInValuesTable(t1, expectedRows);
-        } finally {
-            jobClient.cancel().get();
         }
     }
 

@@ -202,7 +202,7 @@ ORDER BY order_id;
 When a table has the configuration `table.datalake.enabled = 'true'`, its data exists in two layers:
 
 - **Fresh data** is retained in Fluss (real-time layer, sub-second freshness)
-- **Historical data** is tiered to the lake storage (e.g., Paimon, Iceberg)
+- **Historical data** is tiered to the lake storage (e.g., Paimon, Iceberg, Hudi)
 
 Fluss Spark connector supports **union read** that combines both layers to provide a complete, up-to-date view of the data. This allows Fluss to store only a small portion of the dataset in the cluster (reducing costs), while the lake serves as the source of complete historical data.
 

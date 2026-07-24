@@ -5,15 +5,21 @@ sidebar_position: 2
 
 # Tiering Service
 
-The Tiering Service continuously compacts real-time data from Fluss into the configured lake format (Paimon, Iceberg, or Lance) for cost-efficient long-term storage and analytics.
+The Tiering Service continuously compacts real-time data from Fluss into the configured lake format (Paimon, Iceberg, Hudi, or Lance) for cost-efficient long-term storage and analytics.
 
 ## Overview
 
 The Tiering Service is implemented as an Apache Flink job that:
 - Reads records from Fluss tables with lakehouse storage enabled
-- Writes data to the configured data lake format (Paimon, Iceberg, or Lance)
+- Writes data to the configured data lake format (Paimon, Iceberg, Hudi, or Lance)
 - Maintains exactly-once semantics between Fluss and the data lake
 - Operates incrementally, syncing only missing data segments
+
+For an in-depth look at the Tiering Service internals, see the blog series:
+
+- [Tiering Service Deep Dive — Part 1](https://fluss.apache.org/blog/fluss-tiering-service-deep-dive-part1/)
+- [Tiering Service Deep Dive — Part 2](https://fluss.apache.org/blog/fluss-tiering-service-deep-dive-part2/)
+- [Tiering Service Deep Dive — Part 3](https://fluss.apache.org/blog/fluss-tiering-service-deep-dive-part3/)
 
 For deployment instructions, see [Deploying Streaming Lakehouse](../install-deploy/deploying-streaming-lakehouse.md).
 
