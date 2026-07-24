@@ -43,7 +43,7 @@ public class ProtobufRepeatedBytesField extends ProtobufAbstractRepeated<Field.B
         w.format(
                 "ProtoCodecUtils.BytesHolder _%sBh = _%sBytesHolder();\n",
                 ccName, ProtoGenUtil.camelCase("new", singularName));
-        w.format("_%sBh.len = ProtoCodecUtils.readVarInt(_buffer);\n", ccName);
+        w.format("_%sBh.len = ProtoCodecUtils.readBytesLen(_buffer);\n", ccName);
         w.format("_%sBh.b = new byte[_%sBh.len];\n", ccName, ccName);
         w.format("_buffer.readBytes(_%sBh.b);\n", ccName);
     }
