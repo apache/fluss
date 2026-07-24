@@ -27,7 +27,7 @@
     </parent>
 
     <artifactId>fluss-client</artifactId>
-    <name>Apache Fluss (Incubating) : Client</name>
+    <name>Apache Fluss : Client</name>
     <packaging>jar</packaging>
 
     <dependencies>

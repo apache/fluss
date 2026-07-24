@@ -18,7 +18,7 @@
 
 # Fluss Python Client
 
-PyFluss is a Python library for programmatic access to Apache Fluss (Incubating).
+PyFluss is a Python library for programmatic access to Apache Fluss.
 It provides Python APIs to work with Fluss table metadata and read or write table data.
 
 The documentation is available at <https://fluss.apache.org/docs/apis/python/installation/>.

@@ -28,7 +28,7 @@
     </parent>
 
     <artifactId>fluss-lake-lance</artifactId>
-    <name>Apache Fluss (Incubating) : Lake : Lance</name>
+    <name>Apache Fluss : Lake : Lance</name>
 
     <packaging>jar</packaging>
 

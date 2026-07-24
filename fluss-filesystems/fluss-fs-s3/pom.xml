@@ -28,7 +28,7 @@
     </parent>
 
     <artifactId>fluss-fs-s3</artifactId>
-    <name>Apache Fluss (Incubating) : FileSystems : S3 FS</name>
+    <name>Apache Fluss : FileSystems : S3 FS</name>
 
     <packaging>jar</packaging>
 

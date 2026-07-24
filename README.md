@@ -40,9 +40,9 @@
   <a href="https://trendshift.io/repositories/14168" target="_blank"><img src="https://trendshift.io/api/badge/repositories/14168" alt="apache%2Ffluss | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
 </p>
 
-## What is Apache Fluss (Incubating)?
+## What is Apache Fluss?
 
-Apache Fluss (Incubating) is a streaming storage built for real-time analytics & AI which can serve as the real-time data layer for Lakehouse architectures.
+Apache Fluss is a streaming storage built for real-time analytics & AI which can serve as the real-time data layer for Lakehouse architectures.
 
 It bridges the gap between **data streaming** and **data Lakehouse** by enabling low-latency, high-throughput data ingestion and processing while seamlessly integrating with popular compute engines like **Apache Flink** and
 **Apache Spark**, with StarRocks coming soon.
@@ -77,10 +77,10 @@ Apache Fluss is now installed in `build-target`. The build command uses Maven Wr
 
 ## Contributing
 
-Apache Fluss (Incubating) is open-source, and we’d love your help to keep it growing! Join the [discussions](https://github.com/apache/fluss/discussions),
+Apache Fluss is open-source, and we’d love your help to keep it growing! Join the [discussions](https://github.com/apache/fluss/discussions),
 open [issues](https://github.com/apache/fluss/issues) if you find a bug or request features, contribute code and documentation,
 or help us improve the project in any way. All contributions are welcome!
 
 ## License
 
-Apache Fluss (Incubating) project is licensed under the [Apache License 2.0](https://github.com/apache/fluss/blob/main/LICENSE).
+Apache Fluss project is licensed under the [Apache License 2.0](https://github.com/apache/fluss/blob/main/LICENSE).

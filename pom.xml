@@ -31,20 +31,11 @@
     <artifactId>fluss</artifactId>
     <version>1.0-SNAPSHOT</version>
 
-    <name>Apache Fluss (Incubating)</name>
+    <name>Apache Fluss</name>
     <packaging>pom</packaging>
     <description>
-        Apache Fluss (Incubating) is a streaming storage system built for
+        Apache Fluss is a streaming storage system built for
         real-time analytics.
-
-        Apache Fluss is an effort undergoing incubation at The Apache Software
-        Foundation (ASF), sponsored by the Apache Incubator PMC. Incubation is
-        required of all newly accepted projects until a further review indicates
-        that the infrastructure, communications, and decision-making process have
-        stabilized in a manner consistent with other successful ASF projects.
-        While incubation status is not necessarily a reflection of the
-        completeness or stability of the code, it does indicate that the project
-        has yet to be fully endorsed by the ASF.
     </description>
     <url>https://github.com/apache/fluss</url>
     <inceptionYear>2025</inceptionYear>

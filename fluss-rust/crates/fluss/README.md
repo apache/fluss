@@ -1,6 +1,6 @@
-# Apache Fluss (Incubating) Official Rust Client
+# Apache Fluss Official Rust Client
 
-Official Rust client library for [Apache Fluss (Incubating)](https://fluss.apache.org/).
+Official Rust client library for [Apache Fluss](https://fluss.apache.org/).
 
 [![crates.io](https://img.shields.io/crates/v/fluss-rs.svg)](https://crates.io/crates/fluss-rs)
 [![docs.rs](https://img.shields.io/docsrs/fluss-rs)](https://docs.rs/fluss-rs/)

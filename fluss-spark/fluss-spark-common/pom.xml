@@ -27,7 +27,7 @@
     </parent>
 
     <artifactId>fluss-spark-common_${scala.binary.version}</artifactId>
-    <name>Apache Fluss (Incubating) : Engine Spark : Common</name>
+    <name>Apache Fluss : Engine Spark : Common</name>
 
     <dependencies>
         <dependency>

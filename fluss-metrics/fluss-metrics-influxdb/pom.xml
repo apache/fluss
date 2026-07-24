@@ -27,7 +27,7 @@
     </parent>
 
     <artifactId>fluss-metrics-influxdb</artifactId>
-    <name>Apache Fluss (Incubating) : Metrics : InfluxDB</name>
+    <name>Apache Fluss : Metrics : InfluxDB</name>
 
     <properties>
         <influxdb3.version>1.8.0</influxdb3.version>

@@ -29,7 +29,6 @@ header:
     - 'Cargo.lock'
     - 'LICENSE'
     - 'NOTICE'
-    - 'DISCLAIMER'
     - 'fluss-rust/bindings/python/fluss/py.typed'
     - 'fluss-rust/**/mix.lock'
     - 'fluss-rust/website/**'

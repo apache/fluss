@@ -28,7 +28,7 @@
     </parent>
 
     <artifactId>fluss-fs-gs</artifactId>
-    <name>Apache Fluss (Incubating) : FileSystems : Google Cloud Storage FS</name>
+    <name>Apache Fluss : FileSystems : Google Cloud Storage FS</name>
 
     <packaging>jar</packaging>
 

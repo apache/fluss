@@ -21,7 +21,7 @@ build-backend = "maturin"
 
 [project]
 name = "pyfluss"
-description = "Apache Fluss (incubating) Python client"
+description = "Apache Fluss Python client"
 authors = [{name = "Apache Fluss", email = "dev@fluss.apache.org"}]
 license = {text = "Apache-2.0"}
 readme = "PYPI_README.md"

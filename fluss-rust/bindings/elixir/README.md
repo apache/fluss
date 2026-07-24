@@ -1,6 +1,6 @@
 # Fluss Elixir Client
 
-Elixir client for [Apache Fluss (Incubating)](https://fluss.apache.org/), built on the official Rust client via [Rustler](https://github.com/rusterlium/rustler) NIFs.
+Elixir client for [Apache Fluss](https://fluss.apache.org/), built on the official Rust client via [Rustler](https://github.com/rusterlium/rustler) NIFs.
 
 Currently supports **log tables** (append + scan). Primary key (KV) table support is planned.
 

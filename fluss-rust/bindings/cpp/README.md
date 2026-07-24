@@ -1,4 +1,4 @@
-# Apache Fluss™ C++ Bindings (Incubating)
+# Apache Fluss™ C++ Bindings
 
 C++ bindings for Fluss, built on top of the [fluss-rust](../../crates/fluss) client. The API is exposed via a C++ header ([include/fluss.hpp](include/fluss.hpp)) and implemented with Rust FFI.
 

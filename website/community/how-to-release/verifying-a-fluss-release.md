@@ -21,7 +21,7 @@ After downloading the distributions archives, signatures, checksums, and KEYS fi
 First, import the keys in your local keyring:
 
 ```bash
-curl https://downloads.apache.org/incubator/fluss/KEYS -o KEYS
+curl https://downloads.apache.org/fluss/KEYS -o KEYS
 gpg --import KEYS
 ```
 
@@ -33,7 +33,7 @@ for i in *.tgz; do echo $i; gpg --verify $i.asc $i; done
 If the verification is successful, you will see a message like this:
 
 ```
-fluss-0.8.0-incubating-src.tgz
+fluss-1.0.0-src.tgz
 gpg: Signature made Mon 01 Jan 2024 12:00:00 PM UTC
 gpg:                using RSA key E2C45417BED5C104154F341085BACB5AEFAE3202
 gpg: Good signature from "Jark Wu (CODE SIGNING KEY) <jark@apache.org>"
@@ -50,13 +50,13 @@ shasum *.sha512 > checklist.chk; shasum -c checklist.chk
 If the verification is successful, you will see a message like this:
 
 ```
-fluss-0.8.0-incubating-bin.tgz.sha512: OK
-fluss-0.8.0-incubating-src.tgz.sha512: OK
+fluss-1.0.0-bin.tgz.sha512: OK
+fluss-1.0.0-src.tgz.sha512: OK
 ```
 
 ## Verifying build
 
-Unzip the source release archive (`fluss-0.8.0-incubating-src.tgz`), and verify that the source release builds correctly (may with different Java version and Maven version), you can run the following commands:
+Unzip the source release archive (`fluss-1.0.0-src.tgz`), and verify that the source release builds correctly (may with different Java version and Maven version), you can run the following commands:
 
 ```bash
 mvn clean package -DskipTests
@@ -103,7 +103,7 @@ A release publishes to several registries; confirm each one carries the release 
 | Elixir | Hex.pm (post-1.0; not yet published) | `fluss` |
 | Docker | Docker Hub | `apache/fluss`, `apache/fluss-quickstart-flink` |
 
-Source archives, signatures, and checksums are on [dist.apache.org](https://dist.apache.org/repos/dist/dev/incubator/fluss/) (dev) and, after the vote, on [downloads.apache.org](https://downloads.apache.org/incubator/fluss/).
+Source archives, signatures, and checksums are on [dist.apache.org](https://dist.apache.org/repos/dist/dev/fluss/) (dev) and, after the vote, on [downloads.apache.org](https://downloads.apache.org/fluss/).
 
 ## Testing Against Staged Maven Artifacts
 
@@ -131,17 +131,10 @@ To support this, release managers can create and assign cross-team testing issue
 A great way to get started is by walking through the official Quickstart Guide: https://fluss.apache.org/docs/quickstart/flink/ (please switch to the documentation version currently under release).
 
 
-## Incubator Release Checklist
-
-The ASF Incubator has also prepared a release checklist, which you can refer to when verifying the release:
-
-https://cwiki.apache.org/confluence/display/INCUBATOR/Incubator+Release+Checklist
-
-
 ## Voting
 
 Votes are cast by replying on the vote email on the dev mailing list, with either +1, 0, -1.
 
-In addition to your vote, it’s customary to specify if your vote is binding or non-binding. Only members of the PPMC and mentors have formally binding votes, and IPMC on the vote on the Incubator general mailing list. If you’re unsure, you can specify that your vote is non-binding. You can find more details on https://www.apache.org/foundation/voting.html.
+In addition to your vote, it’s customary to specify if your vote is binding or non-binding. Only members of the PMC have formally binding votes. If you’re unsure, you can specify that your vote is non-binding. You can find more details on https://www.apache.org/foundation/voting.html.
 
 Besides, it is recommended to include a list of checklist you have verified for your vote. This helps the community to understand what you have checked and what is still missing.

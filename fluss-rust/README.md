@@ -17,14 +17,14 @@
  under the License.
 -->
 
-# Apache Fluss™ Rust Client (Incubating)
+# Apache Fluss™ Rust Client
 
 ![Experimental](https://img.shields.io/badge/status-experimental-orange)
 [![crates.io](https://img.shields.io/crates/v/fluss-rs.svg)](https://crates.io/crates/fluss-rs)
 [![docs.rs](https://img.shields.io/docsrs/fluss-rs)](https://docs.rs/fluss-rs/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 
-The official Rust **client** library for [Apache Fluss™](https://fluss.apache.org/) (Incubating) — a streaming storage built for real-time analytics, serving as the real-time data layer for Lakehouse architectures. This is a **client SDK**, not the Fluss server itself.
+The official Rust **client** library for [Apache Fluss™](https://fluss.apache.org/) — a streaming storage built for real-time analytics, serving as the real-time data layer for Lakehouse architectures. This is a **client SDK**, not the Fluss server itself.
 
 This repository contains:
 
@@ -304,7 +304,7 @@ cd bindings/elixir && mix test
 
 ## Contributing
 
-This project is part of the Apache Fluss (Incubating) community. Contributions are welcome!
+This project is part of the Apache Fluss community. Contributions are welcome!
 
 - Join the [dev mailing list](https://fluss.apache.org/community/welcome/)
 - Check out [DEVELOPMENT.md](DEVELOPMENT.md) for setup instructions

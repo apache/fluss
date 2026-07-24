@@ -28,7 +28,7 @@
     </parent>
 
     <artifactId>fluss-lake-paimon</artifactId>
-    <name>Apache Fluss (Incubating) : Lake : Paimon</name>
+    <name>Apache Fluss : Lake : Paimon</name>
 
     <packaging>jar</packaging>
 

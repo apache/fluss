@@ -27,7 +27,7 @@
     </parent>
 
     <artifactId>fluss-common</artifactId>
-    <name>Apache Fluss (Incubating) : Common</name>
+    <name>Apache Fluss : Common</name>
     <packaging>jar</packaging>
 
     <dependencies>
