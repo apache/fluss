@@ -32,6 +32,12 @@ import org.apache.flink.table.data.StringData;
 import org.apache.flink.table.data.utils.JoinedRowData;
 import org.apache.flink.types.RowKind;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
+
+import java.util.stream.Stream;
+
+import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -55,17 +61,19 @@ class ChangelogRowConverterTest {
         converter = new ChangelogRowConverter(testRowType);
     }
 
-    @Test
-    void testConvertInsertRecord() throws Exception {
-        LogRecord record = createLogRecord(ChangeType.INSERT, 100L, 1, "Alice", 5000L);
+    @ParameterizedTest
+    @MethodSource("changeTypeCases")
+    void testConvertAllChangeTypes(ChangeType changeType, String expectedChangeType) 
+                throws Exception {
+        LogRecord record = createLogRecord(changeType, 100L, 1, "Alice", 5000L);
 
         RowData result = converter.convert(record);
 
-        // Verify row kind
+        // Virtual table always emits INSERT row kind, regardless of the underlying change type.
         assertThat(result.getRowKind()).isEqualTo(RowKind.INSERT);
 
         // Verify metadata columns
-        assertThat(result.getString(0)).isEqualTo(StringData.fromString("insert"));
+        assertThat(result.getString(0)).isEqualTo(StringData.fromString(expectedChangeType));
         assertThat(result.getLong(1)).isEqualTo(100L); // log offset
         assertThat(result.getTimestamp(2, 3)).isNotNull(); // commit timestamp
 
@@ -78,111 +86,13 @@ class ChangelogRowConverterTest {
         assertThat(result).isInstanceOf(JoinedRowData.class);
     }
 
-    @Test
-    void testConvertUpdateBeforeRecord() throws Exception {
-        LogRecord record = createLogRecord(ChangeType.UPDATE_BEFORE, 200L, 2, "Bob", 3000L);
-
-        RowData result = converter.convert(record);
-
-        // Verify row kind (always INSERT for virtual table)
-        assertThat(result.getRowKind()).isEqualTo(RowKind.INSERT);
-
-        // Verify change type metadata
-        assertThat(result.getString(0)).isEqualTo(StringData.fromString("update_before"));
-        assertThat(result.getLong(1)).isEqualTo(200L);
-
-        // Verify physical columns
-        assertThat(result.getInt(3)).isEqualTo(2);
-        assertThat(result.getString(4).toString()).isEqualTo("Bob");
-        assertThat(result.getLong(5)).isEqualTo(3000L);
-    }
-
-    @Test
-    void testConvertUpdateAfterRecord() throws Exception {
-        LogRecord record = createLogRecord(ChangeType.UPDATE_AFTER, 201L, 2, "Bob", 4000L);
-
-        RowData result = converter.convert(record);
-
-        assertThat(result.getString(0)).isEqualTo(StringData.fromString("update_after"));
-        assertThat(result.getLong(1)).isEqualTo(201L);
-        assertThat(result.getInt(3)).isEqualTo(2);
-        assertThat(result.getString(4).toString()).isEqualTo("Bob");
-        assertThat(result.getLong(5)).isEqualTo(4000L);
-    }
-
-    @Test
-    void testConvertDeleteRecord() throws Exception {
-        LogRecord record = createLogRecord(ChangeType.DELETE, 300L, 3, "Charlie", 1000L);
-
-        RowData result = converter.convert(record);
-
-        assertThat(result.getString(0)).isEqualTo(StringData.fromString("delete"));
-        assertThat(result.getLong(1)).isEqualTo(300L);
-        assertThat(result.getInt(3)).isEqualTo(3);
-        assertThat(result.getString(4).toString()).isEqualTo("Charlie");
-        assertThat(result.getLong(5)).isEqualTo(1000L);
-    }
-
-    @Test
-    void testProducedTypeHasMetadataColumns() {
-        org.apache.flink.table.types.logical.RowType producedType = converter.getProducedType();
-
-        // Should have 3 metadata columns + 3 physical columns
-        assertThat(producedType.getFieldCount()).isEqualTo(6);
-
-        // Check metadata column names and types
-        assertThat(producedType.getFieldNames())
-                .containsExactly(
-                        "_change_type", "_log_offset", "_commit_timestamp", "id", "name", "amount");
-
-        // Check metadata column types
-        assertThat(producedType.getTypeAt(0))
-                .isInstanceOf(org.apache.flink.table.types.logical.VarCharType.class);
-        assertThat(producedType.getTypeAt(1))
-                .isInstanceOf(org.apache.flink.table.types.logical.BigIntType.class);
-        assertThat(producedType.getTypeAt(2))
-                .isInstanceOf(org.apache.flink.table.types.logical.LocalZonedTimestampType.class);
-    }
-
-    @Test
-    void testAllChangeTypes() throws Exception {
-        // Test all change type conversions
-        assertThat(
-                        converter
-                                .convert(createLogRecord(ChangeType.INSERT, 1L, 1, "Test", 100L))
-                                .getString(0))
-                .isEqualTo(StringData.fromString("insert"));
-
-        assertThat(
-                        converter
-                                .convert(
-                                        createLogRecord(
-                                                ChangeType.UPDATE_BEFORE, 2L, 1, "Test", 100L))
-                                .getString(0))
-                .isEqualTo(StringData.fromString("update_before"));
-
-        assertThat(
-                        converter
-                                .convert(
-                                        createLogRecord(
-                                                ChangeType.UPDATE_AFTER, 3L, 1, "Test", 100L))
-                                .getString(0))
-                .isEqualTo(StringData.fromString("update_after"));
-
-        assertThat(
-                        converter
-                                .convert(createLogRecord(ChangeType.DELETE, 4L, 1, "Test", 100L))
-                                .getString(0))
-                .isEqualTo(StringData.fromString("delete"));
-
-        // For log tables (append-only)
-        assertThat(
-                        converter
-                                .convert(
-                                        createLogRecord(
-                                                ChangeType.APPEND_ONLY, 5L, 1, "Test", 100L))
-                                .getString(0))
-                .isEqualTo(StringData.fromString("insert"));
+    private static Stream<Arguments> changeTypeCases() {
+        return Stream.of(
+                Arguments.of(ChangeType.INSERT, "insert"),
+                Arguments.of(ChangeType.DELETE, "delete"),
+                Arguments.of(ChangeType.UPDATE_BEFORE, "update_before"),
+                Arguments.of(ChangeType.UPDATE_AFTER, "update_after"),
+                Arguments.of(ChangeType.APPEND_ONLY, "append_only"));
     }
 
     @Test

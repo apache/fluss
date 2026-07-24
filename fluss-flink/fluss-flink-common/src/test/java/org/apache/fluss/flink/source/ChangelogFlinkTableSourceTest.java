@@ -31,12 +31,17 @@ import org.apache.flink.table.expressions.ValueLiteralExpression;
 import org.apache.flink.table.functions.BuiltInFunctionDefinitions;
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.table.types.logical.RowType;
+
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.stream.Stream;
 
 import static org.apache.fluss.flink.FlinkConnectorOptions.ScanStartupMode;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -97,43 +102,52 @@ class ChangelogFlinkTableSourceTest {
     }
 
     private CallExpression equals(String field, DataType fieldType, Object value) {
+        return call(BuiltInFunctionDefinitions.EQUALS, field, fieldType, value);
+    }
+
+    private CallExpression call(
+            org.apache.flink.table.functions.BuiltInFunctionDefinition func,
+            String field,
+            DataType fieldType,
+            Object value) {
         FieldReferenceExpression ref = new FieldReferenceExpression(field, fieldType, 0, 0);
         ValueLiteralExpression lit = new ValueLiteralExpression(value, fieldType.notNull());
-        return CallExpression.permanent(
-                BuiltInFunctionDefinitions.EQUALS, Arrays.asList(ref, lit), DataTypes.BOOLEAN());
+        return CallExpression.permanent(func, Arrays.asList(ref, lit), DataTypes.BOOLEAN());
     }
 
-    @Test
-    void testApplyProjectionMetadataOnly() {
+    @ParameterizedTest
+    @MethodSource("projectionCases")
+    void testApplyProjection(
+            String description,
+            int[] virtual,
+            int[] expectedDataProjection,
+            int[] expectedBaseProjection) {
         ChangelogFlinkTableSource source = createSource(new int[0]);
-        source.applyProjection(nested(0), projectedType(0));
+        source.applyProjection(nested(virtual), projectedType(virtual));
 
-        assertThat(source.getProjectedFields()).containsExactly(0);
-        assertThat(source.getDataProjection()).isNull();
-        assertThat(source.getBaseRowProjection()).containsExactly(0);
-        assertThat(source.getProducedDataType()).isEqualTo(projectedType(0).getLogicalType());
+        assertThat(source.getProjectedFields()).containsExactly(virtual);
+
+        // dataProjection null for metadata-only projection
+        if (expectedDataProjection == null) {
+            assertThat(source.getDataProjection()).isNull();
+        } else {
+            assertThat(source.getDataProjection()).containsExactly(expectedDataProjection);
+        }
+
+        assertThat(source.getBaseRowProjection()).containsExactly(expectedBaseProjection);
+        assertThat(source.getProducedDataType()).isEqualTo(projectedType(virtual).getLogicalType());
     }
 
-    @Test
-    void testApplyProjectionDataOnly() {
-        ChangelogFlinkTableSource source = createSource(new int[0]);
-        // virtual [id(3), amount(5)]
-        source.applyProjection(nested(3, 5), projectedType(3, 5));
-
-        assertThat(source.getDataProjection()).containsExactly(0, 2);
-        assertThat(source.getBaseRowProjection()).containsExactly(3, 4);
-    }
-
-    @Test
-    void testApplyProjectionReorderedMix() {
-        ChangelogFlinkTableSource source = createSource(new int[0]);
-        // virtual [_change_type(0), amount(5), id(3)]
-        source.applyProjection(nested(0, 5, 3), projectedType(0, 5, 3));
-
-        // data columns scanned in first-appearance order: amount(2), id(0)
-        assertThat(source.getDataProjection()).containsExactly(2, 0);
-        // base row [_change_type, amount, id] over [meta0, meta1, meta2, amount, id]
-        assertThat(source.getBaseRowProjection()).containsExactly(0, 3, 4);
+    private static Stream<Arguments> projectionCases() {
+        return Stream.of(
+            // description, virtual, expectedDataProjection, expectedBaseProjection
+            // metadata only
+            Arguments.of("metadata-only", new int[] {0}, null, new int[] {0}),
+            // data only
+            Arguments.of("data-only", new int[] {3, 5}, new int[] {0, 2}, new int[] {3, 4}),
+            // reordered mix
+            Arguments.of(
+                    "reorderedMix", new int[] {0, 5, 3}, new int[] {2, 0}, new int[] {0, 3, 4}));
     }
 
     @Test
@@ -161,6 +175,51 @@ class ChangelogFlinkTableSourceTest {
         assertThat(result.getAcceptedFilters()).containsExactly(filter);
         // All filters are returned as remaining (safety net).
         assertThat(result.getRemainingFilters()).containsExactly(filter);
+        assertThat(source.getLogRecordBatchFilter()).isNotNull();
+    }
+
+    @Test
+    void testApplyFiltersDataColumnNotInStatisticsNotPushed() {
+        // Statistics are collected only for "amount". A filter on "name" cannot use batch
+        // statistics, so it must not be pushed as a record-batch filter even though it is a
+        // convertible data-column predicate.
+        ChangelogFlinkTableSource source = createSource(new int[0], statsColumns("amount"));
+        ResolvedExpression filter = equals("name", DataTypes.STRING(), "p1");
+
+        SupportsFilterPushDown.Result result =
+                source.applyFilters(Collections.singletonList(filter));
+
+        assertThat(result.getAcceptedFilters()).isEmpty();
+        assertThat(result.getRemainingFilters()).containsExactly(filter);
+        assertThat(source.getLogRecordBatchFilter()).isNull();
+    }
+
+    @Test
+    void testApplyFiltersCompoundDataColumnsPushed() {
+        // WHERE amount > 100 AND amount < 500: both leaves reference a statistics-backed data
+        // column, so the whole AND predicate is pushed as a single record-batch filter.
+        ChangelogFlinkTableSource source = createSource(new int[0], statsAll());
+        ResolvedExpression compound =
+                CallExpression.permanent(
+                        BuiltInFunctionDefinitions.AND,
+                        Arrays.asList(
+                                call(
+                                        BuiltInFunctionDefinitions.GREATER_THAN,
+                                        "amount",
+                                        DataTypes.BIGINT(),
+                                        100L),
+                                call(
+                                        BuiltInFunctionDefinitions.LESS_THAN,
+                                        "amount",
+                                        DataTypes.BIGINT(),
+                                        500L)),
+                        DataTypes.BOOLEAN());
+
+        SupportsFilterPushDown.Result result =
+                source.applyFilters(Collections.singletonList(compound));
+
+        assertThat(result.getAcceptedFilters()).containsExactly(compound);
+        assertThat(result.getRemainingFilters()).containsExactly(compound);
         assertThat(source.getLogRecordBatchFilter()).isNotNull();
     }
 
@@ -234,8 +293,12 @@ class ChangelogFlinkTableSourceTest {
     }
 
     private Map<String, String> statsAll() {
+        return statsColumns("*");
+    }
+
+    private Map<String, String> statsColumns(String columns) {
         Map<String, String> options = new HashMap<>();
-        options.put("table.statistics.columns", "*");
+        options.put("table.statistics.columns", columns);
         return options;
     }
 }
