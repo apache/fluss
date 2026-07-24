@@ -35,7 +35,7 @@ public class GSFileSystemPlugin implements FileSystemPlugin {
 
     private static final String[] FLUSS_CONFIG_PREFIXES = {"gs.", "fs.gs."};
 
-    private static final String HADOOP_CONFIG_PREFIX = "fs.gs.";
+    public static final String HADOOP_CONFIG_PREFIX = "fs.gs.";
 
     @Override
     public String getScheme() {
