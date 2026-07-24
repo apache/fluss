@@ -160,6 +160,7 @@ class KvTabletMergeModeTest {
                         schemaGetter,
                         tableConf.getChangelogImage(),
                         KvManager.getDefaultRateLimiter(),
+                        null,
                         autoIncrementManager);
     }
 
