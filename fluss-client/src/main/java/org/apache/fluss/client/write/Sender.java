@@ -30,6 +30,7 @@ import org.apache.fluss.exception.RetriableException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.PbProduceLogRespForBucket;
 import org.apache.fluss.rpc.messages.PbPutKvRespForBucket;
@@ -231,6 +232,11 @@ public class Sender implements Runnable {
                     readyCheckResult.unknownLeaderTables);
         }
 
+        // Clean up stale physical table path entries from the accumulator on every cycle.
+        // Dropped partitions will no longer appear in the cluster's bucket locations; any
+        // writeBatches entry whose deques are all empty can be safely removed.
+        cleanupStaleWriteBatches(metadataUpdater.getCluster());
+
         Set<Integer> readyNodes = readyCheckResult.readyNodes;
         if (readyNodes.isEmpty()) {
             // TODO The method sendWriteData is in a busy loop. If there is no data continuously, it
@@ -253,6 +259,54 @@ public class Sender implements Runnable {
 
             // move metrics update to the end to make sure the batches has been built.
             updateWriterMetrics(batches);
+        }
+    }
+
+    /**
+     * Mark physical table paths that no longer appear in the cluster as stale, then try to remove
+     * any stale path whose deques have been fully drained.
+     *
+     * <p>Marking prevents new appends to dropped partitions. Removal is deferred until all
+     * in-flight batches for a path have been drained, so no data is silently lost.
+     *
+     * <p>Uses {@code partitionsIdByPath} / {@code tableIdByPath} as the drop signal, not {@code
+     * bucketLocationsByPath}. Leader election and server outages can transiently empty {@code
+     * bucketLocationsByPath} without the partition or table actually being dropped; using the
+     * partition/table ID maps avoids false positives.
+     */
+    private void cleanupStaleWriteBatches(Cluster cluster) {
+        Set<PhysicalTablePath> newStalePaths = new HashSet<>();
+        for (PhysicalTablePath path : accumulator.getPhysicalTablePathsInBatches()) {
+            if (isPathDropped(cluster, path)) {
+                newStalePaths.add(path);
+            }
+        }
+        if (!newStalePaths.isEmpty()) {
+            LOG.debug(
+                    "Marking {} stale physical table path(s) from write batches: {}",
+                    newStalePaths.size(),
+                    newStalePaths);
+            accumulator.markPathsAsStale(newStalePaths);
+        }
+
+        // Try to remove every path that has been marked stale and is now fully drained.
+        for (PhysicalTablePath path : accumulator.getPhysicalTablePathsInBatches()) {
+            if (isPathDropped(cluster, path)) {
+                accumulator.removeStalePathIfEmpty(path);
+            }
+        }
+    }
+
+    private boolean isPathDropped(Cluster cluster, PhysicalTablePath path) {
+        if (path.getPartitionName() != null) {
+            // Partitioned path: dropped if metadata no longer carries the partition ID.
+            // partitionsIdByPath is only cleared on an explicit metadata refresh that confirms the
+            // partition is gone; transient leader failures do NOT clear it.
+            return !cluster.getPartitionId(path).isPresent();
+        } else {
+            // Non-partitioned path: dropped iff the table itself is no longer known.
+            TablePath tablePath = path.getTablePath();
+            return !cluster.getTableId(tablePath).isPresent();
         }
     }
 

@@ -44,6 +44,7 @@ import javax.annotation.Nullable;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
@@ -103,6 +104,14 @@ public class MetadataUtils {
         MetadataRequest metadataRequest =
                 ClientRpcMessageUtils.makeMetadataRequest(
                         tablePaths, tablePartitions, tablePartitionIds);
+        // Collect the table paths for which partition metadata is being refreshed, so that stale
+        // partition entries can be removed during partial updates.
+        final Set<TablePath> refreshedPartitionTables = new HashSet<>();
+        if (tablePartitions != null) {
+            for (PhysicalTablePath ptp : tablePartitions) {
+                refreshedPartitionTables.add(ptp.getTablePath());
+            }
+        }
         return gateway.metadata(metadataRequest)
                 .thenApply(
                         response -> {
@@ -134,6 +143,28 @@ public class MetadataUtils {
                                         new HashMap<>(originCluster.getBucketLocationsByPath());
                                 newPartitionIdByPath =
                                         new HashMap<>(originCluster.getPartitionIdByPath());
+
+                                // Remove stale partition entries for tables whose partition
+                                // metadata was refreshed. The response only contains currently
+                                // existing partitions, so any entry not in the response is stale
+                                // (e.g., dropped partitions).
+                                if (!refreshedPartitionTables.isEmpty()) {
+                                    newPartitionIdByPath
+                                            .keySet()
+                                            .removeIf(
+                                                    path ->
+                                                            refreshedPartitionTables.contains(
+                                                                    path.getTablePath()));
+                                    newBucketLocations
+                                            .keySet()
+                                            .removeIf(
+                                                    path ->
+                                                            path.getPartitionName() != null
+                                                                    && refreshedPartitionTables
+                                                                            .contains(
+                                                                                    path
+                                                                                            .getTablePath()));
+                                }
 
                                 newTablePathToTableId.putAll(newTableMetadata.tablePathToTableId);
                                 newBucketLocations.putAll(newTableMetadata.bucketLocations);

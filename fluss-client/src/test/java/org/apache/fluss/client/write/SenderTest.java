@@ -19,6 +19,7 @@ package org.apache.fluss.client.write;
 
 import org.apache.fluss.client.metadata.TestingMetadataUpdater;
 import org.apache.fluss.client.metrics.TestingWriterMetricGroup;
+import org.apache.fluss.cluster.BucketLocation;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.ConfigOptions;
@@ -803,6 +804,383 @@ final class SenderTest {
         assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isEqualTo(Optional.of(0));
         assertThat(future1.isDone()).isTrue();
         assertThat(future1.get()).isNull();
+    }
+
+    /**
+     * Tests that Sender.runOnce() cleans up stale physical table path entries from the
+     * RecordAccumulator after a metadata update reveals that a partition no longer exists in the
+     * cluster. This prevents unbounded growth of writeBatches for long-running partition-write jobs
+     * where partitions are continuously created and dropped.
+     */
+    @Test
+    void testSenderCleansUpStaleWriteBatchesAfterMetadataUpdate() throws Exception {
+        // Use a non-partitioned stale path so that ready() / drain() work without needing
+        // a partition ID in the cluster's partitionsIdByPath map.
+        PhysicalTablePath stalePath = PhysicalTablePath.of(TablePath.of("test_db", "stale_table"));
+        long staleTableId = 99901L;
+        ServerNode leader = TestingMetadataUpdater.NODE1;
+        int[] replicas = new int[] {leader.id()};
+        BucketLocation staleBucket =
+                new BucketLocation(stalePath, staleTableId, 0, leader.id(), replicas);
+
+        // Build a cluster that includes the normal path AND the soon-to-be-dropped stale path.
+        Cluster clusterWithStale =
+                new Cluster(
+                        metadataUpdater.getCluster().getAliveTabletServers(),
+                        metadataUpdater.getCluster().getCoordinatorServer(),
+                        addExtraPath(
+                                metadataUpdater.getCluster().getBucketLocationsByPath(),
+                                stalePath,
+                                staleBucket),
+                        addExtraTableId(
+                                metadataUpdater.getCluster().getTableIdByPath(),
+                                stalePath.getTablePath(),
+                                staleTableId),
+                        metadataUpdater.getCluster().getPartitionIdByPath());
+        metadataUpdater.updateCluster(clusterWithStale);
+
+        // Create a minimal TableInfo for the stale table so we can append to it.
+        TableInfo staleTableInfo =
+                TableInfo.of(
+                        stalePath.getTablePath(),
+                        staleTableId,
+                        1,
+                        DATA1_TABLE_INFO.toTableDescriptor(),
+                        null,
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis());
+
+        // Append a record to the stale path — this registers it in writeBatches.
+        accumulator.append(
+                WriteRecord.forArrowAppend(staleTableInfo, stalePath, row(1, "a"), null),
+                (tb, leo, e) -> {},
+                clusterWithStale,
+                0,
+                false);
+
+        assertThat(accumulator.getPhysicalTablePathsInBatches()).contains(stalePath);
+
+        // Drain and deallocate to empty the stale deque. batchTimeoutMs=0 so the batch is
+        // immediately ready and drain() will poll it out.
+        RecordAccumulator.ReadyCheckResult ready = accumulator.ready(clusterWithStale);
+        Map<Integer, List<ReadyWriteBatch>> batches =
+                accumulator.drain(clusterWithStale, ready.readyNodes, MAX_REQUEST_SIZE);
+        for (List<ReadyWriteBatch> batchList : batches.values()) {
+            for (ReadyWriteBatch b : batchList) {
+                accumulator.deallocate(b.writeBatch());
+            }
+        }
+
+        // Simulate partition drop: update the cluster without the stale path.
+        Map<PhysicalTablePath, List<BucketLocation>> bucketsWithoutStale =
+                new HashMap<>(metadataUpdater.getCluster().getBucketLocationsByPath());
+        bucketsWithoutStale.remove(stalePath);
+        Map<TablePath, Long> tableIdsWithoutStale =
+                new HashMap<>(metadataUpdater.getCluster().getTableIdByPath());
+        tableIdsWithoutStale.remove(stalePath.getTablePath());
+        Cluster clusterWithoutStale =
+                new Cluster(
+                        metadataUpdater.getCluster().getAliveTabletServers(),
+                        metadataUpdater.getCluster().getCoordinatorServer(),
+                        bucketsWithoutStale,
+                        tableIdsWithoutStale,
+                        metadataUpdater.getCluster().getPartitionIdByPath());
+        metadataUpdater.updateCluster(clusterWithoutStale);
+
+        // runOnce() calls cleanupStaleWriteBatches: marks the path stale, then removes it
+        // because the deque is already empty.
+        sender.runOnce();
+
+        assertThat(accumulator.getPhysicalTablePathsInBatches()).doesNotContain(stalePath);
+    }
+
+    /**
+     * Verifies that a path is NOT marked stale when bucket leaders become unavailable (server down)
+     * but the table/partition ID is still present in the cluster metadata. This guards against the
+     * false-positive where transient leader election empties bucketLocationsByPath and triggers
+     * premature stale marking.
+     */
+    @Test
+    void testSenderDoesNotMarkPathStaleOnLeaderUnavailability() throws Exception {
+        PhysicalTablePath path = PhysicalTablePath.of(TablePath.of("test_db", "live_table"));
+        long tableId = 99902L;
+        ServerNode leader = TestingMetadataUpdater.NODE1;
+        int[] replicas = new int[] {leader.id()};
+        BucketLocation bucket = new BucketLocation(path, tableId, 0, leader.id(), replicas);
+
+        // Build a cluster that includes the table path with a live leader.
+        Cluster clusterWithLeader =
+                new Cluster(
+                        metadataUpdater.getCluster().getAliveTabletServers(),
+                        metadataUpdater.getCluster().getCoordinatorServer(),
+                        addExtraPath(
+                                metadataUpdater.getCluster().getBucketLocationsByPath(),
+                                path,
+                                bucket),
+                        addExtraTableId(
+                                metadataUpdater.getCluster().getTableIdByPath(),
+                                path.getTablePath(),
+                                tableId),
+                        metadataUpdater.getCluster().getPartitionIdByPath());
+        metadataUpdater.updateCluster(clusterWithLeader);
+
+        TableInfo tableInfo =
+                TableInfo.of(
+                        path.getTablePath(),
+                        tableId,
+                        1,
+                        DATA1_TABLE_INFO.toTableDescriptor(),
+                        null,
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis());
+
+        accumulator.append(
+                WriteRecord.forArrowAppend(tableInfo, path, row(1, "a"), null),
+                (tb, leo, e) -> {},
+                clusterWithLeader,
+                0,
+                false);
+
+        assertThat(accumulator.getPhysicalTablePathsInBatches()).contains(path);
+
+        // Simulate leader failure: remove path from bucketLocationsByPath but keep tableIdByPath.
+        Map<PhysicalTablePath, List<BucketLocation>> bucketsWithoutLeader =
+                new HashMap<>(clusterWithLeader.getBucketLocationsByPath());
+        bucketsWithoutLeader.remove(path);
+        Cluster clusterWithoutLeader =
+                new Cluster(
+                        metadataUpdater.getCluster().getAliveTabletServers(),
+                        metadataUpdater.getCluster().getCoordinatorServer(),
+                        bucketsWithoutLeader,
+                        addExtraTableId(
+                                metadataUpdater.getCluster().getTableIdByPath(),
+                                path.getTablePath(),
+                                tableId),
+                        metadataUpdater.getCluster().getPartitionIdByPath());
+        metadataUpdater.updateCluster(clusterWithoutLeader);
+
+        // runOnce() must NOT remove the path because the table still exists in metadata.
+        sender.runOnce();
+
+        assertThat(accumulator.getPhysicalTablePathsInBatches()).contains(path);
+
+        // Drain and deallocate to avoid a memory-leak in teardown.
+        RecordAccumulator.ReadyCheckResult ready = accumulator.ready(clusterWithLeader);
+        Map<Integer, List<ReadyWriteBatch>> batches =
+                accumulator.drain(clusterWithLeader, ready.readyNodes, MAX_REQUEST_SIZE);
+        for (List<ReadyWriteBatch> batchList : batches.values()) {
+            for (ReadyWriteBatch b : batchList) {
+                accumulator.deallocate(b.writeBatch());
+            }
+        }
+    }
+
+    /**
+     * Tests that a partitioned-table path is cleaned up from writeBatches after the partition is
+     * dropped and partitionsIdByPath no longer contains it. This is the partitioned-table
+     * counterpart to testSenderCleansUpStaleWriteBatchesAfterMetadataUpdate.
+     */
+    @Test
+    void testSenderCleansUpStalePartitionedPathAfterPartitionDrop() throws Exception {
+        TablePath tablePath = TablePath.of("test_db", "partitioned_table");
+        long tableId = 99903L;
+        long partitionId = 88801L;
+        String partitionName = "p_2024";
+        PhysicalTablePath partitionPath = PhysicalTablePath.of(tablePath, partitionName);
+        ServerNode leader = TestingMetadataUpdater.NODE1;
+        int[] replicas = new int[] {leader.id()};
+        // Include partitionId in TableBucket so Cluster.leaderFor() can match it correctly.
+        BucketLocation bucket =
+                new BucketLocation(
+                        partitionPath,
+                        new TableBucket(tableId, partitionId, 0),
+                        leader.id(),
+                        replicas);
+
+        // Build cluster with the partition present in both bucketLocationsByPath and
+        // partitionsIdByPath.
+        Map<PhysicalTablePath, Long> partitionIdByPathWithPartition =
+                new HashMap<>(metadataUpdater.getCluster().getPartitionIdByPath());
+        partitionIdByPathWithPartition.put(partitionPath, partitionId);
+        Cluster clusterWithPartition =
+                new Cluster(
+                        metadataUpdater.getCluster().getAliveTabletServers(),
+                        metadataUpdater.getCluster().getCoordinatorServer(),
+                        addExtraPath(
+                                metadataUpdater.getCluster().getBucketLocationsByPath(),
+                                partitionPath,
+                                bucket),
+                        addExtraTableId(
+                                metadataUpdater.getCluster().getTableIdByPath(),
+                                tablePath,
+                                tableId),
+                        partitionIdByPathWithPartition);
+        metadataUpdater.updateCluster(clusterWithPartition);
+
+        TableInfo partitionedTableInfo =
+                TableInfo.of(
+                        tablePath,
+                        tableId,
+                        1,
+                        DATA1_TABLE_INFO.toTableDescriptor(),
+                        null,
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis());
+
+        accumulator.append(
+                WriteRecord.forArrowAppend(partitionedTableInfo, partitionPath, row(1, "a"), null),
+                (tb, leo, e) -> {},
+                clusterWithPartition,
+                0,
+                false);
+
+        assertThat(accumulator.getPhysicalTablePathsInBatches()).contains(partitionPath);
+
+        // Drain and deallocate so the deque is empty before cleanup.
+        RecordAccumulator.ReadyCheckResult ready = accumulator.ready(clusterWithPartition);
+        Map<Integer, List<ReadyWriteBatch>> batches =
+                accumulator.drain(clusterWithPartition, ready.readyNodes, MAX_REQUEST_SIZE);
+        for (List<ReadyWriteBatch> batchList : batches.values()) {
+            for (ReadyWriteBatch b : batchList) {
+                accumulator.deallocate(b.writeBatch());
+            }
+        }
+
+        // Simulate partition drop: remove partition from both bucketLocationsByPath and
+        // partitionsIdByPath (as MetadataUtils does after a metadata refresh).
+        Map<PhysicalTablePath, List<BucketLocation>> bucketsWithoutPartition =
+                new HashMap<>(clusterWithPartition.getBucketLocationsByPath());
+        bucketsWithoutPartition.remove(partitionPath);
+        Map<PhysicalTablePath, Long> partitionIdByPathWithoutPartition =
+                new HashMap<>(partitionIdByPathWithPartition);
+        partitionIdByPathWithoutPartition.remove(partitionPath);
+        Cluster clusterWithoutPartition =
+                new Cluster(
+                        metadataUpdater.getCluster().getAliveTabletServers(),
+                        metadataUpdater.getCluster().getCoordinatorServer(),
+                        bucketsWithoutPartition,
+                        addExtraTableId(
+                                metadataUpdater.getCluster().getTableIdByPath(),
+                                tablePath,
+                                tableId),
+                        partitionIdByPathWithoutPartition);
+        metadataUpdater.updateCluster(clusterWithoutPartition);
+
+        sender.runOnce();
+
+        assertThat(accumulator.getPhysicalTablePathsInBatches()).doesNotContain(partitionPath);
+    }
+
+    /**
+     * Tests that a partitioned-table path is NOT marked stale when bucket leaders become
+     * unavailable (server down / leader election) but partitionsIdByPath still contains the
+     * partition. This is the partitioned-table counterpart to
+     * testSenderDoesNotMarkPathStaleOnLeaderUnavailability.
+     */
+    @Test
+    void testSenderDoesNotMarkPartitionedPathStaleOnLeaderUnavailability() throws Exception {
+        TablePath tablePath = TablePath.of("test_db", "partitioned_table2");
+        long tableId = 99904L;
+        long partitionId = 88802L;
+        String partitionName = "p_2025";
+        PhysicalTablePath partitionPath = PhysicalTablePath.of(tablePath, partitionName);
+        ServerNode leader = TestingMetadataUpdater.NODE1;
+        int[] replicas = new int[] {leader.id()};
+        // Include partitionId in TableBucket so Cluster.leaderFor() can match it correctly.
+        BucketLocation bucket =
+                new BucketLocation(
+                        partitionPath,
+                        new TableBucket(tableId, partitionId, 0),
+                        leader.id(),
+                        replicas);
+
+        // Cluster with partition fully present.
+        Map<PhysicalTablePath, Long> partitionIdByPathWithPartition =
+                new HashMap<>(metadataUpdater.getCluster().getPartitionIdByPath());
+        partitionIdByPathWithPartition.put(partitionPath, partitionId);
+        Cluster clusterWithPartition =
+                new Cluster(
+                        metadataUpdater.getCluster().getAliveTabletServers(),
+                        metadataUpdater.getCluster().getCoordinatorServer(),
+                        addExtraPath(
+                                metadataUpdater.getCluster().getBucketLocationsByPath(),
+                                partitionPath,
+                                bucket),
+                        addExtraTableId(
+                                metadataUpdater.getCluster().getTableIdByPath(),
+                                tablePath,
+                                tableId),
+                        partitionIdByPathWithPartition);
+        metadataUpdater.updateCluster(clusterWithPartition);
+
+        TableInfo partitionedTableInfo =
+                TableInfo.of(
+                        tablePath,
+                        tableId,
+                        1,
+                        DATA1_TABLE_INFO.toTableDescriptor(),
+                        null,
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis());
+
+        accumulator.append(
+                WriteRecord.forArrowAppend(partitionedTableInfo, partitionPath, row(1, "a"), null),
+                (tb, leo, e) -> {},
+                clusterWithPartition,
+                0,
+                false);
+
+        assertThat(accumulator.getPhysicalTablePathsInBatches()).contains(partitionPath);
+
+        // Drain and deallocate BEFORE simulating leader failure so that the deque is empty.
+        // This prevents ready() from adding the path to unknownLeaderTables (which would trigger
+        // a metadata update in TestingMetadataUpdater and cause an unexpected exception).
+        RecordAccumulator.ReadyCheckResult readyBefore = accumulator.ready(clusterWithPartition);
+        Map<Integer, List<ReadyWriteBatch>> batchesBefore =
+                accumulator.drain(clusterWithPartition, readyBefore.readyNodes, MAX_REQUEST_SIZE);
+        for (List<ReadyWriteBatch> batchList : batchesBefore.values()) {
+            for (ReadyWriteBatch b : batchList) {
+                accumulator.deallocate(b.writeBatch());
+            }
+        }
+
+        // Simulate leader failure: remove partition from bucketLocationsByPath only.
+        // partitionsIdByPath still contains the partition — it has not been dropped.
+        Map<PhysicalTablePath, List<BucketLocation>> bucketsWithoutLeader =
+                new HashMap<>(clusterWithPartition.getBucketLocationsByPath());
+        bucketsWithoutLeader.remove(partitionPath);
+        Cluster clusterWithoutLeader =
+                new Cluster(
+                        metadataUpdater.getCluster().getAliveTabletServers(),
+                        metadataUpdater.getCluster().getCoordinatorServer(),
+                        bucketsWithoutLeader,
+                        addExtraTableId(
+                                metadataUpdater.getCluster().getTableIdByPath(),
+                                tablePath,
+                                tableId),
+                        partitionIdByPathWithPartition);
+        metadataUpdater.updateCluster(clusterWithoutLeader);
+
+        // runOnce() must NOT remove the partition path because it still exists in metadata.
+        sender.runOnce();
+
+        assertThat(accumulator.getPhysicalTablePathsInBatches()).contains(partitionPath);
+    }
+
+    private static Map<PhysicalTablePath, List<BucketLocation>> addExtraPath(
+            Map<PhysicalTablePath, List<BucketLocation>> original,
+            PhysicalTablePath extraPath,
+            BucketLocation extraBucket) {
+        Map<PhysicalTablePath, List<BucketLocation>> result = new HashMap<>(original);
+        result.put(extraPath, Collections.singletonList(extraBucket));
+        return result;
+    }
+
+    private static Map<TablePath, Long> addExtraTableId(
+            Map<TablePath, Long> original, TablePath tablePath, long tableId) {
+        Map<TablePath, Long> result = new HashMap<>(original);
+        result.put(tablePath, tableId);
+        return result;
     }
 
     @Test
