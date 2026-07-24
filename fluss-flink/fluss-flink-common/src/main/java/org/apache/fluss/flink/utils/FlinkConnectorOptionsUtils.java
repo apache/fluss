@@ -23,7 +23,7 @@ import org.apache.fluss.flink.FlinkConnectorOptions.ScanStartupMode;
 import org.apache.fluss.flink.sink.shuffle.DistributionMode;
 import org.apache.fluss.metadata.MergeEngineType;
 
-import org.apache.flink.configuration.CoreOptions;
+import org.apache.flink.configuration.ConfigurationUtils;
 import org.apache.flink.configuration.ReadableConfig;
 import org.apache.flink.table.api.ValidationException;
 import org.apache.flink.table.api.config.TableConfigOptions;
@@ -41,7 +41,6 @@ import java.util.List;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
-import static org.apache.flink.configuration.CoreOptions.TMP_DIRS;
 import static org.apache.fluss.config.ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR;
 import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE;
 import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_STARTUP_MODE;
@@ -201,13 +200,15 @@ public class FlinkConnectorOptionsUtils {
 
     public static String getClientScannerIoTmpDir(
             Configuration flussConf, org.apache.flink.configuration.Configuration flinkConfig) {
-        if (!flussConf.contains(CLIENT_SCANNER_IO_TMP_DIR)) {
-            if (flinkConfig.contains(TMP_DIRS)) {
-                // pass flink io tmp dir to fluss client.
-                return new File(flinkConfig.get(CoreOptions.TMP_DIRS), "/fluss").getAbsolutePath();
-            }
-        }
-        return flussConf.getString(CLIENT_SCANNER_IO_TMP_DIR);
+        return flussConf
+                .getOptional(CLIENT_SCANNER_IO_TMP_DIR)
+                .orElseGet(
+                        () ->
+                                new File(
+                                                ConfigurationUtils.getRandomTempDirectory(
+                                                        flinkConfig),
+                                                "fluss")
+                                        .getAbsolutePath());
     }
 
     /** Fluss startup options. * */

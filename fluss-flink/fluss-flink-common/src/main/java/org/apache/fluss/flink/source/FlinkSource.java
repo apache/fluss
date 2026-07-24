@@ -288,9 +288,10 @@ public class FlinkSource<OUT>
         FlinkSourceReaderMetrics flinkSourceReaderMetrics =
                 new FlinkSourceReaderMetrics(context.metricGroup());
 
-        flussConf.set(
+        Configuration readerConf = new Configuration(flussConf);
+        readerConf.set(
                 CLIENT_SCANNER_IO_TMP_DIR,
-                getClientScannerIoTmpDir(flussConf, context.getConfiguration()));
+                getClientScannerIoTmpDir(readerConf, context.getConfiguration()));
         deserializationSchema.open(
                 new DeserializerInitContextImpl(
                         context.metricGroup().addGroup("deserializer"),
@@ -300,7 +301,7 @@ public class FlinkSource<OUT>
 
         return new FlinkSourceReader<>(
                 elementsQueue,
-                flussConf,
+                readerConf,
                 tablePath,
                 sourceOutputType,
                 context,

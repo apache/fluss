@@ -22,7 +22,10 @@ import org.apache.fluss.config.Configuration;
 import org.apache.flink.table.api.ValidationException;
 import org.junit.jupiter.api.Test;
 
+import java.io.File;
 import java.time.ZoneId;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.TimeZone;
 
 import static org.apache.flink.configuration.CoreOptions.TMP_DIRS;
@@ -96,7 +99,7 @@ class FlinkConnectorOptionsUtilTest {
                         FlinkConnectorOptionsUtils.getClientScannerIoTmpDir(
                                 new Configuration(),
                                 new org.apache.flink.configuration.Configuration()))
-                .isEqualTo(property + "/fluss");
+                .isEqualTo(new File(property, "fluss").getAbsolutePath());
 
         // only replace when flussConfig not contains CLIENT_SCANNER_IO_TMP_DIR while flinkConfig
         // contains TMP_DIRS.
@@ -104,5 +107,36 @@ class FlinkConnectorOptionsUtilTest {
                         FlinkConnectorOptionsUtils.getClientScannerIoTmpDir(
                                 new Configuration(), flinkConfig))
                 .isEqualTo("/flink_tmp_dir/fluss");
+    }
+
+    @Test
+    void testGetClientScannerIoTmpDirForMultipleReadersOnSameTaskManager() {
+        org.apache.flink.configuration.Configuration commaSeparatedFlinkConfig =
+                new org.apache.flink.configuration.Configuration()
+                        .set(TMP_DIRS, "/flink_tmp_dir_0,/flink_tmp_dir_1");
+
+        Set<String> selectedDirectories = new HashSet<>();
+        for (int i = 0; i < 100; i++) {
+            selectedDirectories.add(
+                    FlinkConnectorOptionsUtils.getClientScannerIoTmpDir(
+                            new Configuration(), commaSeparatedFlinkConfig));
+        }
+        assertThat(selectedDirectories)
+                .containsExactlyInAnyOrder(
+                        new File("/flink_tmp_dir_0", "fluss").getAbsolutePath(),
+                        new File("/flink_tmp_dir_1", "fluss").getAbsolutePath());
+
+        org.apache.flink.configuration.Configuration pathSeparatorFlinkConfig =
+                new org.apache.flink.configuration.Configuration()
+                        .set(
+                                TMP_DIRS,
+                                "/flink_tmp_dir_0" + File.pathSeparator + "/flink_tmp_dir_1");
+
+        assertThat(
+                        FlinkConnectorOptionsUtils.getClientScannerIoTmpDir(
+                                new Configuration(), pathSeparatorFlinkConfig))
+                .isIn(
+                        new File("/flink_tmp_dir_0", "fluss").getAbsolutePath(),
+                        new File("/flink_tmp_dir_1", "fluss").getAbsolutePath());
     }
 }
