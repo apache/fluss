@@ -19,34 +19,51 @@ package org.apache.fluss.flink.source;
 
 import org.apache.fluss.client.initializer.OffsetsInitializer;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.flink.source.deserializer.ChangelogDeserializationSchema;
 import org.apache.fluss.flink.source.reader.LeaseContext;
 import org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils;
 import org.apache.fluss.flink.utils.FlinkConversions;
+import org.apache.fluss.flink.utils.PushdownUtils;
+import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.predicate.PartitionPredicateVisitor;
 import org.apache.fluss.predicate.Predicate;
+import org.apache.fluss.predicate.PredicateBuilder;
+import org.apache.fluss.predicate.PredicateVisitor;
 import org.apache.fluss.types.RowType;
 
+import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.table.connector.ChangelogMode;
 import org.apache.flink.table.connector.source.DynamicTableSource;
 import org.apache.flink.table.connector.source.ScanTableSource;
 import org.apache.flink.table.connector.source.SourceProvider;
+import org.apache.flink.table.connector.source.abilities.SupportsFilterPushDown;
+import org.apache.flink.table.connector.source.abilities.SupportsProjectionPushDown;
 import org.apache.flink.table.data.RowData;
+import org.apache.flink.table.expressions.ResolvedExpression;
+import org.apache.flink.table.types.DataType;
 import org.apache.flink.table.types.logical.LogicalType;
 
 import javax.annotation.Nullable;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.flink.utils.PredicateConverter.convertToFlussPredicate;
+
 /** A Flink table source for the $changelog virtual table. */
-public class ChangelogFlinkTableSource implements ScanTableSource {
+public class ChangelogFlinkTableSource
+        implements ScanTableSource, SupportsProjectionPushDown, SupportsFilterPushDown {
 
     private final TablePath tablePath;
     private final Configuration flussConfig;
@@ -64,8 +81,17 @@ public class ChangelogFlinkTableSource implements ScanTableSource {
     // Projection pushdown
     @Nullable private int[] projectedFields;
     private LogicalType producedDataType;
+    // Data-column indices actually scanned from Fluss (derived from the virtual projection).
+    @Nullable private int[] dataProjection;
+    // Projection over the base changelog row [metadata columns + scanned data columns].
+    @Nullable private int[] baseRowProjection;
 
     @Nullable private Predicate partitionFilters;
+    // Filter over the scanned data columns pushed to the Fluss log scan (statistics-based).
+    @Nullable private Predicate logRecordBatchFilter;
+
+    // Number of leading changelog metadata columns: _change_type, _log_offset, _commit_timestamp.
+    private static final int METADATA_COLUMN_COUNT = 3;
 
     private static final Set<String> METADATA_COLUMN_NAMES =
             new HashSet<>(
@@ -147,10 +173,8 @@ public class ChangelogFlinkTableSource implements ScanTableSource {
     public ScanRuntimeProvider getScanRuntimeProvider(ScanContext scanContext) {
         // Create the Fluss row type for the data columns (without metadata)
         RowType flussRowType = FlinkConversions.toFlussRowType(dataColumnsType);
-        if (projectedFields != null) {
-            // Adjust projection to account for metadata columns
-            // TODO: Handle projection properly with metadata columns
-            flussRowType = flussRowType.project(projectedFields);
+        if (dataProjection != null) {
+            flussRowType = flussRowType.project(dataProjection);
         }
         // to capture all change types (+I, -U, +U, -D).
         // FULL mode reads snapshot first (no change types), so we use EARLIEST for log-only
@@ -187,12 +211,12 @@ public class ChangelogFlinkTableSource implements ScanTableSource {
                         false,
                         isPartitioned(),
                         flussRowType,
-                        projectedFields,
-                        null,
+                        dataProjection,
+                        logRecordBatchFilter,
                         offsetsInitializer,
                         scanPartitionDiscoveryIntervalMs,
                         splitPerAssignmentBatchSize,
-                        new ChangelogDeserializationSchema(),
+                        new ChangelogDeserializationSchema(baseRowProjection),
                         streaming,
                         partitionFilters,
                         LeaseContext.DEFAULT); // Lake source not supported
@@ -215,7 +239,10 @@ public class ChangelogFlinkTableSource implements ScanTableSource {
                         tableOptions);
         copy.producedDataType = producedDataType;
         copy.projectedFields = projectedFields;
+        copy.dataProjection = dataProjection;
+        copy.baseRowProjection = baseRowProjection;
         copy.partitionFilters = partitionFilters;
+        copy.logRecordBatchFilter = logRecordBatchFilter;
         return copy;
     }
 
@@ -224,10 +251,176 @@ public class ChangelogFlinkTableSource implements ScanTableSource {
         return "FlussChangelogTableSource";
     }
 
-    // TODO: Implement projection pushdown handling for metadata columns
-    // TODO: Implement filter pushdown
+    @Override
+    public boolean supportsNestedProjection() {
+        return false;
+    }
+
+    @Override
+    public void applyProjection(int[][] projectedFields, DataType producedDataType) {
+        this.projectedFields = Arrays.stream(projectedFields).mapToInt(value -> value[0]).toArray();
+        this.producedDataType = producedDataType.getLogicalType();
+
+        // Derive the data-column indices actually scanned from Fluss (first-appearance order),
+        // and the projection over the base changelog row [metadata columns + scanned data columns].
+        List<Integer> dataColumns = new ArrayList<>();
+        for (int virtualIndex : this.projectedFields) {
+            if (virtualIndex >= METADATA_COLUMN_COUNT) {
+                int dataIndex = virtualIndex - METADATA_COLUMN_COUNT;
+                if (!dataColumns.contains(dataIndex)) {
+                    dataColumns.add(dataIndex);
+                }
+            }
+        }
+        // When no data column is projected (metadata-only projection, e.g. SELECT _change_type),
+        // normalize the scan projection to null so Fluss reads the full data row. A zero-column
+        // scan produces no records, so the metadata columns must be emitted from a full data scan
+        // and selected later during deserialization via baseRowProjection.
+        this.dataProjection =
+                dataColumns.isEmpty()
+                        ? null
+                        : dataColumns.stream().mapToInt(Integer::intValue).toArray();
+
+        int[] base = new int[this.projectedFields.length];
+        for (int i = 0; i < this.projectedFields.length; i++) {
+            int virtualIndex = this.projectedFields[i];
+            base[i] =
+                    virtualIndex < METADATA_COLUMN_COUNT
+                            ? virtualIndex
+                            : METADATA_COLUMN_COUNT
+                                    + dataColumns.indexOf(virtualIndex - METADATA_COLUMN_COUNT);
+        }
+        this.baseRowProjection = base;
+    }
+
+    @Override
+    public Result applyFilters(List<ResolvedExpression> filters) {
+        List<ResolvedExpression> acceptedFilters = new ArrayList<>();
+        List<ResolvedExpression> remainingFilters = new ArrayList<>();
+
+        RowType dataFlussRowType = FlinkConversions.toFlussRowType(dataColumnsType);
+
+        if (isPartitioned()) {
+            // apply partition filter pushdown
+            List<Predicate> converted = new ArrayList<>();
+            RowType partitionRowType = dataFlussRowType.project(partitionKeyIndexes);
+            PredicateVisitor<Boolean> checksOnlyPartitionKeys =
+                    new PartitionPredicateVisitor(partitionRowType.getFieldNames());
+
+            for (ResolvedExpression filter : filters) {
+                Optional<Predicate> predicateOptional =
+                        convertToFlussPredicate(partitionRowType, filter);
+                if (predicateOptional.isPresent()) {
+                    Predicate p = predicateOptional.get();
+                    // partition pushdown can only guarantee to filter out partitions matching the
+                    // predicate, but can't guarantee to filter out all data matching a
+                    // non-partition filter in the partition
+                    if (!p.visit(checksOnlyPartitionKeys)) {
+                        remainingFilters.add(filter);
+                    } else {
+                        acceptedFilters.add(filter);
+                    }
+                    converted.add(p);
+                } else {
+                    remainingFilters.add(filter);
+                }
+            }
+            partitionFilters = converted.isEmpty() ? null : PredicateBuilder.and(converted);
+        }
+
+        if (acceptedFilters.isEmpty() && remainingFilters.isEmpty()) {
+            remainingFilters.addAll(filters);
+        }
+
+        // Data-column log filter pushdown (statistics-based). Metadata columns (_change_type,
+        // _log_offset, _commit_timestamp) are resolved by name against the data columns and
+        // therefore naturally fall out as non-pushable.
+        Result recordBatchResult = pushdownRecordBatchFilter(remainingFilters, dataFlussRowType);
+        acceptedFilters.addAll(recordBatchResult.getAcceptedFilters());
+
+        // We cannot determine whether this source will ultimately be used as a scan source. Always
+        // return all original filters as remaining so Flink applies them as a safety net.
+        return Result.of(acceptedFilters, filters);
+    }
+
+    private Result pushdownRecordBatchFilter(
+            List<ResolvedExpression> filters, RowType dataFlussRowType) {
+        TableConfig tableConfig = new TableConfig(Configuration.fromMap(tableOptions));
+        // Log filter pushdown is only supported for the ARROW log format. For INDEXED/COMPACTED
+        // formats, TableScan#createLogScanner rejects a record-batch filter at runtime, so we skip
+        // pushdown here and let Flink apply the filters as a post-scan safety net.
+        if (tableConfig.getLogFormat() != LogFormat.ARROW) {
+            this.logRecordBatchFilter = null;
+            return Result.of(Collections.emptyList(), filters);
+        }
+
+        Set<String> availableStatsColumns =
+                PushdownUtils.computeAvailableStatsColumns(dataFlussRowType, tableConfig);
+
+        List<Predicate> pushdownPredicates = new ArrayList<>();
+        List<ResolvedExpression> acceptedFilters = new ArrayList<>();
+        List<ResolvedExpression> remainingFilters = new ArrayList<>();
+
+        for (ResolvedExpression filter : filters) {
+            Optional<Predicate> predicateOpt = convertToFlussPredicate(dataColumnsType, filter);
+            if (predicateOpt.isPresent()
+                    && PushdownUtils.canPredicateUseStatistics(
+                            predicateOpt.get(), dataFlussRowType, availableStatsColumns)) {
+                pushdownPredicates.add(predicateOpt.get());
+                acceptedFilters.add(filter);
+            }
+            // All filters are kept as remaining so that Flink can still verify the results
+            // after server-side filtering (safety net).
+            remainingFilters.add(filter);
+        }
+
+        if (pushdownPredicates.isEmpty()) {
+            this.logRecordBatchFilter = null;
+        } else {
+            this.logRecordBatchFilter =
+                    pushdownPredicates.size() == 1
+                            ? pushdownPredicates.get(0)
+                            : PredicateBuilder.and(pushdownPredicates);
+        }
+        return Result.of(acceptedFilters, remainingFilters);
+    }
 
     private boolean isPartitioned() {
         return partitionKeyIndexes.length > 0;
+    }
+
+    @VisibleForTesting
+    @Nullable
+    int[] getProjectedFields() {
+        return projectedFields;
+    }
+
+    @VisibleForTesting
+    @Nullable
+    int[] getDataProjection() {
+        return dataProjection;
+    }
+
+    @VisibleForTesting
+    @Nullable
+    int[] getBaseRowProjection() {
+        return baseRowProjection;
+    }
+
+    @VisibleForTesting
+    LogicalType getProducedDataType() {
+        return producedDataType;
+    }
+
+    @VisibleForTesting
+    @Nullable
+    Predicate getLogRecordBatchFilter() {
+        return logRecordBatchFilter;
+    }
+
+    @VisibleForTesting
+    @Nullable
+    Predicate getPartitionFilters() {
+        return partitionFilters;
     }
 }

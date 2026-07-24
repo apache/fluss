@@ -229,6 +229,71 @@ class BinlogRowConverterTest {
         assertThat(result2.getLong(1)).isEqualTo(20L); // offset from second -U
     }
 
+    @Test
+    void testProjectionEmitsSelectedTopLevelColumns() throws Exception {
+        // Project the binlog row [_change_type(0), _log_offset(1), _commit_timestamp(2),
+        // before(3), after(4)] down to [_change_type, after]. The data scan stays full, so the
+        // nested after ROW still contains all columns.
+        BinlogRowConverter projected = new BinlogRowConverter(testRowType, new int[] {0, 4});
+
+        org.apache.flink.table.types.logical.RowType producedType = projected.getProducedType();
+        assertThat(producedType.getFieldNames()).containsExactly("_change_type", "after");
+        assertThat(producedType.getTypeAt(1))
+                .isInstanceOf(org.apache.flink.table.types.logical.RowType.class);
+
+        RowData result =
+                projected.convert(
+                        createLogRecord(ChangeType.INSERT, 100L, 1000L, 1, "Alice", 5000L));
+
+        assertThat(result.getArity()).isEqualTo(2);
+        assertThat(result.getRowKind()).isEqualTo(RowKind.INSERT);
+        assertThat(result.getString(0)).isEqualTo(StringData.fromString("insert"));
+        RowData afterRow = result.getRow(1, 3);
+        assertThat(afterRow.getInt(0)).isEqualTo(1);
+        assertThat(afterRow.getString(1).toString()).isEqualTo("Alice");
+        assertThat(afterRow.getLong(2)).isEqualTo(5000L);
+    }
+
+    @Test
+    void testProjectionUpdateMerge() throws Exception {
+        // Projection must not disturb the -U/+U buffering: project [before, after].
+        BinlogRowConverter projected = new BinlogRowConverter(testRowType, new int[] {3, 4});
+
+        assertThat(
+                        projected.convert(
+                                createLogRecord(
+                                        ChangeType.UPDATE_BEFORE, 200L, 2000L, 2, "Bob", 3000L)))
+                .isNull();
+        RowData result =
+                projected.convert(
+                        createLogRecord(
+                                ChangeType.UPDATE_AFTER, 201L, 2000L, 2, "Bob-Updated", 4000L));
+
+        assertThat(result.getArity()).isEqualTo(2);
+        RowData beforeRow = result.getRow(0, 3);
+        assertThat(beforeRow.getString(1).toString()).isEqualTo("Bob");
+        RowData afterRow = result.getRow(1, 3);
+        assertThat(afterRow.getString(1).toString()).isEqualTo("Bob-Updated");
+    }
+
+    @Test
+    void testProjectionDeleteRecord() throws Exception {
+        // Project [_change_type, before, after]. For a DELETE the after image is null and must
+        // pass through the projection untouched.
+        BinlogRowConverter projected = new BinlogRowConverter(testRowType, new int[] {0, 3, 4});
+
+        RowData result =
+                projected.convert(
+                        createLogRecord(ChangeType.DELETE, 300L, 3000L, 3, "Charlie", 1000L));
+
+        assertThat(result.getArity()).isEqualTo(3);
+        assertThat(result.getString(0)).isEqualTo(StringData.fromString("delete"));
+        RowData beforeRow = result.getRow(1, 3);
+        assertThat(beforeRow.getInt(0)).isEqualTo(3);
+        assertThat(beforeRow.getString(1).toString()).isEqualTo("Charlie");
+        assertThat(result.isNullAt(2)).isTrue();
+    }
+
     private LogRecord createLogRecord(
             ChangeType changeType, long offset, long timestamp, int id, String name, long amount)
             throws Exception {

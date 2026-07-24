@@ -27,10 +27,13 @@ import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.data.StringData;
 import org.apache.flink.table.data.TimestampData;
 import org.apache.flink.table.data.utils.JoinedRowData;
+import org.apache.flink.table.data.utils.ProjectedRowData;
 import org.apache.flink.table.types.logical.BigIntType;
 import org.apache.flink.table.types.logical.LocalZonedTimestampType;
 import org.apache.flink.table.types.logical.VarCharType;
 import org.apache.flink.types.RowKind;
+
+import javax.annotation.Nullable;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -44,10 +47,30 @@ public class ChangelogRowConverter implements RecordToFlinkRowConverter {
     private final FlussRowToFlinkRowConverter baseConverter;
     private final org.apache.flink.table.types.logical.RowType producedType;
 
-    /** Creates a new ChangelogRowConverter. */
+    /**
+     * Optional projection over the base changelog row {@code [_change_type, _log_offset,
+     * _commit_timestamp, <scanned data columns>]}. When non-null, each entry is a position in the
+     * base row and the converter emits exactly those columns in that order; {@code null} means the
+     * full changelog row is emitted.
+     */
+    @Nullable private final int[] baseRowProjection;
+
+    /** Creates a new ChangelogRowConverter without projection. */
     public ChangelogRowConverter(RowType rowType) {
+        this(rowType, null);
+    }
+
+    /**
+     * Creates a new ChangelogRowConverter.
+     *
+     * @param rowType the (possibly projected) data columns scanned from Fluss
+     * @param baseRowProjection projection over the base changelog row, or {@code null} for none
+     */
+    public ChangelogRowConverter(RowType rowType, @Nullable int[] baseRowProjection) {
         this.baseConverter = new FlussRowToFlinkRowConverter(rowType);
-        this.producedType = buildChangelogRowType(FlinkConversions.toFlinkRowType(rowType));
+        this.baseRowProjection = baseRowProjection;
+        this.producedType =
+                buildProducedRowType(FlinkConversions.toFlinkRowType(rowType), baseRowProjection);
     }
 
     /** Converts a LogRecord to a Flink RowData with metadata columns. */
@@ -71,7 +94,10 @@ public class ChangelogRowConverter implements RecordToFlinkRowConverter {
         JoinedRowData joinedRow = new JoinedRowData(metadataRow, physicalRowData);
         joinedRow.setRowKind(RowKind.INSERT);
 
-        return joinedRow;
+        if (baseRowProjection == null) {
+            return joinedRow;
+        }
+        return ProjectedRowData.from(baseRowProjection).replaceRow(joinedRow);
     }
 
     @Override
@@ -126,6 +152,29 @@ public class ChangelogRowConverter implements RecordToFlinkRowConverter {
         // Add all original fields
         fields.addAll(originalType.getFields());
 
+        return new org.apache.flink.table.types.logical.RowType(fields);
+    }
+
+    /**
+     * Builds the produced Flink RowType for a changelog scan: the full changelog row type (metadata
+     * columns prepended to {@code originalDataType}) when {@code baseRowProjection} is null,
+     * otherwise the projected subset selected in the requested order.
+     *
+     * @param originalDataType the (possibly projected) data columns row type
+     * @param baseRowProjection projection over the base changelog row, or {@code null} for none
+     * @return the produced row type
+     */
+    public static org.apache.flink.table.types.logical.RowType buildProducedRowType(
+            org.apache.flink.table.types.logical.RowType originalDataType,
+            @Nullable int[] baseRowProjection) {
+        org.apache.flink.table.types.logical.RowType full = buildChangelogRowType(originalDataType);
+        if (baseRowProjection == null) {
+            return full;
+        }
+        List<org.apache.flink.table.types.logical.RowType.RowField> fields = new ArrayList<>();
+        for (int idx : baseRowProjection) {
+            fields.add(full.getFields().get(idx));
+        }
         return new org.apache.flink.table.types.logical.RowType(fields);
     }
 }

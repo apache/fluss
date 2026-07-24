@@ -25,22 +25,30 @@ import org.apache.fluss.flink.source.reader.LeaseContext;
 import org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils;
 import org.apache.fluss.flink.utils.FlinkConversions;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.types.RowType;
 
+import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.table.connector.ChangelogMode;
 import org.apache.flink.table.connector.source.DynamicTableSource;
 import org.apache.flink.table.connector.source.ScanTableSource;
 import org.apache.flink.table.connector.source.SourceProvider;
+import org.apache.flink.table.connector.source.abilities.SupportsFilterPushDown;
+import org.apache.flink.table.connector.source.abilities.SupportsProjectionPushDown;
 import org.apache.flink.table.data.RowData;
+import org.apache.flink.table.expressions.ResolvedExpression;
+import org.apache.flink.table.types.DataType;
 import org.apache.flink.table.types.logical.LogicalType;
 
 import javax.annotation.Nullable;
 
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 
 /** A Flink table source for the $binlog virtual table. */
-public class BinlogFlinkTableSource implements ScanTableSource {
+public class BinlogFlinkTableSource
+        implements ScanTableSource, SupportsProjectionPushDown, SupportsFilterPushDown {
 
     private final TablePath tablePath;
     private final Configuration flussConfig;
@@ -55,11 +63,11 @@ public class BinlogFlinkTableSource implements ScanTableSource {
     private final int splitPerAssignmentBatchSize;
     private final Map<String, String> tableOptions;
 
-    // Projection pushdown
-    @Nullable private int[] projectedFields;
+    // Projection pushdown. Top-level projection over the binlog row [_change_type, _log_offset,
+    // _commit_timestamp, before, after]; the underlying data scan stays full because before/after
+    // are whole nested ROWs (nested pruning is out of scope).
+    @Nullable private int[] projectedTopLevel;
     private LogicalType producedDataType;
-
-    @Nullable private Predicate partitionFilters;
 
     public BinlogFlinkTableSource(
             TablePath tablePath,
@@ -116,11 +124,9 @@ public class BinlogFlinkTableSource implements ScanTableSource {
 
     @Override
     public ScanRuntimeProvider getScanRuntimeProvider(ScanContext scanContext) {
-        // Create the Fluss row type for the data columns (the original table columns)
+        // Create the Fluss row type for the data columns (the original table columns). The data
+        // scan always stays full because the projected before/after columns are whole nested ROWs.
         RowType flussRowType = FlinkConversions.toFlussRowType(dataColumnsType);
-        if (projectedFields != null) {
-            flussRowType = flussRowType.project(projectedFields);
-        }
 
         // Determine the offsets initializer based on startup mode
         OffsetsInitializer offsetsInitializer;
@@ -150,14 +156,16 @@ public class BinlogFlinkTableSource implements ScanTableSource {
                         false,
                         isPartitioned,
                         flussRowType,
-                        projectedFields,
+                        null,
                         null,
                         offsetsInitializer,
                         scanPartitionDiscoveryIntervalMs,
                         splitPerAssignmentBatchSize,
-                        new BinlogDeserializationSchema(),
+                        new BinlogDeserializationSchema(projectedTopLevel),
                         streaming,
-                        partitionFilters,
+                        // $binlog data/partition columns are nested inside before/after ROWs, so no
+                        // top-level partition filter is pushable; always scan without one.
+                        null,
                         LeaseContext.DEFAULT);
 
         return SourceProvider.of(source);
@@ -177,8 +185,7 @@ public class BinlogFlinkTableSource implements ScanTableSource {
                         splitPerAssignmentBatchSize,
                         tableOptions);
         copy.producedDataType = producedDataType;
-        copy.projectedFields = projectedFields;
-        copy.partitionFilters = partitionFilters;
+        copy.projectedTopLevel = projectedTopLevel;
         return copy;
     }
 
@@ -187,6 +194,39 @@ public class BinlogFlinkTableSource implements ScanTableSource {
         return "FlussBinlogTableSource";
     }
 
-    // TODO: Implement projection pushdown handling for nested before/after columns
-    // TODO: Implement filter pushdown
+    @Override
+    public boolean supportsNestedProjection() {
+        return false;
+    }
+
+    @Override
+    public void applyProjection(int[][] projectedFields, DataType producedDataType) {
+        // Top-level projection over [_change_type, _log_offset, _commit_timestamp, before, after].
+        // The data scan stays full (before/after are whole nested ROWs); the deserialization schema
+        // emits only the projected top-level columns.
+        this.projectedTopLevel =
+                Arrays.stream(projectedFields).mapToInt(value -> value[0]).toArray();
+        this.producedDataType = producedDataType.getLogicalType();
+    }
+
+    @Override
+    public Result applyFilters(List<ResolvedExpression> filters) {
+        // The $binlog data and partition columns are nested inside the before/after ROW columns,
+        // and the leading columns are non-pushable metadata (_change_type, _log_offset,
+        // _commit_timestamp). No top-level filter is convertible to a Fluss predicate, so nothing
+        // is pushed down; all filters are returned to Flink. Implemented for interface parity with
+        // the normal table.
+        return Result.of(Collections.emptyList(), filters);
+    }
+
+    @VisibleForTesting
+    @Nullable
+    int[] getProjectedTopLevel() {
+        return projectedTopLevel;
+    }
+
+    @VisibleForTesting
+    LogicalType getProducedDataType() {
+        return producedDataType;
+    }
 }
