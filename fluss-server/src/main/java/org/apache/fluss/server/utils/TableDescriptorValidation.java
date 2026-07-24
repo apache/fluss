@@ -39,6 +39,7 @@ import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeRoot;
 import org.apache.fluss.types.RowType;
@@ -176,6 +177,13 @@ public class TableDescriptorValidation {
         if (!LakeTableUtil.hasCustomLakePath(tableConf)) {
             return;
         }
+
+        tableConf
+                .getOptional(ConfigOptions.TABLE_DATALAKE_DATABASE_NAME)
+                .ifPresent(TablePath::validateDatabaseName);
+        tableConf
+                .getOptional(ConfigOptions.TABLE_DATALAKE_TABLE_NAME)
+                .ifPresent(TablePath::validateTableName);
 
         DataLakeFormat dataLakeFormat =
                 tableConf
