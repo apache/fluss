@@ -705,6 +705,60 @@ abstract class SparkLakeLogTableReadTest extends SparkLakeTableReadTestBase {
 class SparkLakePaimonLogTableReadTest extends SparkLakeLogTableReadTest {
   override protected def dataLakeFormat: DataLakeFormat = DataLakeFormat.PAIMON
 
+  test("Spark Lake Read: custom lake path falls back when no lake snapshot") {
+    withTable("t_custom_lake_path_fallback") {
+      sql(s"""
+             |CREATE TABLE $DEFAULT_DATABASE.t_custom_lake_path_fallback (id INT, name STRING)
+             | TBLPROPERTIES (
+             |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
+             |  '${ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key()}' = 'custom_lake_db',
+             |  '${ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key()}' = 'custom_lake_table_fallback',
+             |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
+             |  '${BUCKET_NUMBER.key()}' = 1)
+             |""".stripMargin)
+
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t_custom_lake_path_fallback VALUES
+             |(1, "hello"), (2, "fluss")
+             |""".stripMargin)
+
+      checkAnswer(
+        sql(s"""
+               |SELECT * FROM $DEFAULT_DATABASE.t_custom_lake_path_fallback
+               |WHERE id >= 1
+               |ORDER BY id
+               |""".stripMargin),
+        Row(1, "hello") :: Row(2, "fluss") :: Nil
+      )
+    }
+  }
+
+  test("Spark Lake Read: custom lake path rejects an actual lake read") {
+    withTable("t_custom_lake_path_snapshot") {
+      sql(s"""
+             |CREATE TABLE $DEFAULT_DATABASE.t_custom_lake_path_snapshot (id INT, name STRING)
+             | TBLPROPERTIES (
+             |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
+             |  '${ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key()}' = 'custom_lake_db',
+             |  '${ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key()}' = 'custom_lake_table_snapshot',
+             |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
+             |  '${BUCKET_NUMBER.key()}' = 1)
+             |""".stripMargin)
+
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t_custom_lake_path_snapshot VALUES
+             |(1, "hello"), (2, "fluss")
+             |""".stripMargin)
+      tierToLake("t_custom_lake_path_snapshot")
+
+      val error = intercept[UnsupportedOperationException] {
+        sql(s"SELECT * FROM $DEFAULT_DATABASE.t_custom_lake_path_snapshot").collect()
+      }
+      assert(
+        error.getMessage == "Custom lake table path is not supported for Spark lake reads yet.")
+    }
+  }
+
   override protected def flussConf: Configuration = {
     val conf = super.flussConf
     conf.setString("datalake.format", DataLakeFormat.PAIMON.toString)

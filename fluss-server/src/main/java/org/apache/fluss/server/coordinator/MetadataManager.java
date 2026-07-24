@@ -520,19 +520,7 @@ public class MetadataManager {
             TableInfo tableInfo = tableReg.toTableInfo(tablePath, schemaInfo);
 
             // validate the changes
-            Set<String> tableKeysToChange = tablePropertyChanges.tableKeysToChange();
-            boolean lakeTablePathChanged =
-                    tableKeysToChange.contains(ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key())
-                            || tableKeysToChange.contains(
-                                    ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key());
-            boolean lakeTablePathChangeForbidden =
-                    lakeTablePathChanged
-                            && (tableInfo.getTableConfig().isDataLakeEnabled()
-                                    || zookeeperClient
-                                            .getLakeTable(tableInfo.getTableId())
-                                            .isPresent());
-            validateAlterTableProperties(
-                    tableInfo, tableKeysToChange, lakeTablePathChangeForbidden);
+            validateAlterTableProperties(tableInfo, tablePropertyChanges.tableKeysToChange());
 
             TableDescriptor tableDescriptor = tableInfo.toTableDescriptor();
             TableDescriptor newDescriptor =
@@ -558,6 +546,8 @@ public class MetadataManager {
                         newDescriptor = newDescriptor.withDataLakeFormat(dataLakeFormat);
                     }
                 }
+
+                validateAlterLakeTablePath(tableInfo, newDescriptor);
 
                 // reuse the same validate logic with the createTable() method
                 validateTableDescriptor(newDescriptor);
@@ -587,6 +577,29 @@ public class MetadataManager {
                 throw new FlussRuntimeException(
                         "Failed to alter table properties: " + tablePath, e);
             }
+        }
+    }
+
+    private void validateAlterLakeTablePath(TableInfo tableInfo, TableDescriptor newDescriptor)
+            throws Exception {
+        TablePath currentLakeTablePath = tableInfo.getLakeTablePath();
+        TablePath newLakeTablePath =
+                LakeTableUtil.getLakeTablePath(
+                        tableInfo.getTablePath(), newDescriptor.getProperties());
+        if (currentLakeTablePath.equals(newLakeTablePath)) {
+            return;
+        }
+
+        boolean lakeTablePathChangeForbidden =
+                tableInfo.getTableConfig().isDataLakeEnabled()
+                        || zookeeperClient.getLakeTable(tableInfo.getTableId()).isPresent();
+        if (lakeTablePathChangeForbidden) {
+            throw new InvalidAlterTableException(
+                    String.format(
+                            "The name mapping options '%s' and '%s' cannot be altered when '%s' is true or the table has tiering progress.",
+                            ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key(),
+                            ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key(),
+                            ConfigOptions.TABLE_DATALAKE_ENABLED.key()));
         }
     }
 
