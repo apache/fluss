@@ -359,6 +359,7 @@ public class CoordinatorServer extends ServerBase {
                             kvSnapshotLeaseManager,
                             scheduler,
                             clock);
+            dynamicConfigManager.register(coordinatorEventProcessor.getRebalanceManager());
             coordinatorEventProcessor.startup();
 
             // As the active leader, this server is the sole writer of dynamic configs and holds the

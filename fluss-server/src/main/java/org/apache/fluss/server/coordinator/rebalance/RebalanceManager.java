@@ -23,12 +23,18 @@ import org.apache.fluss.cluster.rebalance.RebalanceProgress;
 import org.apache.fluss.cluster.rebalance.RebalanceResultForBucket;
 import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.cluster.rebalance.ServerTag;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.cluster.ServerReconfigurable;
+import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.exception.NoRebalanceInProgressException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.coordinator.CoordinatorEventProcessor;
 import org.apache.fluss.server.coordinator.event.EventManager;
+import org.apache.fluss.server.coordinator.event.RebalanceMaxInflightTasksChangedEvent;
 import org.apache.fluss.server.coordinator.event.RebalanceTaskTimeoutEvent;
+import org.apache.fluss.server.coordinator.event.RecoverRebalanceEvent;
 import org.apache.fluss.server.coordinator.rebalance.goal.Goal;
 import org.apache.fluss.server.coordinator.rebalance.goal.GoalOptimizer;
 import org.apache.fluss.server.coordinator.rebalance.model.ClusterModel;
@@ -48,6 +54,7 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -68,14 +75,16 @@ import static org.apache.fluss.cluster.rebalance.RebalanceStatus.FINAL_STATUSES;
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.NOT_STARTED;
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.REBALANCING;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
-import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /**
  * A rebalance manager to generate rebalance plan, and execution rebalance plan.
  *
- * <p>This manager can only be used in {@link CoordinatorEventProcessor} as a single threaded model.
+ * <p>This manager is used in {@link CoordinatorEventProcessor}'s single-threaded event model.
+ * Non-event threads, such as startup recovery, dynamic configuration callbacks, and the timeout
+ * checker, must enqueue coordinator events instead of directly submitting tasks or advancing
+ * rebalance state.
  */
-public class RebalanceManager {
+public class RebalanceManager implements ServerReconfigurable {
     private static final Logger LOG = LoggerFactory.getLogger(RebalanceManager.class);
 
     /** Hardcoded timeout for an in-flight rebalance task: 2 minutes. */
@@ -90,47 +99,52 @@ public class RebalanceManager {
     private final Clock clock;
     private final ScheduledExecutorService timeoutChecker;
 
-    /** A queue of in progress table bucket to rebalance. */
-    private final Queue<TableBucket> inProgressRebalanceTasksQueue = new ArrayDeque<>();
+    /** A queue of pending table buckets in the current rebalance round. */
+    private final Queue<TableBucket> pendingRebalanceTasksQueue = new ArrayDeque<>();
 
-    /** A mapping from table bucket to rebalance status of pending and running tasks. */
+    /** A queue of table buckets waiting for future rebalance rounds. */
+    private final Queue<TableBucket> remainingRebalanceTasksQueue = new ArrayDeque<>();
+
+    /** A mapping from table bucket to rebalance status of unfinished tasks. */
     private final Map<TableBucket, RebalanceResultForBucket> inProgressRebalanceTasks =
             new ConcurrentHashMap<>();
+
+    /** A mapping from running table bucket to the time when the task was started. */
+    private final Map<TableBucket, Long> inflightRebalanceTaskStartMs = new ConcurrentHashMap<>();
 
     /** A mapping from table bucket to rebalance status of failed or completed tasks. */
     private final Map<TableBucket, RebalanceResultForBucket> finishedRebalanceTasks =
             new ConcurrentHashMap<>();
 
     private final GoalOptimizer goalOptimizer;
+    private final int maxBucketsPerRound;
+    private volatile int maxInflightRebalanceTasks;
+    private volatile int queuedMaxInflightRebalanceTasks;
     private volatile long registerTime;
     private volatile @Nullable RebalanceStatus rebalanceStatus;
     private volatile @Nullable String currentRebalanceId;
     private volatile boolean isClosed = false;
-
-    /**
-     * Timestamp when the current in-flight task was started, or -1 if idle.
-     *
-     * <p>Write ordering contract (volatile publication idiom): always write {@code
-     * inflightTaskStartMs} BEFORE {@code inflightTaskBucket} when setting, and clear {@code
-     * inflightTaskBucket} BEFORE {@code inflightTaskStartMs} when resetting. The timeout checker
-     * reads in reverse order (bucket first, then startMs), ensuring it never observes a stale
-     * startMs paired with a new bucket.
-     */
-    private volatile long inflightTaskStartMs = -1;
-
-    /** The bucket of the current in-flight task, or null if idle. Acts as the "gate" variable. */
-    private volatile @Nullable TableBucket inflightTaskBucket;
 
     public RebalanceManager(
             CoordinatorEventProcessor eventProcessor,
             ZooKeeperClient zkClient,
             EventManager eventManager,
             Clock clock) {
+        this(eventProcessor, zkClient, eventManager, clock, new Configuration());
+    }
+
+    public RebalanceManager(
+            CoordinatorEventProcessor eventProcessor,
+            ZooKeeperClient zkClient,
+            EventManager eventManager,
+            Clock clock,
+            Configuration conf) {
         this(
                 eventProcessor,
                 zkClient,
                 eventManager,
                 clock,
+                conf,
                 // TODO: Reuse the CoordinatorServer shared scheduler for this lightweight
                 // coordinator timeout checker instead of creating a component-owned scheduler.
                 Executors.newScheduledThreadPool(
@@ -144,12 +158,29 @@ public class RebalanceManager {
             EventManager eventManager,
             Clock clock,
             ScheduledExecutorService timeoutChecker) {
+        this(eventProcessor, zkClient, eventManager, clock, new Configuration(), timeoutChecker);
+    }
+
+    @VisibleForTesting
+    RebalanceManager(
+            CoordinatorEventProcessor eventProcessor,
+            ZooKeeperClient zkClient,
+            EventManager eventManager,
+            Clock clock,
+            Configuration conf,
+            ScheduledExecutorService timeoutChecker) {
         this.eventProcessor = eventProcessor;
         this.zkClient = zkClient;
         this.eventManager = eventManager;
         this.clock = clock == null ? SystemClock.getInstance() : clock;
         this.timeoutChecker = timeoutChecker;
         this.goalOptimizer = new GoalOptimizer();
+        validate(conf);
+        this.maxInflightRebalanceTasks =
+                conf.get(ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS);
+        this.queuedMaxInflightRebalanceTasks = maxInflightRebalanceTasks;
+        this.maxBucketsPerRound =
+                conf.get(ConfigOptions.COORDINATOR_REBALANCE_MAX_BUCKETS_PER_ROUND);
     }
 
     public void startup() {
@@ -174,15 +205,61 @@ public class RebalanceManager {
         return currentRebalanceId;
     }
 
+    @Override
+    public void validate(Configuration newConfig) throws ConfigException {
+        int newMaxInflightRebalanceTasks =
+                newConfig.get(ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS);
+        if (newMaxInflightRebalanceTasks < 0) {
+            throw new ConfigException(
+                    String.format(
+                            "Invalid %s: must be non-negative, but was %s",
+                            ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS.key(),
+                            newMaxInflightRebalanceTasks));
+        }
+
+        int newMaxBucketsPerRound =
+                newConfig.get(ConfigOptions.COORDINATOR_REBALANCE_MAX_BUCKETS_PER_ROUND);
+        if (newMaxBucketsPerRound < 0) {
+            throw new ConfigException(
+                    String.format(
+                            "Invalid %s: must be non-negative, but was %s",
+                            ConfigOptions.COORDINATOR_REBALANCE_MAX_BUCKETS_PER_ROUND.key(),
+                            newMaxBucketsPerRound));
+        }
+    }
+
+    @Override
+    public synchronized void reconfigure(Configuration newConfig) {
+        int newMaxInflightRebalanceTasks =
+                newConfig.get(ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS);
+        if (newMaxInflightRebalanceTasks == queuedMaxInflightRebalanceTasks) {
+            LOG.debug(
+                    "{} unchanged: {}",
+                    ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS.key(),
+                    newMaxInflightRebalanceTasks);
+            return;
+        }
+
+        int oldQueuedMaxInflightRebalanceTasks = queuedMaxInflightRebalanceTasks;
+        queuedMaxInflightRebalanceTasks = newMaxInflightRebalanceTasks;
+        LOG.info(
+                "{} change queued: {} -> {}",
+                ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS.key(),
+                oldQueuedMaxInflightRebalanceTasks,
+                newMaxInflightRebalanceTasks);
+
+        if (!isClosed) {
+            eventManager.put(
+                    new RebalanceMaxInflightTasksChangedEvent(newMaxInflightRebalanceTasks));
+        }
+    }
+
     private void initialize() {
         try {
             zkClient.getRebalanceTask()
                     .ifPresent(
-                            rebalancePlan ->
-                                    registerRebalance(
-                                            rebalancePlan.getRebalanceId(),
-                                            rebalancePlan.getExecutePlan(),
-                                            rebalancePlan.getRebalanceStatus()));
+                            rebalanceTask ->
+                                    eventManager.put(new RecoverRebalanceEvent(rebalanceTask)));
         } catch (Exception e) {
             LOG.error(
                     "Failed to get rebalance plan from zookeeper, it will be treated as no"
@@ -191,7 +268,7 @@ public class RebalanceManager {
         }
     }
 
-    public void registerRebalance(
+    public synchronized void registerRebalance(
             String rebalanceId,
             Map<TableBucket, RebalancePlanForBucket> rebalancePlan,
             RebalanceStatus newStatus) {
@@ -199,11 +276,10 @@ public class RebalanceManager {
         registerTime = System.currentTimeMillis();
         // first clear all exists tasks.
         inProgressRebalanceTasks.clear();
-        inProgressRebalanceTasksQueue.clear();
+        pendingRebalanceTasksQueue.clear();
+        remainingRebalanceTasksQueue.clear();
+        inflightRebalanceTaskStartMs.clear();
         finishedRebalanceTasks.clear();
-        // Clear gate (bucket) first, then data (startMs).
-        inflightTaskBucket = null;
-        inflightTaskStartMs = -1;
 
         currentRebalanceId = rebalanceId;
         if (rebalancePlan.isEmpty()) {
@@ -211,57 +287,64 @@ public class RebalanceManager {
             return;
         }
 
-        rebalancePlan.forEach(
-                ((tableBucket, planForBucket) -> {
-                    if (FINAL_STATUSES.contains(newStatus)) {
-                        finishedRebalanceTasks.put(
-                                tableBucket, RebalanceResultForBucket.of(planForBucket, newStatus));
-                    } else {
-                        inProgressRebalanceTasksQueue.add(tableBucket);
-                        inProgressRebalanceTasks.put(
-                                tableBucket,
-                                RebalanceResultForBucket.of(planForBucket, NOT_STARTED));
-                    }
-                }));
+        List<TableBucket> tableBuckets = new ArrayList<>(rebalancePlan.keySet());
+        tableBuckets.sort(RebalanceManager::compareTableBucket);
+        for (TableBucket tableBucket : tableBuckets) {
+            RebalancePlanForBucket planForBucket = rebalancePlan.get(tableBucket);
+            if (FINAL_STATUSES.contains(newStatus)) {
+                finishedRebalanceTasks.put(
+                        tableBucket, RebalanceResultForBucket.of(planForBucket, newStatus));
+            } else {
+                remainingRebalanceTasksQueue.add(tableBucket);
+                inProgressRebalanceTasks.put(
+                        tableBucket, RebalanceResultForBucket.of(planForBucket, NOT_STARTED));
+            }
+        }
 
-        if (!inProgressRebalanceTasksQueue.isEmpty()) {
-            // Trigger one rebalance task to execute.
+        openNextRebalanceRoundIfNeeded();
+        if (!inProgressRebalanceTasks.isEmpty()) {
+            // Trigger rebalance tasks to execute.
             rebalanceStatus = REBALANCING;
-            processNewRebalanceTask();
+            processNewRebalanceTasks();
         } else {
             rebalanceStatus = newStatus;
         }
     }
 
-    public void finishRebalanceTask(TableBucket tableBucket, RebalanceStatus statusForBucket) {
+    public synchronized void finishRebalanceTask(
+            TableBucket tableBucket, RebalanceStatus statusForBucket) {
         checkNotClosed();
-        if (inProgressRebalanceTasksQueue.contains(tableBucket)) {
-            inProgressRebalanceTasksQueue.remove(tableBucket);
-            RebalanceResultForBucket resultForBucket = inProgressRebalanceTasks.remove(tableBucket);
-            checkNotNull(resultForBucket, "RebalanceResultForBucket is null.");
-            finishedRebalanceTasks.put(
-                    tableBucket,
-                    RebalanceResultForBucket.of(resultForBucket.plan(), statusForBucket));
-            // Clear gate (bucket) first, then data (startMs).
-            inflightTaskBucket = null;
-            inflightTaskStartMs = -1;
-            LOG.info(
-                    "Rebalance task {} in progress: {} tasks pending, {} completed.",
-                    currentRebalanceId,
-                    inProgressRebalanceTasksQueue.size(),
-                    finishedRebalanceTasks.size());
+        RebalanceResultForBucket resultForBucket = inProgressRebalanceTasks.get(tableBucket);
+        if (resultForBucket == null || resultForBucket.status() != REBALANCING) {
+            return;
+        }
 
-            if (inProgressRebalanceTasksQueue.isEmpty()) {
-                // All rebalance tasks are completed.
-                completeRebalance();
-            } else {
-                // Trigger one rebalance task to execute.
-                processNewRebalanceTask();
-            }
+        inProgressRebalanceTasks.remove(tableBucket);
+        pendingRebalanceTasksQueue.remove(tableBucket);
+        remainingRebalanceTasksQueue.remove(tableBucket);
+        inflightRebalanceTaskStartMs.remove(tableBucket);
+        finishedRebalanceTasks.put(
+                tableBucket, RebalanceResultForBucket.of(resultForBucket.plan(), statusForBucket));
+        LOG.info(
+                "Rebalance task {} in progress: {} tasks pending in current round, "
+                        + "{} tasks waiting for next rounds, {} tasks in-flight, {} completed.",
+                currentRebalanceId,
+                pendingRebalanceTasksQueue.size(),
+                remainingRebalanceTasksQueue.size(),
+                inflightRebalanceTaskStartMs.size(),
+                finishedRebalanceTasks.size());
+
+        if (inProgressRebalanceTasks.isEmpty()) {
+            // All rebalance tasks are completed.
+            completeRebalance();
+        } else {
+            // Trigger new rebalance tasks to execute if there is available capacity.
+            processNewRebalanceTasks();
         }
     }
 
-    public @Nullable RebalanceProgress listRebalanceProgress(@Nullable String rebalanceId) {
+    public synchronized @Nullable RebalanceProgress listRebalanceProgress(
+            @Nullable String rebalanceId) {
         checkNotClosed();
         if (rebalanceId != null
                 && currentRebalanceId != null
@@ -287,7 +370,7 @@ public class RebalanceManager {
                 currentRebalanceId, rebalanceStatus, 0.0, progressForBucketMap);
     }
 
-    public void cancelRebalance(@Nullable String rebalanceId) {
+    public synchronized void cancelRebalance(@Nullable String rebalanceId) {
         checkNotClosed();
 
         if (rebalanceId != null
@@ -323,20 +406,21 @@ public class RebalanceManager {
         }
 
         rebalanceStatus = CANCELED;
-        inProgressRebalanceTasksQueue.clear();
+        pendingRebalanceTasksQueue.clear();
+        remainingRebalanceTasksQueue.clear();
         inProgressRebalanceTasks.clear();
-        // Clear gate (bucket) first, then data (startMs).
-        inflightTaskBucket = null;
-        inflightTaskStartMs = -1;
+        inflightRebalanceTaskStartMs.clear();
         // Here, it will not clear finishedRebalanceTasks, because it will be used by
         // listRebalanceProgress. It will be cleared when next register.
 
         LOG.info("Cancel rebalance task success.");
     }
 
-    public boolean hasInProgressRebalance() {
+    public synchronized boolean hasInProgressRebalance() {
         checkNotClosed();
-        return !inProgressRebalanceTasks.isEmpty() || !inProgressRebalanceTasksQueue.isEmpty();
+        return !inProgressRebalanceTasks.isEmpty()
+                || !pendingRebalanceTasksQueue.isEmpty()
+                || !remainingRebalanceTasksQueue.isEmpty();
     }
 
     public RebalanceTask generateRebalanceTask(List<Goal> goalsByPriority) {
@@ -368,25 +452,93 @@ public class RebalanceManager {
         return buildRebalanceTask(rebalanceId, rebalancePlanForBuckets);
     }
 
-    public @Nullable RebalancePlanForBucket getRebalancePlanForBucket(TableBucket tableBucket) {
+    public synchronized @Nullable RebalancePlanForBucket getRebalancePlanForBucket(
+            TableBucket tableBucket) {
         checkNotClosed();
         RebalanceResultForBucket resultForBucket = inProgressRebalanceTasks.get(tableBucket);
-        if (resultForBucket != null) {
+        if (resultForBucket != null && resultForBucket.status() == REBALANCING) {
             return resultForBucket.plan();
         }
         return null;
     }
 
-    private void processNewRebalanceTask() {
-        TableBucket tableBucket = inProgressRebalanceTasksQueue.peek();
-        if (tableBucket != null && inProgressRebalanceTasks.containsKey(tableBucket)) {
-            // Write data (startMs) first, then publish gate (bucket).
-            inflightTaskStartMs = clock.milliseconds();
-            inflightTaskBucket = tableBucket;
+    private void processNewRebalanceTasks() {
+        openNextRebalanceRoundIfNeeded();
+        while (inflightRebalanceTaskStartMs.size() < maxInflightRebalanceTasks) {
+            TableBucket tableBucket = pendingRebalanceTasksQueue.poll();
+            if (tableBucket == null) {
+                return;
+            }
+
             RebalanceResultForBucket resultForBucket = inProgressRebalanceTasks.get(tableBucket);
+            if (resultForBucket == null || resultForBucket.status() != NOT_STARTED) {
+                continue;
+            }
+
             RebalanceResultForBucket rebalanceResultForBucket =
                     RebalanceResultForBucket.of(resultForBucket.plan(), REBALANCING);
+            inProgressRebalanceTasks.put(tableBucket, rebalanceResultForBucket);
+            inflightRebalanceTaskStartMs.put(tableBucket, clock.milliseconds());
             eventProcessor.tryToExecuteRebalanceTask(rebalanceResultForBucket.plan());
+        }
+    }
+
+    private void openNextRebalanceRoundIfNeeded() {
+        if (!pendingRebalanceTasksQueue.isEmpty() || !inflightRebalanceTaskStartMs.isEmpty()) {
+            return;
+        }
+
+        int maxBucketsForNextRound =
+                maxBucketsPerRound == 0 ? remainingRebalanceTasksQueue.size() : maxBucketsPerRound;
+        int admittedTasks = 0;
+        while (admittedTasks < maxBucketsForNextRound) {
+            TableBucket tableBucket = remainingRebalanceTasksQueue.poll();
+            if (tableBucket == null) {
+                break;
+            }
+
+            RebalanceResultForBucket resultForBucket = inProgressRebalanceTasks.get(tableBucket);
+            if (resultForBucket == null || FINAL_STATUSES.contains(resultForBucket.status())) {
+                continue;
+            }
+
+            pendingRebalanceTasksQueue.add(tableBucket);
+            admittedTasks++;
+        }
+
+        if (admittedTasks > 0) {
+            LOG.info(
+                    "Open rebalance round for task {} with {} bucket tasks admitted "
+                            + "and {} bucket tasks waiting for later rounds.",
+                    currentRebalanceId,
+                    admittedTasks,
+                    remainingRebalanceTasksQueue.size());
+        }
+    }
+
+    public synchronized void updateMaxInflightRebalanceTasks(int newMaxInflightRebalanceTasks) {
+        checkArgument(
+                newMaxInflightRebalanceTasks >= 0,
+                "%s must be non-negative.",
+                ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS.key());
+        int oldMaxInflightRebalanceTasks = maxInflightRebalanceTasks;
+        if (newMaxInflightRebalanceTasks == oldMaxInflightRebalanceTasks) {
+            LOG.debug(
+                    "{} unchanged: {}",
+                    ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS.key(),
+                    newMaxInflightRebalanceTasks);
+            return;
+        }
+
+        maxInflightRebalanceTasks = newMaxInflightRebalanceTasks;
+        LOG.info(
+                "{} reconfigured: {} -> {}",
+                ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS.key(),
+                oldMaxInflightRebalanceTasks,
+                newMaxInflightRebalanceTasks);
+
+        if (!isClosed) {
+            processNewRebalanceTasks();
         }
     }
 
@@ -411,7 +563,9 @@ public class RebalanceManager {
 
         rebalanceStatus = COMPLETED;
         inProgressRebalanceTasks.clear();
-        inProgressRebalanceTasksQueue.clear();
+        pendingRebalanceTasksQueue.clear();
+        remainingRebalanceTasksQueue.clear();
+        inflightRebalanceTaskStartMs.clear();
 
         // Here, it will not clear finishedRebalanceTasks, because it will be used by
         // listRebalanceProgress. It will be cleared when next register.
@@ -472,6 +626,28 @@ public class RebalanceManager {
         return new RebalanceTask(rebalanceId, NOT_STARTED, bucketPlan);
     }
 
+    private static int compareTableBucket(TableBucket first, TableBucket second) {
+        int result = Long.compare(first.getTableId(), second.getTableId());
+        if (result != 0) {
+            return result;
+        }
+
+        Long firstPartitionId = first.getPartitionId();
+        Long secondPartitionId = second.getPartitionId();
+        if (firstPartitionId == null && secondPartitionId != null) {
+            return -1;
+        } else if (firstPartitionId != null && secondPartitionId == null) {
+            return 1;
+        } else if (firstPartitionId != null) {
+            result = Long.compare(firstPartitionId, secondPartitionId);
+            if (result != 0) {
+                return result;
+            }
+        }
+
+        return Integer.compare(first.getBucket(), second.getBucket());
+    }
+
     private boolean isOfflineTagged(ServerTag serverTag) {
         return serverTag == ServerTag.PERMANENT_OFFLINE || serverTag == ServerTag.TEMPORARY_OFFLINE;
     }
@@ -491,26 +667,20 @@ public class RebalanceManager {
 
     @VisibleForTesting
     void checkTimeout() {
-        // Read gate (bucket) first, then data (startMs).
-        // If bucket is non-null, happens-before guarantees startMs is at least as
-        // fresh as the value written before bucket was published.
-        TableBucket bucket = inflightTaskBucket;
-        long startMs = inflightTaskStartMs;
-        if (bucket == null || startMs < 0) {
-            return;
-        }
-        long elapsed = clock.milliseconds() - startMs;
-        if (elapsed > REBALANCE_TASK_TIMEOUT_MS) {
-            LOG.warn(
-                    "In-flight rebalance task for {} timed out after {}ms. "
-                            + "Treating it as timed out and advancing to the next task.",
-                    bucket,
-                    elapsed);
-            // Clear gate (bucket) first, then data (startMs), matching the
-            // publication idiom so the next checkTimeout sees bucket==null.
-            inflightTaskBucket = null;
-            inflightTaskStartMs = -1;
-            eventManager.put(new RebalanceTaskTimeoutEvent(bucket));
+        for (Map.Entry<TableBucket, Long> entry :
+                new HashMap<>(inflightRebalanceTaskStartMs).entrySet()) {
+            TableBucket bucket = entry.getKey();
+            long startMs = entry.getValue();
+            long elapsed = clock.milliseconds() - startMs;
+            if (elapsed > REBALANCE_TASK_TIMEOUT_MS
+                    && inflightRebalanceTaskStartMs.remove(bucket, startMs)) {
+                LOG.warn(
+                        "In-flight rebalance task for {} timed out after {}ms. "
+                                + "Treating it as timed out and advancing to the next task.",
+                        bucket,
+                        elapsed);
+                eventManager.put(new RebalanceTaskTimeoutEvent(bucket));
+            }
         }
     }
 
@@ -532,5 +702,15 @@ public class RebalanceManager {
     @Nullable
     RebalanceStatus getRebalanceStatus() {
         return rebalanceStatus;
+    }
+
+    @VisibleForTesting
+    int getMaxInflightRebalanceTasks() {
+        return maxInflightRebalanceTasks;
+    }
+
+    @VisibleForTesting
+    int getMaxBucketsPerRound() {
+        return maxBucketsPerRound;
     }
 }
