@@ -5,7 +5,7 @@ title: Introduction
 
 # Introduction
 
-[Apache Fluss](https://fluss.apache.org/) (incubating) is a streaming storage system built for real-time analytics, serving as the real-time data layer for Lakehouse architectures.
+[Apache Fluss](https://fluss.apache.org/) is a streaming storage system built for real-time analytics, serving as the real-time data layer for Lakehouse architectures.
 
 This documentation covers the **Fluss client libraries** for [Java](./java/index.md), Rust, Python, and C++, which are developed in the [Apache Fluss](https://github.com/apache/fluss) repository. These clients allow you to:
 

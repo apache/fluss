@@ -29,7 +29,7 @@ Maven coordinates:
 </dependency>
 ```
 
-Verify downloaded JARs against the [KEYS file](https://downloads.apache.org/incubator/fluss/KEYS) using the [verification instructions](/downloads#verifying-downloads).
+Verify downloaded JARs using the [verification instructions](/downloads#verifying-downloads).
 
 ## Cluster Configuration
 

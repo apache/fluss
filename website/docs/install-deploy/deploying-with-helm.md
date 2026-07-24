@@ -86,7 +86,7 @@ helm install zk bitnami/zookeeper
 #### Install from Helm repo
 
 ```bash
-helm repo add fluss https://downloads.apache.org/incubator/fluss/helm-chart
+helm repo add fluss https://downloads.apache.org/fluss/helm-chart
 helm repo update
 helm install helm-repo/fluss
 ```

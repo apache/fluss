@@ -21,7 +21,7 @@ After downloading the distributions archives, signatures, checksums, and KEYS fi
 First, import the keys in your local keyring:
 
 ```bash
-curl https://downloads.apache.org/incubator/fluss/KEYS -o KEYS
+curl https://downloads.apache.org/fluss/KEYS -o KEYS
 gpg --import KEYS
 ```
 
@@ -33,7 +33,7 @@ for i in *.tgz; do echo $i; gpg --verify $i.asc $i; done
 If the verification is successful, you will see a message like this:
 
 ```
-fluss-shaded-1.0-incubating-src.tgz
+fluss-shaded-1.0-src.tgz
 gpg: Signature made Mon 01 Jan 2024 12:00:00 PM UTC
 gpg:                using RSA key E2C45417BED5C104154F341085BACB5AEFAE3202
 gpg: Good signature from "Jark Wu (CODE SIGNING KEY) <jark@apache.org>"
@@ -50,13 +50,13 @@ for i in *.tgz; do echo $i; sha512sum --check  $i.sha512*; done
 If the verification is successful, you will see a message like this:
 
 ```
-fluss-shaded-1.0-incubating-src.tgz
-fluss-shaded-1.0-incubating-src.tgz: OK
+fluss-shaded-1.0-src.tgz
+fluss-shaded-1.0-src.tgz: OK
 ```
 
 ## Verifying build
 
-Unzip the source release archive (`fluss-shaded-1.0-incubating-src.tgz`), and verify that the source release builds correctly (may with different Java version and Maven version), you can run the following commands:
+Unzip the source release archive (`fluss-shaded-1.0-src.tgz`), and verify that the source release builds correctly (may with different Java version and Maven version), you can run the following commands:
 
 ```bash
 mvn clean package -DskipTests
@@ -93,6 +93,6 @@ And then you can use the staged maven artifacts as dependencies in the project a
 
 Votes are cast by replying on the vote email on the dev mailing list, with either +1, 0, -1.
 
-In addition to your vote, it’s customary to specify if your vote is binding or non-binding. Only members of the PPMC and mentors have formally binding votes, and IPMC on the vote on the Incubator general mailing list. If you’re unsure, you can specify that your vote is non-binding. You can find more details on https://www.apache.org/foundation/voting.html.
+In addition to your vote, it’s customary to specify if your vote is binding or non-binding. Only members of the PMC have formally binding votes. If you’re unsure, you can specify that your vote is non-binding. You can find more details on https://www.apache.org/foundation/voting.html.
 
 Besides, it is recommended to include a list of checklist you have verified for your vote. This helps the community to understand what you have checked and what is still missing.
