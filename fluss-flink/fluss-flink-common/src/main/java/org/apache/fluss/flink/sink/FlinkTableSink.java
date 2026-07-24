@@ -17,9 +17,11 @@
 
 package org.apache.fluss.flink.sink;
 
+import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.sink.serializer.RowDataSerializationSchema;
 import org.apache.fluss.flink.sink.shuffle.DistributionMode;
+import org.apache.fluss.flink.sink.undo.RecoveryAction;
 import org.apache.fluss.flink.sink.writer.FlinkSinkWriter;
 import org.apache.fluss.flink.utils.PushdownUtils;
 import org.apache.fluss.flink.utils.PushdownUtils.FieldEqual;
@@ -27,6 +29,7 @@ import org.apache.fluss.flink.utils.PushdownUtils.ValueConversion;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.MergeEngineType;
+import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.GenericRow;
 
@@ -65,6 +68,7 @@ import java.util.stream.Collectors;
 import static org.apache.fluss.flink.utils.PushdownUtils.extractFieldEquals;
 
 /** A Flink {@link DynamicTableSink}. */
+@Internal
 public class FlinkTableSink
         implements DynamicTableSink,
                 SupportsPartitioning,
@@ -75,6 +79,7 @@ public class FlinkTableSink
     private final TablePath tablePath;
     private final Configuration flussConfig;
     private final RowType tableRowType;
+    @Nullable private final Schema tableSchema;
     private final int[] primaryKeyIndexes;
     private final List<String> partitionKeys;
     private final boolean streaming;
@@ -87,9 +92,13 @@ public class FlinkTableSink
     private final @Nullable DataLakeFormat lakeFormat;
     @Nullable private final String producerId;
 
+    private boolean inputChangelogModeKnown;
+    private boolean inputKnownUpsertOnly;
+
     private boolean appliedUpdates = false;
     @Nullable private GenericRow deleteRow;
 
+    /** Creates a table sink without aggregation metadata, retaining conservative recovery. */
     public FlinkTableSink(
             TablePath tablePath,
             Configuration flussConfig,
@@ -105,9 +114,45 @@ public class FlinkTableSink
             List<String> bucketKeys,
             DistributionMode distributionMode,
             @Nullable String producerId) {
+        this(
+                tablePath,
+                flussConfig,
+                tableRowType,
+                null,
+                primaryKeyIndexes,
+                partitionKeys,
+                streaming,
+                mergeEngineType,
+                lakeFormat,
+                sinkIgnoreDelete,
+                tableDeleteBehavior,
+                numBucket,
+                bucketKeys,
+                distributionMode,
+                producerId);
+    }
+
+    /** Creates a table sink with Fluss aggregation metadata for recovery classification. */
+    public FlinkTableSink(
+            TablePath tablePath,
+            Configuration flussConfig,
+            RowType tableRowType,
+            @Nullable Schema tableSchema,
+            int[] primaryKeyIndexes,
+            List<String> partitionKeys,
+            boolean streaming,
+            @Nullable MergeEngineType mergeEngineType,
+            @Nullable DataLakeFormat lakeFormat,
+            boolean sinkIgnoreDelete,
+            DeleteBehavior tableDeleteBehavior,
+            int numBucket,
+            List<String> bucketKeys,
+            DistributionMode distributionMode,
+            @Nullable String producerId) {
         this.tablePath = tablePath;
         this.flussConfig = flussConfig;
         this.tableRowType = tableRowType;
+        this.tableSchema = tableSchema;
         this.primaryKeyIndexes = primaryKeyIndexes;
         this.partitionKeys = partitionKeys;
         this.streaming = streaming;
@@ -123,23 +168,34 @@ public class FlinkTableSink
 
     @Override
     public ChangelogMode getChangelogMode(ChangelogMode requestedMode) {
+        ChangelogMode acceptedMode;
         if (!streaming) {
-            return ChangelogMode.insertOnly();
-        } else {
-            if (primaryKeyIndexes.length > 0 || sinkIgnoreDelete) {
-                // primary-key table or ignore_delete mode can accept RowKind.DELETE
-                ChangelogMode.Builder builder = ChangelogMode.newBuilder();
-                for (RowKind kind : requestedMode.getContainedKinds()) {
-                    // optimize out the update_before messages
-                    if (kind != RowKind.UPDATE_BEFORE) {
-                        builder.addContainedKind(kind);
-                    }
+            acceptedMode = ChangelogMode.insertOnly();
+        } else if (primaryKeyIndexes.length > 0 || sinkIgnoreDelete) {
+            ChangelogMode.Builder builder = ChangelogMode.newBuilder();
+            for (RowKind kind : requestedMode.getContainedKinds()) {
+                if (kind != RowKind.UPDATE_BEFORE) {
+                    builder.addContainedKind(kind);
                 }
-                return builder.build();
-            } else {
-                return ChangelogMode.insertOnly();
             }
+            acceptedMode = builder.build();
+        } else {
+            acceptedMode = ChangelogMode.insertOnly();
         }
+
+        // The planner may invoke this method multiple times, including with generic capability
+        // probes. Since the public API does not identify the final negotiation, only retain the
+        // upsert-only proof when every observed accepted mode provides it.
+        boolean acceptedModeKnownUpsertOnly =
+                !acceptedMode.getContainedKinds().contains(RowKind.DELETE)
+                        && !acceptedMode.getContainedKinds().contains(RowKind.UPDATE_BEFORE);
+        if (inputChangelogModeKnown) {
+            inputKnownUpsertOnly &= acceptedModeKnownUpsertOnly;
+        } else {
+            inputChangelogModeKnown = true;
+            inputKnownUpsertOnly = acceptedModeKnownUpsertOnly;
+        }
+        return acceptedMode;
     }
 
     @Override
@@ -206,9 +262,21 @@ public class FlinkTableSink
         };
     }
 
+    RecoveryAction getRecoveryAction(@Nullable int[] targetColumnIndexes) {
+        if (mergeEngineType != MergeEngineType.AGGREGATION || tableSchema == null) {
+            return RecoveryAction.UNDO;
+        }
+        return AggregationRecoveryDecider.decide(
+                tableSchema,
+                targetColumnIndexes,
+                tableDeleteBehavior,
+                sinkIgnoreDelete,
+                inputKnownUpsertOnly);
+    }
+
     private FlinkSink<RowData> getFlinkSink(int[] targetColumnIndexes) {
-        // Enable undo recovery for aggregation tables
         boolean enableUndoRecovery = mergeEngineType == MergeEngineType.AGGREGATION;
+        RecoveryAction recoveryAction = getRecoveryAction(targetColumnIndexes);
 
         FlinkSink.SinkWriterBuilder<? extends FlinkSinkWriter, RowData> flinkSinkWriterBuilder =
                 (primaryKeyIndexes.length > 0)
@@ -224,6 +292,7 @@ public class FlinkTableSink
                                 distributionMode,
                                 new RowDataSerializationSchema(false, sinkIgnoreDelete),
                                 enableUndoRecovery,
+                                recoveryAction,
                                 producerId)
                         : new FlinkSink.AppendSinkWriterBuilder<>(
                                 tablePath,
@@ -254,6 +323,7 @@ public class FlinkTableSink
                         tablePath,
                         flussConfig,
                         tableRowType,
+                        tableSchema,
                         primaryKeyIndexes,
                         partitionKeys,
                         streaming,
@@ -265,6 +335,8 @@ public class FlinkTableSink
                         bucketKeys,
                         distributionMode,
                         producerId);
+        sink.inputChangelogModeKnown = inputChangelogModeKnown;
+        sink.inputKnownUpsertOnly = inputKnownUpsertOnly;
         sink.appliedUpdates = appliedUpdates;
         sink.deleteRow = deleteRow;
         return sink;

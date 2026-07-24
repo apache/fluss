@@ -27,6 +27,7 @@ import org.apache.fluss.flink.sink.shuffle.StatisticsOrRecord;
 import org.apache.fluss.flink.sink.shuffle.StatisticsOrRecordChannelComputer;
 import org.apache.fluss.flink.sink.shuffle.StatisticsOrRecordTypeInformation;
 import org.apache.fluss.flink.sink.undo.ProducerOffsetReporter;
+import org.apache.fluss.flink.sink.undo.RecoveryAction;
 import org.apache.fluss.flink.sink.undo.UndoRecoveryOperatorFactory;
 import org.apache.fluss.flink.sink.writer.AppendSinkWriter;
 import org.apache.fluss.flink.sink.writer.FlinkSinkWriter;
@@ -250,14 +251,15 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
         private final DistributionMode distributionMode;
         private final FlussSerializationSchema<InputT> flussSerializationSchema;
         private final boolean enableUndoRecovery;
+        private final RecoveryAction recoveryAction;
         @Nullable private final String producerId;
 
         /**
          * Optional context for reporting offsets to the upstream UndoRecoveryOperator.
          *
-         * <p>This is set internally by {@link #addPreWriteTopology} when UndoRecoveryOperator is
-         * added to the pipeline. The context is then passed to the UpsertSinkWriter during
-         * creation.
+         * <p>This is set internally by {@link #addPreWriteTopology} only when the recovery action
+         * is {@link RecoveryAction#UNDO}. The NO_OP compatibility transform remains in the topology
+         * without installing a writer callback.
          *
          * <p>Note: This field is NOT transient because the ProducerOffsetReporterHolder is
          * serializable and needs to survive job serialization to be passed to the TaskManager.
@@ -276,6 +278,7 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
                 DistributionMode distributionMode,
                 FlussSerializationSchema<InputT> flussSerializationSchema,
                 boolean enableUndoRecovery,
+                RecoveryAction recoveryAction,
                 @Nullable String producerId) {
             this.tablePath = tablePath;
             this.flussConfig = flussConfig;
@@ -288,6 +291,7 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
             this.distributionMode = distributionMode;
             this.flussSerializationSchema = flussSerializationSchema;
             this.enableUndoRecovery = enableUndoRecovery;
+            this.recoveryAction = recoveryAction;
             this.producerId = producerId;
         }
 
@@ -341,7 +345,8 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
                                 targetColumnIndexes,
                                 numBucket,
                                 !partitionKeys.isEmpty(),
-                                producerId);
+                                producerId,
+                                recoveryAction);
 
                 stream =
                         stream.transform(
@@ -350,7 +355,9 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
                                         operatorFactory)
                                 .setParallelism(stream.getParallelism());
 
-                offsetReporter = operatorFactory.getProducerOffsetReporter();
+                if (operatorFactory.getRecoveryAction() == RecoveryAction.UNDO) {
+                    offsetReporter = operatorFactory.getProducerOffsetReporter();
+                }
             }
 
             return stream;

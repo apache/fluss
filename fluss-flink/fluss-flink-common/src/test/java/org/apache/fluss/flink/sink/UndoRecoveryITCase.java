@@ -20,13 +20,17 @@ package org.apache.fluss.flink.sink;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.Admin;
+import org.apache.fluss.client.admin.OffsetSpec;
 import org.apache.fluss.client.admin.ProducerOffsetsResult;
+import org.apache.fluss.client.admin.RegisterResult;
 import org.apache.fluss.client.lookup.Lookuper;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.flink.sink.serializer.RowDataSerializationSchema;
 import org.apache.fluss.flink.sink.testutils.CountingSource;
 import org.apache.fluss.flink.sink.testutils.FailingCountingSource;
+import org.apache.fluss.flink.sink.undo.RecoveryAction;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
@@ -40,6 +44,8 @@ import org.apache.flink.configuration.RestartStrategyOptions;
 import org.apache.flink.configuration.StateBackendOptions;
 import org.apache.flink.core.execution.JobClient;
 import org.apache.flink.core.execution.SavepointFormatType;
+import org.apache.flink.runtime.checkpoint.CheckpointException;
+import org.apache.flink.runtime.checkpoint.CheckpointFailureReason;
 import org.apache.flink.runtime.testutils.MiniClusterResourceConfiguration;
 import org.apache.flink.streaming.api.datastream.DataStreamSource;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
@@ -62,8 +68,15 @@ import javax.annotation.Nullable;
 
 import java.io.File;
 import java.time.Duration;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
+import static org.apache.flink.test.util.TestUtils.waitUntilAllTasksAreRunning;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
@@ -73,22 +86,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * Integration tests for Undo Recovery functionality using Aggregation Merge Engine.
  *
- * <p>This test suite verifies undo recovery in two categories:
+ * <p>This test suite verifies aggregation failover recovery in two categories:
  *
  * <h3>Checkpoint Failover Tests (use FailingCountingSource)</h3>
  *
- * <p>These tests simulate real job failures by injecting exceptions and relying on Flink's
- * automatic checkpoint-based recovery. All failover tests use the default producerId (Flink Job ID)
- * to match production usage:
- *
- * <ul>
- *   <li><b>Checkpoint Failover Recovery</b>: {@link #testCheckpointFailoverRecovery()} - Tests
- *       recovery when failure occurs after checkpoint completion
- *   <li><b>Producer Offset Recovery</b>: {@link #testProducerOffsetRecoveryWithFailover()} - Tests
- *       recovery when failure occurs before any checkpoint
- *   <li><b>Multiple Keys Recovery</b>: {@link #testUndoRecoveryMultipleKeys()} - Tests recovery
- *       across multiple keys after checkpoint
- * </ul>
+ * <p>These tests use explicit source gates to establish a committed prefix, dirty writes, an
+ * injected failure, and complete post-restart emission before checking the stable result.
  *
  * <h3>Savepoint Rescale Tests (use CountingSource)</h3>
  *
@@ -104,8 +107,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * specific parallelism and cannot be used for rescaling. Savepoints provide the portable state
  * format needed for parallelism changes.
  *
- * <p>Tests use bounded sources for precise record tracking and exact expected value calculations
- * with {@code isEqualTo()} assertions.
+ * <p>Failover tests use deterministic source gates, while rescale tests use bounded sources. Both
+ * paths verify stable materialized values with exact assertions.
  */
 abstract class UndoRecoveryITCase {
 
@@ -174,265 +177,214 @@ abstract class UndoRecoveryITCase {
 
     // ==================== Test Methods ====================
 
-    /**
-     * Tests checkpoint-based failover recovery.
-     *
-     * <p>This test verifies that undo recovery works correctly when a job fails and automatically
-     * recovers from a checkpoint. The test uses FailingCountingSource to inject a failure at a
-     * controlled point.
-     *
-     * <p>Pattern:
-     *
-     * <ol>
-     *   <li>Phase 1: Write 10 records, checkpoint completes
-     *   <li>Phase 2: Failure is triggered (simulating crash)
-     *   <li>Phase 3: Auto-recover from checkpoint, undo any uncommitted writes, write 3 new records
-     * </ol>
-     *
-     * <p>Expected result: Final sum = (10 + 3) * VALUE_PER_RECORD = 130 (Any writes after the
-     * checkpoint are undone during recovery)
-     */
+    /** Tests DataStream-builder UNDO recovery after a completed checkpoint. */
     @Test
     void testCheckpointFailoverRecovery() throws Exception {
         String tableName = "undo_checkpoint_failover_" + System.currentTimeMillis();
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+        String producerId = "undo-datastream-" + System.nanoTime();
 
-        initTableEnvironment(null, false).executeSql(createAggTableDDL(tableName));
+        initTableEnvironment(null, false)
+                .executeSql(createAggTableDDL(tableName, DEFAULT_BUCKET_NUM, "allow"));
+        FailingCountingSource source =
+                FailingCountingSource.coordinatedSingleKey(
+                        failureMarkerDir, 1L, 10L, 1, 10L, 9, 10L, 3);
+        JobClient job = startCoordinatedFailoverDataStreamJob(tablePath, producerId, source);
 
-        // Configure: 10 records before failure, 3 records after recovery
-        int recordsBeforeFailure = 10;
-        int recordsAfterFailure = 3;
-
-        // Start job with FailingCountingSource (default producerId = Flink Job ID)
-        JobClient job =
-                startFailoverJob(
-                        tablePath, null, recordsBeforeFailure, recordsAfterFailure, 1, false);
-
-        // Wait for checkpoint to complete before failure triggers
-        waitForCheckpoint(job.getJobID());
-
-        // Wait for final sum after recovery
-        // Expected: (10 + 3) * VALUE_PER_RECORD = 130
-        long expectedFinalSum = (recordsBeforeFailure + recordsAfterFailure) * VALUE_PER_RECORD;
         retry(
                 DEFAULT_TIMEOUT,
-                () -> {
-                    Long sum = lookupSum(tablePath, 1L);
-                    assertThat(sum)
-                            .as("Final sum after checkpoint failover recovery")
-                            .isEqualTo(expectedFinalSum);
-                });
+                () ->
+                        assertThat(lookupSum(tablePath, 1L))
+                                .as("Committed SUM prefix")
+                                .isEqualTo(10L));
+        long initialCheckpointId = triggerCompletedCheckpointAfter(job.getJobID(), -1L);
+        assertRecoveryActionObservable(tablePath, producerId, RecoveryAction.UNDO);
+        long checkpointLogEndOffset = getLatestLogEndOffset(tablePath, 0);
 
-        // Cancel the job after verification
+        source.releaseDirtyEmission();
+        waitForLogEndOffsetAtLeast(tablePath, 0, checkpointLogEndOffset + 9);
+        retry(
+                DEFAULT_TIMEOUT,
+                () ->
+                        assertThat(lookupSum(tablePath, 1L))
+                                .as("Dirty SUM before failure")
+                                .isEqualTo(100L));
+
+        triggerFailureAndWaitForRecovery(source);
+        long postRecoveryCheckpointId =
+                triggerCompletedCheckpointAfter(job.getJobID(), initialCheckpointId);
+        assertThat(postRecoveryCheckpointId).isGreaterThan(initialCheckpointId);
+        retry(
+                DEFAULT_TIMEOUT,
+                () ->
+                        assertThat(lookupSum(tablePath, 1L))
+                                .as("Stable SUM after undo, replay, and recovery emission")
+                                .isEqualTo(130L));
+        assertProducerOffsetsAbsent(producerId);
+
         job.cancel().get();
         waitForJobTermination(job, DEFAULT_TIMEOUT);
-
-        // Final verification
-        Long finalSum = lookupSum(tablePath, 1L);
-        LOG.info("Final sum: {}, expected: {}", finalSum, expectedFinalSum);
-        assertThat(finalSum)
-                .as(
-                        "Final sum should equal (recordsBeforeFailure + recordsAfterFailure) * VALUE_PER_RECORD")
-                .isEqualTo(expectedFinalSum);
+        assertThat(lookupSum(tablePath, 1L)).isEqualTo(130L);
     }
 
-    /** Tests checkpoint-based failover recovery through the SQL/Table API sink path. */
+    /** Tests DataStream-builder NO_OP recovery and one-time stale offset cleanup. */
     @Test
-    void testCheckpointFailoverRecoverySQLJob() throws Exception {
-        String tableName = "undo_checkpoint_failover_sql_" + System.currentTimeMillis();
+    void testDataStreamMaxFailoverUsesNoOpRecoveryAndCleansStaleOffsets() throws Exception {
+        String tableName = "no_op_datastream_max_" + System.currentTimeMillis();
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+        String producerId = "no-op-datastream-" + System.nanoTime();
 
-        // Configure: 10 records before failure, 3 records after recovery
-        int recordsBeforeFailure = 10;
-        int recordsAfterFailure = 3;
+        initTableEnvironment(null, false)
+                .executeSql(createMaxAggTableDDL(tableName, producerId, "ignore"));
+        long tableId = admin.getTableInfo(tablePath).get().getTableId();
+        Map<TableBucket, Long> staleOffsets =
+                Collections.singletonMap(new TableBucket(tableId, 0), 0L);
+        assertThat(admin.registerProducerOffsets(producerId, staleOffsets).get())
+                .isEqualTo(RegisterResult.CREATED);
 
-        // Start job with FailingCountingSource (default producerId = Flink Job ID)
-        TableResult tableResult =
+        FailingCountingSource source =
+                FailingCountingSource.coordinatedSingleKey(
+                        failureMarkerDir, 1L, 1L, 1, 10L, 1, 20L, 1);
+        JobClient job = startCoordinatedFailoverDataStreamJob(tablePath, producerId, source);
+
+        retry(
+                DEFAULT_TIMEOUT,
+                () ->
+                        assertThat(lookupSum(tablePath, 1L))
+                                .as("Committed MAX prefix")
+                                .isEqualTo(1L));
+        assertProducerOffsetsAbsent(producerId);
+        long initialCheckpointId = triggerCompletedCheckpointAfter(job.getJobID(), -1L);
+        assertProducerOffsetsAbsent(producerId);
+        long checkpointLogEndOffset = getLatestLogEndOffset(tablePath, 0);
+
+        source.releaseDirtyEmission();
+        waitForLogEndOffsetAtLeast(tablePath, 0, checkpointLogEndOffset + 1);
+        retry(
+                DEFAULT_TIMEOUT,
+                () ->
+                        assertThat(lookupSum(tablePath, 1L))
+                                .as("Dirty MAX before failure")
+                                .isEqualTo(10L));
+        assertProducerOffsetsAbsent(producerId);
+
+        triggerFailureAndWaitForRecovery(source);
+        assertProducerOffsetsAbsent(producerId);
+        long postRecoveryCheckpointId =
+                triggerCompletedCheckpointAfter(job.getJobID(), initialCheckpointId);
+        assertThat(postRecoveryCheckpointId).isGreaterThan(initialCheckpointId);
+        retry(
+                DEFAULT_TIMEOUT,
+                () ->
+                        assertThat(lookupSum(tablePath, 1L))
+                                .as("Recovery MAX value must not be dropped")
+                                .isEqualTo(20L));
+        assertProducerOffsetsAbsent(producerId);
+
+        job.cancel().get();
+        waitForJobTermination(job, DEFAULT_TIMEOUT);
+        assertThat(lookupSum(tablePath, 1L)).isEqualTo(20L);
+        assertProducerOffsetsAbsent(producerId);
+        assertThat(admin.registerProducerOffsets(producerId, staleOffsets).get())
+                .as("NO_OP must not leave an offset registration behind")
+                .isEqualTo(RegisterResult.CREATED);
+        admin.deleteProducerOffsets(producerId).get();
+    }
+
+    @Test
+    void testMixedAggregationSafePartialUpdateUsesNoOpRecovery() throws Exception {
+        String tableName = "no_op_mixed_partial_" + System.currentTimeMillis();
+        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+        String producerId = "no-op-mixed-" + System.nanoTime();
+        FailingCountingSource source =
+                FailingCountingSource.coordinatedSingleKey(
+                        failureMarkerDir, 1L, 1L, 1, 10L, 1, 20L, 1);
+        TableResult result =
                 startFailoverSqlJob(
                         tablePath,
-                        createAggTableDDL(tableName),
-                        recordsBeforeFailure,
-                        recordsAfterFailure,
+                        createMixedAggTableDDL(tableName, producerId, "ignore"),
                         1,
-                        false);
-
+                        Arrays.asList("id", "max_value"),
+                        source,
+                        TimeUnit.DAYS.toMillis(1));
         JobClient job =
-                tableResult
-                        .getJobClient()
+                result.getJobClient()
                         .orElseThrow(() -> new RuntimeException("JobClient not available"));
 
-        // Wait for checkpoint to complete before failure triggers
-        waitForCheckpoint(job.getJobID());
-
-        // Wait for final sum after recovery
-        // Expected: (10 + 3) * VALUE_PER_RECORD = 130
-        long expectedFinalSum = (recordsBeforeFailure + recordsAfterFailure) * VALUE_PER_RECORD;
         retry(
                 DEFAULT_TIMEOUT,
-                () -> {
-                    Long sum = lookupSum(tablePath, 1L);
-                    assertThat(sum)
-                            .as("Final sum after checkpoint failover recovery")
-                            .isEqualTo(expectedFinalSum);
-                });
+                () ->
+                        assertThat(lookupLong(tablePath, 1L, 1))
+                                .as("Committed MAX prefix")
+                                .isEqualTo(1L));
+        long initialCheckpointId = triggerCompletedCheckpointAfter(job.getJobID(), -1L);
+        long checkpointLogEndOffset = getLatestLogEndOffset(tablePath, 0);
+        assertRecoveryActionObservable(tablePath, producerId, RecoveryAction.NO_OP);
 
-        // Cancel the job after verification
-        job.cancel().get();
-        waitForJobTermination(job, DEFAULT_TIMEOUT);
-
-        // Final verification
-        Long finalSum = lookupSum(tablePath, 1L);
-        LOG.info("Final sum: {}, expected: {}", finalSum, expectedFinalSum);
-        assertThat(finalSum)
-                .as(
-                        "Final sum should equal (recordsBeforeFailure + recordsAfterFailure) * VALUE_PER_RECORD")
-                .isEqualTo(expectedFinalSum);
-    }
-
-    /**
-     * Tests undo recovery with multiple keys using checkpoint-based failover.
-     *
-     * <p>This test verifies that undo recovery works correctly across multiple keys when a job
-     * fails and automatically recovers from a checkpoint. The test uses FailingCountingSource in
-     * multi-key mode to emit records for keys 1, 2, 3.
-     *
-     * <p>Pattern:
-     *
-     * <ol>
-     *   <li>Phase 1: Write 10 records per key (30 total), checkpoint completes
-     *   <li>Phase 2: Failure is triggered (simulating crash)
-     *   <li>Phase 3: Auto-recover from checkpoint, undo any uncommitted writes, write 3 records per
-     *       key
-     * </ol>
-     *
-     * <p>Expected result: Each key's final sum = (10 + 3) * VALUE_PER_RECORD = 130
-     */
-    @Test
-    void testUndoRecoveryMultipleKeys() throws Exception {
-        String tableName = "undo_multi_keys_" + System.currentTimeMillis();
-        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
-
-        initTableEnvironment(null, false).executeSql(createAggTableDDL(tableName));
-
-        // Configure: 10 records per key before failure, 3 records per key after recovery
-        int recordsBeforeFailurePerKey = 10;
-        int recordsAfterFailurePerKey = 3;
-
-        // Start job with FailingCountingSource in multi-key mode (default producerId = Flink Job
-        // ID)
-        JobClient job =
-                startFailoverJob(
-                        tablePath,
-                        null,
-                        recordsBeforeFailurePerKey,
-                        recordsAfterFailurePerKey,
-                        1,
-                        true); // multiKey = true
-
-        // Wait for checkpoint to complete before failure triggers
-        waitForCheckpoint(job.getJobID());
-
-        // Wait for final sums after recovery for all 3 keys
-        // Expected per key: (10 + 3) * VALUE_PER_RECORD = 130
-        long expectedFinalSumPerKey =
-                (recordsBeforeFailurePerKey + recordsAfterFailurePerKey) * VALUE_PER_RECORD;
+        source.releaseDirtyEmission();
+        waitForLogEndOffsetAtLeast(tablePath, 0, checkpointLogEndOffset + 1);
         retry(
                 DEFAULT_TIMEOUT,
-                () -> {
-                    Long[] sums = lookupSumsForKeys(tablePath, 1L, 2L, 3L);
-                    for (int i = 0; i < 3; i++) {
-                        assertThat(sums[i])
-                                .as(
-                                        "Key "
-                                                + (i + 1)
-                                                + " final sum after checkpoint failover recovery")
-                                .isEqualTo(expectedFinalSumPerKey);
-                    }
-                });
+                () ->
+                        assertThat(lookupLong(tablePath, 1L, 1))
+                                .as("Dirty MAX before failure")
+                                .isEqualTo(10L));
 
-        // Cancel the job after verification
+        triggerFailureAndWaitForRecovery(source);
+        assertThat(triggerCompletedCheckpointAfter(job.getJobID(), initialCheckpointId))
+                .isGreaterThan(initialCheckpointId);
+        retry(
+                DEFAULT_TIMEOUT,
+                () -> assertThat(lookupLong(tablePath, 1L, 1)).as("Recovered MAX").isEqualTo(20L));
+        assertProducerOffsetsAbsent(producerId);
+
         job.cancel().get();
         waitForJobTermination(job, DEFAULT_TIMEOUT);
-
-        // Final verification
-        Long[] finalSums = lookupSumsForKeys(tablePath, 1L, 2L, 3L);
-        LOG.info(
-                "Final sums: key1={}, key2={}, key3={}, expected={}",
-                finalSums[0],
-                finalSums[1],
-                finalSums[2],
-                expectedFinalSumPerKey);
-
-        for (int i = 0; i < 3; i++) {
-            assertThat(finalSums[i])
-                    .as("Key " + (i + 1) + " final sum")
-                    .isEqualTo(expectedFinalSumPerKey);
-        }
+        assertThat(lookupLong(tablePath, 1L, 1)).isEqualTo(20L);
     }
 
-    /**
-     * Tests producer offset recovery when failure occurs before any checkpoint completes.
-     *
-     * <p>This test verifies that undo recovery works even without checkpoint state, using the
-     * producer offset stored on the server side. The test uses FailingCountingSource configured to
-     * fail quickly (after just 2 records) before a checkpoint can complete.
-     *
-     * <p>Pattern:
-     *
-     * <ol>
-     *   <li>Write 2 records (failure triggers before checkpoint)
-     *   <li>Failure is triggered
-     *   <li>Auto-recover from fresh state (no checkpoint to restore from)
-     *   <li>Producer offset recovery undoes the 2 pre-failure records
-     *   <li>Source emits total of 7 records (2+5), but only 7 are persisted after undo
-     * </ol>
-     *
-     * <p>Expected result: Final sum = 7 * VALUE_PER_RECORD = 70
-     *
-     * <p>Note: Even without checkpoint state, Fluss can perform undo recovery using the producer
-     * offset stored on the server. The pre-failure writes ARE undone because the producer ID allows
-     * the server to identify uncommitted writes from the previous run.
-     */
+    /** Tests producer-offset recovery before the first checkpoint. */
     @Test
     void testProducerOffsetRecoveryWithFailover() throws Exception {
         String tableName = "undo_producer_offset_" + System.currentTimeMillis();
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+        String producerId = "undo-before-checkpoint-" + System.nanoTime();
 
-        initTableEnvironment(null, false).executeSql(createAggTableDDL(tableName));
+        initTableEnvironment(null, false)
+                .executeSql(createAggTableDDL(tableName, DEFAULT_BUCKET_NUM, "allow"));
+        FailingCountingSource source =
+                FailingCountingSource.coordinatedSingleKey(
+                        failureMarkerDir, 1L, 10L, 0, 10L, 2, 10L, 5);
+        JobClient job = startCoordinatedFailoverDataStreamJob(tablePath, producerId, source);
 
-        // Configure to fail quickly before checkpoint completes
-        int recordsBeforeFailure = 2;
-        int recordsAfterFailure = 5;
-
-        // Start job with FailingCountingSource (default producerId = Flink Job ID)
-        JobClient job =
-                startFailoverJob(
-                        tablePath, null, recordsBeforeFailure, recordsAfterFailure, 1, false);
-
-        // Wait for final sum after recovery
-        // Expected: 7 * VALUE_PER_RECORD = 70
-        // Pre-failure writes ARE undone via producer offset recovery
-        long expectedFinalSum = (recordsBeforeFailure + recordsAfterFailure) * VALUE_PER_RECORD;
+        long initialLogEndOffset = getLatestLogEndOffset(tablePath, 0);
+        source.releaseDirtyEmission();
+        waitForLogEndOffsetAtLeast(tablePath, 0, initialLogEndOffset + 2);
         retry(
                 DEFAULT_TIMEOUT,
-                () -> {
-                    Long sum = lookupSum(tablePath, 1L);
-                    assertThat(sum)
-                            .as("Final sum after producer offset recovery")
-                            .isEqualTo(expectedFinalSum);
-                });
+                () ->
+                        assertThat(lookupSum(tablePath, 1L))
+                                .as("Dirty writes before the first checkpoint")
+                                .isEqualTo(20L));
+        assertThat(findLatestCompletedCheckpoint(job.getJobID().toHexString()))
+                .as("The injected failure must precede every completed checkpoint")
+                .isEqualTo(-1L);
+        assertRecoveryActionObservable(tablePath, producerId, RecoveryAction.UNDO);
 
-        // Cancel the job after verification
+        triggerFailureAndWaitForRecovery(source);
+        long firstCheckpointId = triggerCompletedCheckpointAfter(job.getJobID(), -1L);
+        assertThat(firstCheckpointId).isGreaterThanOrEqualTo(0L);
+        retry(
+                DEFAULT_TIMEOUT,
+                () ->
+                        assertThat(lookupSum(tablePath, 1L))
+                                .as("Stable SUM after producer-offset recovery")
+                                .isEqualTo(70L));
+
         job.cancel().get();
         waitForJobTermination(job, DEFAULT_TIMEOUT);
-
-        // Final verification
-        Long finalSum = lookupSum(tablePath, 1L);
-        LOG.info("Final sum: {}, expected: {}", finalSum, expectedFinalSum);
-        assertThat(finalSum)
-                .as(
-                        "Final sum should equal (recordsBeforeFailure + recordsAfterFailure) * VALUE_PER_RECORD")
-                .isEqualTo(expectedFinalSum);
+        assertThat(lookupSum(tablePath, 1L)).isEqualTo(70L);
+        admin.deleteProducerOffsets(producerId).get();
     }
 
     /** Tests Rescale Up - undo recovery when parallelism increases (1 -> 2). */
@@ -499,7 +451,7 @@ abstract class UndoRecoveryITCase {
 
         // Phase 1: Write dirty data via DataStream API with the same producerId, cancel without
         // checkpoint
-        JobClient dirtyJob = startBoundedJob(tablePath, producerId, null, 5, 1, false);
+        JobClient dirtyJob = startBoundedJob(tablePath, producerId, null, 5, 1, false, false);
 
         // Wait for dirty data to be written
         long dirtySum = 5 * VALUE_PER_RECORD; // 50
@@ -544,32 +496,25 @@ abstract class UndoRecoveryITCase {
                 });
 
         // Verify producer offsets cleaned up
-        verifyProducerOffsetsCleanedUp(producerId);
+        assertProducerOffsetsAbsent(producerId);
     }
 
     /**
      * Tests that producer offsets are cleaned up via endInput() for bounded jobs without
      * checkpointing.
      *
-     * <p>This verifies the cleanup path added in Comment #12: when a bounded job finishes (source
-     * reaches end of input) without any checkpoint completing, {@code endInput()} calls {@code
-     * deleteProducerOffsetsIfNeeded()} to ensure producer offsets don't remain in ZK.
+     * <p>When a bounded source reaches end of input without a completed checkpoint, {@code
+     * endInput()} still removes its producer offsets.
      */
     @Test
     void testBoundedJobCleansUpProducerOffsetsWithoutCheckpoint() throws Exception {
         String tableName = "undo_bounded_cleanup_" + System.currentTimeMillis();
-        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
         String producerId = "test-producer-bounded-" + System.currentTimeMillis();
 
-        // Create table via SQL DDL
         StreamTableEnvironment tEnv = initTableEnvironment(null, false);
-        tEnv.executeSql(createAggTableDDL(tableName));
-
-        // Use SQL INSERT which is inherently bounded — no checkpointing needed.
-        // endInput() is called when the bounded source finishes.
         tEnv.executeSql(
                 String.format(
-                        "CREATE TABLE `%s`.`%s_with_pid` ("
+                        "CREATE TABLE `%s`.`%s` ("
                                 + "  id BIGINT NOT NULL PRIMARY KEY NOT ENFORCED,"
                                 + "  sum_val BIGINT"
                                 + ") WITH ("
@@ -583,12 +528,12 @@ abstract class UndoRecoveryITCase {
         // Execute bounded SQL INSERT (no checkpointing enabled in initTableEnvironment)
         tEnv.executeSql(
                         String.format(
-                                "INSERT INTO `%s`.`%s_with_pid` VALUES (1, 10), (1, 20), (1, 30)",
+                                "INSERT INTO `%s`.`%s` VALUES (1, 10), (1, 20), (1, 30)",
                                 DEFAULT_DB, tableName))
                 .await();
 
         // Verify data written
-        TablePath actualPath = TablePath.of(DEFAULT_DB, tableName + "_with_pid");
+        TablePath actualPath = TablePath.of(DEFAULT_DB, tableName);
         retry(
                 DEFAULT_TIMEOUT,
                 () -> {
@@ -597,10 +542,80 @@ abstract class UndoRecoveryITCase {
                 });
 
         // Verify producer offsets cleaned up via endInput() path
-        verifyProducerOffsetsCleanedUp(producerId);
+        assertProducerOffsetsAbsent(producerId);
     }
 
     // ==================== Reusable Test Patterns ====================
+
+    private void triggerFailureAndWaitForRecovery(FailingCountingSource source) throws Exception {
+        source.triggerFailure();
+        waitUntil(
+                source::hasFailed,
+                DEFAULT_TIMEOUT,
+                "Timeout waiting for the source failure marker");
+        waitUntil(
+                source::hasRestarted,
+                DEFAULT_TIMEOUT,
+                "Timeout waiting for the source restart marker");
+        waitUntil(
+                source::hasRecoveryEmissionCompleted,
+                DEFAULT_TIMEOUT,
+                "Timeout waiting for complete recovery emission");
+    }
+
+    private void waitForLogEndOffsetAtLeast(
+            TablePath tablePath, int bucketId, long minimumLogEndOffset) {
+        retry(
+                DEFAULT_TIMEOUT,
+                () ->
+                        assertThat(getLatestLogEndOffset(tablePath, bucketId))
+                                .as("Records acknowledged in the Fluss log")
+                                .isGreaterThanOrEqualTo(minimumLogEndOffset));
+    }
+
+    private void assertRecoveryActionObservable(
+            TablePath tablePath, String producerId, RecoveryAction expectedRecoveryAction)
+            throws Exception {
+        if (expectedRecoveryAction == RecoveryAction.NO_OP) {
+            assertThat(admin.getProducerOffsets(producerId).get())
+                    .as("NO_OP must not register producer offsets")
+                    .isNull();
+            return;
+        }
+
+        long tableId = admin.getTableInfo(tablePath).get().getTableId();
+        TableBucket expectedBucket = new TableBucket(tableId, 0);
+        retry(
+                DEFAULT_TIMEOUT,
+                () -> {
+                    ProducerOffsetsResult result = admin.getProducerOffsets(producerId).get();
+                    assertThat(result).as("UNDO must register producer offsets").isNotNull();
+                    assertThat(result.getProducerId()).isEqualTo(producerId);
+                    assertThat(result.getTableOffsets()).containsOnlyKeys(tableId);
+                    assertThat(result.getTableOffsets().get(tableId))
+                            .containsOnlyKeys(expectedBucket);
+                    assertThat(result.getTableOffsets().get(tableId).get(expectedBucket))
+                            .isGreaterThanOrEqualTo(0L);
+                });
+    }
+
+    private long getLatestLogEndOffset(TablePath tablePath, int bucketId) throws Exception {
+        try {
+            Map<Integer, Long> latestOffsets =
+                    admin.listOffsets(
+                                    tablePath,
+                                    Collections.singleton(bucketId),
+                                    new OffsetSpec.LatestSpec())
+                            .all()
+                            .get(DEFAULT_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            assertThat(latestOffsets).containsOnlyKeys(bucketId);
+            assertThat(latestOffsets.get(bucketId)).isNotNull();
+            return latestOffsets.get(bucketId);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw e;
+        }
+    }
 
     /**
      * Runs a three-phase undo recovery test with multiple buckets and multiple keys.
@@ -637,7 +652,13 @@ abstract class UndoRecoveryITCase {
         // Phase 1: Write records for multiple keys and take savepoint
         JobClient phase1Job =
                 startBoundedJob(
-                        tablePath, producerId, null, recordsPerPhase[0], phase12Parallelism, true);
+                        tablePath,
+                        producerId,
+                        null,
+                        recordsPerPhase[0],
+                        phase12Parallelism,
+                        true,
+                        true);
 
         // Wait for data to be written before checkpoint (verify all 3 keys)
         long expectedSumPerKey = recordsPerPhase[0] * VALUE_PER_RECORD;
@@ -679,6 +700,7 @@ abstract class UndoRecoveryITCase {
                         savepointPath,
                         recordsPerPhase[1],
                         phase12Parallelism,
+                        true,
                         true);
 
         // Wait for Phase 2 data to be written (verify all 3 keys)
@@ -713,6 +735,7 @@ abstract class UndoRecoveryITCase {
                         savepointPath,
                         recordsPerPhase[2],
                         phase3Parallelism,
+                        true,
                         true);
 
         // Wait for Phase 3 data to be written (after undo, verify all 3 keys)
@@ -729,9 +752,9 @@ abstract class UndoRecoveryITCase {
                     }
                 });
 
-        // Verify producer offsets have been cleaned up from ZK after checkpoint (Comment #8)
+        // Verify producer offsets have been cleaned up after checkpoint.
         waitForCheckpoint(phase3Job.getJobID());
-        verifyProducerOffsetsCleanedUp(producerId);
+        assertProducerOffsetsAbsent(producerId);
 
         phase3Job.cancel().get();
         waitForJobTermination(phase3Job, DEFAULT_TIMEOUT);
@@ -763,11 +786,16 @@ abstract class UndoRecoveryITCase {
 
     // ==================== Helper Methods ====================
 
-    private String createAggTableDDL(String tableName) {
-        return createAggTableDDL(tableName, DEFAULT_BUCKET_NUM);
+    private String createAggTableDDL(String tableName, int bucketNum) {
+        return createAggTableDDL(tableName, bucketNum, null);
     }
 
-    private String createAggTableDDL(String tableName, int bucketNum) {
+    private String createAggTableDDL(
+            String tableName, int bucketNum, @Nullable String deleteBehavior) {
+        String deleteBehaviorOption =
+                deleteBehavior == null
+                        ? ""
+                        : String.format(",  'table.delete.behavior' = '%s'", deleteBehavior);
         return String.format(
                 "CREATE TABLE `%s`.`%s` ("
                         + "  id BIGINT NOT NULL PRIMARY KEY NOT ENFORCED,"
@@ -776,8 +804,43 @@ abstract class UndoRecoveryITCase {
                         + "  'bucket.num' = '%d',"
                         + "  'table.merge-engine' = 'aggregation',"
                         + "  'fields.sum_val.agg' = 'sum'"
+                        + "%s"
                         + ")",
-                DEFAULT_DB, tableName, bucketNum);
+                DEFAULT_DB, tableName, bucketNum, deleteBehaviorOption);
+    }
+
+    private String createMaxAggTableDDL(
+            String tableName, String producerId, String deleteBehavior) {
+        return String.format(
+                "CREATE TABLE `%s`.`%s` ("
+                        + "  id BIGINT NOT NULL PRIMARY KEY NOT ENFORCED,"
+                        + "  max_value BIGINT"
+                        + ") WITH ("
+                        + "  'bucket.num' = '%d',"
+                        + "  'table.merge-engine' = 'aggregation',"
+                        + "  'fields.max_value.agg' = 'max',"
+                        + "  'sink.producer-id' = '%s',"
+                        + "  'table.delete.behavior' = '%s'"
+                        + ")",
+                DEFAULT_DB, tableName, DEFAULT_BUCKET_NUM, producerId, deleteBehavior);
+    }
+
+    private String createMixedAggTableDDL(
+            String tableName, String producerId, String deleteBehavior) {
+        return String.format(
+                "CREATE TABLE `%s`.`%s` ("
+                        + "  id BIGINT NOT NULL PRIMARY KEY NOT ENFORCED,"
+                        + "  max_value BIGINT,"
+                        + "  sum_value BIGINT"
+                        + ") WITH ("
+                        + "  'bucket.num' = '%d',"
+                        + "  'table.merge-engine' = 'aggregation',"
+                        + "  'fields.max_value.agg' = 'max',"
+                        + "  'fields.sum_value.agg' = 'sum',"
+                        + "  'sink.producer-id' = '%s',"
+                        + "  'table.delete.behavior' = '%s'"
+                        + ")",
+                DEFAULT_DB, tableName, DEFAULT_BUCKET_NUM, producerId, deleteBehavior);
     }
 
     /**
@@ -789,6 +852,7 @@ abstract class UndoRecoveryITCase {
      * @param maxRecords max records to emit (per key if multiKey)
      * @param parallelism job parallelism
      * @param multiKey if true, emit to keys 1,2,3 in round-robin
+     * @param enableCheckpointing whether to enable periodic checkpoints
      */
     private JobClient startBoundedJob(
             TablePath tablePath,
@@ -796,7 +860,8 @@ abstract class UndoRecoveryITCase {
             @Nullable String savepointPath,
             int maxRecords,
             int parallelism,
-            boolean multiKey)
+            boolean multiKey,
+            boolean enableCheckpointing)
             throws Exception {
 
         Configuration conf = new Configuration();
@@ -806,7 +871,9 @@ abstract class UndoRecoveryITCase {
 
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment(conf);
         env.setParallelism(parallelism);
-        env.enableCheckpointing(1000);
+        if (enableCheckpointing) {
+            env.enableCheckpointing(1000);
+        }
 
         CountingSource source =
                 multiKey
@@ -832,109 +899,44 @@ abstract class UndoRecoveryITCase {
         return env.executeAsync(jobName);
     }
 
-    /**
-     * Starts a job with FailingCountingSource for checkpoint-based failover testing.
-     *
-     * <p>This method configures a job that will:
-     *
-     * <ol>
-     *   <li>Emit {@code recordsBeforeFailure} records
-     *   <li>Trigger a failure (RuntimeException)
-     *   <li>Auto-recover from checkpoint and emit {@code recordsAfterFailure} records
-     * </ol>
-     *
-     * @param tablePath target table
-     * @param producerId producer ID for undo recovery, or null to use default (Flink Job ID)
-     * @param recordsBeforeFailure records to emit before triggering failure
-     * @param recordsAfterFailure records to emit after recovery
-     * @param parallelism job parallelism
-     * @param multiKey if true, emit to keys 1,2,3 in round-robin
-     * @return JobClient for monitoring the job
-     */
-    private JobClient startFailoverJob(
-            TablePath tablePath,
-            @Nullable String producerId,
-            int recordsBeforeFailure,
-            int recordsAfterFailure,
-            int parallelism,
-            boolean multiKey)
-            throws Exception {
-
-        Configuration conf = new Configuration();
-        // No savepoint path - this is for checkpoint-based failover
-
-        StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment(conf);
-        env.setParallelism(parallelism);
-        env.enableCheckpointing(1000);
-
-        FailingCountingSource source =
-                multiKey
-                        ? FailingCountingSource.multiKey(
-                                failureMarkerDir,
-                                VALUE_PER_RECORD,
-                                recordsBeforeFailure,
-                                recordsAfterFailure)
-                        : FailingCountingSource.singleKey(
-                                failureMarkerDir,
-                                1L,
-                                VALUE_PER_RECORD,
-                                recordsBeforeFailure,
-                                recordsAfterFailure);
+    private JobClient startCoordinatedFailoverDataStreamJob(
+            TablePath tablePath, String producerId, FailingCountingSource source) throws Exception {
+        StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+        env.setParallelism(1);
+        env.enableCheckpointing(TimeUnit.DAYS.toMillis(1));
 
         DataStreamSource<RowData> stream =
-                env.fromSource(source, WatermarkStrategy.noWatermarks(), "failing-counting-source");
-
-        FlussSink<RowData> sink;
-        FlussSinkBuilder<RowData> sinkBuilder =
+                env.fromSource(
+                        source,
+                        WatermarkStrategy.noWatermarks(),
+                        "failing-counting-source",
+                        source.getProducedType());
+        FlussSink<RowData> sink =
                 FlussSink.<RowData>builder()
                         .setBootstrapServers(bootstrapServers)
                         .setDatabase(tablePath.getDatabaseName())
                         .setTable(tablePath.getTableName())
-                        .setSerializationSchema(new RowDataSerializationSchema(false, true));
-        if (producerId != null) {
-            sinkBuilder.setProducerId(producerId);
-        }
-        sink = sinkBuilder.build();
-
+                        .setProducerId(producerId)
+                        .setSerializationSchema(new RowDataSerializationSchema(false, true))
+                        .build();
         stream.sinkTo(sink).name("Fluss Sink");
-
-        String jobName =
-                multiKey ? "Multi-Key Failover Test" : "Failover Test (p=" + parallelism + ")";
-        return env.executeAsync(jobName);
+        return env.executeAsync("Coordinated aggregation failover");
     }
 
-    /**
-     * Starts a job with FailingCountingSource for checkpoint-based failover testing.
-     *
-     * <p>This method configures a job that will:
-     *
-     * <ol>
-     *   <li>Emit {@code recordsBeforeFailure} records
-     *   <li>Trigger a failure (RuntimeException)
-     *   <li>Auto-recover from checkpoint and emit {@code recordsAfterFailure} records
-     * </ol>
-     *
-     * @param tablePath target table
-     * @param recordsBeforeFailure records to emit before triggering failure
-     * @param recordsAfterFailure records to emit after recovery
-     * @param parallelism job parallelism
-     * @param multiKey if true, emit to keys 1,2,3 in round-robin
-     * @return JobClient for monitoring the job
-     */
     private TableResult startFailoverSqlJob(
             TablePath tablePath,
             String ddl,
-            int recordsBeforeFailure,
-            int recordsAfterFailure,
             int parallelism,
-            boolean multiKey)
+            @Nullable List<String> targetColumns,
+            FailingCountingSource source,
+            long checkpointInterval)
             throws Exception {
 
         Configuration conf = new Configuration();
 
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment(conf);
         env.setParallelism(parallelism);
-        env.enableCheckpointing(1000);
+        env.enableCheckpointing(checkpointInterval);
 
         StreamTableEnvironment tEnv =
                 StreamTableEnvironment.create(env, EnvironmentSettings.inStreamingMode());
@@ -944,20 +946,6 @@ abstract class UndoRecoveryITCase {
                         "CREATE CATALOG %s WITH ('type' = 'fluss', '%s' = '%s')",
                         CATALOG_NAME, BOOTSTRAP_SERVERS.key(), bootstrapServers));
         tEnv.executeSql("USE CATALOG " + CATALOG_NAME);
-
-        FailingCountingSource source =
-                multiKey
-                        ? FailingCountingSource.multiKey(
-                                failureMarkerDir,
-                                VALUE_PER_RECORD,
-                                recordsBeforeFailure,
-                                recordsAfterFailure)
-                        : FailingCountingSource.singleKey(
-                                failureMarkerDir,
-                                1L,
-                                VALUE_PER_RECORD,
-                                recordsBeforeFailure,
-                                recordsAfterFailure);
 
         DataStreamSource<RowData> stream =
                 env.fromSource(
@@ -976,23 +964,29 @@ abstract class UndoRecoveryITCase {
 
         tEnv.executeSql(ddl).await();
 
+        String targetClause =
+                targetColumns == null
+                        ? ""
+                        : targetColumns.stream()
+                                .map(column -> "`" + column + "`")
+                                .collect(Collectors.joining(", ", " (", ")"));
+        String sourceQuery =
+                targetColumns == null
+                        ? "SELECT * FROM source_table"
+                        : "SELECT `key`, `value` FROM source_table";
         return tEnv.executeSql(
                 "INSERT INTO `"
                         + tablePath.getDatabaseName()
                         + "`.`"
                         + tablePath.getTableName()
-                        + "` SELECT * FROM source_table");
+                        + "`"
+                        + targetClause
+                        + " "
+                        + sourceQuery);
     }
 
-    /**
-     * Verifies that producer offsets have been cleaned up from ZK.
-     *
-     * <p>After a successful checkpoint, the UndoRecoveryOperator deletes producer offsets from ZK.
-     * This method retries the check to account for async cleanup timing.
-     *
-     * @param producerId the producer ID to check
-     */
-    private void verifyProducerOffsetsCleanedUp(String producerId) {
+    /** Verifies that no producer-offset registration remains for the given producer. */
+    private void assertProducerOffsetsAbsent(String producerId) {
         retry(
                 DEFAULT_TIMEOUT,
                 () -> {
@@ -1009,10 +1003,15 @@ abstract class UndoRecoveryITCase {
 
     @Nullable
     private Long lookupSum(TablePath tablePath, Long key) throws Exception {
+        return lookupLong(tablePath, key, 1);
+    }
+
+    @Nullable
+    private Long lookupLong(TablePath tablePath, Long key, int fieldIndex) throws Exception {
         try (Table table = conn.getTable(tablePath)) {
             Lookuper lookuper = table.newLookup().createLookuper();
             InternalRow result = lookuper.lookup(row(key)).get().getSingletonRow();
-            return result == null ? null : result.getLong(1);
+            return result == null ? null : result.getLong(fieldIndex);
         }
     }
 
@@ -1068,31 +1067,79 @@ abstract class UndoRecoveryITCase {
 
     protected void waitForJobTermination(JobClient jobClient, Duration timeout) {
         waitUntil(
-                () -> {
-                    try {
-                        return jobClient.getJobStatus().get().isTerminalState();
-                    } catch (Exception e) {
-                        return true;
-                    }
-                },
+                () -> jobClient.getJobStatus().get().isTerminalState(),
                 timeout,
                 "Timeout waiting for job termination");
     }
 
     protected void waitForCheckpoint(JobID jobId) {
+        waitForCompletedCheckpointAfter(jobId, -1L);
+    }
+
+    private long triggerCompletedCheckpointAfter(JobID jobId, long minimumCheckpointId)
+            throws Exception {
+        long deadlineNanos = System.nanoTime() + DEFAULT_TIMEOUT.toNanos();
+        while (true) {
+            waitUntilAllTasksAreRunning(miniCluster.getRestClusterClient(), jobId);
+            long remainingMillis =
+                    Math.max(1L, TimeUnit.NANOSECONDS.toMillis(deadlineNanos - System.nanoTime()));
+            try {
+                miniCluster
+                        .getMiniCluster()
+                        .triggerCheckpoint(jobId)
+                        .get(remainingMillis, TimeUnit.MILLISECONDS);
+                return waitForCompletedCheckpointAfter(jobId, minimumCheckpointId);
+            } catch (ExecutionException e) {
+                if (!isTaskReadinessCheckpointFailure(e) || System.nanoTime() >= deadlineNanos) {
+                    throw e;
+                }
+                LOG.info("Checkpoint raced with a task restart; retrying when all tasks run");
+                Thread.sleep(50L);
+            }
+        }
+    }
+
+    private boolean isTaskReadinessCheckpointFailure(ExecutionException exception) {
+        Throwable cause = exception.getCause();
+        return cause instanceof CheckpointException
+                && ((CheckpointException) cause).getCheckpointFailureReason()
+                        == CheckpointFailureReason.NOT_ALL_REQUIRED_TASKS_RUNNING;
+    }
+
+    private long waitForCompletedCheckpointAfter(JobID jobId, long minimumCheckpointId) {
         String jobIdStr = jobId.toHexString();
         waitUntil(
-                () -> {
-                    File jobCheckpointDir = new File(checkpointDir, jobIdStr);
-                    if (!jobCheckpointDir.exists()) {
-                        return false;
-                    }
-                    File[] checkpoints =
-                            jobCheckpointDir.listFiles(
-                                    f -> f.isDirectory() && f.getName().startsWith("chk-"));
-                    return checkpoints != null && checkpoints.length > 0;
-                },
+                () -> findLatestCompletedCheckpoint(jobIdStr) > minimumCheckpointId,
                 DEFAULT_TIMEOUT,
-                "Timeout waiting for checkpoint for job " + jobIdStr);
+                "Timeout waiting for a completed checkpoint after "
+                        + minimumCheckpointId
+                        + " for job "
+                        + jobIdStr);
+        return findLatestCompletedCheckpoint(jobIdStr);
+    }
+
+    private long findLatestCompletedCheckpoint(String jobIdStr) {
+        File jobCheckpointDir = new File(checkpointDir, jobIdStr);
+        File[] checkpoints =
+                jobCheckpointDir.listFiles(
+                        file ->
+                                file.isDirectory()
+                                        && file.getName().startsWith("chk-")
+                                        && new File(file, "_metadata").isFile());
+        long latestCheckpointId = -1L;
+        if (checkpoints != null) {
+            for (File checkpoint : checkpoints) {
+                try {
+                    latestCheckpointId =
+                            Math.max(
+                                    latestCheckpointId,
+                                    Long.parseLong(
+                                            checkpoint.getName().substring("chk-".length())));
+                } catch (NumberFormatException ignored) {
+                    // Ignore unrelated directories with a chk- prefix.
+                }
+            }
+        }
+        return latestCheckpointId;
     }
 }
