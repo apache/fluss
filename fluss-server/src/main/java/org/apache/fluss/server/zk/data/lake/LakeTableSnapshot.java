@@ -20,6 +20,9 @@ package org.apache.fluss.server.zk.data.lake;
 
 import org.apache.fluss.metadata.TableBucket;
 
+import javax.annotation.Nullable;
+
+import java.util.Arrays;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -35,9 +38,20 @@ public class LakeTableSnapshot {
     // will be null if log offset is unknown such as reading the snapshot of primary key table
     private final Map<TableBucket, Long> bucketLogEndOffset;
 
+    // opaque tiering-state JSON bytes; null when absent.
+    @Nullable private final byte[] tieringStateJson;
+
     public LakeTableSnapshot(long snapshotId, Map<TableBucket, Long> bucketLogEndOffset) {
+        this(snapshotId, bucketLogEndOffset, null);
+    }
+
+    public LakeTableSnapshot(
+            long snapshotId,
+            Map<TableBucket, Long> bucketLogEndOffset,
+            @Nullable byte[] tieringStateJson) {
         this.snapshotId = snapshotId;
         this.bucketLogEndOffset = bucketLogEndOffset;
+        this.tieringStateJson = tieringStateJson;
     }
 
     public long getSnapshotId() {
@@ -52,6 +66,12 @@ public class LakeTableSnapshot {
         return bucketLogEndOffset;
     }
 
+    /** Returns the opaque tiering-state JSON bytes, or {@code null} if absent. */
+    @Nullable
+    public byte[] getTieringStateJson() {
+        return tieringStateJson;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) {
@@ -62,12 +82,13 @@ public class LakeTableSnapshot {
         }
         LakeTableSnapshot that = (LakeTableSnapshot) o;
         return snapshotId == that.snapshotId
-                && Objects.equals(bucketLogEndOffset, that.bucketLogEndOffset);
+                && Objects.equals(bucketLogEndOffset, that.bucketLogEndOffset)
+                && Arrays.equals(tieringStateJson, that.tieringStateJson);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(snapshotId, bucketLogEndOffset);
+        return Objects.hash(snapshotId, bucketLogEndOffset, Arrays.hashCode(tieringStateJson));
     }
 
     @Override
@@ -77,6 +98,8 @@ public class LakeTableSnapshot {
                 + snapshotId
                 + ", bucketLogEndOffset="
                 + bucketLogEndOffset
+                + ", tieringStateJson="
+                + Arrays.toString(tieringStateJson)
                 + '}';
     }
 }

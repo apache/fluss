@@ -516,6 +516,18 @@ public class LakeTableTieringManager implements AutoCloseable {
                 });
     }
 
+    /**
+     * Validates a lake commit's tiering epoch against the coordinator's current assignment epoch,
+     * fencing off a writer from a stale assignment. The epoch is in-memory (reset on restart), so
+     * this is an exact match; a mismatched writer must re-acquire the table via heartbeat first.
+     *
+     * @throws TableNotExistException if the table is not (or no longer) a lake table
+     * @throws FencedTieringEpochException if the epoch does not match the current epoch
+     */
+    public void validateTieringEpoch(long tableId, long tieringEpoch) {
+        inReadLock(lock, () -> validateTieringServiceRequest(tableId, tieringEpoch));
+    }
+
     private void validateTieringServiceRequest(long tableId, long tieringEpoch) {
         Long currentEpoch = tableTierEpoch.get(tableId);
         // the table has been dropped, return false

@@ -1775,7 +1775,8 @@ public class ServerRpcMessageUtils {
                     entry.getValue(),
                     tableBucketsMaxTimestamp.get(tableId),
                     null, // no metadata for V1
-                    LakeCommitResult.KEEP_LATEST); // V1: keep only latest snapshot
+                    LakeCommitResult.KEEP_LATEST, // V1: keep only latest snapshot
+                    null); // V1: no tiering epoch
         }
 
         // Add V2 format snapshots (current)
@@ -1796,6 +1797,10 @@ public class ServerRpcMessageUtils {
                     pbLakeTableSnapshotMetadata.hasEarliestSnapshotIdToKeep()
                             ? pbLakeTableSnapshotMetadata.getEarliestSnapshotIdToKeep()
                             : null;
+            Long tieringEpoch =
+                    pbLakeTableSnapshotMetadata.hasTieringEpoch()
+                            ? pbLakeTableSnapshotMetadata.getTieringEpoch()
+                            : null;
 
             // If this table already exists in builder (from V1), update it; otherwise add new
             builder.addTableSnapshot(
@@ -1803,7 +1808,8 @@ public class ServerRpcMessageUtils {
                     lakeTableInfoByTableId.get(tableId), // may be null for V2-only
                     tableBucketsMaxTimestamp.get(tableId), // may be null
                     lakeSnapshotMetadata,
-                    earliestSnapshotIDToKeep);
+                    earliestSnapshotIDToKeep,
+                    tieringEpoch);
         }
 
         return builder.build();
@@ -1822,7 +1828,11 @@ public class ServerRpcMessageUtils {
                             pbBucketOffset.getBucketId());
             bucketOffsets.put(tableBucket, pbBucketOffset.getLogEndOffset());
         }
-        return new TableBucketOffsets(tableId, bucketOffsets);
+
+        // pass through the opaque tiering-state payload
+        byte[] tieringStateJson =
+                pbTableOffsets.hasTieringStateJson() ? pbTableOffsets.getTieringStateJson() : null;
+        return new TableBucketOffsets(tableId, bucketOffsets, tieringStateJson);
     }
 
     /**
@@ -1958,6 +1968,12 @@ public class ServerRpcMessageUtils {
             if (tableBucket.getPartitionId() != null) {
                 pbLakeSnapshotForBucket.setPartitionId(tableBucket.getPartitionId());
             }
+        }
+
+        // pass through the opaque tiering-state payload
+        if (lakeTableSnapshot.getTieringStateJson() != null) {
+            getLakeTableSnapshotResponse.setTieringStateJson(
+                    lakeTableSnapshot.getTieringStateJson());
         }
 
         return getLakeTableSnapshotResponse;

@@ -30,6 +30,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link LakeTableSnapshotLegacyJsonSerde}. */
 class LakeTableSnapshotLegacyJsonSerdeTest extends JsonSerdeTestBase<LakeTableSnapshot> {
@@ -103,5 +104,23 @@ class LakeTableSnapshotLegacyJsonSerdeTest extends JsonSerdeTestBase<LakeTableSn
                         version1Json3.getBytes(StandardCharsets.UTF_8),
                         LakeTableSnapshotLegacyJsonSerde.INSTANCE);
         assertThat(snapshot3.getSnapshotId()).isEqualTo(3);
+    }
+
+    @Test
+    void testSerializeRejectsTieringState() {
+        // Tiering state is a version-2 only feature; the legacy v1 format must reject it rather
+        // than
+        // silently drop it.
+        Map<TableBucket, Long> offsets = new HashMap<>();
+        offsets.put(new TableBucket(1L, 0), 100L);
+        LakeTableSnapshot withState =
+                new LakeTableSnapshot(
+                        1L, offsets, "{\"version\":1}".getBytes(StandardCharsets.UTF_8));
+        assertThatThrownBy(
+                        () ->
+                                JsonSerdeUtils.writeValueAsBytes(
+                                        withState, LakeTableSnapshotLegacyJsonSerde.INSTANCE))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("does not support tiering state");
     }
 }

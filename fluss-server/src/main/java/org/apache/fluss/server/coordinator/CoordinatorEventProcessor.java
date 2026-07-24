@@ -2300,6 +2300,11 @@ public class CoordinatorEventProcessor implements EventProcessor {
                                     throw new FlussRuntimeException(
                                             "Lake snapshot metadata is null for table " + tableId);
                                 }
+                                // Fencing: reject a writer from a stale tiering assignment.
+                                if (snapshot.getTieringEpoch() != null) {
+                                    lakeTableTieringManager.validateTieringEpoch(
+                                            tableId, snapshot.getTieringEpoch());
+                                }
                                 lakeTableHelper.registerLakeTableSnapshotV2(
                                         tableId,
                                         snapshot.getLakeSnapshotMetadata(),
