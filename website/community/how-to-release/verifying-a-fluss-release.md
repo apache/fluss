@@ -142,6 +142,6 @@ https://cwiki.apache.org/confluence/display/INCUBATOR/Incubator+Release+Checklis
 
 Votes are cast by replying on the vote email on the dev mailing list, with either +1, 0, -1.
 
-In addition to your vote, it’s customary to specify if your vote is binding or non-binding. Only members of the PPMC and mentors have formally binding votes, and IPMC on the vote on the Incubator general mailing list. If you’re unsure, you can specify that your vote is non-binding. You can find more details on https://www.apache.org/foundation/voting.html.
+In addition to your vote, it’s customary to specify if your vote is binding or non-binding. Only members of the PMC and mentors have formally binding votes. If you’re unsure, you can specify that your vote is non-binding. You can find more details on https://www.apache.org/foundation/voting.html.
 
 Besides, it is recommended to include a list of checklist you have verified for your vote. This helps the community to understand what you have checked and what is still missing.

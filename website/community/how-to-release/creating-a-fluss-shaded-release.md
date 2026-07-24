@@ -9,9 +9,9 @@ sidebar_position: 4
 This is based on the release guide of the [Apache Flink project](https://cwiki.apache.org/confluence/display/FLINK/Creating+a+Flink+Release).
 :::
 
-The Apache Fluss (Incubating) project periodically declares and publishes releases. A release is one or more packages of the project artifact(s) that are approved for general public distribution and use. The Fluss community treats releases with great importance. They are a public face of the project and most users interact with the project only through the releases. Releases are signed off by the entire Fluss community in a public vote.
+The Apache Fluss project periodically declares and publishes releases. A release is one or more packages of the project artifact(s) that are approved for general public distribution and use. The Fluss community treats releases with great importance. They are a public face of the project and most users interact with the project only through the releases. Releases are signed off by the entire Fluss community in a public vote.
 
-Each release is executed by a Release Manager, who is selected/proposed by the Fluss PPMC members. This document describes the process that the Release Manager follows to perform a release. Any changes to this process should be discussed and adopted on the dev@ mailing list.
+Each release is executed by a Release Manager, who is selected/proposed by the Fluss PMC members. This document describes the process that the Release Manager follows to perform a release. Any changes to this process should be discussed and adopted on the dev@ mailing list.
 
 Please remember that publishing software has legal consequences. This guide complements the foundation-wide [Product Release Policy](https://www.apache.org/legal/release-policy.html) and [Release Distribution Policy](https://infra.apache.org/release-distribution.html).
 
@@ -54,9 +54,9 @@ To prepare for each release, you should audit the project status in the GitHub i
 Set up a few environment variables to simplify commands that follow. (We use bash Unix syntax in this guide.)
 
 ```bash
-RELEASE_VERSION="1.0-incubating"
+RELEASE_VERSION="1.0"
 RELEASE_VERSION_SHORT="1.0"
-NEXT_VERSION="2.0-incubating"
+NEXT_VERSION="2.0"
 ```
 
 #### 2. Verify Java and Maven Version
@@ -186,7 +186,7 @@ tools $ releasing/deploy_staging_jars.sh
 
 Review all staged artifacts in the staging repositories(https://repository.apache.org/#stagingRepositories). They should contain all relevant parts for each module, including pom.xml, jar, test jar, source, test source, javadoc, etc. Carefully review any new artifacts. (fluss-shaded doesn’t deploy test jar, source jar, and javadoc jar, see the [issue](https://github.com/apache/fluss-shaded/blob/main/README.md#sources) for more details)
 
-Close the staging repository on Apache Nexus. When prompted for a description, enter `Apache Fluss Shaded (Incubating), version X, release candidate Y`. You can find the staging repository URL (`https://repository.apache.org/content/repositories/orgapachefluss-[STAGING_ID]/`) once the staging repository is closed successfully.
+Close the staging repository on Apache Nexus. When prompted for a description, enter `Apache Fluss Shaded, version X, release candidate Y`. You can find the staging repository URL (`https://repository.apache.org/content/repositories/orgapachefluss-[STAGING_ID]/`) once the staging repository is closed successfully.
 
 ![](../assets/nexus-staging.png)
 
@@ -232,7 +232,7 @@ The complete staging area is available for your review, which includes:
 * all artifacts to be deployed to the Maven Central Repository [3],
 * source code tag "release-1.0-incubating-rc3" [4],
 
-The vote will be open for at least 72 hours. It is adopted by majority approval, with at least 3 PPMC affirmative votes.
+The vote will be open for at least 72 hours. It is adopted by majority approval, with at least 3 PMC affirmative votes.
 
 Thanks,
 Release Manager
@@ -358,7 +358,7 @@ Thanks everyone!
 ```
 
 **Checklist to proceed to the finalization step**
-- Community votes to release the proposed candidate, with at least three approving PPMC votes
+- Community votes to release the proposed candidate, with at least three approving PMC votes
 - Incubator votes to release the proposed candidate, with at least three approving IPMC votes
 
 
@@ -389,7 +389,7 @@ Copy the source and binary releases from the dev repository to the release repos
 ```bash
 svn move -m "Release Fluss Shaded ${RELEASE_VERSION}" https://dist.apache.org/repos/dist/dev/incubator/fluss/fluss-shaded-${RELEASE_VERSION}-rc${RC_NUM} https://dist.apache.org/repos/dist/release/incubator/fluss/fluss-shaded-${RELEASE_VERSION}
 ```
-(Note: Only PPMC members have access to the release repository. If you do not have access, ask on the mailing list for assistance.)
+(Note: Only PMC members have access to the release repository. If you do not have access, ask on the mailing list for assistance.)
 
 #### Remove old release candidates from dist.apache.org
 
