@@ -47,6 +47,7 @@ public class LanceLakeWriter implements LakeWriter<LanceWriteResult> {
     private final Schema nonShadedSchema;
     private final RowType rowType;
     private final int batchSize;
+    private final long maxBytesPerBatch;
     private final String datasetUri;
     private final WriteParams writeParams;
 
@@ -63,6 +64,7 @@ public class LanceLakeWriter implements LakeWriter<LanceWriteResult> {
                         writerInitContext.tablePath().getTableName());
 
         this.batchSize = LanceConfig.getBatchSize(config);
+        this.maxBytesPerBatch = LanceConfig.getMaxBytesPerBatch(config);
         this.datasetUri = config.getDatasetUri();
         this.writeParams = LanceConfig.genWriteParamsFromConfig(config);
         this.rowType = writerInitContext.tableInfo().getRowType();
@@ -83,10 +85,25 @@ public class LanceLakeWriter implements LakeWriter<LanceWriteResult> {
     public void write(LogRecord record) throws IOException {
         arrowWriter.writeRow(record.getRow());
 
-        if (arrowWriter.getRecordsCount() >= batchSize) {
+        if (shouldFlush()) {
             List<FragmentMetadata> fragments = flush();
             allFragments.addAll(fragments);
         }
+    }
+
+    private boolean shouldFlush() {
+        int recordsCount = arrowWriter.getRecordsCount();
+        if (recordsCount >= batchSize) {
+            return true;
+        }
+        if (maxBytesPerBatch > 0
+                && arrowWriter.getShadedRoot().getFieldVectors().stream()
+                                .mapToLong(v -> v.getBufferSizeFor(recordsCount))
+                                .sum()
+                        >= maxBytesPerBatch) {
+            return true;
+        }
+        return false;
     }
 
     private List<FragmentMetadata> flush() throws IOException {
