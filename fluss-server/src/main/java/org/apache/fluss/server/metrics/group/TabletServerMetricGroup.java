@@ -67,6 +67,7 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
     // aggregated kv metrics
     private final Counter kvFlushCount;
     private final Histogram kvFlushLatencyHistogram;
+    private final Counter kvPreWriteBufferSizeBytes;
     private final Counter kvTruncateAsDuplicatedCount;
     private final Counter kvTruncateAsErrorCount;
 
@@ -117,6 +118,8 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
         meter(MetricNames.KV_FLUSH_RATE, new MeterView(kvFlushCount));
         kvFlushLatencyHistogram = new DescriptiveStatisticsHistogram(WINDOW_SIZE);
         histogram(MetricNames.KV_FLUSH_LATENCY_MS, kvFlushLatencyHistogram);
+        kvPreWriteBufferSizeBytes = new ThreadSafeSimpleCounter();
+        gauge(MetricNames.KV_PRE_WRITE_BUFFER_SIZE_BYTES, kvPreWriteBufferSizeBytes::getCount);
         kvTruncateAsDuplicatedCount = new SimpleCounter();
         meter(
                 MetricNames.KV_PRE_WRITE_BUFFER_TRUNCATE_AS_DUPLICATED_RATE,
@@ -217,6 +220,10 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
 
     public Histogram kvFlushLatencyHistogram() {
         return kvFlushLatencyHistogram;
+    }
+
+    public Counter kvPreWriteBufferSizeBytes() {
+        return kvPreWriteBufferSizeBytes;
     }
 
     public Counter kvTruncateAsDuplicatedCount() {
