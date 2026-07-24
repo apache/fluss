@@ -158,16 +158,16 @@ public class LogTieringTask implements Runnable {
 
                 if (success) {
                     if (!expiredRemoteLogSegments.isEmpty()) {
-                        // Release the mmap-backed local indexes before deleting the remote files.
-                        remoteLogIndexCache.removeAll(
-                                expiredRemoteLogSegments.stream()
-                                        .map(RemoteLogSegment::remoteLogSegmentId)
-                                        .collect(Collectors.toList()));
                         // 3. For these expiredRemoteLogSegments, we will delete remote log
                         // segment files from remote after commit the remote log manifest.
                         // TODO introduce the read reference count to avoid deleting remote log
                         // segments while there are readers is in progress.
                         deleteRemoteLogSegmentFiles(expiredRemoteLogSegments, metricGroup);
+
+                        remoteLogIndexCache.removeAll(
+                                expiredRemoteLogSegments.stream()
+                                        .map(RemoteLogSegment::remoteLogSegmentId)
+                                        .collect(Collectors.toList()));
                     }
 
                     if (endOffset > 0) {
