@@ -26,6 +26,7 @@ import org.apache.fluss.client.admin.ListOffsetsResult;
 import org.apache.fluss.client.admin.OffsetSpec;
 import org.apache.fluss.client.admin.ProducerOffsetsResult;
 import org.apache.fluss.client.admin.RegisterResult;
+import org.apache.fluss.client.admin.TabletServerDescription;
 import org.apache.fluss.client.metadata.ActiveKvSnapshots;
 import org.apache.fluss.client.metadata.KvSnapshotMetadata;
 import org.apache.fluss.client.metadata.KvSnapshots;
@@ -323,6 +324,11 @@ public class TestAdminAdapter implements Admin {
 
     @Override
     public CompletableFuture<ClusterHealth> getClusterHealth() {
+        throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
+    }
+
+    @Override
+    public CompletableFuture<List<TabletServerDescription>> describeTabletServers() {
         throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
     }
 

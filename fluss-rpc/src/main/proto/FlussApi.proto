@@ -808,8 +808,23 @@ message GetClusterHealthResponse {
   required int32 status = 5; // PbClusterHealthStatus: GREEN=0, YELLOW=1, RED=2, UNKNOWN=3
 }
 
+message DescribeTabletServersRequest {
+}
+
+message DescribeTabletServersResponse {
+  repeated PbTabletServerLoad tablet_servers = 1;
+}
+
 
 // --------------- Inner classes ----------------
+message PbTabletServerLoad {
+  required int32 server_id = 1;
+  required int32 num_replicas = 2;
+  required int32 in_sync_replicas = 3;
+  required int32 num_leader_replicas = 4;
+  required int32 active_leader_replicas = 5;
+}
+
 message PbApiVersion {
   required int32 api_key = 1;
   required int32 min_version = 2;

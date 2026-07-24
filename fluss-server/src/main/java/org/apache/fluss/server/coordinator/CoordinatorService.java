@@ -90,6 +90,8 @@ import org.apache.fluss.rpc.messages.CreateTableRequest;
 import org.apache.fluss.rpc.messages.CreateTableResponse;
 import org.apache.fluss.rpc.messages.DeleteProducerOffsetsRequest;
 import org.apache.fluss.rpc.messages.DeleteProducerOffsetsResponse;
+import org.apache.fluss.rpc.messages.DescribeTabletServersRequest;
+import org.apache.fluss.rpc.messages.DescribeTabletServersResponse;
 import org.apache.fluss.rpc.messages.DropAclsRequest;
 import org.apache.fluss.rpc.messages.DropAclsResponse;
 import org.apache.fluss.rpc.messages.DropDatabaseRequest;
@@ -123,6 +125,7 @@ import org.apache.fluss.rpc.messages.PbPrepareLakeTableRespForTable;
 import org.apache.fluss.rpc.messages.PbProducerTableOffsets;
 import org.apache.fluss.rpc.messages.PbTableBucket;
 import org.apache.fluss.rpc.messages.PbTableOffsets;
+import org.apache.fluss.rpc.messages.PbTabletServerLoad;
 import org.apache.fluss.rpc.messages.PrepareLakeTableSnapshotRequest;
 import org.apache.fluss.rpc.messages.PrepareLakeTableSnapshotResponse;
 import org.apache.fluss.rpc.messages.RebalanceRequest;
@@ -202,6 +205,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.function.Supplier;
@@ -1494,6 +1498,80 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         response.setActiveLeaderReplicas(activeLeaderReplicas);
         response.setStatus(status);
         return response;
+    }
+
+    @Override
+    public CompletableFuture<DescribeTabletServersResponse> describeTabletServers(
+            DescribeTabletServersRequest request) {
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), OperationType.DESCRIBE, Resource.cluster());
+        }
+
+        AccessContextEvent<DescribeTabletServersResponse> event =
+                new AccessContextEvent<>(CoordinatorService::computeTabletServerLoads);
+        eventManagerSupplier.get().put(event);
+        return event.getResultFuture();
+    }
+
+    @VisibleForTesting
+    static DescribeTabletServersResponse computeTabletServerLoads(CoordinatorContext ctx) {
+        // sorted by server id for a deterministic response order
+        Map<Integer, PbTabletServerLoad> loads = new TreeMap<>();
+        // report live and shutting-down servers even if they host no replicas, so that
+        // an evacuated server explicitly shows zero replicas
+        for (int serverId : ctx.liveOrShuttingDownTabletServers()) {
+            getOrCreateLoad(loads, serverId);
+        }
+
+        for (TableBucket tb : ctx.getAllBuckets()) {
+            countBucketReplicas(ctx, tb, loads);
+        }
+
+        DescribeTabletServersResponse response = new DescribeTabletServersResponse();
+        response.addAllTabletServers(loads.values());
+        return response;
+    }
+
+    private static void countBucketReplicas(
+            CoordinatorContext ctx, TableBucket tb, Map<Integer, PbTabletServerLoad> loads) {
+        for (int serverId : ctx.getAssignment(tb)) {
+            PbTabletServerLoad load = getOrCreateLoad(loads, serverId);
+            load.setNumReplicas(load.getNumReplicas() + 1);
+        }
+
+        Optional<LeaderAndIsr> laiOpt = ctx.getBucketLeaderAndIsr(tb);
+        if (!laiOpt.isPresent()) {
+            return;
+        }
+
+        for (int serverId : laiOpt.get().isr()) {
+            PbTabletServerLoad load = getOrCreateLoad(loads, serverId);
+            load.setInSyncReplicas(load.getInSyncReplicas() + 1);
+        }
+
+        int leader = laiOpt.get().leader();
+        if (leader == LeaderAndIsr.NO_LEADER) {
+            return;
+        }
+
+        PbTabletServerLoad load = getOrCreateLoad(loads, leader);
+        load.setNumLeaderReplicas(load.getNumLeaderReplicas() + 1);
+        if (ctx.isLeaderActive(tb)) {
+            load.setActiveLeaderReplicas(load.getActiveLeaderReplicas() + 1);
+        }
+    }
+
+    private static PbTabletServerLoad getOrCreateLoad(
+            Map<Integer, PbTabletServerLoad> loads, int serverId) {
+        return loads.computeIfAbsent(
+                serverId,
+                id ->
+                        new PbTabletServerLoad()
+                                .setServerId(id)
+                                .setNumReplicas(0)
+                                .setInSyncReplicas(0)
+                                .setNumLeaderReplicas(0)
+                                .setActiveLeaderReplicas(0));
     }
 
     @VisibleForTesting

@@ -2860,4 +2860,94 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         assertThat(afterRecovery.getNumLeaderReplicas())
                 .isEqualTo(afterRecovery.getActiveLeaderReplicas());
     }
+
+    @Test
+    void testDescribeTabletServersDuringRollingUpgrade() throws Exception {
+        TablePath tablePath = TablePath.of("test_db", "describe_tablet_servers_table");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder().schema(DEFAULT_SCHEMA).distributedBy(3, "id").build();
+        long tableId = createTable(tablePath, tableDescriptor, true);
+        waitAllReplicasReady(tableId, 3);
+
+        // Phase 1: Cluster is healthy - every live server is reported, hosts replicas of the
+        // created table (replication factor 3 on 3 servers) and is green. The cluster is shared
+        // with other tests, so wait until residue from them (e.g. a recovering ISR) has settled
+        // before taking the snapshot asserted below.
+        waitUntil(
+                () ->
+                        admin.describeTabletServers().get().stream()
+                                .allMatch(FlussAdminITCase::isServerGreen),
+                Duration.ofMinutes(1),
+                "All tablet servers should be green before the rolling upgrade starts");
+
+        List<TabletServerDescription> servers = admin.describeTabletServers().get();
+        assertThat(servers).extracting(TabletServerDescription::getServerId).contains(0, 1, 2);
+        for (TabletServerDescription server : servers) {
+            assertThat(server.getNumReplicas()).isGreaterThan(0);
+            assertThat(isServerGreen(server)).isTrue();
+        }
+
+        // The per-server counters must sum up to the cluster-wide health counters.
+        ClusterHealth health = admin.getClusterHealth().get();
+        assertThat(servers.stream().mapToInt(TabletServerDescription::getNumReplicas).sum())
+                .isEqualTo(health.getNumReplicas());
+        assertThat(servers.stream().mapToInt(TabletServerDescription::getInSyncReplicas).sum())
+                .isEqualTo(health.getInSyncReplicas());
+        assertThat(servers.stream().mapToInt(TabletServerDescription::getNumLeaderReplicas).sum())
+                .isEqualTo(health.getNumLeaderReplicas());
+        assertThat(
+                        servers.stream()
+                                .mapToInt(TabletServerDescription::getActiveLeaderReplicas)
+                                .sum())
+                .isEqualTo(health.getActiveLeaderReplicas());
+
+        // Phase 2: Stop one tablet server (simulate server crash during rolling upgrade). It must
+        // still be reported with its assigned replicas, but no longer green - an operator must
+        // not treat it as safe to remove.
+        int stoppedServerId = 0;
+        FLUSS_CLUSTER_EXTENSION.stopTabletServer(stoppedServerId);
+        FLUSS_CLUSTER_EXTENSION.assertHasTabletServerNumber(2);
+
+        for (int bucket = 0; bucket < 3; bucket++) {
+            TableBucket tb = new TableBucket(tableId, bucket);
+            FLUSS_CLUSTER_EXTENSION.waitUntilReplicaShrinkFromIsr(tb, stoppedServerId);
+        }
+
+        TabletServerDescription stopped =
+                getTabletServerDescription(admin.describeTabletServers().get(), stoppedServerId);
+        assertThat(stopped.getNumReplicas()).isGreaterThan(0);
+        assertThat(stopped.getInSyncReplicas()).isLessThan(stopped.getNumReplicas());
+
+        // Phase 3: Restart the server and wait until every server is green again.
+        FLUSS_CLUSTER_EXTENSION.startTabletServer(stoppedServerId);
+        FLUSS_CLUSTER_EXTENSION.assertHasTabletServerNumber(3);
+
+        for (int bucket = 0; bucket < 3; bucket++) {
+            TableBucket tb = new TableBucket(tableId, bucket);
+            FLUSS_CLUSTER_EXTENSION.waitUntilReplicaExpandToIsr(tb, stoppedServerId);
+        }
+
+        waitUntil(
+                () ->
+                        admin.describeTabletServers().get().stream()
+                                .allMatch(FlussAdminITCase::isServerGreen),
+                Duration.ofMinutes(1),
+                "All tablet servers should become green again after server restart");
+    }
+
+    private static TabletServerDescription getTabletServerDescription(
+            List<TabletServerDescription> servers, int serverId) {
+        return servers.stream()
+                .filter(server -> server.getServerId() == serverId)
+                .findFirst()
+                .orElseThrow(
+                        () ->
+                                new AssertionError(
+                                        "no description reported for tablet server " + serverId));
+    }
+
+    private static boolean isServerGreen(TabletServerDescription server) {
+        return server.getInSyncReplicas() == server.getNumReplicas()
+                && server.getActiveLeaderReplicas() == server.getNumLeaderReplicas();
+    }
 }
