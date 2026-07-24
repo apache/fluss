@@ -25,9 +25,14 @@ use crate::rpc::{RpcClient, ServerConnection};
 use log::{info, warn};
 use parking_lot::RwLock;
 use std::collections::HashSet;
+use std::future::Future;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::watch;
+
+const MAX_BOOTSTRAP_RETRIES: usize = 3;
+const BOOTSTRAP_RETRY_INTERVAL_MS: u64 = 100;
 
 pub struct Metadata {
     cluster: RwLock<Arc<Cluster>>,
@@ -111,6 +116,37 @@ impl Metadata {
         Ok(bootstraps)
     }
 
+    async fn retry_bootstrap<T, Operation, OperationFuture, Disconnect>(
+        bootstrap: &str,
+        mut operation: Operation,
+        mut disconnect: Disconnect,
+    ) -> Result<T>
+    where
+        Operation: FnMut() -> OperationFuture,
+        OperationFuture: Future<Output = Result<T>>,
+        Disconnect: FnMut(),
+    {
+        let mut retry_count = 0;
+
+        loop {
+            match operation().await {
+                Ok(result) => return Ok(result),
+                Err(err) if err.is_retriable() && retry_count < MAX_BOOTSTRAP_RETRIES => {
+                    disconnect();
+                    let delay_ms = BOOTSTRAP_RETRY_INTERVAL_MS * (1_u64 << retry_count);
+                    retry_count += 1;
+                    warn!(
+                        "Failed to initialize cluster from bootstrap server '{bootstrap}' \
+                         (retry {retry_count}/{MAX_BOOTSTRAP_RETRIES}). Retrying in \
+                         {delay_ms} ms: {err}"
+                    );
+                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                }
+                Err(err) => return Err(err),
+            }
+        }
+    }
+
     async fn init_cluster(bootstrap_servers: &str, connections: Arc<RpcClient>) -> Result<Cluster> {
         let bootstraps = Self::parse_bootstrap_servers(bootstrap_servers)?;
         let bootstrap_count = bootstraps.len();
@@ -138,7 +174,18 @@ impl Metadata {
                 ServerType::Unknown,
             );
 
-            match Self::fetch_cluster_from_bootstrap(&server_node, connections.clone()).await {
+            let cluster_result = if bootstrap_count == 1 {
+                Self::retry_bootstrap(
+                    &bootstrap.raw,
+                    || Self::fetch_cluster_from_bootstrap(&server_node, connections.clone()),
+                    || connections.disconnect(server_node.uid()),
+                )
+                .await
+            } else {
+                Self::fetch_cluster_from_bootstrap(&server_node, connections.clone()).await
+            };
+
+            match cluster_result {
                 Ok(cluster) => return Ok(cluster),
                 Err(err) => {
                     if index + 1 < bootstrap_count {
@@ -412,6 +459,124 @@ mod tests {
     use crate::error::ApiError;
     use crate::metadata::{TableBucket, TablePath};
     use crate::test_utils::build_cluster_arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[tokio::test(start_paused = true)]
+    async fn bootstrap_retry_succeeds_after_retriable_failures() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let disconnects = Arc::new(AtomicUsize::new(0));
+        let started_at = tokio::time::Instant::now();
+
+        let result = Metadata::retry_bootstrap(
+            "localhost:9123",
+            {
+                let attempts = attempts.clone();
+                move || {
+                    let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+                    async move {
+                        if attempt < 2 {
+                            Err(crate::rpc::RpcError::ConnectionError(
+                                "bootstrap is recovering".to_string(),
+                            )
+                            .into())
+                        } else {
+                            Ok(Cluster::default())
+                        }
+                    }
+                }
+            },
+            {
+                let disconnects = disconnects.clone();
+                move || {
+                    disconnects.fetch_add(1, Ordering::SeqCst);
+                }
+            },
+        )
+        .await;
+
+        assert!(result.is_ok());
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
+        assert_eq!(disconnects.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            tokio::time::Instant::now().duration_since(started_at),
+            std::time::Duration::from_millis(300)
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn bootstrap_retry_returns_last_error_after_exhaustion() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let disconnects = Arc::new(AtomicUsize::new(0));
+        let started_at = tokio::time::Instant::now();
+
+        let result = Metadata::retry_bootstrap(
+            "localhost:9123",
+            {
+                let attempts = attempts.clone();
+                move || {
+                    attempts.fetch_add(1, Ordering::SeqCst);
+                    async {
+                        Err::<Cluster, Error>(
+                            FlussError::RequestTimeOut
+                                .to_api_error(Some("bootstrap is recovering".to_string()))
+                                .into(),
+                        )
+                    }
+                }
+            },
+            {
+                let disconnects = disconnects.clone();
+                move || {
+                    disconnects.fetch_add(1, Ordering::SeqCst);
+                }
+            },
+        )
+        .await;
+
+        let error = match result {
+            Ok(_) => panic!("retries should be exhausted"),
+            Err(error) => error,
+        };
+        assert_eq!(error.api_error(), Some(FlussError::RequestTimeOut));
+        assert_eq!(attempts.load(Ordering::SeqCst), 4);
+        assert_eq!(disconnects.load(Ordering::SeqCst), 3);
+        assert_eq!(
+            tokio::time::Instant::now().duration_since(started_at),
+            std::time::Duration::from_millis(700)
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn bootstrap_retry_does_not_retry_non_retriable_error() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let disconnects = Arc::new(AtomicUsize::new(0));
+
+        let result = Metadata::retry_bootstrap(
+            "localhost:9123",
+            {
+                let attempts = attempts.clone();
+                move || {
+                    attempts.fetch_add(1, Ordering::SeqCst);
+                    async {
+                        Err::<Cluster, Error>(Error::IllegalArgument {
+                            message: "invalid bootstrap response".to_string(),
+                        })
+                    }
+                }
+            },
+            {
+                let disconnects = disconnects.clone();
+                move || {
+                    disconnects.fetch_add(1, Ordering::SeqCst);
+                }
+            },
+        )
+        .await;
+
+        assert!(matches!(result, Err(Error::IllegalArgument { .. })));
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        assert_eq!(disconnects.load(Ordering::SeqCst), 0);
+    }
 
     #[tokio::test]
     async fn leader_for_returns_server() {
@@ -511,7 +676,7 @@ mod tests {
     #[test]
     fn parse_bootstrap_preserves_later_entries_when_one_entry_is_unresolvable() {
         let bootstraps =
-            Metadata::parse_bootstrap_servers("invalid_address:8080, 127.0.0.1:9090").unwrap();
+            Metadata::parse_bootstrap_servers("invalid.invalid:8080, 127.0.0.1:9090").unwrap();
 
         assert_eq!(bootstraps.len(), 2);
         assert!(bootstraps[0].address.is_err());

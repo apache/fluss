@@ -207,6 +207,10 @@ impl RpcClient {
         self
     }
 
+    pub(crate) fn disconnect(&self, server_uid: &str) {
+        self.connections.write().remove(server_uid);
+    }
+
     pub(crate) async fn get_connection(
         &self,
         server_node: &ServerNode,
