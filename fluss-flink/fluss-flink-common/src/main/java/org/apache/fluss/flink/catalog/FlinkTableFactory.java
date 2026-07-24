@@ -21,6 +21,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.flink.FlinkConnectorOptions;
+import org.apache.fluss.flink.adapter.LookupShuffleSourceAdapter;
 import org.apache.fluss.flink.lake.LakeFlinkCatalog;
 import org.apache.fluss.flink.lake.LakeTableFactory;
 import org.apache.fluss.flink.sink.FlinkTableSink;
@@ -150,26 +151,29 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                 tableOptions.get(FlinkConnectorOptions.SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE);
 
         LeaseContext leaseContext = LeaseContext.fromConf(tableOptions);
-        return new FlinkTableSource(
-                toFlussTablePath(context.getObjectIdentifier()),
-                toFlussClientConfig(
-                        context.getCatalogTable().getOptions(), context.getConfiguration()),
-                toFlussTableConfig(tableOptions),
-                tableOutputType,
-                primaryKeyIndexes,
-                bucketKeyIndexes,
-                partitionKeyIndexes,
-                isStreamingMode,
-                startupOptions,
-                tableOptions.get(FlinkConnectorOptions.LOOKUP_ASYNC),
-                tableOptions.get(FlinkConnectorOptions.LOOKUP_INSERT_IF_NOT_EXISTS),
-                cache,
-                partitionDiscoveryIntervalMs,
-                splitAssignmentBatchSize,
-                tableOptions.get(toFlinkOption(ConfigOptions.TABLE_DATALAKE_ENABLED)),
-                tableOptions.get(toFlinkOption(ConfigOptions.TABLE_MERGE_ENGINE)),
-                context.getCatalogTable().getOptions(),
-                leaseContext);
+        return LookupShuffleSourceAdapter.maybeWithCustomShuffle(
+                new FlinkTableSource(
+                        toFlussTablePath(context.getObjectIdentifier()),
+                        toFlussClientConfig(
+                                context.getCatalogTable().getOptions(), context.getConfiguration()),
+                        toFlussTableConfig(tableOptions),
+                        tableOutputType,
+                        primaryKeyIndexes,
+                        bucketKeyIndexes,
+                        partitionKeyIndexes,
+                        isStreamingMode,
+                        startupOptions,
+                        tableOptions.get(FlinkConnectorOptions.LOOKUP_ASYNC),
+                        tableOptions.get(FlinkConnectorOptions.LOOKUP_INSERT_IF_NOT_EXISTS),
+                        cache,
+                        partitionDiscoveryIntervalMs,
+                        splitAssignmentBatchSize,
+                        tableOptions.get(toFlinkOption(ConfigOptions.TABLE_DATALAKE_ENABLED)),
+                        tableOptions.get(toFlinkOption(ConfigOptions.TABLE_MERGE_ENGINE)),
+                        context.getCatalogTable().getOptions(),
+                        leaseContext),
+                tableOptions,
+                primaryKeyIndexes.length > 0 && bucketKeyIndexes.length > 0);
     }
 
     @Override
