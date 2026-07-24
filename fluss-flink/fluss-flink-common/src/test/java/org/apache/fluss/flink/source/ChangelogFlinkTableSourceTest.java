@@ -31,7 +31,6 @@ import org.apache.flink.table.expressions.ValueLiteralExpression;
 import org.apache.flink.table.functions.BuiltInFunctionDefinitions;
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.table.types.logical.RowType;
-
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -140,14 +139,17 @@ class ChangelogFlinkTableSourceTest {
 
     private static Stream<Arguments> projectionCases() {
         return Stream.of(
-            // description, virtual, expectedDataProjection, expectedBaseProjection
-            // metadata only
-            Arguments.of("metadata-only", new int[] {0}, null, new int[] {0}),
-            // data only
-            Arguments.of("data-only", new int[] {3, 5}, new int[] {0, 2}, new int[] {3, 4}),
-            // reordered mix
-            Arguments.of(
-                    "reorderedMix", new int[] {0, 5, 3}, new int[] {2, 0}, new int[] {0, 3, 4}));
+                // description, virtual, expectedDataProjection, expectedBaseProjection
+                // metadata only
+                Arguments.of("metadata-only", new int[] {0}, null, new int[] {0}),
+                // data only
+                Arguments.of("data-only", new int[] {3, 5}, new int[] {0, 2}, new int[] {3, 4}),
+                // reordered mix
+                Arguments.of(
+                        "reorderedMix",
+                        new int[] {0, 5, 3},
+                        new int[] {2, 0},
+                        new int[] {0, 3, 4}));
     }
 
     @Test

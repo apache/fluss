@@ -32,13 +32,12 @@ import org.apache.flink.table.data.StringData;
 import org.apache.flink.table.data.utils.JoinedRowData;
 import org.apache.flink.types.RowKind;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 import java.util.stream.Stream;
-
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -63,8 +62,8 @@ class ChangelogRowConverterTest {
 
     @ParameterizedTest
     @MethodSource("changeTypeCases")
-    void testConvertAllChangeTypes(ChangeType changeType, String expectedChangeType) 
-                throws Exception {
+    void testConvertAllChangeTypes(ChangeType changeType, String expectedChangeType)
+            throws Exception {
         LogRecord record = createLogRecord(changeType, 100L, 1, "Alice", 5000L);
 
         RowData result = converter.convert(record);
