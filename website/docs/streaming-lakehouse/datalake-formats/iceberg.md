@@ -58,10 +58,10 @@ This approach enables passing custom configurations for Iceberg catalog initiali
 Fluss supports all Iceberg-compatible catalog types:
 
 **Built-in Catalog Types:**
-- `hive` - Hive Metastore catalog
+- `hive` - Hive Metastore catalog (see [Hive Metastore](../datalake-catalogs/hive.md))
 - `hadoop` - Hadoop catalog
-- `rest` - REST catalog
-- `glue` - AWS Glue catalog
+- `rest` - REST catalog (see [Lakekeeper](../datalake-catalogs/lakekeeper.md) and [Polaris](../datalake-catalogs/polaris.md))
+- `glue` - AWS Glue catalog (see [AWS Glue](../datalake-catalogs/glue.md))
 - `nessie` - Nessie catalog
 - `jdbc` - JDBC catalog
 
