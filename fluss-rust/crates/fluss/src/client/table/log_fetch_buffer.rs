@@ -991,6 +991,7 @@ mod tests {
     };
     use crate::row::GenericRow;
     use crate::test_utils::{build_table_info, build_table_info_with_columns};
+    use arrow::array::{Array, StringArray};
     use std::sync::Arc;
 
     fn expect_data<T>(result: FetchResult<T>) -> T {
@@ -1193,7 +1194,8 @@ mod tests {
                 .with_fluss_row_type(new_row_type_arc),
         );
         let resolver = Arc::new(
-            ReadContextResolver::new(1, local_ctx, remote_ctx, None).with_fixed_schema(true),
+            ReadContextResolver::new(1, local_ctx, remote_ctx, None)
+                .with_fixed_schema(true, new_table_info.get_schema()),
         );
 
         let mut fetch = DefaultCompletedFetch::new(
@@ -1219,6 +1221,119 @@ mod tests {
         assert_eq!(batch.num_columns(), 2);
         assert_eq!(batch.column(1).null_count(), 1);
 
+        Ok(())
+    }
+
+    #[test]
+    fn fixed_schema_fetch_batches_preserves_renamed_column_by_id() -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let old_table_info = Arc::new(build_table_info_with_columns(
+            table_path.clone(),
+            1,
+            1,
+            vec![
+                DataField::new("id", DataTypes::int(), None),
+                DataField::new("old_name", DataTypes::string(), None),
+            ],
+        ));
+        let new_table_info = build_table_info_with_columns(
+            table_path.clone(),
+            1,
+            1,
+            vec![
+                DataField::new("id", DataTypes::int(), None),
+                DataField::new("new_name", DataTypes::string(), None),
+            ],
+        );
+        let physical_table_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path)));
+
+        let mut builder = MemoryLogRecordsArrowBuilder::new(
+            0,
+            old_table_info.get_row_type(),
+            false,
+            ArrowCompressionInfo {
+                compression_type: ArrowCompressionType::None,
+                compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
+            },
+            usize::MAX,
+            Arc::new(ArrowCompressionRatioEstimator::default()),
+        )?;
+        let mut row = GenericRow::new(2);
+        row.set_field(0, 1_i32);
+        row.set_field(1, "alice");
+        let record =
+            WriteRecord::for_append(Arc::clone(&old_table_info), physical_table_path, 1, &row);
+        builder.append(&record)?;
+
+        let data = builder.build()?;
+        let target_arrow_schema = to_arrow_schema(new_table_info.get_row_type())?;
+        let target_row_type = Arc::new(new_table_info.get_row_type().clone());
+        let local_ctx = Arc::new(
+            ReadContext::new(
+                target_arrow_schema.clone(),
+                Arc::clone(&target_row_type),
+                false,
+            )
+            .with_fluss_row_type(Arc::clone(&target_row_type)),
+        );
+        let remote_ctx = Arc::new(
+            ReadContext::new(
+                target_arrow_schema.clone(),
+                Arc::clone(&target_row_type),
+                true,
+            )
+            .with_fluss_row_type(target_row_type),
+        );
+        let resolver = Arc::new(
+            ReadContextResolver::new(1, local_ctx, remote_ctx, None)
+                .with_fixed_schema(true, new_table_info.get_schema()),
+        );
+        let mut fetch = DefaultCompletedFetch::new(
+            TableBucket::new(1, 0),
+            LogRecordsBatches::new(data.clone()),
+            data.len(),
+            Arc::clone(&resolver),
+            false,
+            0,
+            0,
+        );
+
+        assert!(matches!(
+            fetch.fetch_batches(10)?,
+            FetchResult::SchemaRequired(0)
+        ));
+        resolver.register_schema(0, old_table_info.get_schema())?;
+
+        let batches = expect_data(fetch.fetch_batches(10)?);
+        let batch = &batches[0].0;
+        assert_eq!(batch.schema().field(1).name(), "new_name");
+        let names = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("renamed string column");
+        assert_eq!(names.null_count(), 0);
+        assert_eq!(names.value(0), "alice");
+
+        let mut remote_fetch = DefaultCompletedFetch::new(
+            TableBucket::new(1, 0),
+            LogRecordsBatches::new(data.clone()),
+            data.len(),
+            resolver,
+            true,
+            0,
+            0,
+        );
+        let remote_batches = expect_data(remote_fetch.fetch_batches(10)?);
+        let remote_batch = &remote_batches[0].0;
+        assert_eq!(remote_batch.schema().field(1).name(), "new_name");
+        let remote_names = remote_batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("remote renamed string column");
+        assert_eq!(remote_names.null_count(), 0);
+        assert_eq!(remote_names.value(0), "alice");
         Ok(())
     }
 

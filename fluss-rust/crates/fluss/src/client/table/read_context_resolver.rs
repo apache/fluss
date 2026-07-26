@@ -29,7 +29,7 @@
 
 use crate::client::ClientSchemaGetter;
 use crate::error::{Error, Result};
-use crate::metadata::{RowType, Schema};
+use crate::metadata::{RowType, Schema, UNEXIST_MAPPING, index_mapping};
 use crate::record::{ReadContext, to_arrow_schema};
 use arrow_schema::SchemaRef;
 use parking_lot::RwLock;
@@ -50,7 +50,8 @@ pub(crate) struct ReadContextResolver {
     /// When true, contexts for older schemas still decode with their write-time
     /// schema, then align the output to the scanner creation schema.
     fixed_schema: bool,
-    fixed_target_schema: Option<SchemaRef>,
+    fixed_target_arrow_schema: Option<SchemaRef>,
+    fixed_target_fluss_schema: Option<Schema>,
     fixed_target_row_type: Option<Arc<RowType>>,
 }
 
@@ -82,7 +83,8 @@ impl ReadContextResolver {
             projected_fields,
             schema_getter: None,
             fixed_schema: false,
-            fixed_target_schema: None,
+            fixed_target_arrow_schema: None,
+            fixed_target_fluss_schema: None,
             fixed_target_row_type: None,
         }
     }
@@ -92,9 +94,10 @@ impl ReadContextResolver {
         self
     }
 
-    pub fn with_fixed_schema(mut self, fixed_schema: bool) -> Self {
+    pub fn with_fixed_schema(mut self, fixed_schema: bool, target_fluss_schema: &Schema) -> Self {
         self.fixed_schema = fixed_schema;
         if fixed_schema {
+            self.fixed_target_fluss_schema = Some(target_fluss_schema.clone());
             let fixed_target = {
                 let guard = self.contexts.read();
                 guard
@@ -102,11 +105,12 @@ impl ReadContextResolver {
                     .map(|ctx| (ctx.local.target_schema(), ctx.local.row_type_arc()))
             };
             if let Some((target_schema, target_row_type)) = fixed_target {
-                self.fixed_target_schema = Some(target_schema);
+                self.fixed_target_arrow_schema = Some(target_schema);
                 self.fixed_target_row_type = Some(target_row_type);
             }
         } else {
-            self.fixed_target_schema = None;
+            self.fixed_target_arrow_schema = None;
+            self.fixed_target_fluss_schema = None;
             self.fixed_target_row_type = None;
         }
         self
@@ -170,6 +174,29 @@ impl ReadContextResolver {
         let source_row_type = schema.row_type();
         let source_arrow_schema = to_arrow_schema(source_row_type)?;
         let source_row_type_arc = Arc::new(source_row_type.clone());
+        let source_indexes = if self.fixed_schema {
+            let target_schema =
+                self.fixed_target_fluss_schema
+                    .as_ref()
+                    .ok_or_else(|| Error::UnexpectedError {
+                        message: "Fixed-schema resolver has no target Fluss schema".to_string(),
+                        source: None,
+                    })?;
+            Some(
+                index_mapping(schema, target_schema)?
+                    .into_iter()
+                    .map(|index| {
+                        if index == UNEXIST_MAPPING {
+                            None
+                        } else {
+                            Some(index as usize)
+                        }
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        } else {
+            None
+        };
         let output_row_type = self
             .fixed_target_row_type
             .clone()
@@ -183,10 +210,21 @@ impl ReadContextResolver {
                 .with_fluss_row_type(output_row_type);
 
         if self.fixed_schema {
-            if let Some(target_schema) = &self.fixed_target_schema {
-                local_context = local_context.with_target_schema_alignment(target_schema.clone());
-                remote_context = remote_context.with_target_schema_alignment(target_schema.clone());
-            }
+            let target_schema =
+                self.fixed_target_arrow_schema
+                    .as_ref()
+                    .ok_or_else(|| Error::UnexpectedError {
+                        message: "Fixed-schema resolver has no target Arrow schema".to_string(),
+                        source: None,
+                    })?;
+            let source_indexes = source_indexes.ok_or_else(|| Error::UnexpectedError {
+                message: "Fixed-schema resolver has no source-index mapping".to_string(),
+                source: None,
+            })?;
+            local_context = local_context
+                .with_target_schema_alignment(target_schema.clone(), source_indexes.clone());
+            remote_context =
+                remote_context.with_target_schema_alignment(target_schema.clone(), source_indexes);
         }
 
         let local_context = Arc::new(local_context);

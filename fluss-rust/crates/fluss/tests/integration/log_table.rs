@@ -25,11 +25,11 @@ mod table_test {
         poll_until_count, poll_until_nonempty, row_dt_basics_columns, scalar_dt_columns,
         wait_for_partitions_ready, wait_for_table_buckets_ready, wait_for_table_ready,
     };
-    use arrow::array::record_batch;
+    use arrow::array::{Array, StringArray, record_batch};
     use fluss::client::{EARLIEST_OFFSET, FlussTable, TableScan};
     use fluss::metadata::{
-        AddColumn, AlterTableChanges, ColumnPositionType, DataField, DataTypes, JsonSerde, Schema,
-        TableDescriptor, TablePath,
+        AddColumn, AlterTableChanges, ColumnPositionType, DataField, DataTypes, JsonSerde,
+        RenameColumn, Schema, TableDescriptor, TablePath,
     };
     use fluss::record::ScanRecord;
     use fluss::row::binary_array::FlussArrayWriter;
@@ -2180,6 +2180,112 @@ mod table_test {
             .drop_table(&table_path, false)
             .await
             .expect("Failed to drop table");
+    }
+
+    #[tokio::test]
+    async fn schema_evolution_rename_column_log_scanner_fixed_schema() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("admin");
+        let table_path = TablePath::new(
+            "fluss",
+            "test_schema_evolution_rename_column_log_scanner_fixed_schema",
+        );
+        let descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("old_name", DataTypes::string())
+                    .build()
+                    .expect("schema"),
+            )
+            .build()
+            .expect("descriptor");
+
+        create_table(&admin, &table_path, &descriptor).await;
+        wait_for_table_ready(&admin, &table_path).await;
+
+        let old_table = connection.get_table(&table_path).await.expect("old table");
+        let writer = old_table
+            .new_append()
+            .expect("append")
+            .create_writer()
+            .expect("writer");
+        writer
+            .append_arrow_batch(
+                record_batch!(("id", Int32, [1, 2]), ("old_name", Utf8, ["alice", "bob"]))
+                    .expect("batch"),
+            )
+            .expect("append old batch");
+        writer.flush().await.expect("flush");
+
+        admin
+            .alter_table(
+                &table_path,
+                false,
+                AlterTableChanges {
+                    rename_columns: vec![RenameColumn {
+                        old_column_name: "old_name".to_string(),
+                        new_column_name: "new_name".to_string(),
+                    }],
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("rename column");
+
+        let renamed_table = connection
+            .get_table(&table_path)
+            .await
+            .expect("renamed table");
+        let scanner = renamed_table
+            .new_scan()
+            .with_fixed_schema(true)
+            .create_record_batch_log_scanner()
+            .expect("scanner");
+        for bucket_id in 0..renamed_table.get_table_info().get_num_buckets() {
+            scanner
+                .subscribe(bucket_id, EARLIEST_OFFSET)
+                .await
+                .expect("subscribe");
+        }
+        assert_eq!(scanner.schema().field(1).name(), "new_name");
+
+        let mut names = poll_until_count(
+            2,
+            DEFAULT_POLL_TIMEOUT,
+            Duration::from_millis(500),
+            async |timeout| {
+                scanner
+                    .poll(timeout)
+                    .await
+                    .expect("poll")
+                    .iter()
+                    .flat_map(|scan_batch| {
+                        let values = scan_batch
+                            .batch()
+                            .column(1)
+                            .as_any()
+                            .downcast_ref::<StringArray>()
+                            .expect("renamed string column");
+                        (0..values.len())
+                            .map(|index| {
+                                assert!(!values.is_null(index), "renamed value must not be null");
+                                values.value(index).to_string()
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>()
+            },
+        )
+        .await;
+        names.sort();
+        assert_eq!(names, vec!["alice".to_string(), "bob".to_string()]);
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("drop table");
     }
 
     #[tokio::test]

@@ -1242,7 +1242,7 @@ impl LogFetcher {
                 projected_fields,
             )
             .with_schema_getter(Arc::clone(&schema_getter))
-            .with_fixed_schema(fixed_schema),
+            .with_fixed_schema(fixed_schema, table_info.get_schema()),
         );
 
         let tmp_dir = TempDir::with_prefix("fluss-remote-logs")?;
