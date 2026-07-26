@@ -298,6 +298,43 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
     }
 
     @Test
+    void testKvBatchScanReflectsUpdatesAndDeletes() throws Exception {
+        String tableName = String.format("test_kv_batch_upd_del_%s", RandomUtils.nextInt());
+        tEnv.executeSql(
+                String.format(
+                        "create table %s ("
+                                + "  id int not null,"
+                                + "  address varchar,"
+                                + "  name varchar,"
+                                + "  primary key (id) NOT ENFORCED)"
+                                + " with ("
+                                + "  'bucket.num' = '4',"
+                                + "  'client.scanner.kv.server-side.enabled' = 'true')",
+                        tableName));
+        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
+            for (int i = 1; i <= 5; i++) {
+                upsertWriter.upsert(row(i, "address" + i, "name" + i));
+            }
+
+            upsertWriter.upsert(row(1, "address1-updated", "name1-updated"));
+            upsertWriter.delete(row(2, "address2", "name2"));
+            upsertWriter.flush();
+        }
+
+        CloseableIterator<Row> collected =
+                tEnv.executeSql(String.format("SELECT * FROM %s", tableName)).collect();
+        List<String> expected =
+                Arrays.asList(
+                        "+I[1, address1-updated, name1-updated]",
+                        "+I[3, address3, name3]",
+                        "+I[4, address4, name4]",
+                        "+I[5, address5, name5]");
+        assertResultsIgnoreOrder(collected, expected, true);
+    }
+
+    @Test
     void testKvBatchScanReturnsAllRecords() throws Exception {
         String tableName = String.format("test_kv_batch_100_%s", RandomUtils.nextInt());
         tEnv.executeSql(

@@ -1428,7 +1428,9 @@ public class ConfigOptions {
                                     + "scan the current KV state directly via the server-side KV scan. "
                                     + "When false (default), bounded primary-key reads fall back to the "
                                     + "prior behavior (log-only when lake is enabled, or fail when lake "
-                                    + "is disabled).");
+                                    + "is disabled). This option has no effect when a lake snapshot "
+                                    + "already exists: in that case the bounded read always performs "
+                                    + "the lake + Fluss-log union read and this flag is not consulted.");
 
     public static final ConfigOption<Integer> CLIENT_LOOKUP_QUEUE_SIZE =
             key("client.lookup.queue-size")
