@@ -1234,16 +1234,17 @@ impl LogFetcher {
         );
 
         let initial_schema_id = table_info.get_schema_id() as i16;
-        let resolver = Arc::new(
-            ReadContextResolver::new(
-                initial_schema_id,
-                read_context,
-                remote_read_context,
-                projected_fields,
-            )
-            .with_schema_getter(Arc::clone(&schema_getter))
-            .with_fixed_schema(fixed_schema),
-        );
+        let mut resolver = ReadContextResolver::new(
+            initial_schema_id,
+            read_context,
+            remote_read_context,
+            projected_fields,
+        )
+        .with_schema_getter(Arc::clone(&schema_getter));
+        if fixed_schema {
+            resolver = resolver.with_fixed_schema(table_info.get_schema());
+        }
+        let resolver = Arc::new(resolver);
 
         let tmp_dir = TempDir::with_prefix("fluss-remote-logs")?;
         let log_fetch_buffer = Arc::new(LogFetchBuffer::new(Arc::clone(&resolver)));

@@ -20,7 +20,7 @@ use crate::compression::{
     ArrowCompressionInfo, ArrowCompressionRatioEstimator, ArrowCompressionType,
 };
 use crate::error::{Error, Result};
-use crate::metadata::{DataField, DataType, RowType};
+use crate::metadata::{DataField, DataType, RowType, UNEXIST_MAPPING};
 use crate::record::{ChangeType, ScanRecord};
 use crate::row::column_vector::TypedBatch;
 use crate::row::column_writer::{ColumnWriter, round_up_to_8};
@@ -1440,7 +1440,7 @@ pub struct ReadContext {
     projection: Option<Projection>,
     is_from_remote: bool,
     fluss_row_type: Option<Arc<RowType>>,
-    align_to_target_schema: bool,
+    schema_alignment: Option<Arc<[i32]>>,
 }
 
 #[derive(Clone)]
@@ -1466,7 +1466,7 @@ impl ReadContext {
             projection: None,
             is_from_remote,
             fluss_row_type: None,
-            align_to_target_schema: false,
+            schema_alignment: None,
         }
     }
 
@@ -1487,13 +1487,17 @@ impl ReadContext {
         self.row_type.clone()
     }
 
-    pub(crate) fn with_target_schema_alignment(mut self, target_schema: SchemaRef) -> ReadContext {
+    pub(crate) fn with_target_schema_alignment(
+        mut self,
+        target_schema: SchemaRef,
+        schema_alignment: Arc<[i32]>,
+    ) -> ReadContext {
         debug_assert!(
             self.projection.is_none(),
             "target schema alignment is not supported with projection"
         );
         self.target_schema = target_schema;
-        self.align_to_target_schema = true;
+        self.schema_alignment = Some(schema_alignment);
         self
     }
 
@@ -1568,7 +1572,7 @@ impl ReadContext {
             projection: Some(project),
             is_from_remote,
             fluss_row_type: None,
-            align_to_target_schema: false,
+            schema_alignment: None,
         })
     }
 
@@ -1611,7 +1615,7 @@ impl ReadContext {
 
         let resolve_schema = {
             // if from remote, no projection, need to use full schema
-            if self.is_from_remote || self.align_to_target_schema {
+            if self.is_from_remote || self.schema_alignment.is_some() {
                 self.full_schema.clone()
             } else {
                 // the record batch from server must be ordered by field pos,
@@ -1664,10 +1668,13 @@ impl ReadContext {
             }
             _ => record_batch,
         };
-        let record_batch = if self.align_to_target_schema {
-            align_record_batch_to_schema(record_batch, self.target_schema.clone())?
-        } else {
-            record_batch
+        let record_batch = match &self.schema_alignment {
+            Some(schema_alignment) => align_record_batch_to_schema(
+                record_batch,
+                self.target_schema.clone(),
+                schema_alignment,
+            )?,
+            None => record_batch,
         };
         Ok(record_batch)
     }
@@ -1695,10 +1702,13 @@ impl ReadContext {
             }
             None => record_batch,
         };
-        let record_batch = if self.align_to_target_schema {
-            align_record_batch_to_schema(record_batch, self.target_schema.clone())?
-        } else {
-            record_batch
+        let record_batch = match &self.schema_alignment {
+            Some(schema_alignment) => align_record_batch_to_schema(
+                record_batch,
+                self.target_schema.clone(),
+                schema_alignment,
+            )?,
+            None => record_batch,
         };
         Ok(Some(record_batch))
     }
@@ -1707,33 +1717,53 @@ impl ReadContext {
 fn align_record_batch_to_schema(
     record_batch: RecordBatch,
     target_schema: SchemaRef,
+    schema_alignment: &[i32],
 ) -> Result<RecordBatch> {
-    if record_batch.schema_ref() == &target_schema {
-        return Ok(record_batch);
+    if schema_alignment.len() != target_schema.fields().len() {
+        return Err(Error::UnexpectedError {
+            message: format!(
+                "Schema alignment has {} indexes for {} target fields",
+                schema_alignment.len(),
+                target_schema.fields().len()
+            ),
+            source: None,
+        });
     }
 
     let row_count = record_batch.num_rows();
-    let source_schema = record_batch.schema();
     let mut columns = Vec::with_capacity(target_schema.fields().len());
 
-    for target_field in target_schema.fields() {
-        match source_schema.index_of(target_field.name()) {
-            Ok(source_idx) => {
-                let column = record_batch.column(source_idx);
-                if column.data_type() != target_field.data_type() {
-                    return Err(Error::UnexpectedError {
+    for (target_field, source_index) in target_schema.fields().iter().zip(schema_alignment.iter()) {
+        if *source_index == UNEXIST_MAPPING {
+            columns.push(new_null_array(target_field.data_type(), row_count));
+        } else {
+            let index = usize::try_from(*source_index).map_err(|_| Error::UnexpectedError {
+                message: format!("Schema alignment contains invalid source index {source_index}"),
+                source: None,
+            })?;
+            let column =
+                record_batch
+                    .columns()
+                    .get(index)
+                    .ok_or_else(|| Error::UnexpectedError {
                         message: format!(
-                            "Cannot align column '{}' from type {:?} to {:?}",
-                            target_field.name(),
-                            column.data_type(),
-                            target_field.data_type()
+                            "Schema alignment source index {index} is out of bounds for {} columns",
+                            record_batch.num_columns()
                         ),
                         source: None,
-                    });
-                }
-                columns.push(column.clone());
+                    })?;
+            if column.data_type() != target_field.data_type() {
+                return Err(Error::UnexpectedError {
+                    message: format!(
+                        "Cannot align column '{}' from type {:?} to {:?}",
+                        target_field.name(),
+                        column.data_type(),
+                        target_field.data_type()
+                    ),
+                    source: None,
+                });
             }
-            Err(_) => columns.push(new_null_array(target_field.data_type(), row_count)),
+            columns.push(column.clone());
         }
     }
 

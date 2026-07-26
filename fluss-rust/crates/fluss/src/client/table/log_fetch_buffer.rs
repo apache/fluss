@@ -984,13 +984,17 @@ mod tests {
         ArrowCompressionInfo, ArrowCompressionRatioEstimator, ArrowCompressionType,
         DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
     };
-    use crate::metadata::{DataField, DataTypes, PhysicalTablePath, RowType, TablePath};
+    use crate::metadata::{
+        Column, DataField, DataTypes, PhysicalTablePath, RowType, Schema, TableDescriptor,
+        TableInfo, TablePath,
+    };
     use crate::record::{
         APPEND_ONLY_FLAG_MASK, ATTRIBUTES_OFFSET, LENGTH_LENGTH, LENGTH_OFFSET, LOG_OVERHEAD,
         MemoryLogRecordsArrowBuilder, RECORDS_OFFSET, ReadContext, to_arrow_schema,
     };
     use crate::row::GenericRow;
     use crate::test_utils::{build_table_info, build_table_info_with_columns};
+    use arrow::array::{Array, StringArray};
     use std::sync::Arc;
 
     fn expect_data<T>(result: FetchResult<T>) -> T {
@@ -1015,6 +1019,94 @@ mod tests {
         Ok(Arc::new(ReadContextResolver::new(
             1, local_ctx, remote_ctx, None,
         )))
+    }
+
+    fn table_info_with_column_ids(
+        table_path: TablePath,
+        schema_id: i32,
+        columns: Vec<Column>,
+    ) -> Result<TableInfo> {
+        let schema = Schema::builder().with_columns(columns).build()?;
+        let descriptor = TableDescriptor::builder()
+            .schema(schema)
+            .distributed_by(Some(1), vec![])
+            .build()?;
+        Ok(TableInfo::of(table_path, 1, schema_id, descriptor, 0, 0))
+    }
+
+    fn fetch_fixed_schema_batch(
+        source_table_info: Arc<TableInfo>,
+        target_table_info: &TableInfo,
+        row: &GenericRow,
+        is_remote: bool,
+    ) -> Result<RecordBatch> {
+        let source_schema_id = source_table_info.get_schema_id();
+        let physical_table_path = Arc::new(PhysicalTablePath::of(Arc::new(
+            source_table_info.get_table_path().clone(),
+        )));
+        let mut builder = MemoryLogRecordsArrowBuilder::new(
+            source_schema_id,
+            source_table_info.get_row_type(),
+            false,
+            ArrowCompressionInfo {
+                compression_type: ArrowCompressionType::None,
+                compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
+            },
+            usize::MAX,
+            Arc::new(ArrowCompressionRatioEstimator::default()),
+        )?;
+        let record = WriteRecord::for_append(
+            Arc::clone(&source_table_info),
+            physical_table_path,
+            source_schema_id,
+            row,
+        );
+        builder.append(&record)?;
+        let data = builder.build()?;
+
+        let target_arrow_schema = to_arrow_schema(target_table_info.get_row_type())?;
+        let target_row_type = Arc::new(target_table_info.get_row_type().clone());
+        let local_ctx = Arc::new(
+            ReadContext::new(
+                target_arrow_schema.clone(),
+                Arc::clone(&target_row_type),
+                false,
+            )
+            .with_fluss_row_type(Arc::clone(&target_row_type)),
+        );
+        let remote_ctx = Arc::new(
+            ReadContext::new(target_arrow_schema, Arc::clone(&target_row_type), true)
+                .with_fluss_row_type(target_row_type),
+        );
+        let resolver = Arc::new(
+            ReadContextResolver::new(
+                target_table_info.get_schema_id() as i16,
+                local_ctx,
+                remote_ctx,
+                None,
+            )
+            .with_fixed_schema(target_table_info.get_schema()),
+        );
+        let mut fetch = DefaultCompletedFetch::new(
+            TableBucket::new(1, 0),
+            LogRecordsBatches::new(data.clone()),
+            data.len(),
+            Arc::clone(&resolver),
+            is_remote,
+            0,
+            0,
+        );
+
+        assert!(matches!(
+            fetch.fetch_batches(1)?,
+            FetchResult::SchemaRequired(schema_id) if schema_id == source_schema_id as i16
+        ));
+        resolver.register_schema(source_schema_id as i16, source_table_info.get_schema())?;
+        Ok(expect_data(fetch.fetch_batches(1)?)
+            .into_iter()
+            .next()
+            .expect("one fixed-schema batch")
+            .0)
     }
 
     struct ErrorPendingFetch {
@@ -1193,7 +1285,8 @@ mod tests {
                 .with_fluss_row_type(new_row_type_arc),
         );
         let resolver = Arc::new(
-            ReadContextResolver::new(1, local_ctx, remote_ctx, None).with_fixed_schema(true),
+            ReadContextResolver::new(1, local_ctx, remote_ctx, None)
+                .with_fixed_schema(new_table_info.get_schema()),
         );
 
         let mut fetch = DefaultCompletedFetch::new(
@@ -1219,6 +1312,76 @@ mod tests {
         assert_eq!(batch.num_columns(), 2);
         assert_eq!(batch.column(1).null_count(), 1);
 
+        Ok(())
+    }
+
+    #[test]
+    fn fixed_schema_fetch_batches_preserves_renamed_column_by_id() -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let source_table_info = Arc::new(table_info_with_column_ids(
+            table_path.clone(),
+            0,
+            vec![
+                Column::new("id", DataTypes::int()).with_id(0),
+                Column::new("old_name", DataTypes::string()).with_id(1),
+            ],
+        )?);
+        let target_table_info = table_info_with_column_ids(
+            table_path,
+            1,
+            vec![
+                Column::new("id", DataTypes::int()).with_id(0),
+                Column::new("new_name", DataTypes::string()).with_id(1),
+            ],
+        )?;
+        let mut row = GenericRow::new(2);
+        row.set_field(0, 1_i32);
+        row.set_field(1, "alice");
+
+        for is_remote in [false, true] {
+            let batch = fetch_fixed_schema_batch(
+                Arc::clone(&source_table_info),
+                &target_table_info,
+                &row,
+                is_remote,
+            )?;
+            assert_eq!(batch.schema().field(1).name(), "new_name");
+            let names = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .expect("renamed string column");
+            assert_eq!(names.null_count(), 0);
+            assert_eq!(names.value(0), "alice");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn fixed_schema_fetch_batches_does_not_alias_same_name_with_different_id() -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let source_table_info = Arc::new(table_info_with_column_ids(
+            table_path.clone(),
+            0,
+            vec![
+                Column::new("id", DataTypes::int()).with_id(0),
+                Column::new("name", DataTypes::string()).with_id(1),
+            ],
+        )?);
+        let target_table_info = table_info_with_column_ids(
+            table_path,
+            1,
+            vec![
+                Column::new("id", DataTypes::int()).with_id(0),
+                Column::new("name", DataTypes::string()).with_id(2),
+            ],
+        )?;
+        let mut row = GenericRow::new(2);
+        row.set_field(0, 1_i32);
+        row.set_field(1, "alice");
+
+        let batch = fetch_fixed_schema_batch(source_table_info, &target_table_info, &row, false)?;
+        assert_eq!(batch.column(1).null_count(), 1);
         Ok(())
     }
 
