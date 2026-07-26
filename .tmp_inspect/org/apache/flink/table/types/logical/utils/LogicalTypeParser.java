@@ -1,12 +1,13 @@
 /*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
  *
- *    http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -15,27 +16,63 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.types;
+package org.apache.flink.table.types.logical.utils;
 
-import org.apache.fluss.metadata.ValidationException;
+import org.apache.flink.annotation.PublicEvolving;
+import org.apache.flink.api.common.typeinfo.TypeInformation;
+import org.apache.flink.table.api.ValidationException;
+import org.apache.flink.table.catalog.UnresolvedIdentifier;
+import org.apache.flink.table.types.logical.ArrayType;
+import org.apache.flink.table.types.logical.BigIntType;
+import org.apache.flink.table.types.logical.BinaryType;
+import org.apache.flink.table.types.logical.BooleanType;
+import org.apache.flink.table.types.logical.CharType;
+import org.apache.flink.table.types.logical.DateType;
+import org.apache.flink.table.types.logical.DayTimeIntervalType;
+import org.apache.flink.table.types.logical.DayTimeIntervalType.DayTimeResolution;
+import org.apache.flink.table.types.logical.DecimalType;
+import org.apache.flink.table.types.logical.DoubleType;
+import org.apache.flink.table.types.logical.FloatType;
+import org.apache.flink.table.types.logical.IntType;
+import org.apache.flink.table.types.logical.LegacyTypeInformationType;
+import org.apache.flink.table.types.logical.LocalZonedTimestampType;
+import org.apache.flink.table.types.logical.LogicalType;
+import org.apache.flink.table.types.logical.LogicalTypeRoot;
+import org.apache.flink.table.types.logical.MapType;
+import org.apache.flink.table.types.logical.MultisetType;
+import org.apache.flink.table.types.logical.NullType;
+import org.apache.flink.table.types.logical.RawType;
+import org.apache.flink.table.types.logical.RowType;
+import org.apache.flink.table.types.logical.SmallIntType;
+import org.apache.flink.table.types.logical.TimeType;
+import org.apache.flink.table.types.logical.TimestampType;
+import org.apache.flink.table.types.logical.TinyIntType;
+import org.apache.flink.table.types.logical.UnresolvedUserDefinedType;
+import org.apache.flink.table.types.logical.VarBinaryType;
+import org.apache.flink.table.types.logical.VarCharType;
+import org.apache.flink.table.types.logical.YearMonthIntervalType;
+import org.apache.flink.table.types.logical.YearMonthIntervalType.YearMonthResolution;
+import org.apache.flink.table.types.logical.ZonedTimestampType;
+import org.apache.flink.table.utils.TypeStringUtils;
 
 import javax.annotation.Nullable;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
- * Parser for creating instances of {@link DataType } from a serialized string created with {@link
- * DataType#asSerializableString()}.
+ * Parser for creating instances of {@link LogicalType} from a serialized string created with {@link
+ * LogicalType#asSerializableString()}.
  *
  * <p>In addition to the serializable string representations, this parser also supports common
  * shortcuts for certain types. This includes:
  *
  * <ul>
+ *   <li>{@code STRING} as a synonym for {@code VARCHAR(INT_MAX)}
  *   <li>{@code BYTES} as a synonym for {@code VARBINARY(INT_MAX)}
  *   <li>{@code NUMERIC} and {@code DEC} as synonyms for {@code DECIMAL}
  *   <li>{@code INTEGER} as a synonym for {@code INT}
@@ -44,21 +81,42 @@ import java.util.stream.Stream;
  *   <li>{@code TIMESTAMP WITHOUT TIME ZONE} as a synonym for {@code TIMESTAMP}
  *   <li>{@code TIMESTAMP WITH LOCAL TIME ZONE} as a synonym for {@code TIMESTAMP_LTZ}
  *   <li>{@code type ARRAY} as a synonym for {@code ARRAY<type>}
+ *   <li>{@code type MULTISET} as a synonym for {@code MULTISET<type>}
  *   <li>{@code ROW(...)} as a synonym for {@code ROW<...>}
+ *   <li>{@code type NULL} as a synonym for {@code type}
  * </ul>
+ *
+ * <p>Furthermore, it returns {@link UnresolvedUserDefinedType} for unknown types (partially or
+ * fully qualified such as {@code [catalog].[database].[type]}).
  */
-public final class DataTypeParser {
+@PublicEvolving
+public final class LogicalTypeParser {
 
     /**
-     * Parses a type string.
+     * Parses a type string. All types will be fully resolved except for {@link
+     * UnresolvedUserDefinedType}s.
+     *
+     * @param typeString a string like "ROW(field1 INT, field2 BOOLEAN)"
+     * @param classLoader class loader for loading classes of the RAW type
+     * @throws ValidationException in case of parsing errors.
+     */
+    public static LogicalType parse(String typeString, ClassLoader classLoader) {
+        final List<Token> tokens = tokenize(typeString);
+        final TokenParser converter = new TokenParser(typeString, tokens, classLoader);
+        return converter.parseTokens();
+    }
+
+    /**
+     * Parses a type string. All types will be fully resolved except for {@link
+     * UnresolvedUserDefinedType}s.
      *
      * @param typeString a string like "ROW(field1 INT, field2 BOOLEAN)"
      * @throws ValidationException in case of parsing errors.
+     * @deprecated You should use {@link #parse(String, ClassLoader)} to correctly load user types
      */
-    public static DataType parse(String typeString) {
-        final List<Token> tokens = tokenize(typeString);
-        final TokenParser converter = new TokenParser(typeString, tokens);
-        return converter.parseTokens();
+    @Deprecated
+    public static LogicalType parse(String typeString) {
+        return parse(typeString, Thread.currentThread().getContextClassLoader());
     }
 
     // --------------------------------------------------------------------------------------------
@@ -161,12 +219,6 @@ public final class DataTypeParser {
                     final String token = builder.toString();
                     final String normalizedToken = token.toUpperCase();
                     if (KEYWORDS.contains(normalizedToken)) {
-                        if (UNSUPPORTED_KEYWORDS.contains(normalizedToken)) {
-                            throw new ValidationException(
-                                    String.format(
-                                            "Unsupported keyword %s found in type information.",
-                                            token));
-                        }
                         tokens.add(new Token(TokenType.KEYWORD, cursor, normalizedToken));
                     } else {
                         tokens.add(new Token(TokenType.IDENTIFIER, cursor, token));
@@ -246,9 +298,11 @@ public final class DataTypeParser {
 
     private enum Keyword {
         CHAR,
+        VARCHAR,
         STRING,
         BOOLEAN,
         BINARY,
+        VARBINARY,
         BYTES,
         DECIMAL,
         NUMERIC,
@@ -269,6 +323,7 @@ public final class DataTypeParser {
         ZONE,
         TIMESTAMP,
         TIMESTAMP_LTZ,
+        INTERVAL,
         YEAR,
         MONTH,
         DAY,
@@ -277,33 +332,17 @@ public final class DataTypeParser {
         SECOND,
         TO,
         ARRAY,
+        MULTISET,
         MAP,
         ROW,
-        VECTOR,
-        NOT,
         NULL,
-    }
-
-    private enum UnsupportedKeyword {
-        VARCHAR,
-        VARBINARY,
-        INTERVAL,
-        MULTISET,
         RAW,
         LEGACY,
-        VARIANT,
-        BITMAP
+        NOT
     }
 
     private static final Set<String> KEYWORDS =
-            Stream.concat(
-                            Arrays.stream(Keyword.values()),
-                            Arrays.stream(UnsupportedKeyword.values()))
-                    .map(k -> k.toString().toUpperCase())
-                    .collect(Collectors.toSet());
-
-    private static final Set<String> UNSUPPORTED_KEYWORDS =
-            Stream.of(UnsupportedKeyword.values())
+            Stream.of(Keyword.values())
                     .map(k -> k.toString().toUpperCase())
                     .collect(Collectors.toSet());
 
@@ -329,19 +368,22 @@ public final class DataTypeParser {
 
         private final List<Token> tokens;
 
+        private final ClassLoader classLoader;
+
         private int lastValidToken;
 
         private int currentToken;
 
-        public TokenParser(String inputString, List<Token> tokens) {
+        public TokenParser(String inputString, List<Token> tokens, ClassLoader classLoader) {
             this.inputString = inputString;
             this.tokens = tokens;
+            this.classLoader = classLoader;
             this.lastValidToken = -1;
             this.currentToken = -1;
         }
 
-        private DataType parseTokens() {
-            final DataType type = parseTypeWithNullability();
+        private LogicalType parseTokens() {
+            final LogicalType type = parseTypeWithNullability();
             if (hasRemainingTokens()) {
                 nextToken();
                 throw parsingError("Unexpected token: " + token().value);
@@ -460,30 +502,43 @@ public final class DataTypeParser {
             return true;
         }
 
-        private DataType parseTypeWithNullability() {
-            final DataType dataType = parseTypeByKeyword().copy(parseNullability());
-            // special case: suffix notation for ARRAY types
-            if (hasNextToken(Keyword.ARRAY)) {
-                nextToken(Keyword.ARRAY);
-                return new ArrayType(dataType).copy(parseNullability());
+        private LogicalType parseTypeWithNullability() {
+            final LogicalType logicalType;
+            if (hasNextToken(TokenType.IDENTIFIER)) {
+                logicalType = parseTypeByIdentifier().copy(parseNullability());
+            } else {
+                logicalType = parseTypeByKeyword().copy(parseNullability());
             }
 
-            return dataType;
+            // special case: suffix notation for ARRAY and MULTISET types
+            if (hasNextToken(Keyword.ARRAY)) {
+                nextToken(Keyword.ARRAY);
+                return new ArrayType(logicalType).copy(parseNullability());
+            } else if (hasNextToken(Keyword.MULTISET)) {
+                nextToken(Keyword.MULTISET);
+                return new MultisetType(logicalType).copy(parseNullability());
+            }
+
+            return logicalType;
         }
 
-        private DataType parseTypeByKeyword() {
+        private LogicalType parseTypeByKeyword() {
             nextToken(TokenType.KEYWORD);
             switch (tokenAsKeyword()) {
                 case CHAR:
                     return parseCharType();
+                case VARCHAR:
+                    return parseVarCharType();
                 case STRING:
-                    return new StringType();
+                    return VarCharType.STRING_TYPE;
                 case BOOLEAN:
                     return new BooleanType();
                 case BINARY:
                     return parseBinaryType();
+                case VARBINARY:
+                    return parseVarBinaryType();
                 case BYTES:
-                    return new BytesType();
+                    return new VarBinaryType(VarBinaryType.MAX_LENGTH);
                 case DECIMAL:
                 case NUMERIC:
                 case DEC:
@@ -509,17 +564,54 @@ public final class DataTypeParser {
                     return parseTimestampType();
                 case TIMESTAMP_LTZ:
                     return parseTimestampLtzType();
+                case INTERVAL:
+                    return parseIntervalType();
                 case ARRAY:
                     return parseArrayType();
+                case MULTISET:
+                    return parseMultisetType();
                 case MAP:
                     return parseMapType();
                 case ROW:
                     return parseRowType();
-                case VECTOR:
-                    return parseVectorType();
+                case NULL:
+                    return new NullType();
+                case RAW:
+                    return parseRawType();
+                case LEGACY:
+                    return parseLegacyType();
                 default:
                     throw parsingError("Unsupported type: " + token().value);
             }
+        }
+
+        private LogicalType parseTypeByIdentifier() {
+            nextToken(TokenType.IDENTIFIER);
+            List<String> parts = new ArrayList<>();
+            parts.add(tokenAsString());
+            if (hasNextToken(TokenType.IDENTIFIER_SEPARATOR)) {
+                nextToken(TokenType.IDENTIFIER_SEPARATOR);
+                nextToken(TokenType.IDENTIFIER);
+                parts.add(tokenAsString());
+            }
+            if (hasNextToken(TokenType.IDENTIFIER_SEPARATOR)) {
+                nextToken(TokenType.IDENTIFIER_SEPARATOR);
+                nextToken(TokenType.IDENTIFIER);
+                parts.add(tokenAsString());
+            }
+            final String[] identifierParts =
+                    Stream.of(lastPart(parts, 2), lastPart(parts, 1), lastPart(parts, 0))
+                            .filter(Objects::nonNull)
+                            .toArray(String[]::new);
+            return new UnresolvedUserDefinedType(UnresolvedIdentifier.of(identifierParts));
+        }
+
+        private @Nullable String lastPart(List<String> parts, int inversePos) {
+            final int pos = parts.size() - inversePos - 1;
+            if (pos < 0) {
+                return null;
+            }
+            return parts.get(pos);
         }
 
         private int parseStringType() {
@@ -535,7 +627,7 @@ public final class DataTypeParser {
             return -1;
         }
 
-        private DataType parseCharType() {
+        private LogicalType parseCharType() {
             final int length = parseStringType();
             if (length < 0) {
                 return new CharType();
@@ -544,7 +636,16 @@ public final class DataTypeParser {
             }
         }
 
-        private DataType parseBinaryType() {
+        private LogicalType parseVarCharType() {
+            final int length = parseStringType();
+            if (length < 0) {
+                return new VarCharType();
+            } else {
+                return new VarCharType(length);
+            }
+        }
+
+        private LogicalType parseBinaryType() {
             final int length = parseStringType();
             if (length < 0) {
                 return new BinaryType();
@@ -553,7 +654,16 @@ public final class DataTypeParser {
             }
         }
 
-        private DataType parseDecimalType() {
+        private LogicalType parseVarBinaryType() {
+            final int length = parseStringType();
+            if (length < 0) {
+                return new VarBinaryType();
+            } else {
+                return new VarBinaryType(length);
+            }
+        }
+
+        private LogicalType parseDecimalType() {
             int precision = DecimalType.DEFAULT_PRECISION;
             int scale = DecimalType.DEFAULT_SCALE;
             if (hasNextToken(TokenType.BEGIN_PARAMETER)) {
@@ -570,14 +680,14 @@ public final class DataTypeParser {
             return new DecimalType(precision, scale);
         }
 
-        private DataType parseDoubleType() {
+        private LogicalType parseDoubleType() {
             if (hasNextToken(Keyword.PRECISION)) {
                 nextToken(Keyword.PRECISION);
             }
             return new DoubleType();
         }
 
-        private DataType parseTimeType() {
+        private LogicalType parseTimeType() {
             int precision = parseOptionalPrecision(TimeType.DEFAULT_PRECISION);
             if (hasNextToken(Keyword.WITHOUT)) {
                 nextToken(Keyword.WITHOUT);
@@ -587,7 +697,7 @@ public final class DataTypeParser {
             return new TimeType(precision);
         }
 
-        private DataType parseTimestampType() {
+        private LogicalType parseTimestampType() {
             int precision = parseOptionalPrecision(TimestampType.DEFAULT_PRECISION);
             if (hasNextToken(Keyword.WITHOUT)) {
                 nextToken(Keyword.WITHOUT);
@@ -601,15 +711,127 @@ public final class DataTypeParser {
                     nextToken(Keyword.ZONE);
                     return new LocalZonedTimestampType(precision);
                 } else {
-                    throw parsingError("Timestamp with time zone not supported");
+                    nextToken(Keyword.TIME);
+                    nextToken(Keyword.ZONE);
+                    return new ZonedTimestampType(precision);
                 }
             }
             return new TimestampType(precision);
         }
 
-        private DataType parseTimestampLtzType() {
+        private LogicalType parseTimestampLtzType() {
             int precision = parseOptionalPrecision(LocalZonedTimestampType.DEFAULT_PRECISION);
             return new LocalZonedTimestampType(precision);
+        }
+
+        private LogicalType parseIntervalType() {
+            nextToken(TokenType.KEYWORD);
+            switch (tokenAsKeyword()) {
+                case YEAR:
+                case MONTH:
+                    return parseYearMonthIntervalType();
+                case DAY:
+                case HOUR:
+                case MINUTE:
+                case SECOND:
+                    return parseDayTimeIntervalType();
+                default:
+                    throw parsingError("Invalid interval resolution.");
+            }
+        }
+
+        private LogicalType parseYearMonthIntervalType() {
+            int yearPrecision = YearMonthIntervalType.DEFAULT_PRECISION;
+            switch (tokenAsKeyword()) {
+                case YEAR:
+                    yearPrecision = parseOptionalPrecision(yearPrecision);
+                    if (hasNextToken(Keyword.TO)) {
+                        nextToken(Keyword.TO);
+                        nextToken(Keyword.MONTH);
+                        return new YearMonthIntervalType(
+                                YearMonthResolution.YEAR_TO_MONTH, yearPrecision);
+                    }
+                    return new YearMonthIntervalType(YearMonthResolution.YEAR, yearPrecision);
+                case MONTH:
+                    return new YearMonthIntervalType(YearMonthResolution.MONTH, yearPrecision);
+                default:
+                    throw parsingError("Invalid year-month interval resolution.");
+            }
+        }
+
+        private LogicalType parseDayTimeIntervalType() {
+            int dayPrecision = DayTimeIntervalType.DEFAULT_DAY_PRECISION;
+            int fractionalPrecision = DayTimeIntervalType.DEFAULT_FRACTIONAL_PRECISION;
+            switch (tokenAsKeyword()) {
+                case DAY:
+                    dayPrecision = parseOptionalPrecision(dayPrecision);
+                    if (hasNextToken(Keyword.TO)) {
+                        nextToken(Keyword.TO);
+                        nextToken(TokenType.KEYWORD);
+                        switch (tokenAsKeyword()) {
+                            case HOUR:
+                                return new DayTimeIntervalType(
+                                        DayTimeResolution.DAY_TO_HOUR,
+                                        dayPrecision,
+                                        fractionalPrecision);
+                            case MINUTE:
+                                return new DayTimeIntervalType(
+                                        DayTimeResolution.DAY_TO_MINUTE,
+                                        dayPrecision,
+                                        fractionalPrecision);
+                            case SECOND:
+                                fractionalPrecision = parseOptionalPrecision(fractionalPrecision);
+                                return new DayTimeIntervalType(
+                                        DayTimeResolution.DAY_TO_SECOND,
+                                        dayPrecision,
+                                        fractionalPrecision);
+                            default:
+                                throw parsingError("Invalid day-time interval resolution.");
+                        }
+                    }
+                    return new DayTimeIntervalType(
+                            DayTimeResolution.DAY, dayPrecision, fractionalPrecision);
+                case HOUR:
+                    if (hasNextToken(Keyword.TO)) {
+                        nextToken(Keyword.TO);
+                        nextToken(TokenType.KEYWORD);
+                        switch (tokenAsKeyword()) {
+                            case MINUTE:
+                                return new DayTimeIntervalType(
+                                        DayTimeResolution.HOUR_TO_MINUTE,
+                                        dayPrecision,
+                                        fractionalPrecision);
+                            case SECOND:
+                                fractionalPrecision = parseOptionalPrecision(fractionalPrecision);
+                                return new DayTimeIntervalType(
+                                        DayTimeResolution.HOUR_TO_SECOND,
+                                        dayPrecision,
+                                        fractionalPrecision);
+                            default:
+                                throw parsingError("Invalid day-time interval resolution.");
+                        }
+                    }
+                    return new DayTimeIntervalType(
+                            DayTimeResolution.HOUR, dayPrecision, fractionalPrecision);
+                case MINUTE:
+                    if (hasNextToken(Keyword.TO)) {
+                        nextToken(Keyword.TO);
+                        nextToken(Keyword.SECOND);
+                        fractionalPrecision = parseOptionalPrecision(fractionalPrecision);
+                        return new DayTimeIntervalType(
+                                DayTimeResolution.MINUTE_TO_SECOND,
+                                dayPrecision,
+                                fractionalPrecision);
+                    }
+                    return new DayTimeIntervalType(
+                            DayTimeResolution.MINUTE, dayPrecision, fractionalPrecision);
+                case SECOND:
+                    fractionalPrecision = parseOptionalPrecision(fractionalPrecision);
+                    return new DayTimeIntervalType(
+                            DayTimeResolution.SECOND, dayPrecision, fractionalPrecision);
+                default:
+                    throw parsingError("Invalid day-time interval resolution.");
+            }
         }
 
         private int parseOptionalPrecision(int defaultPrecision) {
@@ -623,32 +845,31 @@ public final class DataTypeParser {
             return precision;
         }
 
-        private DataType parseVectorType() {
-            nextToken(TokenType.BEGIN_PARAMETER);
-            nextToken(TokenType.LITERAL_INT);
-            final int dimension = tokenAsInt();
-            nextToken(TokenType.END_PARAMETER);
-            return new VectorType(dimension);
-        }
-
-        private DataType parseArrayType() {
+        private LogicalType parseArrayType() {
             nextToken(TokenType.BEGIN_SUBTYPE);
-            final DataType elementType = parseTypeWithNullability();
+            final LogicalType elementType = parseTypeWithNullability();
             nextToken(TokenType.END_SUBTYPE);
             return new ArrayType(elementType);
         }
 
-        private DataType parseMapType() {
+        private LogicalType parseMultisetType() {
             nextToken(TokenType.BEGIN_SUBTYPE);
-            final DataType keyType = parseTypeWithNullability();
+            final LogicalType elementType = parseTypeWithNullability();
+            nextToken(TokenType.END_SUBTYPE);
+            return new MultisetType(elementType);
+        }
+
+        private LogicalType parseMapType() {
+            nextToken(TokenType.BEGIN_SUBTYPE);
+            final LogicalType keyType = parseTypeWithNullability();
             nextToken(TokenType.LIST_SEPARATOR);
-            final DataType valueType = parseTypeWithNullability();
+            final LogicalType valueType = parseTypeWithNullability();
             nextToken(TokenType.END_SUBTYPE);
             return new MapType(keyType, valueType);
         }
 
-        private DataType parseRowType() {
-            List<DataField> fields;
+        private LogicalType parseRowType() {
+            List<RowType.RowField> fields;
             // SQL standard notation
             if (hasNextToken(TokenType.BEGIN_PARAMETER)) {
                 nextToken(TokenType.BEGIN_PARAMETER);
@@ -662,8 +883,8 @@ public final class DataTypeParser {
             return new RowType(fields);
         }
 
-        private List<DataField> parseRowFields(TokenType endToken) {
-            List<DataField> fields = new ArrayList<>();
+        private List<RowType.RowField> parseRowFields(TokenType endToken) {
+            List<RowType.RowField> fields = new ArrayList<>();
             boolean isFirst = true;
             while (!hasNextToken(endToken)) {
                 if (isFirst) {
@@ -673,16 +894,57 @@ public final class DataTypeParser {
                 }
                 nextToken(TokenType.IDENTIFIER);
                 final String name = tokenAsString();
-                final DataType type = parseTypeWithNullability();
+                final LogicalType type = parseTypeWithNullability();
                 if (hasNextToken(TokenType.LITERAL_STRING)) {
                     nextToken(TokenType.LITERAL_STRING);
                     final String description = tokenAsString();
-                    fields.add(new DataField(name, type, description));
+                    fields.add(new RowType.RowField(name, type, description));
                 } else {
-                    fields.add(new DataField(name, type));
+                    fields.add(new RowType.RowField(name, type));
                 }
             }
             return fields;
+        }
+
+        @SuppressWarnings("unchecked")
+        private LogicalType parseRawType() {
+            nextToken(TokenType.BEGIN_PARAMETER);
+            nextToken(TokenType.LITERAL_STRING);
+            final String className = tokenAsString();
+
+            nextToken(TokenType.LIST_SEPARATOR);
+            nextToken(TokenType.LITERAL_STRING);
+            final String serializerString = tokenAsString();
+            nextToken(TokenType.END_PARAMETER);
+
+            return RawType.restore(classLoader, className, serializerString);
+        }
+
+        @SuppressWarnings("unchecked")
+        private LogicalType parseLegacyType() {
+            nextToken(TokenType.BEGIN_PARAMETER);
+            nextToken(TokenType.LITERAL_STRING);
+            final String rootString = tokenAsString();
+
+            nextToken(TokenType.LIST_SEPARATOR);
+            nextToken(TokenType.LITERAL_STRING);
+            final String typeInfoString = tokenAsString();
+            nextToken(TokenType.END_PARAMETER);
+
+            try {
+                final LogicalTypeRoot root = LogicalTypeRoot.valueOf(rootString);
+                final TypeInformation typeInfo = TypeStringUtils.readTypeInfo(typeInfoString);
+                return new LegacyTypeInformationType<>(root, typeInfo);
+            } catch (Throwable t) {
+                throw parsingError(
+                        "Unable to restore the Legacy type of '"
+                                + typeInfoString
+                                + "' with "
+                                + "type root '"
+                                + rootString
+                                + "'.",
+                        t);
+            }
         }
     }
 }

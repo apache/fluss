@@ -37,6 +37,7 @@ import org.apache.fluss.types.StringType;
 import org.apache.fluss.types.TimeType;
 import org.apache.fluss.types.TimestampType;
 import org.apache.fluss.types.TinyIntType;
+import org.apache.fluss.types.VectorType;
 
 import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.types.DataType;
@@ -178,6 +179,12 @@ public class FlussDataTypeToHudiDataType implements DataTypeVisitor<DataType> {
             fields[i] = DataTypes.FIELD(fieldName, fieldType);
         }
         return withNullability(DataTypes.ROW(fields), rowType.isNullable());
+    }
+
+    @Override
+    public DataType visit(VectorType vectorType) {
+        throw new UnsupportedOperationException(
+                "VECTOR type is not supported for Hudi lake format tiering.");
     }
 
     private DataType withNullability(DataType flinkDataType, boolean nullable) {

@@ -30,6 +30,7 @@ import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.BaseVariableWidthVe
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.FieldVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorUnloader;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.FixedSizeListVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.ListVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.compression.CompressionCodec;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.compression.CompressionUtil;
@@ -328,6 +329,15 @@ public class ArrowWriter implements AutoCloseable {
             ((BaseFixedWidthVector) fieldVector).allocateNew(INITIAL_CAPACITY);
         } else if (fieldVector instanceof BaseVariableWidthVector) {
             ((BaseVariableWidthVector) fieldVector).allocateNew(INITIAL_CAPACITY);
+        } else if (fieldVector instanceof FixedSizeListVector) {
+            // FixedSizeListVector: allocate the top-level validity bitmap and then
+            // recursively initialize the child (Float32) data vector.
+            FixedSizeListVector fslv = (FixedSizeListVector) fieldVector;
+            fslv.allocateNew();
+            FieldVector dataVector = fslv.getDataVector();
+            if (dataVector != null) {
+                initFieldVector(dataVector);
+            }
         } else if (fieldVector instanceof ListVector) {
             ListVector listVector = (ListVector) fieldVector;
             listVector.allocateNew();

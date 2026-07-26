@@ -31,6 +31,7 @@ import org.apache.fluss.row.array.IndexedArray;
 import org.apache.fluss.row.map.IndexedMap;
 import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.FloatType;
 import org.apache.fluss.types.MapType;
 import org.apache.fluss.types.RowType;
 
@@ -309,6 +310,10 @@ public class IndexedRowReader {
                 DataType[] nestedFieldTypes =
                         ((RowType) fieldType).getFieldTypes().toArray(new DataType[0]);
                 fieldReader = (reader, pos) -> reader.readRow(nestedFieldTypes);
+                break;
+            case VECTOR:
+                // VECTOR is stored as an array of non-nullable FLOAT32 elements.
+                fieldReader = (reader, pos) -> reader.readArray(new FloatType(false));
                 break;
             default:
                 throw new IllegalArgumentException("Unsupported type for IndexedRow: " + fieldType);

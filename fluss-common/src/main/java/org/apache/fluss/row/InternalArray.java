@@ -143,6 +143,10 @@ public interface InternalArray extends DataGetters {
                 final int rowFieldCount = ((RowType) fieldType).getFieldCount();
                 elementGetter = (array, pos) -> array.getRow(pos, rowFieldCount);
                 break;
+            case VECTOR:
+                // VECTOR values are represented as InternalArray of FLOAT32 elements.
+                elementGetter = InternalArray::getArray;
+                break;
             default:
                 String msg =
                         String.format(

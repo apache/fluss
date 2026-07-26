@@ -17,10 +17,13 @@
 
 package org.apache.fluss.flink.utils;
 
+import org.apache.fluss.flink.types.FlussVectorLogicalType;
 import org.apache.fluss.types.BytesType;
 import org.apache.fluss.types.DataField;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.StringType;
+import org.apache.fluss.types.VectorElementType;
+import org.apache.fluss.types.VectorType;
 
 import org.apache.flink.table.types.logical.ArrayType;
 import org.apache.flink.table.types.logical.BigIntType;
@@ -170,6 +173,11 @@ class FlinkTypeToFlussType extends LogicalTypeDefaultVisitor<DataType> {
 
     @Override
     protected DataType defaultMethod(LogicalType logicalType) {
+        if (logicalType instanceof FlussVectorLogicalType) {
+            FlussVectorLogicalType vectorType = (FlussVectorLogicalType) logicalType;
+            return new VectorType(
+                    vectorType.isNullable(), vectorType.getDimension(), VectorElementType.FLOAT32);
+        }
         throw new UnsupportedOperationException("Unsupported data type: " + logicalType);
     }
 }

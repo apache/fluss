@@ -24,6 +24,7 @@ import org.apache.fluss.row.serializer.MapSerializer;
 import org.apache.fluss.row.serializer.RowSerializer;
 import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.FloatType;
 import org.apache.fluss.types.MapType;
 import org.apache.fluss.types.RowType;
 
@@ -184,6 +185,12 @@ public interface BinaryWriter {
                                 rowType.getFieldTypes().toArray(new DataType[0]), rowFormat);
                 return (writer, pos, value) ->
                         writer.writeRow(pos, (InternalRow) value, rowSerializer);
+            case VECTOR:
+                // VECTOR is serialized as an array of non-nullable FLOAT32 elements.
+                final ArraySerializer vectorSerializer =
+                        new ArraySerializer(new FloatType(false), rowFormat);
+                return (writer, pos, value) ->
+                        writer.writeArray(pos, (InternalArray) value, vectorSerializer);
             default:
                 String msg =
                         String.format(
