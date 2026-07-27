@@ -29,6 +29,8 @@ import org.apache.flink.core.execution.JobClient;
 import org.apache.flink.core.execution.SavepointFormatType;
 import org.apache.flink.table.api.TableResult;
 import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
+import org.apache.flink.table.catalog.CatalogPartitionSpec;
+import org.apache.flink.table.catalog.ObjectPath;
 import org.apache.flink.types.Row;
 import org.apache.flink.util.CloseableIterator;
 import org.apache.flink.util.CollectionUtil;
@@ -116,6 +118,14 @@ class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
         assertThat(actual).containsExactlyInAnyOrderElementsOf(expected);
 
         if (isPartitioned) {
+            List<CatalogPartitionSpec> lakeCatalogPartitionSpecs =
+                    flinkCatalog.listPartitions(ObjectPath.fromString(t1 + "$lake"));
+            List<CatalogPartitionSpec> catalogPartitionSpecs =
+                    flinkCatalog.listPartitions(ObjectPath.fromString(t1.toString()));
+            assertThat(lakeCatalogPartitionSpecs).hasSize(catalogPartitionSpecs.size());
+            assertThat(lakeCatalogPartitionSpecs)
+                    .containsExactlyInAnyOrderElementsOf(catalogPartitionSpecs);
+
             // get first partition
             String partition = waitUntilPartitions(t1).values().iterator().next();
             String sqlWithPartitionFilter =
