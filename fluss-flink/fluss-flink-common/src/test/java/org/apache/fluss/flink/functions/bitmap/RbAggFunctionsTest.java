@@ -392,16 +392,16 @@ class RbAggFunctionsTest {
         RoaringBitmap acc2 = fn.createAccumulator();
         fn.accumulate(acc2, BitmapUtils.toBytes(RoaringBitmap.bitmapOf(3, 4, 5)));
         fn.merge(acc1, Collections.singletonList(acc2));
-        // merge() unions partial accumulators via OR: {1,2,3} OR {3,4,5} = {1,2,3,4,5}
+        // XOR merge: {1,2,3} XOR {3,4,5} = {1,2,4,5}
         byte[] result = fn.getValue(acc1);
         assertThat(result).isNotNull();
         RoaringBitmap restored = BitmapUtils.fromBytes(result);
-        assertThat(restored.getLongCardinality()).isEqualTo(5L);
+        assertThat(restored.getLongCardinality()).isEqualTo(4L);
         assertThat(restored.contains(1)).isTrue();
         assertThat(restored.contains(2)).isTrue();
-        assertThat(restored.contains(3)).isTrue();
         assertThat(restored.contains(4)).isTrue();
         assertThat(restored.contains(5)).isTrue();
+        assertThat(restored.contains(3)).isFalse();
     }
 
     @Test
@@ -409,5 +409,37 @@ class RbAggFunctionsTest {
         RbXorAggFunction fn = new RbXorAggFunction();
         assertThatThrownBy(() -> fn.retract(fn.createAccumulator(), new byte[0]))
                 .isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    @Test
+    void testXorAggMergeCancelsToEmpty() throws IOException {
+        // Two partials each holding {1} — XOR merge should cancel to empty, getValue returns null
+        RbXorAggFunction fn = new RbXorAggFunction();
+        RoaringBitmap acc1 = fn.createAccumulator();
+        fn.accumulate(acc1, BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1)));
+        RoaringBitmap acc2 = fn.createAccumulator();
+        fn.accumulate(acc2, BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1)));
+        fn.merge(acc1, Collections.singletonList(acc2));
+        // {1} XOR {1} = empty
+        assertThat(fn.getValue(acc1)).isNull();
+    }
+
+    @Test
+    void testXorAggThreeInputs() throws IOException {
+        // Exercises the "odd number of inputs" contract
+        // {1,2} XOR {2,3} XOR {3,4} = {1,4}
+        RbXorAggFunction fn = new RbXorAggFunction();
+        RoaringBitmap acc = fn.createAccumulator();
+        fn.accumulate(acc, BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1, 2)));
+        fn.accumulate(acc, BitmapUtils.toBytes(RoaringBitmap.bitmapOf(2, 3)));
+        fn.accumulate(acc, BitmapUtils.toBytes(RoaringBitmap.bitmapOf(3, 4)));
+        byte[] result = fn.getValue(acc);
+        assertThat(result).isNotNull();
+        RoaringBitmap restored = BitmapUtils.fromBytes(result);
+        assertThat(restored.getLongCardinality()).isEqualTo(2L);
+        assertThat(restored.contains(1)).isTrue();
+        assertThat(restored.contains(4)).isTrue();
+        assertThat(restored.contains(2)).isFalse();
+        assertThat(restored.contains(3)).isFalse();
     }
 }

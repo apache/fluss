@@ -30,7 +30,12 @@ import java.io.IOException;
  * Returns elements that appear in an odd number of input bitmaps — useful for change detection and
  * symmetric difference analysis.
  *
- * <p>Null and empty inputs are ignored. Returns {@code null} when all inputs are null.
+ * <p>Note: there is no server-side {@code FieldRoaringBitmapXorAgg} counterpart. This function
+ * executes entirely in Flink. Users should be aware that combining it with {@code
+ * table.merge-engine=aggregation} may produce unexpected results during server-side compaction.
+ *
+ * <p>Null and empty inputs are ignored. Returns {@code null} when all inputs are null or the result
+ * fully cancels to an empty bitmap.
  */
 public class RbXorAggFunction extends AbstractRbAggFunction {
 
@@ -55,5 +60,14 @@ public class RbXorAggFunction extends AbstractRbAggFunction {
     public void retract(RoaringBitmap acc, @Nullable byte[] bitmapBytes) {
         throw new UnsupportedOperationException(
                 "rb_xor_agg does not support retraction. " + "Use it only on append-only streams.");
+    }
+
+    @Override
+    public void merge(RoaringBitmap acc, Iterable<RoaringBitmap> it) {
+        for (RoaringBitmap other : it) {
+            if (other != null) {
+                acc.xor(other);
+            }
+        }
     }
 }

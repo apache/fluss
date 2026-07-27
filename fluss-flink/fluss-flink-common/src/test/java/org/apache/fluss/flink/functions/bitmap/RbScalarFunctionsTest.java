@@ -299,6 +299,18 @@ class RbScalarFunctionsTest {
         assertThat(result.getLongCardinality()).isEqualTo(4L);
     }
 
+    @Test
+    void testXorIdenticalSetsProducesEmpty() throws IOException {
+        RbXorFunction fn = new RbXorFunction();
+        byte[] left = BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1, 2, 3));
+        byte[] right = BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1, 2, 3));
+        // XOR of identical sets = empty bitmap (not null, since both inputs were provided)
+        byte[] result = fn.eval(left, right);
+        assertThat(result).isNotNull();
+        RoaringBitmap restored = BitmapUtils.fromBytes(result);
+        assertThat(restored.isEmpty()).isTrue();
+    }
+
     // -------------------------------------------------------------------------
     // rb_andnot (scalar)
     // -------------------------------------------------------------------------
