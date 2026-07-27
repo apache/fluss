@@ -71,6 +71,15 @@ CREATE TABLE fluss_order_with_lake (
 );
 ```
 
+To use a different database or table name for the Paimon table, set the following options when creating the Fluss table:
+
+```sql
+'table.datalake.database-name' = 'paimon_database',
+'table.datalake.table-name' = 'paimon_table'
+```
+
+Both options are optional. If either option is omitted, the corresponding Fluss database or table name is used. Once the Paimon table has been created, these options cannot be modified.
+
 Then, the datalake tiering service continuously tiers data from Fluss to Paimon. The parameter `table.datalake.freshness` controls the frequency that Fluss writes data to Paimon tables. By default, the data freshness is 3 minutes.  
 For primary key tables, changelogs are also generated in the Paimon format, enabling stream-based consumption via Paimon APIs.
 
