@@ -25,6 +25,7 @@ import org.apache.fluss.server.entity.FetchReqInfo;
 import org.apache.fluss.server.log.FetchParams;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.log.remote.RemoteLogIndexCache.Entry;
+import org.apache.fluss.server.replica.Replica;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -138,6 +139,22 @@ final class RemoteLogTTLTest extends RemoteLogTestBase {
         remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
         assertThat(remoteLog.allRemoteLogSegments()).isEmpty();
         assertThat(remoteLog.getRemoteLogStartOffset()).isEqualTo(Long.MAX_VALUE);
+        assertThat(remoteLog.getRemoteLogEndOffset()).isEmpty();
+        assertThat(remoteLog.getHighestRemoteLogEndOffset()).hasValue(40L);
+        assertThat(
+                        zkClient.getRemoteLogManifestHandle(tb)
+                                .orElseThrow(AssertionError::new)
+                                .getRemoteLogEndOffset())
+                .isEqualTo(40L);
+
+        // Reload the empty manifest and verify the persisted highest copied offset still
+        // distinguishes it from a bucket that has never copied a segment.
+        Replica replica = replicaManager.getReplicaOrException(tb);
+        remoteLogManager.stopLogTiering(replica);
+        remoteLogManager.registerReplica(replica);
+        RemoteLogTablet restoredRemoteLog = remoteLogManager.remoteLogTablet(tb);
+        assertThat(restoredRemoteLog.getRemoteLogEndOffset()).isEmpty();
+        assertThat(restoredRemoteLog.getHighestRemoteLogEndOffset()).hasValue(40L);
 
         // Fetch records from remote.
         // mock to update remote log end offset and remote log start offset as

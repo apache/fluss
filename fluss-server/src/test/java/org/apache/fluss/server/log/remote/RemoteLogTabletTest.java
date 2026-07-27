@@ -64,6 +64,7 @@ class RemoteLogTabletTest extends RemoteLogTestBase {
         remoteLogTablet.addAndDeleteLogSegments(remoteLogSegmentList, Collections.emptyList());
         assertThat(remoteLogTablet.getIdToRemoteLogSegmentMap()).hasSize(5);
         assertThat(remoteLogTablet.getRemoteLogStartOffset()).isEqualTo(0);
+        assertThat(remoteLogTablet.getHighestRemoteLogEndOffset()).hasValue(50L);
 
         // try to delete two segments.
         RemoteLogSegment firstSegment = remoteLogSegmentList.get(0);
@@ -79,6 +80,7 @@ class RemoteLogTabletTest extends RemoteLogTestBase {
         assertThat(remoteLogTablet.getIdToRemoteLogSegmentMap()).isEmpty();
         assertThat(remoteLogTablet.getRemoteLogStartOffset()).isEqualTo(Long.MAX_VALUE);
         assertThat(remoteLogTablet.getRemoteLogEndOffset()).isEqualTo(OptionalLong.empty());
+        assertThat(remoteLogTablet.getHighestRemoteLogEndOffset()).hasValue(50L);
     }
 
     @ParameterizedTest

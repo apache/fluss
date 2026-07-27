@@ -1792,6 +1792,16 @@ public class ConfigOptions {
                             "The number of log segments to retain in local for each table when log tiered storage is enabled. "
                                     + "It must be greater that 0. The default is 2.");
 
+    public static final ConfigOption<Duration> TABLE_LOG_LOCAL_TTL =
+            key("table.log.local-ttl")
+                    .durationType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The time to retain local log segments after they have been copied to remote storage. "
+                                    + "If not configured, the value of `table.log.ttl` is used. When configured, "
+                                    + "the value must be greater than 0 and, if `table.log.ttl` is positive, less "
+                                    + "than or equal to `table.log.ttl`.");
+
     public static final ConfigOption<Boolean> TABLE_DATALAKE_ENABLED =
             key("table.datalake.enabled")
                     .booleanType()

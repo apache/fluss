@@ -95,6 +95,16 @@ public class TableConfig {
         return config.get(ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS);
     }
 
+    /**
+     * Gets the TTL of local segments for tiered log. The table log TTL is used when no local TTL is
+     * configured.
+     */
+    public long getLocalLogTTLMs() {
+        return config.getOptional(ConfigOptions.TABLE_LOG_LOCAL_TTL)
+                .orElseGet(() -> config.get(ConfigOptions.TABLE_LOG_TTL))
+                .toMillis();
+    }
+
     /** Whether the data lake is enabled. */
     public boolean isDataLakeEnabled() {
         return config.get(ConfigOptions.TABLE_DATALAKE_ENABLED);

@@ -865,6 +865,29 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .isInstanceOf(InvalidConfigException.class)
                 .hasMessage("'table.log.tiered.local-segments' must be greater than 0.");
 
+        TableDescriptor invalidLocalTtl =
+                TableDescriptor.builder()
+                        .schema(DEFAULT_SCHEMA)
+                        .comment("test table")
+                        .property(ConfigOptions.TABLE_LOG_TTL.key(), "1h")
+                        .property(ConfigOptions.TABLE_LOG_LOCAL_TTL.key(), "2h")
+                        .build();
+        assertThatThrownBy(() -> admin.createTable(tablePath, invalidLocalTtl, false).get())
+                .cause()
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessage("'table.log.local-ttl' must be less than or equal to 'table.log.ttl'.");
+
+        TableDescriptor nonPositiveLocalTtl =
+                TableDescriptor.builder()
+                        .schema(DEFAULT_SCHEMA)
+                        .comment("test table")
+                        .property(ConfigOptions.TABLE_LOG_LOCAL_TTL.key(), "0ms")
+                        .build();
+        assertThatThrownBy(() -> admin.createTable(tablePath, nonPositiveLocalTtl, false).get())
+                .cause()
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessage("'table.log.local-ttl' must be greater than 0.");
+
         TableDescriptor t4 =
                 TableDescriptor.builder()
                         .schema(DEFAULT_SCHEMA) // no pk
@@ -926,6 +949,24 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .isInstanceOf(InvalidConfigException.class)
                 .hasMessageContaining(
                         "Currently, Primary Key Table supports ARROW or COMPACTED log format when kv format is COMPACTED.");
+    }
+
+    @Test
+    void testCreateTableWithLocalTtlAndInfiniteRemoteTtl() throws Exception {
+        TablePath tablePath =
+                TablePath.of(
+                        DEFAULT_TABLE_PATH.getDatabaseName(),
+                        "test_local_ttl_with_infinite_remote_ttl");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(DEFAULT_SCHEMA)
+                        .property(ConfigOptions.TABLE_LOG_TTL.key(), "0ms")
+                        .property(ConfigOptions.TABLE_LOG_LOCAL_TTL.key(), "1h")
+                        .build();
+
+        admin.createTable(tablePath, tableDescriptor, false).get();
+        assertThat(admin.tableExists(tablePath).get()).isTrue();
+        admin.dropTable(tablePath, false).get();
     }
 
     @Test
