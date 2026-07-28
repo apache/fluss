@@ -33,7 +33,10 @@
     <packaging>jar</packaging>
 
     <properties>
-        <fs.s3.aws.version>1.12.319</fs.s3.aws.version>
+        <!-- Hadoop 3.4.3's S3A implementation references CRC64_NVME, which requires an AWS SDK
+             version newer than the one bundled by Hadoop. Keep this aligned with Flink's
+             Hadoop 3.4.3 upgrade. -->
+        <fs.s3.aws.sdk2.version>2.44.4</fs.s3.aws.sdk2.version>
     </properties>
 
     <dependencies>
@@ -73,6 +76,14 @@
                 <exclusion>
                     <groupId>com.sun.jersey</groupId>
                     <artifactId>jersey-server</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>com.github.pjfanning</groupId>
+                    <artifactId>jersey-json</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>com.sun.xml.bind</groupId>
+                    <artifactId>jaxb-impl</artifactId>
                 </exclusion>
                 <exclusion>
                     <groupId>org.apache.avro</groupId>
@@ -174,6 +185,26 @@
                     <groupId>org.slf4j</groupId>
                     <artifactId>slf4j-reload4j</artifactId>
                 </exclusion>
+                <exclusion>
+                    <groupId>org.bouncycastle</groupId>
+                    <artifactId>bcprov-jdk18on</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>io.netty</groupId>
+                    <artifactId>netty-handler</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>io.netty</groupId>
+                    <artifactId>netty-transport-native-epoll</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>io.dropwizard.metrics</groupId>
+                    <artifactId>metrics-core</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.codehaus.jettison</groupId>
+                    <artifactId>jettison</artifactId>
+                </exclusion>
             </exclusions>
         </dependency>
 
@@ -184,31 +215,37 @@
             <version>${project.version}</version>
         </dependency>
 
-        <!-- AWS dependencies (bundled) -->
+        <!-- AWS SDK v2 core, authentication and S3 data-transfer dependencies (bundled).
+             Keep these as individual modules instead of software.amazon.awssdk:bundle. -->
         <dependency>
-            <groupId>com.amazonaws</groupId>
-            <artifactId>aws-java-sdk-core</artifactId>
-            <version>${fs.s3.aws.version}</version>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>aws-core</artifactId>
+            <version>${fs.s3.aws.sdk2.version}</version>
         </dependency>
         <dependency>
-            <groupId>com.amazonaws</groupId>
-            <artifactId>aws-java-sdk-s3</artifactId>
-            <version>${fs.s3.aws.version}</version>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>auth</artifactId>
+            <version>${fs.s3.aws.sdk2.version}</version>
         </dependency>
         <dependency>
-            <groupId>com.amazonaws</groupId>
-            <artifactId>aws-java-sdk-kms</artifactId>
-            <version>${fs.s3.aws.version}</version>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>s3</artifactId>
+            <version>${fs.s3.aws.sdk2.version}</version>
         </dependency>
         <dependency>
-            <groupId>com.amazonaws</groupId>
-            <artifactId>aws-java-sdk-dynamodb</artifactId>
-            <version>${fs.s3.aws.version}</version>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>kms</artifactId>
+            <version>${fs.s3.aws.sdk2.version}</version>
         </dependency>
         <dependency>
-            <groupId>com.amazonaws</groupId>
-            <artifactId>aws-java-sdk-sts</artifactId>
-            <version>${fs.s3.aws.version}</version>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>sts</artifactId>
+            <version>${fs.s3.aws.sdk2.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>s3-transfer-manager</artifactId>
+            <version>${fs.s3.aws.sdk2.version}</version>
         </dependency>
 
         <!-- Hadoop's s3 support classes (bundled) -->
@@ -218,8 +255,8 @@
             <version>${fs.hadoopshaded.version}</version>
             <exclusions>
                 <exclusion>
-                    <groupId>com.amazonaws</groupId>
-                    <artifactId>aws-java-sdk-bundle</artifactId>
+                    <groupId>software.amazon.awssdk</groupId>
+                    <artifactId>bundle</artifactId>
                 </exclusion>
                 <exclusion>
                     <groupId>ch.qos.reload4j</groupId>
@@ -365,12 +402,13 @@
                                     </excludes>
                                 </filter>
                                 <filter>
-                                    <artifact>com.amazonaws:aws-java-sdk-s3</artifact>
-                                    <!-- Make sure we are using the overridden XmlResponsesSaxParser of flink-s3-fs-base.
-                                        Filter must be removed as soon as XmlResponsesSaxParser of this module is
-                                        dropped, for example when discontinuing support for Java 8. -->
+                                    <artifact>software.amazon.s3.analyticsaccelerator:analyticsaccelerator-s3</artifact>
                                     <excludes>
-                                        <exclude>com/amazonaws/services/s3/model/transform/XmlResponsesSaxParser**</exclude>
+                                        <exclude>LICENSE</exclude>
+                                        <exclude>NOTICE</exclude>
+                                        <exclude>THIRD-PARTY-NOTICES</exclude>
+                                        <exclude>META-INF/LICENSE</exclude>
+                                        <exclude>META-INF/NOTICE</exclude>
                                     </excludes>
                                 </filter>
                                 <filter>

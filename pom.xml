@@ -114,7 +114,7 @@
         <scala.version>${scala212.version}</scala.version>
         <spark.version>3.5.7</spark.version>
 
-        <fluss.hadoop.version>3.4.0</fluss.hadoop.version>
+        <fluss.hadoop.version>3.4.3</fluss.hadoop.version>
         <frocksdb.version>6.20.3-ververica-2.0</frocksdb.version>
         <slf4j.version>1.7.36</slf4j.version>
         <log4j.version>2.25.4</log4j.version>
