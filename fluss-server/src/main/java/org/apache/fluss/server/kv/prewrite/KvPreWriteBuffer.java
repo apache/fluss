@@ -95,8 +95,14 @@ public class KvPreWriteBuffer implements AutoCloseable {
     private final LinkedList<KvEntry> allKvEntries = new LinkedList<>();
 
     // metrics related.
+    private final Counter preWriteBufferSizeBytes;
     private final Counter truncateAsDuplicatedCount;
     private final Counter truncateAsErrorCount;
+
+    // The current payload bytes contributed by this buffer to the server-level aggregate gauge.
+    private long bufferedPayloadSizeBytes;
+
+    private boolean closed;
 
     // the max LSN in the buffer
     private long maxLogSequenceNumber = -1;
@@ -105,6 +111,7 @@ public class KvPreWriteBuffer implements AutoCloseable {
             KvBatchWriter kvBatchWriter, TabletServerMetricGroup serverMetricGroup) {
         this.kvBatchWriter = kvBatchWriter;
 
+        preWriteBufferSizeBytes = serverMetricGroup.kvPreWriteBufferSizeBytes();
         truncateAsDuplicatedCount = serverMetricGroup.kvTruncateAsDuplicatedCount();
         truncateAsErrorCount = serverMetricGroup.kvTruncateAsErrorCount();
     }
@@ -156,6 +163,7 @@ public class KvPreWriteBuffer implements AutoCloseable {
                                         : KvEntry.of(changeType, key, value, lsn, v));
         // append the entry to the tail of the list for all kv entries
         allKvEntries.addLast(kvEntry);
+        increasePreWriteBufferSize(kvEntry.sizeInBytes());
         // update the max lsn
         maxLogSequenceNumber = lsn;
     }
@@ -194,6 +202,7 @@ public class KvPreWriteBuffer implements AutoCloseable {
                 break;
             }
             descIter.remove();
+            decreasePreWriteBufferSize(entry.sizeInBytes());
             boolean removed = kvEntryMap.remove(entry.getKey(), entry);
             // if the latest entry is removed, we need to rollback the previous entry to the map
             if (removed && entry.previousEntry != null) {
@@ -225,6 +234,7 @@ public class KvPreWriteBuffer implements AutoCloseable {
 
             // first remove the entry from the list
             it.remove();
+            decreasePreWriteBufferSize(entry.sizeInBytes());
 
             // then write data using write batch writer
             Value value = entry.getValue();
@@ -273,8 +283,20 @@ public class KvPreWriteBuffer implements AutoCloseable {
 
     @Override
     public void close() throws Exception {
-        if (kvBatchWriter != null) {
-            kvBatchWriter.close();
+        if (closed) {
+            return;
+        }
+
+        try {
+            if (kvBatchWriter != null) {
+                kvBatchWriter.close();
+            }
+        } finally {
+            decreasePreWriteBufferSize(bufferedPayloadSizeBytes);
+            allKvEntries.clear();
+            kvEntryMap.clear();
+            maxLogSequenceNumber = -1;
+            closed = true;
         }
     }
 
@@ -284,6 +306,16 @@ public class KvPreWriteBuffer implements AutoCloseable {
 
     public Counter getTruncateAsErrorCount() {
         return truncateAsErrorCount;
+    }
+
+    private void increasePreWriteBufferSize(long sizeInBytes) {
+        preWriteBufferSizeBytes.inc(sizeInBytes);
+        bufferedPayloadSizeBytes += sizeInBytes;
+    }
+
+    private void decreasePreWriteBufferSize(long sizeInBytes) {
+        preWriteBufferSizeBytes.dec(sizeInBytes);
+        bufferedPayloadSizeBytes -= sizeInBytes;
     }
 
     // -------------------------------------------------------------------------------------------
@@ -349,6 +381,10 @@ public class KvPreWriteBuffer implements AutoCloseable {
             return logSequenceNumber;
         }
 
+        long sizeInBytes() {
+            return key.sizeInBytes() + value.sizeInBytes();
+        }
+
         @Override
         public boolean equals(Object o) {
             if (this == o) {
@@ -410,6 +446,10 @@ public class KvPreWriteBuffer implements AutoCloseable {
             return key;
         }
 
+        long sizeInBytes() {
+            return key.length;
+        }
+
         @Override
         public int hashCode() {
             return hashCode;
@@ -464,6 +504,10 @@ public class KvPreWriteBuffer implements AutoCloseable {
         @Nullable
         public byte[] get() {
             return value;
+        }
+
+        long sizeInBytes() {
+            return value == null ? 0 : value.length;
         }
 
         @Override

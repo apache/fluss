@@ -76,6 +76,7 @@ import org.apache.fluss.server.utils.ResourceGuard;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.BytesUtils;
+import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.IOUtils;
 
@@ -851,10 +852,23 @@ public final class KvTablet {
                     }
                     // Note: RocksDB metrics lifecycle is managed by TableMetricGroup
                     // No need to close it here
+                    Exception exception = null;
+                    try {
+                        kvPreWriteBuffer.close();
+                    } catch (Exception e) {
+                        exception = e;
+                    }
                     if (rocksDBKv != null) {
-                        rocksDBKv.close();
+                        try {
+                            rocksDBKv.close();
+                        } catch (Exception e) {
+                            exception = ExceptionUtils.firstOrSuppressed(e, exception);
+                        }
                     }
                     isClosed = true;
+                    if (exception != null) {
+                        throw exception;
+                    }
                 });
     }
 

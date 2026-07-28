@@ -17,8 +17,10 @@
 
 package org.apache.fluss.server.kv.prewrite;
 
+import org.apache.fluss.metrics.registry.NOPMetricRegistry;
 import org.apache.fluss.server.kv.KvBatchWriter;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.TruncateReason;
+import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 
 import org.junit.jupiter.api.Test;
@@ -238,6 +240,42 @@ class KvPreWriteBufferTest {
         assertThat(buffer.flush(Long.MAX_VALUE)).isEqualTo(7);
     }
 
+    @Test
+    void testPreWriteBufferSizeBytesMetric() throws Exception {
+        TabletServerMetricGroup metricGroup =
+                new TabletServerMetricGroup(NOPMetricRegistry.INSTANCE, "fluss", "rack", "host", 0);
+        KvPreWriteBuffer buffer = new KvPreWriteBuffer(new NopKvBatchWriter(), metricGroup);
+
+        assertThat(metricGroup.kvPreWriteBufferSizeBytes().getCount()).isZero();
+
+        bufferInsert(buffer, "key1", "value1", 0);
+        bufferInsert(buffer, "key2", "value2", 1);
+        bufferInsert(buffer, "key2", "value3", 2);
+        long key1Value1Size = entrySize("key1", "value1");
+        long key2Value2Size = entrySize("key2", "value2");
+        long key2Value3Size = entrySize("key2", "value3");
+        long key3Value3Size = entrySize("key3", "value3");
+        assertThat(metricGroup.kvPreWriteBufferSizeBytes().getCount())
+                .isEqualTo(key1Value1Size + key2Value2Size + key2Value3Size);
+
+        buffer.flush(1);
+        assertThat(metricGroup.kvPreWriteBufferSizeBytes().getCount())
+                .isEqualTo(key2Value2Size + key2Value3Size);
+
+        bufferInsert(buffer, "key3", "value3", 3);
+        assertThat(metricGroup.kvPreWriteBufferSizeBytes().getCount())
+                .isEqualTo(key2Value2Size + key2Value3Size + key3Value3Size);
+
+        buffer.truncateTo(2, TruncateReason.ERROR);
+        assertThat(metricGroup.kvPreWriteBufferSizeBytes().getCount()).isEqualTo(key2Value2Size);
+
+        buffer.close();
+        assertThat(metricGroup.kvPreWriteBufferSizeBytes().getCount()).isZero();
+
+        buffer.close();
+        assertThat(metricGroup.kvPreWriteBufferSizeBytes().getCount()).isZero();
+    }
+
     private static void bufferInsert(
             KvPreWriteBuffer kvPreWriteBuffer, String key, String value, int elementCount) {
         kvPreWriteBuffer.insert(toKey(key), value.getBytes(), elementCount);
@@ -266,6 +304,10 @@ class KvPreWriteBufferTest {
 
     private static KvPreWriteBuffer.Key toKey(String str) {
         return KvPreWriteBuffer.Key.of(str.getBytes());
+    }
+
+    private static long entrySize(String key, String value) {
+        return key.getBytes().length + value.getBytes().length;
     }
 
     /** A {@link KvBatchWriter} for test purpose without doing anything. */
