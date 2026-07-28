@@ -50,7 +50,7 @@ public class KvSnapshotHandle {
      */
     private boolean ownsSharedFiles;
 
-    private KvSnapshotHandle(
+    KvSnapshotHandle(
             List<KvFileHandleAndLocalPath> sharedFileHandles,
             List<KvFileHandleAndLocalPath> privateFileHandles,
             long incrementalSize,
