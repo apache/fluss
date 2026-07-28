@@ -27,7 +27,6 @@ import java.util.Objects;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
-import static org.apache.fluss.utils.Preconditions.checkState;
 
 /**
  * A handle to the snapshot of a kv tablet. It contains the share file handles and the private file
@@ -46,22 +45,36 @@ public class KvSnapshotHandle {
     private final long incrementalSize;
 
     /**
-     * Once the shared states are registered, it is the {@link SharedKvFileRegistry}'s
-     * responsibility to cleanup those shared states. But in the cases where the state handle is
-     * discarded before performing the registration, the handle should delete all the shared states
-     * created by it.
-     *
-     * <p>This variable is not null iff the handles was registered.
+     * Whether {@link #discard()} should directly delete the shared files. This is true for newly
+     * created handles until registration and false for restored handles.
      */
-    private transient SharedKvFileRegistry sharedKvFileRegistry;
+    private boolean ownsSharedFiles;
 
-    public KvSnapshotHandle(
+    private KvSnapshotHandle(
             List<KvFileHandleAndLocalPath> sharedFileHandles,
             List<KvFileHandleAndLocalPath> privateFileHandles,
-            long incrementalSize) {
+            long incrementalSize,
+            boolean ownsSharedFiles) {
         this.sharedFileHandles = sharedFileHandles;
         this.privateFileHandles = privateFileHandles;
         this.incrementalSize = incrementalSize;
+        this.ownsSharedFiles = ownsSharedFiles;
+    }
+
+    /** Creates a handle that directly discards its shared files until they are registered. */
+    public static KvSnapshotHandle create(
+            List<KvFileHandleAndLocalPath> sharedFileHandles,
+            List<KvFileHandleAndLocalPath> privateFileHandles,
+            long incrementalSize) {
+        return new KvSnapshotHandle(sharedFileHandles, privateFileHandles, incrementalSize, true);
+    }
+
+    /** Restores a handle that only references already-persisted shared files. */
+    static KvSnapshotHandle restore(
+            List<KvFileHandleAndLocalPath> sharedFileHandles,
+            List<KvFileHandleAndLocalPath> privateFileHandles,
+            long incrementalSize) {
+        return new KvSnapshotHandle(sharedFileHandles, privateFileHandles, incrementalSize, false);
     }
 
     public List<KvFileHandleAndLocalPath> getSharedKvFileHandles() {
@@ -98,9 +111,6 @@ public class KvSnapshotHandle {
     }
 
     public void discard() {
-        SharedKvFileRegistry registry = this.sharedKvFileRegistry;
-        final boolean isRegistered = (registry != null);
-
         try {
             SnapshotUtil.bestEffortDiscardAllKvFiles(
                     privateFileHandles.stream()
@@ -110,7 +120,7 @@ public class KvSnapshotHandle {
             LOG.warn("Could not properly discard misc file states.", e);
         }
 
-        if (!isRegistered) {
+        if (ownsSharedFiles) {
             try {
                 SnapshotUtil.bestEffortDiscardAllKvFiles(
                         sharedFileHandles.stream()
@@ -123,11 +133,8 @@ public class KvSnapshotHandle {
     }
 
     public void registerKvFileHandles(SharedKvFileRegistry registry, long snapshotID) {
-        checkState(
-                sharedKvFileRegistry != registry,
-                "The kv file handle has already registered its shared kv files to the given registry.");
-
-        sharedKvFileRegistry = checkNotNull(registry);
+        checkNotNull(registry);
+        ownsSharedFiles = false;
 
         for (KvFileHandleAndLocalPath handleAndLocalPath : sharedFileHandles) {
             registry.registerReference(

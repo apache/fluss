@@ -27,6 +27,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -105,8 +106,32 @@ class CompletedSnapshotTest {
         assertThat(snapshot.getKvSnapshotHandle().getSnapshotSize()).isEqualTo(400L);
     }
 
+    @Test
+    void testDiscardRestoredSnapshotKeepsSharedFiles(@TempDir Path tempDir) throws Exception {
+        TableBucket tableBucket = new TableBucket(1, 1);
+        Path localFileDir = makeDir(tempDir, "local");
+        Path snapshotBaseLocation = makeDir(tempDir, "snapshot");
+        Path shareDir = makeDir(snapshotBaseLocation, "share");
+        Path snapshotPath = makeDir(snapshotBaseLocation, "snapshot-1");
+        KvSnapshotHandle kvSnapshotHandle =
+                makeSnapshotHandle(localFileDir, snapshotPath, shareDir, 100);
+        CompletedSnapshot snapshot =
+                new CompletedSnapshot(
+                        tableBucket,
+                        1,
+                        FsPath.fromLocalFile(snapshotPath.toFile()),
+                        kvSnapshotHandle);
+        Files.createFile(snapshotPath.resolve("_METADATA"));
+
+        CompletedSnapshot restoredSnapshot =
+                CompletedSnapshotJsonSerde.fromJson(CompletedSnapshotJsonSerde.toJson(snapshot));
+        restoredSnapshot.discardAsync(Executors.directExecutor()).get();
+
+        checkCompletedSnapshotCleanUp(snapshotPath, restoredSnapshot.getKvSnapshotHandle(), false);
+    }
+
     private void checkCompletedSnapshotCleanUp(
-            Path snapshotPath, KvSnapshotHandle kvSnapshotHandle, boolean isShareFileShouldDelete) {
+            Path snapshotPath, KvSnapshotHandle kvSnapshotHandle, boolean shouldDeleteSharedFiles) {
         // private should be deleted, but the local file should still remain
         for (KvFileHandleAndLocalPath kvFileHandleAndLocalPath :
                 kvSnapshotHandle.getPrivateFileHandles()) {
@@ -118,8 +143,8 @@ class CompletedSnapshotTest {
         // check the share files is as expected, and the local file should still remain
         for (KvFileHandleAndLocalPath kvFileHandleAndLocalPath :
                 kvSnapshotHandle.getSharedKvFileHandles()) {
-            // share files should also be deleted, but the local file should still remain
-            if (isShareFileShouldDelete) {
+            // shared files should also be deleted, but the local file should still remain
+            if (shouldDeleteSharedFiles) {
                 assertThat(new File(kvFileHandleAndLocalPath.getKvFileHandle().getFilePath()))
                         .doesNotExist();
             } else {
@@ -168,7 +193,7 @@ class CompletedSnapshotTest {
                             new KvFileHandle(privateFile.getPath(), privateFile.length()),
                             localFile.getPath()));
         }
-        return new KvSnapshotHandle(sharedFileHandles, privateFileHandles, 10);
+        return KvSnapshotHandle.create(sharedFileHandles, privateFileHandles, 10);
     }
 
     private Path makeDir(Path basePath, String dirName) {

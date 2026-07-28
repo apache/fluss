@@ -88,6 +88,9 @@ public class CompletedSnapshot {
 
     public static final String SNAPSHOT_DATA_NOT_EXISTS_ERROR_MESSAGE = "No such file or directory";
 
+    private static final String HADOOP_SNAPSHOT_DATA_NOT_EXISTS_ERROR_MESSAGE =
+            "File does not exist";
+
     public CompletedSnapshot(
             TableBucket tableBucket,
             long snapshotID,
@@ -163,9 +166,8 @@ public class CompletedSnapshot {
     }
 
     public CompletableFuture<Void> discardAsync(Executor ioExecutor) {
-        // it'll discard the snapshot files for kv, it'll always discard
-        // the private files; for shared files, only if they're not be registered in
-        // SharedKvRegistry, can the files be deleted.
+        // Always discard private files. Shared files are discarded directly only when the handle
+        // represents a newly created snapshot that has not been registered.
         CompletableFuture<Void> discardKvFuture =
                 FutureUtils.runAsync(kvSnapshotHandle::discard, ioExecutor);
 
@@ -193,6 +195,24 @@ public class CompletedSnapshot {
 
     public static FsPath getMetadataFilePath(FsPath snapshotLocation) {
         return new FsPath(snapshotLocation, SNAPSHOT_METADATA_FILE_NAME);
+    }
+
+    /**
+     * Returns whether the throwable or any of its causes indicates that snapshot data no longer
+     * exists in remote storage.
+     */
+    public static boolean isSnapshotDataNotExists(Throwable throwable) {
+        Throwable cause = throwable;
+        while (cause != null) {
+            String message = cause.getMessage();
+            if (message != null
+                    && (message.contains(SNAPSHOT_DATA_NOT_EXISTS_ERROR_MESSAGE)
+                            || message.contains(HADOOP_SNAPSHOT_DATA_NOT_EXISTS_ERROR_MESSAGE))) {
+                return true;
+            }
+            cause = cause.getCause();
+        }
+        return false;
     }
 
     private void disposeMetadata() throws IOException {
