@@ -19,6 +19,7 @@ package org.apache.fluss.flink.sink.writer;
 
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.table.writer.DeleteResult;
+import org.apache.fluss.client.table.writer.RetractResult;
 import org.apache.fluss.client.table.writer.TableWriter;
 import org.apache.fluss.client.table.writer.Upsert;
 import org.apache.fluss.client.table.writer.UpsertResult;
@@ -114,7 +115,7 @@ public class UpsertSinkWriter<InputT> extends FlinkSinkWriter<InputT> {
                         "Received RETRACT operation but the schema does not support retract. "
                                 + "This should have been rejected at plan time or serialization.");
             }
-            CompletableFuture<UpsertResult> future = upsertWriter.retract(internalRow);
+            CompletableFuture<RetractResult> future = upsertWriter.retract(internalRow);
             if (offsetReporter != null) {
                 return future.thenAccept(
                         result ->

@@ -30,7 +30,6 @@ import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.memory.LazyMemorySegmentPool;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.memory.PreAllocatedPagedOutputView;
-import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
@@ -38,6 +37,7 @@ import org.apache.fluss.metadata.TableOrPartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.record.LogRecordBatchStatisticsCollector;
+import org.apache.fluss.record.MutationType;
 import org.apache.fluss.row.arrow.ArrowWriter;
 import org.apache.fluss.row.arrow.ArrowWriterPool;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
@@ -1130,11 +1130,12 @@ public final class RecordAccumulator {
                         writeRecord.getTargetColumns(),
                         writeRecord.getMergeMode(),
                         isHistoricalPartition,
-                        tableInfo
-                                .getTableConfig()
-                                .getMergeEngineType()
-                                .filter(t -> t == MergeEngineType.AGGREGATION)
-                                .isPresent(),
+                        // Only RETRACT records require the V2 record format. Upsert/delete
+                        // records always start V0 batches (even on aggregation tables) to stay
+                        // wire-compatible with servers that only support PUT_KV version < 4.
+                        // A RETRACT record hitting a V0 batch cannot join it and re-enters
+                        // here to create a V2 batch; subsequent upserts can join that V2 batch.
+                        writeRecord.getMutationType() == MutationType.RETRACT,
                         clock.milliseconds());
 
             case ARROW_LOG:

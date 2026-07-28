@@ -106,7 +106,7 @@ public class KvRecordTestUtils {
                             KvFormat.COMPACTED,
                             true);
             for (V2RecordEntry entry : entries) {
-                builder.appendV2(
+                builder.append(
                         entry.mutationType,
                         BytesUtils.toArray(entry.record.getKey()),
                         entry.record.getRow());

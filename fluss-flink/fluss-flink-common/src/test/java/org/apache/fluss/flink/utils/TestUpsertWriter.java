@@ -18,6 +18,7 @@
 package org.apache.fluss.flink.utils;
 
 import org.apache.fluss.client.table.writer.DeleteResult;
+import org.apache.fluss.client.table.writer.RetractResult;
 import org.apache.fluss.client.table.writer.UpsertResult;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.metadata.TableBucket;
@@ -59,16 +60,16 @@ public class TestUpsertWriter implements UpsertWriter {
     }
 
     @Override
-    public CompletableFuture<UpsertResult> retract(InternalRow row) {
+    public CompletableFuture<RetractResult> retract(InternalRow row) {
         if (shouldFail) {
-            CompletableFuture<UpsertResult> future = new CompletableFuture<>();
+            CompletableFuture<RetractResult> future = new CompletableFuture<>();
             future.completeExceptionally(new RuntimeException("Simulated write failure"));
             return future;
         }
         retractCount++;
         lastRetractedRow = row;
         allRetractedRows.add(row);
-        return CompletableFuture.completedFuture(new UpsertResult(new TableBucket(1L, 0), 0L));
+        return CompletableFuture.completedFuture(new RetractResult(new TableBucket(1L, 0), 0L));
     }
 
     @Override

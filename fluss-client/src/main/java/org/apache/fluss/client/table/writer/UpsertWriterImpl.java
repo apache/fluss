@@ -228,12 +228,21 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
     }
 
     @Override
-    public CompletableFuture<UpsertResult> retract(InternalRow row) {
+    public CompletableFuture<RetractResult> retract(InternalRow row) {
         if (!supportsRetract) {
             throw new IllegalStateException(
                     "retract() is only supported for tables with AGGREGATION merge engine. "
                             + "Table: "
                             + tablePath);
+        }
+        // Retract is not idempotent (a duplicated retract subtracts twice), so it must not be
+        // used when the idempotent writer is disabled: retries could silently corrupt the
+        // aggregated value without server-side batch deduplication.
+        if (!writerClient.isIdempotenceEnabled()) {
+            throw new IllegalStateException(
+                    "retract() requires the idempotent writer to be enabled, because retract is "
+                            + "not idempotent and relies on server-side batch deduplication for "
+                            + "retry correctness. Please enable 'client.writer.enable-idempotence'.");
         }
         checkFieldCount(row);
         byte[] key = primaryKeyEncoder.encodeKey(row);
@@ -249,7 +258,7 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
                         writeFormat,
                         targetColumns,
                         mergeMode);
-        return sendWithResult(record, UpsertResult::new);
+        return sendWithResult(record, RetractResult::new);
     }
 
     private BinaryRow encodeRow(InternalRow row) {

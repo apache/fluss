@@ -93,21 +93,19 @@ class KvWriteBatchTest {
             boolean appendResult =
                     kvProducerBatch.tryAppend(createWriteRecord(), newWriteCallback());
 
-            assertThat(appendResult).isEqualTo(true);
+            assertThat(appendResult).isTrue();
         }
 
         // batch full.
-        boolean appendResult =
-                kvProducerBatch.tryAppend(createWriteRecord(), newWriteCallback());
-        assertThat(appendResult).isEqualTo(false);
+        boolean appendResult = kvProducerBatch.tryAppend(createWriteRecord(), newWriteCallback());
+        assertThat(appendResult).isFalse();
     }
 
     @Test
     void testToBytes() throws Exception {
         KvWriteBatch kvProducerBatch = createKvWriteBatch(new TableBucket(DATA1_TABLE_ID_PK, 0));
 
-        assertThat(kvProducerBatch.tryAppend(createWriteRecord(), newWriteCallback()))
-                .isEqualTo(true);
+        assertThat(kvProducerBatch.tryAppend(createWriteRecord(), newWriteCallback())).isTrue();
         DefaultKvRecordBatch kvRecords =
                 DefaultKvRecordBatch.pointToBytesView(kvProducerBatch.build());
         assertDefaultKvRecordBatchEquals(kvRecords);
@@ -117,8 +115,7 @@ class KvWriteBatchTest {
     void testCompleteTwice() throws Exception {
         KvWriteBatch kvWriteBatch = createKvWriteBatch(new TableBucket(DATA1_TABLE_ID_PK, 0));
 
-        assertThat(kvWriteBatch.tryAppend(createWriteRecord(), newWriteCallback()))
-                .isEqualTo(true);
+        assertThat(kvWriteBatch.tryAppend(createWriteRecord(), newWriteCallback())).isTrue();
 
         assertThat(kvWriteBatch.complete()).isTrue();
         assertThatThrownBy(kvWriteBatch::complete)
@@ -131,8 +128,7 @@ class KvWriteBatchTest {
     void testFailedTwice() throws Exception {
         KvWriteBatch kvWriteBatch = createKvWriteBatch(new TableBucket(DATA1_TABLE_ID_PK, 0));
 
-        assertThat(kvWriteBatch.tryAppend(createWriteRecord(), newWriteCallback()))
-                .isEqualTo(true);
+        assertThat(kvWriteBatch.tryAppend(createWriteRecord(), newWriteCallback())).isTrue();
 
         assertThat(kvWriteBatch.completeExceptionally(new IllegalStateException("test failed.")))
                 .isTrue();
@@ -144,14 +140,12 @@ class KvWriteBatchTest {
     @Test
     void testClose() throws Exception {
         KvWriteBatch kvProducerBatch = createKvWriteBatch(new TableBucket(DATA1_TABLE_ID_PK, 0));
-        assertThat(kvProducerBatch.tryAppend(createWriteRecord(), newWriteCallback()))
-                .isEqualTo(true);
+        assertThat(kvProducerBatch.tryAppend(createWriteRecord(), newWriteCallback())).isTrue();
 
         kvProducerBatch.close();
         assertThat(kvProducerBatch.isClosed()).isTrue();
 
-        assertThat(kvProducerBatch.tryAppend(createWriteRecord(), newWriteCallback()))
-                .isEqualTo(false);
+        assertThat(kvProducerBatch.tryAppend(createWriteRecord(), newWriteCallback())).isFalse();
     }
 
     @Test
@@ -273,8 +267,7 @@ class KvWriteBatchTest {
 
         // Append record with DEFAULT mode should succeed
         WriteRecord defaultRecord = createWriteRecordWithMergeMode(MergeMode.DEFAULT);
-        assertThat(defaultBatch.tryAppend(defaultRecord, newWriteCallback()))
-                .isEqualTo(true);
+        assertThat(defaultBatch.tryAppend(defaultRecord, newWriteCallback())).isTrue();
 
         // Append record with OVERWRITE mode should fail
         WriteRecord overwriteRecord = createWriteRecordWithMergeMode(MergeMode.OVERWRITE);
@@ -298,8 +291,7 @@ class KvWriteBatchTest {
 
         // Append record with OVERWRITE mode should succeed
         WriteRecord overwriteRecord = createWriteRecordWithMergeMode(MergeMode.OVERWRITE);
-        assertThat(overwriteBatch.tryAppend(overwriteRecord, newWriteCallback()))
-                .isEqualTo(true);
+        assertThat(overwriteBatch.tryAppend(overwriteRecord, newWriteCallback())).isTrue();
 
         // Append record with DEFAULT mode should fail
         WriteRecord defaultRecord = createWriteRecordWithMergeMode(MergeMode.DEFAULT);
@@ -358,8 +350,7 @@ class KvWriteBatchTest {
 
         // UPSERT should succeed on V0 batch
         WriteRecord upsertRecord = createWriteRecord();
-        assertThat(v0Batch.tryAppend(upsertRecord, newWriteCallback()))
-                .isEqualTo(true);
+        assertThat(v0Batch.tryAppend(upsertRecord, newWriteCallback())).isTrue();
 
         // RETRACT should be rejected on V0 batch
         WriteRecord retractRecord =
@@ -372,8 +363,7 @@ class KvWriteBatchTest {
                         WriteFormat.COMPACTED_KV,
                         null,
                         MergeMode.DEFAULT);
-        assertThat(v0Batch.tryAppend(retractRecord, newWriteCallback()))
-                .isEqualTo(false);
+        assertThat(v0Batch.tryAppend(retractRecord, newWriteCallback())).isFalse();
 
         // Only the UPSERT record should be in the batch
         assertThat(v0Batch.getRecordCount()).isEqualTo(1);
@@ -394,13 +384,11 @@ class KvWriteBatchTest {
                         WriteFormat.COMPACTED_KV,
                         null,
                         MergeMode.DEFAULT);
-        assertThat(v2Batch.tryAppend(retractRecord, newWriteCallback()))
-                .isEqualTo(true);
+        assertThat(v2Batch.tryAppend(retractRecord, newWriteCallback())).isTrue();
 
         // UPSERT should also succeed on V2 batch
         WriteRecord upsertRecord = createWriteRecord();
-        assertThat(v2Batch.tryAppend(upsertRecord, newWriteCallback()))
-                .isEqualTo(true);
+        assertThat(v2Batch.tryAppend(upsertRecord, newWriteCallback())).isTrue();
 
         // Both records should be in the batch
         assertThat(v2Batch.getRecordCount()).isEqualTo(2);
@@ -431,8 +419,7 @@ class KvWriteBatchTest {
                         null,
                         MergeMode.DEFAULT);
         assertThat(retractRecord.getMutationType()).isEqualTo(MutationType.RETRACT);
-        assertThat(v2Batch.tryAppend(retractRecord, newWriteCallback()))
-                .isEqualTo(true);
+        assertThat(v2Batch.tryAppend(retractRecord, newWriteCallback())).isTrue();
 
         // Build and read back with V2 ReadContext
         DefaultKvRecordBatch kvRecords = DefaultKvRecordBatch.pointToBytesView(v2Batch.build());
@@ -455,8 +442,7 @@ class KvWriteBatchTest {
 
         // Append an UPSERT record
         WriteRecord upsertRecord = createWriteRecord();
-        assertThat(v2Batch.tryAppend(upsertRecord, newWriteCallback()))
-                .isEqualTo(true);
+        assertThat(v2Batch.tryAppend(upsertRecord, newWriteCallback())).isTrue();
 
         // Build and read back with V2 ReadContext
         DefaultKvRecordBatch kvRecords = DefaultKvRecordBatch.pointToBytesView(v2Batch.build());
@@ -479,8 +465,7 @@ class KvWriteBatchTest {
 
         // Append an UPSERT record
         WriteRecord upsertRecord = createWriteRecord();
-        assertThat(v2Batch.tryAppend(upsertRecord, newWriteCallback()))
-                .isEqualTo(true);
+        assertThat(v2Batch.tryAppend(upsertRecord, newWriteCallback())).isTrue();
 
         // Append a RETRACT record
         WriteRecord retractRecord =
@@ -493,8 +478,7 @@ class KvWriteBatchTest {
                         WriteFormat.COMPACTED_KV,
                         null,
                         MergeMode.DEFAULT);
-        assertThat(v2Batch.tryAppend(retractRecord, newWriteCallback()))
-                .isEqualTo(true);
+        assertThat(v2Batch.tryAppend(retractRecord, newWriteCallback())).isTrue();
         assertThat(v2Batch.getRecordCount()).isEqualTo(2);
 
         // Build and read back with V2 ReadContext

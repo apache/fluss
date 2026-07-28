@@ -145,7 +145,8 @@ public class FlinkTableSink
 
     @Override
     public ChangelogMode getChangelogMode(ChangelogMode requestedMode) {
-        if (streaming && isAggregationTable
+        if (streaming
+                && isAggregationTable
                 && !schemaSupportsRetract
                 && containsUpdateChangelog(requestedMode)) {
             throw new ValidationException(

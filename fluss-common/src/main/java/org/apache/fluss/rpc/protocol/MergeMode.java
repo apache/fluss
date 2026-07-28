@@ -65,6 +65,9 @@ public enum MergeMode {
 
     private static final Logger LOG = LoggerFactory.getLogger(MergeMode.class);
 
+    /** Whether the unknown-merge-mode warning has been logged (logged only once per JVM). */
+    private static volatile boolean unknownMergeModeWarned = false;
+
     private final int value;
 
     MergeMode(int value) {
@@ -121,8 +124,6 @@ public enum MergeMode {
      * @param protoValue the proto value
      * @return the corresponding MergeMode, or {@link #DEFAULT} for unknown values
      */
-    private static volatile boolean unknownMergeModeWarned = false;
-
     public static MergeMode fromProtoValue(int protoValue) {
         switch (protoValue) {
             case 0:

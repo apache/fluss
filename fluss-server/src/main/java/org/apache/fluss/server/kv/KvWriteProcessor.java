@@ -20,8 +20,8 @@ package org.apache.fluss.server.kv;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.compression.ArrowCompressionInfo;
 import org.apache.fluss.exception.DeletionDisabledException;
-import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.InvalidRecordException;
+import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.SchemaNotExistException;
 import org.apache.fluss.memory.MemorySegmentPool;
 import org.apache.fluss.metadata.ChangelogImage;
@@ -322,9 +322,17 @@ public final class KvWriteProcessor {
             @Nullable HistoricalValueLookup historicalValueLookup)
             throws Exception {
         if (kvRecords.isV2Format()) {
-            processV2KvRecords(kvRecords, schemaIdOfNewData, currentMerger,
-                    autoIncrementUpdater, walBuilder, latestSchemaRow, startLogOffset,
-                    stateAccessor, originalPartitionName, historicalValueLookup);
+            processV2KvRecords(
+                    kvRecords,
+                    schemaIdOfNewData,
+                    currentMerger,
+                    autoIncrementUpdater,
+                    walBuilder,
+                    latestSchemaRow,
+                    startLogOffset,
+                    stateAccessor,
+                    originalPartitionName,
+                    historicalValueLookup);
             return;
         }
         long logOffset = startLogOffset;
@@ -368,18 +376,25 @@ public final class KvWriteProcessor {
     }
 
     private void processV2KvRecords(
-            KvRecordBatch kvRecords, short schemaIdOfNewData, RowMerger currentMerger,
-            AutoIncrementUpdater autoIncrementUpdater, WalBuilder walBuilder,
-            PaddingRow latestSchemaRow, long startLogOffset, KvStateAccessor stateAccessor,
+            KvRecordBatch kvRecords,
+            short schemaIdOfNewData,
+            RowMerger currentMerger,
+            AutoIncrementUpdater autoIncrementUpdater,
+            WalBuilder walBuilder,
+            PaddingRow latestSchemaRow,
+            long startLogOffset,
+            KvStateAccessor stateAccessor,
             @Nullable String originalPartitionName,
-            @Nullable HistoricalValueLookup historicalValueLookup) throws Exception {
+            @Nullable HistoricalValueLookup historicalValueLookup)
+            throws Exception {
         long logOffset = startLogOffset;
         KvRecordBatch.ReadContext readContext =
                 KvRecordReadContext.createReadContext(kvFormat, schemaGetter);
         // V2 path: uses PeekableKvMutationIterator for RETRACT+UPSERT pairing optimization
         Iterator<KvRecord> iter = kvRecords.records(readContext).iterator();
         PeekableKvMutationIterator peekableIter =
-                new PeekableKvMutationIterator(iter, schemaIdOfNewData, stateAccessor, originalPartitionName);
+                new PeekableKvMutationIterator(
+                        iter, schemaIdOfNewData, stateAccessor, originalPartitionName);
         while (peekableIter.hasNext()) {
             KvRecord kvRecord = peekableIter.next();
             NormalizedKvMutation mutation = peekableIter.nextMutation(kvRecord);
@@ -399,7 +414,9 @@ public final class KvWriteProcessor {
                                         autoIncrementUpdater,
                                         walBuilder,
                                         latestSchemaRow,
-                                        logOffset, stateAccessor, originalPartitionName,
+                                        logOffset,
+                                        stateAccessor,
+                                        originalPartitionName,
                                         historicalValueLookup);
                         break;
                     }
@@ -412,7 +429,9 @@ public final class KvWriteProcessor {
                                         autoIncrementUpdater,
                                         walBuilder,
                                         latestSchemaRow,
-                                        logOffset, stateAccessor, originalPartitionName,
+                                        logOffset,
+                                        stateAccessor,
+                                        originalPartitionName,
                                         historicalValueLookup);
                         break;
                     }
@@ -434,8 +453,12 @@ public final class KvWriteProcessor {
                         final KvPreWriteBuffer.Key retractKey = mutation.key;
                         final BinaryValue retractValue = mutation.value;
 
-                        BinaryValue oldValue = getPreviousValue(retractKey,
-                                mutation.primaryKey, stateAccessor, historicalValueLookup);
+                        BinaryValue oldValue =
+                                getPreviousValue(
+                                        retractKey,
+                                        mutation.primaryKey,
+                                        stateAccessor,
+                                        historicalValueLookup);
                         if (oldValue == null) {
                             // Retract on non-existent key — nothing to undo, safe to skip.
                             LOG.debug(
@@ -444,7 +467,6 @@ public final class KvWriteProcessor {
                                     tableBucket);
                             break;
                         }
-
 
                         // Best-effort merge optimization: peek next record for same key
                         KvRecord nextRecord = peekableIter.peek();
@@ -492,7 +514,8 @@ public final class KvWriteProcessor {
                                                         oldValue,
                                                         walBuilder,
                                                         latestSchemaRow,
-                                                        logOffset, stateAccessor);
+                                                        logOffset,
+                                                        stateAccessor);
                                     }
                                 }
                                 // Use value equality (not reference equality) because
@@ -509,7 +532,8 @@ public final class KvWriteProcessor {
                                                     newValue,
                                                     walBuilder,
                                                     latestSchemaRow,
-                                                    logOffset, stateAccessor);
+                                                    logOffset,
+                                                    stateAccessor);
                                 }
                                 break;
                             }
@@ -526,7 +550,8 @@ public final class KvWriteProcessor {
                                         currentMerger,
                                         walBuilder,
                                         latestSchemaRow,
-                                        logOffset, stateAccessor);
+                                        logOffset,
+                                        stateAccessor);
                         break;
                     }
                 default:
@@ -548,7 +573,8 @@ public final class KvWriteProcessor {
             RowMerger currentMerger,
             WalBuilder walBuilder,
             PaddingRow latestSchemaRow,
-            long logOffset, KvStateAccessor stateAccessor)
+            long logOffset,
+            KvStateAccessor stateAccessor)
             throws Exception {
         BinaryValue intermediate = currentMerger.retract(oldValue, retractValue);
 
@@ -566,7 +592,8 @@ public final class KvWriteProcessor {
                         "Delete operations are disabled for this table."
                                 + " The table.delete.behavior is set to 'disable'.");
             } else {
-                return applyDelete(key, oldValue, walBuilder, latestSchemaRow, logOffset, stateAccessor);
+                return applyDelete(
+                        key, oldValue, walBuilder, latestSchemaRow, logOffset, stateAccessor);
             }
         }
         // Use value equality (not reference equality) because retract()+merge() always
@@ -574,7 +601,14 @@ public final class KvWriteProcessor {
         else if (intermediate.equals(oldValue)) {
             return logOffset; // no change, no offset consumed
         } else {
-            return applyUpdate(key, oldValue, intermediate, walBuilder, latestSchemaRow, logOffset, stateAccessor);
+            return applyUpdate(
+                    key,
+                    oldValue,
+                    intermediate,
+                    walBuilder,
+                    latestSchemaRow,
+                    logOffset,
+                    stateAccessor);
         }
     }
 
@@ -582,9 +616,10 @@ public final class KvWriteProcessor {
             NormalizedKvMutation mutation,
             RowMerger currentMerger,
             AutoIncrementUpdater autoIncrementUpdater,
-                WalBuilder walBuilder,
+            WalBuilder walBuilder,
             PaddingRow latestSchemaRow,
-            long logOffset, KvStateAccessor stateAccessor,
+            long logOffset,
+            KvStateAccessor stateAccessor,
             @Nullable String originalPartitionName,
             @Nullable HistoricalValueLookup historicalValueLookup)
             throws Exception {
@@ -594,7 +629,10 @@ public final class KvWriteProcessor {
                     currentMerger,
                     walBuilder,
                     latestSchemaRow,
-                    logOffset, stateAccessor, mutation.primaryKey, historicalValueLookup);
+                    logOffset,
+                    stateAccessor,
+                    mutation.primaryKey,
+                    historicalValueLookup);
         } else {
             return processUpsert(
                     mutation.key,
@@ -603,7 +641,10 @@ public final class KvWriteProcessor {
                     autoIncrementUpdater,
                     walBuilder,
                     latestSchemaRow,
-                    logOffset, stateAccessor, mutation.primaryKey, historicalValueLookup);
+                    logOffset,
+                    stateAccessor,
+                    mutation.primaryKey,
+                    historicalValueLookup);
         }
     }
 
@@ -627,8 +668,11 @@ public final class KvWriteProcessor {
         // Reusable mutation object for the non-peeked hot path to avoid per-record allocation.
         private final NormalizedKvMutation reusable;
 
-        PeekableKvMutationIterator(Iterator<KvRecord> inner, short schemaIdOfNewData,
-                KvStateAccessor stateAccessor, @Nullable String originalPartitionName) {
+        PeekableKvMutationIterator(
+                Iterator<KvRecord> inner,
+                short schemaIdOfNewData,
+                KvStateAccessor stateAccessor,
+                @Nullable String originalPartitionName) {
             this.inner = inner;
             this.stateAccessor = stateAccessor;
             this.originalPartitionName = originalPartitionName;

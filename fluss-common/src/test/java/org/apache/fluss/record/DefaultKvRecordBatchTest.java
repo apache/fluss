@@ -181,9 +181,9 @@ class DefaultKvRecordBatchTest extends KvTestBase {
         byte[] key2 = new byte[] {2};
         byte[] key3 = new byte[] {3};
 
-        builder.appendV2(MutationType.UPSERT, key1, upsertRow);
-        builder.appendV2(MutationType.DELETE, key2, null);
-        builder.appendV2(MutationType.RETRACT, key3, retractRow);
+        builder.append(MutationType.UPSERT, key1, upsertRow);
+        builder.append(MutationType.DELETE, key2, null);
+        builder.append(MutationType.RETRACT, key3, retractRow);
 
         DefaultKvRecordBatch batch = DefaultKvRecordBatch.pointToBytesView(builder.build());
         batch.ensureValid();
@@ -239,7 +239,7 @@ class DefaultKvRecordBatchTest extends KvTestBase {
             row = writer.finishRow();
         }
 
-        v2Builder.appendV2(MutationType.UPSERT, new byte[] {1}, row);
+        v2Builder.append(MutationType.UPSERT, new byte[] {1}, row);
 
         DefaultKvRecordBatch v2Batch = DefaultKvRecordBatch.pointToBytesView(v2Builder.build());
         v2Batch.ensureValid();
@@ -265,6 +265,7 @@ class DefaultKvRecordBatchTest extends KvTestBase {
 
         v0Builder.close();
     }
+
     @Test
     void testEqualsAndHashCode() throws Exception {
         DefaultKvRecordBatch batch1 = buildBatch();

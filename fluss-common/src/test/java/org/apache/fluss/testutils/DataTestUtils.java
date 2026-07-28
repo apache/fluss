@@ -42,6 +42,7 @@ import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.record.MemoryLogRecordsArrowBuilder;
 import org.apache.fluss.record.MemoryLogRecordsIndexedBuilder;
+import org.apache.fluss.record.MutationType;
 import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericArray;
@@ -353,6 +354,31 @@ public class DataTestUtils {
                             keyEncoder.encodeKey(row(keyAndValue.f0)), keyAndValue.f1));
         }
         return kvRecordBatchFactory.ofRecords(records, writerId, batchSequence);
+    }
+
+    /**
+     * Generate a KvRecord V2 format batch (with per-record MutationType byte) from the given key
+     * and values. The mutation type is inferred from the value: DELETE for null values, UPSERT
+     * otherwise.
+     */
+    public static KvRecordBatch genKvRecordBatchV2(List<Tuple2<Object[], Object[]>> keyAndValues)
+            throws Exception {
+        CompactedKeyEncoder keyEncoder = new CompactedKeyEncoder(DATA1_KEY_TYPE);
+        KvRecordTestUtils.KvRecordBatchFactory kvRecordBatchFactory =
+                KvRecordTestUtils.KvRecordBatchFactory.of(DEFAULT_SCHEMA_ID);
+        KvRecordTestUtils.KvRecordFactory kvRecordFactory =
+                KvRecordTestUtils.KvRecordFactory.of(DATA1_ROW_TYPE);
+        List<KvRecordTestUtils.V2RecordEntry> entries = new ArrayList<>();
+        for (Tuple2<Object[], Object[]> keyAndValue : keyAndValues) {
+            KvRecord record =
+                    kvRecordFactory.ofRecord(
+                            keyEncoder.encodeKey(row(keyAndValue.f0)), keyAndValue.f1);
+            entries.add(
+                    KvRecordTestUtils.V2RecordEntry.of(
+                            keyAndValue.f1 == null ? MutationType.DELETE : MutationType.UPSERT,
+                            record));
+        }
+        return kvRecordBatchFactory.ofV2Records(entries);
     }
 
     @SafeVarargs

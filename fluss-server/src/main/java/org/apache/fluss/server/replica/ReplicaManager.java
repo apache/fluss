@@ -29,6 +29,7 @@ import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.InvalidColumnProjectionException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidPartitionException;
+import org.apache.fluss.exception.InvalidRecordException;
 import org.apache.fluss.exception.InvalidRequiredAcksException;
 import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.exception.LogOffsetOutOfRangeException;
@@ -900,6 +901,7 @@ public class ReplicaManager implements ServerReconfigurable {
             validateClientVersionForPkTable(apiVersion, replica.getTableInfo());
 
             KvRecordBatch records = putData.records();
+            validateKvBatchFormatForApiVersion(apiVersion, records, putData.tableBucket());
             checkArgument(
                     records instanceof DefaultKvRecordBatch,
                     "Historical RPC write requires DefaultKvRecordBatch, but found %s.",
@@ -1696,15 +1698,12 @@ public class ReplicaManager implements ServerReconfigurable {
                 LOG.trace("Put records to local kv tablet for table bucket {}", tb);
                 Replica replica = getReplicaOrException(tb);
                 validateClientVersionForPkTable(apiVersion, replica.getTableInfo());
+                validateKvBatchFormatForApiVersion(apiVersion, entry.getValue(), tb);
                 tableMetrics = replica.tableMetrics();
                 tableMetrics.totalPutKvRequests().inc();
                 LogAppendInfo appendInfo =
                         replica.putRecordsToLeader(
-                                entry.getValue(),
-                                targetColumns,
-                                mergeMode,
-                                requiredAcks,
-                                apiVersion);
+                                entry.getValue(), targetColumns, mergeMode, requiredAcks);
                 LOG.trace(
                         "Written to local kv for {}, and the cdc log beginning at offset {} and ending at offset {}",
                         tb,
@@ -2768,6 +2767,23 @@ public class ReplicaManager implements ServerReconfigurable {
                                     + "This table uses new key encoding strategy (kv format version %d). "
                                     + "Please upgrade your Fluss client to a newer version.",
                             apiVersion, tableInfo.getTablePath(), kvFormatVersion.get()));
+        }
+    }
+
+    /**
+     * Rejects V2 format kv batches sent with an api version that does not declare V2 support.
+     * KvRecord V2 format (per-record MutationType byte) is introduced in PUT_KV api version 4, so a
+     * V2 batch under an older api version indicates a client/protocol inconsistency and must not be
+     * interpreted as V0.
+     */
+    private void validateKvBatchFormatForApiVersion(
+            short apiVersion, KvRecordBatch kvRecords, TableBucket tb) {
+        if (kvRecords.isV2Format() && apiVersion < 4) {
+            throw new InvalidRecordException(
+                    String.format(
+                            "Received a V2 format kv record batch for bucket %s with PUT_KV api "
+                                    + "version %d, but V2 format requires api version >= 4.",
+                            tb, apiVersion));
         }
     }
 

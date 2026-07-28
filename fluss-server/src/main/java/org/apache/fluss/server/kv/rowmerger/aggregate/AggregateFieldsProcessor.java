@@ -85,47 +85,6 @@ public final class AggregateFieldsProcessor {
     }
 
     /**
-     * Aggregate and encode a single field.
-     *
-     * @param oldFieldGetter getter for the old field
-     * @param newFieldGetter getter for the new field
-     * @param oldRow the old row
-     * @param newRow the new row
-     * @param aggregator the aggregator for this field
-     * @param targetIdx the target index to encode
-     * @param encoder the row encoder
-     */
-    private static void aggregateAndEncode(
-            InternalRow.FieldGetter oldFieldGetter,
-            InternalRow.FieldGetter newFieldGetter,
-            BinaryRow oldRow,
-            BinaryRow newRow,
-            FieldAggregator aggregator,
-            int targetIdx,
-            RowEncoder encoder) {
-        Object accumulator = oldFieldGetter.getFieldOrNull(oldRow);
-        Object inputField = newFieldGetter.getFieldOrNull(newRow);
-        Object mergedField = aggregator.agg(accumulator, inputField);
-        encoder.encodeField(targetIdx, mergedField);
-    }
-
-    /**
-     * Copy and encode a field value from old row.
-     *
-     * @param fieldGetter getter for the field
-     * @param oldRow the old row
-     * @param targetIdx the target index to encode
-     * @param encoder the row encoder
-     */
-    private static void copyOldValueAndEncode(
-            InternalRow.FieldGetter fieldGetter,
-            BinaryRow oldRow,
-            int targetIdx,
-            RowEncoder encoder) {
-        encoder.encodeField(targetIdx, fieldGetter.getFieldOrNull(oldRow));
-    }
-
-    /**
      * Encodes the first row written for a key, passing the fields whose aggregator requires it
      * through {@code agg(null, value)}.
      *

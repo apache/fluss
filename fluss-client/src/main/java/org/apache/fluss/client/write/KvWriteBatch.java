@@ -91,9 +91,13 @@ public class KvWriteBatch extends WriteBatch {
         return false;
     }
 
+    /** Whether this batch uses the KvRecord V2 wire format (requires PUT_KV api version >= 4). */
+    public boolean isV2Format() {
+        return v2Format;
+    }
+
     @Override
-    boolean tryAppendRecord(WriteRecord writeRecord, WriteCallback callback)
-            throws Exception {
+    boolean tryAppendRecord(WriteRecord writeRecord, WriteCallback callback) throws Exception {
         validateRecordConsistency(writeRecord);
 
         // V0 batch cannot carry RETRACT records — caller must create a new V2 batch.
@@ -106,24 +110,15 @@ public class KvWriteBatch extends WriteBatch {
         checkNotNull(callback, "write callback must be not null");
         BinaryRow row = checkRow(writeRecord.getRow());
 
-        if (v2Format) {
-            if (!recordsBuilder.hasRoomForV2(key, row) || isClosed()) {
-                return false;
-            } else {
-                recordsBuilder.appendV2(writeRecord.getMutationType(), key, row);
-                callbacks.add(callback);
-                recordCount++;
-                return true;
-            }
+        // hasRoomFor() and append() are format-aware: the builder sizes and writes records
+        // according to its own record format (V0 or V2).
+        if (!recordsBuilder.hasRoomFor(key, row) || isClosed()) {
+            return false;
         } else {
-            if (!recordsBuilder.hasRoomFor(key, row) || isClosed()) {
-                return false;
-            } else {
-                recordsBuilder.append(key, row);
-                callbacks.add(callback);
-                recordCount++;
-                return true;
-            }
+            recordsBuilder.append(writeRecord.getMutationType(), key, row);
+            callbacks.add(callback);
+            recordCount++;
+            return true;
         }
     }
 

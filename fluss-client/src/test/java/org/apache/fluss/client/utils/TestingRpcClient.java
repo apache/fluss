@@ -25,6 +25,7 @@ import org.apache.fluss.rpc.protocol.ApiKeys;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.BiFunction;
 
@@ -61,6 +62,11 @@ public class TestingRpcClient implements RpcClient {
     @Override
     public boolean isReady(ServerNode node) {
         return true;
+    }
+
+    @Override
+    public Optional<Short> negotiatedMaxApiVersion(ServerNode node, ApiKeys apiKey) {
+        return Optional.of(apiKey.highestSupportedVersion);
     }
 
     @Override

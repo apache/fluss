@@ -46,10 +46,20 @@ public interface UpsertWriter extends TableWriter {
      * key. The retract record is sent independently with {@link
      * org.apache.fluss.record.MutationType#RETRACT} mutation type.
      *
+     * <p><b>Retract is NOT idempotent.</b> Applying the same retract twice subtracts the
+     * contribution twice (e.g., for SUM). Correctness under retries relies on the server-side
+     * writer batch deduplication, therefore retract requires {@code
+     * client.writer.enable-idempotence} to be enabled (the default) and implementations must reject
+     * retract when it is disabled. Note that deduplication is scoped to a single writer session: if
+     * the application itself resends a retract after a restart (a new writer id), the server cannot
+     * detect the duplicate. Callers that need exactly-once semantics across restarts must handle it
+     * externally (e.g., the Flink connector restores checkpoint state via undo recovery before
+     * replaying).
+     *
      * @param row the old aggregation value to retract (UPDATE_BEFORE).
-     * @return A {@link CompletableFuture} that returns upsert result when complete normally.
+     * @return A {@link CompletableFuture} that returns retract result when complete normally.
      */
-    default CompletableFuture<UpsertResult> retract(InternalRow row) {
+    default CompletableFuture<RetractResult> retract(InternalRow row) {
         throw new UnsupportedOperationException(
                 "retract() is not supported by this UpsertWriter implementation.");
     }

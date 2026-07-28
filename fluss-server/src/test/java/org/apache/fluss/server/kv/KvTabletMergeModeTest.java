@@ -583,7 +583,7 @@ class KvTabletMergeModeTest {
                                 RETRACT_KV_RECORD_FACTORY.ofRecord(
                                         "k1".getBytes(), new Object[] {1, 30L, "new"})));
         KvRecordBatch batch = kvRecordBatchFactory.ofV2Records(entries);
-        kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT, (short) 2);
+        kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT);
 
         // Verify UB(old) + UA(new) CDC entries
         LogRecords actualLogRecords = readLogRecords(endOffset);
@@ -623,7 +623,7 @@ class KvTabletMergeModeTest {
                                 RETRACT_KV_RECORD_FACTORY.ofRecord(
                                         "k1".getBytes(), new Object[] {1, 20L, "old"})));
         KvRecordBatch batch = kvRecordBatchFactory.ofV2Records(entries);
-        kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT, (short) 2);
+        kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT);
 
         // Verify UB(old) + UA(intermediate) CDC entries
         LogRecords actualLogRecords = readLogRecords(endOffset);
@@ -654,7 +654,7 @@ class KvTabletMergeModeTest {
                                 RETRACT_KV_RECORD_FACTORY.ofRecord(
                                         "k1".getBytes(), new Object[] {1, 10L, "ghost"})));
         KvRecordBatch batch = kvRecordBatchFactory.ofV2Records(entries);
-        kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT, (short) 2);
+        kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT);
 
         // Verify no CDC records generated
         LogRecords logRecords = readLogRecords(startOffset);
@@ -709,7 +709,7 @@ class KvTabletMergeModeTest {
                                 lastValueKvRecordFactory.ofRecord(
                                         "k1".getBytes(), new Object[] {1, "hello"})));
         KvRecordBatch batch = kvRecordBatchFactory.ofV2Records(entries);
-        kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT, (short) 2);
+        kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT);
 
         // Verify CDC: DELETE(1, "hello") — zombie row is removed
         LogRecords actualLogRecords = readLogRecords(endOffset);
@@ -752,7 +752,7 @@ class KvTabletMergeModeTest {
                                         "k1".getBytes(), new Object[] {1, "old"})));
         KvRecordBatch batch = kvRecordBatchFactory.ofV2Records(entries);
 
-        assertThatThrownBy(() -> kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT, (short) 2))
+        assertThatThrownBy(() -> kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT))
                 .isInstanceOf(InvalidRecordException.class)
                 .hasMessageContaining("RETRACT")
                 .hasMessageContaining("aggregation");
@@ -780,7 +780,7 @@ class KvTabletMergeModeTest {
                                         "k1".getBytes(), new Object[] {1, 5L, 50, "old"})));
         KvRecordBatch batch = kvRecordBatchFactory.ofV2Records(entries);
 
-        assertThatThrownBy(() -> kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT, (short) 2))
+        assertThatThrownBy(() -> kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT))
                 .isInstanceOf(InvalidRecordException.class)
                 .hasMessageContaining("RETRACT")
                 .hasMessageContaining("retract-safe");
@@ -817,7 +817,7 @@ class KvTabletMergeModeTest {
                                 RETRACT_KV_RECORD_FACTORY.ofRecord(
                                         "k1".getBytes(), new Object[] {1, 30L, "new"})));
         KvRecordBatch batch = kvRecordBatchFactory.ofV2Records(entries);
-        kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT, (short) 2);
+        kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT);
 
         // Verify: INSERT(k2) + UB(k1,old) + UA(k1,new)
         LogRecords actualLogRecords = readLogRecords(endOffset);
@@ -877,7 +877,7 @@ class KvTabletMergeModeTest {
                                 RETRACT_KV_RECORD_FACTORY.ofRecord(
                                         "k1".getBytes(), new Object[] {1, 50L, "new2"})));
         KvRecordBatch batch = kvRecordBatchFactory.ofV2Records(entries);
-        kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT, (short) 2);
+        kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT);
 
         // Verify changelog shows the transitions
         LogRecords actualLogRecords = readLogRecords(endOffset);
@@ -932,7 +932,7 @@ class KvTabletMergeModeTest {
                                 SUM_KV_RECORD_FACTORY.ofRecord(
                                         "k1".getBytes(), new Object[] {1, 30L})));
         KvRecordBatch batch = kvRecordBatchFactory.ofV2Records(entries);
-        kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT, (short) 2);
+        kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT);
 
         // Verify key is NOT deleted and final value is 30
         LogRecords actualLogRecords = readLogRecords(endOffset);
@@ -977,7 +977,7 @@ class KvTabletMergeModeTest {
                                 SUM_KV_RECORD_FACTORY.ofRecord(
                                         "k1".getBytes(), new Object[] {1, 5L})));
         KvRecordBatch retractBatch = kvRecordBatchFactory.ofV2Records(entries);
-        kvTablet.putAsLeader(retractBatch, null, MergeMode.DEFAULT, (short) 2);
+        kvTablet.putAsLeader(retractBatch, null, MergeMode.DEFAULT);
 
         // Verify no changelog is emitted (the newValue.equals(oldValue) optimization).
         LogRecords logRecords = readLogRecords(endOffset);
@@ -1027,7 +1027,7 @@ class KvTabletMergeModeTest {
                                 SUM_KV_RECORD_FACTORY.ofRecord(
                                         "k1".getBytes(), new Object[] {1, 30L})));
         KvRecordBatch batch = kvRecordBatchFactory.ofV2Records(entries);
-        kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT, (short) 2);
+        kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT);
 
         // Verify changelog: 4 entries total
         // 1st RETRACT (independent): UB(100) + UA(80)
@@ -1109,7 +1109,7 @@ class KvTabletMergeModeTest {
                                 aggKvRecordFactory.ofRecord("k1".getBytes(), null)));
         KvRecordBatch batch = kvRecordBatchFactory.ofV2Records(entries);
 
-        assertThatThrownBy(() -> kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT, (short) 2))
+        assertThatThrownBy(() -> kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT))
                 .isInstanceOf(InvalidRecordException.class)
                 .hasMessageContaining("V2 UPSERT record must carry a non-null row value.");
     }
@@ -1125,7 +1125,7 @@ class KvTabletMergeModeTest {
                                 RETRACT_KV_RECORD_FACTORY.ofRecord("k1".getBytes(), null)));
         KvRecordBatch batch = kvRecordBatchFactory.ofV2Records(entries);
 
-        assertThatThrownBy(() -> kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT, (short) 2))
+        assertThatThrownBy(() -> kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT))
                 .isInstanceOf(InvalidRecordException.class)
                 .hasMessageContaining("RETRACT record must carry a non-null row value.");
     }
@@ -1155,7 +1155,7 @@ class KvTabletMergeModeTest {
                                 MutationType.DELETE,
                                 RETRACT_KV_RECORD_FACTORY.ofRecord("k1".getBytes(), null)));
         KvRecordBatch batch = kvRecordBatchFactory.ofV2Records(entries);
-        kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT, (short) 2);
+        kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT);
 
         // Verify DELETE CDC is produced — same behavior as V0 delete
         LogRecords actualLogRecords = readLogRecords(endOffset);
@@ -1209,7 +1209,7 @@ class KvTabletMergeModeTest {
                                 twoSumKvRecordFactory.ofRecord(
                                         "k1".getBytes(), new Object[] {1, 30L, null})));
         KvRecordBatch retractBatch = kvRecordBatchFactory.ofV2Records(retractEntries);
-        kvTablet.putAsLeader(retractBatch, targetColumns, MergeMode.DEFAULT, (short) 2);
+        kvTablet.putAsLeader(retractBatch, targetColumns, MergeMode.DEFAULT);
 
         long afterRetractOffset = logTablet.localLogEndOffset();
 
@@ -1236,7 +1236,7 @@ class KvTabletMergeModeTest {
                                 twoSumKvRecordFactory.ofRecord(
                                         "k1".getBytes(), new Object[] {1, 50L, null})));
         KvRecordBatch upsertBatch = kvRecordBatchFactory.ofV2Records(upsertEntries);
-        kvTablet.putAsLeader(upsertBatch, targetColumns, MergeMode.DEFAULT, (short) 2);
+        kvTablet.putAsLeader(upsertBatch, targetColumns, MergeMode.DEFAULT);
 
         // Verify CDC after upsert: UB(70,200) + UA(120,200)
         LogRecords upsertCdc = readLogRecords(afterRetractOffset);
