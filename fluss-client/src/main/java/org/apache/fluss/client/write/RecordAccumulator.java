@@ -695,6 +695,9 @@ public final class RecordAccumulator {
         if (last != null) {
             boolean success = last.tryAppend(writeRecord, callback);
             if (!success) {
+                // The last batch is either full/closed or belongs to a different table/write
+                // format/schema. Close it so the incoming record rolls over to a compatible new
+                // batch.
                 // TODO For ArrowLogWriteBatch, close here is a heavy operation (including build
                 // logic), we need to avoid do that in an lock which locked dq. However, why we not
                 // remove build logic out of close for ArrowLogWriteBatch is that we want to release

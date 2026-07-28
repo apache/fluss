@@ -24,6 +24,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.memory.ManagedPagedOutputView;
 import org.apache.fluss.memory.TestingMemorySegmentPool;
+import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.arrow.ArrowWriter;
 import org.apache.fluss.row.arrow.ArrowWriterPool;
@@ -146,7 +147,7 @@ public class MemoryLogRecordsArrowBuilderTest {
                         "Tried to append a record, but MemoryLogRecordsArrowBuilder is closed for record appends");
         assertThat(builder.isClosed()).isTrue();
         MemoryLogRecords records = MemoryLogRecords.pointToBytesView(builder.build());
-        assertLogRecordsEquals(DATA1_ROW_TYPE, records, expectedResult);
+        assertLogRecordsEquals(DATA1_ROW_TYPE, records, expectedResult, TEST_SCHEMA_GETTER);
     }
 
     @ParameterizedTest
@@ -419,7 +420,10 @@ public class MemoryLogRecordsArrowBuilderTest {
         // Create read context
         LogRecordReadContext readContext =
                 LogRecordReadContext.createArrowReadContext(
-                        testRowType, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER);
+                        testRowType,
+                        DEFAULT_SCHEMA_ID,
+                        new TestingSchemaGetter(
+                                1, Schema.newBuilder().fromRowType(testRowType).build()));
 
         // Test statistics reading
         Optional<LogRecordBatchStatistics> statisticsOpt = batch.getStatistics(readContext);
@@ -524,7 +528,10 @@ public class MemoryLogRecordsArrowBuilderTest {
         // Create read context
         LogRecordReadContext readContext =
                 LogRecordReadContext.createArrowReadContext(
-                        testRowType, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER);
+                        testRowType,
+                        DEFAULT_SCHEMA_ID,
+                        new TestingSchemaGetter(
+                                1, Schema.newBuilder().fromRowType(testRowType).build()));
 
         // Test statistics reading
         Optional<LogRecordBatchStatistics> statisticsOpt = batch.getStatistics(readContext);

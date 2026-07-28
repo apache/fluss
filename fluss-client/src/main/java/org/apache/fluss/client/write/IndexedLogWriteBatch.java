@@ -50,6 +50,8 @@ public final class IndexedLogWriteBatch extends AbstractRowLogWriteBatch<Indexed
                 tableId,
                 bucketId,
                 physicalTablePath,
+                schemaId,
+                WriteFormat.INDEXED_LOG,
                 createdMs,
                 outputView,
                 MemoryLogRecordsIndexedBuilder.builder(schemaId, writeLimit, outputView, true),

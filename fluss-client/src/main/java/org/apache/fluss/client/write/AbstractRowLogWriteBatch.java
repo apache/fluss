@@ -47,18 +47,20 @@ abstract class AbstractRowLogWriteBatch<R> extends WriteBatch {
             long tableId,
             int bucketId,
             PhysicalTablePath physicalTablePath,
+            int schemaId,
+            WriteFormat writeFormat,
             long createdMs,
             AbstractPagedOutputView outputView,
             MemoryLogRecordsRowBuilder<R> recordsBuilder,
             String buildErrorMessage) {
-        super(tableId, bucketId, physicalTablePath, createdMs);
+        super(tableId, bucketId, physicalTablePath, schemaId, writeFormat, createdMs);
         this.outputView = outputView;
         this.recordsBuilder = recordsBuilder;
         this.buildErrorMessage = buildErrorMessage;
     }
 
     @Override
-    public boolean tryAppend(WriteRecord writeRecord, WriteCallback callback) throws Exception {
+    boolean tryAppendRecord(WriteRecord writeRecord, WriteCallback callback) throws Exception {
         checkNotNull(callback, "write callback must be not null");
         InternalRow rowObj = writeRecord.getRow();
         checkNotNull(rowObj, "row must not be null for log record");

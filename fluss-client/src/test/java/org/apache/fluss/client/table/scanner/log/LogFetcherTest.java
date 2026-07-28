@@ -29,6 +29,7 @@ import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
@@ -45,6 +46,7 @@ import org.junit.jupiter.api.Test;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -81,25 +83,30 @@ public class LogFetcherTest {
     }
 
     private LogFetcher createLogFetcher(Configuration conf) {
-        ClientSchemaGetter clientSchemaGetter =
-                new TestingClientSchemaGetter(
-                        DATA1_TABLE_PATH, new SchemaInfo(DATA1_SCHEMA, 0), metadataUpdater, conf);
         LogScannerStatus logScannerStatus = initializeLogScannerStatus();
-        return new LogFetcher(
-                DATA1_TABLE_INFO,
-                null,
-                null,
-                logScannerStatus,
-                conf,
-                metadataUpdater,
-                TestingScannerMetricGroup.newInstance(),
-                new RemoteFileDownloader(1),
-                clientSchemaGetter);
+        LogFetcher fetcher =
+                new LogFetcher(
+                        "default-fetcher",
+                        logScannerStatus,
+                        conf,
+                        metadataUpdater,
+                        TestingScannerMetricGroup.newInstance(),
+                        new RemoteFileDownloader(1),
+                        LogRecordReadContext.SchemaResolution.TARGET);
+        fetcher.registerTable(
+                new TableScanSpec(DATA1_TABLE_INFO, null, null), createSchemaGetter(conf));
+        return fetcher;
+    }
+
+    private ClientSchemaGetter createSchemaGetter(Configuration conf) {
+        return new TestingClientSchemaGetter(
+                DATA1_TABLE_PATH, new SchemaInfo(DATA1_SCHEMA, 0), metadataUpdater, conf);
     }
 
     @Test
     void sendFetchRequestWithNotLeaderOrFollowerException() {
-        Map<Integer, FetchLogRequest> requestMap = logFetcher.prepareFetchLogRequests();
+        List<TableBucket> fetchable = Collections.singletonList(tb1);
+        Map<Integer, FetchLogRequest> requestMap = logFetcher.prepareFetchLogRequests(fetchable);
         Set<Integer> serverSet = requestMap.keySet();
         assertThat(serverSet).containsExactlyInAnyOrder(1);
 
@@ -121,8 +128,47 @@ public class LogFetcherTest {
     }
 
     @Test
+    void testUnregisterTableDiscardsBufferedFetches() {
+        Map<Integer, FetchLogRequest> requestMap =
+                logFetcher.prepareFetchLogRequests(Collections.singletonList(tb1));
+        logFetcher.sendFetchRequest(1, requestMap.get(1));
+        assertThat(logFetcher.getCompletedFetchesSize()).isEqualTo(1);
+
+        logFetcher.getLogScannerStatus().unassignScanBuckets(Collections.singletonList(tb1));
+        logFetcher.unregisterTable(DATA1_TABLE_ID);
+
+        assertThat(logFetcher.getCompletedFetchesSize()).isZero();
+        assertThat(logFetcher.getRegisteredTableCount()).isZero();
+    }
+
+    @Test
+    void testDiscardStaleResponseAfterTableReregistered() {
+        IOUtils.closeQuietly(logFetcher);
+        DelayedTabletServerGateway delayedGateway = new DelayedTabletServerGateway();
+        metadataUpdater = initializeMetadataUpdater(delayedGateway);
+        Configuration conf = new Configuration();
+        logFetcher = createLogFetcher(conf);
+
+        Map<Integer, FetchLogRequest> requestMap =
+                logFetcher.prepareFetchLogRequests(Collections.singletonList(tb1));
+        logFetcher.sendFetchRequest(1, requestMap.get(1));
+
+        logFetcher.getLogScannerStatus().unassignScanBuckets(Collections.singletonList(tb1));
+        logFetcher.unregisterTable(DATA1_TABLE_ID);
+        logFetcher.registerTable(
+                new TableScanSpec(DATA1_TABLE_INFO, null, null), createSchemaGetter(conf));
+        logFetcher.getLogScannerStatus().assignScanBuckets(Collections.singletonMap(tb1, 0L));
+
+        delayedGateway.completeResponse();
+
+        assertThat(logFetcher.getCompletedFetchesSize()).isZero();
+        assertThat(logFetcher.getRegisteredTableCount()).isEqualTo(1);
+    }
+
+    @Test
     void testPrepareFetchLogRequestWithReadPreference() throws Exception {
-        Map<Integer, FetchLogRequest> defaultRequestMap = logFetcher.prepareFetchLogRequests();
+        Map<Integer, FetchLogRequest> defaultRequestMap =
+                logFetcher.prepareFetchLogRequests(Collections.singletonList(tb1));
         FetchLogRequest defaultRequest = defaultRequestMap.get(1);
         assertThat(defaultRequest.hasReadPreference()).isTrue();
         assertThat(defaultRequest.getReadPreference())
@@ -135,7 +181,7 @@ public class LogFetcherTest {
         LogFetcher remoteFirstFetcher = createLogFetcher(remoteFirstConf);
         try {
             Map<Integer, FetchLogRequest> remoteFirstRequestMap =
-                    remoteFirstFetcher.prepareFetchLogRequests();
+                    remoteFirstFetcher.prepareFetchLogRequests(Collections.singletonList(tb1));
             FetchLogRequest remoteFirstRequest = remoteFirstRequestMap.get(1);
             assertThat(remoteFirstRequest.hasReadPreference()).isTrue();
             assertThat(remoteFirstRequest.getReadPreference())
@@ -178,13 +224,32 @@ public class LogFetcherTest {
         }
     }
 
-    private TestingMetadataUpdater initializeMetadataUpdater() {
+    private static class DelayedTabletServerGateway extends TestingTabletServerGateway {
+        private final CompletableFuture<FetchLogResponse> responseFuture =
+                new CompletableFuture<>();
+        private FetchLogResponse response;
 
+        @Override
+        public CompletableFuture<FetchLogResponse> fetchLog(FetchLogRequest request) {
+            response = super.fetchLog(request).join();
+            return responseFuture;
+        }
+
+        private void completeResponse() {
+            responseFuture.complete(response);
+        }
+    }
+
+    private TestingMetadataUpdater initializeMetadataUpdater() {
+        return initializeMetadataUpdater(new TestingTabletServerGateway());
+    }
+
+    private TestingMetadataUpdater initializeMetadataUpdater(TestTabletServerGateway gateway) {
         return new TestingMetadataUpdater(
                 TestingMetadataUpdater.COORDINATOR,
                 Arrays.asList(NODE1, NODE2, NODE3),
                 Collections.singletonMap(DATA1_TABLE_PATH, DATA1_TABLE_INFO),
-                Collections.singletonMap(1, new TestingTabletServerGateway()),
+                Collections.singletonMap(1, gateway),
                 new Configuration());
     }
 }

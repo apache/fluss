@@ -22,7 +22,6 @@ import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.record.LogRecordBatch;
 
@@ -49,11 +48,10 @@ public class LogFetchCollector extends AbstractLogFetchCollector<ScanRecord, Sca
     private static final Logger LOG = LoggerFactory.getLogger(LogFetchCollector.class);
 
     public LogFetchCollector(
-            TablePath tablePath,
             LogScannerStatus logScannerStatus,
             Configuration conf,
             MetadataUpdater metadataUpdater) {
-        super(LOG, tablePath, logScannerStatus, conf, metadataUpdater);
+        super(LOG, logScannerStatus, conf, metadataUpdater);
     }
 
     @Override

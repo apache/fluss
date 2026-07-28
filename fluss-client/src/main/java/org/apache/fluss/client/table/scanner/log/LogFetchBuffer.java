@@ -227,7 +227,16 @@ public class LogFetchBuffer implements AutoCloseable {
                     }
 
                     // remove entries that not matches the buckets from pendingFetches
-                    pendingFetches.entrySet().removeIf(entry -> !buckets.contains(entry.getKey()));
+                    pendingFetches
+                            .entrySet()
+                            .removeIf(
+                                    entry -> {
+                                        if (!buckets.contains(entry.getKey())) {
+                                            entry.getValue().forEach(PendingFetch::discard);
+                                            return true;
+                                        }
+                                        return false;
+                                    });
                 });
     }
 

@@ -36,6 +36,7 @@ import org.apache.fluss.row.GenericMap;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ChunkedAllocationManager;
 import org.apache.fluss.testutils.InternalRowAssert;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
@@ -336,13 +337,16 @@ public class DefaultCompletedFetchTest {
         DefaultCompletedFetch defaultCompletedFetch =
                 new DefaultCompletedFetch(
                         tb,
+                        DATA2_TABLE_PATH,
                         resultForBucket,
                         LogRecordReadContext.createReadContext(
                                 tableInfo,
                                 false,
+                                LogRecordReadContext.SchemaResolution.DYNAMIC,
                                 null,
                                 new TestingSchemaGetter(
-                                        tableInfo.getSchemaId(), tableInfo.getSchema())),
+                                        tableInfo.getSchemaId(), tableInfo.getSchema()),
+                                new ChunkedAllocationManager.ChunkedFactory()),
                         logScannerStatus,
                         true,
                         fetchOffset,
@@ -391,12 +395,15 @@ public class DefaultCompletedFetchTest {
             Projection projection) {
         return new DefaultCompletedFetch(
                 tableBucket,
+                DATA2_TABLE_PATH,
                 resultForBucket,
                 LogRecordReadContext.createReadContext(
                         tableInfo,
                         false,
+                        LogRecordReadContext.SchemaResolution.DYNAMIC,
                         projection,
-                        new TestingSchemaGetter(tableInfo.getSchemaId(), tableInfo.getSchema())),
+                        new TestingSchemaGetter(tableInfo.getSchemaId(), tableInfo.getSchema()),
+                        new ChunkedAllocationManager.ChunkedFactory()),
                 logScannerStatus,
                 true,
                 offset,

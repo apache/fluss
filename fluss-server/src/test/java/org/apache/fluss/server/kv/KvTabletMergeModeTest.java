@@ -209,6 +209,7 @@ class KvTabletMergeModeTest {
 
         assertThatLogRecords(actualLogRecords)
                 .withSchema(AGG_ROW_TYPE)
+                .withSchemaGetter(schemaGetter)
                 .assertCheckSum(true)
                 .isEqualTo(expectedLogs);
     }
@@ -248,6 +249,7 @@ class KvTabletMergeModeTest {
 
         assertThatLogRecords(actualLogRecords)
                 .withSchema(AGG_ROW_TYPE)
+                .withSchemaGetter(schemaGetter)
                 .assertCheckSum(true)
                 .isEqualTo(expectedLogs);
 
@@ -299,6 +301,7 @@ class KvTabletMergeModeTest {
 
         assertThatLogRecords(actualLogRecords)
                 .withSchema(AGG_ROW_TYPE)
+                .withSchemaGetter(schemaGetter)
                 .assertCheckSum(true)
                 .isEqualTo(expectedLogs);
     }
@@ -321,6 +324,7 @@ class KvTabletMergeModeTest {
 
         assertThatLogRecords(actualLogRecords)
                 .withSchema(AGG_ROW_TYPE)
+                .withSchemaGetter(schemaGetter)
                 .assertCheckSum(true)
                 .isEqualTo(expectedLogs);
     }
@@ -351,6 +355,7 @@ class KvTabletMergeModeTest {
 
         assertThatLogRecords(actualLogRecords)
                 .withSchema(AGG_ROW_TYPE)
+                .withSchemaGetter(schemaGetter)
                 .assertCheckSum(true)
                 .isEqualTo(expectedLogs);
     }
@@ -404,6 +409,7 @@ class KvTabletMergeModeTest {
 
         assertThatLogRecords(actualLogRecords)
                 .withSchema(AGG_ROW_TYPE)
+                .withSchemaGetter(schemaGetter)
                 .assertCheckSum(true)
                 .isEqualTo(expectedLogs);
     }
@@ -442,6 +448,7 @@ class KvTabletMergeModeTest {
 
         assertThatLogRecords(actualLogRecords)
                 .withSchema(AGG_ROW_TYPE)
+                .withSchemaGetter(schemaGetter)
                 .assertCheckSum(true)
                 .isEqualTo(expectedLogs);
     }
@@ -489,6 +496,7 @@ class KvTabletMergeModeTest {
 
         assertThatLogRecords(actualLogRecords)
                 .withSchema(AGG_ROW_TYPE)
+                .withSchemaGetter(schemaGetter)
                 .assertCheckSum(true)
                 .isEqualTo(expectedLogs);
     }
@@ -528,6 +536,7 @@ class KvTabletMergeModeTest {
 
         assertThatLogRecords(actualLogRecords)
                 .withSchema(AGG_ROW_TYPE)
+                .withSchemaGetter(schemaGetter)
                 .assertCheckSum(true)
                 .isEqualTo(expectedLogs);
     }

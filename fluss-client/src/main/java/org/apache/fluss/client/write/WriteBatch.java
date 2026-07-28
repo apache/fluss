@@ -47,6 +47,8 @@ public abstract class WriteBatch {
     private final PhysicalTablePath physicalTablePath;
     private final RequestFuture requestFuture;
     private final long tableId;
+    private final int schemaId;
+    private final WriteFormat writeFormat;
     private final int bucketId;
 
     protected final List<WriteCallback> callbacks = new ArrayList<>();
@@ -57,10 +59,17 @@ public abstract class WriteBatch {
     private long drainedMs;
 
     public WriteBatch(
-            long tableId, int bucketId, PhysicalTablePath physicalTablePath, long createdMs) {
+            long tableId,
+            int bucketId,
+            PhysicalTablePath physicalTablePath,
+            int schemaId,
+            WriteFormat writeFormat,
+            long createdMs) {
         this.physicalTablePath = physicalTablePath;
         this.createdMs = createdMs;
         this.tableId = tableId;
+        this.schemaId = schemaId;
+        this.writeFormat = checkNotNull(writeFormat, "write format must be not null");
         this.bucketId = bucketId;
         this.requestFuture = new RequestFuture();
         this.recordCount = 0;
@@ -79,10 +88,18 @@ public abstract class WriteBatch {
      *
      * @param writeRecord the record to write
      * @param callback the callback to send back to writer
-     * @return true if append success, false if the batch is full.
+     * @return true if append success, false if the batch is full or belongs to a different table,
+     *     write format or schema.
      */
-    public abstract boolean tryAppend(WriteRecord writeRecord, WriteCallback callback)
-            throws Exception;
+    public final boolean tryAppend(WriteRecord writeRecord, WriteCallback callback)
+            throws Exception {
+        checkNotNull(writeRecord, "write record must be not null");
+        checkNotNull(callback, "write callback must be not null");
+        if (!canAppend(writeRecord)) {
+            return false;
+        }
+        return tryAppendRecord(writeRecord, callback);
+    }
 
     /**
      * Gets the memory segment bytes view of the batch. This includes the latest updated {@link
@@ -164,6 +181,14 @@ public abstract class WriteBatch {
         return tableId;
     }
 
+    int schemaId() {
+        return schemaId;
+    }
+
+    WriteFormat writeFormat() {
+        return writeFormat;
+    }
+
     public PhysicalTablePath physicalTablePath() {
         return physicalTablePath;
     }
@@ -241,6 +266,18 @@ public abstract class WriteBatch {
      */
     boolean isDone() {
         return finalState.get() != null;
+    }
+
+    abstract boolean tryAppendRecord(WriteRecord writeRecord, WriteCallback callback)
+            throws Exception;
+
+    private boolean canAppend(WriteRecord writeRecord) {
+        // a schema id mismatch is a batch-compatibility boundary like table id and write format:
+        // returning false makes the accumulator close this batch and roll a new one carrying the
+        // record's schema id, so a single batch never mixes schemas.
+        return tableId == writeRecord.getTableInfo().getTableId()
+                && writeFormat == writeRecord.getWriteFormat()
+                && schemaId == writeRecord.getSchemaId();
     }
 
     /**

@@ -90,10 +90,7 @@ public class DefaultLogRecordBatchTest extends LogTestBase {
         assertThat(logRecordBatch.isValid()).isTrue();
         assertThat(logRecordBatch.schemaId()).isEqualTo(schemaId);
 
-        SchemaGetter schemaGetter =
-                new TestingSchemaGetter(
-                        new SchemaInfo(
-                                Schema.newBuilder().fromRowType(allRowType).build(), schemaId));
+        SchemaGetter schemaGetter = new TestingSchemaGetter(schemaId, allRowType);
         // verify record.
         int i = 0;
         try (LogRecordReadContext readContext =

@@ -19,6 +19,7 @@ package org.apache.fluss.client;
 
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.client.admin.Admin;
+import org.apache.fluss.client.table.MultiTable;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.TablePath;
@@ -55,6 +56,16 @@ public interface Connection extends AutoCloseable {
 
     /** Retrieve a new Table client to operate data in table. */
     Table getTable(TablePath tablePath);
+
+    /**
+     * Retrieve a {@link MultiTable} client to scan and write data across multiple tables in a
+     * single unified API. Unlike {@link #getTable(TablePath)} which is bound to one table, {@code
+     * MultiTable} is table-agnostic: tables are identified per scan subscription and per write
+     * record.
+     *
+     * <p>{@link MultiTable} instances are light-weight and NOT thread-safe; obtain per-thread.
+     */
+    MultiTable getMultiTable();
 
     /** Close the connection and release all resources. */
     @Override

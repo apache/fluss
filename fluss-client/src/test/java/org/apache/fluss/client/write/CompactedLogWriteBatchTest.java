@@ -20,6 +20,7 @@ package org.apache.fluss.client.write;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.memory.PreAllocatedPagedOutputView;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.CompactedLogRecord;
 import org.apache.fluss.record.LogRecord;
@@ -45,7 +46,9 @@ import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO;
+import static org.apache.fluss.record.TestData.TEST_SCHEMA_GETTER;
 import static org.apache.fluss.testutils.DataTestUtils.compactedRow;
+import static org.apache.fluss.testutils.DataTestUtils.indexedRow;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -146,6 +149,41 @@ public class CompactedLogWriteBatchTest {
     }
 
     @Test
+    void testTryAppendRejectsIncompatibleBatchIdentity() throws Exception {
+        int bucketId = 0;
+        CompactedLogWriteBatch logProducerBatch =
+                createLogWriteBatch(new TableBucket(DATA1_TABLE_ID, bucketId));
+
+        assertThat(logProducerBatch.tryAppend(createWriteRecord(), newWriteCallback())).isTrue();
+        assertThat(
+                        logProducerBatch.tryAppend(
+                                createWriteRecord(
+                                        withTableIdAndSchemaId(
+                                                DATA1_TABLE_ID,
+                                                DATA1_TABLE_INFO.getSchemaId() + 1)),
+                                newWriteCallback()))
+                .isFalse();
+        assertThat(
+                        logProducerBatch.tryAppend(
+                                createWriteRecord(
+                                        withTableIdAndSchemaId(
+                                                DATA1_TABLE_ID + 1,
+                                                DATA1_TABLE_INFO.getSchemaId())),
+                                newWriteCallback()))
+                .isFalse();
+        assertThat(
+                        logProducerBatch.tryAppend(
+                                WriteRecord.forIndexedAppend(
+                                        DATA1_TABLE_INFO,
+                                        DATA1_PHYSICAL_TABLE_PATH,
+                                        indexedRow(DATA1_ROW_TYPE, new Object[] {1, "a"}),
+                                        null),
+                                newWriteCallback()))
+                .isFalse();
+        assertThat(logProducerBatch.getRecordCount()).isEqualTo(1);
+    }
+
+    @Test
     void testBatchAborted() throws Exception {
         int bucketId = 0;
         int writeLimit = 10240;
@@ -196,8 +234,11 @@ public class CompactedLogWriteBatchTest {
     }
 
     private WriteRecord createWriteRecord() {
-        return WriteRecord.forCompactedAppend(
-                DATA1_TABLE_INFO, DATA1_PHYSICAL_TABLE_PATH, row, null);
+        return createWriteRecord(DATA1_TABLE_INFO);
+    }
+
+    private WriteRecord createWriteRecord(TableInfo tableInfo) {
+        return WriteRecord.forCompactedAppend(tableInfo, DATA1_PHYSICAL_TABLE_PATH, row, null);
     }
 
     private CompactedLogWriteBatch createLogWriteBatch(TableBucket tb) throws Exception {
@@ -216,13 +257,32 @@ public class CompactedLogWriteBatchTest {
                 System.currentTimeMillis());
     }
 
+    private TableInfo withTableIdAndSchemaId(long tableId, int schemaId) {
+        return new TableInfo(
+                DATA1_TABLE_INFO.getTablePath(),
+                tableId,
+                schemaId,
+                DATA1_TABLE_INFO.getSchema(),
+                DATA1_TABLE_INFO.getBucketKeys(),
+                DATA1_TABLE_INFO.getPartitionKeys(),
+                DATA1_TABLE_INFO.getNumBuckets(),
+                DATA1_TABLE_INFO.getProperties(),
+                DATA1_TABLE_INFO.getCustomProperties(),
+                DATA1_TABLE_INFO.getRemoteDataDir(),
+                DATA1_TABLE_INFO.getComment().orElse(null),
+                DATA1_TABLE_INFO.getCreatedTime(),
+                DATA1_TABLE_INFO.getModifiedTime());
+    }
+
     private void assertDefaultLogRecordBatchEquals(LogRecordBatch recordBatch) {
         assertThat(recordBatch.getRecordCount()).isEqualTo(1);
         assertThat(recordBatch.baseLogOffset()).isEqualTo(0L);
         assertThat(recordBatch.schemaId()).isEqualTo((short) DATA1_TABLE_INFO.getSchemaId());
         try (LogRecordReadContext readContext =
                         LogRecordReadContext.createCompactedRowReadContext(
-                                DATA1_ROW_TYPE, DATA1_TABLE_INFO.getSchemaId());
+                                DATA1_ROW_TYPE,
+                                DATA1_TABLE_INFO.getSchemaId(),
+                                TEST_SCHEMA_GETTER);
                 CloseableIterator<LogRecord> iterator = recordBatch.records(readContext)) {
             assertThat(iterator.hasNext()).isTrue();
             LogRecord record = iterator.next();

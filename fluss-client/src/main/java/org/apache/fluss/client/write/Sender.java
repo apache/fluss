@@ -91,6 +91,9 @@ public class Sender implements Runnable {
     /** true when the caller wants to ignore all unsent/inflight messages and force close. */
     private volatile boolean forceClose;
 
+    private final Object wakeupLock = new Object();
+    private boolean wakeup;
+
     /**
      * A per-bucket queue of batches ordered by creation time for tracking the in-flight batches.
      */
@@ -236,8 +239,7 @@ public class Sender implements Runnable {
             // TODO The method sendWriteData is in a busy loop. If there is no data continuously, it
             // will cause the CPU to be occupied.
             // In the future, we need to introduce delay logic to deal with it.
-            // TODO: condition waiter
-            Thread.sleep(readyCheckResult.nextReadyCheckDelayMs);
+            awaitNextReadyCheck(readyCheckResult.nextReadyCheckDelayMs);
         }
 
         // get the list of batches prepare to send.
@@ -644,6 +646,27 @@ public class Sender implements Runnable {
         // breaking from the sender loop. Otherwise, we may miss some callbacks when shutting down.
         accumulator.close();
         running = false;
+        wakeup();
+    }
+
+    /** Wake up the sender if it is waiting for the next ready check. */
+    public void wakeup() {
+        synchronized (wakeupLock) {
+            wakeup = true;
+            wakeupLock.notifyAll();
+        }
+    }
+
+    private void awaitNextReadyCheck(long delayMs) throws InterruptedException {
+        if (delayMs <= 0) {
+            return;
+        }
+        synchronized (wakeupLock) {
+            if (!wakeup) {
+                wakeupLock.wait(delayMs);
+            }
+            wakeup = false;
+        }
     }
 
     /**

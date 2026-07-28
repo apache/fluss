@@ -60,7 +60,7 @@ public class ArrowLogWriteBatch extends WriteBatch {
             AbstractPagedOutputView outputView,
             long createdMs,
             @Nullable LogRecordBatchStatisticsCollector statisticsCollector) {
-        super(tableId, bucketId, physicalTablePath, createdMs);
+        super(tableId, bucketId, physicalTablePath, schemaId, WriteFormat.ARROW_LOG, createdMs);
         this.outputView = outputView;
         this.recordsBuilder =
                 MemoryLogRecordsArrowBuilder.builder(
@@ -73,7 +73,7 @@ public class ArrowLogWriteBatch extends WriteBatch {
     }
 
     @Override
-    public boolean tryAppend(WriteRecord writeRecord, WriteCallback callback) throws Exception {
+    boolean tryAppendRecord(WriteRecord writeRecord, WriteCallback callback) throws Exception {
         InternalRow row = writeRecord.getRow();
         checkArgument(
                 writeRecord.getTargetColumns() == null,

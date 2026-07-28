@@ -599,7 +599,8 @@ class FileLogProjectionTest {
         RowType projectedType = TestData.DATA2_ROW_TYPE.project(new int[] {0, 2});
 
         try (LogRecordReadContext context =
-                createArrowReadContext(projectedType, schemaIdForData2, testingSchemaGetter)) {
+                createArrowReadContext(
+                        projectedType, schemaIdForData2, testingSchemaGetter, true)) {
             for (LogRecordBatch projectedBatch : projectedRecords.batches()) {
                 try (CloseableIterator<LogRecord> records = projectedBatch.records(context)) {
                     int recordCount = 0;
@@ -692,7 +693,8 @@ class FileLogProjectionTest {
         RowType projectedType = TestData.DATA2_ROW_TYPE.project(new int[] {1});
 
         try (LogRecordReadContext context =
-                createArrowReadContext(projectedType, schemaIdForData2, testingSchemaGetter)) {
+                createArrowReadContext(
+                        projectedType, schemaIdForData2, testingSchemaGetter, true)) {
             for (LogRecordBatch projectedBatch : projectedRecords.batches()) {
                 try (CloseableIterator<LogRecord> records = projectedBatch.records(context)) {
                     int recordCount = 0;
@@ -744,7 +746,8 @@ class FileLogProjectionTest {
         RowType projectedType = TestData.DATA2_ROW_TYPE.project(new int[] {0, 1, 2});
 
         try (LogRecordReadContext context =
-                createArrowReadContext(projectedType, schemaIdForData2, testingSchemaGetter)) {
+                createArrowReadContext(
+                        projectedType, schemaIdForData2, testingSchemaGetter, true)) {
             for (LogRecordBatch projectedBatch : projectedRecords.batches()) {
                 try (CloseableIterator<LogRecord> records = projectedBatch.records(context)) {
                     int recordCount = 0;
@@ -824,7 +827,8 @@ class FileLogProjectionTest {
         RowType projectedType = TestData.DATA1_ROW_TYPE.project(new int[] {0});
 
         try (LogRecordReadContext context =
-                createArrowReadContext(projectedType, DEFAULT_SCHEMA_ID, testingSchemaGetter)) {
+                createArrowReadContext(
+                        projectedType, DEFAULT_SCHEMA_ID, testingSchemaGetter, true)) {
             // Verify first batch
             int firstBatchCount = 0;
             for (LogRecordBatch projectedBatch : firstProjectedRecords.batches()) {
@@ -881,7 +885,8 @@ class FileLogProjectionTest {
         RowType projectedType = TestData.DATA2_ROW_TYPE.project(new int[] {0, 1});
 
         try (LogRecordReadContext context =
-                createArrowReadContext(projectedType, DEFAULT_SCHEMA_ID, testingSchemaGetter)) {
+                createArrowReadContext(
+                        projectedType, DEFAULT_SCHEMA_ID, testingSchemaGetter, true)) {
             for (LogRecordBatch projectedBatch : projectedRecords.batches()) {
                 // Verify that statistics are not available in projected batch
                 assertThat(projectedBatch.getStatistics(context)).isEmpty();
@@ -932,7 +937,8 @@ class FileLogProjectionTest {
         RowType projectedType = TestData.DATA2_ROW_TYPE.project(new int[] {0, 1});
 
         try (LogRecordReadContext context =
-                createArrowReadContext(projectedType, DEFAULT_SCHEMA_ID, testingSchemaGetter)) {
+                createArrowReadContext(
+                        projectedType, DEFAULT_SCHEMA_ID, testingSchemaGetter, true)) {
             for (LogRecordBatch projectedBatch : projectedRecords.batches()) {
                 // For V0/V1, statistics should be 0 (not supported)
                 assertThat(projectedBatch.getStatistics(context)).isEmpty();
@@ -994,7 +1000,8 @@ class FileLogProjectionTest {
         RowType projectedType = TestData.DATA2_ROW_TYPE.project(new int[] {0, 2});
 
         try (LogRecordReadContext context =
-                createArrowReadContext(projectedType, schemaIdForData2, testingSchemaGetter)) {
+                createArrowReadContext(
+                        projectedType, schemaIdForData2, testingSchemaGetter, true)) {
             for (LogRecordBatch projectedBatch : projectedRecords.batches()) {
                 // Verify that statistics are not available in projected batch
                 assertThat(projectedBatch.getStatistics(context)).isEmpty();

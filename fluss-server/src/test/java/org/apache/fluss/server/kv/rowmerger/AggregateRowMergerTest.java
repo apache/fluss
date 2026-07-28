@@ -270,8 +270,7 @@ class AggregateRowMergerTest {
 
         // Create schema getter with both schemas
         // Initialize with newSchema as latest schema for AggregateRowMerger constructor
-        TestingSchemaGetter schemaGetter =
-                new TestingSchemaGetter(new SchemaInfo(newSchema, newSchemaId));
+        TestingSchemaGetter schemaGetter = new TestingSchemaGetter(newSchemaId, newSchema);
         // Add old schema to cache
         schemaGetter.updateLatestSchemaInfo(new SchemaInfo(oldSchema, oldSchemaId));
         // Ensure newSchema is latest

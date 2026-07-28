@@ -788,7 +788,7 @@ final class LogSegmentTest extends LogTestBase {
             org.apache.fluss.types.RowType projectedType = DATA1_ROW_TYPE.project(new int[] {0});
             try (LogRecordReadContext projectedContext =
                     LogRecordReadContext.createArrowReadContext(
-                            projectedType, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER)) {
+                            projectedType, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER, true)) {
                 int recordCount = 0;
                 for (LogRecordBatch b : read.getRecords().batches()) {
                     try (CloseableIterator<LogRecord> iter = b.records(projectedContext)) {

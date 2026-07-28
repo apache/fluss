@@ -245,20 +245,20 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
         long timestamp = commitTimestamp();
         LogFormat logFormat = context.getLogFormat();
         RowType rowType = context.getRowType(schemaId);
+        ProjectedRow outputProjection = context.getOutputProjectedRow(schemaId);
 
         switch (logFormat) {
             case ARROW:
                 return columnRecordIterator(
                         rowType,
-                        context.getOutputProjectedRow(schemaId),
+                        outputProjection,
                         context.getVectorSchemaRoot(schemaId),
                         context.getBufferAllocator(),
                         timestamp);
             case INDEXED:
-                return rowRecordIterator(
-                        rowType, context.getOutputProjectedRow(schemaId), timestamp);
+                return rowRecordIterator(rowType, outputProjection, timestamp);
             case COMPACTED:
-                return compactedRowRecordIterator(rowType, timestamp);
+                return compactedRowRecordIterator(rowType, outputProjection, timestamp);
             default:
                 throw new IllegalArgumentException("Unsupported log format: " + logFormat);
         }
@@ -354,7 +354,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
     }
 
     private CloseableIterator<LogRecord> compactedRowRecordIterator(
-            RowType rowType, long timestamp) {
+            RowType rowType, @Nullable ProjectedRow outputProjection, long timestamp) {
         DataType[] fieldTypes = rowType.getChildren().toArray(new DataType[0]);
         return new LogRecordIterator() {
             int position = DefaultLogRecordBatch.this.position + recordsDataOffset();
@@ -367,7 +367,15 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
                                 segment, position, baseOffset + rowId, timestamp, fieldTypes);
                 rowId++;
                 position += logRecord.getSizeInBytes();
-                return logRecord;
+                if (outputProjection == null) {
+                    return logRecord;
+                } else {
+                    return new GenericRecord(
+                            logRecord.logOffset(),
+                            logRecord.timestamp(),
+                            logRecord.getChangeType(),
+                            outputProjection.replaceRow(logRecord.getRow()));
+                }
             }
 
             @Override

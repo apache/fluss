@@ -841,6 +841,7 @@ class KvTabletTest {
                                 : Arrays.asList(new Object[] {1, "v11"}, new Object[] {2, "v21"}));
         assertThatLogRecords(actualLogRecords)
                 .withSchema(readLogRowType)
+                .withSchemaGetter(schemaGetter)
                 .assertCheckSum(!doProjection)
                 .isEqualTo(expectedLogs);
 
@@ -875,6 +876,7 @@ class KvTabletTest {
             actualLogRecords = readLogRecords(logTablet, 0, logProjection);
             assertThatLogRecords(actualLogRecords)
                     .withSchema(readLogRowType)
+                    .withSchemaGetter(schemaGetter)
                     .assertCheckSum(!doProjection)
                     .isEqualTo(expectedLogs);
         }
@@ -898,6 +900,7 @@ class KvTabletTest {
         actualLogRecords = readLogRecords(logTablet, endOffset, logProjection);
         assertThatLogRecords(actualLogRecords)
                 .withSchema(readLogRowType)
+                .withSchemaGetter(schemaGetter)
                 .assertCheckSum(!doProjection)
                 .isEqualTo(expectedLogs);
 
@@ -933,6 +936,7 @@ class KvTabletTest {
         actualLogRecords = readLogRecords(logTablet, endOffset, logProjection);
         assertThatLogRecords(actualLogRecords)
                 .withSchema(readLogRowType)
+                .withSchemaGetter(schemaGetter)
                 .assertCheckSum(!doProjection)
                 .isEqualTo(expectedLogs);
 
@@ -954,6 +958,7 @@ class KvTabletTest {
         actualLogRecords = readLogRecords(logTablet, endOffset, logProjection);
         assertThatLogRecords(actualLogRecords)
                 .withSchema(readLogRowType)
+                .withSchemaGetter(schemaGetter)
                 .assertCheckSum(!doProjection)
                 .isEqualTo(expectedLogs);
     }
@@ -1031,6 +1036,7 @@ class KvTabletTest {
                                         new Object[] {2, 1001}));
         assertThatLogRecords(actualLogRecords)
                 .withSchema(readLogRowType)
+                .withSchemaGetter(schemaGetter)
                 .assertCheckSum(!doProjection)
                 .isEqualTo(expectedLogs);
 
@@ -1065,6 +1071,7 @@ class KvTabletTest {
         actualLogRecords = readLogRecords(logTablet, 0, logProjection);
         assertThatLogRecords(actualLogRecords)
                 .withSchema(readLogRowType)
+                .withSchemaGetter(schemaGetter)
                 .assertCheckSum(!doProjection)
                 .isEqualTo(expectedLogs);
 
@@ -1097,6 +1104,7 @@ class KvTabletTest {
         actualLogRecords = readLogRecords(logTablet, endOffset, logProjection);
         assertThatLogRecords(actualLogRecords)
                 .withSchema(readLogRowType)
+                .withSchemaGetter(schemaGetter)
                 .assertCheckSum(!doProjection)
                 .isEqualTo(expectedLogs);
 
@@ -1136,6 +1144,7 @@ class KvTabletTest {
         actualLogRecords = readLogRecords(logTablet, endOffset, logProjection);
         assertThatLogRecords(actualLogRecords)
                 .withSchema(newSchemaLogRowType)
+                .withSchemaGetter(schemaGetter)
                 .assertCheckSum(!doProjection)
                 .isEqualTo(expectedLogs);
 
@@ -1158,6 +1167,7 @@ class KvTabletTest {
         actualLogRecords = readLogRecords(logTablet, endOffset, logProjection);
         assertThatLogRecords(actualLogRecords)
                 .withSchema(newSchemaLogRowType)
+                .withSchemaGetter(schemaGetter)
                 .assertCheckSum(!doProjection)
                 .isEqualTo(expectedLogs);
     }
@@ -1205,6 +1215,7 @@ class KvTabletTest {
                                 new Object[] {2, 20L, 200, "Bob"}));
         assertThatLogRecords(actualLogRecords)
                 .withSchema(rowType)
+                .withSchemaGetter(schemaGetter)
                 .assertCheckSum(true)
                 .isEqualTo(expectedLogs);
 
@@ -1238,6 +1249,7 @@ class KvTabletTest {
         actualLogRecords = readLogRecords(logTablet, endOffset, null);
         assertThatLogRecords(actualLogRecords)
                 .withSchema(rowType)
+                .withSchemaGetter(schemaGetter)
                 .assertCheckSum(true)
                 .isEqualTo(expectedLogs);
 
@@ -1259,6 +1271,7 @@ class KvTabletTest {
         actualLogRecords = readLogRecords(logTablet, endOffset, null);
         assertThatLogRecords(actualLogRecords)
                 .withSchema(rowType)
+                .withSchemaGetter(schemaGetter)
                 .assertCheckSum(true)
                 .isEqualTo(expectedLogs);
     }
@@ -1485,11 +1498,13 @@ class KvTabletTest {
 
     private void checkEqual(
             LogRecords actaulLogRecords, List<MemoryLogRecords> expectedLogs, RowType rowType) {
-        LogTestBase.assertLogRecordsListEquals(expectedLogs, actaulLogRecords, rowType);
+        LogTestBase.assertLogRecordsListEquals(
+                expectedLogs, actaulLogRecords, rowType, schemaGetter);
     }
 
     private void checkEqual(LogRecords actaulLogRecords, List<MemoryLogRecords> expectedLogs) {
-        LogTestBase.assertLogRecordsListEquals(expectedLogs, actaulLogRecords, baseRowType);
+        LogTestBase.assertLogRecordsListEquals(
+                expectedLogs, actaulLogRecords, baseRowType, schemaGetter);
     }
 
     private Value valueOf(BinaryRow row) {

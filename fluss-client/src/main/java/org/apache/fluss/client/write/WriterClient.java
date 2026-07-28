@@ -92,6 +92,14 @@ public class WriterClient {
             MetadataUpdater metadataUpdater,
             ClientMetricGroup clientMetricGroup,
             Admin admin) {
+        this(conf, metadataUpdater, new WriterMetricGroup(clientMetricGroup), admin);
+    }
+
+    public WriterClient(
+            Configuration conf,
+            MetadataUpdater metadataUpdater,
+            WriterMetricGroup writerMetricGroup,
+            Admin admin) {
         int maxRequestSizeLocal = -1;
         IdempotenceManager idempotenceManagerLocal = null;
         try {
@@ -100,9 +108,9 @@ public class WriterClient {
             maxRequestSizeLocal =
                     (int) conf.get(ConfigOptions.CLIENT_WRITER_REQUEST_MAX_SIZE).getBytes();
             this.maxRequestSize = maxRequestSizeLocal;
+            this.writerMetricGroup = writerMetricGroup;
             idempotenceManagerLocal = buildIdempotenceManager();
             this.idempotenceManager = idempotenceManagerLocal;
-            this.writerMetricGroup = new WriterMetricGroup(clientMetricGroup);
 
             short acks = configureAcks(idempotenceManager.idempotenceEnabled());
             int retries = configureRetries(idempotenceManager.idempotenceEnabled());
@@ -156,6 +164,7 @@ public class WriterClient {
         LOG.trace("Flushing accumulated records in writer.");
         long start = System.currentTimeMillis();
         accumulator.beginFlush();
+        sender.wakeup();
         try {
             accumulator.awaitFlushCompletion();
         } catch (InterruptedException e) {
@@ -212,7 +221,7 @@ public class WriterClient {
                         "Waking up the sender since table {} bucket {} is either full or getting a new batch",
                         record.getPhysicalTablePath(),
                         bucketId);
-                // TODO add the wakeup logic refer to Kafka.
+                sender.wakeup();
             }
         } catch (Exception e) {
             throw new FlussRuntimeException(

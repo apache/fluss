@@ -310,6 +310,33 @@ class RecordAccumulatorTest {
     }
 
     @Test
+    void testAppendRollsNewBatchWhenSchemaIdChanges() throws Exception {
+        int batchSize = 1024;
+        IndexedRow row = indexedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
+        RecordAccumulator accum = createTestRecordAccumulator(batchSize, 10L * batchSize);
+        int oldSchemaId = DATA1_TABLE_INFO.getSchemaId();
+        int newSchemaId = oldSchemaId + 1;
+
+        accum.append(createRecord(row), writeCallback, cluster, 0, false);
+        // a record with a bumped schema id closes the old-schema batch and rolls a new one.
+        accum.append(
+                createRecord(row, withSchemaId(newSchemaId)), writeCallback, cluster, 0, false);
+
+        Deque<WriteBatch> writeBatches =
+                accum.getReadyDeque(DATA1_PHYSICAL_TABLE_PATH, tb1.getBucket());
+        assertThat(writeBatches).hasSize(2);
+        Iterator<WriteBatch> batchIterator = writeBatches.iterator();
+        WriteBatch oldBatch = batchIterator.next();
+        assertThat(oldBatch.isClosed()).isTrue();
+        assertThat(oldBatch.schemaId()).isEqualTo(oldSchemaId);
+        assertThat(oldBatch.getRecordCount()).isEqualTo(1);
+        WriteBatch newBatch = batchIterator.next();
+        assertThat(newBatch.isClosed()).isFalse();
+        assertThat(newBatch.schemaId()).isEqualTo(newSchemaId);
+        assertThat(newBatch.getRecordCount()).isEqualTo(1);
+    }
+
+    @Test
     void testAppendLarge() throws Exception {
         int batchSize = 100;
         // set batch timeout as 0 to make sure batch are always ready.
@@ -550,7 +577,28 @@ class RecordAccumulatorTest {
      * format , see {@link #updateCluster(List)}.
      */
     private WriteRecord createRecord(IndexedRow row) {
-        return WriteRecord.forIndexedAppend(DATA1_TABLE_INFO, DATA1_PHYSICAL_TABLE_PATH, row, null);
+        return createRecord(row, DATA1_TABLE_INFO);
+    }
+
+    private WriteRecord createRecord(IndexedRow row, TableInfo tableInfo) {
+        return WriteRecord.forIndexedAppend(tableInfo, DATA1_PHYSICAL_TABLE_PATH, row, null);
+    }
+
+    private TableInfo withSchemaId(int schemaId) {
+        return new TableInfo(
+                DATA1_TABLE_INFO.getTablePath(),
+                DATA1_TABLE_INFO.getTableId(),
+                schemaId,
+                DATA1_TABLE_INFO.getSchema(),
+                DATA1_TABLE_INFO.getBucketKeys(),
+                DATA1_TABLE_INFO.getPartitionKeys(),
+                DATA1_TABLE_INFO.getNumBuckets(),
+                DATA1_TABLE_INFO.getProperties(),
+                DATA1_TABLE_INFO.getCustomProperties(),
+                DATA1_TABLE_INFO.getRemoteDataDir(),
+                DATA1_TABLE_INFO.getComment().orElse(null),
+                DATA1_TABLE_INFO.getCreatedTime(),
+                DATA1_TABLE_INFO.getModifiedTime());
     }
 
     private Cluster updateCluster(List<BucketLocation> bucketLocations) {

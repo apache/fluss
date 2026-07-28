@@ -51,6 +51,8 @@ public final class CompactedLogWriteBatch extends AbstractRowLogWriteBatch<Compa
                 tableId,
                 bucketId,
                 physicalTablePath,
+                schemaId,
+                WriteFormat.COMPACTED_LOG,
                 createdMs,
                 outputView,
                 MemoryLogRecordsCompactedBuilder.builder(schemaId, writeLimit, outputView, true),
