@@ -292,6 +292,7 @@ public final class LogManager extends TabletManagerBase {
      * @param tableBucket the table bucket
      * @param logFormat the log format
      * @param tieredLogLocalSegments the number of segments to retain in local for tiered log
+     * @param logTtlMs the table log TTL in milliseconds
      * @param localLogTtlMs the local log TTL in milliseconds from table configuration
      * @param isChangelog whether the log is a changelog of primary key table
      */
@@ -301,6 +302,7 @@ public final class LogManager extends TabletManagerBase {
             TableBucket tableBucket,
             LogFormat logFormat,
             int tieredLogLocalSegments,
+            long logTtlMs,
             long localLogTtlMs,
             boolean isChangelog)
             throws Exception {
@@ -324,7 +326,7 @@ public final class LogManager extends TabletManagerBase {
                                     scheduler,
                                     logFormat,
                                     tieredLogLocalSegments,
-                                    localLogTtlMs,
+                                    effectiveLocalLogTtlMs(logTtlMs, localLogTtlMs),
                                     isChangelog,
                                     clock,
                                     true);
@@ -355,6 +357,7 @@ public final class LogManager extends TabletManagerBase {
                 tableBucket,
                 logFormat,
                 tieredLogLocalSegments,
+                tableConfig.getLogTTLMs(),
                 tableConfig.getLocalLogTTLMs(),
                 isChangelog);
     }
@@ -469,7 +472,9 @@ public final class LogManager extends TabletManagerBase {
                         scheduler,
                         tableInfo.getTableConfig().getLogFormat(),
                         tableInfo.getTableConfig().getTieredLogLocalSegments(),
-                        tableInfo.getTableConfig().getLocalLogTTLMs(),
+                        effectiveLocalLogTtlMs(
+                                tableInfo.getTableConfig().getLogTTLMs(),
+                                tableInfo.getTableConfig().getLocalLogTTLMs()),
                         tableInfo.hasPrimaryKey(),
                         clock,
                         isCleanShutdown);
@@ -492,6 +497,12 @@ public final class LogManager extends TabletManagerBase {
         localDiskManager.recordReplicaLoad(dataDir, tableInfo.hasPrimaryKey());
 
         return logTablet;
+    }
+
+    private long effectiveLocalLogTtlMs(long logTtlMs, long localLogTtlMs) {
+        return conf.get(ConfigOptions.REMOTE_LOG_TASK_INTERVAL_DURATION).toMillis() > 0L
+                ? localLogTtlMs
+                : logTtlMs;
     }
 
     /** Close all the logs. */

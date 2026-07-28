@@ -53,7 +53,7 @@ class TableConfigTest {
         conf.set(ConfigOptions.TABLE_LOG_TTL, Duration.ofDays(3));
         TableConfig tableConfig = new TableConfig(conf);
 
-        assertThat(tableConfig.getLocalLogTTLMs()).isEqualTo(Duration.ofDays(3).toMillis());
+        assertThat(tableConfig.getLocalLogTTLMs()).isEqualTo(Duration.ofDays(1).toMillis());
 
         conf.set(ConfigOptions.TABLE_LOG_LOCAL_TTL, Duration.ofHours(6));
         assertThat(tableConfig.getLocalLogTTLMs()).isEqualTo(Duration.ofHours(6).toMillis());
