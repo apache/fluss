@@ -174,11 +174,9 @@ public class FlussSourceBuilder<OUT> {
 
     /**
      * Builds a bounded source for batch execution. The source reads up to the latest offsets at job
-     * startup and then finishes. On datalake-enabled log tables, the default {@link
-     * OffsetsInitializer#full()} performs a bounded union read of the lake snapshot and the Fluss
-     * log. Primary-key tables require full startup mode for batch reads and use Fluss KV snapshots
-     * plus bounded logs. Log tables support all startup modes. If not called, the source is
-     * unbounded (streaming).
+     * startup and then finishes; combined with the default {@link OffsetsInitializer#full()} on a
+     * datalake-enabled table this performs a bounded union read of the lake snapshot and the Fluss
+     * log. If not called, the source is unbounded (streaming).
      *
      * @return this builder
      */
@@ -365,9 +363,7 @@ public class FlussSourceBuilder<OUT> {
         }
 
         LakeSource<LakeSplit> lakeSource = null;
-        // Bounded primary-key scans use Fluss KV snapshots plus bounded logs. Lake union-read is
-        // kept for log tables and streaming reads.
-        if (lakeEnabled && fullStartup && !(bounded && hasPrimaryKey)) {
+        if (lakeEnabled && fullStartup) {
             lakeSource =
                     LakeSourceUtils.createLakeSource(tablePath, tableInfo.getProperties().toMap());
             if (lakeSource != null) {

@@ -80,6 +80,11 @@ public class BoundedSplitReader implements AutoCloseable {
             // no any records, add the RecordAndPosBatch back
             recordAndPosBatchPool.add(recordAndPosBatch);
             return null;
+        } else if (!nextBatch.hasNext()) {
+            // if record is empty, add the RecordAndPosBatch back
+            nextBatch.close();
+            recordAndPosBatchPool.add(recordAndPosBatch);
+            return CloseableIterator.emptyIterator();
         } else {
             return recordAndPosBatch.replace(nextBatch);
         }

@@ -18,6 +18,7 @@
 package org.apache.fluss.client.table.scanner.batch;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.scanner.SortMergeReader;
@@ -39,14 +40,12 @@ import org.apache.fluss.utils.IOUtils;
 import javax.annotation.Nullable;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.time.Duration;
-import java.util.Arrays;
 import java.util.Comparator;
-import java.util.List;
 import java.util.Map;
+import java.util.NoSuchElementException;
 import java.util.TreeMap;
-import java.util.stream.Collectors;
-import java.util.stream.IntStream;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
@@ -67,7 +66,6 @@ public class KvSnapshotAndLogBatchScanner implements BatchScanner {
     @Nullable private final LogScanner logScanner;
 
     private boolean logScanFinished;
-    private boolean snapshotIteratorInitialized;
     private boolean finished;
     private boolean closed;
 
@@ -124,26 +122,32 @@ public class KvSnapshotAndLogBatchScanner implements BatchScanner {
             return null;
         }
 
+        // 1. collect the bounded log range into memory before merging.
         if (!logScanFinished) {
             pollLogRecords(timeout);
             return CloseableIterator.emptyIterator();
         }
 
         if (sortMergeReader == null) {
-            if (!initializeSnapshotIterator(timeout)) {
-                return CloseableIterator.emptyIterator();
-            }
+            CloseableIterator<LogRecord> snapshotRecords = createSnapshotRecordIterator(timeout);
 
+            // 3. merge the snapshot stream with the reduced changelog rows by primary key.
             sortMergeReader =
                     new SortMergeReader(
                             adjustProjectedFields,
                             keyIndexesInScanRow,
-                            snapshotRecordIterator,
+                            snapshotRecords,
                             primaryKeyComparator,
                             CloseableIterator.wrap(logRows.values().iterator()));
         }
 
-        sortMergeIterator = sortMergeReader.readBatch();
+        try {
+            sortMergeIterator = sortMergeReader.readBatch();
+        } catch (UncheckedIOException e) {
+            throw e.getCause();
+        }
+
+        // 4. mark the scanner as finished once the merge reader has been drained.
         if (sortMergeIterator == null) {
             finished = true;
         }
@@ -181,32 +185,13 @@ public class KvSnapshotAndLogBatchScanner implements BatchScanner {
         logRows.put(keyValueRow.keyRow(), keyValueRow);
     }
 
-    private boolean initializeSnapshotIterator(Duration timeout) throws IOException {
-        if (snapshotIteratorInitialized) {
-            return true;
-        }
-
+    private CloseableIterator<LogRecord> createSnapshotRecordIterator(Duration timeout) {
         if (snapshotScanner == null) {
             snapshotRecordIterator = CloseableIterator.emptyIterator();
-            snapshotIteratorInitialized = true;
-            return true;
+        } else {
+            snapshotRecordIterator = new SnapshotRecordIterator(snapshotScanner, timeout);
         }
-
-        CloseableIterator<InternalRow> snapshotRows = snapshotScanner.pollBatch(timeout);
-        if (snapshotRows == null) {
-            snapshotRecordIterator = CloseableIterator.emptyIterator();
-            snapshotIteratorInitialized = true;
-            return true;
-        }
-
-        if (!snapshotRows.hasNext()) {
-            snapshotRows.close();
-            return false;
-        }
-
-        snapshotRecordIterator = new SnapshotRecordIterator(snapshotRows);
-        snapshotIteratorInitialized = true;
-        return true;
+        return snapshotRecordIterator;
     }
 
     @Override
@@ -223,33 +208,10 @@ public class KvSnapshotAndLogBatchScanner implements BatchScanner {
 
     private static ProjectionPlan createProjectionPlan(
             TableInfo tableInfo, @Nullable int[] projectedFields) {
-        int[] physicalPrimaryKeyIndexes = getPhysicalPrimaryKeyIndexes(tableInfo);
-        int fieldCount = tableInfo.getRowType().getFieldCount();
-        if (projectedFields == null) {
-            return new ProjectionPlan(
-                    IntStream.range(0, fieldCount).toArray(), physicalPrimaryKeyIndexes, null);
-        }
-
-        List<Integer> scanProjectedFields =
-                Arrays.stream(projectedFields).boxed().collect(Collectors.toList());
-        int[] keyIndexesInScanRow = new int[physicalPrimaryKeyIndexes.length];
-        for (int i = 0; i < physicalPrimaryKeyIndexes.length; i++) {
-            int primaryKeyIndex = physicalPrimaryKeyIndexes[i];
-            int indexInProjectedFields = findIndex(projectedFields, primaryKeyIndex);
-            if (indexInProjectedFields >= 0) {
-                keyIndexesInScanRow[i] = indexInProjectedFields;
-            } else {
-                scanProjectedFields.add(primaryKeyIndex);
-                keyIndexesInScanRow[i] = scanProjectedFields.size() - 1;
-            }
-        }
-
-        int[] scanProjection = scanProjectedFields.stream().mapToInt(Integer::intValue).toArray();
-        int[] adjustProjectedFields = new int[projectedFields.length];
-        for (int i = 0; i < projectedFields.length; i++) {
-            adjustProjectedFields[i] = findIndex(scanProjection, projectedFields[i]);
-        }
-        return new ProjectionPlan(scanProjection, keyIndexesInScanRow, adjustProjectedFields);
+        return ProjectionPlan.create(
+                tableInfo.getRowType().getFieldCount(),
+                getPhysicalPrimaryKeyIndexes(tableInfo),
+                projectedFields);
     }
 
     private static Comparator<InternalRow> createPrimaryKeyComparator(TableInfo tableInfo) {
@@ -276,49 +238,57 @@ public class KvSnapshotAndLogBatchScanner implements BatchScanner {
                 .toArray();
     }
 
-    private static int findIndex(int[] array, int target) {
-        for (int i = 0; i < array.length; i++) {
-            if (array[i] == target) {
-                return i;
-            }
-        }
-        return -1;
-    }
+    @VisibleForTesting
+    static class SnapshotRecordIterator implements CloseableIterator<LogRecord> {
+        private final BatchScanner scanner;
+        private final Duration timeout;
+        @Nullable private CloseableIterator<InternalRow> rows;
+        private boolean snapshotFinished;
 
-    private static class ProjectionPlan {
-        private final int[] scanProjectedFields;
-        private final int[] keyIndexesInScanRow;
-        @Nullable private final int[] adjustProjectedFields;
-
-        private ProjectionPlan(
-                int[] scanProjectedFields,
-                int[] keyIndexesInScanRow,
-                @Nullable int[] adjustProjectedFields) {
-            this.scanProjectedFields = scanProjectedFields;
-            this.keyIndexesInScanRow = keyIndexesInScanRow;
-            this.adjustProjectedFields = adjustProjectedFields;
-        }
-    }
-
-    private static class SnapshotRecordIterator implements CloseableIterator<LogRecord> {
-        private final CloseableIterator<InternalRow> rows;
-
-        private SnapshotRecordIterator(CloseableIterator<InternalRow> rows) {
-            this.rows = rows;
+        @VisibleForTesting
+        SnapshotRecordIterator(BatchScanner scanner, Duration timeout) {
+            this.scanner = scanner;
+            this.timeout = timeout;
         }
 
         @Override
         public void close() {
-            rows.close();
+            IOUtils.closeQuietly(rows);
+            rows = null;
         }
 
         @Override
         public boolean hasNext() {
-            return rows.hasNext();
+            while (true) {
+                if (rows != null) {
+                    if (rows.hasNext()) {
+                        return true;
+                    }
+                    rows.close();
+                    rows = null;
+                }
+
+                if (snapshotFinished) {
+                    return false;
+                }
+
+                try {
+                    rows = scanner.pollBatch(timeout);
+                } catch (IOException e) {
+                    throw new UncheckedIOException(e);
+                }
+                if (rows == null) {
+                    snapshotFinished = true;
+                    return false;
+                }
+            }
         }
 
         @Override
         public LogRecord next() {
+            if (!hasNext()) {
+                throw new NoSuchElementException();
+            }
             return new ScanRecord(rows.next());
         }
     }

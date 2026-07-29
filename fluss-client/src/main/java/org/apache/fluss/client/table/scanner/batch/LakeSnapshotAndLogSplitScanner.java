@@ -45,8 +45,6 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
-import java.util.stream.Collectors;
-import java.util.stream.IntStream;
 
 /** A scanner to merge the lakehouse's snapshot and change log. */
 public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
@@ -84,7 +82,14 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
         this.lakeSplits = lakeSplits;
         this.lakeSource = lakeSource;
         this.stoppingOffset = stoppingOffset;
-        int[] newProjectedFields = getNeedProjectFields(table, projectedFields);
+        ProjectionPlan projectionPlan =
+                ProjectionPlan.create(
+                        table.getTableInfo().getRowType().getFieldCount(),
+                        pkIndexes,
+                        projectedFields);
+        this.keyIndexesInRow = projectionPlan.keyIndexesInScanRow;
+        this.adjustProjectedFields = projectionPlan.adjustProjectedFields;
+        int[] newProjectedFields = projectionPlan.scanProjectedFields;
 
         this.logScanner = table.newScan().project(newProjectedFields).createLogScanner();
         this.lakeSource.withProject(
@@ -100,56 +105,6 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
         }
 
         this.logScanFinished = startingOffset >= stoppingOffset || stoppingOffset <= 0;
-    }
-
-    private int[] getNeedProjectFields(Table flussTable, @Nullable int[] projectedFields) {
-        if (projectedFields != null) {
-            // we need to include the primary key in projected fields to sort merge by pk
-            // if the provided don't include, we need to include it
-            List<Integer> newProjectedFields =
-                    Arrays.stream(projectedFields).boxed().collect(Collectors.toList());
-
-            // the indexes of primary key with new projected fields
-            keyIndexesInRow = new int[pkIndexes.length];
-            for (int i = 0; i < pkIndexes.length; i++) {
-                int primaryKeyIndex = pkIndexes[i];
-                // search the pk in projected fields
-                int indexInProjectedFields = findIndex(projectedFields, primaryKeyIndex);
-                if (indexInProjectedFields >= 0) {
-                    keyIndexesInRow[i] = indexInProjectedFields;
-                } else {
-                    // no pk in projected fields, we must include it to do
-                    // merge sort
-                    newProjectedFields.add(primaryKeyIndex);
-                    keyIndexesInRow[i] = newProjectedFields.size() - 1;
-                }
-            }
-            int[] newProjection = newProjectedFields.stream().mapToInt(Integer::intValue).toArray();
-            // the underlying scan will use the new projection to scan data,
-            // but will still need to map from the new projection to the origin projected fields
-            int[] adjustProjectedFields = new int[projectedFields.length];
-            for (int i = 0; i < projectedFields.length; i++) {
-                adjustProjectedFields[i] = findIndex(newProjection, projectedFields[i]);
-            }
-            this.adjustProjectedFields = adjustProjectedFields;
-            return newProjection;
-        } else {
-            // no projectedFields, use all fields
-            keyIndexesInRow = pkIndexes;
-            return IntStream.range(0, flussTable.getTableInfo().getRowType().getFieldCount())
-                    .toArray();
-        }
-    }
-
-    private int findIndex(int[] array, int target) {
-        int index = -1;
-        for (int i = 0; i < array.length; i++) {
-            if (array[i] == target) {
-                index = i;
-                break;
-            }
-        }
-        return index;
     }
 
     @Nullable

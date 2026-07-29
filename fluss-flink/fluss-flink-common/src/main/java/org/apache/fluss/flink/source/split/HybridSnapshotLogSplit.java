@@ -27,14 +27,19 @@ import java.util.Optional;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /**
- * The hybrid split for first reading the snapshot files and then switch to read the cdc log from a
- * specified offset.
+ * A primary-key table split that reads a snapshot and a log range for the same table bucket.
  *
- * <p>Only used for primary key table which will be of snapshot phase and incremental phase of
- * reading.
+ * <p>For streaming reads, the split first reads the snapshot files and then switches to the CDC log
+ * from the configured starting offset. For bounded batch reads, the split represents the merge of
+ * an optional snapshot and a bounded primary-key changelog range ending at the configured stopping
+ * offset.
  */
 public class HybridSnapshotLogSplit extends SnapshotSplit {
 
+    /**
+     * Snapshot id sentinel for a split that has no snapshot phase and should read only the bounded
+     * log range.
+     */
     public static final long NO_SNAPSHOT_ID = -1L;
 
     private static final String HYBRID_SPLIT_PREFIX = "hybrid-snapshot-log-";
