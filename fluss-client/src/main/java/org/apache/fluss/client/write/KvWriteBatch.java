@@ -24,6 +24,7 @@ import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.record.KvRecordBatchBuilder;
+import org.apache.fluss.record.MutationType;
 import org.apache.fluss.record.bytesview.BytesView;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.InternalRow;
@@ -53,6 +54,7 @@ public class KvWriteBatch extends WriteBatch {
     private final @Nullable int[] targetColumns;
     private final int schemaId;
     private final MergeMode mergeMode;
+    private final boolean v2Format;
 
     public KvWriteBatch(
             long tableId,
@@ -64,14 +66,16 @@ public class KvWriteBatch extends WriteBatch {
             AbstractPagedOutputView outputView,
             @Nullable int[] targetColumns,
             MergeMode mergeMode,
+            boolean v2Format,
             long createdMs) {
         super(tableId, bucketId, physicalTablePath, createdMs);
         this.outputView = outputView;
         this.recordsBuilder =
-                KvRecordBatchBuilder.builder(schemaId, writeLimit, outputView, kvFormat);
+                KvRecordBatchBuilder.builder(schemaId, writeLimit, outputView, kvFormat, v2Format);
         this.targetColumns = targetColumns;
         this.schemaId = schemaId;
         this.mergeMode = mergeMode;
+        this.v2Format = v2Format;
     }
 
     @Override
@@ -79,18 +83,45 @@ public class KvWriteBatch extends WriteBatch {
         return false;
     }
 
+    /** Whether this batch uses the KvRecord V2 wire format (requires PUT_KV api version >= 2). */
+    public boolean isV2Format() {
+        return v2Format;
+    }
+
     @Override
-    public boolean tryAppend(WriteRecord writeRecord, WriteCallback callback) throws Exception {
+    public AppendResult tryAppend(WriteRecord writeRecord, WriteCallback callback)
+            throws Exception {
+        validateRecordConsistency(writeRecord);
+
+        // V0 batch cannot carry RETRACT records — caller must create a new V2 batch.
+        if (!v2Format && writeRecord.getMutationType() == MutationType.RETRACT) {
+            return AppendResult.FORMAT_MISMATCH;
+        }
+
+        byte[] key = writeRecord.getKey();
+        checkNotNull(key, "key must be not null for kv record");
+        checkNotNull(callback, "write callback must be not null");
+        BinaryRow row = checkRow(writeRecord.getRow());
+
+        // hasRoomFor() and append() are format-aware: the builder sizes and writes records
+        // according to its own record format (V0 or V2).
+        if (!recordsBuilder.hasRoomFor(key, row) || isClosed()) {
+            return AppendResult.BATCH_FULL;
+        } else {
+            recordsBuilder.append(writeRecord.getMutationType(), key, row);
+            callbacks.add(callback);
+            recordCount++;
+            return AppendResult.APPENDED;
+        }
+    }
+
+    private void validateRecordConsistency(WriteRecord writeRecord) {
         if (schemaId != writeRecord.getSchemaId()) {
             throw new IllegalStateException(
                     String.format(
                             "schema id %d of the write record to append is not the same as the current schema id %d in the batch.",
                             writeRecord.getSchemaId(), schemaId));
         }
-
-        // currently, we throw exception directly when the target columns of the write record is
-        // not the same as the current target columns in the batch.
-        // this should be quite fast as they should be the same objects.
         if (!Arrays.equals(targetColumns, writeRecord.getTargetColumns())) {
             throw new IllegalStateException(
                     String.format(
@@ -98,28 +129,12 @@ public class KvWriteBatch extends WriteBatch {
                             Arrays.toString(writeRecord.getTargetColumns()),
                             Arrays.toString(targetColumns)));
         }
-
-        // Validate mergeMode consistency - records with different mergeMode cannot be batched
-        // together
         if (writeRecord.getMergeMode() != this.mergeMode) {
             throw new IllegalStateException(
                     String.format(
                             "Cannot mix records with different mergeMode in the same batch. "
                                     + "Batch mergeMode: %s, Record mergeMode: %s",
                             this.mergeMode, writeRecord.getMergeMode()));
-        }
-
-        byte[] key = writeRecord.getKey();
-        checkNotNull(key, "key must be not null for kv record");
-        checkNotNull(callback, "write callback must be not null");
-        BinaryRow row = checkRow(writeRecord.getRow());
-        if (!recordsBuilder.hasRoomFor(key, row) || isClosed()) {
-            return false;
-        } else {
-            recordsBuilder.append(key, row);
-            callbacks.add(callback);
-            recordCount++;
-            return true;
         }
     }
 

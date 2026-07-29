@@ -17,22 +17,7 @@
 
 package org.apache.fluss.flink.row;
 
-/**
- * Enumeration of row operation types used in Fluss-Flink data processing.
- *
- * <p>This enum represents the type of operation associated with a row, such as an append (insert),
- * upsert (update or insert), delete, or ignore. It is used to indicate how a row should be
- * interpreted or processed in downstream systems.
- *
- * <ul>
- *   <li>{@link #APPEND} - Represents an append-only (insert) operation.
- *   <li>{@link #UPSERT} - Represents an upsert operation (update or insert).
- *   <li>{@link #DELETE} - Represents a delete operation.
- *   <li>{@link #IGNORE} - Represents an operation that should be ignored.
- * </ul>
- *
- * @see org.apache.fluss.flink.row.RowWithOp
- */
+/** Enumeration of row operation types used in Fluss-Flink data processing. */
 public enum OperationType {
     /** Represents an append-only (insert) operation. */
     APPEND,
@@ -42,6 +27,9 @@ public enum OperationType {
 
     /** Represents a delete operation. */
     DELETE,
+
+    /** Represents a retract operation for aggregation merge engine tables. */
+    RETRACT,
 
     /** Represents an operation that should be ignored. */
     IGNORE

@@ -56,7 +56,7 @@ import java.util.NoSuchElementException;
  *
  * <pre>
  * -----------------------------------------------------------------------------------------------
- * | Unused (0-8)
+ * | Unused (0-7)
  * -----------------------------------------------------------------------------------------------
  * </pre>
  *
@@ -85,6 +85,12 @@ public class DefaultKvRecordBatch implements KvRecordBatch {
     static final int RECORDS_OFFSET = RECORDS_COUNT_OFFSET + RECORDS_COUNT_LENGTH;
     public static final int RECORD_BATCH_HEADER_SIZE = RECORDS_OFFSET;
 
+    /** Bit mask for V2 record format in the attributes byte. */
+    static final byte V2_FORMAT_ATTRIBUTE_MASK = 0x01;
+
+    /** Mask of all attribute bits that this version understands. */
+    static final byte KNOWN_ATTRIBUTES_MASK = V2_FORMAT_ATTRIBUTE_MASK;
+
     public static final int KV_OVERHEAD = LENGTH_OFFSET + LENGTH_LENGTH;
 
     private MemorySegment segment;
@@ -110,6 +116,17 @@ public class DefaultKvRecordBatch implements KvRecordBatch {
                             + " is smaller than the minimum allowed overhead "
                             + RECORD_BATCH_HEADER_SIZE
                             + ")");
+        }
+        // Reject batches that use attribute bits this version does not understand.
+        // This prevents an old server from silently misreading V2 records as V0.
+        byte attributes = segment.get(position + ATTRIBUTES_OFFSET);
+        byte unknownBits = (byte) (attributes & ~KNOWN_ATTRIBUTES_MASK);
+        if (unknownBits != 0) {
+            throw new CorruptMessageException(
+                    "Record batch uses unsupported attribute bits: 0x"
+                            + Integer.toHexString(unknownBits & 0xFF)
+                            + ". This may indicate a newer record format that this server version"
+                            + " does not support.");
         }
         if (!isValid()) {
             throw new CorruptMessageException(
@@ -156,6 +173,11 @@ public class DefaultKvRecordBatch implements KvRecordBatch {
         return segment.getInt(position + RECORDS_COUNT_OFFSET);
     }
 
+    @Override
+    public boolean isV2Format() {
+        return (segment.get(position + ATTRIBUTES_OFFSET) & V2_FORMAT_ATTRIBUTE_MASK) != 0;
+    }
+
     public MemorySegment getMemorySegment() {
         return segment;
     }
@@ -181,8 +203,12 @@ public class DefaultKvRecordBatch implements KvRecordBatch {
 
             @Override
             protected KvRecord readNext() {
-                KvRecord kvRecord =
-                        DefaultKvRecord.readFrom(segment, position, schemaId, readContext);
+                KvRecord kvRecord;
+                if (DefaultKvRecordBatch.this.isV2Format()) {
+                    kvRecord = DefaultKvRecord.readFromV2(segment, position, schemaId, readContext);
+                } else {
+                    kvRecord = DefaultKvRecord.readFrom(segment, position, schemaId, readContext);
+                }
                 iteratorNumber++;
                 position += kvRecord.getSizeInBytes();
                 return kvRecord;

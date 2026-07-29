@@ -388,4 +388,29 @@ class TableDescriptorTest {
         AggFunctions.of(AggFunctionType.LAST_VALUE, params).validateDataType(DataTypes.STRING());
         AggFunctions.of(AggFunctionType.LISTAGG, params).validateDataType(DataTypes.STRING());
     }
+
+    @Test
+    void testRetractSafeAggFunctionSubset() {
+        // SUM, LAST_VALUE, LAST_VALUE_IGNORE_NULLS support retract
+        assertThat(AggFunctions.SUM().getType().supportsRetract()).isTrue();
+        assertThat(AggFunctions.SUM().supportsRetract()).isTrue();
+        assertThat(AggFunctions.PRODUCT().getType().supportsRetract()).isFalse();
+        assertThat(AggFunctions.LAST_VALUE().getType().supportsRetract()).isTrue();
+        assertThat(AggFunctions.LAST_VALUE_IGNORE_NULLS().getType().supportsRetract()).isTrue();
+
+        // All other functions must NOT support retract
+        assertThat(AggFunctions.MAX().getType().supportsRetract()).isFalse();
+        assertThat(AggFunctions.MIN().getType().supportsRetract()).isFalse();
+        assertThat(AggFunctions.FIRST_VALUE().getType().supportsRetract()).isFalse();
+        assertThat(AggFunctions.FIRST_VALUE_IGNORE_NULLS().getType().supportsRetract()).isFalse();
+        assertThat(AggFunctions.LISTAGG().getType().supportsRetract()).isFalse();
+        assertThat(AggFunctions.BOOL_AND().getType().supportsRetract()).isFalse();
+        assertThat(AggFunctions.BOOL_OR().getType().supportsRetract()).isFalse();
+
+        // Verify the AggFunction delegating helper is consistent with AggFunctionType
+        for (AggFunctionType type : AggFunctionType.values()) {
+            AggFunction func = AggFunctions.of(type, null);
+            assertThat(func.supportsRetract()).isEqualTo(type.supportsRetract());
+        }
+    }
 }

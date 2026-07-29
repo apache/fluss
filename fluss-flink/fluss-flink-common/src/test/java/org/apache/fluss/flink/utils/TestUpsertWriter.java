@@ -18,6 +18,7 @@
 package org.apache.fluss.flink.utils;
 
 import org.apache.fluss.client.table.writer.DeleteResult;
+import org.apache.fluss.client.table.writer.RetractResult;
 import org.apache.fluss.client.table.writer.UpsertResult;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.metadata.TableBucket;
@@ -41,6 +42,9 @@ public class TestUpsertWriter implements UpsertWriter {
     private InternalRow lastDeletedRow;
     private final List<InternalRow> allUpsertedRows = new ArrayList<>();
     private final List<InternalRow> allDeletedRows = new ArrayList<>();
+    private int retractCount = 0;
+    private InternalRow lastRetractedRow;
+    private final List<InternalRow> allRetractedRows = new ArrayList<>();
 
     @Override
     public CompletableFuture<UpsertResult> upsert(InternalRow record) {
@@ -53,6 +57,19 @@ public class TestUpsertWriter implements UpsertWriter {
         lastUpsertedRow = record;
         allUpsertedRows.add(record);
         return CompletableFuture.completedFuture(new UpsertResult(new TableBucket(1L, 0), 0L));
+    }
+
+    @Override
+    public CompletableFuture<RetractResult> retract(InternalRow row) {
+        if (shouldFail) {
+            CompletableFuture<RetractResult> future = new CompletableFuture<>();
+            future.completeExceptionally(new RuntimeException("Simulated write failure"));
+            return future;
+        }
+        retractCount++;
+        lastRetractedRow = row;
+        allRetractedRows.add(row);
+        return CompletableFuture.completedFuture(new RetractResult(new TableBucket(1L, 0), 0L));
     }
 
     @Override
@@ -101,6 +118,18 @@ public class TestUpsertWriter implements UpsertWriter {
         return allDeletedRows;
     }
 
+    public int getRetractCount() {
+        return retractCount;
+    }
+
+    public InternalRow getLastRetractedRow() {
+        return lastRetractedRow;
+    }
+
+    public List<InternalRow> getAllRetractedRows() {
+        return allRetractedRows;
+    }
+
     public void setShouldFail(boolean shouldFail) {
         this.shouldFail = shouldFail;
     }
@@ -108,11 +137,14 @@ public class TestUpsertWriter implements UpsertWriter {
     public void reset() {
         upsertCount = 0;
         deleteCount = 0;
+        retractCount = 0;
         flushCalled = false;
         shouldFail = false;
         lastUpsertedRow = null;
         lastDeletedRow = null;
+        lastRetractedRow = null;
         allUpsertedRows.clear();
         allDeletedRows.clear();
+        allRetractedRows.clear();
     }
 }

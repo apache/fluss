@@ -36,6 +36,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.TestFileSystem;
+import org.apache.fluss.metadata.AggFunctions;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
@@ -2036,5 +2037,76 @@ class FlussTableITCase extends ClientToServerITCaseBase {
             assertThat(result2.getLogEndOffset()).isEqualTo(3);
             assertThat(result3.getLogEndOffset()).isEqualTo(3);
         }
+    }
+
+    @Test
+    void testRetractAppliesInverseAggregation() throws Exception {
+        TablePath tablePath = TablePath.of("test_db_1", "test_retract_sum_table");
+        createTable(tablePath, aggSumTableDescriptor(), false);
+
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
+            // accumulate 10 + 5 = 15, then retract the contribution of 5.
+            upsertWriter.upsert(row(1, 10L)).get();
+            upsertWriter.upsert(row(1, 5L)).get();
+            upsertWriter.retract(row(1, 5L)).get();
+            upsertWriter.flush();
+
+            Lookuper lookuper = table.newLookup().createLookuper();
+            InternalRow result = lookupRow(lookuper, row(1));
+            assertThat(result).isNotNull();
+            assertThat(result.getLong(1)).isEqualTo(10L);
+        }
+    }
+
+    @Test
+    void testRetractRequiresIdempotentWriter() throws Exception {
+        TablePath tablePath = TablePath.of("test_db_1", "test_retract_idempotence_table");
+        createTable(tablePath, aggSumTableDescriptor(), false);
+
+        Configuration nonIdempotentConf = new Configuration(clientConf);
+        nonIdempotentConf.set(ConfigOptions.CLIENT_WRITER_ENABLE_IDEMPOTENCE, false);
+        try (Connection nonIdempotentConn = ConnectionFactory.createConnection(nonIdempotentConf);
+                Table table = nonIdempotentConn.getTable(tablePath)) {
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
+            // retract is not idempotent, so it must be rejected when the idempotent writer
+            // is disabled: a retried duplicate would silently subtract twice.
+            assertThatThrownBy(() -> upsertWriter.retract(row(1, 10L)))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("client.writer.enable-idempotence");
+        }
+    }
+
+    @Test
+    void testRetractOnNonAggregationTableThrows() throws Exception {
+        TablePath tablePath = TablePath.of("test_db_1", "test_retract_non_agg_table");
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("total", DataTypes.BIGINT())
+                        .primaryKey("id")
+                        .build();
+        createTable(tablePath, TableDescriptor.builder().schema(schema).build(), false);
+
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
+            assertThatThrownBy(() -> upsertWriter.retract(row(1, 10L)))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("AGGREGATION merge engine");
+        }
+    }
+
+    /** An aggregation merge engine table with a SUM column, used by the retract tests. */
+    private static TableDescriptor aggSumTableDescriptor() {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("total", DataTypes.BIGINT(), AggFunctions.SUM())
+                        .primaryKey("id")
+                        .build();
+        return TableDescriptor.builder()
+                .schema(schema)
+                .property(ConfigOptions.TABLE_MERGE_ENGINE.key(), "aggregation")
+                .build();
     }
 }

@@ -28,6 +28,9 @@ import org.apache.fluss.types.DataType;
 import java.math.BigDecimal;
 
 import static org.apache.fluss.row.Decimal.fromBigDecimal;
+import static org.apache.fluss.server.kv.rowmerger.aggregate.functions.NarrowMathUtils.checkDecimalConsistency;
+import static org.apache.fluss.server.kv.rowmerger.aggregate.functions.NarrowMathUtils.multiplyExactByte;
+import static org.apache.fluss.server.kv.rowmerger.aggregate.functions.NarrowMathUtils.multiplyExactShort;
 
 /** Product aggregator - computes the product of numeric values. */
 public class FieldProductAgg extends FieldAggregator {
@@ -51,26 +54,23 @@ public class FieldProductAgg extends FieldAggregator {
             case DECIMAL:
                 Decimal mergeFieldDD = (Decimal) accumulator;
                 Decimal inFieldDD = (Decimal) inputField;
-                assert mergeFieldDD.scale() == inFieldDD.scale()
-                        : "Inconsistent scale of aggregate Decimal!";
-                assert mergeFieldDD.precision() == inFieldDD.precision()
-                        : "Inconsistent precision of aggregate Decimal!";
+                checkDecimalConsistency(mergeFieldDD, inFieldDD);
                 BigDecimal bigDecimal = mergeFieldDD.toBigDecimal();
                 BigDecimal bigDecimal1 = inFieldDD.toBigDecimal();
                 BigDecimal mul = bigDecimal.multiply(bigDecimal1);
                 product = fromBigDecimal(mul, mergeFieldDD.precision(), mergeFieldDD.scale());
                 break;
             case TINYINT:
-                product = (byte) ((byte) accumulator * (byte) inputField);
+                product = multiplyExactByte((byte) accumulator, (byte) inputField);
                 break;
             case SMALLINT:
-                product = (short) ((short) accumulator * (short) inputField);
+                product = multiplyExactShort((short) accumulator, (short) inputField);
                 break;
             case INTEGER:
-                product = (int) accumulator * (int) inputField;
+                product = Math.multiplyExact((int) accumulator, (int) inputField);
                 break;
             case BIGINT:
-                product = (long) accumulator * (long) inputField;
+                product = Math.multiplyExact((long) accumulator, (long) inputField);
                 break;
             case FLOAT:
                 product = (float) accumulator * (float) inputField;
@@ -81,9 +81,15 @@ public class FieldProductAgg extends FieldAggregator {
             default:
                 String msg =
                         String.format(
-                                "type %s not support in %s", typeRoot, this.getClass().getName());
+                                "Type %s is not supported in %s",
+                                typeRoot, this.getClass().getName());
                 throw new IllegalArgumentException(msg);
         }
         return product;
+    }
+
+    @Override
+    public boolean supportsRetract() {
+        return false;
     }
 }

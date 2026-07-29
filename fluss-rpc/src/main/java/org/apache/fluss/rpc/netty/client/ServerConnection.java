@@ -57,6 +57,7 @@ import java.net.InetSocketAddress;
 import java.nio.channels.ClosedChannelException;
 import java.util.ArrayDeque;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -127,6 +128,22 @@ final class ServerConnection {
     public boolean isReady() {
         synchronized (lock) {
             return state == ConnectionState.READY && channel != null && channel.isActive();
+        }
+    }
+
+    /**
+     * Returns the negotiated highest available version for the given api key, or empty if the api
+     * version handshake with the server has not completed yet.
+     *
+     * @throws org.apache.fluss.exception.UnsupportedVersionException if the handshake completed but
+     *     the server does not support the api key in the client's supported version range
+     */
+    public Optional<Short> negotiatedMaxVersion(ApiKeys apiKey) {
+        synchronized (lock) {
+            if (serverApiVersions == null) {
+                return Optional.empty();
+            }
+            return Optional.of(serverApiVersions.highestAvailableVersion(apiKey));
         }
     }
 

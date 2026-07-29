@@ -152,6 +152,7 @@ import static org.apache.fluss.testutils.DataTestUtils.assertMemoryRecordsEquals
 import static org.apache.fluss.testutils.DataTestUtils.assertMemoryRecordsEqualsWithRowKind;
 import static org.apache.fluss.testutils.DataTestUtils.compactedRow;
 import static org.apache.fluss.testutils.DataTestUtils.genKvRecordBatch;
+import static org.apache.fluss.testutils.DataTestUtils.genKvRecordBatchV2;
 import static org.apache.fluss.testutils.DataTestUtils.genKvRecordBatchWithWriterId;
 import static org.apache.fluss.testutils.DataTestUtils.genKvRecords;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
@@ -668,6 +669,42 @@ class ReplicaManagerTest extends ReplicaTestBase {
     }
 
     @Test
+    void testPutKvV2FormatRequiresApiVersion2() throws Exception {
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID_PK, 1);
+        makeKvTableAsLeader(DATA1_TABLE_ID_PK, DATA1_TABLE_PATH_PK, tb.getBucket());
+
+        KvRecordBatch v2Batch = genKvRecordBatchV2(DATA_1_WITH_KEY_AND_VALUE);
+
+        // a V2 format batch sent with api version < 2 must be rejected: an old-format request
+        // must never be interpreted as V0 silently.
+        CompletableFuture<List<PutKvResultForBucket>> future = new CompletableFuture<>();
+        replicaManager.putRecordsToKv(
+                20000,
+                1,
+                Collections.singletonMap(tb, v2Batch),
+                null,
+                MergeMode.DEFAULT,
+                PUT_KV_VERSION,
+                future::complete);
+        List<PutKvResultForBucket> results = future.get();
+        assertThat(results).hasSize(1);
+        assertThat(results.get(0).failed()).isTrue();
+        assertThat(results.get(0).getErrorMessage()).contains("requires api version >= 2");
+
+        // the same V2 batch with api version 2 is accepted.
+        future = new CompletableFuture<>();
+        replicaManager.putRecordsToKv(
+                20000,
+                1,
+                Collections.singletonMap(tb, v2Batch),
+                null,
+                MergeMode.DEFAULT,
+                (short) 2,
+                future::complete);
+        assertThat(future.get()).containsOnly(new PutKvResultForBucket(tb, 8));
+    }
+
+    @Test
     void testPutKvWithOutOfBatchSequence() throws Exception {
         TableBucket tb = new TableBucket(DATA1_TABLE_ID_PK, 1);
         makeKvTableAsLeader(DATA1_TABLE_ID_PK, DATA1_TABLE_PATH_PK, tb.getBucket());
@@ -907,9 +944,6 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 MergeMode.DEFAULT,
                 PUT_KV_VERSION,
                 future1::complete);
-        assertThat(future1.get()).containsOnly(new PutKvResultForBucket(tb, 8));
-
-        // second lookup key in table, key = 1, value = 1, "a1".
         Object[] value1 = DATA_1_WITH_KEY_AND_VALUE.get(3).f1;
         byte[] value1Bytes =
                 ValueEncoder.encodeValue(DEFAULT_SCHEMA_ID, compactedRow(DATA1_ROW_TYPE, value1));

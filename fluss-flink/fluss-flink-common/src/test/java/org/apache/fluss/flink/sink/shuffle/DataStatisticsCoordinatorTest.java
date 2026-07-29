@@ -18,6 +18,7 @@
 package org.apache.fluss.flink.sink.shuffle;
 
 import org.apache.fluss.flink.sink.serializer.RowDataSerializationSchema;
+import org.apache.fluss.flink.sink.serializer.SinkOperationMode;
 
 import org.apache.flink.runtime.executiongraph.ExecutionAttemptID;
 import org.apache.flink.runtime.executiongraph.ExecutionGraphID;
@@ -125,7 +126,7 @@ public class DataStatisticsCoordinatorTest {
                 new DataStatisticsOperatorFactory<RowData>(
                         DATA1_ROW_TYPE,
                         Collections.singletonList("b"),
-                        new RowDataSerializationSchema(false, false));
+                        new RowDataSerializationSchema(SinkOperationMode.upsert(false)));
         OperatorID operatorID = new OperatorID();
         DataStatisticsCoordinatorProvider provider =
                 (DataStatisticsCoordinatorProvider)

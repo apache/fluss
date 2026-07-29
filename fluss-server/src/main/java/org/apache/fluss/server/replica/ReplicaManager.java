@@ -26,6 +26,7 @@ import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.exception.FencedLeaderEpochException;
 import org.apache.fluss.exception.InvalidColumnProjectionException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
+import org.apache.fluss.exception.InvalidRecordException;
 import org.apache.fluss.exception.InvalidRequiredAcksException;
 import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.exception.LogOffsetOutOfRangeException;
@@ -1348,6 +1349,7 @@ public class ReplicaManager implements ServerReconfigurable {
                 LOG.trace("Put records to local kv tablet for table bucket {}", tb);
                 Replica replica = getReplicaOrException(tb);
                 validateClientVersionForPkTable(apiVersion, replica.getTableInfo());
+                validateKvBatchFormatForApiVersion(apiVersion, entry.getValue(), tb);
                 tableMetrics = replica.tableMetrics();
                 tableMetrics.totalPutKvRequests().inc();
                 LogAppendInfo appendInfo =
@@ -2284,6 +2286,23 @@ public class ReplicaManager implements ServerReconfigurable {
                                         + "Please upgrade your Fluss client to a newer version.",
                                 apiVersion, tableInfo.getTablePath(), kvFormatVersion.get()));
             }
+        }
+    }
+
+    /**
+     * Rejects V2 format kv batches sent with an api version that does not declare V2 support.
+     * KvRecord V2 format (per-record MutationType byte) is introduced in PUT_KV api version 2, so a
+     * V2 batch under an older api version indicates a client/protocol inconsistency and must not be
+     * interpreted as V0.
+     */
+    private void validateKvBatchFormatForApiVersion(
+            short apiVersion, KvRecordBatch kvRecords, TableBucket tb) {
+        if (kvRecords.isV2Format() && apiVersion < 2) {
+            throw new InvalidRecordException(
+                    String.format(
+                            "Received a V2 format kv record batch for bucket %s with PUT_KV api "
+                                    + "version %d, but V2 format requires api version >= 2.",
+                            tb, apiVersion));
         }
     }
 

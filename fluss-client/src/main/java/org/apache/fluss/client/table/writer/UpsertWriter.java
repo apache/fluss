@@ -39,6 +39,32 @@ public interface UpsertWriter extends TableWriter {
     CompletableFuture<UpsertResult> upsert(InternalRow record);
 
     /**
+     * Retracts a previous aggregation contribution for the given row. The row must contain the
+     * primary key fields and the old aggregation values to retract.
+     *
+     * <p>This is used when a Flink aggregate operator emits UPDATE_BEFORE (retract old value) for a
+     * key. The retract record is sent independently with {@link
+     * org.apache.fluss.record.MutationType#RETRACT} mutation type.
+     *
+     * <p><b>Retract is NOT idempotent.</b> Applying the same retract twice subtracts the
+     * contribution twice (e.g., for SUM). Correctness under retries relies on the server-side
+     * writer batch deduplication, therefore retract requires {@code
+     * client.writer.enable-idempotence} to be enabled (the default) and implementations must reject
+     * retract when it is disabled. Note that deduplication is scoped to a single writer session: if
+     * the application itself resends a retract after a restart (a new writer id), the server cannot
+     * detect the duplicate. Callers that need exactly-once semantics across restarts must handle it
+     * externally (e.g., the Flink connector restores checkpoint state via undo recovery before
+     * replaying).
+     *
+     * @param row the old aggregation value to retract (UPDATE_BEFORE).
+     * @return A {@link CompletableFuture} that returns retract result when complete normally.
+     */
+    default CompletableFuture<RetractResult> retract(InternalRow row) {
+        throw new UnsupportedOperationException(
+                "retract() is not supported by this UpsertWriter implementation.");
+    }
+
+    /**
      * Delete a certain record from the Fluss table. The input must contain the primary key fields.
      *
      * @param record the record to delete.

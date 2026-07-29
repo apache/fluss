@@ -196,4 +196,38 @@ class UndoComputerTest {
         assertThat(mockWriter.getDeleteCount()).isEqualTo(1);
         assertThat(processedKeys).hasSize(1);
     }
+
+    // ==================== Undo vs Retract Boundary ====================
+
+    /**
+     * Test that undo operations never use retract — they use upsert/delete with OVERWRITE mode.
+     *
+     * <p>This is a critical boundary test: undo recovery restores exact checkpoint state via
+     * OVERWRITE, while retract applies inverse aggregation via RETRACT. The two mechanisms are
+     * independent and must not be confused.
+     */
+    @Test
+    void testUndoNeverCallsRetract() {
+        Set<ByteArrayWrapper> processedKeys = new HashSet<>();
+
+        // Process all change types that trigger undo operations
+        undoComputer.processRecord(
+                new ScanRecord(0L, 0L, ChangeType.INSERT, row(1, "a", 10)), processedKeys);
+        processedKeys.clear(); // allow reprocessing for test
+
+        undoComputer.processRecord(
+                new ScanRecord(1L, 0L, ChangeType.UPDATE_BEFORE, row(2, "b", 20)), processedKeys);
+        processedKeys.clear();
+
+        undoComputer.processRecord(
+                new ScanRecord(2L, 0L, ChangeType.DELETE, row(3, "c", 30)), processedKeys);
+
+        // Undo should only use upsert and delete, never retract
+        assertThat(mockWriter.getDeleteCount()).isEqualTo(1); // INSERT -> delete
+        assertThat(mockWriter.getUpsertCount())
+                .isEqualTo(2); // UPDATE_BEFORE -> upsert, DELETE -> upsert
+        assertThat(mockWriter.getRetractCount())
+                .as("Undo operations must never call retract")
+                .isEqualTo(0);
+    }
 }

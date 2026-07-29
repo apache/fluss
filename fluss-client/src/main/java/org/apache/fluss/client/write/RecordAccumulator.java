@@ -34,6 +34,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.record.LogRecordBatchStatisticsCollector;
+import org.apache.fluss.record.MutationType;
 import org.apache.fluss.row.arrow.ArrowWriter;
 import org.apache.fluss.row.arrow.ArrowWriterPool;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
@@ -606,7 +607,14 @@ public final class RecordAccumulator {
                         outputView,
                         schemaId);
 
-        batch.tryAppend(writeRecord, callback);
+        WriteBatch.AppendResult appendResult2 = batch.tryAppend(writeRecord, callback);
+        if (appendResult2 != WriteBatch.AppendResult.APPENDED) {
+            batch.close();
+            throw new FlussRuntimeException(
+                    "Failed to append record to a freshly created batch (result="
+                            + appendResult2
+                            + "). The record may be too large for the configured batch size.");
+        }
         deque.addLast(batch);
         incomplete.add(batch);
         return new RecordAppendResult(deque.size() > 1 || batch.isClosed(), true, false);
@@ -634,6 +642,12 @@ public final class RecordAccumulator {
                         outputView,
                         writeRecord.getTargetColumns(),
                         writeRecord.getMergeMode(),
+                        // Only RETRACT records require the V2 record format. Upsert/delete
+                        // records always start V0 batches (even on aggregation tables) to stay
+                        // wire-compatible with servers that only support PUT_KV version < 2.
+                        // A RETRACT record hitting a V0 batch gets FORMAT_MISMATCH and re-enters
+                        // here to create a V2 batch; subsequent upserts can join that V2 batch.
+                        writeRecord.getMutationType() == MutationType.RETRACT,
                         clock.milliseconds());
 
             case ARROW_LOG:
@@ -693,17 +707,17 @@ public final class RecordAccumulator {
         }
         WriteBatch last = deque.peekLast();
         if (last != null) {
-            boolean success = last.tryAppend(writeRecord, callback);
-            if (!success) {
-                // TODO For ArrowLogWriteBatch, close here is a heavy operation (including build
-                // logic), we need to avoid do that in an lock which locked dq. However, why we not
-                // remove build logic out of close for ArrowLogWriteBatch is that we want to release
-                // non-heap memory hold by arrowWriter as soon as possible to avoid OOM. Maybe we
-                // need to introduce a more reasonable way to solve these two problems.
-                last.close();
-            } else {
+            WriteBatch.AppendResult result = last.tryAppend(writeRecord, callback);
+            if (result == WriteBatch.AppendResult.APPENDED) {
                 return new RecordAppendResult(deque.size() > 1 || last.isClosed(), false, false);
             }
+            // BATCH_FULL or FORMAT_MISMATCH — close the current batch so a new one is created.
+            // TODO For ArrowLogWriteBatch, close here is a heavy operation (including build
+            // logic), we need to avoid do that in an lock which locked dq. However, why we not
+            // remove build logic out of close for ArrowLogWriteBatch is that we want to release
+            // non-heap memory hold by arrowWriter as soon as possible to avoid OOM. Maybe we
+            // need to introduce a more reasonable way to solve these two problems.
+            last.close();
         }
         return null;
     }

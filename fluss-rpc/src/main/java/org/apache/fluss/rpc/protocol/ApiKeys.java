@@ -48,7 +48,9 @@ public enum ApiKeys {
     // Version 0: Uses lake's encoder for primary key encoding (legacy behavior).
     // Version 1: Uses CompactedKeyEncoder for primary key encoding when bucket key differs from
     //            primary key, enabling prefix lookup support.
-    PUT_KV(1016, 0, 1, PUBLIC),
+    // Version 2: Adds per-record MutationType byte to KvRecord format, enabling
+    //            UPSERT/DELETE/RETRACT identification at the record level.
+    PUT_KV(1016, 0, 2, PUBLIC),
 
     // Version 0: Uses lake's encoder for primary key encoding (legacy behavior).
     // Version 1: Uses CompactedKeyEncoder for primary key encoding when bucket key differs from

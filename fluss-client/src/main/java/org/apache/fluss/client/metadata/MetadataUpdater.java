@@ -39,6 +39,7 @@ import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.rpc.protocol.ApiKeys;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -161,6 +162,28 @@ public class MetadataUpdater {
             return GatewayClientProxy.createGatewayProxy(
                     () -> serverNode, rpcClient, TabletServerGateway.class);
         }
+    }
+
+    /**
+     * Begin connecting to the given tablet server if not connected yet, and return true if the
+     * connection is ready (api version handshake completed).
+     */
+    public boolean tryConnect(int serverId) {
+        ServerNode serverNode = getTabletServer(serverId);
+        return serverNode != null && rpcClient.connect(serverNode);
+    }
+
+    /**
+     * Returns the negotiated highest available version for the given api key on the connection to
+     * the given tablet server, or empty if the server is unknown or the api version handshake has
+     * not completed yet.
+     */
+    public Optional<Short> negotiatedMaxApiVersion(int serverId, ApiKeys apiKey) {
+        ServerNode serverNode = getTabletServer(serverId);
+        if (serverNode == null) {
+            return Optional.empty();
+        }
+        return rpcClient.negotiatedMaxApiVersion(serverNode.uid(), apiKey);
     }
 
     public void checkAndUpdateTableMetadata(Set<TablePath> tablePaths) {
