@@ -1496,6 +1496,31 @@ impl ReadContext {
             self.projection.is_none(),
             "target schema alignment is not supported with projection"
         );
+        debug_assert_eq!(
+            schema_alignment.len(),
+            target_schema.fields().len(),
+            "schema alignment length must match target schema"
+        );
+        debug_assert!(
+            schema_alignment.iter().all(|source_index| {
+                *source_index == UNEXIST_MAPPING
+                    || usize::try_from(*source_index)
+                        .is_ok_and(|index| index < self.full_schema.fields().len())
+            }),
+            "schema alignment contains an invalid source index"
+        );
+        debug_assert!(
+            target_schema
+                .fields()
+                .iter()
+                .zip(schema_alignment.iter())
+                .all(|(target_field, source_index)| {
+                    *source_index == UNEXIST_MAPPING
+                        || self.full_schema.field(*source_index as usize).data_type()
+                            == target_field.data_type()
+                }),
+            "schema alignment source and target types must match"
+        );
         self.target_schema = target_schema;
         self.schema_alignment = Some(schema_alignment);
         self
@@ -1719,17 +1744,6 @@ fn align_record_batch_to_schema(
     target_schema: SchemaRef,
     schema_alignment: &[i32],
 ) -> Result<RecordBatch> {
-    if schema_alignment.len() != target_schema.fields().len() {
-        return Err(Error::UnexpectedError {
-            message: format!(
-                "Schema alignment has {} indexes for {} target fields",
-                schema_alignment.len(),
-                target_schema.fields().len()
-            ),
-            source: None,
-        });
-    }
-
     let row_count = record_batch.num_rows();
     let mut columns = Vec::with_capacity(target_schema.fields().len());
 
@@ -1737,33 +1751,7 @@ fn align_record_batch_to_schema(
         if *source_index == UNEXIST_MAPPING {
             columns.push(new_null_array(target_field.data_type(), row_count));
         } else {
-            let index = usize::try_from(*source_index).map_err(|_| Error::UnexpectedError {
-                message: format!("Schema alignment contains invalid source index {source_index}"),
-                source: None,
-            })?;
-            let column =
-                record_batch
-                    .columns()
-                    .get(index)
-                    .ok_or_else(|| Error::UnexpectedError {
-                        message: format!(
-                            "Schema alignment source index {index} is out of bounds for {} columns",
-                            record_batch.num_columns()
-                        ),
-                        source: None,
-                    })?;
-            if column.data_type() != target_field.data_type() {
-                return Err(Error::UnexpectedError {
-                    message: format!(
-                        "Cannot align column '{}' from type {:?} to {:?}",
-                        target_field.name(),
-                        column.data_type(),
-                        target_field.data_type()
-                    ),
-                    source: None,
-                });
-            }
-            columns.push(column.clone());
+            columns.push(record_batch.column(*source_index as usize).clone());
         }
     }
 
@@ -1913,6 +1901,30 @@ mod tests {
     use crate::metadata::{DataField, DataTypes, PhysicalTablePath, RowType, TablePath};
     use crate::row::{DataGetters, GenericRow};
     use crate::test_utils::build_table_info;
+
+    fn single_int_read_context() -> (ReadContext, SchemaRef) {
+        let row_type = Arc::new(RowType::new(vec![DataField::new(
+            "id",
+            DataTypes::int(),
+            None,
+        )]));
+        let schema = to_arrow_schema(&row_type).expect("arrow schema");
+        (ReadContext::new(schema.clone(), row_type, false), schema)
+    }
+
+    #[test]
+    #[should_panic(expected = "schema alignment length must match target schema")]
+    fn target_schema_alignment_rejects_length_mismatch() {
+        let (read_context, target_schema) = single_int_read_context();
+        read_context.with_target_schema_alignment(target_schema, Arc::from([]));
+    }
+
+    #[test]
+    #[should_panic(expected = "schema alignment contains an invalid source index")]
+    fn target_schema_alignment_rejects_invalid_source_index() {
+        let (read_context, target_schema) = single_int_read_context();
+        read_context.with_target_schema_alignment(target_schema, Arc::from([-2]));
+    }
 
     #[test]
     fn test_to_array_type() {
