@@ -17,6 +17,8 @@
 
 package org.apache.fluss.remote;
 
+import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 
@@ -38,13 +40,17 @@ public class RemoteLogManifest {
     private final TableBucket tableBucket;
     private final List<RemoteLogSegment> remoteLogSegmentList;
 
+    private final FsPath remoteLogDir;
+
     public RemoteLogManifest(
             PhysicalTablePath physicalTablePath,
             TableBucket tableBucket,
-            List<RemoteLogSegment> remoteLogSegmentList) {
+            List<RemoteLogSegment> remoteLogSegmentList,
+            FsPath remoteLogDir) {
         this.physicalTablePath = physicalTablePath;
         this.tableBucket = tableBucket;
         this.remoteLogSegmentList = Collections.unmodifiableList(remoteLogSegmentList);
+        this.remoteLogDir = remoteLogDir;
 
         // sanity check
         for (RemoteLogSegment remoteLogSegment : remoteLogSegmentList) {
@@ -73,7 +79,7 @@ public class RemoteLogManifest {
         }
         newSegments.addAll(addedSegments);
         newSegments.sort(Comparator.comparingLong(RemoteLogSegment::remoteLogStartOffset));
-        return new RemoteLogManifest(physicalTablePath, tableBucket, newSegments);
+        return new RemoteLogManifest(physicalTablePath, tableBucket, newSegments, remoteLogDir);
     }
 
     public long getRemoteLogStartOffset() {
@@ -120,8 +126,34 @@ public class RemoteLogManifest {
         return tableBucket;
     }
 
+    public FsPath getRemoteLogDir() {
+        return remoteLogDir;
+    }
+
+    @VisibleForTesting
     public List<RemoteLogSegment> getRemoteLogSegmentList() {
         return remoteLogSegmentList;
+    }
+
+    public RemoteLogManifest newManifest(FsPath remoteLogDir) {
+        List<RemoteLogSegment> newRemoteLogSegments = new ArrayList<>(remoteLogSegmentList.size());
+        for (RemoteLogSegment remoteLogSegment : remoteLogSegmentList) {
+            newRemoteLogSegments.add(
+                    RemoteLogSegment.Builder.builder()
+                            .physicalTablePath(remoteLogSegment.physicalTablePath())
+                            .tableBucket(remoteLogSegment.tableBucket())
+                            .remoteLogSegmentId(remoteLogSegment.remoteLogSegmentId())
+                            .remoteLogStartOffset(remoteLogSegment.remoteLogStartOffset())
+                            .remoteLogEndOffset(remoteLogSegment.remoteLogEndOffset())
+                            .maxTimestamp(remoteLogSegment.maxTimestamp())
+                            .segmentSizeInBytes(remoteLogSegment.segmentSizeInBytes())
+                            // We set remoteLogDir manually here, so subsequent usage will be safe
+                            // to directly use it.
+                            .remoteLogDir(remoteLogDir)
+                            .build());
+        }
+        return new RemoteLogManifest(
+                physicalTablePath, tableBucket, newRemoteLogSegments, remoteLogDir);
     }
 
     @Override
