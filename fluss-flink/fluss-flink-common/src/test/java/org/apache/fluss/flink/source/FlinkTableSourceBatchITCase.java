@@ -275,7 +275,7 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
             String partition =
                     waitUntilPartitions(
                                     FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(),
-                                    TablePath.of(DEFAULT_DB, tableName))
+                                    TablePath.of(databaseName, tableName))
                             .values()
                             .stream()
                             .sorted()
@@ -312,7 +312,7 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
             Collection<String> partitions =
                     waitUntilPartitions(
                                     FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(),
-                                    TablePath.of(DEFAULT_DB, tableName))
+                                    TablePath.of(databaseName, tableName))
                             .values();
             expected =
                     partitions.stream()
@@ -421,7 +421,7 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
                                 + " with ('bucket.num' = '4')",
                         tableName));
 
-        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+        TablePath tablePath = TablePath.of(databaseName, tableName);
         try (Table table = conn.getTable(tablePath)) {
             UpsertWriter upsertWriter = table.newUpsert().createWriter();
             upsertWriter.upsert(row(1, "address1", "name1"));
