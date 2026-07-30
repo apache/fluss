@@ -1380,8 +1380,15 @@ mod tests {
         row.set_field(0, 1_i32);
         row.set_field(1, "alice");
 
-        let batch = fetch_fixed_schema_batch(source_table_info, &target_table_info, &row, false)?;
-        assert_eq!(batch.column(1).null_count(), 1);
+        for is_remote in [false, true] {
+            let batch = fetch_fixed_schema_batch(
+                Arc::clone(&source_table_info),
+                &target_table_info,
+                &row,
+                is_remote,
+            )?;
+            assert_eq!(batch.column(1).null_count(), 1);
+        }
         Ok(())
     }
 
