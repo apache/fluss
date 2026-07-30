@@ -96,6 +96,9 @@ impl ReadContextResolver {
     }
 
     pub fn with_fixed_schema(mut self, target_fluss_schema: &Schema) -> Self {
+        if self.projected_fields.is_some() {
+            return self;
+        }
         self.fixed_target = {
             let guard = self.contexts.read();
             guard
@@ -221,5 +224,44 @@ impl ReadContextResolver {
     #[allow(dead_code)]
     pub fn projected_fields(&self) -> Option<&[usize]> {
         self.projected_fields.as_deref()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ReadContextResolver;
+    use crate::error::Result;
+    use crate::metadata::{DataTypes, Schema};
+    use crate::record::{ReadContext, to_arrow_schema};
+    use std::sync::Arc;
+
+    #[test]
+    fn fixed_schema_does_not_capture_target_with_projection() -> Result<()> {
+        let schema = Schema::builder()
+            .column("id", DataTypes::int())
+            .column("name", DataTypes::string())
+            .build()?;
+        let arrow_schema = to_arrow_schema(schema.row_type())?;
+        let projected_fields = vec![0];
+        let projected_row_type = Arc::new(schema.row_type().project(&projected_fields)?);
+        let local_context = Arc::new(ReadContext::with_projection_pushdown(
+            arrow_schema.clone(),
+            Arc::clone(&projected_row_type),
+            projected_fields.clone(),
+            false,
+        )?);
+        let remote_context = Arc::new(ReadContext::with_projection_pushdown(
+            arrow_schema,
+            projected_row_type,
+            projected_fields.clone(),
+            true,
+        )?);
+
+        let resolver =
+            ReadContextResolver::new(1, local_context, remote_context, Some(projected_fields))
+                .with_fixed_schema(&schema);
+
+        assert!(resolver.fixed_target.is_none());
+        Ok(())
     }
 }
