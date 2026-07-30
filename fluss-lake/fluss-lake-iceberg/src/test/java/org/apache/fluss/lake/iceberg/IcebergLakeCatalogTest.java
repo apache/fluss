@@ -17,6 +17,7 @@
 
 package org.apache.fluss.lake.iceberg;
 
+import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidAlterTableException;
@@ -24,6 +25,9 @@ import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.lake.lakestorage.TestingLakeCatalogContext;
+import org.apache.fluss.metadata.DateTruncPartitionTransform;
+import org.apache.fluss.metadata.PartitionExpression;
+import org.apache.fluss.metadata.PartitionKey;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -36,6 +40,7 @@ import org.apache.iceberg.DataFiles;
 import org.apache.iceberg.FileFormat;
 import org.apache.iceberg.PartitionField;
 import org.apache.iceberg.PartitionSpec;
+import org.apache.iceberg.PartitionSpecParser;
 import org.apache.iceberg.RowLevelOperationMode;
 import org.apache.iceberg.SortDirection;
 import org.apache.iceberg.SortField;
@@ -52,15 +57,18 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.File;
 import java.time.Duration;
+import java.time.ZoneId;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -126,6 +134,226 @@ class IcebergLakeCatalogTest {
         assertThat(created.properties()).containsEntry("fluss.table.datalake.freshness", "30s");
         assertThat(created.properties())
                 .doesNotContainKeys("iceberg.commit.retry.num-retries", "table.datalake.freshness");
+    }
+
+    @Test
+    void testCreateTableWithImplicitPartition() {
+        TablePath tablePath = TablePath.of("test_db", "implicit_partition_table");
+        flussIcebergCatalog.createTable(
+                tablePath, implicitPartitionDescriptor(), new TestingLakeCatalogContext());
+
+        Table table =
+                flussIcebergCatalog
+                        .getIcebergCatalog()
+                        .loadTable(TableIdentifier.of("test_db", "implicit_partition_table"));
+        assertThat(table.schema().findField("event_day")).isNull();
+        assertThat(table.spec().fields()).hasSize(2);
+        PartitionField implicitField = table.spec().fields().get(0);
+        assertThat(implicitField.name()).isEqualTo("event_day");
+        assertThat(implicitField.transform().toString()).isEqualTo("day");
+        assertThat(table.schema().findColumnName(implicitField.sourceId())).isEqualTo("event_time");
+        assertThat(table.spec().fields().get(1).name()).isEqualTo(BUCKET_COLUMN_NAME);
+    }
+
+    @ParameterizedTest
+    @EnumSource(
+            value = AutoPartitionTimeUnit.class,
+            names = {"HOUR", "DAY", "MONTH", "YEAR"})
+    void testCreateTableWithEachSupportedImplicitTimeTransform(AutoPartitionTimeUnit timeUnit) {
+        Schema schema =
+                Schema.newBuilder().column("event_time", DataTypes.TIMESTAMP().copy(false)).build();
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .partitionedByKeys(
+                                PartitionKey.expression(
+                                        PartitionExpression.of(
+                                                "business_time",
+                                                DateTruncPartitionTransform.of(
+                                                        "event_time", timeUnit))))
+                        .distributedBy(1)
+                        .build();
+        String tableName = "implicit_" + timeUnit.name().toLowerCase(Locale.ROOT);
+        TablePath tablePath = TablePath.of("test_db", tableName);
+
+        flussIcebergCatalog.createTable(tablePath, descriptor, new TestingLakeCatalogContext());
+
+        Table table =
+                flussIcebergCatalog
+                        .getIcebergCatalog()
+                        .loadTable(TableIdentifier.of("test_db", tableName));
+        assertThat(table.spec().fields().get(0).transform().toString())
+                .isEqualTo(timeUnit.name().toLowerCase(Locale.ROOT));
+        assertThat(table.spec().fields().get(0).name()).isEqualTo("business_time");
+        assertThat(table.schema().findColumnName(table.spec().fields().get(0).sourceId()))
+                .isEqualTo("event_time");
+    }
+
+    @Test
+    void testImplicitIcebergPartitionFieldUsesVirtualPartitionKey() {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("event_time", DataTypes.TIMESTAMP().copy(false))
+                        .column("event_time_day", DataTypes.STRING())
+                        .build();
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .partitionedByKeys(
+                                PartitionKey.expression(
+                                        PartitionExpression.of(
+                                                "business_day",
+                                                DateTruncPartitionTransform.of(
+                                                        "event_time", AutoPartitionTimeUnit.DAY))))
+                        .distributedBy(1)
+                        .build();
+        TablePath tablePath = TablePath.of("test_db", "implicit_field_name_collision");
+
+        flussIcebergCatalog.createTable(tablePath, descriptor, new TestingLakeCatalogContext());
+
+        Table table =
+                flussIcebergCatalog
+                        .getIcebergCatalog()
+                        .loadTable(TableIdentifier.of("test_db", "implicit_field_name_collision"));
+        assertThat(table.schema().findField("event_time_day")).isNotNull();
+        assertThat(table.spec().fields().get(0).name()).isEqualTo("business_day");
+    }
+
+    @Test
+    void testCreateTableKeepsMixedPhysicalAndImplicitPartitionOrder() {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("region", DataTypes.STRING().copy(false))
+                        .column("event_time", DataTypes.TIMESTAMP().copy(false))
+                        .build();
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .partitionedByKeys(
+                                PartitionKey.column("region"),
+                                PartitionKey.expression(
+                                        PartitionExpression.of(
+                                                "business_day",
+                                                DateTruncPartitionTransform.of(
+                                                        "event_time", AutoPartitionTimeUnit.DAY))))
+                        .distributedBy(1)
+                        .build();
+        TablePath tablePath = TablePath.of("test_db", "mixed_implicit_partition");
+
+        flussIcebergCatalog.createTable(tablePath, descriptor, new TestingLakeCatalogContext());
+
+        Table table =
+                flussIcebergCatalog
+                        .getIcebergCatalog()
+                        .loadTable(TableIdentifier.of("test_db", "mixed_implicit_partition"));
+        assertThat(table.spec().fields()).hasSize(3);
+        assertThat(table.spec().fields().get(0).name()).isEqualTo("region");
+        assertThat(table.spec().fields().get(1).name()).isEqualTo("business_day");
+        assertThat(table.spec().fields().get(1).transform().toString()).isEqualTo("day");
+        assertThat(table.spec().fields().get(2).name()).isEqualTo(BUCKET_COLUMN_NAME);
+    }
+
+    @Test
+    void testCreatePrimaryKeyTableWithImplicitPartition() {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT().copy(false))
+                        .column("event_time", DataTypes.TIMESTAMP().copy(false))
+                        .column("payload", DataTypes.STRING())
+                        .primaryKey("id", "event_time")
+                        .build();
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .partitionedByKeys(
+                                PartitionKey.expression(
+                                        PartitionExpression.of(
+                                                "business_day",
+                                                DateTruncPartitionTransform.of(
+                                                        "event_time", AutoPartitionTimeUnit.DAY))))
+                        .distributedBy(2, "id")
+                        .build();
+        TablePath tablePath = TablePath.of("test_db", "implicit_partition_pk");
+
+        flussIcebergCatalog.createTable(tablePath, descriptor, new TestingLakeCatalogContext());
+
+        Table table =
+                flussIcebergCatalog
+                        .getIcebergCatalog()
+                        .loadTable(TableIdentifier.of("test_db", "implicit_partition_pk"));
+        assertThat(table.schema().identifierFieldIds())
+                .containsExactlyInAnyOrder(
+                        table.schema().findField("id").fieldId(),
+                        table.schema().findField("event_time").fieldId());
+        assertThat(table.spec().fields().get(0).transform().toString()).isEqualTo("day");
+        assertThat(table.spec().fields().get(1).transform().toString()).isEqualTo("bucket[2]");
+    }
+
+    @Test
+    void testRejectUnsupportedImplicitPartitionForIceberg() {
+        Schema schema =
+                Schema.newBuilder().column("event_time", DataTypes.TIMESTAMP().copy(false)).build();
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .partitionedByKeys(
+                                PartitionKey.expression(
+                                        PartitionExpression.of(
+                                                "event_quarter",
+                                                DateTruncPartitionTransform.of(
+                                                        "event_time",
+                                                        AutoPartitionTimeUnit.QUARTER))))
+                        .distributedBy(1)
+                        .build();
+
+        assertThatThrownBy(
+                        () ->
+                                flussIcebergCatalog.validateTable(
+                                        descriptor, new TestingLakeCatalogContext()))
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessage(
+                        "Iceberg does not have an equivalent native QUARTER partition transform.");
+    }
+
+    @Test
+    void testTimestampLtzImplicitPartitionRequiresUtc() {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("event_time", DataTypes.TIMESTAMP_LTZ().copy(false))
+                        .build();
+
+        assertThatThrownBy(
+                        () ->
+                                DateTruncPartitionTransform.of(
+                                        "event_time",
+                                        AutoPartitionTimeUnit.DAY,
+                                        ZoneId.of("Asia/Shanghai")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("time zone must be UTC");
+
+        TableDescriptor utcDescriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .partitionedByKeys(
+                                PartitionKey.expression(
+                                        PartitionExpression.of(
+                                                "event_day",
+                                                DateTruncPartitionTransform.of(
+                                                        "event_time",
+                                                        AutoPartitionTimeUnit.DAY,
+                                                        ZoneId.of("UTC")))))
+                        .distributedBy(1)
+                        .build();
+        TablePath tablePath = TablePath.of("test_db", "implicit_ltz_partition_table");
+        flussIcebergCatalog.createTable(tablePath, utcDescriptor, new TestingLakeCatalogContext());
+
+        Table table =
+                flussIcebergCatalog
+                        .getIcebergCatalog()
+                        .loadTable(TableIdentifier.of("test_db", "implicit_ltz_partition_table"));
+        PartitionField implicitField = table.spec().fields().get(0);
+        assertThat(implicitField.transform().toString()).isEqualTo("day");
+        assertThat(table.schema().findColumnName(implicitField.sourceId())).isEqualTo("event_time");
     }
 
     @Test
@@ -1687,6 +1915,56 @@ class IcebergLakeCatalogTest {
                 .isFalse();
     }
 
+    @Test
+    void testTimeTransformCompatibleAfterMetadataRoundTrip() {
+        org.apache.iceberg.Schema schema =
+                new org.apache.iceberg.Schema(
+                        Types.NestedField.required(
+                                1, "event_time", Types.TimestampType.withoutZone()));
+        PartitionSpec expectedSpec =
+                PartitionSpec.builderFor(schema).day("event_time", "event_day").build();
+        PartitionSpec reloadedSpec =
+                PartitionSpecParser.fromJson(schema, PartitionSpecParser.toJson(expectedSpec));
+
+        assertThat(reloadedSpec.fields().get(0).transform())
+                .isNotEqualTo(expectedSpec.fields().get(0).transform());
+        assertThat(reloadedSpec.fields().get(0).transform().toString())
+                .isEqualTo(expectedSpec.fields().get(0).transform().toString());
+        assertThat(
+                        flussIcebergCatalog.isIcebergPartitionSpecCompatible(
+                                reloadedSpec, schema, expectedSpec, schema))
+                .isTrue();
+    }
+
+    @Test
+    void testImplicitPartitionSpecCompatibleWithNativeIcebergFieldIds() {
+        org.apache.iceberg.Schema nativeSchema =
+                new org.apache.iceberg.Schema(
+                        Types.NestedField.required(1, "id", Types.IntegerType.get()),
+                        Types.NestedField.required(
+                                2, "event_time", Types.TimestampType.withoutZone()));
+        org.apache.iceberg.Schema flussSchema =
+                new org.apache.iceberg.Schema(
+                        Types.NestedField.required(0, "id", Types.IntegerType.get()),
+                        Types.NestedField.required(
+                                1, "event_time", Types.TimestampType.withoutZone()));
+        PartitionSpec nativeSpec =
+                PartitionSpec.builderFor(nativeSchema)
+                        .day("event_time", "event_day")
+                        .bucket("id", 1, "id_bucket")
+                        .build();
+        PartitionSpec flussSpec =
+                PartitionSpec.builderFor(flussSchema)
+                        .day("event_time", "__fluss_implicit_partition_0")
+                        .bucket("id", 1, "id_bucket")
+                        .build();
+
+        assertThat(
+                        flussIcebergCatalog.isIcebergPartitionSpecCompatible(
+                                nativeSpec, nativeSchema, flussSpec, flussSchema))
+                .isTrue();
+    }
+
     /** White-box tests for {@link IcebergLakeCatalog#isIcebergSortOrderCompatible}. */
     @Test
     void testIsIcebergSortOrderCompatible() {
@@ -1783,5 +2061,23 @@ class IcebergLakeCatalogTest {
 
     private TableDescriptor getTableDescriptor(Schema schema) {
         return TableDescriptor.builder().schema(schema).distributedBy(3).build();
+    }
+
+    private static TableDescriptor implicitPartitionDescriptor() {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("event_time", DataTypes.TIMESTAMP().copy(false))
+                        .column("payload", DataTypes.STRING())
+                        .build();
+        return TableDescriptor.builder()
+                .schema(schema)
+                .partitionedByKeys(
+                        PartitionKey.expression(
+                                PartitionExpression.of(
+                                        "event_day",
+                                        DateTruncPartitionTransform.of(
+                                                "event_time", AutoPartitionTimeUnit.DAY))))
+                .distributedBy(1)
+                .build();
     }
 }

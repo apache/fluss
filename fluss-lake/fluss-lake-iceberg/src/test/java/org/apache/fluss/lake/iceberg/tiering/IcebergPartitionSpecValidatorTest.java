@@ -17,7 +17,13 @@
 
 package org.apache.fluss.lake.iceberg.tiering;
 
+import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.exception.InvalidTableException;
+import org.apache.fluss.lake.iceberg.IcebergSchemaUtils;
+import org.apache.fluss.lake.iceberg.utils.IcebergPartitionSpecUtils;
+import org.apache.fluss.metadata.DateTruncPartitionTransform;
+import org.apache.fluss.metadata.PartitionExpression;
+import org.apache.fluss.metadata.PartitionKey;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
@@ -25,6 +31,7 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.types.DataTypes;
 
 import org.apache.iceberg.PartitionSpec;
+import org.apache.iceberg.PartitionSpecParser;
 import org.apache.iceberg.Table;
 import org.apache.iceberg.types.Types;
 import org.junit.jupiter.api.Test;
@@ -62,6 +69,25 @@ class IcebergPartitionSpecValidatorTest {
                         () ->
                                 IcebergPartitionSpecValidator.validate(
                                         mockTable(icebergSpec), createTableInfo()))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void testMatchingTimeTransformAfterMetadataRoundTrip() {
+        TableInfo tableInfo = createTimePartitionedTableInfo();
+        TableDescriptor tableDescriptor = tableInfo.toTableDescriptor();
+        org.apache.iceberg.Schema icebergSchema =
+                IcebergSchemaUtils.createIcebergSchema(tableDescriptor, tableInfo.hasPrimaryKey());
+        PartitionSpec expectedSpec =
+                IcebergPartitionSpecUtils.createPartitionSpec(tableDescriptor, icebergSchema);
+        PartitionSpec reloadedSpec =
+                PartitionSpecParser.fromJson(
+                        icebergSchema, PartitionSpecParser.toJson(expectedSpec));
+
+        assertThatCode(
+                        () ->
+                                IcebergPartitionSpecValidator.validate(
+                                        mockTable(icebergSchema, reloadedSpec), tableInfo))
                 .doesNotThrowAnyException();
     }
 
@@ -219,6 +245,26 @@ class IcebergPartitionSpecValidatorTest {
                         .schema(flussSchema)
                         .distributedBy(BUCKET_NUM)
                         .partitionedBy("c3")
+                        .build();
+        return TableInfo.of(TABLE_PATH, 0, 1, tableDescriptor, DEFAULT_REMOTE_DATA_DIR, 1L, 1L);
+    }
+
+    private static TableInfo createTimePartitionedTableInfo() {
+        Schema flussSchema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("event_time", DataTypes.TIMESTAMP().copy(false))
+                        .build();
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(flussSchema)
+                        .distributedBy(BUCKET_NUM)
+                        .partitionedByKeys(
+                                PartitionKey.expression(
+                                        PartitionExpression.of(
+                                                "event_time_day",
+                                                DateTruncPartitionTransform.of(
+                                                        "event_time", AutoPartitionTimeUnit.DAY))))
                         .build();
         return TableInfo.of(TABLE_PATH, 0, 1, tableDescriptor, DEFAULT_REMOTE_DATA_DIR, 1L, 1L);
     }

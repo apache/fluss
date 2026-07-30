@@ -21,14 +21,21 @@ import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidPartitionException;
+import org.apache.fluss.metadata.DateTruncPartitionTransform;
+import org.apache.fluss.metadata.PartitionExpression;
+import org.apache.fluss.metadata.PartitionKey;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
+import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.row.BinaryString;
+import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.DataTypeRoot;
+import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.types.RowType;
 
 import org.junit.jupiter.api.Test;
 
@@ -390,6 +397,41 @@ class PartitionUtilsTest {
                 .isInstanceOf(InvalidPartitionException.class)
                 .hasMessageContaining(outOfDate.toString())
                 .hasMessageContaining(earliestRetained.toString());
+    }
+
+    @Test
+    void testImplicitPartitionRowTypeUsesVirtualPartitionKeyAsString() {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("region", DataTypes.STRING().copy(false))
+                        .column("event_time", DataTypes.TIMESTAMP().copy(false))
+                        .column("payload", DataTypes.STRING())
+                        .build();
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .partitionedByKeys(
+                                PartitionKey.column("region"),
+                                PartitionKey.expression(
+                                        PartitionExpression.of(
+                                                "event_day",
+                                                DateTruncPartitionTransform.of(
+                                                        "event_time", AutoPartitionTimeUnit.DAY))))
+                        .distributedBy(1)
+                        .build();
+        TableInfo tableInfo =
+                TableInfo.of(DATA1_TABLE_PATH, 1L, 1, descriptor, DEFAULT_REMOTE_DATA_DIR, 1L, 1L);
+
+        RowType partitionRowType = PartitionUtils.partitionRowType(tableInfo);
+        GenericRow partitionRow =
+                PartitionUtils.toPartitionRow(Arrays.asList("us", "20240315"), partitionRowType);
+
+        assertThat(partitionRowType.getFieldNames()).containsExactly("region", "event_day");
+        assertThat(partitionRowType.getTypeAt(0).getTypeRoot()).isEqualTo(DataTypeRoot.STRING);
+        assertThat(partitionRowType.getTypeAt(1).getTypeRoot()).isEqualTo(DataTypeRoot.STRING);
+        assertThat(partitionRowType.getTypeAt(1).isNullable()).isFalse();
+        assertThat(partitionRow.getString(0)).isEqualTo(BinaryString.fromString("us"));
+        assertThat(partitionRow.getString(1)).isEqualTo(BinaryString.fromString("20240315"));
     }
 
     @Test

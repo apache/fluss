@@ -18,11 +18,13 @@
 package org.apache.fluss.server.zk.data;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.metadata.PartitionExpression;
 import org.apache.fluss.metadata.TableDescriptor.TableDistribution;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import org.apache.fluss.utils.json.JsonDeserializer;
 import org.apache.fluss.utils.json.JsonSerializer;
+import org.apache.fluss.utils.json.PartitionExpressionJsonSerde;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -71,6 +73,13 @@ public class TableRegistrationJsonSerde
             generator.writeArrayFieldStart(PARTITION_KEY_NAME);
             for (String partitionKey : tableReg.partitionKeys) {
                 generator.writeString(partitionKey);
+            }
+            generator.writeEndArray();
+        }
+        if (!tableReg.partitionExpressions.isEmpty()) {
+            generator.writeArrayFieldStart(PartitionExpressionJsonSerde.PARTITION_EXPRESSIONS_NAME);
+            for (PartitionExpression partitionExpression : tableReg.partitionExpressions) {
+                PartitionExpressionJsonSerde.INSTANCE.serialize(partitionExpression, generator);
             }
             generator.writeEndArray();
         }
@@ -133,6 +142,17 @@ public class TableRegistrationJsonSerde
             }
         }
 
+        List<PartitionExpression> partitionExpressions = new ArrayList<>();
+        if (node.has(PartitionExpressionJsonSerde.PARTITION_EXPRESSIONS_NAME)) {
+            Iterator<JsonNode> partitionExpressionJsons =
+                    node.get(PartitionExpressionJsonSerde.PARTITION_EXPRESSIONS_NAME).elements();
+            while (partitionExpressionJsons.hasNext()) {
+                partitionExpressions.add(
+                        PartitionExpressionJsonSerde.INSTANCE.deserializeResolved(
+                                partitionExpressionJsons.next()));
+            }
+        }
+
         List<String> bucketKeys = new ArrayList<>();
         if (node.has(BUCKET_KEY_NAME)) {
             Iterator<JsonNode> bucketJsons = node.get(BUCKET_KEY_NAME).elements();
@@ -161,6 +181,7 @@ public class TableRegistrationJsonSerde
                 tableId,
                 comment,
                 partitionKeys,
+                partitionExpressions,
                 distribution,
                 properties,
                 customProperties,

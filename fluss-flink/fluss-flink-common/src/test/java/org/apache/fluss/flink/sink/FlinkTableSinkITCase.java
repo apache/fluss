@@ -19,16 +19,24 @@ package org.apache.fluss.flink.sink;
 
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
+import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.scanner.log.ScanRecords;
+import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.sink.shuffle.DistributionMode;
+import org.apache.fluss.metadata.DateTruncPartitionTransform;
+import org.apache.fluss.metadata.PartitionExpression;
+import org.apache.fluss.metadata.PartitionKey;
+import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.apache.flink.api.common.RuntimeExecutionMode;
@@ -58,6 +66,8 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -167,6 +177,47 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                         "+I[3, 3503, coco]", "+I[4, 3504, jerry]",
                         "+I[5, 3505, piggy]", "+I[6, 3506, stave]");
         assertResultsIgnoreOrder(rowIter, expectedRows, true);
+    }
+
+    @Test
+    void testReadAndWriteImplicitPartitionTableFromCatalog() throws Exception {
+        String tableName = "implicit_partition_table";
+        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+        Schema schema =
+                Schema.newBuilder()
+                        .column("event_time", DataTypes.TIMESTAMP().copy(false))
+                        .column("payload", DataTypes.STRING())
+                        .build();
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .partitionedByKeys(
+                                PartitionKey.expression(
+                                        PartitionExpression.of(
+                                                "event_day",
+                                                DateTruncPartitionTransform.of(
+                                                        "event_time", AutoPartitionTimeUnit.DAY))))
+                        .distributedBy(1)
+                        .build();
+        try (Connection connection =
+                        ConnectionFactory.createConnection(
+                                FLUSS_CLUSTER_EXTENSION.getClientConfig());
+                Admin admin = connection.getAdmin()) {
+            admin.createTable(tablePath, tableDescriptor, false).get();
+        }
+
+        LocalDateTime now = LocalDateTime.now().withNano(0);
+        DateTimeFormatter timestampFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+        tEnv.executeSql(
+                        String.format(
+                                "INSERT INTO %s VALUES (TIMESTAMP '%s', 'a'), (TIMESTAMP '%s', 'b')",
+                                tableName,
+                                timestampFormatter.format(now),
+                                timestampFormatter.format(now.minusDays(1))))
+                .await();
+
+        CloseableIterator<Row> rows = tEnv.executeSql("SELECT payload FROM " + tableName).collect();
+        assertResultsIgnoreOrder(rows, Arrays.asList("+I[a]", "+I[b]"), true);
     }
 
     @ParameterizedTest

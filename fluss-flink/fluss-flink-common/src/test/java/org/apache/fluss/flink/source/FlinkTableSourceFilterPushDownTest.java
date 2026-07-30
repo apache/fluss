@@ -30,6 +30,7 @@ import org.apache.fluss.row.GenericRow;
 import org.apache.flink.shaded.guava31.com.google.common.collect.Maps;
 import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.data.GenericRowData;
+import org.apache.flink.table.data.TimestampData;
 import org.apache.flink.table.expressions.CallExpression;
 import org.apache.flink.table.expressions.FieldReferenceExpression;
 import org.apache.flink.table.expressions.ResolvedExpression;
@@ -40,9 +41,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
+import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -52,6 +55,78 @@ import static org.assertj.core.api.Assertions.assertThat;
  * pushdown types (primary key, partition key, record batch filter).
  */
 public class FlinkTableSourceFilterPushDownTest {
+
+    @Test
+    void testImplicitPartitionLookupReceivesProjectedPrimaryKeyRow() {
+        RowType implicitTableOutputType =
+                (RowType)
+                        DataTypes.ROW(
+                                        DataTypes.FIELD("id", DataTypes.INT().notNull()),
+                                        DataTypes.FIELD(
+                                                "event_time", DataTypes.TIMESTAMP(3).notNull()),
+                                        DataTypes.FIELD("payload", DataTypes.STRING()))
+                                .getLogicalType();
+        FlinkConnectorOptionsUtils.StartupOptions startupOptions =
+                new FlinkConnectorOptionsUtils.StartupOptions();
+        startupOptions.startupMode = FlinkConnectorOptions.ScanStartupMode.FULL;
+        LocalDateTime eventTime = LocalDateTime.of(2026, 7, 29, 16, 30);
+        AtomicBoolean lookupCoverageChecked = new AtomicBoolean();
+
+        FlinkTableSource implicitTableSource =
+                new FlinkTableSource(
+                        TablePath.of("test_db", "implicit_partition_table"),
+                        new Configuration(),
+                        new TableConfig(new Configuration()),
+                        implicitTableOutputType,
+                        new int[] {0, 1},
+                        new int[] {},
+                        new int[] {},
+                        true,
+                        false,
+                        startupOptions,
+                        false,
+                        false,
+                        null,
+                        1000L,
+                        FlinkConnectorOptions.SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE.defaultValue(),
+                        false,
+                        null,
+                        Maps.newHashMap(),
+                        null) {
+                    @Override
+                    boolean lookupCoversAllData(GenericRowData lookupRow) {
+                        lookupCoverageChecked.set(true);
+                        assertThat(lookupRow.getInt(0)).isEqualTo(7);
+                        assertThat(lookupRow.getTimestamp(1, 3))
+                                .isEqualTo(TimestampData.fromLocalDateTime(eventTime));
+                        return true;
+                    }
+                };
+
+        FieldReferenceExpression idField =
+                new FieldReferenceExpression("id", DataTypes.INT(), 0, 0);
+        FieldReferenceExpression eventTimeField =
+                new FieldReferenceExpression("event_time", DataTypes.TIMESTAMP(3).notNull(), 0, 1);
+        List<ResolvedExpression> filters =
+                Arrays.asList(
+                        new CallExpression(
+                                BuiltInFunctionDefinitions.EQUALS,
+                                Arrays.asList(idField, new ValueLiteralExpression(7)),
+                                DataTypes.BOOLEAN()),
+                        new CallExpression(
+                                BuiltInFunctionDefinitions.EQUALS,
+                                Arrays.asList(
+                                        eventTimeField,
+                                        new ValueLiteralExpression(
+                                                eventTime, DataTypes.TIMESTAMP(3).notNull())),
+                                DataTypes.BOOLEAN()));
+
+        FlinkTableSource.Result result = implicitTableSource.applyFilters(filters);
+
+        assertThat(lookupCoverageChecked).isTrue();
+        assertThat(result.getAcceptedFilters()).containsExactlyElementsOf(filters);
+        assertThat(implicitTableSource.getSingleRowFilter()).isNotNull();
+    }
 
     @Nested
     class NonPartitionedKvTableTests {
@@ -546,6 +621,7 @@ public class FlinkTableSourceFilterPushDownTest {
 
             assertThat(result.getAcceptedFilters()).hasSize(1);
             assertThat(result.getRemainingFilters()).hasSize(1);
+            assertThat(tableSource.getPartitionFilters()).isNull();
             // record batch filter should be successfully pushdown
             assertThat(tableSource.getLogRecordBatchFilter()).isNotNull();
         }

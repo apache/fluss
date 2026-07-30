@@ -19,7 +19,6 @@ package org.apache.fluss.client.lookup;
 
 import org.apache.fluss.bucketing.BucketingFunction;
 import org.apache.fluss.client.metadata.MetadataUpdater;
-import org.apache.fluss.client.table.getter.PartitionGetter;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.SchemaGetter;
@@ -28,6 +27,7 @@ import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.utils.PartitionComputer;
 
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.NotThreadSafe;
@@ -60,7 +60,7 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
     /**
      * a getter to extract partition from prefix lookup key row, null when it's not a partitioned.
      */
-    private @Nullable final PartitionGetter partitionGetter;
+    private @Nullable final PartitionComputer partitionComputer;
 
     public PrefixKeyLookuper(
             TableInfo tableInfo,
@@ -95,10 +95,8 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
                                 lookupRowType, tableInfo.getBucketKeys(), lakeFormat);
 
         this.bucketingFunction = BucketingFunction.of(lakeFormat);
-        this.partitionGetter =
-                tableInfo.isPartitioned()
-                        ? new PartitionGetter(lookupRowType, tableInfo.getPartitionKeys())
-                        : null;
+        this.partitionComputer =
+                tableInfo.isPartitioned() ? new PartitionComputer(tableInfo, lookupRowType) : null;
     }
 
     private void validatePrefixLookup(TableInfo tableInfo, List<String> lookupColumns) {
@@ -126,7 +124,7 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
 
         // verify the lookup columns must contain all partition fields if this is partitioned table
         if (tableInfo.isPartitioned()) {
-            List<String> partitionKeys = tableInfo.getPartitionKeys();
+            List<String> partitionKeys = tableInfo.getPartitionInputColumns();
             Set<String> lookupColumnsSet = new HashSet<>(lookupColumns);
             if (!lookupColumnsSet.containsAll(partitionKeys)) {
                 throw new IllegalArgumentException(
@@ -138,9 +136,9 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
         }
 
         // verify the lookup columns must contain all bucket keys **in order**
-        List<String> physicalLookupColumns = new ArrayList<>(lookupColumns);
-        physicalLookupColumns.removeAll(tableInfo.getPartitionKeys());
-        if (!physicalLookupColumns.equals(bucketKeys)) {
+        List<String> bucketLookupColumns =
+                removePartitionOnlyInputColumns(tableInfo, lookupColumns);
+        if (!bucketLookupColumns.equals(bucketKeys)) {
             throw new IllegalArgumentException(
                     String.format(
                             "Can not perform prefix lookup on table '%s', "
@@ -158,6 +156,21 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
         }
     }
 
+    private List<String> removePartitionOnlyInputColumns(
+            TableInfo tableInfo, List<String> lookupColumns) {
+        Set<String> bucketKeySet = new HashSet<>(tableInfo.getBucketKeys());
+        Set<String> partitionInputColumnSet = new HashSet<>(tableInfo.getPartitionInputColumns());
+        List<String> bucketLookupColumns = new ArrayList<>();
+        for (String lookupColumn : lookupColumns) {
+            if (partitionInputColumnSet.contains(lookupColumn)
+                    && !bucketKeySet.contains(lookupColumn)) {
+                continue;
+            }
+            bucketLookupColumns.add(lookupColumn);
+        }
+        return bucketLookupColumns;
+    }
+
     @Override
     public CompletableFuture<LookupResult> lookup(InternalRow prefixKey) {
         byte[] prefixKeyBytes = prefixKeyEncoder.encodeKey(prefixKey);
@@ -168,12 +181,12 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
         int bucketId = bucketingFunction.bucketing(bucketKeyBytes, numBuckets);
 
         Long partitionId = null;
-        if (partitionGetter != null) {
+        if (partitionComputer != null) {
             try {
                 partitionId =
                         getPartitionId(
                                 prefixKey,
-                                partitionGetter,
+                                partitionComputer,
                                 tableInfo.getTablePath(),
                                 metadataUpdater);
             } catch (PartitionNotExistException e) {

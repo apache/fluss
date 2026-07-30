@@ -913,6 +913,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         schemaInfo.getSchema(),
                         oldTableInfo.getBucketKeys(),
                         oldTableInfo.getPartitionKeys(),
+                        oldTableInfo.getPartitionExpressions(),
                         oldTableInfo.getNumBuckets(),
                         oldTableInfo.getProperties(),
                         oldTableInfo.getCustomProperties(),

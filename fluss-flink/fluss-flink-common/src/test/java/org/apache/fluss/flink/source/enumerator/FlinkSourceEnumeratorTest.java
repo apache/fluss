@@ -21,6 +21,8 @@ import org.apache.fluss.client.initializer.OffsetsInitializer;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.client.write.HashBucketAssigner;
+import org.apache.fluss.config.AutoPartitionTimeUnit;
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.flink.lake.split.LakeSnapshotAndFlussLogSplit;
@@ -40,12 +42,19 @@ import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.LakeSplit;
 import org.apache.fluss.lake.source.TestingLakeSource;
 import org.apache.fluss.lake.source.TestingLakeSplit;
+import org.apache.fluss.metadata.DateTruncPartitionTransform;
+import org.apache.fluss.metadata.PartitionExpression;
 import org.apache.fluss.metadata.PartitionInfo;
+import org.apache.fluss.metadata.PartitionKey;
+import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.predicate.Predicate;
+import org.apache.fluss.predicate.PredicateBuilder;
+import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
 import org.apache.fluss.server.zk.ZooKeeperClient;
@@ -212,6 +221,73 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                                             false))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("Split assignment batch size must be positive");
+        }
+    }
+
+    @Test
+    void testPartitionFilterUsesImplicitVirtualSpecKey() throws Throwable {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "implicit_partition_filter_table");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("region", DataTypes.STRING().copy(false))
+                                        .column("event_time", DataTypes.TIMESTAMP().copy(false))
+                                        .build())
+                        .partitionedByKeys(
+                                PartitionKey.column("region"),
+                                PartitionKey.expression(
+                                        PartitionExpression.of(
+                                                "event_day",
+                                                DateTruncPartitionTransform.of(
+                                                        "event_time", AutoPartitionTimeUnit.DAY))))
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_NUM_RETENTION, 10_000)
+                        .distributedBy(DEFAULT_BUCKET_NUM)
+                        .build();
+        createTable(tablePath, tableDescriptor);
+        createPartition(tablePath, "us", "20240315");
+        createPartition(tablePath, "us", "20240316");
+        long tableId = admin.getTableInfo(tablePath).get().getTableId();
+        Predicate partitionFilter =
+                new PredicateBuilder(
+                                org.apache.fluss.types.RowType.of(
+                                        DataTypes.STRING(), DataTypes.STRING()))
+                        .equal(1, BinaryString.fromString("20240315"));
+
+        try (MockSplitEnumeratorContext<SourceSplitBase> context =
+                        new MockSplitEnumeratorContext<>(DEFAULT_BUCKET_NUM);
+                FlinkSourceEnumerator enumerator =
+                        new FlinkSourceEnumerator(
+                                tablePath,
+                                flussConf,
+                                false,
+                                true,
+                                context,
+                                OffsetsInitializer.full(),
+                                DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
+                                streaming,
+                                partitionFilter,
+                                null,
+                                LeaseContext.DEFAULT,
+                                false)) {
+            enumerator.start();
+            context.runNextOneTimeCallable();
+            context.runNextOneTimeCallable();
+            for (int i = 0; i < DEFAULT_BUCKET_NUM; i++) {
+                registerReader(context, enumerator, i);
+            }
+
+            List<SourceSplitBase> assignedSplits =
+                    getReadersAssignments(context).values().stream()
+                            .flatMap(List::stream)
+                            .collect(Collectors.toList());
+            assertThat(assignedSplits).hasSize(DEFAULT_BUCKET_NUM);
+            assertThat(assignedSplits)
+                    .allSatisfy(
+                            split -> {
+                                assertThat(split.getTableBucket().getTableId()).isEqualTo(tableId);
+                                assertThat(split.getPartitionName()).isEqualTo("us$20240315");
+                            });
         }
     }
 
@@ -1277,6 +1353,14 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
             int readerId) {
         context.registerReader(new ReaderInfo(readerId, "location " + readerId));
         enumerator.addReader(readerId);
+    }
+
+    private void createPartition(TablePath tablePath, String region, String eventDay)
+            throws Exception {
+        Map<String, String> partitionSpec = new HashMap<>();
+        partitionSpec.put("region", region);
+        partitionSpec.put("event_day", eventDay);
+        admin.createPartition(tablePath, new PartitionSpec(partitionSpec), false).get();
     }
 
     private Map<Integer, List<SourceSplitBase>> expectAssignments(

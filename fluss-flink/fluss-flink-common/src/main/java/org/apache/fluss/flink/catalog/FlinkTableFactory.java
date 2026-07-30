@@ -159,6 +159,9 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                 primaryKeyIndexes,
                 bucketKeyIndexes,
                 partitionKeyIndexes,
+                !resolvedCatalogTable.getPartitionKeys().isEmpty()
+                        || tableOptions.get(
+                                FlinkConnectorOptions.INTERNAL_IMPLICIT_PARTITIONED_TABLE),
                 isStreamingMode,
                 startupOptions,
                 tableOptions.get(FlinkConnectorOptions.LOOKUP_ASYNC),
@@ -234,6 +237,7 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                                 FlinkConnectorOptions.AUTO_INCREMENT_FIELDS,
                                 FlinkConnectorOptions.BUCKET_KEY,
                                 FlinkConnectorOptions.BUCKET_NUMBER,
+                                FlinkConnectorOptions.INTERNAL_IMPLICIT_PARTITIONED_TABLE,
                                 FlinkConnectorOptions.SCAN_STARTUP_MODE,
                                 FlinkConnectorOptions.SCAN_STARTUP_TIMESTAMP,
                                 FlinkConnectorOptions.SCAN_PARTITION_DISCOVERY_INTERVAL,

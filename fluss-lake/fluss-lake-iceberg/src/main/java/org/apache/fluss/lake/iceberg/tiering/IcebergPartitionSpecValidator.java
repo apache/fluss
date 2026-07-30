@@ -71,8 +71,12 @@ final class IcebergPartitionSpecValidator {
         for (int i = 0; i < currentFields.size(); i++) {
             PartitionField currentField = currentFields.get(i);
             PartitionField expectedField = expectedFields.get(i);
+            // Iceberg binds time transforms to source types after a metadata round-trip.
             if (currentField.sourceId() != expectedField.sourceId()
-                    || !currentField.transform().equals(expectedField.transform())) {
+                    || !currentField
+                            .transform()
+                            .toString()
+                            .equals(expectedField.transform().toString())) {
                 return false;
             }
         }

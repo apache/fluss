@@ -48,6 +48,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
 import java.io.IOException;
+import java.time.LocalDateTime;
 
 import static org.apache.fluss.lake.iceberg.utils.IcebergConversions.toIceberg;
 import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
@@ -159,6 +160,27 @@ class IcebergRewriteTest {
         assertThat(filesAfterBucket1).isEqualTo(1);
     }
 
+    @Test
+    void testImplicitPartitionRewriteIsScopedByTransformedPartition() throws Exception {
+        TablePath tablePath = TablePath.of("iceberg", "rewrite_implicit_partition");
+        createImplicitPartitionTable(tablePath);
+        Table table = icebergCatalog.loadTable(toIceberg(tablePath));
+        appendTinyImplicitPartitionFiles(table, 4, "20260604", 0);
+        appendTinyImplicitPartitionFiles(table, 3, "20260605", 0);
+        table.refresh();
+
+        RewriteDataFileResult result =
+                new IcebergRewriteDataFiles(table, "20260604", new TableBucket(0L, 1L, 0))
+                        .execute();
+
+        assertThat(result).isNotNull();
+        assertThat(result.deletedDataFiles()).hasSize(4);
+        assertThat(result.addedDataFiles()).hasSize(1);
+        commitRewrite(table, result);
+        table.refresh();
+        assertThat(countDataFiles(table)).isEqualTo(4);
+    }
+
     private IcebergRewriteDataFiles createIcebergRewriteDataFiles(Table table, int bucket) {
         table.refresh();
         return new IcebergRewriteDataFiles(table, null, new TableBucket(0, bucket));
@@ -194,6 +216,29 @@ class IcebergRewriteTest {
         TableIdentifier tableId =
                 TableIdentifier.of(tablePath.getDatabaseName(), tablePath.getTableName());
         icebergCatalog.createTable(tableId, schema, partitionSpec);
+    }
+
+    private void createImplicitPartitionTable(TablePath tablePath) {
+        Namespace namespace = Namespace.of(tablePath.getDatabaseName());
+        SupportsNamespaces ns = (SupportsNamespaces) icebergCatalog;
+        if (!ns.namespaceExists(namespace)) {
+            ns.createNamespace(namespace);
+        }
+        Schema schema =
+                new Schema(
+                        Types.NestedField.optional(1, "c1", Types.IntegerType.get()),
+                        Types.NestedField.required(
+                                2, "event_time", Types.TimestampType.withoutZone()),
+                        Types.NestedField.required(3, BUCKET_COLUMN_NAME, Types.IntegerType.get()),
+                        Types.NestedField.required(4, OFFSET_COLUMN_NAME, Types.LongType.get()),
+                        Types.NestedField.required(
+                                5, TIMESTAMP_COLUMN_NAME, Types.TimestampType.withZone()));
+        PartitionSpec spec =
+                PartitionSpec.builderFor(schema)
+                        .day("event_time", "__fluss_implicit_partition_0")
+                        .identity(BUCKET_COLUMN_NAME)
+                        .build();
+        icebergCatalog.createTable(toIceberg(tablePath), schema, spec);
     }
 
     private static int countDataFiles(Table table) throws IOException {
@@ -263,5 +308,32 @@ class IcebergRewriteTest {
             checkState(dataFiles.length == 1);
             return dataFiles[0];
         }
+    }
+
+    private static void appendTinyImplicitPartitionFiles(
+            Table table, int files, String partition, int bucket) throws Exception {
+        AppendFiles append = table.newAppend();
+        for (int i = 0; i < files; i++) {
+            try (TaskWriter<Record> taskWriter =
+                    TaskWriterFactory.createTaskWriter(table, partition, bucket)) {
+                Record record = org.apache.iceberg.data.GenericRecord.create(table.schema());
+                record.setField("c1", i);
+                record.setField(
+                        "event_time",
+                        "20260604".equals(partition)
+                                ? LocalDateTime.of(2026, 6, 4, 12, 0)
+                                : LocalDateTime.of(2026, 6, 5, 12, 0));
+                record.setField(BUCKET_COLUMN_NAME, bucket);
+                record.setField(OFFSET_COLUMN_NAME, (long) i);
+                record.setField(
+                        TIMESTAMP_COLUMN_NAME,
+                        java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC));
+                taskWriter.write(record);
+                DataFile[] dataFiles = taskWriter.dataFiles();
+                checkState(dataFiles.length == 1);
+                append.appendFile(dataFiles[0]);
+            }
+        }
+        append.commit();
     }
 }

@@ -63,12 +63,17 @@ public class RecoveryOffsetManagerTest {
     // ==================== Test Data Helpers ====================
 
     private static TableInfo createTableInfo(int numBuckets, boolean isPartitioned) {
-        Schema schema =
+        Schema.Builder schemaBuilder =
                 Schema.newBuilder()
                         .column("id", DataTypes.INT())
-                        .column("value", DataTypes.STRING())
-                        .primaryKey("id")
-                        .build();
+                        .column("pt", DataTypes.STRING())
+                        .column("value", DataTypes.STRING());
+        if (isPartitioned) {
+            schemaBuilder.primaryKey("id", "pt");
+        } else {
+            schemaBuilder.primaryKey("id");
+        }
+        Schema schema = schemaBuilder.build();
 
         List<String> partitionKeys =
                 isPartitioned ? Collections.singletonList("pt") : Collections.emptyList();
