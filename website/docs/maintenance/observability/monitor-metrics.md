@@ -1039,9 +1039,9 @@ These metrics use Sum aggregation to show the total value across all buckets of 
   </tbody>
 </table>
 
-#### Server-level RocksDB Metrics (Sum Aggregation)
+#### Server-level RocksDB Metrics
 
-These metrics use Sum aggregation to show the total value across all tables in a server, providing a server-wide view of RocksDB resource usage.
+These metrics provide a server-wide view of RocksDB resource usage. The total memory metric sums usage across tables, while the shared block cache metrics report the single cache owned by the server.
 
 <table class="table table-bordered">
   <thead>
@@ -1055,10 +1055,20 @@ These metrics use Sum aggregation to show the total value across all tables in a
   </thead>
   <tbody>
     <tr>
-      <th rowspan="1"><strong>tabletserver</strong></th>
-      <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="1">-</td>
+      <th rowspan="3"><strong>tabletserver</strong></th>
+      <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="3">-</td>
       <td>rocksdbMemoryUsageTotal</td>
-      <td>Total memory usage across all RocksDB instances in this server (in bytes).</td>
+      <td>Total memory usage across all RocksDB instances in this server (in bytes). This includes memtables, table readers, and block cache. When shared block cache is enabled (<code>kv.rocksdb.shared-block-cache.enabled=true</code>), the shared block cache usage is counted once to avoid double-counting across tablets.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rocksdbSharedBlockCacheUsage</td>
+      <td>Memory usage of the shared RocksDB block cache in this server (in bytes). Reports 0 when the shared block cache is disabled.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rocksdbSharedBlockCachePinnedUsage</td>
+      <td>Pinned memory usage of the shared RocksDB block cache in this server (in bytes). Reports 0 when the shared block cache is disabled.</td>
       <td>Gauge</td>
     </tr>
   </tbody>
@@ -1096,12 +1106,12 @@ These metrics use Sum aggregation to show the total value across all tables in a
     </tr>
     <tr>
       <td>rocksdbBlockCacheMemoryUsageTotal</td>
-      <td>Total block cache memory usage across all buckets of this table (in bytes).</td>
+      <td>Total block cache memory usage across all buckets of this table (in bytes). When shared block cache is enabled, this metric reports 0 because the cache is shared across all tables and reported at the server level via <code>rocksdbSharedBlockCacheUsage</code>.</td>
       <td>Gauge</td>
     </tr>
     <tr>
       <td>rocksdbBlockCachePinnedUsageTotal</td>
-      <td>Total pinned memory in block cache across all buckets of this table (in bytes).</td>
+      <td>Total pinned memory in block cache across all buckets of this table (in bytes). When shared block cache is enabled, this metric reports 0 because the cache is shared across all tables and reported at the server level via <code>rocksdbSharedBlockCachePinnedUsage</code>.</td>
       <td>Gauge</td>
     </tr>
   </tbody>

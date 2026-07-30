@@ -34,6 +34,7 @@ import org.apache.fluss.server.kv.rocksdb.RocksDBStatistics;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.LongSupplier;
 
 /** The metric group for tablet server. */
 public class TabletServerMetricGroup extends AbstractMetricGroup {
@@ -74,6 +75,11 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
     private final Counter isrShrinks;
     private final Counter isrExpands;
     private final Counter failedIsrUpdates;
+
+    /** Suppliers for shared block cache usage, set by KvManager when shared cache is enabled. */
+    private volatile LongSupplier sharedBlockCacheUsageSupplier = () -> 0L;
+
+    private volatile LongSupplier sharedBlockCachePinnedUsageSupplier = () -> 0L;
 
     public TabletServerMetricGroup(
             MetricRegistry registry, String clusterId, String rack, String hostname, int serverId) {
@@ -144,13 +150,32 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
      */
     private void registerServerRocksDBMetrics() {
         // Total memory usage across all RocksDB instances in this server.
+        // When shared block cache is enabled, per-tablet stats exclude block cache,
+        // so we add the shared block cache usage once separately.
         gauge(
                 MetricNames.ROCKSDB_MEMORY_USAGE_TOTAL,
                 () ->
                         metricGroupByTable.values().stream()
-                                .flatMap(TableMetricGroup::allRocksDBStatistics)
-                                .mapToLong(RocksDBStatistics::getTotalMemoryUsage)
-                                .sum());
+                                        .flatMap(TableMetricGroup::allRocksDBStatistics)
+                                        .mapToLong(RocksDBStatistics::getTotalMemoryUsage)
+                                        .sum()
+                                + sharedBlockCacheUsageSupplier.getAsLong());
+        gauge(
+                MetricNames.ROCKSDB_SHARED_BLOCK_CACHE_USAGE,
+                () -> sharedBlockCacheUsageSupplier.getAsLong());
+        gauge(
+                MetricNames.ROCKSDB_SHARED_BLOCK_CACHE_PINNED_USAGE,
+                () -> sharedBlockCachePinnedUsageSupplier.getAsLong());
+    }
+
+    /**
+     * Sets the suppliers for shared block cache usage. Called by KvManager when shared block cache
+     * is enabled.
+     */
+    public void setSharedBlockCacheUsageSuppliers(
+            LongSupplier usageSupplier, LongSupplier pinnedUsageSupplier) {
+        this.sharedBlockCacheUsageSupplier = usageSupplier;
+        this.sharedBlockCachePinnedUsageSupplier = pinnedUsageSupplier;
     }
 
     @Override

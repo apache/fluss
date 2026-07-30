@@ -138,6 +138,7 @@ class ScannerManagerTest {
                         schemaGetter,
                         tableConf.getChangelogImage(),
                         KvManager.getDefaultRateLimiter(),
+                        null,
                         autoIncrementManager);
     }
 
