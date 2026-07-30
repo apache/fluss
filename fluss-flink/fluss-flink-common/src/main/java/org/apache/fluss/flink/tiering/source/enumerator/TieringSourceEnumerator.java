@@ -332,7 +332,7 @@ public class TieringSourceEnumerator
 
     @VisibleForTesting
     protected void handleTableTieringReachMaxDuration(
-            TablePath tablePath, long tableId, long tieringEpoch) {
+            TablePath tablePath, long tableId, long tieringEpoch, long maxTieringDurationMs) {
         Long currentEpoch = tieringTableEpochs.get(tableId);
         if (currentEpoch != null && currentEpoch.equals(tieringEpoch)) {
             LOG.info("Table {}-{} reached max duration. Force completing.", tablePath, tableId);
@@ -355,7 +355,38 @@ public class TieringSourceEnumerator
                 LOG.info("Send {} to reader {}", tieringReachMaxDurationEvent, reader);
                 context.sendEventToSourceReader(reader, tieringReachMaxDurationEvent);
             }
+
+            timerService.schedule(
+                    () ->
+                            context.runInCoordinatorThread(
+                                    () ->
+                                            failTieringJobIfNotFinished(
+                                                    tablePath,
+                                                    tableId,
+                                                    tieringEpoch,
+                                                    maxTieringDurationMs)),
+                    maxTieringDurationMs,
+                    TimeUnit.MILLISECONDS);
         }
+    }
+
+    @VisibleForTesting
+    void failTieringJobIfNotFinished(
+            TablePath tablePath, long tableId, long tieringEpoch, long maxTieringDurationMs) {
+        Long currentEpoch = tieringTableEpochs.get(tableId);
+        if (currentEpoch != null && currentEpoch.equals(tieringEpoch)) {
+            throw new FlinkRuntimeException(
+                    String.format(
+                            "Tiering table %s-%d did not finish within %d ms after reaching max duration. "
+                                    + "Failing the tiering job to recover the stuck source readers.",
+                            tablePath, tableId, maxTieringDurationMs));
+        }
+    }
+
+    @VisibleForTesting
+    @Nullable
+    Long getTieringEpoch(long tableId) {
+        return tieringTableEpochs.get(tableId);
     }
 
     @VisibleForTesting
@@ -476,6 +507,8 @@ public class TieringSourceEnumerator
                 finishedTables.put(tieringTable.f0, TieringFinishInfo.from(tieringTable.f1));
             } else {
                 pendingSplits.addAll(tieringSplits);
+                long maxTieringDurationMs =
+                        tableInfo.getTableConfig().getDataLakeFreshness().toMillis();
 
                 timerService.schedule(
                         () ->
@@ -484,10 +517,11 @@ public class TieringSourceEnumerator
                                                 handleTableTieringReachMaxDuration(
                                                         tablePath,
                                                         tieringTable.f0,
-                                                        tieringTable.f1)),
+                                                        tieringTable.f1,
+                                                        maxTieringDurationMs)),
 
                         // for simplicity, we use the freshness as
-                        tableInfo.getTableConfig().getDataLakeFreshness().toMillis(),
+                        maxTieringDurationMs,
                         TimeUnit.MILLISECONDS);
             }
         } catch (Exception e) {
