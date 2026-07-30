@@ -22,6 +22,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.cluster.ServerReconfigurable;
 import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.kv.KvSnapshotResource;
 import org.apache.fluss.server.zk.ZooKeeperClient;

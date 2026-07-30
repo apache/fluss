@@ -17,6 +17,8 @@
 
 package org.apache.fluss.server.kv.snapshot;
 
+import org.apache.fluss.kv.snapshot.CompletedSnapshot;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

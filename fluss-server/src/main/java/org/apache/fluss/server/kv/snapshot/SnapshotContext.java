@@ -19,6 +19,7 @@ package org.apache.fluss.server.kv.snapshot;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.utils.function.FunctionWithException;

@@ -22,6 +22,8 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.kv.snapshot.CompletedSnapshot;
+import org.apache.fluss.kv.snapshot.KvFileHandleAndLocalPath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.SequenceIDCounter;
 import org.apache.fluss.server.kv.rocksdb.RocksDBExtension;

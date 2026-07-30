@@ -17,8 +17,8 @@
 
 package org.apache.fluss.server.entity;
 
+import org.apache.fluss.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotRequest;
-import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 
 /** The data for request {@link CommitKvSnapshotRequest}. */
 public class CommitKvSnapshotData {

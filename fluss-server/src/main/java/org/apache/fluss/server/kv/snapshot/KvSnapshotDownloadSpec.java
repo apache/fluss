@@ -17,6 +17,8 @@
 
 package org.apache.fluss.server.kv.snapshot;
 
+import org.apache.fluss.kv.snapshot.KvSnapshotHandle;
+
 import java.nio.file.Path;
 
 /**

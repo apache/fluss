@@ -15,58 +15,78 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.server.kv.snapshot;
+package org.apache.fluss.utils.json;
 
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.kv.autoinc.AutoIncIDRange;
+import org.apache.fluss.kv.snapshot.CompletedSnapshot;
+import org.apache.fluss.kv.snapshot.KvFileHandle;
+import org.apache.fluss.kv.snapshot.KvFileHandleAndLocalPath;
+import org.apache.fluss.kv.snapshot.KvSnapshotHandle;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.server.kv.autoinc.AutoIncIDRange;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
-import org.apache.fluss.utils.json.JsonDeserializer;
-import org.apache.fluss.utils.json.JsonSerdeUtils;
-import org.apache.fluss.utils.json.JsonSerializer;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
-/** Json serializer and deserializer for {@link CompletedSnapshot}. */
+/**
+ * Json serializer and deserializer for {@link CompletedSnapshot}.
+ *
+ * <p>This class is the single source of truth for KV snapshot {@code _METADATA} JSON format
+ * constants. It provides full serialization/deserialization as well as lightweight extraction
+ * utilities (e.g., {@link #parseSharedSstLocalPaths(byte[])} and {@link
+ * #parseSharedSstRemotePaths(byte[])}) for consumers that do not need a full domain object.
+ */
 public class CompletedSnapshotJsonSerde
         implements JsonSerializer<CompletedSnapshot>, JsonDeserializer<CompletedSnapshot> {
 
+    // ---------------------------------------------------------------------------------
+    // JSON field name constants — _METADATA schema version 1
+    // ---------------------------------------------------------------------------------
+
+    /** Current schema version. */
+    public static final int VERSION = 1;
+
+    public static final String VERSION_KEY = "version";
+
+    // Table bucket identification
+    public static final String TABLE_ID = "table_id";
+    public static final String PARTITION_ID = "partition_id";
+    public static final String BUCKET_ID = "bucket_id";
+
+    // Snapshot identity
+    public static final String SNAPSHOT_ID = "snapshot_id";
+    public static final String SNAPSHOT_LOCATION = "snapshot_location";
+
+    // KV snapshot handle structure
+    public static final String KV_SNAPSHOT_HANDLE = "kv_snapshot_handle";
+    public static final String KV_SHARED_FILES_HANDLE = "shared_file_handles";
+    public static final String KV_PRIVATE_FILES_HANDLE = "private_file_handles";
+
+    // Individual file entry fields
+    public static final String KV_FILE_HANDLE = "kv_file_handle";
+    public static final String KV_FILE_PATH = "path";
+    public static final String KV_FILE_SIZE = "size";
+    public static final String KV_FILE_LOCAL_PATH = "local_path";
+
+    // Snapshot size
+    public static final String SNAPSHOT_INCREMENTAL_SIZE = "snapshot_incremental_size";
+
+    // KV tablet state
+    public static final String LOG_OFFSET = "log_offset";
+    public static final String ROW_COUNT = "row_count";
+
+    // Auto-increment ID ranges
+    public static final String AUTO_INC_ID_RANGE = "auto_inc_id_range";
+    public static final String AUTO_INC_COLUMN_ID = "column_id";
+    public static final String AUTO_INC_ID_START = "start";
+    public static final String AUTO_INC_ID_END = "end";
+
     public static final CompletedSnapshotJsonSerde INSTANCE = new CompletedSnapshotJsonSerde();
-
-    private static final int VERSION = 1;
-    private static final String VERSION_KEY = "version";
-    // for table bucket the snapshot belongs to
-    private static final String TABLE_ID = "table_id";
-    private static final String PARTITION_ID = "partition_id";
-    private static final String BUCKET_ID = "bucket_id";
-
-    private static final String SNAPSHOT_ID = "snapshot_id";
-    private static final String SNAPSHOT_LOCATION = "snapshot_location";
-
-    // for kv snapshot's files
-    private static final String KV_SNAPSHOT_HANDLE = "kv_snapshot_handle";
-    private static final String KV_SHARED_FILES_HANDLE = "shared_file_handles";
-    private static final String KV_PRIVATE_FILES_HANDLE = "private_file_handles";
-    private static final String KV_FILE_HANDLE = "kv_file_handle";
-    private static final String KV_FILE_PATH = "path";
-    private static final String KV_FILE_SIZE = "size";
-    private static final String KV_FILE_LOCAL_PATH = "local_path";
-    private static final String SNAPSHOT_INCREMENTAL_SIZE = "snapshot_incremental_size";
-
-    // ---------------------------------------------------------------------------------
-    // kv tablet state for the snapshot
-    // ---------------------------------------------------------------------------------
-
-    // for the next log offset when the snapshot is triggered;
-    private static final String LOG_OFFSET = "log_offset";
-    private static final String ROW_COUNT = "row_count";
-    private static final String AUTO_INC_ID_RANGE = "auto_inc_id_range";
-    private static final String AUTO_INC_COLUMN_ID = "column_id";
-    private static final String AUTO_INC_ID_START = "start";
-    private static final String AUTO_INC_ID_END = "end";
 
     @Override
     public void serialize(CompletedSnapshot completedSnapshot, JsonGenerator generator)
@@ -240,6 +260,10 @@ public class CompletedSnapshotJsonSerde
         return kvFileHandleAndLocalPaths;
     }
 
+    // ---------------------------------------------------------------------------------
+    // Static convenience methods
+    // ---------------------------------------------------------------------------------
+
     /** Serialize the {@link CompletedSnapshot} to json bytes. */
     public static byte[] toJson(CompletedSnapshot completedSnapshot) {
         return JsonSerdeUtils.writeValueAsBytes(completedSnapshot, INSTANCE);
@@ -248,5 +272,112 @@ public class CompletedSnapshotJsonSerde
     /** Deserialize the json bytes to {@link CompletedSnapshot}. */
     public static CompletedSnapshot fromJson(byte[] json) {
         return JsonSerdeUtils.readValue(json, INSTANCE);
+    }
+
+    /**
+     * Parses a {@code _METADATA} JSON payload and returns the set of shared SST file names (local
+     * path basenames) referenced by the snapshot.
+     *
+     * <p>This method navigates the JSON tree: {@code kv_snapshot_handle → shared_file_handles[*] →
+     * local_path} and collects non-empty values.
+     *
+     * @param metadataJsonBytes raw bytes of the {@code _METADATA} file
+     * @return set of shared SST file names (e.g. {@code "abc-def-0.sst"})
+     * @throws IOException if the bytes cannot be parsed as valid JSON or the expected structure is
+     *     missing
+     */
+    public static Set<String> parseSharedSstLocalPaths(byte[] metadataJsonBytes)
+            throws IOException {
+        JsonNode sharedFilesNode = parseSharedFileHandles(metadataJsonBytes);
+
+        Set<String> fileNames = new HashSet<>();
+        for (JsonNode entry : sharedFilesNode) {
+            JsonNode localPathNode = entry.get(KV_FILE_LOCAL_PATH);
+            if (localPathNode == null || !localPathNode.isTextual()) {
+                throw new IOException(
+                        "Missing or non-textual '"
+                                + KV_FILE_LOCAL_PATH
+                                + "' in "
+                                + KV_SHARED_FILES_HANDLE
+                                + " entry");
+            }
+            String localPath = localPathNode.asText();
+            if (localPath.isEmpty()) {
+                throw new IOException(
+                        "Empty '"
+                                + KV_FILE_LOCAL_PATH
+                                + "' in "
+                                + KV_SHARED_FILES_HANDLE
+                                + " entry");
+            }
+            fileNames.add(localPath);
+        }
+        return fileNames;
+    }
+
+    /**
+     * Parses a {@code _METADATA} JSON payload and returns the remote paths of shared SST objects
+     * referenced by the snapshot.
+     *
+     * <p>Remote storage assigns an opaque name to each uploaded object. It is therefore unsafe for
+     * cleanup to compare a scanned remote object with {@code local_path}, which is only the RocksDB
+     * filename on the tablet server. This method navigates {@code kv_snapshot_handle →
+     * shared_file_handles[*] → kv_file_handle.path} and fails closed when any entry is malformed.
+     */
+    public static Set<String> parseSharedSstRemotePaths(byte[] metadataJsonBytes)
+            throws IOException {
+        JsonNode sharedFilesNode = parseSharedFileHandles(metadataJsonBytes);
+        Set<String> remotePaths = new HashSet<>();
+        for (JsonNode entry : sharedFilesNode) {
+            JsonNode fileHandleNode = entry.get(KV_FILE_HANDLE);
+            if (fileHandleNode == null || !fileHandleNode.isObject()) {
+                throw new IOException(
+                        "Missing or non-object '"
+                                + KV_FILE_HANDLE
+                                + "' in "
+                                + KV_SHARED_FILES_HANDLE
+                                + " entry");
+            }
+            JsonNode remotePathNode = fileHandleNode.get(KV_FILE_PATH);
+            if (remotePathNode == null || !remotePathNode.isTextual()) {
+                throw new IOException(
+                        "Missing or non-textual '"
+                                + KV_FILE_HANDLE
+                                + "."
+                                + KV_FILE_PATH
+                                + "' in "
+                                + KV_SHARED_FILES_HANDLE
+                                + " entry");
+            }
+            String remotePath = remotePathNode.asText();
+            if (remotePath.isEmpty()) {
+                throw new IOException(
+                        "Empty '"
+                                + KV_FILE_HANDLE
+                                + "."
+                                + KV_FILE_PATH
+                                + "' in "
+                                + KV_SHARED_FILES_HANDLE
+                                + " entry");
+            }
+            remotePaths.add(remotePath);
+        }
+        return remotePaths;
+    }
+
+    private static JsonNode parseSharedFileHandles(byte[] metadataJsonBytes) throws IOException {
+        JsonNode root = JsonSerdeUtils.OBJECT_MAPPER_INSTANCE.readTree(metadataJsonBytes);
+        JsonNode kvSnapshotHandle = root == null ? null : root.get(KV_SNAPSHOT_HANDLE);
+        if (kvSnapshotHandle == null) {
+            throw new IOException("Missing '" + KV_SNAPSHOT_HANDLE + "' in _METADATA JSON payload");
+        }
+        JsonNode sharedFilesNode = kvSnapshotHandle.get(KV_SHARED_FILES_HANDLE);
+        if (sharedFilesNode == null || !sharedFilesNode.isArray()) {
+            throw new IOException(
+                    "Missing or non-array '"
+                            + KV_SHARED_FILES_HANDLE
+                            + "' in _METADATA JSON payload");
+        }
+        return sharedFilesNode;
     }
 }

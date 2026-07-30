@@ -18,11 +18,11 @@
 package org.apache.fluss.server.coordinator.lease;
 
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableBucketSnapshot;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metrics.MetricNames;
-import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.metrics.group.CoordinatorMetricGroup;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.lease.KvSnapshotTableLease;

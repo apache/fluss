@@ -17,6 +17,10 @@
 
 package org.apache.fluss.server.kv.snapshot;
 
+import org.apache.fluss.kv.snapshot.CompletedSnapshot;
+import org.apache.fluss.kv.snapshot.KvFileHandle;
+import org.apache.fluss.kv.snapshot.KvFileHandleAndLocalPath;
+import org.apache.fluss.kv.snapshot.KvSnapshotHandle;
 import org.apache.fluss.utils.concurrent.Executors;
 
 import org.slf4j.Logger;
@@ -200,7 +204,12 @@ public class SharedKvFileRegistry implements AutoCloseable {
         }
 
         synchronized (registeredKvEntries) {
-            kvSnapshotHandle.registerKvFileHandles(this, snapshotID);
+            for (KvFileHandleAndLocalPath hlp : kvSnapshotHandle.getSharedKvFileHandles()) {
+                registerReference(
+                        SharedKvFileRegistryKey.fromKvFileHandle(hlp.getKvFileHandle()),
+                        hlp.getKvFileHandle(),
+                        snapshotID);
+            }
         }
     }
 

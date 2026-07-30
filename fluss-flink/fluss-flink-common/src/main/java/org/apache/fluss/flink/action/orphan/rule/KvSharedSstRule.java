@@ -21,18 +21,25 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.utils.FlussPaths;
 
+import java.util.regex.Pattern;
+
 /**
  * Rule for shared SST files under the {@code shared/} KV directory.
  *
- * <p>Always returns {@link Decision#KEEP_ACTIVE}. The true active set for shared SSTs lives inside
- * the engine's {@code SharedKvFileRegistry}; orphan cleanup has no read path into that registry, so
- * any deletion here would be a guess. Per the action's hard constraint "prefer leak over
- * mis-delete," the rule never deletes, and as a consequence orphan PK-table / orphan-partition
- * directories permanently retain their {@code shared/} subtree as accepted residue (recovering that
- * residue would require a registry-backed GC channel that is out of scope for this action).
+ * <p>Determines whether a shared SST file is still referenced by any active snapshot. The active
+ * set is built from the union of remote {@code shared_file_handles[*].kv_file_handle.path}
+ * basenames across all active snapshots' {@code _METADATA} files.
+ *
+ * <p>Safety: completeness is explicit. An unresolved set conservatively returns {@link
+ * Decision#KEEP_ACTIVE}; a resolved-but-empty set proves that no active snapshot references a
+ * shared object and therefore allows the normal cutoff policy to run.
  */
 @Internal
 public final class KvSharedSstRule implements FileRule {
+
+    private static final Pattern REMOTE_FILE_UUID =
+            Pattern.compile(
+                    "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}");
 
     @Override
     public RuleId id() {
@@ -45,9 +52,19 @@ public final class KvSharedSstRule implements FileRule {
         if (parent == null || !FlussPaths.REMOTE_KV_SNAPSHOT_SHARED_DIR.equals(parent.getName())) {
             return Decision.SKIP_UNKNOWN;
         }
-        if (!file.path().getName().endsWith(".sst")) {
+        String fileName = file.path().getName();
+        if (!fileName.endsWith(".sst") && !REMOTE_FILE_UUID.matcher(fileName).matches()) {
             return Decision.SKIP_UNKNOWN;
         }
-        return Decision.KEEP_ACTIVE;
+
+        if (activeRefs.kvSharedSstFileNames().contains(fileName)) {
+            return Decision.KEEP_ACTIVE;
+        }
+
+        if (!activeRefs.kvSharedSstRefsComplete()) {
+            return Decision.KEEP_ACTIVE;
+        }
+
+        return file.modificationTime() < cutoffMillis ? Decision.DELETE : Decision.DEFER;
     }
 }

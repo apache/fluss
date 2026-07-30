@@ -19,6 +19,7 @@
 package org.apache.fluss.server.kv.autoinc;
 
 import org.apache.fluss.config.TableConfig;
+import org.apache.fluss.kv.autoinc.AutoIncIDRange;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;

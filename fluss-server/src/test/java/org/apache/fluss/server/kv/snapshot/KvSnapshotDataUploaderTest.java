@@ -20,6 +20,8 @@ package org.apache.fluss.server.kv.snapshot;
 import org.apache.fluss.fs.FSDataInputStream;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.local.LocalFileSystem;
+import org.apache.fluss.kv.snapshot.KvFileHandle;
+import org.apache.fluss.kv.snapshot.KvFileHandleAndLocalPath;
 import org.apache.fluss.utils.CloseableRegistry;
 import org.apache.fluss.utils.IOUtils;
 

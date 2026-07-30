@@ -17,6 +17,8 @@
 
 package org.apache.fluss.server.kv.snapshot;
 
+import org.apache.fluss.kv.snapshot.KvFileHandle;
+
 import java.io.Serializable;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;

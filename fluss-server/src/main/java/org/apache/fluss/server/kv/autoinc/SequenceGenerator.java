@@ -18,6 +18,8 @@
 
 package org.apache.fluss.server.kv.autoinc;
 
+import org.apache.fluss.kv.autoinc.AutoIncIDRange;
+
 /** SequenceGenerator is used to generate auto increment column ID. */
 public interface SequenceGenerator {
 

@@ -18,15 +18,20 @@
 package org.apache.fluss.server.kv.snapshot;
 
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.kv.autoinc.AutoIncIDRange;
+import org.apache.fluss.kv.snapshot.CompletedSnapshot;
+import org.apache.fluss.kv.snapshot.KvFileHandle;
+import org.apache.fluss.kv.snapshot.KvFileHandleAndLocalPath;
+import org.apache.fluss.kv.snapshot.KvSnapshotHandle;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.server.kv.autoinc.AutoIncIDRange;
+import org.apache.fluss.utils.json.CompletedSnapshotJsonSerde;
 import org.apache.fluss.utils.json.JsonSerdeTestBase;
 
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
-/** Test for {@link org.apache.fluss.server.kv.snapshot.CompletedSnapshotJsonSerde}. */
+/** Test for {@link CompletedSnapshotJsonSerde}. */
 class CompletedSnapshotJsonSerdeTest extends JsonSerdeTestBase<CompletedSnapshot> {
 
     protected CompletedSnapshotJsonSerdeTest() {

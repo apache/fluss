@@ -15,9 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.server.kv.snapshot;
-
-import org.apache.fluss.server.utils.SnapshotUtil;
+package org.apache.fluss.kv.snapshot;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -25,9 +23,6 @@ import org.slf4j.LoggerFactory;
 import java.util.List;
 import java.util.Objects;
 import java.util.stream.Collectors;
-
-import static org.apache.fluss.utils.Preconditions.checkNotNull;
-import static org.apache.fluss.utils.Preconditions.checkState;
 
 /**
  * A handle to the snapshot of a kv tablet. It contains the share file handles and the private file
@@ -44,16 +39,6 @@ public class KvSnapshotHandle {
 
     /** The size of the incremental snapshot. */
     private final long incrementalSize;
-
-    /**
-     * Once the shared states are registered, it is the {@link SharedKvFileRegistry}'s
-     * responsibility to cleanup those shared states. But in the cases where the state handle is
-     * discarded before performing the registration, the handle should delete all the shared states
-     * created by it.
-     *
-     * <p>This variable is not null iff the handles was registered.
-     */
-    private transient SharedKvFileRegistry sharedKvFileRegistry;
 
     public KvSnapshotHandle(
             List<KvFileHandleAndLocalPath> sharedFileHandles,
@@ -97,43 +82,35 @@ public class KvSnapshotHandle {
         return snapshotSize;
     }
 
-    public void discard() {
-        SharedKvFileRegistry registry = this.sharedKvFileRegistry;
-        final boolean isRegistered = (registry != null);
-
+    /**
+     * Discards only the private files of this snapshot. Use this when shared files are managed
+     * externally by a registry.
+     */
+    public void discardPrivateFiles() {
         try {
             SnapshotUtil.bestEffortDiscardAllKvFiles(
                     privateFileHandles.stream()
                             .map(KvFileHandleAndLocalPath::getKvFileHandle)
                             .collect(Collectors.toList()));
         } catch (Exception e) {
-            LOG.warn("Could not properly discard misc file states.", e);
-        }
-
-        if (!isRegistered) {
-            try {
-                SnapshotUtil.bestEffortDiscardAllKvFiles(
-                        sharedFileHandles.stream()
-                                .map(KvFileHandleAndLocalPath::getKvFileHandle)
-                                .collect(Collectors.toSet()));
-            } catch (Exception e) {
-                LOG.warn("Could not properly discard new sst file states.", e);
-            }
+            LOG.warn("Could not properly discard private file states.", e);
         }
     }
 
-    public void registerKvFileHandles(SharedKvFileRegistry registry, long snapshotID) {
-        checkState(
-                sharedKvFileRegistry != registry,
-                "The kv file handle has already registered its shared kv files to the given registry.");
+    /**
+     * Discards all files (private + shared). Use this for failed or aborted snapshots that were
+     * never registered with a shared file registry.
+     */
+    public void discardAll() {
+        discardPrivateFiles();
 
-        sharedKvFileRegistry = checkNotNull(registry);
-
-        for (KvFileHandleAndLocalPath handleAndLocalPath : sharedFileHandles) {
-            registry.registerReference(
-                    SharedKvFileRegistryKey.fromKvFileHandle(handleAndLocalPath.getKvFileHandle()),
-                    handleAndLocalPath.getKvFileHandle(),
-                    snapshotID);
+        try {
+            SnapshotUtil.bestEffortDiscardAllKvFiles(
+                    sharedFileHandles.stream()
+                            .map(KvFileHandleAndLocalPath::getKvFileHandle)
+                            .collect(Collectors.toSet()));
+        } catch (Exception e) {
+            LOG.warn("Could not properly discard shared sst file states.", e);
         }
     }
 

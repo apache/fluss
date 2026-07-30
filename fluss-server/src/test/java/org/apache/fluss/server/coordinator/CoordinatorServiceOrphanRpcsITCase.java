@@ -18,6 +18,8 @@
 package org.apache.fluss.server.coordinator;
 
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.kv.snapshot.CompletedSnapshot;
+import org.apache.fluss.kv.snapshot.KvSnapshotHandle;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -29,11 +31,9 @@ import org.apache.fluss.rpc.messages.ListRemoteLogManifestsRequest;
 import org.apache.fluss.rpc.messages.ListRemoteLogManifestsResponse;
 import org.apache.fluss.rpc.messages.PbKvSnapshot;
 import org.apache.fluss.rpc.messages.PbRemoteLogManifestEntry;
-import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotHandle;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotHandleStore;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotStore;
-import org.apache.fluss.server.kv.snapshot.KvSnapshotHandle;
 import org.apache.fluss.server.kv.snapshot.SharedKvFileRegistry;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.testutils.RpcMessageTestUtils;

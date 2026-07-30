@@ -17,6 +17,9 @@
 
 package org.apache.fluss.server.kv.snapshot;
 
+import org.apache.fluss.kv.snapshot.KvFileHandle;
+import org.apache.fluss.kv.snapshot.KvFileHandleAndLocalPath;
+import org.apache.fluss.kv.snapshot.KvSnapshotHandle;
 import org.apache.fluss.utils.CloseableRegistry;
 
 import org.junit.jupiter.api.AfterAll;

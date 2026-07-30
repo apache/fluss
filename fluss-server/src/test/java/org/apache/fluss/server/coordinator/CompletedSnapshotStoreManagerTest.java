@@ -17,8 +17,8 @@
 
 package org.apache.fluss.server.coordinator;
 
+import org.apache.fluss.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotHandle;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotHandleStore;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotStore;

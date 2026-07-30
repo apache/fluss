@@ -19,6 +19,8 @@ package org.apache.fluss.server.kv.snapshot;
 
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.local.LocalFileSystem;
+import org.apache.fluss.kv.snapshot.KvFileHandleAndLocalPath;
+import org.apache.fluss.kv.snapshot.KvSnapshotHandle;
 import org.apache.fluss.server.kv.rocksdb.RocksDBExtension;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKv;
 import org.apache.fluss.server.testutils.KvTestUtils;
@@ -135,7 +137,7 @@ class RocksIncrementalSnapshotTest {
             KvSnapshotHandle kvSnapshotHandle5 =
                     snapshot(5L, incrementalSnapshot, snapshotLocation, closeableRegistry);
             // discard the snapshot handle
-            kvSnapshotHandle5.discard();
+            kvSnapshotHandle5.discardAll();
 
             // we can still restore from cp4
             Path dest3 = snapshotDownDir.resolve("restore3");

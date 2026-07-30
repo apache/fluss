@@ -21,7 +21,9 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.fs.FSDataOutputStream;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.utils.json.CompletedSnapshotJsonSerde;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -160,7 +162,7 @@ public class CompletedSnapshotStore {
         checkNotNull(snapshot, "Snapshot");
 
         // register the completed snapshot to the shared registry
-        snapshot.registerSharedKvFilesAfterRestored(sharedKvFileRegistry);
+        sharedKvFileRegistry.registerAllAfterRestored(snapshot);
 
         CompletedSnapshotHandle completedSnapshotHandle = store(snapshot);
         completedSnapshotHandleStore.add(
@@ -208,7 +210,7 @@ public class CompletedSnapshotStore {
                     // Snapshot metadata/private files cleanup: use the latest snapshot
                     // ID + 1 so subsumed snapshots can be cleaned even when a lower
                     // snapshot has a lease. This is safe because
-                    // KvSnapshotHandle.discard() only deletes private files and
+                    // KvSnapshotHandle.discardPrivateFiles() only deletes private files and
                     // metadata, not shared SST files registered in SharedKvFileRegistry.
                     snapshotsCleaner.cleanSubsumedSnapshots(
                             snapshot.getSnapshotID() + 1, stillInUseIds, postCleanup, ioExecutor);

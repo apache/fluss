@@ -20,6 +20,7 @@ package org.apache.fluss.server.kv.snapshot;
 import org.apache.fluss.fs.FSDataOutputStream;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.kv.snapshot.KvFileHandle;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

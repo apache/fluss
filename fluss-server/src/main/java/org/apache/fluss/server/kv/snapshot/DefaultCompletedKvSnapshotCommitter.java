@@ -19,6 +19,7 @@ package org.apache.fluss.server.kv.snapshot;
 
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.rpc.GatewayClientProxy;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
