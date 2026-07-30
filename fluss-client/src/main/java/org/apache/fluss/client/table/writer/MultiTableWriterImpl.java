@@ -237,6 +237,7 @@ class MultiTableWriterImpl implements MultiTableWriter {
                 schema,
                 base.getBucketKeys(),
                 base.getPartitionKeys(),
+                base.getPartitionExpressions(),
                 base.getNumBuckets(),
                 base.getProperties(),
                 base.getCustomProperties(),

@@ -32,6 +32,7 @@ import org.apache.fluss.flink.sink.writer.AppendSinkWriter;
 import org.apache.fluss.flink.sink.writer.FlinkSinkWriter;
 import org.apache.fluss.flink.sink.writer.UpsertSinkWriter;
 import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.PartitionExpression;
 import org.apache.fluss.metadata.TablePath;
 
 import org.apache.flink.api.common.functions.FlatMapFunction;
@@ -50,6 +51,7 @@ import org.apache.flink.table.types.logical.RowType;
 import javax.annotation.Nullable;
 
 import java.io.Serializable;
+import java.util.Collections;
 import java.util.List;
 
 import static org.apache.fluss.flink.sink.FlinkStreamPartitioner.partition;
@@ -123,6 +125,7 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
         private final int numBucket;
         private final List<String> bucketKeys;
         private final List<String> partitionKeys;
+        private final List<PartitionExpression> partitionExpressions;
         private final @Nullable DataLakeFormat lakeFormat;
         private final DistributionMode distributionMode;
         private final FlussSerializationSchema<InputT> flussSerializationSchema;
@@ -137,12 +140,37 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
                 @Nullable DataLakeFormat lakeFormat,
                 DistributionMode distributionMode,
                 FlussSerializationSchema<InputT> flussSerializationSchema) {
+            this(
+                    tablePath,
+                    flussConfig,
+                    tableRowType,
+                    numBucket,
+                    bucketKeys,
+                    partitionKeys,
+                    Collections.emptyList(),
+                    lakeFormat,
+                    distributionMode,
+                    flussSerializationSchema);
+        }
+
+        public AppendSinkWriterBuilder(
+                TablePath tablePath,
+                Configuration flussConfig,
+                RowType tableRowType,
+                int numBucket,
+                List<String> bucketKeys,
+                List<String> partitionKeys,
+                List<PartitionExpression> partitionExpressions,
+                @Nullable DataLakeFormat lakeFormat,
+                DistributionMode distributionMode,
+                FlussSerializationSchema<InputT> flussSerializationSchema) {
             this.tablePath = tablePath;
             this.flussConfig = flussConfig;
             this.tableRowType = tableRowType;
             this.numBucket = numBucket;
             this.bucketKeys = bucketKeys;
             this.partitionKeys = partitionKeys;
+            this.partitionExpressions = partitionExpressions;
             this.lakeFormat = lakeFormat;
             this.distributionMode = distributionMode;
             this.flussSerializationSchema = flussSerializationSchema;
@@ -188,6 +216,7 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
                                             new DataStatisticsOperatorFactory<>(
                                                     toFlussRowType(tableRowType),
                                                     partitionKeys,
+                                                    partitionExpressions,
                                                     flussSerializationSchema))
                                     // Set the parallelism same as input operator to encourage
                                     // chaining
@@ -199,6 +228,7 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
                                             toFlussRowType(tableRowType),
                                             bucketKeys,
                                             partitionKeys,
+                                            partitionExpressions,
                                             numBucket,
                                             lakeFormat,
                                             flussSerializationSchema),
@@ -229,6 +259,7 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
                             toFlussRowType(tableRowType),
                             bucketKeys,
                             partitionKeys,
+                            partitionExpressions,
                             lakeFormat,
                             numBucket,
                             flussSerializationSchema),
@@ -249,6 +280,7 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
         private final int numBucket;
         private final List<String> bucketKeys;
         private final List<String> partitionKeys;
+        private final List<PartitionExpression> partitionExpressions;
         private final @Nullable DataLakeFormat lakeFormat;
         private final DistributionMode distributionMode;
         private final FlussSerializationSchema<InputT> flussSerializationSchema;
@@ -280,6 +312,36 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
                 FlussSerializationSchema<InputT> flussSerializationSchema,
                 boolean enableUndoRecovery,
                 @Nullable String producerId) {
+            this(
+                    tablePath,
+                    flussConfig,
+                    tableRowType,
+                    targetColumnIndexes,
+                    numBucket,
+                    bucketKeys,
+                    partitionKeys,
+                    Collections.emptyList(),
+                    lakeFormat,
+                    distributionMode,
+                    flussSerializationSchema,
+                    enableUndoRecovery,
+                    producerId);
+        }
+
+        UpsertSinkWriterBuilder(
+                TablePath tablePath,
+                Configuration flussConfig,
+                RowType tableRowType,
+                @Nullable int[] targetColumnIndexes,
+                int numBucket,
+                List<String> bucketKeys,
+                List<String> partitionKeys,
+                List<PartitionExpression> partitionExpressions,
+                @Nullable DataLakeFormat lakeFormat,
+                DistributionMode distributionMode,
+                FlussSerializationSchema<InputT> flussSerializationSchema,
+                boolean enableUndoRecovery,
+                @Nullable String producerId) {
             this.tablePath = tablePath;
             this.flussConfig = flussConfig;
             this.tableRowType = tableRowType;
@@ -287,6 +349,7 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
             this.numBucket = numBucket;
             this.bucketKeys = bucketKeys;
             this.partitionKeys = partitionKeys;
+            this.partitionExpressions = partitionExpressions;
             this.lakeFormat = lakeFormat;
             this.distributionMode = distributionMode;
             this.flussSerializationSchema = flussSerializationSchema;
@@ -331,6 +394,7 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
                                             toFlussRowType(tableRowType),
                                             bucketKeys,
                                             partitionKeys,
+                                            partitionExpressions,
                                             lakeFormat,
                                             numBucket,
                                             flussSerializationSchema),

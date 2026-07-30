@@ -18,6 +18,7 @@
 package org.apache.fluss.lake.lakestorage;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.metadata.TableChange;
@@ -36,6 +37,23 @@ import java.util.List;
  */
 @PublicEvolving
 public interface LakeCatalog extends AutoCloseable {
+
+    /**
+     * Validates that this lake format can represent the expected Fluss table metadata.
+     *
+     * <p>The default implementation rejects implicit partition expressions. Lake formats must
+     * explicitly opt in after validating equivalent transform, type, ordering, and time-zone
+     * semantics.
+     *
+     * @param tableDescriptor descriptor of the expected table
+     * @param context contextual information for the table operation
+     */
+    default void validateTable(TableDescriptor tableDescriptor, Context context) {
+        if (tableDescriptor.hasPartitionExpressions()) {
+            throw new InvalidTableException(
+                    "The selected lake format does not support implicit partition expressions.");
+        }
+    }
 
     /**
      * Create a new table in lake.

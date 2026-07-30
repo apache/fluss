@@ -19,7 +19,6 @@ package org.apache.fluss.client.lookup;
 
 import org.apache.fluss.bucketing.BucketingFunction;
 import org.apache.fluss.client.metadata.MetadataUpdater;
-import org.apache.fluss.client.table.getter.PartitionGetter;
 import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.metadata.DataLakeFormat;
@@ -30,6 +29,7 @@ import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.utils.PartitionComputer;
 
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.NotThreadSafe;
@@ -73,7 +73,7 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
     private final Set<String> confirmedHistoricalPartitions;
 
     /** a getter to extract partition from lookup key row, null when it's not a partitioned. */
-    private @Nullable final PartitionGetter partitionGetter;
+    private @Nullable final PartitionComputer partitionComputer;
 
     public PrimaryKeyLookuper(
             TableInfo tableInfo,
@@ -109,10 +109,8 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
 
         this.bucketingFunction = BucketingFunction.of(lakeFormat);
 
-        this.partitionGetter =
-                tableInfo.isPartitioned()
-                        ? new PartitionGetter(lookupRowType, tableInfo.getPartitionKeys())
-                        : null;
+        this.partitionComputer =
+                tableInfo.isPartitioned() ? new PartitionComputer(tableInfo, lookupRowType) : null;
     }
 
     @Override
@@ -127,8 +125,8 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
         Long partitionId = null;
         String originalPartitionName = null;
         int bucketCount = numBuckets;
-        if (partitionGetter != null) {
-            originalPartitionName = partitionGetter.getPartition(lookupKey);
+        if (partitionComputer != null) {
+            originalPartitionName = partitionComputer.getPartition(lookupKey);
             if (confirmedHistoricalPartitions.contains(originalPartitionName)) {
                 return historicalLookup(bkBytes, pkBytes, originalPartitionName);
             }

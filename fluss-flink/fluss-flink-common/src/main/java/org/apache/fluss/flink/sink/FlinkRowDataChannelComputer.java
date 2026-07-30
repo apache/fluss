@@ -19,20 +19,22 @@ package org.apache.fluss.flink.sink;
 
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.bucketing.BucketingFunction;
-import org.apache.fluss.client.table.getter.PartitionGetter;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.flink.row.RowWithOp;
 import org.apache.fluss.flink.sink.serializer.FlussSerializationSchema;
 import org.apache.fluss.flink.sink.serializer.SerializerInitContextImpl;
 import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.PartitionExpression;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.utils.PartitionComputer;
 
 import org.apache.flink.table.data.RowData;
 
 import javax.annotation.Nullable;
 
+import java.util.Collections;
 import java.util.List;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -47,13 +49,14 @@ public class FlinkRowDataChannelComputer<InputT> implements ChannelComputer<Inpu
     private final RowType flussRowType;
     private final List<String> bucketKeys;
     private final List<String> partitionKeys;
+    private final List<PartitionExpression> partitionExpressions;
     private final FlussSerializationSchema<InputT> serializationSchema;
 
     private transient int numChannels;
     private transient BucketingFunction bucketingFunction;
     private transient KeyEncoder bucketKeyEncoder;
     private transient boolean combineShuffleWithPartitionName;
-    private transient @Nullable PartitionGetter partitionGetter;
+    private transient @Nullable PartitionComputer partitionComputer;
 
     public FlinkRowDataChannelComputer(
             RowType flussRowType,
@@ -62,9 +65,28 @@ public class FlinkRowDataChannelComputer<InputT> implements ChannelComputer<Inpu
             @Nullable DataLakeFormat lakeFormat,
             int numBucket,
             FlussSerializationSchema<InputT> serializationSchema) {
+        this(
+                flussRowType,
+                bucketKeys,
+                partitionKeys,
+                Collections.emptyList(),
+                lakeFormat,
+                numBucket,
+                serializationSchema);
+    }
+
+    public FlinkRowDataChannelComputer(
+            RowType flussRowType,
+            List<String> bucketKeys,
+            List<String> partitionKeys,
+            List<PartitionExpression> partitionExpressions,
+            @Nullable DataLakeFormat lakeFormat,
+            int numBucket,
+            FlussSerializationSchema<InputT> serializationSchema) {
         this.flussRowType = flussRowType;
         this.bucketKeys = bucketKeys;
         this.partitionKeys = partitionKeys;
+        this.partitionExpressions = partitionExpressions;
         this.lakeFormat = lakeFormat;
         this.numBucket = numBucket;
         this.serializationSchema = serializationSchema;
@@ -76,15 +98,16 @@ public class FlinkRowDataChannelComputer<InputT> implements ChannelComputer<Inpu
         this.bucketingFunction = BucketingFunction.of(lakeFormat);
         this.bucketKeyEncoder = KeyEncoder.ofBucketKeyEncoder(flussRowType, bucketKeys, lakeFormat);
         if (partitionKeys.isEmpty()) {
-            this.partitionGetter = null;
+            this.partitionComputer = null;
         } else {
-            this.partitionGetter = new PartitionGetter(flussRowType, partitionKeys);
+            this.partitionComputer =
+                    new PartitionComputer(partitionKeys, partitionExpressions, flussRowType);
         }
 
         // Use shared logic from ChannelComputer to determine sharding strategy
         this.combineShuffleWithPartitionName =
                 ChannelComputer.shouldCombinePartitionInSharding(
-                        partitionGetter != null, numBucket, numChannels);
+                        partitionComputer != null, numBucket, numChannels);
 
         try {
             // no need to read real database, thus assume to deserialize the fluss row as same as
@@ -105,8 +128,8 @@ public class FlinkRowDataChannelComputer<InputT> implements ChannelComputer<Inpu
             if (!combineShuffleWithPartitionName) {
                 return ChannelComputer.select(bucketId, numChannels);
             } else {
-                checkNotNull(partitionGetter, "partitionGetter is null");
-                String partitionName = partitionGetter.getPartition(row);
+                checkNotNull(partitionComputer, "partitionComputer is null");
+                String partitionName = partitionComputer.getPartition(row);
                 return ChannelComputer.select(partitionName, bucketId, numChannels);
             }
         } catch (Exception e) {

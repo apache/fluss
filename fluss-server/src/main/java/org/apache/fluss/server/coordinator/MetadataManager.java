@@ -800,6 +800,7 @@ public class MetadataManager {
                 getUpdatedTableDescriptor(tableDescriptor, tablePropertyChanges);
 
         if (newDescriptor != null) {
+            newDescriptor = CoordinatorService.applyImplicitPartitionDefaults(newDescriptor);
             // is to enable datalake for the table
             if (isDataLakeEnabled(newDescriptor) && !isDataLakeEnabled(tableDescriptor)) {
                 // The table was created before cluster-level datalake was enabled.
@@ -965,6 +966,7 @@ public class MetadataManager {
                 lakeTablePath =
                         LakeTableUtil.resolveLakeTablePath(
                                 tablePath, Configuration.fromMap(newDescriptor.getProperties()));
+                lakeCatalog.validateTable(newDescriptor, lakeCatalogContext);
                 try {
                     lakeCatalog.createTable(lakeTablePath, newDescriptor, lakeCatalogContext);
                 } catch (TableAlreadyExistException e) {
