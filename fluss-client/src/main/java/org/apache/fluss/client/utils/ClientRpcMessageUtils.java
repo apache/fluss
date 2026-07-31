@@ -37,6 +37,7 @@ import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
 import org.apache.fluss.cluster.rebalance.RebalanceProgress;
 import org.apache.fluss.cluster.rebalance.RebalanceResultForBucket;
 import org.apache.fluss.cluster.rebalance.RebalanceStatus;
+import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.config.cluster.ColumnPositionType;
 import org.apache.fluss.config.cluster.ConfigEntry;
@@ -968,7 +969,10 @@ public class ClientRpcMessageUtils {
                                         load.getNumReplicas(),
                                         load.getInSyncReplicas(),
                                         load.getNumLeaderReplicas(),
-                                        load.getActiveLeaderReplicas()))
+                                        load.getActiveLeaderReplicas(),
+                                        load.hasServerTag()
+                                                ? ServerTag.valueOf(load.getServerTag())
+                                                : null))
                 .collect(Collectors.toList());
     }
 }

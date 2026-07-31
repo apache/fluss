@@ -19,6 +19,7 @@ package org.apache.fluss.server.coordinator;
 
 import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.messages.DescribeTabletServersResponse;
 import org.apache.fluss.rpc.messages.GetClusterHealthResponse;
@@ -165,6 +166,20 @@ class DescribeTabletServersTest {
     }
 
     @Test
+    void testServerTagsAreReported() {
+        ctx.putServerTag(1, ServerTag.TEMPORARY_OFFLINE);
+        // server 5 is dead and hosts no replicas, but its tag must remain visible
+        ctx.putServerTag(5, ServerTag.PERMANENT_OFFLINE);
+
+        DescribeTabletServersResponse resp = CoordinatorService.computeTabletServerLoads(ctx);
+
+        assertThat(findLoad(resp, 0).hasServerTag()).isFalse();
+        assertThat(findLoad(resp, 1).getServerTag()).isEqualTo(ServerTag.TEMPORARY_OFFLINE.value);
+        assertThat(findLoad(resp, 5).getServerTag()).isEqualTo(ServerTag.PERMANENT_OFFLINE.value);
+        assertLoad(resp, 5, 0, 0, 0, 0);
+    }
+
+    @Test
     void testPerServerSumsReconcileWithClusterHealth() {
         TableBucket tb1 = new TableBucket(1L, 0);
         TableBucket tb2 = new TableBucket(1L, 1);
@@ -211,14 +226,7 @@ class DescribeTabletServersTest {
             int inSyncReplicas,
             int numLeaderReplicas,
             int activeLeaderReplicas) {
-        PbTabletServerLoad load =
-                resp.getTabletServersList().stream()
-                        .filter(l -> l.getServerId() == serverId)
-                        .findFirst()
-                        .orElseThrow(
-                                () ->
-                                        new AssertionError(
-                                                "no load reported for tablet server " + serverId));
+        PbTabletServerLoad load = findLoad(resp, serverId);
         assertThat(load.getNumReplicas())
                 .as("numReplicas of server %s", serverId)
                 .isEqualTo(numReplicas);
@@ -231,6 +239,14 @@ class DescribeTabletServersTest {
         assertThat(load.getActiveLeaderReplicas())
                 .as("activeLeaderReplicas of server %s", serverId)
                 .isEqualTo(activeLeaderReplicas);
+    }
+
+    private static PbTabletServerLoad findLoad(DescribeTabletServersResponse resp, int serverId) {
+        return resp.getTabletServersList().stream()
+                .filter(l -> l.getServerId() == serverId)
+                .findFirst()
+                .orElseThrow(
+                        () -> new AssertionError("no load reported for tablet server " + serverId));
     }
 
     private static ServerInfo makeServerInfo(int id) {

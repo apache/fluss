@@ -18,8 +18,12 @@
 package org.apache.fluss.client.admin;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.cluster.rebalance.ServerTag;
+
+import javax.annotation.Nullable;
 
 import java.util.Objects;
+import java.util.Optional;
 
 /**
  * Per tablet server replica load returned by {@link Admin#describeTabletServers()}.
@@ -56,18 +60,21 @@ public final class TabletServerDescription {
     private final int inSyncReplicas;
     private final int numLeaderReplicas;
     private final int activeLeaderReplicas;
+    private final @Nullable ServerTag serverTag;
 
     public TabletServerDescription(
             int serverId,
             int numReplicas,
             int inSyncReplicas,
             int numLeaderReplicas,
-            int activeLeaderReplicas) {
+            int activeLeaderReplicas,
+            @Nullable ServerTag serverTag) {
         this.serverId = serverId;
         this.numReplicas = numReplicas;
         this.inSyncReplicas = inSyncReplicas;
         this.numLeaderReplicas = numLeaderReplicas;
         this.activeLeaderReplicas = activeLeaderReplicas;
+        this.serverTag = serverTag;
     }
 
     public int getServerId() {
@@ -94,6 +101,15 @@ public final class TabletServerDescription {
         return activeLeaderReplicas;
     }
 
+    /**
+     * The {@link ServerTag} set on this server via {@link Admin#addServerTag}, or empty if the
+     * server is untagged. A tagged server is being drained, so it is reported even when it is dead
+     * and hosts no replicas.
+     */
+    public Optional<ServerTag> getServerTag() {
+        return Optional.ofNullable(serverTag);
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) {
@@ -107,13 +123,19 @@ public final class TabletServerDescription {
                 && numReplicas == that.numReplicas
                 && inSyncReplicas == that.inSyncReplicas
                 && numLeaderReplicas == that.numLeaderReplicas
-                && activeLeaderReplicas == that.activeLeaderReplicas;
+                && activeLeaderReplicas == that.activeLeaderReplicas
+                && serverTag == that.serverTag;
     }
 
     @Override
     public int hashCode() {
         return Objects.hash(
-                serverId, numReplicas, inSyncReplicas, numLeaderReplicas, activeLeaderReplicas);
+                serverId,
+                numReplicas,
+                inSyncReplicas,
+                numLeaderReplicas,
+                activeLeaderReplicas,
+                serverTag);
     }
 
     @Override
@@ -129,6 +151,8 @@ public final class TabletServerDescription {
                 + numLeaderReplicas
                 + ", activeLeaderReplicas="
                 + activeLeaderReplicas
+                + ", serverTag="
+                + serverTag
                 + '}';
     }
 }
