@@ -822,6 +822,7 @@ message PbTabletServerLoad {
   required int32 in_sync_replicas = 3;
   required int32 num_leader_replicas = 4;
   required int32 active_leader_replicas = 5;
+  optional int32 server_tag = 6; // ServerTag: PERMANENT_OFFLINE=0, TEMPORARY_OFFLINE=1
 }
 
 message PbApiVersion {

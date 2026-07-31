@@ -1527,6 +1527,12 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             countBucketReplicas(ctx, tb, loads);
         }
 
+        // tagged servers are being drained, so report them even when dead and empty
+        ctx.getServerTags()
+                .forEach(
+                        (serverId, tag) ->
+                                getOrCreateLoad(loads, serverId).setServerTag(tag.value));
+
         DescribeTabletServersResponse response = new DescribeTabletServersResponse();
         response.addAllTabletServers(loads.values());
         return response;

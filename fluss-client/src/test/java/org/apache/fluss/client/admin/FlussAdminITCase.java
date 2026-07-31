@@ -2305,6 +2305,14 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .containsEntry(0, ServerTag.PERMANENT_OFFLINE)
                 .containsEntry(1, ServerTag.PERMANENT_OFFLINE);
 
+        // the tags are also visible via describeTabletServers.
+        List<TabletServerDescription> described = admin.describeTabletServers().get();
+        assertThat(getTabletServerDescription(described, 0).getServerTag())
+                .contains(ServerTag.PERMANENT_OFFLINE);
+        assertThat(getTabletServerDescription(described, 1).getServerTag())
+                .contains(ServerTag.PERMANENT_OFFLINE);
+        assertThat(getTabletServerDescription(described, 2).getServerTag()).isNotPresent();
+
         // 3.add different server tag for server 0,2. error will be thrown and tag for 2 will not be
         // added.
         assertThatThrownBy(
