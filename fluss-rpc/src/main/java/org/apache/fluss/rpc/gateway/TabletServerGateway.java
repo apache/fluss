@@ -30,6 +30,8 @@ import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerRequest;
 import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerResponse;
 import org.apache.fluss.rpc.messages.GetConsumerOffsetsRequest;
 import org.apache.fluss.rpc.messages.GetConsumerOffsetsResponse;
+import org.apache.fluss.rpc.messages.FreezePartitionRequest;
+import org.apache.fluss.rpc.messages.FreezePartitionResponse;
 import org.apache.fluss.rpc.messages.GetTableStatsRequest;
 import org.apache.fluss.rpc.messages.GetTableStatsResponse;
 import org.apache.fluss.rpc.messages.InitWriterRequest;
@@ -95,6 +97,10 @@ public interface TabletServerGateway extends RpcGateway, AdminReadOnlyGateway {
      */
     @RPC(api = ApiKeys.STOP_REPLICA)
     CompletableFuture<StopReplicaResponse> stopReplica(StopReplicaRequest stopBucketReplicaRequest);
+
+    /** Freeze writes to partition bucket leaders for lake-aware retention. */
+    @RPC(api = ApiKeys.FREEZE_PARTITION)
+    CompletableFuture<FreezePartitionResponse> freezePartition(FreezePartitionRequest request);
 
     /**
      * Produce log data to the specified table bucket.

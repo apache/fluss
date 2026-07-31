@@ -123,7 +123,8 @@ public enum ApiKeys {
     GET_CONSUMER_OFFSETS(1070, 0, 0, PUBLIC),
     DELETE_CONSUMER_OFFSETS(1071, 0, 0, PUBLIC),
     LIST_CONSUMER_GROUPS(1072, 0, 0, PUBLIC),
-    DELETE_CONSUMER_GROUPS(1073, 0, 0, PUBLIC);
+    DELETE_CONSUMER_GROUPS(1073, 0, 0, PUBLIC),
+    FREEZE_PARTITION(1074, 0, 0, PRIVATE);
 
     private static final Map<Integer, ApiKeys> ID_TO_TYPE =
             Arrays.stream(ApiKeys.values())

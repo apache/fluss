@@ -75,6 +75,8 @@ import org.apache.fluss.rpc.messages.CreateAclsResponse;
 import org.apache.fluss.rpc.messages.DropAclsResponse;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
+import org.apache.fluss.rpc.messages.FreezePartitionRequest;
+import org.apache.fluss.rpc.messages.FreezePartitionResponse;
 import org.apache.fluss.rpc.messages.GetFileSystemSecurityTokenResponse;
 import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataResponse;
 import org.apache.fluss.rpc.messages.GetLakeSnapshotResponse;
@@ -118,6 +120,8 @@ import org.apache.fluss.rpc.messages.PbFetchLogReqForBucket;
 import org.apache.fluss.rpc.messages.PbFetchLogReqForTable;
 import org.apache.fluss.rpc.messages.PbFetchLogRespForBucket;
 import org.apache.fluss.rpc.messages.PbFetchLogRespForTable;
+import org.apache.fluss.rpc.messages.PbFreezePartitionReqForBucket;
+import org.apache.fluss.rpc.messages.PbFreezePartitionRespForBucket;
 import org.apache.fluss.rpc.messages.PbKeyValue;
 import org.apache.fluss.rpc.messages.PbKvSnapshot;
 import org.apache.fluss.rpc.messages.PbKvSnapshotLeaseForBucket;
@@ -180,6 +184,7 @@ import org.apache.fluss.server.entity.AdjustIsrResultForBucket;
 import org.apache.fluss.server.entity.CommitLakeTableSnapshotsData;
 import org.apache.fluss.server.entity.CommitRemoteLogManifestData;
 import org.apache.fluss.server.entity.FetchReqInfo;
+import org.apache.fluss.server.entity.FreezePartitionResultForBucket;
 import org.apache.fluss.server.entity.LakeBucketOffset;
 import org.apache.fluss.server.entity.LookupDataForBucket;
 import org.apache.fluss.server.entity.NotifyKvSnapshotOffsetData;
@@ -938,6 +943,49 @@ public class ServerRpcMessageUtils {
         }
         stopReplicaResponse.addAllStopReplicasResps(stopReplicaRespForBucketList);
         return stopReplicaResponse;
+    }
+
+    public static FreezePartitionRequest makeFreezePartitionRequest(
+            int coordinatorEpoch, Map<TableBucket, Integer> leaderEpochs) {
+        FreezePartitionRequest request =
+                new FreezePartitionRequest().setCoordinatorEpoch(coordinatorEpoch);
+        List<PbFreezePartitionReqForBucket> bucketRequests = new ArrayList<>();
+        leaderEpochs.forEach(
+                (tableBucket, leaderEpoch) ->
+                        bucketRequests.add(
+                                new PbFreezePartitionReqForBucket()
+                                        .setTableBucket(fromTableBucket(tableBucket))
+                                        .setLeaderEpoch(leaderEpoch)));
+        return request.addAllBucketsReqs(bucketRequests);
+    }
+
+    public static Map<TableBucket, Integer> getFreezePartitionData(FreezePartitionRequest request) {
+        Map<TableBucket, Integer> leaderEpochs = new HashMap<>();
+        for (PbFreezePartitionReqForBucket bucketRequest : request.getBucketsReqsList()) {
+            leaderEpochs.put(
+                    toTableBucket(bucketRequest.getTableBucket()), bucketRequest.getLeaderEpoch());
+        }
+        return leaderEpochs;
+    }
+
+    public static FreezePartitionResponse makeFreezePartitionResponse(
+            List<FreezePartitionResultForBucket> results) {
+        FreezePartitionResponse response = new FreezePartitionResponse();
+        List<PbFreezePartitionRespForBucket> bucketResponses = new ArrayList<>();
+        for (FreezePartitionResultForBucket result : results) {
+            PbFreezePartitionRespForBucket bucketResponse =
+                    new PbFreezePartitionRespForBucket()
+                            .setTableBucket(fromTableBucket(result.getTableBucket()));
+            if (result.failed()) {
+                bucketResponse.setError(result.getErrorCode(), result.getErrorMessage());
+            } else {
+                bucketResponse
+                        .setHighWatermark(result.getHighWatermark())
+                        .setLogEndOffset(result.getLogEndOffset());
+            }
+            bucketResponses.add(bucketResponse);
+        }
+        return response.addAllBucketsResps(bucketResponses);
     }
 
     /** Converts produce-log requests while preserving their historical partition context. */

@@ -77,6 +77,7 @@ import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.entity.FetchReqInfo;
+import org.apache.fluss.server.entity.FreezePartitionResultForBucket;
 import org.apache.fluss.server.entity.LakeBucketOffset;
 import org.apache.fluss.server.entity.LookupDataForBucket;
 import org.apache.fluss.server.entity.NotifyKvSnapshotOffsetData;
@@ -753,6 +754,37 @@ public class ReplicaManager implements ServerReconfigurable {
         }
         FutureUtils.combineAll(resultFutures)
                 .thenAccept(results -> responseCallback.accept(new ArrayList<>(results)));
+    }
+
+    /** Freeze writes to partition bucket leaders and return their stable offsets. */
+    public void freezePartitions(
+            int requestCoordinatorEpoch,
+            Map<TableBucket, Integer> leaderEpochs,
+            Consumer<List<FreezePartitionResultForBucket>> responseCallback) {
+        List<FreezePartitionResultForBucket> results = new ArrayList<>();
+        inLock(
+                replicaStateChangeLock,
+                () -> {
+                    validateAndApplyCoordinatorEpoch(requestCoordinatorEpoch, "freezePartitions");
+                    for (Map.Entry<TableBucket, Integer> entry : leaderEpochs.entrySet()) {
+                        TableBucket tableBucket = entry.getKey();
+                        try {
+                            Replica.FrozenOffsets frozenOffsets =
+                                    getReplicaOrException(tableBucket)
+                                            .freezeForRetention(entry.getValue());
+                            results.add(
+                                    new FreezePartitionResultForBucket(
+                                            tableBucket,
+                                            frozenOffsets.getHighWatermark(),
+                                            frozenOffsets.getLogEndOffset()));
+                        } catch (Exception e) {
+                            results.add(
+                                    new FreezePartitionResultForBucket(
+                                            tableBucket, ApiError.fromThrowable(e)));
+                        }
+                    }
+                });
+        responseCallback.accept(results);
     }
 
     /**

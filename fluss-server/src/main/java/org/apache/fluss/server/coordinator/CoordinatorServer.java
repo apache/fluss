@@ -344,14 +344,21 @@ public class CoordinatorServer extends ServerBase {
                             conf,
                             serverMetricGroup);
 
+            LakeAwarePartitionRetentionManager lakeAwarePartitionRetentionManager =
+                    new LakeAwarePartitionRetentionManager(
+                            metadataManager,
+                            zkClient,
+                            coordinatorChannelManager,
+                            zkEpoch.getCoordinatorEpoch(),
+                            ioExecutor);
             this.autoPartitionManager =
                     new AutoPartitionManager(
                             metadataCache,
                             metadataManager,
                             remoteDirDynamicLoader,
                             conf,
-                            replicaCapacityController);
-            autoPartitionManager.start();
+                            replicaCapacityController,
+                            lakeAwarePartitionRetentionManager);
 
             this.coordinatorEventProcessor =
                     new CoordinatorEventProcessor(
@@ -370,6 +377,7 @@ public class CoordinatorServer extends ServerBase {
                             scheduler,
                             clock);
             coordinatorEventProcessor.startup();
+            autoPartitionManager.start();
 
             // As the active leader, this server is the sole writer of dynamic configs and holds the
             // latest values, so stop consuming change notifications to avoid rolling a value back.

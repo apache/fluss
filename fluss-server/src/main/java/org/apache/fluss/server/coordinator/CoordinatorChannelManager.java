@@ -23,9 +23,12 @@ import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.metrics.groups.MetricGroup;
+import org.apache.fluss.exception.TabletServerNotAvailableException;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.ApiMessage;
+import org.apache.fluss.rpc.messages.FreezePartitionRequest;
+import org.apache.fluss.rpc.messages.FreezePartitionResponse;
 import org.apache.fluss.rpc.messages.NotifyKvSnapshotOffsetRequest;
 import org.apache.fluss.rpc.messages.NotifyKvSnapshotOffsetResponse;
 import org.apache.fluss.rpc.messages.NotifyLakeTableOffsetRequest;
@@ -48,6 +51,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
+import javax.annotation.concurrent.ThreadSafe;
 
 import java.util.Collection;
 import java.util.HashMap;
@@ -68,6 +72,7 @@ import static org.apache.fluss.utils.Preconditions.checkState;
  * sizes. Mirrors Kafka's {@code ControllerChannelManager} which uses a {@code brokerLock} for the
  * same purpose.
  */
+@ThreadSafe
 public class CoordinatorChannelManager {
 
     private static final Logger LOG = LoggerFactory.getLogger(CoordinatorChannelManager.class);
@@ -275,6 +280,20 @@ public class CoordinatorChannelManager {
                     "Interrupted while enqueueing {} for tablet server {}", apiKey, targetServerId);
             return false;
         }
+    }
+
+    /** Send a request to freeze partition writes on a tablet server. */
+    public CompletableFuture<FreezePartitionResponse> sendFreezePartitionRequest(
+            int receiveServerId, FreezePartitionRequest request) {
+        Optional<TabletServerGateway> gateway = getTabletServerGateway(receiveServerId);
+        if (gateway.isPresent()) {
+            return gateway.get().freezePartition(request);
+        }
+        CompletableFuture<FreezePartitionResponse> response = new CompletableFuture<>();
+        response.completeExceptionally(
+                new TabletServerNotAvailableException(
+                        "Tablet server " + receiveServerId + " is not available."));
+        return response;
     }
 
     /** Send UpdateMetadataRequest to the server and handle the response. */
