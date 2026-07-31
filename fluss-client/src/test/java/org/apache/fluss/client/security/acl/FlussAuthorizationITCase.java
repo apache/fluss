@@ -52,11 +52,15 @@ import org.apache.fluss.rpc.gateway.AdminGateway;
 import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.rpc.messages.CommitKvSnapshotRequest;
+import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
 import org.apache.fluss.rpc.messages.ControlledShutdownRequest;
 import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataRequest;
 import org.apache.fluss.rpc.messages.InitWriterRequest;
 import org.apache.fluss.rpc.messages.InitWriterResponse;
 import org.apache.fluss.rpc.messages.MetadataRequest;
+import org.apache.fluss.rpc.messages.NotifyKvSnapshotOffsetRequest;
+import org.apache.fluss.rpc.messages.NotifyLakeTableOffsetRequest;
 import org.apache.fluss.rpc.messages.ReleaseKvSnapshotLeaseRequest;
 import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
 import org.apache.fluss.security.acl.AccessControlEntry;
@@ -1389,6 +1393,104 @@ public class FlussAuthorizationITCase {
 
         // Cleanup
         rootAdmin.dropTable(testTablePath, true).get();
+    }
+
+    @Test
+    void testSnapshotManagementAuthorization() throws Exception {
+        // These RPCs are internal-only and should reject all external sessions,
+        // regardless of permissions
+        try (RpcClient rpcClient =
+                RpcClient.create(guestConf, TestingClientMetricGroup.newInstance())) {
+
+            TabletServerGateway guestTabletGateway =
+                    GatewayClientProxy.createGatewayProxy(
+                            () -> FLUSS_CLUSTER_EXTENSION.getTabletServerNodes("CLIENT").get(0),
+                            rpcClient,
+                            TabletServerGateway.class);
+
+            CoordinatorGateway guestCoordinatorGateway =
+                    GatewayClientProxy.createGatewayProxy(
+                            () -> FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode("CLIENT"),
+                            rpcClient,
+                            CoordinatorGateway.class);
+
+            // Test 1: notifyKvSnapshotOffset should reject external sessions
+            NotifyKvSnapshotOffsetRequest notifyKvRequest = new NotifyKvSnapshotOffsetRequest();
+            notifyKvRequest.setTableId(1L);
+            notifyKvRequest.setBucketId(0);
+            notifyKvRequest.setCoordinatorEpoch(1);
+            notifyKvRequest.setMinRetainOffset(0L);
+            assertThatThrownBy(
+                            () -> guestTabletGateway.notifyKvSnapshotOffset(notifyKvRequest).get())
+                    .rootCause()
+                    .isInstanceOf(AuthorizationException.class)
+                    .hasMessageContaining(
+                            "NotifyKvSnapshotOffset is an internal RPC and cannot be called by external clients");
+
+            // Test 2: notifyLakeTableOffset should reject external sessions
+            NotifyLakeTableOffsetRequest notifyLakeRequest = new NotifyLakeTableOffsetRequest();
+            notifyLakeRequest.setCoordinatorEpoch(1);
+            assertThatThrownBy(
+                            () -> guestTabletGateway.notifyLakeTableOffset(notifyLakeRequest).get())
+                    .rootCause()
+                    .isInstanceOf(AuthorizationException.class)
+                    .hasMessageContaining(
+                            "NotifyLakeTableOffset is an internal RPC and cannot be called by external clients");
+
+            // Test 3: commitKvSnapshot should reject external sessions
+            CommitKvSnapshotRequest commitKvRequest = new CommitKvSnapshotRequest();
+            commitKvRequest.setCompletedSnapshot(new byte[0]);
+            commitKvRequest.setCoordinatorEpoch(1);
+            commitKvRequest.setBucketLeaderEpoch(1);
+            assertThatThrownBy(
+                            () -> guestCoordinatorGateway.commitKvSnapshot(commitKvRequest).get())
+                    .rootCause()
+                    .isInstanceOf(AuthorizationException.class)
+                    .hasMessageContaining(
+                            "CommitKvSnapshot is an internal RPC and cannot be called by external clients");
+
+            // Test 4: commitLakeTableSnapshot should reject external sessions
+            CommitLakeTableSnapshotRequest commitLakeRequest = new CommitLakeTableSnapshotRequest();
+            assertThatThrownBy(
+                            () ->
+                                    guestCoordinatorGateway
+                                            .commitLakeTableSnapshot(commitLakeRequest)
+                                            .get())
+                    .rootCause()
+                    .isInstanceOf(AuthorizationException.class)
+                    .hasMessageContaining(
+                            "CommitLakeTableSnapshot is an internal RPC and cannot be called by external clients");
+        }
+
+        // Test 5: Even root user (super user) cannot call these RPCs from external sessions
+        Configuration rootClientConf =
+                new Configuration(FLUSS_CLUSTER_EXTENSION.getClientConfig("CLIENT"));
+        rootClientConf.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "sasl");
+        rootClientConf.set(ConfigOptions.CLIENT_SASL_MECHANISM, "plain");
+        rootClientConf.setString("client.security.sasl.username", "root");
+        rootClientConf.setString("client.security.sasl.password", "password");
+
+        try (RpcClient rootRpcClient =
+                RpcClient.create(rootClientConf, TestingClientMetricGroup.newInstance())) {
+
+            TabletServerGateway rootTabletGateway =
+                    GatewayClientProxy.createGatewayProxy(
+                            () -> FLUSS_CLUSTER_EXTENSION.getTabletServerNodes("CLIENT").get(0),
+                            rootRpcClient,
+                            TabletServerGateway.class);
+
+            NotifyKvSnapshotOffsetRequest notifyKvRequest = new NotifyKvSnapshotOffsetRequest();
+            notifyKvRequest.setTableId(1L);
+            notifyKvRequest.setBucketId(0);
+            notifyKvRequest.setCoordinatorEpoch(1);
+            notifyKvRequest.setMinRetainOffset(0L);
+            assertThatThrownBy(
+                            () -> rootTabletGateway.notifyKvSnapshotOffset(notifyKvRequest).get())
+                    .rootCause()
+                    .isInstanceOf(AuthorizationException.class)
+                    .hasMessageContaining(
+                            "NotifyKvSnapshotOffset is an internal RPC and cannot be called by external clients");
+        }
     }
 
     private static Configuration initConfig() {
