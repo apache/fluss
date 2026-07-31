@@ -65,8 +65,9 @@ public class FlinkSourceReaderMetrics {
     // Map for tracking current consuming offsets
     private final Map<TableBucket, Long> offsets = new HashMap<>();
 
-    // For currentFetchEventTimeLag metric
-    private volatile long currentFetchEventTimeLag = UNINITIALIZED;
+    private volatile long maxFetchEventTimeLag = UNINITIALIZED;
+    // Map for tracking current fetch event time lag by table bucket
+    private final Map<TableBucket, Long> currentFetchEventTimeLags = new HashMap<>();
 
     public FlinkSourceReaderMetrics(SourceReaderMetricGroup sourceReaderMetricGroup) {
         this.sourceReaderMetricGroup = sourceReaderMetricGroup;
@@ -74,17 +75,20 @@ public class FlinkSourceReaderMetrics {
                 sourceReaderMetricGroup.addGroup(FLUSS_METRIC_GROUP).addGroup(READER_METRIC_GROUP);
     }
 
-    public void reportRecordEventTime(long lag) {
-        if (currentFetchEventTimeLag == UNINITIALIZED) {
-            // Lazily register the currentFetchEventTimeLag
-            // Set the lag before registering the metric to avoid metric reporter getting
-            // the uninitialized value
-            currentFetchEventTimeLag = lag;
-            sourceReaderMetricGroup.gauge(
-                    MetricNames.CURRENT_FETCH_EVENT_TIME_LAG, () -> currentFetchEventTimeLag);
-            return;
+    public void reportRecordEventTime(TableBucket tableBucket, long timestamp) {
+        if (!currentFetchEventTimeLags.containsKey(tableBucket)) {
+            registerEventTimeLagMetricsForTableBucket(tableBucket);
         }
-        currentFetchEventTimeLag = lag;
+        long lag = System.currentTimeMillis() - timestamp;
+        currentFetchEventTimeLags.put(tableBucket, lag);
+
+        if (lag > maxFetchEventTimeLag) {
+            if (maxFetchEventTimeLag == UNINITIALIZED) {
+                sourceReaderMetricGroup.gauge(
+                        MetricNames.CURRENT_FETCH_EVENT_TIME_LAG, () -> maxFetchEventTimeLag);
+            }
+            maxFetchEventTimeLag = lag;
+        }
     }
 
     public void registerTableBucket(TableBucket tableBucket) {
@@ -105,16 +109,26 @@ public class FlinkSourceReaderMetrics {
 
     // -------- Helper functions --------
     private void registerOffsetMetricsForTableBucket(TableBucket tableBucket) {
+        getMetricGroupForTableBucket(tableBucket)
+                .gauge(
+                        CURRENT_OFFSET_METRIC_GAUGE,
+                        () -> offsets.getOrDefault(tableBucket, INITIAL_OFFSET));
+    }
+
+    private void registerEventTimeLagMetricsForTableBucket(TableBucket tableBucket) {
+        getMetricGroupForTableBucket(tableBucket)
+                .gauge(
+                        MetricNames.CURRENT_FETCH_EVENT_TIME_LAG,
+                        () -> currentFetchEventTimeLags.getOrDefault(tableBucket, UNINITIALIZED));
+    }
+
+    private MetricGroup getMetricGroupForTableBucket(TableBucket tableBucket) {
         final MetricGroup metricGroup =
                 tableBucket.getPartitionId() == null
                         ? this.flussSourceReaderMetricGroup
                         : this.flussSourceReaderMetricGroup.addGroup(
                                 PARTITION_GROUP, String.valueOf(tableBucket.getPartitionId()));
-        final MetricGroup bucketGroup =
-                metricGroup.addGroup(BUCKET_GROUP, String.valueOf(tableBucket.getBucket()));
-        bucketGroup.gauge(
-                CURRENT_OFFSET_METRIC_GAUGE,
-                () -> offsets.getOrDefault(tableBucket, INITIAL_OFFSET));
+        return metricGroup.addGroup(BUCKET_GROUP, String.valueOf(tableBucket.getBucket()));
     }
 
     private void checkTableBucketTracked(TableBucket tableBucket) {

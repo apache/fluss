@@ -17,7 +17,10 @@
 
 package org.apache.fluss.flink.source.reader;
 
+import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.scanner.batch.BatchScanner;
+import org.apache.fluss.record.ChangeType;
+import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.ProjectedRow;
 import org.apache.fluss.row.indexed.IndexedRow;
@@ -143,6 +146,25 @@ class BoundedSplitReaderTest {
         }
     }
 
+    @Test
+    void testLakeLogRecordMetadataPreserved() throws IOException {
+        List<LogRecord> logRecords = new ArrayList<>();
+        logRecords.add(new ScanRecord(1L, 1000L, ChangeType.INSERT, row(1, "a")));
+        logRecords.add(new ScanRecord(2L, 2000L, ChangeType.DELETE, row(2, "b")));
+
+        TestingLakeLogRecordBatchScanner scanner = new TestingLakeLogRecordBatchScanner(logRecords);
+        BoundedSplitReader reader = new BoundedSplitReader(scanner, 0);
+
+        List<RecordAndPos> records = collectRecords(reader);
+        assertThat(records).hasSize(2);
+        assertThat(records.get(0).record().logOffset()).isEqualTo(1L);
+        assertThat(records.get(0).record().timestamp()).isEqualTo(1000L);
+        assertThat(records.get(0).record().getChangeType()).isEqualTo(ChangeType.INSERT);
+        assertThat(records.get(1).record().logOffset()).isEqualTo(2L);
+        assertThat(records.get(1).record().timestamp()).isEqualTo(2000L);
+        assertThat(records.get(1).record().getChangeType()).isEqualTo(ChangeType.DELETE);
+    }
+
     /** A testing {@link BatchScanner} with static returned records. */
     private static class TestingBatchScanner implements BatchScanner {
 
@@ -161,6 +183,51 @@ class BoundedSplitReaderTest {
         @Override
         public void close() throws IOException {
             // do nothing
+        }
+    }
+
+    /** A testing {@link BatchScanner} with static returned lake log records. */
+    private static class TestingLakeLogRecordBatchScanner implements BatchScanner {
+
+        private final CloseableIterator<InternalRow> rowIterator;
+
+        public TestingLakeLogRecordBatchScanner(List<LogRecord> records) {
+            this.rowIterator = new TestingLakeLogRecordIterator(records);
+        }
+
+        @Override
+        @Nullable
+        public CloseableIterator<InternalRow> pollBatch(Duration timeout) {
+            return rowIterator.hasNext() ? rowIterator : null;
+        }
+
+        @Override
+        public void close() throws IOException {
+            // do nothing
+        }
+    }
+
+    private static class TestingLakeLogRecordIterator implements LogRecordRowIterator {
+
+        private final CloseableIterator<LogRecord> records;
+
+        private TestingLakeLogRecordIterator(List<LogRecord> records) {
+            this.records = CloseableIterator.wrap(records.iterator());
+        }
+
+        @Override
+        public void close() {
+            records.close();
+        }
+
+        @Override
+        public boolean hasNext() {
+            return records.hasNext();
+        }
+
+        @Override
+        public LogRecord nextLogRecord() {
+            return records.next();
         }
     }
 

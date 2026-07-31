@@ -18,8 +18,8 @@
 
 package org.apache.fluss.flink.lake.reader;
 
+import org.apache.fluss.flink.source.reader.LogRecordRowIterator;
 import org.apache.fluss.record.LogRecord;
-import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.utils.CloseableIterator;
 
 /**
@@ -39,7 +39,7 @@ import org.apache.fluss.utils.CloseableIterator;
  *   <li>Maintains iterator semantics for sequential data access
  * </ul>
  */
-public class IndexedLakeSplitRecordIterator implements CloseableIterator<InternalRow> {
+public class IndexedLakeSplitRecordIterator implements LogRecordRowIterator {
     private final CloseableIterator<LogRecord> logRecordIterators;
     private final int currentLakeSplitIndex;
 
@@ -64,7 +64,7 @@ public class IndexedLakeSplitRecordIterator implements CloseableIterator<Interna
     }
 
     @Override
-    public InternalRow next() {
-        return logRecordIterators.next().getRow();
+    public LogRecord nextLogRecord() {
+        return logRecordIterators.next();
     }
 }

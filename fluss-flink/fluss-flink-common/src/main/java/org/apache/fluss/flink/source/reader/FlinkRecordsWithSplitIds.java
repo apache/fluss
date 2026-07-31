@@ -142,6 +142,11 @@ public class FlinkRecordsWithSplitIds implements RecordsWithSplitIds<RecordAndPo
                 flinkSourceReaderMetrics.recordCurrentOffset(currentTableBucket, offset);
             }
 
+            long timestamp = recordAndPos.record().timestamp();
+            if (timestamp > 0) {
+                flinkSourceReaderMetrics.reportRecordEventTime(currentTableBucket, timestamp);
+            }
+
             return recordAndPos;
         }
         return null;
