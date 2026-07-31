@@ -232,7 +232,7 @@ class SparkTieringJobRunner(
       val tieringRoundTimestamp = System.currentTimeMillis()
       val splits = rawSplits.zipWithIndex.map {
         case (s, idx) => s.copy(totalSplits, idx, tieringRoundTimestamp)
-      }
+      }.toSeq
 
       // Register tiering in coordinator state
       coordinator.registerTiering(tableId, tieringEpoch)
