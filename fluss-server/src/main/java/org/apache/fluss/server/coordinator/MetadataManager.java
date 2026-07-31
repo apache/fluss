@@ -930,6 +930,25 @@ public class MetadataManager {
         }
     }
 
+    Optional<PartitionRegistration> getPartitionRegistration(
+            TablePath tablePath, String partitionName) {
+        return getOptionalPartitionRegistration(tablePath, partitionName);
+    }
+
+    void updatePartitionRegistration(
+            TablePath tablePath,
+            String partitionName,
+            PartitionRegistration partitionRegistration) {
+        try {
+            zookeeperClient.updatePartition(tablePath, partitionName, partitionRegistration);
+        } catch (Exception e) {
+            throw new FlussRuntimeException(
+                    String.format(
+                            "Fail to update partition '%s' of table %s.", partitionName, tablePath),
+                    e);
+        }
+    }
+
     private void rethrowIfIsNotNoNodeException(
             ThrowingRunnable<Exception> throwingRunnable, String exceptionMessage) {
         try {

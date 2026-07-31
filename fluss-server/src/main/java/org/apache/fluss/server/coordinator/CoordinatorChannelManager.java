@@ -20,9 +20,12 @@ package org.apache.fluss.server.coordinator;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.exception.TabletServerNotAvailableException;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.ApiMessage;
+import org.apache.fluss.rpc.messages.FreezePartitionRequest;
+import org.apache.fluss.rpc.messages.FreezePartitionResponse;
 import org.apache.fluss.rpc.messages.NotifyKvSnapshotOffsetRequest;
 import org.apache.fluss.rpc.messages.NotifyKvSnapshotOffsetResponse;
 import org.apache.fluss.rpc.messages.NotifyLakeTableOffsetRequest;
@@ -40,7 +43,7 @@ import org.apache.fluss.server.utils.RpcGatewayManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.annotation.concurrent.NotThreadSafe;
+import javax.annotation.concurrent.ThreadSafe;
 
 import java.util.Collection;
 import java.util.Optional;
@@ -53,7 +56,7 @@ import static org.apache.fluss.utils.Preconditions.checkState;
  * Using by coordinator server. It's a manager to manage the rpc channels to tablet servers and send
  * request to the servers.
  */
-@NotThreadSafe
+@ThreadSafe
 public class CoordinatorChannelManager {
 
     private static final Logger LOG = LoggerFactory.getLogger(CoordinatorChannelManager.class);
@@ -119,6 +122,20 @@ public class CoordinatorChannelManager {
                 stopReplicaRequest,
                 TabletServerGateway::stopReplica,
                 responseConsumer);
+    }
+
+    /** Send a request to freeze partition writes on a tablet server. */
+    public CompletableFuture<FreezePartitionResponse> sendFreezePartitionRequest(
+            int receiveServerId, FreezePartitionRequest request) {
+        Optional<TabletServerGateway> gateway = getTabletServerGateway(receiveServerId);
+        if (gateway.isPresent()) {
+            return gateway.get().freezePartition(request);
+        }
+        CompletableFuture<FreezePartitionResponse> response = new CompletableFuture<>();
+        response.completeExceptionally(
+                new TabletServerNotAvailableException(
+                        "Tablet server " + receiveServerId + " is not available."));
+        return response;
     }
 
     /** Send UpdateMetadataRequest to the server and handle the response. */

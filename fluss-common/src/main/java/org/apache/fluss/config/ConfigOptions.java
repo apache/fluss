@@ -1810,6 +1810,15 @@ public class ConfigOptions {
                                     + "The partitions earlier than 20241108 will be deleted. "
                                     + "The default value is 7.");
 
+    public static final ConfigOption<Boolean> TABLE_AUTO_PARTITION_RETENTION_ENSURE_TIERED =
+            key("table.auto-partition.retention.ensure-tiered")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether an expired auto partition must be fully committed to the data lake before deletion. "
+                                    + "When enabled, writes to the partition are frozen first, and the partition is deleted only after the lake contains all frozen log offsets. "
+                                    + "The default value is false.");
+
     public static final ConfigOption<Duration> TABLE_LOG_TTL =
             key("table.log.ttl")
                     .durationType()

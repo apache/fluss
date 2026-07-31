@@ -22,6 +22,9 @@ import org.apache.fluss.metadata.TablePartition;
 
 import javax.annotation.Nullable;
 
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -45,10 +48,22 @@ public class PartitionRegistration {
      */
     private final @Nullable String remoteDataDir;
 
+    /** Bucket offsets captured after all partition leaders have fenced writes for retention. */
+    private final Map<Integer, FrozenBucket> frozenBuckets;
+
     public PartitionRegistration(long tableId, long partitionId, @Nullable String remoteDataDir) {
+        this(tableId, partitionId, remoteDataDir, Collections.emptyMap());
+    }
+
+    public PartitionRegistration(
+            long tableId,
+            long partitionId,
+            @Nullable String remoteDataDir,
+            Map<Integer, FrozenBucket> frozenBuckets) {
         this.tableId = tableId;
         this.partitionId = partitionId;
         this.remoteDataDir = remoteDataDir;
+        this.frozenBuckets = Collections.unmodifiableMap(new HashMap<>(frozenBuckets));
     }
 
     public long getTableId() {
@@ -64,6 +79,14 @@ public class PartitionRegistration {
         return remoteDataDir;
     }
 
+    public Map<Integer, FrozenBucket> getFrozenBuckets() {
+        return frozenBuckets;
+    }
+
+    public boolean isFrozenForRetention() {
+        return !frozenBuckets.isEmpty();
+    }
+
     public TablePartition toTablePartition() {
         return new TablePartition(tableId, partitionId);
     }
@@ -77,7 +100,11 @@ public class PartitionRegistration {
      * @return a new registration with the given remote data directory
      */
     public PartitionRegistration newRemoteDataDir(String remoteDataDir) {
-        return new PartitionRegistration(tableId, partitionId, remoteDataDir);
+        return new PartitionRegistration(tableId, partitionId, remoteDataDir, frozenBuckets);
+    }
+
+    public PartitionRegistration withFrozenBuckets(Map<Integer, FrozenBucket> frozenBuckets) {
+        return new PartitionRegistration(tableId, partitionId, remoteDataDir, frozenBuckets);
     }
 
     @Override
@@ -88,12 +115,13 @@ public class PartitionRegistration {
         PartitionRegistration that = (PartitionRegistration) o;
         return tableId == that.tableId
                 && partitionId == that.partitionId
-                && Objects.equals(remoteDataDir, that.remoteDataDir);
+                && Objects.equals(remoteDataDir, that.remoteDataDir)
+                && Objects.equals(frozenBuckets, that.frozenBuckets);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(tableId, partitionId, remoteDataDir);
+        return Objects.hash(tableId, partitionId, remoteDataDir, frozenBuckets);
     }
 
     @Override
@@ -106,6 +134,73 @@ public class PartitionRegistration {
                 + ", remoteDataDir='"
                 + remoteDataDir
                 + '\''
+                + ", frozenBuckets="
+                + frozenBuckets
                 + '}';
+    }
+
+    /** The leader and offsets captured when a bucket is frozen for partition retention. */
+    public static final class FrozenBucket {
+        private final int leaderId;
+        private final int leaderEpoch;
+        private final long highWatermark;
+        private final long logEndOffset;
+
+        public FrozenBucket(int leaderId, int leaderEpoch, long highWatermark, long logEndOffset) {
+            this.leaderId = leaderId;
+            this.leaderEpoch = leaderEpoch;
+            this.highWatermark = highWatermark;
+            this.logEndOffset = logEndOffset;
+        }
+
+        public int getLeaderId() {
+            return leaderId;
+        }
+
+        public int getLeaderEpoch() {
+            return leaderEpoch;
+        }
+
+        public long getHighWatermark() {
+            return highWatermark;
+        }
+
+        public long getLogEndOffset() {
+            return logEndOffset;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (o == null || getClass() != o.getClass()) {
+                return false;
+            }
+            FrozenBucket that = (FrozenBucket) o;
+            return leaderId == that.leaderId
+                    && leaderEpoch == that.leaderEpoch
+                    && highWatermark == that.highWatermark
+                    && logEndOffset == that.logEndOffset;
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(leaderId, leaderEpoch, highWatermark, logEndOffset);
+        }
+
+        @Override
+        public String toString() {
+            return "FrozenBucket{"
+                    + "leaderId="
+                    + leaderId
+                    + ", leaderEpoch="
+                    + leaderEpoch
+                    + ", highWatermark="
+                    + highWatermark
+                    + ", logEndOffset="
+                    + logEndOffset
+                    + '}';
+        }
     }
 }

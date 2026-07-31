@@ -329,14 +329,21 @@ public class CoordinatorServer extends ServerBase {
 
             this.coordinatorChannelManager = new CoordinatorChannelManager(rpcClient);
 
+            LakeAwarePartitionRetentionManager lakeAwarePartitionRetentionManager =
+                    new LakeAwarePartitionRetentionManager(
+                            metadataManager,
+                            zkClient,
+                            coordinatorChannelManager,
+                            zkEpoch.getCoordinatorEpoch(),
+                            ioExecutor);
             this.autoPartitionManager =
                     new AutoPartitionManager(
                             metadataCache,
                             metadataManager,
                             remoteDirDynamicLoader,
                             conf,
-                            replicaCapacityController);
-            autoPartitionManager.start();
+                            replicaCapacityController,
+                            lakeAwarePartitionRetentionManager);
 
             // start coordinator event processor after we register coordinator leader to zk
             // so that the event processor can get the coordinator leader node from zk during
@@ -360,6 +367,7 @@ public class CoordinatorServer extends ServerBase {
                             scheduler,
                             clock);
             coordinatorEventProcessor.startup();
+            autoPartitionManager.start();
 
             // As the active leader, this server is the sole writer of dynamic configs and holds the
             // latest values, so stop consuming change notifications to avoid rolling a value back.

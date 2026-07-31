@@ -924,6 +924,14 @@ public class ZooKeeperClient implements AutoCloseable {
         return partitions;
     }
 
+    /** Update partition metadata. */
+    public void updatePartition(
+            TablePath tablePath, String partitionName, PartitionRegistration partitionRegistration)
+            throws Exception {
+        String path = PartitionZNode.path(tablePath, partitionName);
+        zkClient.setData().forPath(path, PartitionZNode.encode(partitionRegistration));
+    }
+
     /** Get the partition and the id for the partitions of tables in ZK. */
     public Map<TablePath, Map<String, Long>> getPartitionNameAndIdsForTables(
             List<TablePath> tablePaths) throws Exception {

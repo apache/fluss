@@ -23,6 +23,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.FencedLeaderEpochException;
 import org.apache.fluss.exception.InvalidColumnProjectionException;
+import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.InvalidTimestampException;
 import org.apache.fluss.exception.InvalidUpdateVersionException;
@@ -113,6 +114,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
+import javax.annotation.concurrent.GuardedBy;
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.io.Closeable;
@@ -209,6 +211,9 @@ public final class Replica {
     private volatile int bucketEpoch = LeaderAndIsr.INITIAL_BUCKET_EPOCH;
     private volatile int coordinatorEpoch = CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
     private volatile boolean isStandbyReplica = false;
+
+    @GuardedBy("leaderIsrUpdateLock")
+    private boolean frozenForRetention = false;
 
     // null if table without pk or haven't become leader
     private volatile @Nullable KvTablet kvTablet;
@@ -1069,6 +1074,7 @@ public final class Replica {
                                         "Leader not local for bucket %s on tabletServer %d",
                                         tableBucket, localTabletServerId));
                     }
+                    checkNotFrozenForRetention();
 
                     validateInSyncReplicaSize(requiredAcks);
 
@@ -1129,6 +1135,7 @@ public final class Replica {
                                         "Leader not local for bucket %s on tabletServer %d",
                                         tableBucket, localTabletServerId));
                     }
+                    checkNotFrozenForRetention();
 
                     validateInSyncReplicaSize(requiredAcks);
                     KvTablet kv = this.kvTablet;
@@ -1147,6 +1154,57 @@ public final class Replica {
                     maybeIncrementLeaderHW(logTablet, clock.milliseconds());
                     return logAppendInfo;
                 });
+    }
+
+    /** Freeze leader writes and return a stable offset boundary for partition retention. */
+    public FrozenOffsets freezeForRetention(int expectedLeaderEpoch) {
+        return inWriteLock(
+                leaderIsrUpdateLock,
+                () -> {
+                    if (!isLeader()) {
+                        throw new NotLeaderOrFollowerException(
+                                String.format(
+                                        "Leader not local for bucket %s on tabletServer %d",
+                                        tableBucket, localTabletServerId));
+                    }
+                    if (leaderEpoch != expectedLeaderEpoch) {
+                        throw new FencedLeaderEpochException(
+                                String.format(
+                                        "Expected leader epoch %s for bucket %s, but current epoch is %s.",
+                                        expectedLeaderEpoch, tableBucket, leaderEpoch));
+                    }
+                    frozenForRetention = true;
+                    return new FrozenOffsets(
+                            logTablet.getHighWatermark(), logTablet.localLogEndOffset());
+                });
+    }
+
+    private void checkNotFrozenForRetention() {
+        if (frozenForRetention) {
+            throw new InvalidPartitionException(
+                    String.format(
+                            "Partition %s is frozen for retention and no longer accepts writes.",
+                            physicalPath));
+        }
+    }
+
+    /** High watermark and log end offset captured while leader writes are fenced. */
+    public static final class FrozenOffsets {
+        private final long highWatermark;
+        private final long logEndOffset;
+
+        private FrozenOffsets(long highWatermark, long logEndOffset) {
+            this.highWatermark = highWatermark;
+            this.logEndOffset = logEndOffset;
+        }
+
+        public long getHighWatermark() {
+            return highWatermark;
+        }
+
+        public long getLogEndOffset() {
+            return logEndOffset;
+        }
     }
 
     public LogReadInfo fetchRecords(FetchParams fetchParams) throws IOException {
