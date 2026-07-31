@@ -431,7 +431,7 @@ public class FlinkTableSource
 
                 @Override
                 public Source<RowData, ?, ?> createSource() {
-                    if (modificationScanType != null) {
+                    if (modificationScanType == RowLevelModificationType.UPDATE) {
                         throw new UnsupportedOperationException(
                                 "Currently, Fluss table only supports "
                                         + modificationScanType
