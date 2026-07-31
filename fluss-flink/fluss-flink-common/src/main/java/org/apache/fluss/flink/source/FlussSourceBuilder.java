@@ -176,7 +176,10 @@ public class FlussSourceBuilder<OUT> {
      * Builds a bounded source for batch execution. The source reads up to the latest offsets at job
      * startup and then finishes; combined with the default {@link OffsetsInitializer#full()} on a
      * datalake-enabled table this performs a bounded union read of the lake snapshot and the Fluss
-     * log. If not called, the source is unbounded (streaming).
+     * log. Alternatively, a bounded read of a primary-key table is supported via the server-side KV
+     * scan by setting {@code client.scanner.kv.server-side.enabled = true} (see {@link
+     * ConfigOptions#CLIENT_SCANNER_KV_SERVER_SIDE_ENABLED}). If not called, the source is unbounded
+     * (streaming).
      *
      * @return this builder
      */
@@ -353,13 +356,22 @@ public class FlussSourceBuilder<OUT> {
         boolean lakeEnabled = tableInfo.getTableConfig().isDataLakeEnabled();
         boolean fullStartup = offsetsInitializer instanceof SnapshotOffsetsInitializer;
 
-        if (bounded && !(lakeEnabled && fullStartup)) {
+        boolean kvBatchEnabled = flussConf.get(ConfigOptions.CLIENT_SCANNER_KV_SERVER_SIDE_ENABLED);
+        boolean kvBatchAllowed = hasPrimaryKey && kvBatchEnabled;
+
+        if (bounded && !(lakeEnabled && fullStartup) && !kvBatchAllowed) {
             throw new IllegalArgumentException(
                     String.format(
-                            "Bounded (batch) read requires a datalake-enabled table started in "
-                                    + "full mode (OffsetsInitializer.full()), but table '%s' has "
-                                    + "datalake enabled=%s and full startup mode=%s.",
-                            tablePath, lakeEnabled, fullStartup));
+                            "Bounded (batch) read requires either a datalake-enabled table started "
+                                    + "in full mode (OffsetsInitializer.full()), or a primary-key "
+                                    + "table with '%s' = 'true'. Table '%s' has datalake enabled=%s, "
+                                    + "full startup mode=%s, primary key=%s, server-side KV scan=%s.",
+                            ConfigOptions.CLIENT_SCANNER_KV_SERVER_SIDE_ENABLED.key(),
+                            tablePath,
+                            lakeEnabled,
+                            fullStartup,
+                            hasPrimaryKey,
+                            kvBatchEnabled));
         }
 
         LakeSource<LakeSplit> lakeSource = null;

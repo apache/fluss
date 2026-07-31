@@ -25,6 +25,7 @@ import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.client.write.HashBucketAssigner;
 import org.apache.fluss.flink.source.metrics.FlinkSourceReaderMetrics;
 import org.apache.fluss.flink.source.split.HybridSnapshotLogSplit;
+import org.apache.fluss.flink.source.split.KvBatchSplit;
 import org.apache.fluss.flink.source.split.LogSplit;
 import org.apache.fluss.flink.source.split.SourceSplitBase;
 import org.apache.fluss.flink.utils.FlinkTestBase;
@@ -304,6 +305,35 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
                     totalSplits,
                     expectedRecords,
                     DEFAULT_PK_TABLE_SCHEMA.getRowType());
+        }
+    }
+
+    @Test
+    void testHandleKvBatchSplitChangesAndFetch() throws Exception {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "test-kv-batch-split-table");
+        long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
+        try (FlinkSourceSplitReader splitReader =
+                createSplitReader(tablePath, DEFAULT_PK_TABLE_SCHEMA.getRowType())) {
+            Map<TableBucket, List<InternalRow>> rows = putRows(tableId, tablePath, 10);
+
+            List<SourceSplitBase> splits = new ArrayList<>();
+            for (TableBucket bucket : rows.keySet()) {
+                splits.add(new KvBatchSplit(bucket, null));
+            }
+
+            Map<String, List<RecordAndPos>> expectedRecords = new HashMap<>();
+            for (Map.Entry<TableBucket, List<InternalRow>> e : rows.entrySet()) {
+                String splitId = new KvBatchSplit(e.getKey(), null).splitId();
+                List<RecordAndPos> records = new ArrayList<>(e.getValue().size());
+                int pos = 1;
+                for (InternalRow row : e.getValue()) {
+                    records.add(new RecordAndPos(new ScanRecord(row), pos++));
+                }
+                expectedRecords.put(splitId, records);
+            }
+
+            assignSplitsAndFetchUntilRetrieveRecords(
+                    splitReader, splits, expectedRecords, DEFAULT_PK_TABLE_SCHEMA.getRowType());
         }
     }
 

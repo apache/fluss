@@ -21,6 +21,8 @@ import org.apache.fluss.client.initializer.OffsetsInitializer;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.client.table.writer.UpsertWriter;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.source.deserializer.RowDataDeserializationSchema;
 import org.apache.fluss.flink.source.testutils.MockDataUtils;
 import org.apache.fluss.flink.source.testutils.Order;
@@ -110,6 +112,34 @@ public class FlussSourceITCase extends FlinkTestBase {
         List<Order> collectedElements = stream.executeAndCollect(ORDERS.size());
 
         // Assert result size and elements match
+        assertThat(collectedElements).hasSameElementsAs(ORDERS);
+    }
+
+    @Test
+    public void testBoundedKvBatchPKSource() throws Exception {
+        createTable(ordersPKTablePath, pkTableDescriptor);
+        writeRowsToTable(ordersPKTablePath);
+
+        Configuration flussConf = new Configuration();
+        flussConf.set(ConfigOptions.CLIENT_SCANNER_KV_SERVER_SIDE_ENABLED, true);
+
+        FlussSource<Order> flussSource =
+                FlussSource.<Order>builder()
+                        .setBootstrapServers(bootstrapServers)
+                        .setDatabase(DEFAULT_DB)
+                        .setTable(pkTableName)
+                        .setStartingOffsets(OffsetsInitializer.full())
+                        .setScanPartitionDiscoveryIntervalMs(1000L)
+                        .setDeserializationSchema(new MockDataUtils.OrderDeserializationSchema())
+                        .setFlussConfig(flussConf)
+                        .setBounded()
+                        .build();
+
+        DataStreamSource<Order> stream =
+                env.fromSource(flussSource, WatermarkStrategy.noWatermarks(), "Fluss Source");
+
+        List<Order> collectedElements = stream.executeAndCollect(ORDERS.size());
+
         assertThat(collectedElements).hasSameElementsAs(ORDERS);
     }
 

@@ -39,6 +39,7 @@ import org.apache.fluss.flink.source.event.PartitionBucketsUnsubscribedEvent;
 import org.apache.fluss.flink.source.event.PartitionsRemovedEvent;
 import org.apache.fluss.flink.source.reader.LeaseContext;
 import org.apache.fluss.flink.source.split.HybridSnapshotLogSplit;
+import org.apache.fluss.flink.source.split.KvBatchSplit;
 import org.apache.fluss.flink.source.split.LogSplit;
 import org.apache.fluss.flink.source.split.SourceSplitBase;
 import org.apache.fluss.flink.source.state.SourceEnumeratorState;
@@ -575,6 +576,7 @@ public class FlinkSourceEnumerator
     }
 
     private void startInBatchMode() {
+        boolean kvBatchEnabled = flussConf.get(ConfigOptions.CLIENT_SCANNER_KV_SERVER_SIDE_ENABLED);
         if (lakeEnabled) {
             if (lakeSource == null) {
                 throw new IllegalStateException(
@@ -583,41 +585,65 @@ public class FlinkSourceEnumerator
             context.callAsync(
                     () -> {
                         List<SourceSplitBase> splits = generateHybridLakeFlussSplits();
-                        // No lake snapshot exists, fall back to Fluss-only splits
                         if (splits == null) {
                             LOG.info(
                                     "No lake snapshot found for table {},"
                                             + " falling back to Fluss-only splits.",
                                     tablePath);
-                            if (isPartitioned) {
-                                Set<PartitionInfo> partitionInfos = listPartitions();
-                                Collection<Partition> partitions =
-                                        partitionInfos.stream()
-                                                .map(
-                                                        p ->
-                                                                new Partition(
-                                                                        p.getPartitionId(),
-                                                                        p.getPartitionName()))
-                                                .collect(Collectors.toList());
-                                // Use log-only splits to avoid generating mixed split
-                                // types (HybridSnapshotLogSplit + LogSplit) for
-                                // primary-key tables, which is not supported.
-                                splits =
-                                        this.initLogTablePartitionSplits(
-                                                partitions, startingOffsetsInitializer);
-                            } else {
-                                splits = this.getLogSplit(null, null);
-                            }
+                            splits = generateFlussOnlyBatchSplits(kvBatchEnabled);
                         }
                         return splits;
                     },
                     this::handleSplitsAdd);
+        } else if (kvBatchEnabled && hasPrimaryKey) {
+            context.callAsync(() -> generateFlussOnlyBatchSplits(true), this::handleSplitsAdd);
         } else {
             throw new UnsupportedOperationException(
                     String.format(
-                            "Batch only supports when table option '%s' is set to true.",
-                            ConfigOptions.TABLE_DATALAKE_ENABLED));
+                            "Batch mode requires either '%s' = 'true' (data-lake integration) "
+                                    + "or '%s' = 'true' (server-side KV scan, primary-key tables only).",
+                            ConfigOptions.TABLE_DATALAKE_ENABLED.key(),
+                            ConfigOptions.CLIENT_SCANNER_KV_SERVER_SIDE_ENABLED.key()));
         }
+    }
+
+    private List<SourceSplitBase> generateFlussOnlyBatchSplits(boolean kvBatchEnabled) {
+        if (kvBatchEnabled && hasPrimaryKey) {
+            if (isPartitioned) {
+                Set<PartitionInfo> partitionInfos = listPartitions();
+                List<SourceSplitBase> splits = new ArrayList<>();
+                for (PartitionInfo partitionInfo : partitionInfos) {
+                    splits.addAll(
+                            buildKvBatchSplits(
+                                    partitionInfo.getPartitionId(),
+                                    partitionInfo.getPartitionName()));
+                }
+                return splits;
+            }
+            return buildKvBatchSplits(null, null);
+        }
+        if (isPartitioned) {
+            Set<PartitionInfo> partitionInfos = listPartitions();
+            Collection<Partition> partitions =
+                    partitionInfos.stream()
+                            .map(p -> new Partition(p.getPartitionId(), p.getPartitionName()))
+                            .collect(Collectors.toList());
+            return this.initLogTablePartitionSplits(partitions, startingOffsetsInitializer);
+        }
+        return this.getLogSplit(null, null);
+    }
+
+    private List<SourceSplitBase> buildKvBatchSplits(
+            @Nullable Long partitionId, @Nullable String partitionName) {
+        List<SourceSplitBase> splits = new ArrayList<>();
+        for (int bucketId = 0; bucketId < tableInfo.getNumBuckets(); bucketId++) {
+            TableBucket tb = new TableBucket(tableInfo.getTableId(), partitionId, bucketId);
+            if (ignoreTableBucket(tb)) {
+                continue;
+            }
+            splits.add(new KvBatchSplit(tb, partitionName));
+        }
+        return splits;
     }
 
     private void startInStreamModeForNonPartitionedTable() {

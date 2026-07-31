@@ -87,6 +87,8 @@ public class FlinkRecordEmitter<OUT> implements RecordEmitter<RecordAndPos, OUT,
                         .asLogSplitState()
                         .setNextOffset(recordAndPosition.record().logOffset() + 1);
             }
+        } else if (splitState.isKvBatchSplitState()) {
+            processAndEmitRecord(recordAndPosition.record(), sourceOutput);
         } else if (splitState.isLakeSplit()) {
             if (lakeRecordRecordEmitter == null) {
                 lakeRecordRecordEmitter = new LakeRecordRecordEmitter<>(this::processAndEmitRecord);

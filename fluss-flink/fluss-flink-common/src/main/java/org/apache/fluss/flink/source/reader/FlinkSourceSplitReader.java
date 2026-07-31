@@ -216,6 +216,8 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
                 subscribeLog(sourceSplitBase, hybridSnapshotLogSplit.getLogStartingOffset());
             } else if (sourceSplitBase.isLogSplit()) {
                 subscribeLog(sourceSplitBase, sourceSplitBase.asLogSplit().getStartingOffset());
+            } else if (sourceSplitBase.isKvBatchSplit()) {
+                boundedSplits.add(sourceSplitBase);
             } else if (sourceSplitBase.isLakeSplit()) {
                 getLakeSplitReader().addSplit(sourceSplitBase, boundedSplits);
                 if (sourceSplitBase instanceof LakeSnapshotAndFlussLogSplit) {
@@ -412,6 +414,12 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
                                     snapshotSplit.getTableBucket(), snapshotSplit.getSnapshotId());
             currentBoundedSplitReader =
                     new BoundedSplitReader(batchScanner, snapshotSplit.recordsToSkip());
+        } else if (currentBoundedSplit.isKvBatchSplit()) {
+            BatchScanner batchScanner =
+                    table.newScan()
+                            .project(projectedFields)
+                            .createBatchScanner(currentBoundedSplit.getTableBucket());
+            currentBoundedSplitReader = new BoundedSplitReader(batchScanner, 0);
         } else if (currentBoundedSplit.isLakeSplit()) {
             currentBoundedSplitReader =
                     getLakeSplitReader().getBoundedSplitScanner(currentBoundedSplit);

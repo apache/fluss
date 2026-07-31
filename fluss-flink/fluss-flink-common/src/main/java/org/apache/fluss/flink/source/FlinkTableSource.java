@@ -437,9 +437,18 @@ public class FlinkTableSource
                                         + modificationScanType
                                         + " statement with conditions on primary key.");
                     }
-                    if (!isDataLakeEnabled) {
+                    if (!isDataLakeEnabled
+                            && !(hasPrimaryKey()
+                                    && flussConfig.get(
+                                            ConfigOptions.CLIENT_SCANNER_KV_SERVER_SIDE_ENABLED))) {
                         throw new UnsupportedOperationException(
-                                "Currently, Fluss only support queries on table with datalake enabled or point queries on primary key when it's in batch execution mode.");
+                                "Batch mode requires either datalake enabled"
+                                        + " (set '"
+                                        + ConfigOptions.TABLE_DATALAKE_ENABLED.key()
+                                        + "' = 'true') or server-side KV scan on a"
+                                        + " primary-key table (set '"
+                                        + ConfigOptions.CLIENT_SCANNER_KV_SERVER_SIDE_ENABLED.key()
+                                        + "' = 'true').");
                     }
                     return source;
                 }

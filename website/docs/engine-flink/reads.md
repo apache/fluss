@@ -234,6 +234,51 @@ The server evaluates these predicates against per-batch column statistics and sk
 
 ## Batch Read
 
+### Full Scan of Primary Key Tables
+
+Fluss can perform a bounded full-table scan on a primary-key table directly via the server-side KV scan API.
+
+Enable the feature by setting `client.scanner.kv.server-side.enabled = true` on the table or as a SQL hint:
+
+- This is a **bounded** read. The source finishes once all buckets have been drained and does not continue reading the change-log.
+- On task restart, each bucket is rescanned from scratch. Progress within a scan session is not checkpointed, because an expired or invalidated server-side session cannot be resumed from a mid-point.
+- The feature is disabled by default (`false`). Without it, unbounded (streaming) reads on primary-key tables work as usual; bounded reads require the data-lake integration to be enabled.
+
+#### Example
+
+**1. Create a primary-key table with the feature enabled:**
+```sql title="Flink SQL"
+CREATE TABLE pk_table (
+    id     INT NOT NULL,
+    name   STRING,
+    region STRING,
+    PRIMARY KEY (id) NOT ENFORCED
+) WITH (
+    'bucket.num' = '4',
+    'client.scanner.kv.server-side.enabled' = 'true'
+);
+```
+
+**2. Write some data:**
+```sql title="Flink SQL"
+INSERT INTO pk_table VALUES
+    (1, 'Alice', 'us-east'),
+    (2, 'Bob',   'eu-west'),
+    (3, 'Carol', 'ap-south');
+```
+
+**3. Run a full scan in batch mode:**
+```sql title="Flink SQL"
+SET 'execution.runtime-mode' = 'batch';
+SELECT * FROM pk_table;
+```
+
+You can also enable the feature dynamically without storing it in the table metadata:
+```sql title="Flink SQL"
+SET 'execution.runtime-mode' = 'batch';
+SELECT * FROM pk_table /*+ OPTIONS('client.scanner.kv.server-side.enabled' = 'true') */;
+```
+
 ### Limit Read
 The Fluss source supports limiting reads for both primary-key tables and log tables, making it convenient to preview the latest `N` records in a table.
 
