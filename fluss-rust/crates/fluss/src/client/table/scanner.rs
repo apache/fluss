@@ -161,8 +161,8 @@ impl<'a> TableScan<'a> {
         if !self.table_info.has_primary_key() {
             validate_scan_support(&self.table_info.table_path, &self.table_info)?;
         }
-        // Pre-seed the current schema; older versions are fetched lazily during
-        // KV decode. Mirrors `Table::new_lookup`.
+        // Pre-seed the current schema; older versions are fetched lazily while
+        // decoding log or KV batches. Mirrors `Table::new_lookup`.
         let latest = SchemaInfo::new(
             self.table_info.get_schema().clone(),
             self.table_info.get_schema_id(),
