@@ -109,6 +109,7 @@ public final class LogTablet {
     private final Clock clock;
     private final boolean isChangeLog;
     private final long logTtlMs;
+    private final boolean remoteLogEnabled;
 
     @GuardedBy("lock")
     private volatile LogOffsetMetadata highWatermarkMetadata;
@@ -160,6 +161,8 @@ public final class LogTablet {
         this.writerStateManager = writerStateManager;
         this.highWatermarkMetadata = new LogOffsetMetadata(0L);
         this.logTtlMs = logTtlMs;
+        this.remoteLogEnabled =
+                conf.get(ConfigOptions.REMOTE_LOG_TASK_INTERVAL_DURATION).toMillis() > 0L;
 
         this.scheduler = scheduler;
         // scheduler the writer expiration interval check.
@@ -1048,7 +1051,7 @@ public final class LogTablet {
      */
     @VisibleForTesting
     @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-    public void roll(Optional<Long> expectedNextOffset) throws Exception {
+    public void roll(Optional<Long> expectedNextOffset) throws IOException {
         synchronized (lock) {
             LogSegment segment = localLog.roll(expectedNextOffset);
             // Take a snapshot of the writer state to facilitate recovery. It is useful to have
@@ -1350,7 +1353,7 @@ public final class LogTablet {
         return deletableSegments;
     }
 
-    /** Returns the contiguous prefix of inactive segments that has expired. */
+    /** Returns the contiguous prefix of expired segments and rolls an expired active segment. */
     private List<LogSegment> deletableExpiredSegments(long endOffset) throws IOException {
         if (localLog.getSegments().isEmpty()) {
             return Collections.emptyList();
@@ -1359,13 +1362,28 @@ public final class LogTablet {
         List<LogSegment> deletableSegments = new ArrayList<>();
         List<LogSegment> logSegments = localLog.getSegments().values();
         long now = clock.milliseconds();
+        boolean shouldRoll = false;
 
-        for (int i = 0; i < logSegments.size() - 1; i++) {
-            if (logSegments.get(i + 1).getBaseOffset() > endOffset
-                    || !isSegmentExpired(now, logSegments.get(i), logTtlMs)) {
+        for (int i = 0; i < logSegments.size(); i++) {
+            LogSegment segment = logSegments.get(i);
+            boolean active = i == logSegments.size() - 1;
+            if ((!active && logSegments.get(i + 1).getBaseOffset() > endOffset)
+                    || !isSegmentExpired(now, segment, logTtlMs)) {
                 break;
             }
-            deletableSegments.add(logSegments.get(i));
+
+            if (active) {
+                shouldRoll =
+                        remoteLogEnabled
+                                && segment.getSizeInBytes() > 0
+                                && getHighWatermark() >= localLogEndOffset();
+                break;
+            }
+            deletableSegments.add(segment);
+        }
+
+        if (shouldRoll) {
+            roll(Optional.empty());
         }
         return deletableSegments;
     }
