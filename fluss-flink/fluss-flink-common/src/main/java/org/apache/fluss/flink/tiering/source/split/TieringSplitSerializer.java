@@ -31,6 +31,9 @@ import org.apache.flink.core.memory.DataOutputSerializer;
 
 import java.io.IOException;
 
+import static org.apache.fluss.client.tiering.TieringSplit.TIERING_LOG_SPLIT_FLAG;
+import static org.apache.fluss.client.tiering.TieringSplit.TIERING_SNAPSHOT_SPLIT_FLAG;
+
 /**
  * A serializer for the {@link FlinkTieringSplit}.
  *
@@ -46,9 +49,6 @@ public class TieringSplitSerializer implements SimpleVersionedSerializer<FlinkTi
 
     private static final ThreadLocal<DataOutputSerializer> SERIALIZER_CACHE =
             ThreadLocal.withInitial(() -> new DataOutputSerializer(64));
-
-    private static final byte TIERING_SNAPSHOT_SPLIT_FLAG = 1;
-    private static final byte TIERING_LOG_SPLIT_FLAG = 2;
 
     private static final int CURRENT_VERSION = VERSION_0;
 
@@ -166,7 +166,7 @@ public class TieringSplitSerializer implements SimpleVersionedSerializer<FlinkTi
                             skipCurrentRound,
                             splitIndex,
                             tieringRoundTimestamp);
-        } else {
+        } else if (splitKind == TIERING_LOG_SPLIT_FLAG) {
             // deserialize starting offset
             long startingOffset = in.readLong();
             // deserialize starting offset
@@ -182,6 +182,8 @@ public class TieringSplitSerializer implements SimpleVersionedSerializer<FlinkTi
                             skipCurrentRound,
                             splitIndex,
                             tieringRoundTimestamp);
+        } else {
+            throw new IOException("Unknown split kind " + splitKind);
         }
         return new FlinkTieringSplit(tieringSplit);
     }
