@@ -86,12 +86,8 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
         ObjectIdentifier tableIdentifier = context.getObjectIdentifier();
         String tableName = tableIdentifier.getObjectName();
         if (tableName.contains(LAKE_TABLE_SPLITTER)) {
-            // Extract the lake table name: for "table$lake" -> "table"
-            // for "table$lake$snapshots" -> "table$snapshots"
-            String lakeTableName = tableName.replaceFirst("\\$lake", "");
-
             lakeTableFactory = mayInitLakeTableFactory();
-            return lakeTableFactory.createDynamicTableSource(context, lakeTableName);
+            return lakeTableFactory.createDynamicTableSource(context);
         }
 
         // Check if this is a $changelog suffix in table name

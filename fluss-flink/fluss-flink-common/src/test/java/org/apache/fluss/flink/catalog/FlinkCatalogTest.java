@@ -85,6 +85,8 @@ import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_KEY;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_NUMBER;
 import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_STARTUP_MODE;
 import static org.apache.fluss.flink.adapter.CatalogTableAdapter.toCatalogTable;
+import static org.apache.fluss.flink.lake.LakeTableFactory.RESOLVED_LAKE_DATABASE;
+import static org.apache.fluss.flink.lake.LakeTableFactory.RESOLVED_LAKE_OBJECT;
 import static org.apache.fluss.flink.utils.CatalogTableTestUtils.addOptions;
 import static org.apache.fluss.flink.utils.CatalogTableTestUtils.checkEqualsIgnoreSchema;
 import static org.apache.fluss.flink.utils.CatalogTableTestUtils.checkEqualsRespectSchema;
@@ -348,8 +350,11 @@ class FlinkCatalogTest {
         assertThat(catalog.tableExists(lakeTablePath)).isTrue();
         // get the lake table from lake catalog.
         mockLakeCatalog.registerLakeTable(lakeTablePath, table);
+        Map<String, String> expectedOptions = new HashMap<>(table.getOptions());
+        expectedOptions.put(RESOLVED_LAKE_DATABASE, DEFAULT_DB);
+        expectedOptions.put(RESOLVED_LAKE_OBJECT, "lake_table");
         assertThat((CatalogTable) catalog.getTable(new ObjectPath(DEFAULT_DB, "lake_table$lake")))
-                .isEqualTo(table);
+                .isEqualTo(table.copy(expectedOptions));
 
         // drop fluss table
         catalog.dropTable(lakeTablePath, false);
@@ -380,9 +385,12 @@ class FlinkCatalogTest {
         mockLakeCatalog.registerLakeTable(
                 new ObjectPath(lakeTablePath.getDatabaseName(), lakeTablePath.getTableName()),
                 lakeTable);
-        CatalogBaseTable gottenLakeTable =
-                catalog.getTable(new ObjectPath(DEFAULT_DB, flussTableName + "$lake"));
-        assertThat(gottenLakeTable).isEqualTo(lakeTable);
+        CatalogTable gottenLakeTable =
+                (CatalogTable)
+                        catalog.getTable(new ObjectPath(DEFAULT_DB, flussTableName + "$lake"));
+        assertThat(gottenLakeTable.getOptions())
+                .containsEntry(RESOLVED_LAKE_DATABASE, lakeTablePath.getDatabaseName())
+                .containsEntry(RESOLVED_LAKE_OBJECT, lakeTablePath.getTableName());
 
         CatalogTable snapshotsTable = newCatalogTable(Collections.emptyMap());
         mockLakeCatalog.registerLakeTable(
@@ -390,9 +398,13 @@ class FlinkCatalogTest {
                         lakeTablePath.getDatabaseName(),
                         lakeTablePath.getTableName() + "$snapshots"),
                 snapshotsTable);
-        CatalogBaseTable gottenSnapshotsTable =
-                catalog.getTable(new ObjectPath(DEFAULT_DB, flussTableName + "$lake$snapshots"));
-        assertThat(gottenSnapshotsTable).isEqualTo(snapshotsTable);
+        CatalogTable gottenSnapshotsTable =
+                (CatalogTable)
+                        catalog.getTable(
+                                new ObjectPath(DEFAULT_DB, flussTableName + "$lake$snapshots"));
+        assertThat(gottenSnapshotsTable.getOptions())
+                .containsEntry(RESOLVED_LAKE_DATABASE, lakeTablePath.getDatabaseName())
+                .containsEntry(RESOLVED_LAKE_OBJECT, lakeTablePath.getTableName() + "$snapshots");
     }
 
     @Test
