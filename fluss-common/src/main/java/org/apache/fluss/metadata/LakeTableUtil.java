@@ -19,10 +19,7 @@ package org.apache.fluss.metadata;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.config.ConfigOptions;
-import org.apache.fluss.config.Configuration;
-
-import java.util.Map;
-import java.util.Optional;
+import org.apache.fluss.config.ReadableConfig;
 
 /** Utility methods for resolving external lake table metadata. */
 @Internal
@@ -30,30 +27,18 @@ public final class LakeTableUtil {
 
     private LakeTableUtil() {}
 
-    /** Returns the table path used to access the external datalake table. */
-    public static TablePath getLakeTablePath(
-            TablePath flussTablePath, Map<String, String> tableProperties) {
-        return getLakeTablePath(flussTablePath, Configuration.fromMap(tableProperties));
-    }
-
-    /** Returns the table path used to access the external datalake table. */
-    public static TablePath getLakeTablePath(TablePath flussTablePath, Configuration tableConf) {
+    /** Resolves the table path used to access the external datalake table. */
+    public static TablePath resolveLakeTablePath(
+            TablePath flussTablePath, ReadableConfig tableConfig) {
         String lakeDatabaseName =
-                getDataLakeDatabaseName(tableConf).orElse(flussTablePath.getDatabaseName());
+                tableConfig
+                        .getOptional(ConfigOptions.TABLE_DATALAKE_DATABASE_NAME)
+                        .orElse(flussTablePath.getDatabaseName());
         String lakeTableName =
-                getDataLakeTableName(tableConf).orElse(flussTablePath.getTableName());
+                tableConfig
+                        .getOptional(ConfigOptions.TABLE_DATALAKE_TABLE_NAME)
+                        .orElse(flussTablePath.getTableName());
         return TablePath.of(lakeDatabaseName, lakeTableName);
-    }
-
-    /** Returns whether the table has explicit custom datalake path options. */
-    public static boolean hasCustomLakePath(Map<String, String> tableProperties) {
-        return hasCustomLakePath(Configuration.fromMap(tableProperties));
-    }
-
-    /** Returns whether the table has explicit custom datalake path options. */
-    public static boolean hasCustomLakePath(Configuration tableConf) {
-        return getDataLakeDatabaseName(tableConf).isPresent()
-                || getDataLakeTableName(tableConf).isPresent();
     }
 
     /** Returns the lake table name with the metadata table suffix from the requested table name. */
@@ -89,13 +74,5 @@ public final class LakeTableUtil {
                 requestedTableName.substring(0, splitterIndex)
                         + requestedTableName.substring(splitterIndex + lakeTableSplitter.length());
         return getLakeTableName(lakeTableName, requestedLakeTableName);
-    }
-
-    private static Optional<String> getDataLakeDatabaseName(Configuration tableConf) {
-        return tableConf.getOptional(ConfigOptions.TABLE_DATALAKE_DATABASE_NAME);
-    }
-
-    private static Optional<String> getDataLakeTableName(Configuration tableConf) {
-        return tableConf.getOptional(ConfigOptions.TABLE_DATALAKE_TABLE_NAME);
     }
 }

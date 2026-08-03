@@ -33,7 +33,6 @@ import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.KvFormat;
-import org.apache.fluss.metadata.LakeTableUtil;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.Schema;
@@ -240,7 +239,10 @@ public class TableDescriptorValidation {
 
     private static void checkCustomLakePathSupported(
             Configuration tableConf, @Nullable DataLakeFormat clusterDataLakeFormat) {
-        if (!LakeTableUtil.hasCustomLakePath(tableConf)) {
+        boolean hasLakePathOption =
+                tableConf.contains(ConfigOptions.TABLE_DATALAKE_DATABASE_NAME)
+                        || tableConf.contains(ConfigOptions.TABLE_DATALAKE_TABLE_NAME);
+        if (!hasLakePathOption) {
             return;
         }
 

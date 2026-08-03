@@ -49,14 +49,12 @@ public class LakeSourceUtils {
     @Nullable
     public static LakeSource<LakeSplit> createLakeSource(
             TablePath tablePath, Map<String, String> properties) {
+        Configuration tableConfig = Configuration.fromMap(properties);
         Map<String, String> catalogProperties =
-                DataLakeUtils.extractLakeCatalogProperties(Configuration.fromMap(properties));
+                DataLakeUtils.extractLakeCatalogProperties(tableConfig);
         Configuration lakeConfig = Configuration.fromMap(catalogProperties);
 
-        String dataLake =
-                Configuration.fromMap(properties)
-                        .get(ConfigOptions.TABLE_DATALAKE_FORMAT)
-                        .toString();
+        String dataLake = tableConfig.get(ConfigOptions.TABLE_DATALAKE_FORMAT).toString();
         LakeStoragePlugin lakeStoragePlugin;
         try {
             lakeStoragePlugin = LakeStoragePluginSetUp.fromDataLakeFormat(dataLake, null);
@@ -68,7 +66,7 @@ public class LakeSourceUtils {
                             dataLake, dataLake.toLowerCase()));
         }
         LakeStorage lakeStorage = checkNotNull(lakeStoragePlugin).createLakeStorage(lakeConfig);
-        TablePath lakeTablePath = LakeTableUtil.getLakeTablePath(tablePath, properties);
+        TablePath lakeTablePath = LakeTableUtil.resolveLakeTablePath(tablePath, tableConfig);
         try {
             return (LakeSource<LakeSplit>) lakeStorage.createLakeSource(lakeTablePath);
         } catch (UnsupportedOperationException e) {

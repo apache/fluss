@@ -120,12 +120,7 @@ public final class TableInfo {
      * {@link #getTablePath()}.
      */
     public TablePath getLakeTablePath() {
-        return LakeTableUtil.getLakeTablePath(tablePath, properties);
-    }
-
-    /** Returns whether the table has explicit custom datalake path options. */
-    public boolean hasCustomLakePath() {
-        return LakeTableUtil.hasCustomLakePath(properties);
+        return LakeTableUtil.resolveLakeTablePath(tablePath, properties);
     }
 
     /**

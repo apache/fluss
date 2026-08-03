@@ -18,7 +18,7 @@
 package org.apache.fluss.spark.read
 
 import org.apache.fluss.config.{Configuration => FlussConfiguration}
-import org.apache.fluss.metadata.{LakeTableUtil, LogFormat, TableInfo, TablePath}
+import org.apache.fluss.metadata.{LogFormat, TableInfo, TablePath}
 import org.apache.fluss.predicate.{Predicate => FlussPredicate}
 import org.apache.fluss.spark.read.lake.FlussLakeUtils
 import org.apache.fluss.spark.utils.{SparkPartitionPredicate, SparkPredicateConverter}
@@ -98,7 +98,7 @@ trait FlussSupportsPushDownV2Filters extends FlussSupportsPushDownPartitionFilte
       acceptedPredicates = accepted.toArray
     } else if (
       tableInfo.getTableConfig.isDataLakeEnabled &&
-      !LakeTableUtil.hasCustomLakePath(tableInfo.getProperties)
+      tableInfo.getLakeTablePath == tableInfo.getTablePath
     ) {
       // TODO: Remove the custom lake path guard when Spark supports reading custom Paimon paths.
       // Predicate pushdown also runs for log-only fallback and streaming scans. Do not fail those

@@ -52,11 +52,11 @@ object FlussLakeUtils extends Logging {
       catalogProperties: util.Map[String, String],
       tableProperties: util.Map[String, String],
       tablePath: TablePath): LakeSource[LakeSplit] = {
-    if (LakeTableUtil.hasCustomLakePath(tableProperties)) {
+    val tableConfig = Configuration.fromMap(tableProperties)
+    if (LakeTableUtil.resolveLakeTablePath(tablePath, tableConfig) != tablePath) {
       throw new UnsupportedOperationException(
         "Custom lake table path is not supported for Spark lake reads yet.")
     }
-    val tableConfig = Configuration.fromMap(tableProperties)
     val datalakeFormat = tableConfig.get(ConfigOptions.TABLE_DATALAKE_FORMAT)
     val dataLakePrefix = "table.datalake." + datalakeFormat + "."
 
