@@ -27,7 +27,10 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.io.IOException;
+
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Unit tests for serialization and deserialization of {@link TieringSnapshotSplit} and {@link
@@ -93,6 +96,20 @@ class TieringSplitSerializerTest {
                 serializer.deserialize(serializer.getVersion(), serialized);
         TieringLogSplit deserializedSplit = deserializedFlinkSplit.asTieringLogSplit();
         assertThat(deserializedSplit).isEqualTo(tieringSplit);
+    }
+
+    @Test
+    void testDeserializeUnknownSplitKindFailsFast() throws Exception {
+        TieringLogSplit tieringSplit =
+                new TieringLogSplit(tablePath, tableBucket, null, 100, 200, 40);
+        byte[] serialized = serializer.serialize(new FlinkTieringSplit(tieringSplit));
+        // the split kind is written as the first byte, tamper it with an unknown kind so that
+        // deserialization must fail fast instead of silently falling back to a log split
+        serialized[0] = 99;
+
+        assertThatThrownBy(() -> serializer.deserialize(serializer.getVersion(), serialized))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("Unknown split kind 99");
     }
 
     @ParameterizedTest
