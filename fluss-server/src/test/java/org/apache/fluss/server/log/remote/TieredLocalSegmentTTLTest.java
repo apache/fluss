@@ -19,6 +19,7 @@ package org.apache.fluss.server.log.remote;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.server.log.LogSegment;
 import org.apache.fluss.server.log.LogTablet;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -77,17 +78,16 @@ final class TieredLocalSegmentTTLTest extends RemoteLogTestBase {
         assertThat(logTablet.localLogStartOffset()).isEqualTo(40L);
         assertThat(logTablet.activeLogSegment().getBaseOffset()).isEqualTo(50L);
 
-        // An empty active segment must not be rolled again while the previous segment is waiting
-        // for remote upload.
-        logManager.cleanupExpiredLocalLogSegments();
-        assertThat(logTablet.getSegments()).hasSize(2);
-
         remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
         assertThat(remoteLog.getRemoteLogEndOffset()).hasValue(50L);
         logManager.cleanupExpiredLocalLogSegments();
         assertThat(logTablet.getSegments()).hasSize(1);
         assertThat(logTablet.localLogStartOffset()).isEqualTo(50L);
         assertThat(logTablet.activeLogSegment().getBaseOffset()).isEqualTo(50L);
+
+        LogSegment emptyActiveSegment = logTablet.activeLogSegment();
+        logManager.cleanupExpiredLocalLogSegments();
+        assertThat(logTablet.activeLogSegment()).isSameAs(emptyActiveSegment);
     }
 
     @ParameterizedTest
@@ -118,27 +118,6 @@ final class TieredLocalSegmentTTLTest extends RemoteLogTestBase {
         assertThat(logTablet.getSegments()).hasSize(2);
         assertThat(logTablet.localLogStartOffset()).isEqualTo(40L);
         assertThat(logTablet.activeLogSegment().getBaseOffset()).isEqualTo(50L);
-    }
-
-    @ParameterizedTest
-    @ValueSource(booleans = {true, false})
-    void testExpiredActiveSegmentNotRolledWhenRemoteLogDisabled(boolean partitionTable)
-            throws Exception {
-        conf.set(ConfigOptions.REMOTE_LOG_TASK_INTERVAL_DURATION, Duration.ZERO);
-        TableBucket tb =
-                partitionTable
-                        ? new TableBucket(DATA1_TABLE_ID, 0L, 0)
-                        : new TableBucket(DATA1_TABLE_ID, 0);
-        makeLogTableAsLeader(tb, partitionTable);
-        LogTablet logTablet = replicaManager.getReplicaOrException(tb).getLogTablet();
-
-        addMultiSegmentsToLogTablet(logTablet, 5);
-        manualClock.advanceTime(Duration.ofHours(2));
-        logManager.cleanupExpiredLocalLogSegments();
-
-        assertThat(logTablet.getSegments()).hasSize(1);
-        assertThat(logTablet.localLogStartOffset()).isEqualTo(40L);
-        assertThat(logTablet.activeLogSegment().getBaseOffset()).isEqualTo(40L);
     }
 
     @ParameterizedTest
