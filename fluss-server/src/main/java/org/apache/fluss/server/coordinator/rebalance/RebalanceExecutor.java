@@ -15,24 +15,20 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.server.coordinator.event;
+package org.apache.fluss.server.coordinator.rebalance;
 
-import org.apache.fluss.server.zk.data.RebalanceTask;
+import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
+import org.apache.fluss.server.coordinator.CoordinatorContext;
 
-/** An event that recovers and reconciles a persisted rebalance task. */
-public final class RecoverRebalanceEvent implements CoordinatorEvent {
-    private final RebalanceTask rebalanceTask;
+/** Coordinator operations needed to execute and reconcile rebalance bucket plans. */
+public interface RebalanceExecutor {
 
-    public RecoverRebalanceEvent(RebalanceTask rebalanceTask) {
-        this.rebalanceTask = rebalanceTask;
-    }
+    /** Returns the coordinator state used to build a cluster model. */
+    CoordinatorContext getCoordinatorContext();
 
-    public RebalanceTask getRebalanceTask() {
-        return rebalanceTask;
-    }
+    /** Starts or resumes one bucket plan. */
+    void tryToExecuteRebalanceTask(RebalancePlanForBucket planForBucket);
 
-    @Override
-    public String toString() {
-        return "RecoverRebalanceEvent{rebalanceTask=" + rebalanceTask + "}";
-    }
+    /** Returns whether the plan remains at its clean origin state. */
+    boolean isRebalanceTaskAtOrigin(RebalancePlanForBucket planForBucket);
 }
