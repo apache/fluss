@@ -17,7 +17,6 @@
 
 package org.apache.fluss.flink.source.reader;
 
-import org.apache.fluss.flink.source.metrics.FlinkSourceReaderMetrics;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.utils.CloseableIterator;
 
@@ -50,54 +49,43 @@ public class FlinkRecordsWithSplitIds implements RecordsWithSplitIds<RecordAndPo
     /** The table buckets of the split in splitIterator. */
     private final Iterator<TableBucket> tableBucketIterator;
 
-    private final FlinkSourceReaderMetrics flinkSourceReaderMetrics;
-
     // the closable iterator for the records in the current split
     private @Nullable CloseableIterator<RecordAndPos> currentRecordIterator;
     private @Nullable TableBucket currentTableBucket;
     private @Nullable Long currentSplitStoppingOffset;
 
-    public static FlinkRecordsWithSplitIds emptyRecords(
-            FlinkSourceReaderMetrics flinkSourceReaderMetrics) {
-        return new FlinkRecordsWithSplitIds(Collections.emptySet(), flinkSourceReaderMetrics);
+    public static FlinkRecordsWithSplitIds emptyRecords() {
+        return new FlinkRecordsWithSplitIds(Collections.emptySet());
     }
 
     // only for single split
     public FlinkRecordsWithSplitIds(
-            String split,
-            TableBucket tableBucket,
-            CloseableIterator<RecordAndPos> records,
-            FlinkSourceReaderMetrics flinkSourceReaderMetrics) {
+            String split, TableBucket tableBucket, CloseableIterator<RecordAndPos> records) {
         this(
                 Collections.singletonMap(split, records),
                 Collections.singleton(split).iterator(),
                 Collections.singleton(tableBucket).iterator(),
-                new HashSet<>(),
-                flinkSourceReaderMetrics);
+                new HashSet<>());
     }
 
     // no any splits, just used to mark splits finished
-    public FlinkRecordsWithSplitIds(
-            Set<String> finishedSplits, FlinkSourceReaderMetrics flinkSourceReaderMetrics) {
+    public FlinkRecordsWithSplitIds(Set<String> finishedSplits) {
         this(
                 Collections.emptyMap(),
                 Collections.emptyIterator(),
                 Collections.emptyIterator(),
-                finishedSplits,
-                flinkSourceReaderMetrics);
+                finishedSplits);
     }
 
     public FlinkRecordsWithSplitIds(
             Map<String, CloseableIterator<RecordAndPos>> splitRecords,
             Iterator<String> splitIterator,
             Iterator<TableBucket> tableBucketIterator,
-            Set<String> finishedSplits,
-            FlinkSourceReaderMetrics flinkSourceReaderMetrics) {
+            Set<String> finishedSplits) {
         this.splitRecords = splitRecords;
         this.splitIterator = splitIterator;
         this.tableBucketIterator = tableBucketIterator;
         this.finishedSplits = finishedSplits;
-        this.flinkSourceReaderMetrics = flinkSourceReaderMetrics;
     }
 
     public void setTableBucketStoppingOffset(TableBucket tableBucket, long stoppingOffset) {
@@ -136,10 +124,6 @@ public class FlinkRecordsWithSplitIds implements RecordsWithSplitIds<RecordAndPo
             // shouldn't emit it
             if (offset >= currentSplitStoppingOffset) {
                 return null;
-            }
-
-            if (offset >= 0) {
-                flinkSourceReaderMetrics.recordCurrentOffset(currentTableBucket, offset);
             }
 
             return recordAndPos;

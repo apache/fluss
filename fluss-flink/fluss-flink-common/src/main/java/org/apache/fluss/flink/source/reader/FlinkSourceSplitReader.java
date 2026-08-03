@@ -152,8 +152,7 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
     public RecordsWithSplitIds<RecordAndPos> fetch() throws IOException {
         if (!removedSplits.isEmpty()) {
             FlinkRecordsWithSplitIds records =
-                    new FlinkRecordsWithSplitIds(
-                            new HashSet<>(removedSplits), flinkSourceReaderMetrics);
+                    new FlinkRecordsWithSplitIds(new HashSet<>(removedSplits));
             removedSplits.clear();
             return records;
         }
@@ -170,14 +169,13 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
             // may need to finish empty log splits
             if (!emptyLogSplits.isEmpty()) {
                 FlinkRecordsWithSplitIds records =
-                        new FlinkRecordsWithSplitIds(
-                                new HashSet<>(emptyLogSplits), flinkSourceReaderMetrics);
+                        new FlinkRecordsWithSplitIds(new HashSet<>(emptyLogSplits));
                 emptyLogSplits.clear();
                 return records;
             } else {
                 // if not subscribe any buckets, just return empty records
                 if (subscribedBuckets.isEmpty()) {
-                    return FlinkRecordsWithSplitIds.emptyRecords(flinkSourceReaderMetrics);
+                    return FlinkRecordsWithSplitIds.emptyRecords();
                 }
                 ScanRecords scanRecords = logScanner.poll(POLL_TIMEOUT);
                 return forLogRecords(scanRecords);
@@ -317,8 +315,6 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
                     "Subscribe to read log for split {} from offset {}.",
                     split.splitId(),
                     startingOffset);
-            // Track the new bucket in metrics and internal state.
-            flinkSourceReaderMetrics.registerTableBucket(tableBucket);
             subscribedBuckets.put(tableBucket, split.splitId());
         }
     }
@@ -513,11 +509,7 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
 
         FlinkRecordsWithSplitIds recordsWithSplitIds =
                 new FlinkRecordsWithSplitIds(
-                        splitRecords,
-                        splitIterator,
-                        tableScanBuckets.iterator(),
-                        finishedSplits,
-                        flinkSourceReaderMetrics);
+                        splitRecords, splitIterator, tableScanBuckets.iterator(), finishedSplits);
         stoppingOffsets.forEach(recordsWithSplitIds::setTableBucketStoppingOffset);
         return recordsWithSplitIds;
     }
@@ -547,10 +539,7 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
             final SourceSplitBase snapshotSplit,
             final CloseableIterator<RecordAndPos> recordsForSplit) {
         return new FlinkRecordsWithSplitIds(
-                snapshotSplit.splitId(),
-                snapshotSplit.getTableBucket(),
-                recordsForSplit,
-                flinkSourceReaderMetrics);
+                snapshotSplit.splitId(), snapshotSplit.getTableBucket(), recordsForSplit);
     }
 
     private long getStoppingOffset(TableBucket tableBucket) {
@@ -570,8 +559,7 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
                         // since it remains log to read
                         ? Collections.emptySet()
                         : Collections.singleton(currentBoundedSplit.splitId());
-        final FlinkRecordsWithSplitIds finishRecords =
-                new FlinkRecordsWithSplitIds(finishedSplits, flinkSourceReaderMetrics);
+        final FlinkRecordsWithSplitIds finishRecords = new FlinkRecordsWithSplitIds(finishedSplits);
         closeCurrentBoundedSplit();
         return finishRecords;
     }
