@@ -19,9 +19,8 @@ package org.apache.fluss.server.coordinator.event;
 
 import org.apache.fluss.server.zk.data.RebalanceTask;
 
-/** Fired during startup to recover a rebalance task that was persisted in ZooKeeper. */
-public class RecoverRebalanceEvent implements CoordinatorEvent {
-
+/** An event that recovers and reconciles a persisted rebalance task. */
+public final class RecoverRebalanceEvent implements CoordinatorEvent {
     private final RebalanceTask rebalanceTask;
 
     public RecoverRebalanceEvent(RebalanceTask rebalanceTask) {
