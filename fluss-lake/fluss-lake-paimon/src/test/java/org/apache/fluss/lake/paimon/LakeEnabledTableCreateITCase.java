@@ -28,7 +28,6 @@ import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.LakeTableAlreadyExistException;
 import org.apache.fluss.fs.FsPath;
-import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
@@ -1310,39 +1309,6 @@ class LakeEnabledTableCreateITCase {
                 .hasMessageContaining(
                         "cannot be altered when 'table.datalake.enabled' is true or the table has tiering progress")
                 .hasMessageContaining(ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key());
-    }
-
-    @Test
-    void testAlterLakePathOptionsOnlyForPaimon() throws Exception {
-        TablePath tablePath = TablePath.of(DATABASE, "non_paimon_lake_path");
-        TableDescriptor tableDescriptor =
-                TableDescriptor.builder()
-                        .schema(
-                                Schema.newBuilder()
-                                        .column("c1", DataTypes.INT())
-                                        .column("c2", DataTypes.STRING())
-                                        .build())
-                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, false)
-                        .property(ConfigOptions.TABLE_DATALAKE_FORMAT, DataLakeFormat.ICEBERG)
-                        .distributedBy(BUCKET_NUM, "c1", "c2")
-                        .build();
-        admin.createTable(tablePath, tableDescriptor, false).get();
-
-        assertThatThrownBy(
-                        () ->
-                                admin.alterTable(
-                                                tablePath,
-                                                Collections.singletonList(
-                                                        TableChange.set(
-                                                                ConfigOptions
-                                                                        .TABLE_DATALAKE_TABLE_NAME
-                                                                        .key(),
-                                                                "lake_table")),
-                                                false)
-                                        .get())
-                .cause()
-                .isInstanceOf(InvalidConfigException.class)
-                .hasMessageContaining("Custom lake table path is only supported for Paimon");
     }
 
     @Test

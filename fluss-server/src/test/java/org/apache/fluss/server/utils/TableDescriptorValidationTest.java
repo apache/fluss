@@ -275,6 +275,19 @@ class TableDescriptorValidationTest {
                 .doesNotThrowAnyException();
     }
 
+    @Test
+    void testRejectCustomLakePathForIceberg() {
+        TableDescriptor tableDescriptor =
+                tableDescriptorWithLakeName(ConfigOptions.TABLE_DATALAKE_TABLE_NAME, "lake_table");
+
+        assertThatThrownBy(
+                        () ->
+                                TableDescriptorValidation.validateTableDescriptor(
+                                        tableDescriptor, 100, DataLakeFormat.ICEBERG))
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining("Custom lake table path is only supported for Paimon");
+    }
+
     private static Stream<Arguments> supportedKvTTLTimeColumnTypes() {
         return Stream.of(
                 Arguments.of(DataTypes.BIGINT()),
