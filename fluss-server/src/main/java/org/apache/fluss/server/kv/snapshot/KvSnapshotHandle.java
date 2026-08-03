@@ -27,6 +27,7 @@ import java.util.Objects;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.utils.Preconditions.checkState;
 
 /**
  * A handle to the snapshot of a kv tablet. It contains the share file handles and the private file
@@ -50,6 +51,11 @@ public class KvSnapshotHandle {
      */
     private boolean ownsSharedFiles;
 
+    /**
+     * The registry where shared files were registered, or null if registration has not happened.
+     */
+    private transient SharedKvFileRegistry sharedKvFileRegistry;
+
     KvSnapshotHandle(
             List<KvFileHandleAndLocalPath> sharedFileHandles,
             List<KvFileHandleAndLocalPath> privateFileHandles,
@@ -69,7 +75,13 @@ public class KvSnapshotHandle {
         return new KvSnapshotHandle(sharedFileHandles, privateFileHandles, incrementalSize, true);
     }
 
-    /** Restores a handle that only references already-persisted shared files. */
+    /**
+     * Restores a handle that only references already-persisted shared files.
+     *
+     * <p>A restored handle never directly deletes shared files because it cannot prove that no
+     * other snapshot references them. Shared files are reclaimed only through registry-based
+     * cleanup; retaining an untracked file is preferred over deleting a file that is still in use.
+     */
     static KvSnapshotHandle restore(
             List<KvFileHandleAndLocalPath> sharedFileHandles,
             List<KvFileHandleAndLocalPath> privateFileHandles,
@@ -133,7 +145,11 @@ public class KvSnapshotHandle {
     }
 
     public void registerKvFileHandles(SharedKvFileRegistry registry, long snapshotID) {
-        checkNotNull(registry);
+        checkState(
+                sharedKvFileRegistry != registry,
+                "The kv file handle has already registered its shared kv files to the given registry.");
+
+        sharedKvFileRegistry = checkNotNull(registry);
         ownsSharedFiles = false;
 
         for (KvFileHandleAndLocalPath handleAndLocalPath : sharedFileHandles) {

@@ -40,6 +40,7 @@ import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.server.kv.scan.ScannerManager;
 import org.apache.fluss.server.kv.snapshot.CompletedKvSnapshotCommitter;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
+import org.apache.fluss.server.kv.snapshot.CompletedSnapshotJsonSerde;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotDataDownloader;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotDataUploader;
 import org.apache.fluss.server.kv.snapshot.SnapshotContext;
@@ -715,7 +716,14 @@ public class ReplicaTestBase {
         @Override
         public FunctionWithException<TableBucket, CompletedSnapshot, Exception>
                 getLatestCompletedSnapshotProvider() {
-            return testKvSnapshotStore::getLatestCompletedSnapshot;
+            return tableBucket -> {
+                CompletedSnapshot snapshot =
+                        testKvSnapshotStore.getLatestCompletedSnapshot(tableBucket);
+                return snapshot == null
+                        ? null
+                        : CompletedSnapshotJsonSerde.fromJson(
+                                CompletedSnapshotJsonSerde.toJson(snapshot));
+            };
         }
 
         @Override

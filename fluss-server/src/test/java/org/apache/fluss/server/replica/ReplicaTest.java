@@ -41,7 +41,6 @@ import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.kv.KvTablet;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
-import org.apache.fluss.server.kv.snapshot.CompletedSnapshotJsonSerde;
 import org.apache.fluss.server.kv.snapshot.TestingCompletedKvSnapshotCommitter;
 import org.apache.fluss.server.log.FetchParams;
 import org.apache.fluss.server.log.LogAppendInfo;
@@ -657,15 +656,14 @@ final class ReplicaTest extends ReplicaTestBase {
                     @Override
                     public FunctionWithException<TableBucket, CompletedSnapshot, Exception>
                             getLatestCompletedSnapshotProvider() {
+                        FunctionWithException<TableBucket, CompletedSnapshot, Exception>
+                                snapshotProvider = super.getLatestCompletedSnapshotProvider();
                         return bucket -> {
-                            CompletedSnapshot snapshot =
-                                    testKvSnapshotStore.getLatestCompletedSnapshot(bucket);
+                            CompletedSnapshot snapshot = snapshotProvider.apply(bucket);
                             if (snapshot != null) {
                                 attemptedSnapshotIds.add(snapshot.getSnapshotID());
-                                return CompletedSnapshotJsonSerde.fromJson(
-                                        CompletedSnapshotJsonSerde.toJson(snapshot));
                             }
-                            return null;
+                            return snapshot;
                         };
                     }
 

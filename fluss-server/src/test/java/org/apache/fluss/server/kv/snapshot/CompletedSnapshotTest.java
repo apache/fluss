@@ -25,15 +25,18 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
+import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Executor;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link org.apache.fluss.server.kv.snapshot.CompletedSnapshot} . */
 class CompletedSnapshotTest {
@@ -62,6 +65,13 @@ class CompletedSnapshotTest {
         SharedKvFileRegistry sharedKvFileRegistry = new SharedKvFileRegistry();
         // register the snapshot to a registry
         snapshot.registerSharedKvFilesAfterRestored(sharedKvFileRegistry);
+        CompletedSnapshot registeredSnapshot = snapshot;
+        assertThatThrownBy(
+                        () ->
+                                registeredSnapshot.registerSharedKvFilesAfterRestored(
+                                        sharedKvFileRegistry))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("already registered");
         Executor ioExecutor = Executors.directExecutor();
         snapshot.discardAsync(ioExecutor).get();
 
@@ -128,6 +138,37 @@ class CompletedSnapshotTest {
         restoredSnapshot.discardAsync(Executors.directExecutor()).get();
 
         checkCompletedSnapshotCleanUp(snapshotPath, restoredSnapshot.getKvSnapshotHandle(), false);
+    }
+
+    @Test
+    void testSnapshotDataNotExistsDetection(@TempDir Path tempDir) throws Exception {
+        IOException nestedMissingException =
+                new IOException(
+                        "wrapper", new IOException("File does not exist: /remote/snapshot/file"));
+        assertThat(
+                        CompletedSnapshot.isSnapshotDataNotExists(
+                                new IOException("wrapper", new FileNotFoundException("missing"))))
+                .isTrue();
+        assertThat(
+                        CompletedSnapshot.isSnapshotDataNotExists(
+                                new IOException("wrapper", new NoSuchFileException("missing"))))
+                .isTrue();
+        assertThat(CompletedSnapshot.isSnapshotDataNotExists(nestedMissingException)).isTrue();
+        assertThat(CompletedSnapshot.isSnapshotDataNotExists(new IOException("Access denied")))
+                .isFalse();
+
+        Path snapshotDataFile = Files.createFile(tempDir.resolve("snapshot-data"));
+        FsPath snapshotDataPath = FsPath.fromLocalFile(snapshotDataFile.toFile());
+        assertThat(
+                        CompletedSnapshot.isSnapshotDataNotExists(
+                                nestedMissingException, snapshotDataPath))
+                .isFalse();
+
+        Files.delete(snapshotDataFile);
+        assertThat(
+                        CompletedSnapshot.isSnapshotDataNotExists(
+                                nestedMissingException, snapshotDataPath))
+                .isTrue();
     }
 
     private void checkCompletedSnapshotCleanUp(

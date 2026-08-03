@@ -27,7 +27,9 @@ import org.apache.fluss.utils.concurrent.FutureUtils;
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.NotThreadSafe;
 
+import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.nio.file.NoSuchFileException;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
@@ -204,6 +206,9 @@ public class CompletedSnapshot {
     public static boolean isSnapshotDataNotExists(Throwable throwable) {
         Throwable cause = throwable;
         while (cause != null) {
+            if (cause instanceof FileNotFoundException || cause instanceof NoSuchFileException) {
+                return true;
+            }
             String message = cause.getMessage();
             if (message != null
                     && (message.contains(SNAPSHOT_DATA_NOT_EXISTS_ERROR_MESSAGE)
@@ -213,6 +218,27 @@ public class CompletedSnapshot {
             cause = cause.getCause();
         }
         return false;
+    }
+
+    /**
+     * Returns whether the throwable indicates missing snapshot data and the given path is confirmed
+     * to be absent from remote storage.
+     *
+     * <p>If checking the path fails, this method conservatively returns {@code false} so callers do
+     * not perform destructive cleanup. The verification failure is attached to the original
+     * throwable as a suppressed exception for diagnostics.
+     */
+    public static boolean isSnapshotDataNotExists(Throwable throwable, FsPath dataPath) {
+        if (!isSnapshotDataNotExists(throwable)) {
+            return false;
+        }
+
+        try {
+            return !dataPath.getFileSystem().exists(dataPath);
+        } catch (Exception verificationException) {
+            throwable.addSuppressed(verificationException);
+            return false;
+        }
     }
 
     private void disposeMetadata() throws IOException {
