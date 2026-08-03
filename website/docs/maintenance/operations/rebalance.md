@@ -107,10 +107,10 @@ Optional<RebalanceProgress> latestProgress = admin.listRebalanceProgress(null).g
 Rebalance statuses:
 - **NOT_STARTED**: The rebalance has been created but not yet started
 - **REBALANCING**: The rebalance is currently in progress
-- **COMPLETED**: The rebalance has successfully completed
-- **FAILED**: The rebalance has failed
+- **COMPLETED**: The rebalance has successfully completed, or its table/partition was deleted while the task was pending or being reconciled
+- **FAILED**: The rebalance has failed, for example because a bucket migration was given up on after its target servers stayed unavailable for too long. The affected buckets may be left with an intermediate assignment that a new rebalance can move again
 - **CANCELED**: The rebalance has been canceled
-- **TIMEOUT**: The rebalance task timed out (e.g., ISR could not converge within the timeout period)
+- **TIMEOUT**: The normal execution slot was released after the timeout, but the task remains non-final. The coordinator retries the current migration phase idempotently, with a growing backoff, until the task reaches `COMPLETED` or `FAILED`. Only a bounded number of timed-out tasks is tracked at the same time, so a rebalance stops admitting new bucket migrations while too many tasks are still being reconciled
 
 ### 4. Cancel Rebalance (If Needed)
 
@@ -127,6 +127,7 @@ admin.cancelRebalance(null).get();
 **Important Notes:**
 - Only rebalance operations in `NOT_STARTED` or `REBALANCING` status can be canceled
 - Already completed bucket migrations will not be rolled back
+- Bucket migrations that have not changed anything yet are canceled right away, migrations that are already under way are drained first so that no bucket is left half-migrated
 - After cancellation, the rebalance status will change to `CANCELED`
 
 ### 5. Remove Server Tags (After Completion)
