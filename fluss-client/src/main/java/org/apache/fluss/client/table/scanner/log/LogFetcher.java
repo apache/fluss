@@ -209,8 +209,7 @@ public class LogFetcher implements Closeable {
      * have an in-flight fetch or pending fetch data.
      */
     public void sendFetches() {
-        List<TableBucket> fetchable = fetchableBuckets();
-        checkAndUpdateMetadata(fetchable);
+        checkAndUpdateMetadata(fetchableBuckets());
         synchronized (this) {
             // Recompute after metadata update because response callbacks can populate the buffer.
             // Don't perform heavy I/O operations or synchronous waits here.
