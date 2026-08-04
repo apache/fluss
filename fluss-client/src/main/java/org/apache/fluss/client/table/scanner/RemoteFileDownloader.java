@@ -104,15 +104,12 @@ public class RemoteFileDownloader implements Closeable {
             FileUtils.atomicMoveWithFallback(temporaryFile, targetFilePath, false);
             return downloadBytes;
         } catch (Exception ex) {
-            IOException failure = new IOException(ex);
+            throw new IOException(ex);
+        } finally {
             if (temporaryFile != null) {
-                try {
-                    Files.deleteIfExists(temporaryFile);
-                } catch (IOException cleanupException) {
-                    failure.addSuppressed(cleanupException);
-                }
+                Path fileToDelete = temporaryFile;
+                IOUtils.closeQuietly(() -> Files.deleteIfExists(fileToDelete));
             }
-            throw failure;
         }
     }
 

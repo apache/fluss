@@ -27,6 +27,7 @@ import org.apache.fluss.fs.FSDataInputStream;
 import org.apache.fluss.fs.FSDataInputStreamWrapper;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.fs.FsPathAndFileName;
 import org.apache.fluss.fs.local.LocalFileSystem;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
@@ -41,6 +42,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -67,6 +69,7 @@ import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.apache.fluss.utils.FlussPaths.remoteLogDir;
 import static org.apache.fluss.utils.FlussPaths.remoteLogTabletDir;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for {@link RemoteLogDownloader}. */
 class RemoteLogDownloaderTest {
@@ -244,6 +247,43 @@ class RemoteLogDownloaderTest {
             IOUtils.closeQuietly(downloader);
             IOUtils.closeQuietly(fileDownloader);
         }
+    }
+
+    @Test
+    void testTemporaryFileCleanupOnError() throws Exception {
+        Path remoteFile = remoteDataDir.toPath().resolve("remote.log");
+        Files.write(remoteFile, new byte[] {1});
+        FileSystem failingFileSystem =
+                new LocalFileSystem() {
+                    @Override
+                    public FSDataInputStream open(FsPath path) throws IOException {
+                        return new FSDataInputStreamWrapper(super.open(path)) {
+                            @Override
+                            public int read(byte[] buffer) {
+                                throw new OutOfMemoryError("test");
+                            }
+                        };
+                    }
+                };
+        FsPath remotePath =
+                new FsPath(remoteFile.toUri()) {
+                    @Override
+                    public FileSystem getFileSystem() {
+                        return failingFileSystem;
+                    }
+                };
+
+        try (RemoteFileDownloader downloader = new RemoteFileDownloader(1)) {
+            assertThatThrownBy(
+                            () ->
+                                    downloader
+                                            .downloadFileAsync(
+                                                    new FsPathAndFileName(remotePath, "local.log"),
+                                                    localDir.toPath())
+                                            .get())
+                    .hasCauseInstanceOf(OutOfMemoryError.class);
+        }
+        assertThat(FileUtils.listDirectory(localDir.toPath())).isEmpty();
     }
 
     @Test
