@@ -907,6 +907,11 @@ public class UndoRecoveryManagerITCase {
         }
 
         @Override
+        public Long position(TableBucket tableBucket) {
+            return delegate.position(tableBucket);
+        }
+
+        @Override
         public void subscribe(int bucket, long offset) {
             delegate.subscribe(bucket, offset);
         }

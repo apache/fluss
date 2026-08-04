@@ -26,6 +26,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.row.OperationType;
 import org.apache.fluss.flink.sink.serializer.FlussSerializationSchema;
 import org.apache.fluss.flink.sink.undo.ProducerOffsetReporter;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
 
@@ -37,6 +38,9 @@ import javax.annotation.Nullable;
 
 import java.io.IOException;
 import java.util.concurrent.CompletableFuture;
+
+import static org.apache.fluss.utils.Preconditions.checkArgument;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** An upsert sink writer or fluss primary key table. */
 public class UpsertSinkWriter<InputT> extends FlinkSinkWriter<InputT> {
@@ -101,12 +105,11 @@ public class UpsertSinkWriter<InputT> extends FlinkSinkWriter<InputT> {
             // Report offset to upstream UndoRecoveryOperator if reporter provided
             if (offsetReporter != null) {
                 return future.thenAccept(
-                        result -> {
-                            if (result.getBucket() != null && result.getLogEndOffset() >= 0) {
-                                offsetReporter.reportOffset(
-                                        result.getBucket(), result.getLogEndOffset());
-                            }
-                        });
+                        result ->
+                                validateAndReportOffset(
+                                        offsetReporter,
+                                        result.getBucket(),
+                                        result.getLogEndOffset()));
             }
             return future;
         } else if (opType == OperationType.DELETE) {
@@ -114,17 +117,27 @@ public class UpsertSinkWriter<InputT> extends FlinkSinkWriter<InputT> {
             // Report offset to upstream UndoRecoveryOperator if reporter provided
             if (offsetReporter != null) {
                 return future.thenAccept(
-                        result -> {
-                            if (result.getBucket() != null && result.getLogEndOffset() >= 0) {
-                                offsetReporter.reportOffset(
-                                        result.getBucket(), result.getLogEndOffset());
-                            }
-                        });
+                        result ->
+                                validateAndReportOffset(
+                                        offsetReporter,
+                                        result.getBucket(),
+                                        result.getLogEndOffset()));
             }
             return future;
         } else {
             throw new UnsupportedOperationException("Unsupported operation type: " + opType);
         }
+    }
+
+    static void validateAndReportOffset(
+            ProducerOffsetReporter offsetReporter,
+            @Nullable TableBucket bucket,
+            long logEndOffset) {
+        checkNotNull(bucket, "Write result bucket must not be null when Undo Recovery is enabled");
+        checkArgument(
+                logEndOffset >= 0,
+                "Write result log end offset must be non-negative when Undo Recovery is enabled");
+        offsetReporter.reportOffset(bucket, logEndOffset);
     }
 
     @Override

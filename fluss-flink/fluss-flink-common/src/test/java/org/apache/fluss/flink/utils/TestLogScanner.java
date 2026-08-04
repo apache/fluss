@@ -38,11 +38,13 @@ import java.util.concurrent.atomic.AtomicInteger;
  *   <li>Simulating empty polls for testing exponential backoff behavior
  *   <li>Batch size control for realistic multi-poll scenarios
  *   <li>Always-empty mode for testing fatal exception on max empty polls
+ *   <li>Per-bucket position tracking
  * </ul>
  */
 public class TestLogScanner implements LogScanner {
     private final Map<TableBucket, List<ScanRecord>> recordsByBucket = new HashMap<>();
     private final Map<TableBucket, AtomicInteger> pollIndexByBucket = new HashMap<>();
+    private final Map<String, Long> positions = new HashMap<>();
 
     /** Number of empty polls to return before returning actual records. */
     private int emptyPollsBeforeData = 0;
@@ -95,7 +97,6 @@ public class TestLogScanner implements LogScanner {
         }
 
         Map<TableBucket, List<ScanRecord>> result = new HashMap<>();
-
         for (Map.Entry<TableBucket, List<ScanRecord>> entry : recordsByBucket.entrySet()) {
             TableBucket bucket = entry.getKey();
             List<ScanRecord> allRecords = entry.getValue();
@@ -114,6 +115,11 @@ public class TestLogScanner implements LogScanner {
                 List<ScanRecord> batch = allRecords.subList(startIndex, endIndex);
                 result.put(bucket, new ArrayList<>(batch));
                 index.set(endIndex);
+                ScanRecord lastRecord = batch.get(batch.size() - 1);
+                String key = positionKey(bucket);
+                if (positions.containsKey(key)) {
+                    updatePosition(key, lastRecord.logOffset() + 1);
+                }
             }
         }
 
@@ -121,16 +127,29 @@ public class TestLogScanner implements LogScanner {
     }
 
     @Override
-    public void subscribe(int bucket, long offset) {}
+    public void subscribe(int bucket, long offset) {
+        updatePosition(bucketKey(bucket), offset);
+    }
 
     @Override
-    public void subscribe(long partitionId, int bucket, long offset) {}
+    public void subscribe(long partitionId, int bucket, long offset) {
+        updatePosition(partitionBucketKey(partitionId, bucket), offset);
+    }
 
     @Override
-    public void unsubscribe(long partitionId, int bucket) {}
+    public Long position(TableBucket bucket) {
+        return positions.get(positionKey(bucket));
+    }
 
     @Override
-    public void unsubscribe(int bucket) {}
+    public void unsubscribe(long partitionId, int bucket) {
+        positions.remove(partitionBucketKey(partitionId, bucket));
+    }
+
+    @Override
+    public void unsubscribe(int bucket) {
+        positions.remove(bucketKey(bucket));
+    }
 
     @Override
     public void wakeup() {}
@@ -141,9 +160,29 @@ public class TestLogScanner implements LogScanner {
     public void reset() {
         recordsByBucket.clear();
         pollIndexByBucket.clear();
+        positions.clear();
         emptyPollsBeforeData = 0;
         currentEmptyPollCount = 0;
         alwaysReturnEmpty = false;
         batchSize = 0;
+    }
+
+    private void updatePosition(String key, long position) {
+        positions.put(key, position);
+    }
+
+    private static String bucketKey(int bucket) {
+        return "b:" + bucket;
+    }
+
+    private static String partitionBucketKey(long partitionId, int bucket) {
+        return "p:" + partitionId + ":b:" + bucket;
+    }
+
+    private static String positionKey(TableBucket bucket) {
+        if (bucket.getPartitionId() != null) {
+            return partitionBucketKey(bucket.getPartitionId(), bucket.getBucket());
+        }
+        return bucketKey(bucket.getBucket());
     }
 }

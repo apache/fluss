@@ -29,10 +29,12 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.HashSet;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Executes undo recovery for multiple buckets using streaming execution.
@@ -61,8 +63,8 @@ public class UndoRecoveryExecutor {
     /** Fixed poll timeout in milliseconds. */
     private static final long POLL_TIMEOUT_MS = 10_000;
 
-    /** Default maximum total wait time in milliseconds before failing (1 hour). */
-    private static final long DEFAULT_MAX_TOTAL_WAIT_TIME_MS = 60 * 60 * 1000; // 1 hour
+    /** Default maximum idle time for each bucket before failing (1 hour). */
+    private static final long DEFAULT_MAX_IDLE_TIME_MS = 60 * 60 * 1000; // 1 hour
 
     /** Interval for logging progress during long waits (5 minutes). */
     private static final long PROGRESS_LOG_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
@@ -71,12 +73,12 @@ public class UndoRecoveryExecutor {
     private final UpsertWriter writer;
     private final UndoComputer undoComputer;
 
-    // Configurable timeout parameter
-    private final long maxTotalWaitTimeMs;
+    private final long maxIdleTimeMs;
+    private final long maxIdleTimeNanos;
 
     public UndoRecoveryExecutor(
             LogScanner scanner, UpsertWriter writer, UndoComputer undoComputer) {
-        this(scanner, writer, undoComputer, DEFAULT_MAX_TOTAL_WAIT_TIME_MS);
+        this(scanner, writer, undoComputer, DEFAULT_MAX_IDLE_TIME_MS);
     }
 
     /**
@@ -85,17 +87,18 @@ public class UndoRecoveryExecutor {
      * @param scanner the log scanner
      * @param writer the upsert writer
      * @param undoComputer the undo computer
-     * @param maxTotalWaitTimeMs maximum total wait time before failing
+     * @param maxIdleTimeMs maximum time a bucket may make no progress before failing
      */
     public UndoRecoveryExecutor(
             LogScanner scanner,
             UpsertWriter writer,
             UndoComputer undoComputer,
-            long maxTotalWaitTimeMs) {
+            long maxIdleTimeMs) {
         this.scanner = scanner;
         this.writer = writer;
         this.undoComputer = undoComputer;
-        this.maxTotalWaitTimeMs = maxTotalWaitTimeMs;
+        this.maxIdleTimeMs = maxIdleTimeMs;
+        this.maxIdleTimeNanos = TimeUnit.MILLISECONDS.toNanos(maxIdleTimeMs);
     }
 
     /**
@@ -176,54 +179,63 @@ public class UndoRecoveryExecutor {
             return allFutures;
         }
 
-        long startTimeMs = System.currentTimeMillis();
-        long lastProgressLogTime = System.currentTimeMillis();
-        Set<TableBucket> unsubscribedBuckets = new HashSet<>();
+        long startTimeNanos = System.nanoTime();
+        long lastProgressLogTimeNanos = startTimeNanos;
+        Map<TableBucket, Long> lastProgressNanos = new HashMap<>();
+        for (BucketRecoveryContext ctx : contexts) {
+            lastProgressNanos.put(ctx.getBucket(), startTimeNanos);
+        }
 
         while (!allComplete(contexts)) {
             ScanRecords records = scanner.poll(Duration.ofMillis(POLL_TIMEOUT_MS));
+            long progressTimeNanos = System.nanoTime();
 
-            if (records.isEmpty()) {
-                // Check if we've exceeded the maximum total wait time
-                long elapsedMs = System.currentTimeMillis() - startTimeMs;
-                if (elapsedMs >= maxTotalWaitTimeMs) {
-                    throw new RuntimeException(
-                            String.format(
-                                    "Undo recovery timed out: unable to read all changelog records after "
-                                            + "%.1f minutes of waiting. %d bucket(s) still incomplete. "
-                                            + "The job will restart and retry the recovery.",
-                                    elapsedMs / 60000.0, countIncomplete(contexts)));
+            // Process records before applying the post-poll position. The poll may reach the
+            // target while returning the final records below it.
+            for (BucketRecoveryContext ctx : contexts) {
+                if (ctx.isComplete()) {
+                    continue;
                 }
-
-                LOG.debug("Empty poll (total elapsed: {}ms)", elapsedMs);
-            } else {
-                // Process records for each bucket
-                for (BucketRecoveryContext ctx : contexts) {
-                    if (ctx.isComplete()) {
-                        continue;
-                    }
-                    List<ScanRecord> bucketRecords = records.records(ctx.getBucket());
-                    if (!bucketRecords.isEmpty()) {
-                        processRecords(ctx, bucketRecords, allFutures);
-                    }
-                    // Unsubscribe completed buckets to stop fetching data from them
-                    if (ctx.isComplete() && unsubscribedBuckets.add(ctx.getBucket())) {
-                        unsubscribeBucket(ctx.getBucket());
-                    }
+                List<ScanRecord> bucketRecords = records.records(ctx.getBucket());
+                if (!bucketRecords.isEmpty() && processRecords(ctx, bucketRecords, allFutures)) {
+                    lastProgressNanos.put(ctx.getBucket(), progressTimeNanos);
                 }
             }
 
-            // Log progress periodically (at the end of each loop iteration)
-            long now = System.currentTimeMillis();
-            if (now - lastProgressLogTime >= PROGRESS_LOG_INTERVAL_MS) {
-                long elapsedMs = now - startTimeMs;
+            // Scanner position advances across both user records and empty batches, so it is the
+            // completion signal for the bounded recovery range.
+            for (BucketRecoveryContext ctx : contexts) {
+                if (ctx.isComplete()) {
+                    continue;
+                }
+                Long position = scanner.position(ctx.getBucket());
+                if (position == null) {
+                    throw new IllegalStateException(
+                            String.format(
+                                    "Log scanner returned null position for active bucket %s during undo recovery",
+                                    ctx.getBucket()));
+                }
+                if (ctx.updateScanPosition(position)) {
+                    lastProgressNanos.put(ctx.getBucket(), progressTimeNanos);
+                }
+                if (ctx.isComplete()) {
+                    unsubscribeBucket(ctx.getBucket());
+                }
+            }
+
+            long nowNanos = System.nanoTime();
+            checkIdleTimeouts(contexts, lastProgressNanos, nowNanos);
+
+            if (nowNanos - lastProgressLogTimeNanos
+                    >= TimeUnit.MILLISECONDS.toNanos(PROGRESS_LOG_INTERVAL_MS)) {
+                long elapsedMs = TimeUnit.NANOSECONDS.toMillis(nowNanos - startTimeNanos);
                 LOG.info(
                         "Undo recovery waiting for changelog records: {} bucket(s) incomplete, "
-                                + "waited {} minutes so far (max: {} minutes)",
+                                + "waited {} minutes so far (per-bucket idle limit: {} minutes)",
                         countIncomplete(contexts),
                         String.format("%.1f", elapsedMs / 60000.0),
-                        String.format("%.1f", maxTotalWaitTimeMs / 60000.0));
-                lastProgressLogTime = now;
+                        String.format("%.1f", maxIdleTimeMs / 60000.0));
+                lastProgressLogTimeNanos = nowNanos;
             }
         }
 
@@ -241,6 +253,31 @@ public class UndoRecoveryExecutor {
         return allFutures;
     }
 
+    private void checkIdleTimeouts(
+            List<BucketRecoveryContext> contexts,
+            Map<TableBucket, Long> lastProgressNanos,
+            long nowNanos) {
+        for (BucketRecoveryContext ctx : contexts) {
+            if (ctx.isComplete()) {
+                continue;
+            }
+            long idleNanos = nowNanos - lastProgressNanos.get(ctx.getBucket());
+            if (idleNanos >= maxIdleTimeNanos) {
+                throw new RuntimeException(
+                        String.format(
+                                "Undo recovery timed out: bucket=%s, baseline=%d, target=%d, "
+                                        + "position=%d, idle=%dms (limit=%dms). "
+                                        + "The job will restart and retry the recovery.",
+                                ctx.getBucket(),
+                                ctx.getCheckpointOffset(),
+                                ctx.getLogEndOffset(),
+                                ctx.getScanPosition(),
+                                TimeUnit.NANOSECONDS.toMillis(idleNanos),
+                                maxIdleTimeMs));
+            }
+        }
+    }
+
     private void unsubscribeBucket(TableBucket bucket) {
         if (bucket.getPartitionId() != null) {
             scanner.unsubscribe(bucket.getPartitionId(), bucket.getBucket());
@@ -249,21 +286,27 @@ public class UndoRecoveryExecutor {
         }
     }
 
-    private void processRecords(
+    private boolean processRecords(
             BucketRecoveryContext ctx,
             List<ScanRecord> records,
             List<CompletableFuture<?>> futures) {
         Set<ByteArrayWrapper> processedKeys = ctx.getProcessedKeys();
+        boolean madeProgress = false;
         for (ScanRecord record : records) {
+            if (record.logOffset() >= ctx.getLogEndOffset()) {
+                continue;
+            }
+            long previousProcessedOffset = ctx.getLastProcessedOffset();
             CompletableFuture<?> future = undoComputer.processRecord(record, processedKeys);
             if (future != null) {
                 futures.add(future);
             }
             ctx.recordProcessed(record.logOffset());
-            if (ctx.isComplete()) {
-                break;
+            if (record.logOffset() > previousProcessedOffset) {
+                madeProgress = true;
             }
         }
+        return madeProgress;
     }
 
     private boolean allComplete(List<BucketRecoveryContext> contexts) {

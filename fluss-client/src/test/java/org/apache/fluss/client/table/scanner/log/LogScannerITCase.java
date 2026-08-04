@@ -117,9 +117,15 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
                                             .greaterThan(0, 5))
                             .createLogScanner()) {
                 logScanner.subscribeFromBeginning(0);
+                assertThat(logScanner.position(tableBucket)).isEqualTo(LogScanner.EARLIEST_OFFSET);
 
                 ScanRecords scanRecords = pollUntilProgressOnly(logScanner, tableBucket);
                 assertThat(scanRecords.consumedUpToOffset(tableBucket)).isGreaterThan(0L);
+                assertThat(logScanner.position(tableBucket))
+                        .isEqualTo(scanRecords.consumedUpToOffset(tableBucket));
+
+                logScanner.unsubscribe(0);
+                assertThat(logScanner.position(tableBucket)).isNull();
             }
         }
     }

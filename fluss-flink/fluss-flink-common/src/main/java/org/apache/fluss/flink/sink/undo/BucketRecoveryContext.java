@@ -43,6 +43,7 @@ public class BucketRecoveryContext {
     private final long logEndOffset;
 
     private final Set<ByteArrayWrapper> processedKeys;
+    private long scanPosition;
     private long lastProcessedOffset;
     private int totalRecordsProcessed;
 
@@ -51,6 +52,7 @@ public class BucketRecoveryContext {
         this.checkpointOffset = checkpointOffset;
         this.logEndOffset = logEndOffset;
         this.processedKeys = new HashSet<>();
+        this.scanPosition = checkpointOffset;
         this.lastProcessedOffset = checkpointOffset - 1;
         this.totalRecordsProcessed = 0;
     }
@@ -83,21 +85,9 @@ public class BucketRecoveryContext {
     /**
      * Checks if changelog scanning is complete for this bucket.
      *
-     * <p>Complete means either:
-     *
-     * <ul>
-     *   <li>No recovery is needed (checkpointOffset >= logEndOffset), or
-     *   <li>The last processed offset has reached or passed logEndOffset - 1 (lastProcessedOffset
-     *       >= logEndOffset - 1)
-     * </ul>
-     *
-     * <p>TODO: This offset-based completion detection cannot handle the case where all
-     * LogRecordBatches between checkpointOffset and logEndOffset are empty (contain no user
-     * records). In that scenario, lastProcessedOffset will never advance and isComplete() will
-     * never return true, causing the recovery to rely on the timeout mechanism in
-     * UndoRecoveryExecutor. A future improvement is to implement bounded subscription mode in
-     * LogScanner, which will allow the scanner to signal completion directly, and this logic should
-     * be refactored accordingly.
+     * <p>Complete means that no recovery is needed, or the scanner's next fetch offset has reached
+     * the recovery target. Scanner position is used instead of the last user-record offset because
+     * empty log batches consume offsets without producing {@code ScanRecord}s.
      *
      * @return true if changelog scanning is complete
      */
@@ -105,7 +95,32 @@ public class BucketRecoveryContext {
         if (!needsRecovery()) {
             return true;
         }
-        return lastProcessedOffset >= logEndOffset - 1;
+        return scanPosition >= logEndOffset;
+    }
+
+    /**
+     * Updates the scanner's next fetch offset.
+     *
+     * @param position the scanner's current next fetch offset
+     * @return whether the position advanced
+     */
+    public boolean updateScanPosition(long position) {
+        if (position < scanPosition) {
+            throw new IllegalStateException(
+                    String.format(
+                            "Scanner position moved backwards for bucket %s: previous=%d, current=%d",
+                            bucket, scanPosition, position));
+        }
+        if (position == scanPosition) {
+            return false;
+        }
+        scanPosition = position;
+        return true;
+    }
+
+    /** Returns the scanner's current next fetch offset. */
+    public long getScanPosition() {
+        return scanPosition;
     }
 
     /**
@@ -135,6 +150,8 @@ public class BucketRecoveryContext {
                 + checkpointOffset
                 + ", logEndOffset="
                 + logEndOffset
+                + ", scanPosition="
+                + scanPosition
                 + ", processedKeys="
                 + processedKeys.size()
                 + ", complete="
