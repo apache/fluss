@@ -54,7 +54,7 @@ class SslContextFactoryTest {
         Configuration conf = new Configuration();
         TestSslUtils.setServerSslConfig(conf, keyStore, trustStore);
 
-        SslContext sslContext = SslContextFactory.createServerSslContext(conf);
+        SslContext sslContext = SslContextFactory.createServerSslContext(conf).get();
         assertThat(sslContext.isServer()).isTrue();
         assertThat(sslContext.newEngine(ByteBufAllocator.DEFAULT).getEnabledProtocols())
                 .contains("TLSv1.2", "TLSv1.3");
@@ -65,7 +65,7 @@ class SslContextFactoryTest {
         Configuration conf = new Configuration();
         TestSslUtils.setClientSslConfig(conf, trustStore, keyStore);
 
-        SslContext sslContext = SslContextFactory.createClientSslContext(conf);
+        SslContext sslContext = SslContextFactory.createClientSslContext(conf).get();
         assertThat(sslContext.isClient()).isTrue();
     }
 
@@ -75,7 +75,7 @@ class SslContextFactoryTest {
         TestSslUtils.setServerSslConfig(conf, keyStore, null);
         conf.setString(ConfigOptions.SERVER_SSL_ENABLED_PROTOCOLS.key(), "TLSv1.2");
 
-        SslContext sslContext = SslContextFactory.createServerSslContext(conf);
+        SslContext sslContext = SslContextFactory.createServerSslContext(conf).get();
         assertThat(sslContext.newEngine(ByteBufAllocator.DEFAULT).getEnabledProtocols())
                 .containsExactly("TLSv1.2");
     }
@@ -88,7 +88,7 @@ class SslContextFactoryTest {
         conf.setString(ConfigOptions.SERVER_SSL_ENABLED_PROTOCOLS.key(), "TLSv1.2");
         conf.setString(ConfigOptions.SERVER_SSL_CIPHER_SUITES.key(), pinned);
 
-        SslContext sslContext = SslContextFactory.createServerSslContext(conf);
+        SslContext sslContext = SslContextFactory.createServerSslContext(conf).get();
         assertThat(sslContext.newEngine(ByteBufAllocator.DEFAULT).getEnabledCipherSuites())
                 .contains(pinned)
                 .doesNotContain("TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384");
@@ -99,11 +99,11 @@ class SslContextFactoryTest {
         Configuration conf = new Configuration();
         TestSslUtils.setServerSslConfig(conf, keyStore, null);
 
-        SslConfig config = SslConfig.fromServerConfig(conf);
+        SslConfig config = SslConfig.fromServerConfig(conf).get();
         assertThat(config.keyPassword()).isEqualTo(TestSslUtils.PASSWORD);
 
         conf.setString(ConfigOptions.SERVER_SSL_KEY_PASSWORD.key(), "key-only-password");
-        config = SslConfig.fromServerConfig(conf);
+        config = SslConfig.fromServerConfig(conf).get();
         assertThat(config.keyPassword()).isEqualTo("key-only-password");
     }
 
@@ -111,7 +111,7 @@ class SslContextFactoryTest {
     void testClientSslHandlerEndpointIdentification() {
         Configuration conf = new Configuration();
         TestSslUtils.setClientSslConfig(conf, trustStore, null);
-        SslContext sslContext = SslContextFactory.createClientSslContext(conf);
+        SslContext sslContext = SslContextFactory.createClientSslContext(conf).get();
 
         SslHandler httpsHandler =
                 SslContextFactory.createClientSslHandler(
@@ -130,7 +130,7 @@ class SslContextFactoryTest {
     void testServerSslHandlerClientAuthRequirement() {
         Configuration conf = new Configuration();
         TestSslUtils.setServerSslConfig(conf, keyStore, trustStore);
-        SslContext sslContext = SslContextFactory.createServerSslContext(conf);
+        SslContext sslContext = SslContextFactory.createServerSslContext(conf).get();
 
         SslHandler noClientAuth =
                 SslContextFactory.createServerSslHandler(
@@ -152,13 +152,13 @@ class SslContextFactoryTest {
 
         SslHandler serverHandler =
                 SslContextFactory.createServerSslHandler(
-                        SslContextFactory.createServerSslContext(serverConf),
+                        SslContextFactory.createServerSslContext(serverConf).get(),
                         ByteBufAllocator.DEFAULT,
                         false);
         // endpoint identification disabled here: this raw handshake test only checks encryption.
         SslHandler clientHandler =
                 SslContextFactory.createClientSslHandler(
-                        SslContextFactory.createClientSslContext(clientConf),
+                        SslContextFactory.createClientSslContext(clientConf).get(),
                         ByteBufAllocator.DEFAULT,
                         "localhost",
                         9123,
@@ -198,8 +198,44 @@ class SslContextFactoryTest {
     @Test
     void testServerConfigRequiresKeystore() {
         Configuration conf = new Configuration();
+        conf.setString(ConfigOptions.SERVER_SSL_ENABLED_LISTENERS.key(), TestSslUtils.TLS_LISTENER);
         assertThatThrownBy(() -> SslConfig.fromServerConfig(conf))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining(ConfigOptions.SERVER_SSL_KEYSTORE_PATH.key());
+    }
+
+    @Test
+    void testServerConfigEmptyWithoutEnabledListeners() {
+        // key material alone does not switch TLS on: no listener is enabled.
+        Configuration conf = new Configuration();
+        conf.setString(ConfigOptions.SERVER_SSL_KEYSTORE_PATH.key(), keyStore.toString());
+        conf.setString(ConfigOptions.SERVER_SSL_KEYSTORE_PASSWORD.key(), TestSslUtils.PASSWORD);
+
+        assertThat(SslConfig.fromServerConfig(conf)).isNotPresent();
+        assertThat(SslContextFactory.createServerSslContext(conf)).isNotPresent();
+    }
+
+    @Test
+    void testClientConfigEmptyWhenSslDisabled() {
+        Configuration conf = new Configuration();
+
+        assertThat(SslConfig.fromClientConfig(conf)).isNotPresent();
+        assertThat(SslContextFactory.createClientSslContext(conf)).isNotPresent();
+    }
+
+    @Test
+    void testServerConfigExposesEnabledListeners() {
+        Configuration conf = new Configuration();
+        TestSslUtils.setServerSslConfig(conf, keyStore, null);
+
+        assertThat(SslConfig.fromServerConfig(conf).get().enabledListeners())
+                .containsExactly(TestSslUtils.TLS_LISTENER);
+        assertThat(SslConfig.fromClientConfig(clientConf()).get().enabledListeners()).isEmpty();
+    }
+
+    private Configuration clientConf() {
+        Configuration conf = new Configuration();
+        TestSslUtils.setClientSslConfig(conf, trustStore, null);
+        return conf;
     }
 }
