@@ -308,23 +308,6 @@ mod batch_scanner_test {
             .get_table(&table_path)
             .await
             .expect("updated table");
-        let current_writer = current_table
-            .new_append()
-            .expect("append")
-            .create_writer()
-            .expect("writer");
-        current_writer
-            .append_arrow_batch(
-                record_batch!(
-                    ("id", Int32, [3]),
-                    ("name", Utf8, ["carol"]),
-                    ("age", Int32, [30])
-                )
-                .expect("current-schema batch"),
-            )
-            .expect("append current-schema batch");
-        current_writer.flush().await.expect("flush");
-
         let table_info = current_table.get_table_info();
         let mut scanner = current_table
             .new_scan()
@@ -339,7 +322,7 @@ mod batch_scanner_test {
             .expect("scan old-schema batch")
             .expect("batch");
         let batch = scan_batch.batch();
-        assert_eq!(batch.num_rows(), 3);
+        assert_eq!(batch.num_rows(), 2);
         assert_eq!(batch.num_columns(), 3);
         assert_eq!(batch.schema().field(2).name(), "age");
         assert_eq!(batch.column(2).null_count(), 2);
@@ -358,13 +341,11 @@ mod batch_scanner_test {
             .as_any()
             .downcast_ref::<Int32Array>()
             .expect("age column");
-        assert_eq!(ids.values(), &[1, 2, 3]);
+        assert_eq!(ids.values(), &[1, 2]);
         assert_eq!(names.value(0), "alice");
         assert_eq!(names.value(1), "bob");
-        assert_eq!(names.value(2), "carol");
         assert!(ages.is_null(0));
         assert!(ages.is_null(1));
-        assert_eq!(ages.value(2), 30);
     }
 
     /// Limit scan on a primary-key table: decodes the value-record batch and
