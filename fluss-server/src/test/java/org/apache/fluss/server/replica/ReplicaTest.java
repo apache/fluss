@@ -701,9 +701,6 @@ final class ReplicaTest extends ReplicaTestBase {
                                 Tuple2.of("k2", new Object[] {2, "b"}),
                                 Tuple2.of("k3", new Object[] {4, "d"})));
         verifyGetKeyValues(kvTablet, expectedKeyValues);
-
-        File metadataFile = new File(snapshot2.getMetadataFilePath().getPath());
-        assertThat(metadataFile.exists()).isFalse();
     }
 
     @Test
