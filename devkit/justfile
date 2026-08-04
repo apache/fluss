@@ -1,0 +1,363 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements. See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership. The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+set dotenv-load := false
+
+# --- Paths --------------------------------------------------------------------
+
+DEVKIT_DIR := justfile_directory()
+FLUSS_DEV_HOME := DEVKIT_DIR + "/.."
+PROFILES_DIR := DEVKIT_DIR + "/profiles"
+DEPS_DIR := DEVKIT_DIR + "/.deps"
+CACHE_DIR := DEPS_DIR + "/cache"
+
+# --- Docker Compose commands --------------------------------------------------
+
+COMPOSE := "docker compose -f " + DEVKIT_DIR + "/docker-compose.yml"
+COMPOSE_TIERING := COMPOSE + " -f " + DEVKIT_DIR + "/compose/tiering.yml"
+ALL_COMPOSE := COMPOSE_TIERING + " -f " + DEVKIT_DIR + "/compose/lake-common.yml -f " + DEVKIT_DIR + "/compose/iceberg.yml"
+ALL_PROFILES := "--profile single --profile cluster --profile flink --profile tiering"
+
+# --- Build commands -----------------------------------------------------------
+
+BUILD_CMD := env_var_or_default("DEVKIT_BUILD_CMD", "./mvnw -DskipTests -pl fluss-dist,fluss-flink/fluss-flink-1.20 -am package")
+TIERING_BUILD_CMD := env_var_or_default("DEVKIT_TIERING_BUILD_CMD", "./mvnw -DskipTests -pl fluss-dist,fluss-flink/fluss-flink-1.20,fluss-flink/fluss-flink-tiering -am package")
+
+default:
+    @just --list
+
+[doc("Build the local Fluss distribution and Flink connector")]
+build:
+    cd "{{ FLUSS_DEV_HOME }}" && {{ BUILD_CMD }}
+
+[doc("Build the local distribution and lake tiering artifacts")]
+build-tiering:
+    cd "{{ FLUSS_DEV_HOME }}" && {{ TIERING_BUILD_CMD }}
+
+[private]
+ensure-dist:
+    #!/usr/bin/env bash
+    set -e
+    if [ ! -x "{{ FLUSS_DEV_HOME }}/build-target/bin/coordinator-server.sh" ]; then
+      echo "Local distribution not found. Run: just build"
+      exit 1
+    fi
+
+[private]
+validate-profile profile:
+    #!/usr/bin/env bash
+    set -e
+    PROFILE={{ quote(profile) }}
+    if [[ ! "$PROFILE" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+      echo "profile must match [a-z0-9][a-z0-9-]*"
+      exit 1
+    fi
+    if [ ! -f "{{ PROFILES_DIR }}/$PROFILE/server.yaml" ]; then
+      echo "Unknown profile: $PROFILE"
+      exit 1
+    fi
+
+[private]
+profile-format profile:
+    #!/usr/bin/env bash
+    PROFILE={{ quote(profile) }}
+    sed -n 's/^[[:space:]]*datalake\.format[[:space:]]*: \([^#]*\).*$/\1/p' \
+      "{{ PROFILES_DIR }}/$PROFILE/server.yaml" | sed 's/[[:space:]]*$//' | tail -n 1
+
+[doc("Download the JARs declared by a profile")]
+deps profile:
+    #!/usr/bin/env bash
+    set -e
+    PROFILE={{ quote(profile) }}
+    just validate-profile "$PROFILE"
+    PROFILE_DIR="{{ PROFILES_DIR }}/$PROFILE"
+    mkdir -p "{{ CACHE_DIR }}"
+    for FILE in "$PROFILE_DIR"/{jars,server,flink}.urls; do
+      [ -f "$FILE" ] || continue
+      while IFS= read -r URL; do
+        NAME="$(basename "${URL%%\?*}")"
+        TARGET="{{ CACHE_DIR }}/$NAME"
+        [ -s "$TARGET" ] && continue
+        echo "Downloading $(basename "$TARGET")..."
+        curl -fL --retry 3 -o "${TARGET}.tmp" "$URL"
+        mv "${TARGET}.tmp" "$TARGET"
+      done < <(sed 's/#.*//; s/[[:space:]]//g; /^$/d' "$FILE")
+    done
+
+[private]
+ensure-flink:
+    #!/usr/bin/env bash
+    set -e
+    ACTIVE_DIR="{{ DEPS_DIR }}/flink/active"
+    MATCHES=( {{ FLUSS_DEV_HOME }}/fluss-flink/fluss-flink-1.20/target/fluss-flink-1.20-*.jar )
+    if [ "${#MATCHES[@]}" -ne 1 ] || [ ! -f "${MATCHES[0]}" ]; then
+      echo "Expected one Flink connector artifact"
+      echo "Run: just build"
+      exit 1
+    fi
+    mkdir -p "$ACTIVE_DIR/lib" "$ACTIVE_DIR/jobs"
+    rm -f "$ACTIVE_DIR/lib/"*.jar "$ACTIVE_DIR/jobs/"*.jar
+    cp "${MATCHES[0]}" "$ACTIVE_DIR/lib/fluss-flink-1.20.jar"
+    chmod -R a+rX "$ACTIVE_DIR"
+
+[private]
+ensure-tiering profile:
+    #!/usr/bin/env bash
+    set -e
+    PROFILE={{ quote(profile) }}
+    just validate-profile "$PROFILE"
+    PROFILE_DIR="{{ PROFILES_DIR }}/$PROFILE"
+    FORMAT=$(just profile-format "$PROFILE")
+    if [ -z "$FORMAT" ]; then
+      echo "Profile $PROFILE does not configure datalake.format"
+      exit 1
+    fi
+    stage() {
+      local PATTERN="$1"
+      local TARGET="$2"
+      MATCHES=( $PATTERN )
+      if [ "${#MATCHES[@]}" -ne 1 ] || [ ! -f "${MATCHES[0]}" ]; then
+        echo "Expected one build artifact: $PATTERN"
+        echo "Run: just build-tiering"
+        exit 1
+      fi
+      cp "${MATCHES[0]}" "$TARGET"
+    }
+    copy_urls() {
+      local FILE="$1"
+      shift
+      local URL NAME TARGET
+      [ -f "$FILE" ] || return 0
+      while IFS= read -r URL; do
+        NAME="$(basename "${URL%%\?*}")"
+        for TARGET in "$@"; do
+          cp "{{ CACHE_DIR }}/$NAME" "$TARGET/"
+        done
+      done < <(sed 's/#.*//; s/[[:space:]]//g; /^$/d' "$FILE")
+    }
+    ACTIVE_DIR="{{ DEPS_DIR }}/flink/active"
+    just deps "$PROFILE"
+    stage "{{ FLUSS_DEV_HOME }}/fluss-lake/fluss-lake-$FORMAT/target/fluss-lake-$FORMAT-*.jar" "$ACTIVE_DIR/lib/fluss-lake-$FORMAT.jar"
+    stage "{{ FLUSS_DEV_HOME }}/fluss-flink/fluss-flink-tiering/target/fluss-flink-tiering-*.jar" "$ACTIVE_DIR/jobs/fluss-flink-tiering.jar"
+
+    SERVER_PLUGIN_DIR="{{ FLUSS_DEV_HOME }}/build-target/plugins/$FORMAT"
+    mkdir -p "$SERVER_PLUGIN_DIR"
+    # Filesystem plugins must stay isolated from lake plugin classpaths.
+    rm -f "$SERVER_PLUGIN_DIR"/fluss-fs-*.jar
+    REMOTE_DATA_DIR=$(sed -n 's/^[[:space:]]*remote\.data\.dir[[:space:]]*: \([^#]*\).*$/\1/p' "$PROFILE_DIR/server.yaml" | sed 's/[[:space:]]*$//' | tail -n 1)
+    SCHEME="${REMOTE_DATA_DIR%%:*}"
+    if [ "$SCHEME" != "$REMOTE_DATA_DIR" ] && [ -d "{{ FLUSS_DEV_HOME }}/build-target/plugins/$SCHEME" ]; then
+      cp "{{ FLUSS_DEV_HOME }}/build-target/plugins/$SCHEME/"*.jar "$ACTIVE_DIR/lib/"
+    fi
+
+    copy_urls "$PROFILE_DIR/jars.urls" "$SERVER_PLUGIN_DIR" "$ACTIVE_DIR/lib"
+    copy_urls "$PROFILE_DIR/server.urls" "$SERVER_PLUGIN_DIR"
+    copy_urls "$PROFILE_DIR/flink.urls" "$ACTIVE_DIR/lib"
+    chmod -R a+rX "$ACTIVE_DIR"
+
+[doc("Start a profile from the profiles directory")]
+up profile="core" nodes="1": ensure-dist ensure-flink
+    #!/usr/bin/env bash
+    set -e
+    PROFILE={{ quote(profile) }}
+    just validate-profile "$PROFILE"
+    case "{{ nodes }}" in
+      1) TOPOLOGY=single ;;
+      3) TOPOLOGY=cluster ;;
+      *) echo "nodes must be 1 or 3"; exit 1 ;;
+    esac
+    PROFILE_DIR="{{ PROFILES_DIR }}/$PROFILE"
+    FORMAT=$(just profile-format "$PROFILE")
+    COMPOSE_ARGS=(-f "{{ DEVKIT_DIR }}/docker-compose.yml" -f "{{ DEVKIT_DIR }}/compose/tiering.yml")
+    PROFILES=(--profile "$TOPOLOGY" --profile flink)
+    if [ -n "$FORMAT" ]; then
+      just ensure-tiering "$PROFILE"
+      PROFILES+=(--profile tiering)
+      if [ -f "$PROFILE_DIR/compose.files" ]; then
+        while IFS= read -r FILE; do
+          FILE="${FILE%%#*}"
+          FILE="${FILE//[[:space:]]/}"
+          [ -n "$FILE" ] || continue
+          if [ ! -f "{{ DEVKIT_DIR }}/$FILE" ]; then
+            echo "Compose file not found: $FILE"
+            exit 1
+          fi
+          COMPOSE_ARGS+=(-f "{{ DEVKIT_DIR }}/$FILE")
+        done < "$PROFILE_DIR/compose.files"
+      fi
+    fi
+    export FLUSS_DEVKIT_CONFIG="$PROFILE_DIR/server.yaml"
+    export FLUSS_REPLICATION_FACTOR="{{ nodes }}"
+    {{ ALL_COMPOSE }} {{ ALL_PROFILES }} down --remove-orphans >/dev/null 2>&1 || true
+    docker compose "${COMPOSE_ARGS[@]}" "${PROFILES[@]}" up -d
+    just check "$PROFILE"
+
+[doc("Stop services and keep data")]
+down:
+    @{{ ALL_COMPOSE }} {{ ALL_PROFILES }} down --remove-orphans
+
+[doc("Stop services and remove data")]
+clean:
+    @{{ ALL_COMPOSE }} {{ ALL_PROFILES }} down -v --remove-orphans
+
+[doc("Show service status")]
+status:
+    @{{ ALL_COMPOSE }} {{ ALL_PROFILES }} ps -a
+
+[doc("Show log output. Example: just logs tablet-server-0 200")]
+logs service="" tail="100":
+    #!/usr/bin/env bash
+    if [ -z "{{ service }}" ]; then
+      {{ ALL_COMPOSE }} {{ ALL_PROFILES }} logs --tail="{{ tail }}"
+    else
+      {{ ALL_COMPOSE }} {{ ALL_PROFILES }} logs --tail="{{ tail }}" "{{ service }}"
+    fi
+
+[doc("Run a command in a service. Example: just exec tablet-server-0 java -version")]
+exec service *CMD:
+    @{{ ALL_COMPOSE }} {{ ALL_PROFILES }} exec "{{ service }}" {{ CMD }}
+
+[private]
+check profile: check-cluster check-flink
+    #!/usr/bin/env bash
+    FORMAT=$(just profile-format {{ quote(profile) }})
+    if [ -n "$FORMAT" ]; then just check-tiering "$FORMAT"; fi
+
+[private]
+check-cluster:
+    #!/usr/bin/env bash
+    set -e
+    ATTEMPT=0
+    until {{ COMPOSE }} --profile single --profile cluster exec -T tablet-server-0 java -Xmx64m -classpath '/opt/fluss/lib/*' org.apache.fluss.server.tools.ClusterHealthReadinessCheck --host tablet-server-0 --port 9123 --timeoutMs 10000; do
+      ATTEMPT=$((ATTEMPT + 1))
+      if [ "$ATTEMPT" -ge 20 ]; then
+        echo "Cluster health did not become ready"
+        exit 1
+      fi
+      sleep 3
+    done
+
+[private]
+check-flink:
+    #!/usr/bin/env bash
+    set -e
+    for _ in {1..40}; do
+      if {{ COMPOSE_TIERING }} --profile flink exec -T jobmanager curl -fsS --max-time 5 http://localhost:8081/taskmanagers | grep -q '"id"'; then
+        exit 0
+      fi
+      sleep 3
+    done
+    {{ COMPOSE_TIERING }} --profile flink logs --tail=200 jobmanager taskmanager
+    echo "Flink cluster did not become ready"
+    exit 1
+
+[private]
+check-tiering format:
+    #!/usr/bin/env bash
+    set -e
+    for _ in {1..40}; do
+      JOB=$({{ COMPOSE_TIERING }} --profile flink --profile tiering exec -T jobmanager curl -fsS http://localhost:8081/jobs/overview | grep -o '"name":"Fluss Lake Tiering Service - {{ format }}"[^}]*' || true)
+      STATE=$(printf '%s' "$JOB" | sed -n 's/.*"state":"\([^"]*\)".*/\1/p')
+      case "$STATE" in
+        RUNNING)
+          echo "{{ format }} tiering job is running"
+          exit 0
+          ;;
+        FAILING|FAILED|CANCELLING|CANCELED|FINISHED|RESTARTING|SUSPENDED)
+          {{ COMPOSE_TIERING }} --profile flink --profile tiering logs --tail=200 tiering-submit jobmanager taskmanager
+          echo "Tiering job entered state $STATE"
+          exit 1
+          ;;
+      esac
+      sleep 3
+    done
+    {{ COMPOSE_TIERING }} --profile flink --profile tiering logs --tail=200 tiering-submit jobmanager taskmanager
+    echo "Tiering job did not start"
+    exit 1
+
+[private]
+validate-table table:
+    #!/usr/bin/env bash
+    if [[ ! "{{ table }}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+      echo "table must match [A-Za-z_][A-Za-z0-9_]*"
+      exit 1
+    fi
+
+[doc("Run a local SQL file with Flink SQL Client")]
+run-sql file:
+    #!/usr/bin/env bash
+    set -e
+    FILE={{ quote(file) }}
+    if [[ "$FILE" != /* ]]; then
+      FILE={{ quote(invocation_directory()) }}/"$FILE"
+    fi
+    if [ ! -f "$FILE" ]; then
+      echo "SQL file not found: $FILE"
+      exit 1
+    fi
+    set +e
+    OUTPUT=$({{ COMPOSE_TIERING }} --profile flink exec -T jobmanager /opt/flink/bin/sql-client.sh -f /dev/stdin < "$FILE" 2>&1)
+    STATUS=$?
+    set -e
+    printf '%s\n' "$OUTPUT"
+    if [ "$STATUS" -ne 0 ] || printf '%s\n' "$OUTPUT" | grep -Eq '\[ERROR\]|Could not execute SQL statement'; then
+      exit 1
+    fi
+
+[private]
+run-demo-sql file table marker="":
+    #!/usr/bin/env bash
+    set -e
+    just validate-table "{{ table }}"
+    set +e
+    OUTPUT=$({{ ALL_COMPOSE }} {{ ALL_PROFILES }} exec -T -e DEVKIT_TABLE="{{ table }}" jobmanager /bin/bash -c "envsubst '\${DEVKIT_TABLE}' < /opt/devkit-tests/{{ file }} > /tmp/{{ file }} && /opt/flink/bin/sql-client.sh -f /tmp/{{ file }}" 2>&1)
+    STATUS=$?
+    set -e
+    printf '%s\n' "$OUTPUT"
+    if [ "$STATUS" -ne 0 ] || printf '%s\n' "$OUTPUT" | grep -Eq '\[ERROR\]|Could not execute SQL statement'; then
+      exit 1
+    fi
+    if [ -n "{{ marker }}" ] && ! printf '%s\n' "$OUTPUT" | grep -Fq "{{ marker }}"; then
+      echo "SQL command did not report expected marker: {{ marker }}"
+      exit 1
+    fi
+
+[private]
+run-format-sql operation format table marker="":
+    #!/usr/bin/env bash
+    just validate-profile "{{ format }}"
+    FILE="{{ format }}-{{ operation }}.sql"
+    if [ ! -f "{{ DEVKIT_DIR }}/tests/$FILE" ]; then
+      echo "{{ operation }} is not available for {{ format }}"
+      exit 1
+    fi
+    just run-demo-sql "$FILE" "{{ table }}" "{{ marker }}"
+
+[doc("Create a lake-enabled Fluss table")]
+create-table format table:
+    @just run-format-sql create-table "{{ format }}" "{{ table }}"
+
+[doc("Write three sample rows to a Fluss table")]
+write-data format table:
+    @just run-format-sql write-data "{{ format }}" "{{ table }}" "Job ID:"
+
+[doc("Show running Flink jobs")]
+tiering-status:
+    @{{ ALL_COMPOSE }} {{ ALL_PROFILES }} exec -T jobmanager /opt/flink/bin/flink list -r
+
+[doc("Query a table through its lake table")]
+query-lake format table:
+    @just run-format-sql query-lake "{{ format }}" "{{ table }}"
