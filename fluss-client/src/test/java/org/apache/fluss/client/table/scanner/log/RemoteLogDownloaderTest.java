@@ -161,55 +161,9 @@ class RemoteLogDownloaderTest {
         CountDownLatch duplicateDownloadCopyStarted = new CountDownLatch(1);
         CountDownLatch continueDuplicateDownload = new CountDownLatch(1);
 
-        class BlockingRemoteFileDownloader extends RemoteFileDownloader {
-            private final AtomicInteger downloadCount = new AtomicInteger();
-
-            private BlockingRemoteFileDownloader() {
-                super(1);
-            }
-
-            @Override
-            protected long downloadFile(Path targetFilePath, FsPath remoteFilePath)
-                    throws IOException {
-                if (downloadCount.incrementAndGet() == 2) {
-                    FileSystem blockingFileSystem =
-                            new LocalFileSystem() {
-                                @Override
-                                public FSDataInputStream open(FsPath path) throws IOException {
-                                    return new FSDataInputStreamWrapper(super.open(path)) {
-                                        @Override
-                                        public int read(byte[] buffer) throws IOException {
-                                            duplicateDownloadCopyStarted.countDown();
-                                            try {
-                                                if (!continueDuplicateDownload.await(
-                                                        30, TimeUnit.SECONDS)) {
-                                                    throw new IOException(
-                                                            "Timed out waiting to continue duplicate download");
-                                                }
-                                            } catch (InterruptedException e) {
-                                                Thread.currentThread().interrupt();
-                                                throw new IOException(
-                                                        "Interrupted while blocking duplicate download",
-                                                        e);
-                                            }
-                                            return super.read(buffer);
-                                        }
-                                    };
-                                }
-                            };
-                    remoteFilePath =
-                            new FsPath(remoteFilePath.toUri()) {
-                                @Override
-                                public FileSystem getFileSystem() {
-                                    return blockingFileSystem;
-                                }
-                            };
-                }
-                return super.downloadFile(targetFilePath, remoteFilePath);
-            }
-        }
-
-        BlockingRemoteFileDownloader fileDownloader = new BlockingRemoteFileDownloader();
+        BlockingRemoteFileDownloader fileDownloader =
+                new BlockingRemoteFileDownloader(
+                        duplicateDownloadCopyStarted, continueDuplicateDownload);
         RemoteLogDownloader downloader =
                 new RemoteLogDownloader(
                         DATA1_TABLE_PATH.toString(), conf, fileDownloader, scannerMetricGroup, 10L);
@@ -639,6 +593,59 @@ class RemoteLogDownloaderTest {
             blockLatch.countDown(); // ensure latch is released even on test failure
             IOUtils.closeQuietly(downloader);
             IOUtils.closeQuietly(fileDownloader);
+        }
+    }
+
+    private static class BlockingRemoteFileDownloader extends RemoteFileDownloader {
+        private final CountDownLatch duplicateDownloadCopyStarted;
+        private final CountDownLatch continueDuplicateDownload;
+        private final AtomicInteger downloadCount = new AtomicInteger();
+
+        private BlockingRemoteFileDownloader(
+                CountDownLatch duplicateDownloadCopyStarted,
+                CountDownLatch continueDuplicateDownload) {
+            super(1);
+            this.duplicateDownloadCopyStarted = duplicateDownloadCopyStarted;
+            this.continueDuplicateDownload = continueDuplicateDownload;
+        }
+
+        @Override
+        protected long downloadFile(Path targetFilePath, FsPath remoteFilePath) throws IOException {
+            if (downloadCount.incrementAndGet() == 2) {
+                FileSystem blockingFileSystem =
+                        new LocalFileSystem() {
+                            @Override
+                            public FSDataInputStream open(FsPath path) throws IOException {
+                                return new FSDataInputStreamWrapper(super.open(path)) {
+                                    @Override
+                                    public int read(byte[] buffer) throws IOException {
+                                        duplicateDownloadCopyStarted.countDown();
+                                        try {
+                                            if (!continueDuplicateDownload.await(
+                                                    30, TimeUnit.SECONDS)) {
+                                                throw new IOException(
+                                                        "Timed out waiting to continue duplicate download");
+                                            }
+                                        } catch (InterruptedException e) {
+                                            Thread.currentThread().interrupt();
+                                            throw new IOException(
+                                                    "Interrupted while blocking duplicate download",
+                                                    e);
+                                        }
+                                        return super.read(buffer);
+                                    }
+                                };
+                            }
+                        };
+                remoteFilePath =
+                        new FsPath(remoteFilePath.toUri()) {
+                            @Override
+                            public FileSystem getFileSystem() {
+                                return blockingFileSystem;
+                            }
+                        };
+            }
+            return super.downloadFile(targetFilePath, remoteFilePath);
         }
     }
 

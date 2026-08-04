@@ -108,7 +108,9 @@ public class RemoteFileDownloader implements Closeable {
         } finally {
             if (temporaryFile != null) {
                 Path fileToDelete = temporaryFile;
-                IOUtils.closeQuietly(() -> Files.deleteIfExists(fileToDelete));
+                IOUtils.closeQuietly(
+                        () -> Files.deleteIfExists(fileToDelete),
+                        "temporary download file " + fileToDelete);
             }
         }
     }
