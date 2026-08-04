@@ -84,4 +84,17 @@ public interface LakeCommitter<WriteResult, CommittableT> extends AutoCloseable 
     @Nullable
     CommittedLakeSnapshot getMissingLakeSnapshot(@Nullable Long latestLakeSnapshotIdOfFluss)
             throws IOException;
+
+    /**
+     * Performs partition mark-done maintenance for a tiering round without any data to commit. The
+     * default implementation is a no-op which returns null.
+     *
+     * @return the properties-only lake snapshot created to persist the mark-done state, or null if
+     *     no snapshot was created (feature disabled or state unchanged)
+     * @throws IOException if an I/O error occurs
+     */
+    @Nullable
+    default CommittedLakeSnapshot commitMarkDoneMaintenance() throws IOException {
+        return null;
+    }
 }

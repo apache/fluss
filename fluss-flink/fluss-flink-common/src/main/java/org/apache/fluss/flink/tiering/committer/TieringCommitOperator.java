@@ -33,6 +33,7 @@ import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.lake.committer.TieringStats;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.lake.writer.LakeWriter;
+import org.apache.fluss.lake.writer.PartitionMarkDoneEnabler;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -205,6 +206,8 @@ public class TieringCommitOperator<WriteResult, Committable>
                     "Commit tiering write results is empty for table {}, table path {}",
                     tableId,
                     tablePath);
+            // still run partition mark-done maintenance for the empty round
+            maybeCommitMarkDoneMaintenance(tableId, tablePath);
             return new CommitResult(null, null);
         }
 
@@ -271,6 +274,42 @@ public class TieringCommitOperator<WriteResult, Committable>
                     logEndOffsets,
                     logMaxTieredTimestamps);
             return new CommitResult(committable, lakeCommitResult.getTieringStats());
+        }
+    }
+
+    /**
+     * Runs partition mark-done maintenance for an empty tiering round, and commits the resulting
+     * properties-only lake snapshot (if any) to Fluss.
+     */
+    private void maybeCommitMarkDoneMaintenance(long tableId, TablePath tablePath)
+            throws Exception {
+        if (!(lakeTieringFactory instanceof PartitionMarkDoneEnabler)) {
+            return;
+        }
+        TableInfo tableInfo = admin.getTableInfo(tablePath).get();
+        if (tableInfo.getTableId() != tableId
+                || !((PartitionMarkDoneEnabler) lakeTieringFactory)
+                        .isPartitionMarkDoneEnabled(tableInfo)) {
+            return;
+        }
+        try (LakeCommitter<WriteResult, Committable> lakeCommitter =
+                lakeTieringFactory.createLakeCommitter(
+                        new TieringCommitterInitContext(
+                                tablePath, tableInfo, lakeTieringConfig, flussConfig))) {
+            CommittedLakeSnapshot maintenanceSnapshot = lakeCommitter.commitMarkDoneMaintenance();
+            if (maintenanceSnapshot != null) {
+                flussTableLakeSnapshotCommitter.commit(
+                        tableId,
+                        maintenanceSnapshot.getLakeSnapshotId(),
+                        maintenanceSnapshot
+                                .getSnapshotProperties()
+                                .get(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY),
+                        null,
+                        // no data was written in this round
+                        Collections.emptyMap(),
+                        Collections.emptyMap(),
+                        LakeCommitResult.KEEP_ALL_PREVIOUS);
+            }
         }
     }
 

@@ -46,10 +46,12 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 
 import java.io.IOException;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.apache.fluss.lake.paimon.tiering.PaimonLakeTieringFactory.FLUSS_LAKE_TIERING_COMMIT_USER;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
@@ -66,6 +68,7 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
     private final TablePath tablePath;
     private final long tableId;
     private final Configuration flussClientConfig;
+    @Nullable private final PaimonPartitionMarkDone partitionMarkDone;
     private TableCommitImpl tableCommit;
 
     private static final ThreadLocal<Long> currentCommitSnapshotId = new ThreadLocal<>();
@@ -87,6 +90,11 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
                                 || committerInitContext
                                         .lakeTieringConfig()
                                         .get(ConfigOptions.LAKE_TIERING_AUTO_EXPIRE_SNAPSHOT));
+        this.partitionMarkDone =
+                PaimonPartitionMarkDone.isEnabled(committerInitContext.tableInfo(), fileStoreTable)
+                        ? new PaimonPartitionMarkDone(
+                                fileStoreTable, committerInitContext.tableInfo())
+                        : null;
     }
 
     @Override
@@ -107,6 +115,10 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
         snapshotProperties.forEach(manifestCommittable::addProperty);
 
         try {
+            if (partitionMarkDone != null) {
+                runPartitionMarkDone(manifestCommittable);
+            }
+
             tableCommit = fileStoreTable.newCommit(FLUSS_LAKE_TIERING_COMMIT_USER);
             tableCommit.commit(manifestCommittable);
 
@@ -152,6 +164,87 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
                 }
             }
 
+        } catch (Throwable t) {
+            throw new IOException(t);
+        }
+    }
+
+    /**
+     * Runs partition mark-done for a data commit and attaches the state (re-attached even if
+     * unchanged) so the latest Fluss-committed snapshot always holds the full state.
+     */
+    private void runPartitionMarkDone(ManifestCommittable manifestCommittable) throws Exception {
+        checkNotNull(partitionMarkDone);
+        String previousStateJson = getLatestMarkDoneStateJson();
+        Set<String> tieredPartitions =
+                partitionMarkDone.extractTieredPartitions(manifestCommittable.fileCommittables());
+        String newStateJson = partitionMarkDone.run(previousStateJson, tieredPartitions);
+        String stateJson = newStateJson != null ? newStateJson : previousStateJson;
+        if (stateJson != null) {
+            manifestCommittable.addProperty(
+                    PaimonPartitionMarkDone.MARK_DONE_STATE_PROPERTY, stateJson);
+        }
+    }
+
+    @Nullable
+    private String getLatestMarkDoneStateJson() throws IOException {
+        Snapshot latestFlussSnapshot =
+                getCommittedLatestSnapshotOfLake(FLUSS_LAKE_TIERING_COMMIT_USER);
+        if (latestFlussSnapshot == null || latestFlussSnapshot.properties() == null) {
+            return null;
+        }
+        return latestFlussSnapshot
+                .properties()
+                .get(PaimonPartitionMarkDone.MARK_DONE_STATE_PROPERTY);
+    }
+
+    @Nullable
+    @Override
+    public CommittedLakeSnapshot commitMarkDoneMaintenance() throws IOException {
+        if (partitionMarkDone == null) {
+            return null;
+        }
+        try {
+            Snapshot latestFlussSnapshot =
+                    getCommittedLatestSnapshotOfLake(FLUSS_LAKE_TIERING_COMMIT_USER);
+            if (latestFlussSnapshot == null || latestFlussSnapshot.properties() == null) {
+                // never tiered by Fluss, cold start happens with the first data commit
+                return null;
+            }
+            String previousOffsetsPath =
+                    latestFlussSnapshot.properties().get(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY);
+            if (previousOffsetsPath == null) {
+                // keep the invariant that every Fluss-committed snapshot carries offsets
+                return null;
+            }
+            String previousStateJson =
+                    latestFlussSnapshot
+                            .properties()
+                            .get(PaimonPartitionMarkDone.MARK_DONE_STATE_PROPERTY);
+            String newStateJson = partitionMarkDone.run(previousStateJson, Collections.emptySet());
+            if (newStateJson == null) {
+                return null;
+            }
+
+            // persist the new state with a properties-only snapshot, carrying over the
+            // bucket offsets of the previous snapshot
+            Map<String, String> snapshotProperties = new HashMap<>();
+            snapshotProperties.put(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, previousOffsetsPath);
+            snapshotProperties.put(PaimonPartitionMarkDone.MARK_DONE_STATE_PROPERTY, newStateJson);
+
+            ManifestCommittable manifestCommittable = new ManifestCommittable(COMMIT_IDENTIFIER);
+            snapshotProperties.forEach(manifestCommittable::addProperty);
+            tableCommit = fileStoreTable.newCommit(FLUSS_LAKE_TIERING_COMMIT_USER);
+            // force creating a snapshot even though the committable is empty
+            tableCommit.ignoreEmptyCommit(false);
+            tableCommit.commit(manifestCommittable);
+
+            long committedSnapshotId =
+                    checkNotNull(
+                            currentCommitSnapshotId.get(),
+                            "Paimon committed snapshot id must be non-null.");
+            currentCommitSnapshotId.remove();
+            return new CommittedLakeSnapshot(committedSnapshotId, snapshotProperties);
         } catch (Throwable t) {
             throw new IOException(t);
         }
@@ -241,6 +334,9 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
     @Override
     public void close() throws Exception {
         try {
+            if (partitionMarkDone != null) {
+                partitionMarkDone.close();
+            }
             if (tableCommit != null) {
                 tableCommit.close();
             }
