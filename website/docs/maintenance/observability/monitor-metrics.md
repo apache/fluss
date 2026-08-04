@@ -767,7 +767,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </thead>
   <tbody>
     <tr>
-      <th rowspan="31"><strong>tabletserver</strong></th>
+      <th rowspan="33"><strong>tabletserver</strong></th>
       <td rowspan="20">table</td>
       <td>messagesInPerSecond</td>
       <td>The number of messages written per second to this table.</td>
@@ -919,6 +919,12 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
      <tr>
       <td>size</td>
       <td>The number of bytes written per second to this table.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>table_bucket_physicalStorage</td>
+      <td>localLogSize</td>
+      <td>The physical size, in bytes, of all local log segments for this table bucket on this TabletServer. The metric is reported for both leader and follower replicas and includes the partition and bucket variables. Sum it by partition or table, and across TabletServers, to obtain the corresponding local log footprint including replication.</td>
       <td>Gauge</td>
     </tr>
      <tr>

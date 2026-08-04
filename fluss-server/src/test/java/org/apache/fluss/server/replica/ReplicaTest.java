@@ -201,6 +201,63 @@ final class ReplicaTest extends ReplicaTestBase {
     }
 
     @Test
+    void testBucketPhysicalStorageLocalLogSizeIncludesFollower() throws Exception {
+        TableBucket tableBucket = new TableBucket(DATA1_TABLE_ID, 1);
+        Replica logReplica = makeLogReplica(DATA1_PHYSICAL_TABLE_PATH, tableBucket);
+        makeLogReplicaAsLeader(logReplica);
+        logReplica.appendRecordsToLeader(genMemoryLogRecordsByObject(DATA1), 0);
+
+        Gauge<Long> localLogSizeGauge = getBucketLocalLogSizeGauge(logReplica);
+        long localLogSize = logReplica.getLogTablet().logSize();
+        assertThat(localLogSize).isPositive();
+        assertThat(localLogSizeGauge.getValue()).isEqualTo(localLogSize);
+
+        int followerLeaderEpoch = INITIAL_LEADER_EPOCH + 1;
+        int newLeaderId = TABLET_SERVER_ID + 1;
+        List<Integer> replicas = Arrays.asList(TABLET_SERVER_ID, newLeaderId);
+        logReplica.makeFollower(
+                new NotifyLeaderAndIsrData(
+                        DATA1_PHYSICAL_TABLE_PATH,
+                        tableBucket,
+                        replicas,
+                        new LeaderAndIsr(
+                                newLeaderId,
+                                followerLeaderEpoch,
+                                replicas,
+                                Collections.emptyList(),
+                                INITIAL_COORDINATOR_EPOCH,
+                                followerLeaderEpoch)));
+
+        assertThat(logReplica.isLeader()).isFalse();
+        assertThat(localLogSizeGauge.getValue()).isEqualTo(localLogSize);
+    }
+
+    @Test
+    void testPhysicalStorageLocalLogSizeIsScopedPerBucket() throws Exception {
+        TableBucket firstTableBucket = new TableBucket(DATA1_TABLE_ID, 1);
+        TableBucket secondTableBucket = new TableBucket(DATA1_TABLE_ID, 2);
+        Replica firstReplica = makeLogReplica(DATA1_PHYSICAL_TABLE_PATH, firstTableBucket);
+        Replica secondReplica = makeLogReplica(DATA1_PHYSICAL_TABLE_PATH, secondTableBucket);
+        makeLeaderReplica(firstReplica, DATA1_TABLE_PATH, firstTableBucket, INITIAL_LEADER_EPOCH);
+        makeLeaderReplica(secondReplica, DATA1_TABLE_PATH, secondTableBucket, INITIAL_LEADER_EPOCH);
+
+        firstReplica.appendRecordsToLeader(genMemoryLogRecordsByObject(DATA1), 0);
+
+        Gauge<Long> firstBucketGauge = getBucketLocalLogSizeGauge(firstReplica);
+        Gauge<Long> secondBucketGauge = getBucketLocalLogSizeGauge(secondReplica);
+        assertThat(firstBucketGauge.getValue())
+                .isEqualTo(firstReplica.getLogTablet().logSize())
+                .isGreaterThan(secondBucketGauge.getValue());
+        assertThat(secondBucketGauge.getValue()).isEqualTo(secondReplica.getLogTablet().logSize());
+        assertThat(firstReplica.bucketMetrics().getAllVariables())
+                .containsEntry("partition", "")
+                .containsEntry("bucket", "1");
+        assertThat(secondReplica.bucketMetrics().getAllVariables())
+                .containsEntry("partition", "")
+                .containsEntry("bucket", "2");
+    }
+
+    @Test
     void testAppendRecordsWithOutOfOrderBatchSequence() throws Exception {
         Replica logReplica =
                 makeLogReplica(DATA1_PHYSICAL_TABLE_PATH, new TableBucket(DATA1_TABLE_ID, 1));
@@ -902,6 +959,16 @@ final class ReplicaTest extends ReplicaTestBase {
                 (Gauge<Long>)
                         ((AbstractMetricGroup) lakeTieringMetricGroup).getMetrics().get(metricName);
         return gauge.getValue();
+    }
+
+    @SuppressWarnings("unchecked")
+    private Gauge<Long> getBucketLocalLogSizeGauge(Replica replica) {
+        MetricGroup physicalStorageMetricGroup =
+                replica.bucketMetrics().addGroup("physicalStorage");
+        return (Gauge<Long>)
+                ((AbstractMetricGroup) physicalStorageMetricGroup)
+                        .getMetrics()
+                        .get(MetricNames.BUCKET_PHYSICAL_STORAGE_LOCAL_LOG_SIZE);
     }
 
     private void makeLogReplicaAsLeader(Replica replica) throws Exception {
