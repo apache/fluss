@@ -41,6 +41,8 @@ import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.kv.KvTablet;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
+import org.apache.fluss.server.kv.snapshot.KvSnapshotDataDownloader;
+import org.apache.fluss.server.kv.snapshot.KvSnapshotDownloadSpec;
 import org.apache.fluss.server.kv.snapshot.TestingCompletedKvSnapshotCommitter;
 import org.apache.fluss.server.log.FetchParams;
 import org.apache.fluss.server.log.LogAppendInfo;
@@ -51,6 +53,7 @@ import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.testutils.DataTestUtils;
 import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.utils.CloseableRegistry;
 import org.apache.fluss.utils.concurrent.Executors;
 import org.apache.fluss.utils.function.FunctionWithException;
 import org.apache.fluss.utils.types.Tuple2;
@@ -59,6 +62,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -70,6 +74,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
@@ -567,6 +572,103 @@ final class ReplicaTest extends ReplicaTestBase {
         kvSnapshotStore.waitUntilSnapshotComplete(tableBucket, snapshot);
         assertThat(kvSnapshotStore.getSnapshotLeaderEpoch(tableBucket, snapshot))
                 .isEqualTo(latestLeaderEpoch);
+    }
+
+    @Test
+    void testTransientMissingSnapshotExceptionKeepsHealthySnapshot(
+            @TempDir File snapshotKvTabletDir) throws Exception {
+        TableBucket tableBucket = new TableBucket(DATA1_TABLE_ID_PK, 1);
+        TestSnapshotContext testKvSnapshotContext =
+                new TestSnapshotContext(snapshotKvTabletDir.getPath());
+        ManuallyTriggeredScheduledExecutorService scheduledExecutorService =
+                testKvSnapshotContext.scheduledExecutorService;
+        TestingCompletedKvSnapshotCommitter kvSnapshotStore =
+                testKvSnapshotContext.testKvSnapshotStore;
+
+        Replica kvReplica =
+                makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, tableBucket, testKvSnapshotContext);
+        makeKvReplicaAsLeader(kvReplica);
+        KvRecordBatch kvRecords =
+                genKvRecordBatch(
+                        Tuple2.of("k1", new Object[] {1, "a"}),
+                        Tuple2.of("k2", new Object[] {2, "b"}));
+        putRecordsToLeader(kvReplica, kvRecords);
+
+        scheduledExecutorService.triggerAllNonPeriodicTasks();
+        CompletedSnapshot snapshot = kvSnapshotStore.waitUntilSnapshotComplete(tableBucket, 0);
+        assertThat(snapshot.getKvSnapshotHandle().getSharedKvFileHandles()).isNotEmpty();
+        String existingSnapshotFilePath =
+                snapshot.getKvSnapshotHandle()
+                        .getSharedKvFileHandles()
+                        .get(0)
+                        .getKvFileHandle()
+                        .getFilePath();
+        FsPath existingSnapshotFile = new FsPath(existingSnapshotFilePath);
+        assertThat(existingSnapshotFile.getFileSystem().exists(existingSnapshotFile)).isTrue();
+
+        makeKvReplicaAsFollower(kvReplica, 1);
+
+        AtomicBoolean failNextDownload = new AtomicBoolean(true);
+        List<Long> attemptedSnapshotIds = new ArrayList<>();
+        List<Long> brokenSnapshotIds = new ArrayList<>();
+        testKvSnapshotContext =
+                new TestSnapshotContext(snapshotKvTabletDir.getPath(), kvSnapshotStore) {
+                    @Override
+                    public FunctionWithException<TableBucket, CompletedSnapshot, Exception>
+                            getLatestCompletedSnapshotProvider() {
+                        FunctionWithException<TableBucket, CompletedSnapshot, Exception>
+                                snapshotProvider = super.getLatestCompletedSnapshotProvider();
+                        return bucket -> {
+                            CompletedSnapshot latestSnapshot = snapshotProvider.apply(bucket);
+                            if (latestSnapshot != null) {
+                                attemptedSnapshotIds.add(latestSnapshot.getSnapshotID());
+                            }
+                            return latestSnapshot;
+                        };
+                    }
+
+                    @Override
+                    public KvSnapshotDataDownloader getSnapshotDataDownloader() {
+                        return new KvSnapshotDataDownloader(executorService) {
+                            @Override
+                            public void transferAllDataToDirectory(
+                                    KvSnapshotDownloadSpec downloadSpec,
+                                    CloseableRegistry closeableRegistry)
+                                    throws Exception {
+                                if (failNextDownload.compareAndSet(true, false)) {
+                                    throw new IOException(
+                                            "Fail to download kv snapshot.",
+                                            new FileNotFoundException(
+                                                    "File does not exist: "
+                                                            + existingSnapshotFilePath));
+                                }
+                                super.transferAllDataToDirectory(downloadSpec, closeableRegistry);
+                            }
+                        };
+                    }
+
+                    @Override
+                    public void handleSnapshotBroken(CompletedSnapshot snapshot) throws Exception {
+                        brokenSnapshotIds.add(snapshot.getSnapshotID());
+                        super.handleSnapshotBroken(snapshot);
+                    }
+                };
+        kvReplica = makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, tableBucket, testKvSnapshotContext);
+        makeKvReplicaAsLeader(kvReplica, 2);
+
+        assertThat(failNextDownload).isFalse();
+        assertThat(attemptedSnapshotIds).containsExactly(0L, 0L);
+        assertThat(brokenSnapshotIds).isEmpty();
+        assertThat(kvSnapshotStore.getLatestCompletedSnapshot(tableBucket).getSnapshotID())
+                .isEqualTo(0);
+        assertThat(existingSnapshotFile.getFileSystem().exists(existingSnapshotFile)).isTrue();
+        assertThat(kvReplica.getKvTablet()).isNotNull();
+        verifyGetKeyValues(
+                kvReplica.getKvTablet(),
+                getKeyValuePairs(
+                        genKvRecords(
+                                Tuple2.of("k1", new Object[] {1, "a"}),
+                                Tuple2.of("k2", new Object[] {2, "b"}))));
     }
 
     @Test

@@ -70,6 +70,7 @@ import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.KvFileHandleAndLocalPath;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotDataDownloader;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotDownloadSpec;
+import org.apache.fluss.server.kv.snapshot.KvSnapshotHandle;
 import org.apache.fluss.server.kv.snapshot.KvTabletSnapshotTarget;
 import org.apache.fluss.server.kv.snapshot.PeriodicSnapshotManager;
 import org.apache.fluss.server.kv.snapshot.RocksIncrementalSnapshot;
@@ -854,7 +855,7 @@ public final class Replica {
         try {
             kvSnapshotDataDownloader.transferAllDataToDirectory(downloadSpec, closeableRegistry);
         } catch (Exception e) {
-            if (CompletedSnapshot.isSnapshotDataNotExists(e)) {
+            if (isSnapshotDataNotExists(e, downloadSpec)) {
                 try {
                     snapshotContext.handleSnapshotBroken(completedSnapshot);
                 } catch (Exception t) {
@@ -869,6 +870,26 @@ public final class Replica {
                 completedSnapshot,
                 kvDbPath,
                 end - start);
+    }
+
+    private static boolean isSnapshotDataNotExists(
+            Throwable throwable, KvSnapshotDownloadSpec downloadSpec) {
+        if (!CompletedSnapshot.isSnapshotDataNotExists(throwable)) {
+            return false;
+        }
+
+        List<KvFileHandleAndLocalPath> fileHandles = new ArrayList<>();
+        KvSnapshotHandle handle = downloadSpec.getKvSnapshotHandle();
+        fileHandles.addAll(handle.getSharedKvFileHandles());
+        fileHandles.addAll(handle.getPrivateFileHandles());
+
+        for (KvFileHandleAndLocalPath fileHandle : fileHandles) {
+            FsPath filePath = new FsPath(fileHandle.getKvFileHandle().getFilePath());
+            if (CompletedSnapshot.isSnapshotDataNotExists(throwable, filePath)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private Optional<CompletedSnapshot> getLatestSnapshot(TableBucket tableBucket) {

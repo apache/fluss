@@ -627,7 +627,7 @@ public class ReplicaTestBase {
         private final FsPath remoteKvTabletDir;
         protected ManuallyTriggeredScheduledExecutorService scheduledExecutorService;
         protected final TestingCompletedKvSnapshotCommitter testKvSnapshotStore;
-        private final ExecutorService executorService;
+        protected final ExecutorService executorService;
 
         public TestSnapshotContext(
                 String remoteKvTabletDir, TestingCompletedKvSnapshotCommitter testKvSnapshotStore)
