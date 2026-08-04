@@ -92,6 +92,7 @@ import org.apache.flink.table.expressions.Expression;
 import org.apache.flink.table.factories.Factory;
 import org.apache.flink.table.procedures.Procedure;
 import org.apache.flink.table.types.AbstractDataType;
+import org.apache.paimon.flink.SystemCatalogTable;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -492,10 +493,19 @@ public class FlinkCatalog extends AbstractCatalog {
                         lakeFlinkCatalog
                                 .getLakeCatalog(properties, lakeCatalogProperties)
                                 .getTable(new ObjectPath(lakeDatabaseName, lakeObjectName));
-        Map<String, String> options = new HashMap<>(lakeTable.getOptions());
-        options.put(RESOLVED_LAKE_DATABASE, lakeDatabaseName);
-        options.put(RESOLVED_LAKE_OBJECT, lakeObjectName);
-        return lakeTable.copy(options);
+        if (lakeTable instanceof SystemCatalogTable) {
+            Map<String, String> transientOptions = new HashMap<>();
+            transientOptions.put(RESOLVED_LAKE_DATABASE, lakeDatabaseName);
+            transientOptions.put(RESOLVED_LAKE_OBJECT, lakeObjectName);
+            // Paimon's SystemCatalogTable does not expose options. Wrap it only to carry the
+            // resolved lake identifiers through the Flink planner.
+            return new PaimonSystemCatalogTable((SystemCatalogTable) lakeTable, transientOptions);
+        } else {
+            Map<String, String> options = new HashMap<>(lakeTable.getOptions());
+            options.put(RESOLVED_LAKE_DATABASE, lakeDatabaseName);
+            options.put(RESOLVED_LAKE_OBJECT, lakeObjectName);
+            return lakeTable.copy(options);
+        }
     }
 
     @Override

@@ -18,6 +18,7 @@
 package org.apache.fluss.flink.lake;
 
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.flink.catalog.PaimonSystemCatalogTable;
 
 import org.apache.flink.table.catalog.CatalogTable;
 import org.apache.flink.table.catalog.ObjectIdentifier;
@@ -70,7 +71,14 @@ public class LakeTableFactory {
                         context.getObjectIdentifier().getCatalogName(),
                         lakeDatabaseName,
                         lakeObjectName);
-        CatalogTable lakeTable = context.getCatalogTable().copy(options);
+        CatalogTable originTable = context.getCatalogTable().getOrigin();
+        CatalogTable lakeTable;
+        if (originTable instanceof PaimonSystemCatalogTable) {
+            // Unwrap the transient option carrier before delegating to Paimon.
+            lakeTable = ((PaimonSystemCatalogTable) originTable).unwrap();
+        } else {
+            lakeTable = originTable.copy(options);
+        }
         ResolvedCatalogTable resolvedLakeTable =
                 new ResolvedCatalogTable(lakeTable, context.getCatalogTable().getResolvedSchema());
         return new FactoryUtil.DefaultDynamicTableContext(
