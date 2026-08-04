@@ -21,6 +21,8 @@ import org.apache.fluss.metadata.DeleteBehavior;
 
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Tests for {@link TableConfig}. */
@@ -43,5 +45,17 @@ class TableConfigTest {
         conf.set(ConfigOptions.TABLE_DELETE_BEHAVIOR, DeleteBehavior.IGNORE);
         TableConfig tableConfig3 = new TableConfig(conf);
         assertThat(tableConfig3.getDeleteBehavior()).hasValue(DeleteBehavior.IGNORE);
+    }
+
+    @Test
+    void testTieredLogLocalTtl() {
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.TABLE_LOG_TTL, Duration.ofDays(3));
+        TableConfig tableConfig = new TableConfig(conf);
+
+        assertThat(tableConfig.getLocalLogTTLMs()).isEqualTo(Duration.ofDays(1).toMillis());
+
+        conf.set(ConfigOptions.TABLE_LOG_LOCAL_TTL, Duration.ofHours(6));
+        assertThat(tableConfig.getLocalLogTTLMs()).isEqualTo(Duration.ofHours(6).toMillis());
     }
 }

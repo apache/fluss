@@ -357,7 +357,10 @@ public class LogTieringTask implements Runnable {
         // 2. sending the CommitRemoteLogManifestRequest to coordinator server
         // to try to commit this snapshot.
         long newRemoteLogStartOffset = newRemoteLogManifest.getRemoteLogStartOffset();
-        long newRemoteLogEndOffset = newRemoteLogManifest.getRemoteLogEndOffset();
+        long newRemoteLogEndOffset =
+                Math.max(
+                        newRemoteLogManifest.getRemoteLogEndOffset(),
+                        remoteLogTablet.getHighestRemoteLogEndOffset().orElse(-1L));
         long newRemoteLogSize = newRemoteLogManifest.getRemoteLogSize();
         int retrySendCommitTimes = 1;
         while (retrySendCommitTimes <= 10) {
@@ -436,7 +439,7 @@ public class LogTieringTask implements Runnable {
     }
 
     private long findRemoteLogEndOffset(LogTablet logTablet) {
-        OptionalLong remoteLogEndOffsetOpt = remoteLog.getRemoteLogEndOffset();
+        OptionalLong remoteLogEndOffsetOpt = remoteLog.getHighestRemoteLogEndOffset();
         long newRemoteLogEndOffset;
         if (remoteLogEndOffsetOpt.isPresent()) {
             long remoteLogEndOffset = remoteLogEndOffsetOpt.getAsLong();

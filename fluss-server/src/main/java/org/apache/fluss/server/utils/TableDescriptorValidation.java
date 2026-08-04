@@ -46,6 +46,7 @@ import org.apache.fluss.utils.StringUtils;
 
 import javax.annotation.Nullable;
 
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.EnumSet;
@@ -456,6 +457,26 @@ public class TableDescriptorValidation {
                     String.format(
                             "'%s' must be greater than 0.",
                             ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS.key()));
+        }
+
+        Optional<Duration> localTtl = tableConf.getOptional(ConfigOptions.TABLE_LOG_LOCAL_TTL);
+        if (!localTtl.isPresent()) {
+            return;
+        }
+        if (localTtl.get().isZero() || localTtl.get().isNegative()) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "'%s' must be greater than 0.",
+                            ConfigOptions.TABLE_LOG_LOCAL_TTL.key()));
+        }
+
+        Duration logTtl = tableConf.get(ConfigOptions.TABLE_LOG_TTL);
+        if (!logTtl.isZero() && !logTtl.isNegative() && localTtl.get().compareTo(logTtl) > 0) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "'%s' must be less than or equal to '%s'.",
+                            ConfigOptions.TABLE_LOG_LOCAL_TTL.key(),
+                            ConfigOptions.TABLE_LOG_TTL.key()));
         }
     }
 

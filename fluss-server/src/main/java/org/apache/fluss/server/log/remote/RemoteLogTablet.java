@@ -95,10 +95,14 @@ public class RemoteLogTablet {
      */
     private volatile long remoteLogStartOffset;
 
-    /**
-     * It represents the remote log end offset of the segments that have copied to remote storage.
-     */
+    /** The end offset of the segments in the current remote log manifest. */
     private volatile long remoteLogEndOffset;
+
+    /**
+     * The highest end offset ever committed to remote storage. Unlike {@link #remoteLogEndOffset},
+     * this value is not reset when all remote segments expire.
+     */
+    private volatile long highestRemoteLogEndOffset = INIT_REMOTE_LOG_END_OFFSET;
 
     private volatile boolean closed = false;
 
@@ -268,6 +272,31 @@ public class RemoteLogTablet {
     }
 
     /**
+     * Returns the highest end offset ever committed to remote storage, or empty if no segment has
+     * been committed.
+     */
+    public OptionalLong getHighestRemoteLogEndOffset() {
+        return highestRemoteLogEndOffset == INIT_REMOTE_LOG_END_OFFSET
+                ? OptionalLong.empty()
+                : OptionalLong.of(highestRemoteLogEndOffset);
+    }
+
+    /**
+     * Restores the highest end offset from the persisted remote log manifest handle.
+     *
+     * <p>The handle keeps this offset even when its manifest no longer contains segments.
+     */
+    public void updateHighestRemoteLogEndOffset(long remoteLogEndOffset) {
+        inWriteLock(
+                lock,
+                () -> {
+                    if (remoteLogEndOffset > highestRemoteLogEndOffset) {
+                        highestRemoteLogEndOffset = remoteLogEndOffset;
+                    }
+                });
+    }
+
+    /**
      * Gets the snapshot of current remote log segment manifest. The snapshot including the exists
      * remoteLogSegment already committed.
      */
@@ -313,6 +342,7 @@ public class RemoteLogTablet {
                         if (remoteLogSegment.remoteLogEndOffset() > remoteLogEndOffset) {
                             remoteLogEndOffset = remoteLogSegment.remoteLogEndOffset();
                         }
+                        updateHighestRemoteLogEndOffset(remoteLogSegment.remoteLogEndOffset());
 
                         newSizeInBytes += remoteLogSegment.segmentSizeInBytes();
                     }

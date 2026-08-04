@@ -1229,6 +1229,10 @@ public class ReplicaManager implements ServerReconfigurable {
                 if (replica.makeFollower(data)) {
                     replicasBecomeFollower.add(replica);
                     scannerManager.closeScannersForBucket(tb);
+                    // A follower may not receive another remote offset notification for an idle
+                    // bucket, so best-effort restore the persisted highest copied offset once when
+                    // the replica transitions to follower.
+                    remoteLogManager.restoreRemoteLogEndOffset(replica);
                 }
                 // stop the remote log tiering tasks for followers
                 remoteLogManager.stopLogTiering(replica);

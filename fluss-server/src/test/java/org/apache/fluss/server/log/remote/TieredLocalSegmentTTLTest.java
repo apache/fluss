@@ -18,15 +18,24 @@
 package org.apache.fluss.server.log.remote;
 
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.log.LogTablet;
+import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
 
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
 
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
@@ -39,12 +48,15 @@ final class TieredLocalSegmentTTLTest extends RemoteLogTestBase {
     @BeforeEach
     public void setup() throws Exception {
         super.setup();
+        Map<String, String> properties = new HashMap<>();
+        properties.put(ConfigOptions.TABLE_LOG_TTL.key(), "2h");
+        properties.put(ConfigOptions.TABLE_LOG_LOCAL_TTL.key(), "1h");
         registerTableInZkClient(
                 DATA1_TABLE_PATH,
                 DATA1_SCHEMA,
                 DATA1_TABLE_ID,
                 Collections.emptyList(),
-                Collections.singletonMap(ConfigOptions.TABLE_LOG_TTL.key(), "1h"));
+                properties);
     }
 
     @ParameterizedTest
@@ -67,7 +79,7 @@ final class TieredLocalSegmentTTLTest extends RemoteLogTestBase {
         assertThat(logTablet.localLogStartOffset()).isEqualTo(30L);
         assertThat(remoteLog.allRemoteLogSegments()).hasSize(4);
 
-        manualClock.advanceTime(Duration.ofHours(2));
+        manualClock.advanceTime(Duration.ofMinutes(90));
         // Run local retention without updating the remote manifest or uploading another segment.
         logManager.cleanupExpiredLocalLogSegments();
 
@@ -80,7 +92,7 @@ final class TieredLocalSegmentTTLTest extends RemoteLogTestBase {
 
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
-    void testExpiredLocalSegmentsRemovedWithoutRemoteLogEndOffset(boolean partitionTable)
+    void testExpiredLocalSegmentsRetainedWithoutRemoteLogEndOffset(boolean partitionTable)
             throws Exception {
         TableBucket tb =
                 partitionTable
@@ -92,11 +104,11 @@ final class TieredLocalSegmentTTLTest extends RemoteLogTestBase {
         addMultiSegmentsToLogTablet(logTablet, 5);
         assertThat(remoteLogManager.remoteLogTablet(tb).getRemoteLogEndOffset()).isEmpty();
 
-        manualClock.advanceTime(Duration.ofHours(2));
+        manualClock.advanceTime(Duration.ofMinutes(90));
         logManager.cleanupExpiredLocalLogSegments();
 
-        assertThat(logTablet.getSegments()).hasSize(1);
-        assertThat(logTablet.localLogStartOffset()).isEqualTo(40L);
+        assertThat(logTablet.getSegments()).hasSize(5);
+        assertThat(logTablet.localLogStartOffset()).isZero();
         assertThat(logTablet.activeLogSegment().getBaseOffset()).isEqualTo(40L);
     }
 
@@ -114,11 +126,41 @@ final class TieredLocalSegmentTTLTest extends RemoteLogTestBase {
         logTablet.updateTieredLogLocalSegments(5);
         logTablet.updateRemoteLogEndOffset(20L);
 
-        manualClock.advanceTime(Duration.ofHours(2));
+        manualClock.advanceTime(Duration.ofMinutes(90));
         logManager.cleanupExpiredLocalLogSegments();
 
         assertThat(logTablet.getSegments()).hasSize(3);
         assertThat(logTablet.localLogStartOffset()).isEqualTo(20L);
         assertThat(logTablet.activeLogSegment().getBaseOffset()).isEqualTo(40L);
+    }
+
+    @Test
+    void testFollowerRestoresHighestCopiedOffset() throws Exception {
+        TableBucket tableBucket = new TableBucket(DATA1_TABLE_ID, 0);
+        zkClient.upsertRemoteLogManifestHandle(
+                tableBucket,
+                new RemoteLogManifestHandle(new FsPath("test:///remote-log-manifest"), 40L));
+        makeLeaderAndFollower(
+                Collections.singletonList(
+                        new NotifyLeaderAndIsrData(
+                                PhysicalTablePath.of(DATA1_TABLE_PATH),
+                                tableBucket,
+                                Arrays.asList(TABLET_SERVER_ID, 2),
+                                new LeaderAndIsr(
+                                        LeaderAndIsr.NO_LEADER,
+                                        0,
+                                        Collections.singletonList(TABLET_SERVER_ID),
+                                        Collections.emptyList(),
+                                        0,
+                                        0))));
+        LogTablet logTablet = replicaManager.getReplicaOrException(tableBucket).getLogTablet();
+
+        addMultiSegmentsToLogTablet(logTablet, 5);
+        logTablet.updateHighWatermark(logTablet.localLogEndOffset());
+        manualClock.advanceTime(Duration.ofMinutes(90));
+        logManager.cleanupExpiredLocalLogSegments();
+
+        assertThat(logTablet.getSegments()).hasSize(1);
+        assertThat(logTablet.localLogStartOffset()).isEqualTo(40L);
     }
 }

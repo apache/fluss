@@ -157,19 +157,48 @@ public class RemoteLogManager implements Closeable {
         Optional<RemoteLogManifestHandle> remoteLogManifestHandleOpt =
                 zkClient.getRemoteLogManifestHandle(tableBucket);
         if (remoteLogManifestHandleOpt.isPresent()) {
+            RemoteLogManifestHandle remoteLogManifestHandle = remoteLogManifestHandleOpt.get();
             // If there is remote log manifest handle in remote, we will download
             // the manifest snapshot from remote storage and write to cache.
             RemoteLogManifest manifest =
                     remoteLogStorage.readRemoteLogManifestSnapshot(
-                            remoteLogManifestHandleOpt.get().getRemoteLogManifestPath());
+                            remoteLogManifestHandle.getRemoteLogManifestPath());
             remoteLog.loadRemoteLogManifest(manifest);
+            remoteLog.updateHighestRemoteLogEndOffset(
+                    remoteLogManifestHandle.getRemoteLogEndOffset());
+            log.updateRemoteLogEndOffset(remoteLogManifestHandle.getRemoteLogEndOffset());
         }
-        remoteLog.getRemoteLogEndOffset().ifPresent(log::updateRemoteLogEndOffset);
         log.updateRemoteLogStartOffset(remoteLog.getRemoteLogStartOffset());
         log.updateRemoteLogSize(remoteLog.getRemoteSizeInBytes());
         // leader needs to register the remote log metrics
         remoteLog.registerMetrics(replica.bucketMetrics());
         remoteLogs.put(tableBucket, remoteLog);
+    }
+
+    /**
+     * Best-effort restores the highest copied remote log end offset from persistent metadata.
+     *
+     * <p>A failure only delays local log cleanup until a later remote offset notification and must
+     * not prevent the replica from becoming a follower.
+     */
+    public void restoreRemoteLogEndOffset(Replica replica) {
+        if (remoteDisabled()) {
+            return;
+        }
+        try {
+            Optional<RemoteLogManifestHandle> remoteLogManifestHandle =
+                    zkClient.getRemoteLogManifestHandle(replica.getTableBucket());
+            if (remoteLogManifestHandle.isPresent()) {
+                replica.getLogTablet()
+                        .updateRemoteLogEndOffset(
+                                remoteLogManifestHandle.get().getRemoteLogEndOffset());
+            }
+        } catch (Exception e) {
+            LOG.warn(
+                    "Failed to restore remote log end offset for follower replica {}.",
+                    replica.getTableBucket(),
+                    e);
+        }
     }
 
     /** Start the log tiering task for the given replica. */

@@ -26,6 +26,8 @@ import org.apache.fluss.fs.FsPath;
  */
 public class RemoteLogManifestHandle {
     private final FsPath remoteLogManifestPath;
+    // The highest end offset ever copied to remote storage. It is monotonic and may be greater
+    // than the end offset in the current manifest after remote segments expire.
     private final long remoteLogEndOffset;
 
     public RemoteLogManifestHandle(FsPath remoteLogManifestPath, long remoteLogEndOffset) {
@@ -41,6 +43,12 @@ public class RemoteLogManifestHandle {
         return remoteLogManifestPath;
     }
 
+    /**
+     * Returns the highest end offset ever copied to remote storage.
+     *
+     * <p>The value is monotonic and may be greater than the end offset represented by the current
+     * remote manifest after expired segments are removed.
+     */
     public long getRemoteLogEndOffset() {
         return remoteLogEndOffset;
     }
