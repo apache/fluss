@@ -361,6 +361,7 @@ inline TableInfo from_ffi_table_info(const ffi::FfiTableInfo& ffi_info) {
         info.partition_keys.push_back(std::string(pk));
     }
 
+    info.has_partition_expressions = ffi_info.has_partition_expressions;
     info.num_buckets = ffi_info.num_buckets;
     info.has_primary_key = ffi_info.has_primary_key;
     info.is_partitioned = ffi_info.is_partitioned;

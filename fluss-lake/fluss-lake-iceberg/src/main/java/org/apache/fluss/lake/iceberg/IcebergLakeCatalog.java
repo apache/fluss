@@ -18,16 +18,21 @@
 package org.apache.fluss.lake.iceberg;
 
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidAlterTableException;
+import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.lake.iceberg.utils.IcebergCatalogUtils;
 import org.apache.fluss.lake.iceberg.utils.IcebergPartitionSpecUtils;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
+import org.apache.fluss.metadata.DateTruncPartitionTransform;
+import org.apache.fluss.metadata.PartitionExpression;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.types.DataTypeRoot;
 import org.apache.fluss.utils.IOUtils;
 
 import org.apache.iceberg.PartitionField;
@@ -53,7 +58,11 @@ import org.apache.iceberg.types.Types;
 
 import javax.annotation.Nullable;
 
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -68,10 +77,12 @@ import static org.apache.fluss.utils.Preconditions.checkArgument;
 public class IcebergLakeCatalog implements LakeCatalog {
     @VisibleForTesting
     static final Set<String> RESERVED_PROPERTIES =
-            Set.of(
-                    TableProperties.MERGE_MODE,
-                    TableProperties.UPDATE_MODE,
-                    TableProperties.DELETE_MODE);
+            Collections.unmodifiableSet(
+                    new HashSet<>(
+                            Arrays.asList(
+                                    TableProperties.MERGE_MODE,
+                                    TableProperties.UPDATE_MODE,
+                                    TableProperties.DELETE_MODE)));
 
     private final Catalog icebergCatalog;
 
@@ -90,8 +101,90 @@ public class IcebergLakeCatalog implements LakeCatalog {
     }
 
     @Override
+    public void validateTable(TableDescriptor tableDescriptor, Context context) {
+        Set<String> timeTransformSources = new HashSet<>();
+        for (PartitionExpression partitionExpression : tableDescriptor.getPartitionExpressions()) {
+            if (!(partitionExpression.getTransform() instanceof DateTruncPartitionTransform)) {
+                throw new InvalidTableException(
+                        "Iceberg implicit partitioning supports DATE_TRUNC transforms only.");
+            }
+            DateTruncPartitionTransform transform =
+                    (DateTruncPartitionTransform) partitionExpression.getTransform();
+            if (!timeTransformSources.add(transform.getSourceColumn())) {
+                throw new InvalidTableException(
+                        String.format(
+                                "Iceberg supports only one native time transform for source column '%s'.",
+                                transform.getSourceColumn()));
+            }
+            switch (transform.getTimeUnit()) {
+                case HOUR:
+                case DAY:
+                case MONTH:
+                case YEAR:
+                    break;
+                case QUARTER:
+                    throw new InvalidTableException(
+                            "Iceberg does not have an equivalent native QUARTER partition transform.");
+                default:
+                    throw new InvalidTableException(
+                            "Unsupported Iceberg implicit partition transform unit: "
+                                    + transform.getTimeUnit());
+            }
+
+            int sourceColumnIndex =
+                    tableDescriptor
+                            .getSchema()
+                            .getRowType()
+                            .getFieldIndex(transform.getSourceColumn());
+            if (sourceColumnIndex < 0) {
+                throw new InvalidTableException(
+                        String.format(
+                                "Iceberg implicit partition source column '%s' does not exist.",
+                                transform.getSourceColumn()));
+            }
+            DataTypeRoot sourceType =
+                    tableDescriptor
+                            .getSchema()
+                            .getRowType()
+                            .getTypeAt(sourceColumnIndex)
+                            .getTypeRoot();
+            if (sourceType != DataTypeRoot.DATE
+                    && sourceType != DataTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE
+                    && sourceType != DataTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE) {
+                throw new InvalidTableException(
+                        String.format(
+                                "Iceberg native time transforms do not support source column '%s' with type %s.",
+                                transform.getSourceColumn(), sourceType));
+            }
+            if (sourceType == DataTypeRoot.DATE
+                    && transform.getTimeUnit() == AutoPartitionTimeUnit.HOUR) {
+                throw new InvalidTableException(
+                        "Iceberg native HOUR transform does not support DATE source columns.");
+            }
+            if (sourceType == DataTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE) {
+                if (!transform.getTimeZone().isPresent()
+                        || !transform.getTimeZone().get().getRules().isFixedOffset()
+                        || !transform
+                                .getTimeZone()
+                                .get()
+                                .getRules()
+                                .getOffset(Instant.EPOCH)
+                                .equals(ZoneOffset.UTC)) {
+                    throw new InvalidTableException(
+                            String.format(
+                                    "Iceberg native time transforms for TIMESTAMP_LTZ require UTC partition boundaries, but transform '%s' uses time zone %s.",
+                                    partitionExpression.getVirtualPartitionSpecKey().get(),
+                                    transform.getTimeZone().orElse(null)));
+                }
+            }
+        }
+    }
+
+    @Override
     public void createTable(TablePath tablePath, TableDescriptor tableDescriptor, Context context)
             throws TableAlreadyExistException {
+        validateTable(tableDescriptor, context);
+
         // convert Fluss table path to iceberg table
         boolean isPkTable = tableDescriptor.hasPrimaryKey();
         TableIdentifier icebergId = toIcebergTableIdentifier(tablePath);
@@ -388,7 +481,10 @@ public class IcebergLakeCatalog implements LakeCatalog {
         return names;
     }
 
-    /** Checks whether the existing Iceberg partition spec is compatible with the expected one. */
+    /**
+     * Checks whether the existing Iceberg partition spec is compatible with the expected one.
+     * Partition field names and Iceberg-assigned field IDs don't affect the partition semantics.
+     */
     @VisibleForTesting
     boolean isIcebergPartitionSpecCompatible(
             PartitionSpec existingSpec,
@@ -409,11 +505,8 @@ public class IcebergLakeCatalog implements LakeCatalog {
                 return false;
             }
 
-            if (!existing.name().equals(expected.name())) {
-                return false;
-            }
-
-            if (!existing.transform().equals(expected.transform())) {
+            // Iceberg binds time transforms to source types after a metadata round-trip.
+            if (!existing.transform().toString().equals(expected.transform().toString())) {
                 return false;
             }
         }

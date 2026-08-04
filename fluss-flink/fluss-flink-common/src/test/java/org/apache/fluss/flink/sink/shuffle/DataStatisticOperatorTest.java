@@ -17,7 +17,13 @@
 
 package org.apache.fluss.flink.sink.shuffle;
 
+import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.flink.sink.serializer.RowDataSerializationSchema;
+import org.apache.fluss.metadata.DateTruncPartitionTransform;
+import org.apache.fluss.metadata.PartitionExpression;
+import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.types.RowType;
 
 import org.apache.flink.runtime.operators.coordination.OperatorEvent;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
@@ -25,8 +31,10 @@ import org.apache.flink.streaming.util.OneInputStreamOperatorTestHarness;
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.data.StringData;
+import org.apache.flink.table.data.TimestampData;
 import org.junit.jupiter.api.Test;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -90,6 +98,56 @@ public class DataStatisticOperatorTest {
                                     new DataStatistics(expectedGlobalStatistic))));
             assertThat(testHarness.getRecordOutput()).isEqualTo(expectedOutput);
         }
+    }
+
+    @Test
+    void testProcessElementWithImplicitPartitionExpression() throws Exception {
+        RowType rowType = implicitPartitionedRowType();
+        DataStatisticsOperatorFactory<RowData> factory =
+                new DataStatisticsOperatorFactory<>(
+                        rowType,
+                        Collections.singletonList("event_day"),
+                        Collections.singletonList(
+                                PartitionExpression.of(
+                                        "event_day",
+                                        DateTruncPartitionTransform.of(
+                                                "event_time", AutoPartitionTimeUnit.DAY))),
+                        new RowDataSerializationSchema(false, false));
+        List<StreamRecord<RowData>> inputRecords =
+                Arrays.asList(
+                        new StreamRecord<>(rowData(1, LocalDateTime.of(2024, 3, 15, 10, 30), "a")),
+                        new StreamRecord<>(rowData(2, LocalDateTime.of(2024, 3, 15, 23, 59), "b")),
+                        new StreamRecord<>(rowData(3, LocalDateTime.of(2024, 3, 16, 0, 0), "c")));
+
+        List<StreamRecord<StatisticsOrRecord<RowData>>> expectedOutput = new ArrayList<>();
+
+        try (DataStatisticOperatorTestHarness testHarness =
+                new DataStatisticOperatorTestHarness(factory, 1, 1, 0)) {
+            testHarness.open();
+
+            for (StreamRecord<RowData> record : inputRecords) {
+                testHarness.processElement(record);
+                expectedOutput.add(
+                        new StreamRecord<>(StatisticsOrRecord.fromRecord(record.getValue())));
+            }
+
+            Map<String, Long> expectedLocalStatistic = new HashMap<>();
+            expectedLocalStatistic.put("20240315", 26L);
+            expectedLocalStatistic.put("20240316", 13L);
+            assertThat(testHarness.getLocalStatistics()).isEqualTo(expectedLocalStatistic);
+            assertThat(testHarness.getRecordOutput()).isEqualTo(expectedOutput);
+        }
+    }
+
+    private static RowType implicitPartitionedRowType() {
+        return RowType.of(
+                new DataType[] {DataTypes.INT(), DataTypes.TIMESTAMP(), DataTypes.STRING()},
+                new String[] {"id", "event_time", "payload"});
+    }
+
+    private static GenericRowData rowData(int id, LocalDateTime eventTime, String payload) {
+        return GenericRowData.of(
+                id, TimestampData.fromLocalDateTime(eventTime), StringData.fromString(payload));
     }
 
     static class DataStatisticOperatorTestHarness

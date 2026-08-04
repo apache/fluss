@@ -17,7 +17,6 @@
 
 package org.apache.fluss.lake.paimon.tiering;
 
-import org.apache.fluss.client.table.getter.PartitionGetter;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.lake.paimon.testutils.FlinkPaimonTieringTestBase;
@@ -35,6 +34,7 @@ import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.utils.PartitionComputer;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.apache.flink.core.execution.JobClient;
@@ -270,9 +270,10 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
         TableInfo tableInfo = admin.getTableInfo(t1).get();
         List<PartitionInfo> partitionInfos = admin.listPartitionInfos(t1).get();
         assertThat(partitionInfos.size()).isEqualTo(1);
-        PartitionGetter partitionGetter =
-                new PartitionGetter(tableInfo.getRowType(), partitionKeys);
-        String partition = partitionGetter.getPartition(rows.get(0));
+        PartitionComputer partitionComputer =
+                new PartitionComputer(
+                        partitionKeys, tableInfo.getPartitionExpressions(), tableInfo.getRowType());
+        String partition = partitionComputer.getPartition(rows.get(0));
         assertThat(partitionInfos.get(0).getPartitionName()).isEqualTo(partition);
 
         long partitionId = partitionInfos.get(0).getPartitionId();

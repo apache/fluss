@@ -44,6 +44,11 @@ public class LanceLakeCatalog implements LakeCatalog {
 
     @Override
     public void createTable(TablePath tablePath, TableDescriptor tableDescriptor, Context context) {
+        if (tableDescriptor.hasPartitionExpressions()) {
+            throw new UnsupportedOperationException(
+                    "Lance lake tables do not support implicit partition expressions yet.");
+        }
+
         // currently, we don't support primary key table for lance
         if (tableDescriptor.hasPrimaryKey()) {
             throw new InvalidTableException(

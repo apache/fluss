@@ -18,13 +18,13 @@
 package org.apache.fluss.client.utils;
 
 import org.apache.fluss.client.metadata.MetadataUpdater;
-import org.apache.fluss.client.table.getter.PartitionGetter;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.IllegalConfigurationException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.utils.PartitionComputer;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -122,12 +122,12 @@ public final class ClientUtils {
      */
     public static Long getPartitionId(
             InternalRow row,
-            PartitionGetter partitionGetter,
+            PartitionComputer partitionComputer,
             TablePath tablePath,
             MetadataUpdater metadataUpdater)
             throws PartitionNotExistException {
-        checkNotNull(partitionGetter, "partitionGetter shouldn't be null.");
-        String partitionName = partitionGetter.getPartition(row);
+        checkNotNull(partitionComputer, "partitionComputer shouldn't be null.");
+        String partitionName = partitionComputer.getPartition(row);
         PhysicalTablePath physicalTablePath = PhysicalTablePath.of(tablePath, partitionName);
         metadataUpdater.checkAndUpdatePartitionMetadata(physicalTablePath);
         return metadataUpdater.getCluster().getPartitionIdOrElseThrow(physicalTablePath);

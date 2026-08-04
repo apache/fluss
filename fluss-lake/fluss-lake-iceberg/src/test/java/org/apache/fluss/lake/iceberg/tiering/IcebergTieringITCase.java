@@ -17,12 +17,22 @@
 
 package org.apache.fluss.lake.iceberg.tiering;
 
+import org.apache.fluss.client.table.Table;
+import org.apache.fluss.client.table.scanner.ScanRecord;
+import org.apache.fluss.client.table.scanner.log.LogScanner;
+import org.apache.fluss.client.table.scanner.log.ScanRecords;
+import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.lake.iceberg.testutils.FlinkIcebergTieringTestBase;
+import org.apache.fluss.metadata.DateTruncPartitionTransform;
+import org.apache.fluss.metadata.PartitionExpression;
+import org.apache.fluss.metadata.PartitionInfo;
+import org.apache.fluss.metadata.PartitionKey;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
@@ -31,11 +41,13 @@ import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.DateTimeUtils;
+import org.apache.fluss.utils.PartitionComputer;
 import org.apache.fluss.utils.TypeUtils;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.apache.flink.core.execution.JobClient;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.iceberg.PartitionField;
 import org.apache.iceberg.data.Record;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -43,9 +55,11 @@ import org.junit.jupiter.api.Test;
 import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -53,8 +67,11 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
+import static org.apache.fluss.lake.iceberg.utils.IcebergConversions.toIceberg;
 import static org.apache.fluss.testutils.DataTestUtils.row;
+import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** The ITCase for tiering into iceberg. */
@@ -268,6 +285,77 @@ class IcebergTieringITCase extends FlinkIcebergTieringTestBase {
         }
     }
 
+    @Test
+    void testImplicitPartitionLogTableTieringEndToEnd() throws Exception {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "implicitPartitionLogTable");
+        LocalDate partitionDate = LocalDate.now(ZoneOffset.UTC);
+        String partitionName = partitionDate.format(DateTimeFormatter.BASIC_ISO_DATE);
+        LocalDateTime firstEventTime = partitionDate.atTime(10, 0);
+        LocalDateTime secondEventTime = partitionDate.atTime(11, 0);
+
+        Schema schema =
+                Schema.newBuilder()
+                        .column("event_time", DataTypes.TIMESTAMP().copy(false))
+                        .column("payload", DataTypes.STRING())
+                        .build();
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .partitionedByKeys(
+                                PartitionKey.expression(
+                                        PartitionExpression.of(
+                                                "event_day",
+                                                DateTruncPartitionTransform.of(
+                                                        "event_time", AutoPartitionTimeUnit.DAY))))
+                        .distributedBy(1)
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500))
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_NUM_RETENTION, 30)
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE, 0)
+                        .build();
+        long tableId = createTable(tablePath, descriptor);
+        TableInfo tableInfo = admin.getTableInfo(tablePath).get();
+        assertThat(tableInfo.hasPartitionExpressions()).isTrue();
+        assertThat(tableInfo.isAutoPartitioned()).isTrue();
+
+        org.apache.iceberg.Table icebergTable = icebergCatalog.loadTable(toIceberg(tablePath));
+        assertThat(icebergTable.schema().findField("event_day")).isNull();
+        PartitionField implicitField = icebergTable.spec().fields().get(0);
+        assertThat(implicitField.transform().toString()).isEqualTo("day");
+        assertThat(icebergTable.schema().findColumnName(implicitField.sourceId()))
+                .isEqualTo("event_time");
+
+        List<InternalRow> rows =
+                Arrays.asList(
+                        row(TimestampNtz.fromLocalDateTime(firstEventTime), "v1"),
+                        row(TimestampNtz.fromLocalDateTime(secondEventTime), "v2"));
+        PartitionComputer partitionComputer =
+                new PartitionComputer(tableInfo, tableInfo.getRowType());
+        assertThat(partitionComputer.getPartition(rows.get(0))).isEqualTo(partitionName);
+        appendRowsAndWait(tablePath, rows);
+
+        PartitionInfo partitionInfo = waitForPartitionInfo(tablePath, partitionName);
+        assertThat(partitionInfo.getPartitionName()).isEqualTo(partitionName);
+        assertThat(partitionInfo.getResolvedPartitionSpec().getPartitionKeys())
+                .containsExactly("event_day");
+        assertThat(partitionInfo.getPartitionSpec().getSpecMap())
+                .containsEntry("event_day", partitionName);
+        long partitionId = partitionInfo.getPartitionId();
+
+        checkImplicitPartitionRowsInFluss(tablePath, partitionId, rows);
+
+        JobClient jobClient = buildTieringJob(execEnv);
+        TableBucket tableBucket = new TableBucket(tableId, partitionId, 0);
+        try {
+            assertReplicaStatus(tableBucket, rows.size());
+            checkImplicitPartitionRowsInIceberg(tablePath, rows);
+            checkFlussOffsetsInSnapshot(
+                    tablePath, Collections.singletonMap(tableBucket, (long) rows.size()));
+        } finally {
+            jobClient.cancel().get();
+        }
+    }
+
     private void checkDataInIcebergPrimaryKeyTable(
             TablePath tablePath, List<InternalRow> expectedRows) throws Exception {
         Iterator<Record> actualIterator = getIcebergRecords(tablePath).iterator();
@@ -309,6 +397,78 @@ class IcebergTieringITCase extends FlinkIcebergTieringTestBase {
         }
         assertThat(actualIterator.hasNext()).isFalse();
         assertThat(iterator.hasNext()).isFalse();
+    }
+
+    private void appendRowsAndWait(TablePath tablePath, List<InternalRow> rows) throws Exception {
+        try (Table table = conn.getTable(tablePath)) {
+            AppendWriter appendWriter = table.newAppend().createWriter();
+            for (InternalRow row : rows) {
+                appendWriter.append(row).get();
+            }
+            appendWriter.flush();
+        }
+    }
+
+    private PartitionInfo waitForPartitionInfo(TablePath tablePath, String partitionName)
+            throws Exception {
+        return waitValue(
+                () -> {
+                    List<PartitionInfo> partitionInfos = admin.listPartitionInfos(tablePath).get();
+                    for (PartitionInfo partitionInfo : partitionInfos) {
+                        if (partitionInfo.getPartitionName().equals(partitionName)) {
+                            return Optional.of(partitionInfo);
+                        }
+                    }
+                    return Optional.empty();
+                },
+                Duration.ofMinutes(1),
+                "Fail to wait for the implicit partition created.");
+    }
+
+    private void checkImplicitPartitionRowsInFluss(
+            TablePath tablePath, long partitionId, List<InternalRow> expectedRows)
+            throws Exception {
+        try (Table table = conn.getTable(tablePath);
+                LogScanner logScanner = table.newScan().createLogScanner()) {
+            logScanner.subscribeFromBeginning(partitionId, 0);
+            List<InternalRow> actualRows = new ArrayList<>();
+            while (actualRows.size() < expectedRows.size()) {
+                ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+                for (ScanRecord scanRecord : scanRecords) {
+                    actualRows.add(scanRecord.getRow());
+                }
+            }
+            assertThat(actualRows).hasSize(expectedRows.size());
+            for (int i = 0; i < expectedRows.size(); i++) {
+                assertThat(actualRows.get(i).getTimestampNtz(0, 6))
+                        .isEqualTo(expectedRows.get(i).getTimestampNtz(0, 6));
+                assertThat(actualRows.get(i).getString(1).toString())
+                        .isEqualTo(expectedRows.get(i).getString(1).toString());
+            }
+        }
+    }
+
+    private void checkImplicitPartitionRowsInIceberg(
+            TablePath tablePath, List<InternalRow> expectedRows) throws Exception {
+        List<Record> records = getIcebergRecords(tablePath);
+        assertThat(records).hasSize(expectedRows.size());
+
+        List<Object> actualEventTimes = new ArrayList<>();
+        List<Object> actualPayloads = new ArrayList<>();
+        for (Record record : records) {
+            actualEventTimes.add(record.get(0));
+            actualPayloads.add(record.get(1));
+        }
+
+        List<Object> expectedEventTimes = new ArrayList<>();
+        List<Object> expectedPayloads = new ArrayList<>();
+        for (InternalRow row : expectedRows) {
+            expectedEventTimes.add(row.getTimestampNtz(0, 6).toLocalDateTime());
+            expectedPayloads.add(row.getString(1).toString());
+        }
+
+        assertThat(actualEventTimes).containsExactlyInAnyOrderElementsOf(expectedEventTimes);
+        assertThat(actualPayloads).containsExactlyInAnyOrderElementsOf(expectedPayloads);
     }
 
     private Tuple2<Long, TableDescriptor> createPartitionedTable(TablePath partitionedTablePath)

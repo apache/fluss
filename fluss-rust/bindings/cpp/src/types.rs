@@ -347,6 +347,7 @@ pub fn core_table_info_to_ffi(info: &fcore::metadata::TableInfo) -> ffi::FfiTabl
         primary_keys: info.get_primary_keys().clone(),
         bucket_keys: info.get_bucket_keys().to_vec(),
         partition_keys: info.get_partition_keys().to_vec(),
+        has_partition_expressions: info.has_partition_expressions(),
         num_buckets: info.get_num_buckets(),
         has_primary_key: info.has_primary_key(),
         is_partitioned: info.is_partitioned(),
@@ -373,6 +374,7 @@ pub fn empty_table_info() -> ffi::FfiTableInfo {
         primary_keys: vec![],
         bucket_keys: vec![],
         partition_keys: vec![],
+        has_partition_expressions: false,
         num_buckets: 0,
         has_primary_key: false,
         is_partitioned: false,
@@ -657,4 +659,47 @@ pub fn core_scan_batches_to_ffi(
     Ok(ffi::FfiArrowRecordBatches {
         batches: ffi_batches,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn table_info_ffi_exposes_implicit_partition_capability() {
+        let descriptor = fcore::metadata::TableDescriptor::builder()
+            .schema(
+                fcore::metadata::Schema::builder()
+                    .column("event_time", fcore::metadata::DataTypes::timestamp())
+                    .build()
+                    .unwrap(),
+            )
+            .partitioned_by(vec!["event_day"])
+            .partition_expressions(vec![fcore::metadata::PartitionExpression::new(
+                "event_day",
+                fcore::metadata::PartitionTransform::DateTrunc(
+                    fcore::metadata::DateTruncPartitionTransform::new(
+                        "event_time",
+                        "DAY",
+                        Some("UTC".to_string()),
+                    ),
+                ),
+            )])
+            .distributed_by(Some(1), Vec::new())
+            .build()
+            .unwrap();
+        let table_info = fcore::metadata::TableInfo::of(
+            fcore::metadata::TablePath::new("db".to_string(), "tbl".to_string()),
+            1,
+            1,
+            descriptor,
+            0,
+            0,
+        );
+
+        let ffi_table_info = core_table_info_to_ffi(&table_info);
+
+        assert!(ffi_table_info.has_partition_expressions);
+        assert_eq!(ffi_table_info.partition_keys, vec!["event_day".to_string()]);
+    }
 }

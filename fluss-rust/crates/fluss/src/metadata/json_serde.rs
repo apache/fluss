@@ -21,7 +21,10 @@ use crate::metadata::datatype::{
     DataField, DataType, DataTypes, DecimalType, TimeType, TimestampLTzType, TimestampType,
     UNASSIGNED_FIELD_ID,
 };
-use crate::metadata::table::{Column, Schema, TableDescriptor};
+use crate::metadata::table::{
+    Column, DateTruncPartitionTransform, PartitionExpression, PartitionTransform, Schema,
+    TableDescriptor,
+};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 
@@ -454,6 +457,112 @@ impl Schema {
     const VERSION: u32 = 1;
 }
 
+impl PartitionExpression {
+    const VIRTUAL_PARTITION_SPEC_KEY_NAME: &'static str = "virtual_partition_spec_key";
+    const TRANSFORM_NAME: &'static str = "transform";
+}
+
+impl PartitionTransform {
+    const TYPE_NAME: &'static str = "type";
+    const SOURCE_COLUMN_NAME: &'static str = "source_column";
+    const UNIT_NAME: &'static str = "unit";
+    const TIME_ZONE_NAME: &'static str = "time_zone";
+    const DATE_TRUNC_TYPE: &'static str = "date_trunc";
+}
+
+impl JsonSerde for PartitionExpression {
+    fn serialize_json(&self) -> Result<Value> {
+        let mut obj = serde_json::Map::new();
+        obj.insert(
+            Self::VIRTUAL_PARTITION_SPEC_KEY_NAME.to_string(),
+            json!(self.virtual_partition_spec_key()),
+        );
+        obj.insert(
+            Self::TRANSFORM_NAME.to_string(),
+            self.transform().serialize_json()?,
+        );
+        Ok(Value::Object(obj))
+    }
+
+    fn deserialize_json(node: &Value) -> Result<Self> {
+        let virtual_partition_spec_key = node
+            .get(Self::VIRTUAL_PARTITION_SPEC_KEY_NAME)
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| Error::JsonSerdeError {
+                message: "Partition expression must contain virtual_partition_spec_key."
+                    .to_string(),
+            })?
+            .to_owned();
+        let transform_node =
+            node.get(Self::TRANSFORM_NAME)
+                .ok_or_else(|| Error::JsonSerdeError {
+                    message: format!("Missing required field: {}", Self::TRANSFORM_NAME),
+                })?;
+        let transform = PartitionTransform::deserialize_json(transform_node)?;
+        Ok(PartitionExpression::new(
+            virtual_partition_spec_key,
+            transform,
+        ))
+    }
+}
+
+impl JsonSerde for PartitionTransform {
+    fn serialize_json(&self) -> Result<Value> {
+        let mut obj = serde_json::Map::new();
+        match self {
+            PartitionTransform::DateTrunc(transform) => {
+                obj.insert(Self::TYPE_NAME.to_string(), json!(Self::DATE_TRUNC_TYPE));
+                obj.insert(
+                    Self::SOURCE_COLUMN_NAME.to_string(),
+                    json!(transform.source_column()),
+                );
+                obj.insert(Self::UNIT_NAME.to_string(), json!(transform.unit()));
+                if let Some(time_zone) = transform.time_zone() {
+                    obj.insert(Self::TIME_ZONE_NAME.to_string(), json!(time_zone));
+                }
+            }
+        }
+        Ok(Value::Object(obj))
+    }
+
+    fn deserialize_json(node: &Value) -> Result<Self> {
+        let transform_type = node
+            .get(Self::TYPE_NAME)
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| Error::JsonSerdeError {
+                message: format!("Missing required field: {}", Self::TYPE_NAME),
+            })?;
+        match transform_type {
+            Self::DATE_TRUNC_TYPE => {
+                let source_column = node
+                    .get(Self::SOURCE_COLUMN_NAME)
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| Error::JsonSerdeError {
+                        message: format!("Missing required field: {}", Self::SOURCE_COLUMN_NAME),
+                    })?
+                    .to_owned();
+                let unit = node
+                    .get(Self::UNIT_NAME)
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| Error::JsonSerdeError {
+                        message: format!("Missing required field: {}", Self::UNIT_NAME),
+                    })?
+                    .to_owned();
+                let time_zone = node
+                    .get(Self::TIME_ZONE_NAME)
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_owned());
+                Ok(PartitionTransform::DateTrunc(
+                    DateTruncPartitionTransform::new(source_column, unit, time_zone),
+                ))
+            }
+            _ => Err(Error::JsonSerdeError {
+                message: format!("Unsupported partition transform type: {transform_type}"),
+            }),
+        }
+    }
+}
+
 impl JsonSerde for Schema {
     fn serialize_json(&self) -> Result<Value> {
         let mut obj = serde_json::Map::new();
@@ -530,6 +639,7 @@ impl TableDescriptor {
     const SCHEMA_NAME: &'static str = "schema";
     const COMMENT_NAME: &'static str = "comment";
     const PARTITION_KEY_NAME: &'static str = "partition_key";
+    const PARTITION_EXPRESSIONS_NAME: &'static str = "partition_expressions";
     const BUCKET_KEY_NAME: &'static str = "bucket_key";
     const BUCKET_COUNT_NAME: &'static str = "bucket_count";
     const PROPERTIES_NAME: &'static str = "properties";
@@ -581,6 +691,18 @@ impl JsonSerde for TableDescriptor {
         let partition_keys: Vec<Value> =
             self.partition_keys().iter().map(|key| json!(key)).collect();
         obj.insert(Self::PARTITION_KEY_NAME.to_string(), json!(partition_keys));
+
+        if !self.partition_expressions().is_empty() {
+            let partition_expressions: Vec<Value> = self
+                .partition_expressions()
+                .iter()
+                .map(|partition_expression| partition_expression.serialize_json())
+                .collect::<Result<_>>()?;
+            obj.insert(
+                Self::PARTITION_EXPRESSIONS_NAME.to_string(),
+                json!(partition_expressions),
+            );
+        }
 
         // Serialize table distribution if present
         if let Some(dist) = &self.table_distribution() {
@@ -647,6 +769,22 @@ impl JsonSerde for TableDescriptor {
         }
         builder = builder.partitioned_by(partition_keys);
 
+        if let Some(partition_expressions_node) = node.get(Self::PARTITION_EXPRESSIONS_NAME) {
+            let partition_expressions_node =
+                partition_expressions_node
+                    .as_array()
+                    .ok_or_else(|| JsonSerdeError {
+                        message: format!("{} must be an array", Self::PARTITION_EXPRESSIONS_NAME),
+                    })?;
+            let mut partition_expressions = Vec::with_capacity(partition_expressions_node.len());
+            for partition_expression_node in partition_expressions_node {
+                partition_expressions.push(PartitionExpression::deserialize_json(
+                    partition_expression_node,
+                )?);
+            }
+            builder = builder.partition_expressions(partition_expressions);
+        }
+
         let mut bucket_count = None;
         let mut bucket_keys = vec![];
         if let Some(bucket_key_node) = node.get(Self::BUCKET_KEY_NAME) {
@@ -703,6 +841,82 @@ mod tests {
     use crate::metadata::{
         Column, DataField, DataType, DataTypes as DT, DataTypes, MapType, Schema,
     };
+
+    #[test]
+    fn table_descriptor_preserves_implicit_partition_expressions() {
+        let descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("event_time", DataTypes::timestamp())
+                    .build()
+                    .unwrap(),
+            )
+            .partitioned_by(vec!["event_day"])
+            .build()
+            .unwrap();
+        let mut table_json = descriptor.serialize_json().unwrap();
+        table_json.as_object_mut().unwrap().insert(
+            TableDescriptor::PARTITION_EXPRESSIONS_NAME.to_string(),
+            serde_json::json!([{
+                "virtual_partition_spec_key": "event_day",
+                "transform": {
+                    "type": "date_trunc",
+                    "source_column": "event_time",
+                    "unit": "DAY",
+                },
+            }]),
+        );
+
+        let actual = TableDescriptor::deserialize_json(&table_json).unwrap();
+
+        assert!(actual.has_partition_expressions());
+        assert_eq!(actual.partition_keys(), &["event_day".to_string()]);
+        assert_eq!(
+            actual.get_virtual_partition_keys(),
+            vec!["event_day".to_string()]
+        );
+        assert_eq!(actual.get_physical_partition_keys(), Vec::<String>::new());
+
+        let expression = &actual.partition_expressions()[0];
+        assert_eq!(expression.virtual_partition_spec_key(), "event_day");
+        match expression.transform() {
+            PartitionTransform::DateTrunc(transform) => {
+                assert_eq!(transform.source_column(), "event_time");
+                assert_eq!(transform.unit(), "DAY");
+                assert_eq!(transform.time_zone(), None);
+            }
+        }
+
+        let serialized = actual.serialize_json().unwrap();
+        assert_eq!(
+            serialized.get(TableDescriptor::PARTITION_EXPRESSIONS_NAME),
+            table_json.get(TableDescriptor::PARTITION_EXPRESSIONS_NAME)
+        );
+    }
+
+    #[test]
+    fn table_descriptor_accepts_empty_partition_expressions() {
+        let descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("region", DataTypes::string())
+                    .build()
+                    .unwrap(),
+            )
+            .partitioned_by(vec!["region"])
+            .build()
+            .unwrap();
+        let mut table_json = descriptor.serialize_json().unwrap();
+        table_json.as_object_mut().unwrap().insert(
+            TableDescriptor::PARTITION_EXPRESSIONS_NAME.to_string(),
+            serde_json::json!([]),
+        );
+
+        assert_eq!(
+            TableDescriptor::deserialize_json(&table_json).unwrap(),
+            descriptor
+        );
+    }
 
     #[test]
     fn column_id_round_trip_through_json() {

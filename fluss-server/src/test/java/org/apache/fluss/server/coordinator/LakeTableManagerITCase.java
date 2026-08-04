@@ -17,11 +17,17 @@
 
 package org.apache.fluss.server.coordinator;
 
+import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
+import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.TableAlreadyExistException;
+import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.DateTruncPartitionTransform;
+import org.apache.fluss.metadata.PartitionExpression;
+import org.apache.fluss.metadata.PartitionKey;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
@@ -119,6 +125,65 @@ class LakeTableManagerITCase {
                 .cause()
                 .isInstanceOf(TableAlreadyExistException.class)
                 .hasMessage("Table %s already exists.", lakeTablePath);
+    }
+
+    @Test
+    void testUnsupportedLakeFormatRejectsImplicitPartitionBeforeFlussMetadataMutation()
+            throws Exception {
+        AdminGateway adminGateway = FLUSS_CLUSTER_EXTENSION.newCoordinatorClient();
+        TablePath createPath = TablePath.of("fluss", "unsupported_implicit_lake_create");
+        TableDescriptor lakeEnabledDescriptor =
+                implicitPartitionDescriptor()
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .build();
+
+        assertThatThrownBy(
+                        () ->
+                                adminGateway
+                                        .createTable(
+                                                newCreateTableRequest(
+                                                        createPath, lakeEnabledDescriptor, false))
+                                        .get())
+                .cause()
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining("does not support implicit partition expressions");
+        assertThatThrownBy(
+                        () -> adminGateway.getTableInfo(newGetTableInfoRequest(createPath)).get())
+                .cause()
+                .isInstanceOf(TableNotExistException.class);
+
+        TablePath alterPath = TablePath.of("fluss", "unsupported_implicit_lake_alter");
+        adminGateway
+                .createTable(
+                        newCreateTableRequest(
+                                alterPath, implicitPartitionDescriptor().build(), false))
+                .get();
+        assertThatThrownBy(
+                        () ->
+                                adminGateway
+                                        .alterTable(
+                                                newAlterTableRequest(
+                                                        alterPath,
+                                                        Collections.singletonMap(
+                                                                ConfigOptions.TABLE_DATALAKE_ENABLED
+                                                                        .key(),
+                                                                "true"),
+                                                        Collections.emptyList(),
+                                                        Collections.emptyList(),
+                                                        false))
+                                        .get())
+                .cause()
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining("does not support implicit partition expressions");
+
+        TableDescriptor afterFailedAlter =
+                TableDescriptor.fromJsonBytes(
+                        adminGateway
+                                .getTableInfo(newGetTableInfoRequest(alterPath))
+                                .get()
+                                .getTableJson());
+        assertThat(afterFailedAlter.getProperties().get(ConfigOptions.TABLE_DATALAKE_ENABLED.key()))
+                .isNotEqualTo("true");
     }
 
     @Test
@@ -383,6 +448,21 @@ class LakeTableManagerITCase {
 
     private AdminGateway getAdminGateway() {
         return FLUSS_CLUSTER_EXTENSION.newCoordinatorClient();
+    }
+
+    private static TableDescriptor.Builder implicitPartitionDescriptor() {
+        return TableDescriptor.builder()
+                .schema(
+                        Schema.newBuilder()
+                                .column("event_time", DataTypes.TIMESTAMP().copy(false))
+                                .build())
+                .partitionedByKeys(
+                        PartitionKey.expression(
+                                PartitionExpression.of(
+                                        "event_day",
+                                        DateTruncPartitionTransform.of(
+                                                "event_time", AutoPartitionTimeUnit.DAY))))
+                .distributedBy(1);
     }
 
     private static TableDescriptor newPkTable() {

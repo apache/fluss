@@ -41,6 +41,7 @@ import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.utils.PartitionComputer;
 
 import org.apache.flink.table.api.TableException;
 import org.apache.flink.table.data.DecimalData;
@@ -343,6 +344,31 @@ public class PushdownUtils {
         } catch (Exception e) {
             throw new FlussRuntimeException(e);
         }
+    }
+
+    public static boolean partitionExists(
+            TablePath tablePath,
+            Configuration flussConfig,
+            org.apache.fluss.types.RowType lookupRowType,
+            InternalRow lookupRow) {
+        try (Connection connection = ConnectionFactory.createConnection(flussConfig);
+                Admin flussAdmin = connection.getAdmin()) {
+            TableInfo tableInfo = flussAdmin.getTableInfo(tablePath).get();
+            PartitionSpec partitionSpec =
+                    computeLookupPartitionSpec(tableInfo, lookupRowType, lookupRow);
+            return !flussAdmin.listPartitionInfos(tablePath, partitionSpec).get().isEmpty();
+        } catch (Exception e) {
+            throw new FlussRuntimeException(e);
+        }
+    }
+
+    static PartitionSpec computeLookupPartitionSpec(
+            TableInfo tableInfo,
+            org.apache.fluss.types.RowType lookupRowType,
+            InternalRow lookupRow) {
+        return new PartitionComputer(tableInfo, lookupRowType)
+                .getResolvedPartitionSpec(lookupRow)
+                .toPartitionSpec();
     }
 
     public static long countTable(TablePath tablePath, Configuration flussConfig) {

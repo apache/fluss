@@ -46,6 +46,15 @@ pub use remote_log::{
 pub use scanner::{LogScanner, RecordBatchLogScanner, TableScan};
 pub use upsert::{TableUpsert, UpsertWriter};
 
+pub(super) fn unsupported_implicit_partition_operation(operation: &str) -> Error {
+    Error::UnsupportedOperation {
+        message: format!(
+            "Rust client v1 does not support {operation} for implicit partitioned Fluss tables. \
+             Full Rust PartitionComputer support is planned for v2."
+        ),
+    }
+}
+
 #[allow(dead_code)]
 pub struct FlussTable<'a> {
     conn: &'a FlussConnection,
@@ -72,6 +81,9 @@ impl<'a> FlussTable<'a> {
                 message: "Append is only supported for log tables (without primary key)"
                     .to_string(),
             });
+        }
+        if self.table_info.has_partition_expressions() {
+            return Err(unsupported_implicit_partition_operation("append"));
         }
         Ok(TableAppend::new(
             self.table_path.clone(),
@@ -126,6 +138,9 @@ impl<'a> FlussTable<'a> {
                 message: "Lookup is only supported for primary key tables".to_string(),
             });
         }
+        if self.table_info.has_partition_expressions() {
+            return Err(unsupported_implicit_partition_operation("lookup"));
+        }
         let lookup_client = self.conn.get_or_create_lookup_client()?;
         // Pre-seed the schema getter with the table's current schema —
         // rows written under it (the dominant case) never trigger an RPC.
@@ -152,6 +167,9 @@ impl<'a> FlussTable<'a> {
                 message: "Upsert is only supported for primary key tables".to_string(),
             });
         }
+        if self.table_info.has_partition_expressions() {
+            return Err(unsupported_implicit_partition_operation("upsert"));
+        }
 
         Ok(TableUpsert::new(
             self.table_path.clone(),
@@ -164,5 +182,24 @@ impl<'a> FlussTable<'a> {
 impl<'a> Drop for FlussTable<'a> {
     fn drop(&mut self) {
         // do-nothing now
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unsupported_implicit_partition_operation_returns_unsupported_operation() {
+        let err = unsupported_implicit_partition_operation("append");
+
+        match err {
+            Error::UnsupportedOperation { message } => {
+                assert!(message.contains("append"));
+                assert!(message.contains("implicit partitioned Fluss tables"));
+                assert!(message.contains("planned for v2"));
+            }
+            _ => panic!("expected UnsupportedOperation"),
+        }
     }
 }

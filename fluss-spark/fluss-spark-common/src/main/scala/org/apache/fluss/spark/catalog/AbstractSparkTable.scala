@@ -18,13 +18,13 @@
 package org.apache.fluss.spark.catalog
 
 import org.apache.fluss.client.admin.Admin
-import org.apache.fluss.config.{Configuration => FlussConfiguration}
-import org.apache.fluss.metadata.{TableInfo, TablePath}
+import org.apache.fluss.config.AutoPartitionTimeUnit
+import org.apache.fluss.metadata.{DateTruncPartitionTransform, PartitionExpression, TableInfo}
 import org.apache.fluss.spark.SparkConversions
+import org.apache.fluss.utils.PartitionUtils
 
-import org.apache.spark.sql.CatalogV2UtilShim
 import org.apache.spark.sql.connector.catalog.{Table, TableCapability}
-import org.apache.spark.sql.connector.expressions.Transform
+import org.apache.spark.sql.connector.expressions.{Expressions, Transform}
 import org.apache.spark.sql.types.StructType
 
 import java.util
@@ -35,8 +35,8 @@ abstract class AbstractSparkTable(val admin: Admin, val tableInfo: TableInfo) ex
   protected lazy val _schema: StructType =
     SparkConversions.toSparkDataType(tableInfo.getSchema.getRowType)
 
-  protected lazy val _partitionSchema = new StructType(
-    _schema.fields.filter(e => tableInfo.getPartitionKeys.contains(e.name)))
+  protected lazy val _partitionSchema: StructType =
+    SparkConversions.toSparkDataType(PartitionUtils.partitionRowType(tableInfo))
 
   override def name(): String = tableInfo.getTablePath.toString
 
@@ -52,6 +52,33 @@ abstract class AbstractSparkTable(val admin: Admin, val tableInfo: TableInfo) ex
   }
 
   override def partitioning(): Array[Transform] = {
-    CatalogV2UtilShim.toSparkTransforms(_partitionSchema.fields.map(_.name))
+    val expressionsByKey = tableInfo.getPartitionExpressions.asScala
+      .map(expression => expression.getVirtualPartitionSpecKey.get() -> expression)
+      .toMap
+    tableInfo.getPartitionKeys.asScala.map {
+      key =>
+        expressionsByKey.get(key) match {
+          case Some(expression) => toSparkTransform(expression)
+          case None => Expressions.identity(key)
+        }
+    }.toArray
+  }
+
+  private def toSparkTransform(partitionExpression: PartitionExpression): Transform = {
+    partitionExpression.getTransform match {
+      case transform: DateTruncPartitionTransform =>
+        val sourceColumn = transform.getSourceColumn
+        transform.getTimeUnit match {
+          case AutoPartitionTimeUnit.YEAR => Expressions.years(sourceColumn)
+          case AutoPartitionTimeUnit.QUARTER =>
+            Expressions.apply("quarters", Expressions.column(sourceColumn))
+          case AutoPartitionTimeUnit.MONTH => Expressions.months(sourceColumn)
+          case AutoPartitionTimeUnit.DAY => Expressions.days(sourceColumn)
+          case AutoPartitionTimeUnit.HOUR => Expressions.hours(sourceColumn)
+        }
+      case transform =>
+        throw new UnsupportedOperationException(
+          s"Unsupported Fluss partition transform: $transform")
+    }
   }
 }

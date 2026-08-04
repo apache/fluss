@@ -18,6 +18,8 @@
 package org.apache.fluss.utils.json;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.metadata.PartitionExpression;
+import org.apache.fluss.metadata.PartitionKey;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator;
@@ -26,9 +28,12 @@ import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /** Json serializer and deserializer for {@link TableDescriptor}. */
 @Internal
@@ -71,6 +76,14 @@ public class TableDescriptorJsonSerde
             generator.writeString(partitionKey);
         }
         generator.writeEndArray();
+        if (!tableDescriptor.getPartitionExpressions().isEmpty()) {
+            generator.writeArrayFieldStart(PartitionExpressionJsonSerde.PARTITION_EXPRESSIONS_NAME);
+            for (PartitionExpression partitionExpression :
+                    tableDescriptor.getPartitionExpressions()) {
+                PartitionExpressionJsonSerde.INSTANCE.serialize(partitionExpression, generator);
+            }
+            generator.writeEndArray();
+        }
 
         // serialize tableDistribution.
         if (tableDescriptor.getTableDistribution().isPresent()) {
@@ -120,7 +133,21 @@ public class TableDescriptorJsonSerde
         while (partitionJsons.hasNext()) {
             partitionKeys.add(partitionJsons.next().asText());
         }
-        builder.partitionedBy(partitionKeys);
+
+        List<PartitionExpression> partitionExpressions = new ArrayList<>();
+        if (node.has(PartitionExpressionJsonSerde.PARTITION_EXPRESSIONS_NAME)) {
+            Iterator<JsonNode> expressionJsons =
+                    node.get(PartitionExpressionJsonSerde.PARTITION_EXPRESSIONS_NAME).elements();
+            while (expressionJsons.hasNext()) {
+                partitionExpressions.add(
+                        PartitionExpressionJsonSerde.INSTANCE.deserialize(expressionJsons.next()));
+            }
+        }
+        if (partitionExpressions.isEmpty()) {
+            builder.partitionedBy(partitionKeys);
+        } else {
+            builder.partitionedByKeys(toPartitionKeys(partitionKeys, partitionExpressions));
+        }
 
         if (node.has(BUCKET_KEY_NAME) || node.has(BUCKET_COUNT_NAME)) {
             Iterator<JsonNode> bucketJsons = node.get(BUCKET_KEY_NAME).elements();
@@ -142,6 +169,44 @@ public class TableDescriptorJsonSerde
         builder.customProperties(deserializeProperties(node.get(CUSTOM_PROPERTIES_NAME)));
 
         return builder.build();
+    }
+
+    private List<PartitionKey> toPartitionKeys(
+            List<String> partitionKeys, List<PartitionExpression> partitionExpressions) {
+        Set<String> partitionKeySet = new HashSet<>(partitionKeys);
+        Map<String, PartitionExpression> expressionByKey = new HashMap<>();
+        for (PartitionExpression partitionExpression : partitionExpressions) {
+            String virtualPartitionSpecKey =
+                    partitionExpression
+                            .getVirtualPartitionSpecKey()
+                            .orElseThrow(
+                                    () ->
+                                            new IllegalArgumentException(
+                                                    "Partition expression must contain virtual_partition_spec_key."));
+            if (!partitionKeySet.contains(virtualPartitionSpecKey)) {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Virtual partition spec key '%s' is not present in partition_key %s.",
+                                virtualPartitionSpecKey, partitionKeys));
+            }
+            if (expressionByKey.put(virtualPartitionSpecKey, partitionExpression) != null) {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Duplicate virtual partition spec key '%s'.",
+                                virtualPartitionSpecKey));
+            }
+        }
+        return partitionKeys.stream()
+                .map(
+                        partitionKey -> {
+                            PartitionExpression partitionExpression =
+                                    expressionByKey.get(partitionKey);
+                            if (partitionExpression == null) {
+                                return PartitionKey.column(partitionKey);
+                            }
+                            return PartitionKey.expression(partitionExpression);
+                        })
+                .collect(Collectors.toList());
     }
 
     private Map<String, String> deserializeProperties(JsonNode node) {

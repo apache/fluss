@@ -238,8 +238,15 @@ public class FlinkConnectorOptions {
                     BOOTSTRAP_SERVERS.key());
 
     // -------------------------------------------------------------------------------------------
-    // Only used internally to support materialized table
+    // Only used internally
     // -------------------------------------------------------------------------------------------
+
+    public static final ConfigOption<Boolean> INTERNAL_IMPLICIT_PARTITIONED_TABLE =
+            ConfigOptions.key("fluss.internal.implicit-partitioned-table")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether the catalog table has implicit partition expressions.");
 
     public static final String MATERIALIZED_TABLE_PREFIX = "materialized-table.";
 
