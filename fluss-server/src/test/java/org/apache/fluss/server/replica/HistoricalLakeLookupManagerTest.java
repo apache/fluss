@@ -204,7 +204,7 @@ class HistoricalLakeLookupManagerTest {
         lookupAndRun(manager, executor, PARTITION_TABLE_INFO);
         assertThat(staleLookupFile).doesNotExist();
         assertThat(serverLookupDir).isDirectory();
-        assertThat(manager.createdIoTmpDirs).containsExactly(serverLookupDir.getAbsolutePath());
+        assertThat(manager.createdIoTmpDirs.get(0)).startsWith(serverLookupDir.getAbsolutePath());
     }
 
     @Test
@@ -417,7 +417,10 @@ class HistoricalLakeLookupManagerTest {
 
         @Override
         LakeTableLookuper createLakeTableLookuper(
-                TablePath tablePath, String ioTmpDir, TableConfig tableConfig) {
+                TablePath tablePath,
+                String ioTmpDir,
+                TableConfig tableConfig,
+                Configuration clusterConf) {
             TestingLakeTableLookuper lookuper = new TestingLakeTableLookuper();
             createdLookupers.add(lookuper);
             createdIoTmpDirs.add(ioTmpDir);

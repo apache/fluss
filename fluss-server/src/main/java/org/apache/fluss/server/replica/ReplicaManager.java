@@ -415,6 +415,7 @@ public class ReplicaManager implements ServerReconfigurable {
 
     @Override
     public void reconfigure(Configuration newConfig) {
+        historicalLakeLookupManager.reconfigure(newConfig);
         int newMinInSyncReplicas =
                 newConfig.get(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER);
         if (newMinInSyncReplicas == minInSyncReplicas) {

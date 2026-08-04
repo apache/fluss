@@ -37,7 +37,8 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
 /**
- * Central place for defining all the paths of kv and log local/remote files/directories.
+ * Central place for defining all the paths of kv, log, and historical lookup local/remote
+ * files/directories.
  *
  * <p>All the local file/directories returns the {@link File java.io.File} interface.
  *
@@ -145,6 +146,28 @@ public class FlussPaths {
             File dataDir, PhysicalTablePath tablePath, TableBucket tableBucket) {
         final Path tabletParentDir = tabletParentDir(dataDir, tablePath, tableBucket);
         return tabletParentDir.resolve(KV_TABLET_DIR_PREFIX + tableBucket.getBucket()).toFile();
+    }
+
+    /**
+     * Returns the local directory path for storing historical lookup files for a table.
+     *
+     * <p>The path contract:
+     *
+     * <pre>
+     * {$lookupRoot}/{databaseName}/{tableName}-{tableId}
+     * </pre>
+     *
+     * @param lookupRoot the historical lookup root directory
+     * @param tablePath the table path
+     * @param tableId the table ID
+     */
+    public static File historicalLookupTableDir(
+            File lookupRoot, TablePath tablePath, long tableId) {
+        return Paths.get(
+                        lookupRoot.getAbsolutePath(),
+                        tablePath.getDatabaseName(),
+                        tablePath.getTableName() + "-" + tableId)
+                .toFile();
     }
 
     private static Path tabletParentDir(
