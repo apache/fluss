@@ -79,8 +79,9 @@ public class KvSnapshotHandle {
      * Restores a handle that only references already-persisted shared files.
      *
      * <p>A restored handle never directly deletes shared files because it cannot prove that no
-     * other snapshot references them. Shared files are reclaimed only through registry-based
-     * cleanup; retaining an untracked file is preferred over deleting a file that is still in use.
+     * other snapshot references them. If such a handle is discarded before registration, shared
+     * files referenced only by this handle remain orphaned until the table directory is cleaned up.
+     * Retaining those files is preferred over deleting a file that is still in use.
      */
     static KvSnapshotHandle restore(
             List<KvFileHandleAndLocalPath> sharedFileHandles,
