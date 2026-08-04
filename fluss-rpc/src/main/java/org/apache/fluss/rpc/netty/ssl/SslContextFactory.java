@@ -35,6 +35,7 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.security.KeyStore;
+import java.util.Optional;
 
 /**
  * Builds Netty {@link SslContext}s and {@link SslHandler}s for the Fluss RPC layer from the {@code
@@ -51,9 +52,12 @@ public final class SslContextFactory {
 
     private SslContextFactory() {}
 
-    /** Build a server {@link SslContext} from the {@code security.ssl.*} configuration. */
-    public static SslContext createServerSslContext(Configuration conf) {
-        return createServerSslContext(SslConfig.fromServerConfig(conf));
+    /**
+     * Build a server {@link SslContext} from the {@code security.ssl.*} configuration, or {@link
+     * Optional#empty()} when TLS is not enabled for any listener.
+     */
+    public static Optional<SslContext> createServerSslContext(Configuration conf) {
+        return SslConfig.fromServerConfig(conf).map(SslContextFactory::createServerSslContext);
     }
 
     /** Build a server {@link SslContext} from a parsed {@link SslConfig}. */
@@ -85,9 +89,12 @@ public final class SslContextFactory {
         }
     }
 
-    /** Build a client {@link SslContext} from the {@code client.security.ssl.*} configuration. */
-    public static SslContext createClientSslContext(Configuration conf) {
-        return createClientSslContext(SslConfig.fromClientConfig(conf));
+    /**
+     * Build a client {@link SslContext} from the {@code client.security.ssl.*} configuration, or
+     * {@link Optional#empty()} when TLS is disabled on the client.
+     */
+    public static Optional<SslContext> createClientSslContext(Configuration conf) {
+        return SslConfig.fromClientConfig(conf).map(SslContextFactory::createClientSslContext);
     }
 
     /** Build a client {@link SslContext} from a parsed {@link SslConfig}. */

@@ -35,6 +35,9 @@ public class TestSslUtils {
 
     public static final String PASSWORD = "test-password";
 
+    /** The listener name {@link #setServerSslConfig} enables TLS for. */
+    public static final String TLS_LISTENER = "CLIENT";
+
     private TestSslUtils() {}
 
     /** Generate a self-signed certificate whose subject CN is {@code fqdn}. */
@@ -70,12 +73,14 @@ public class TestSslUtils {
     }
 
     /**
-     * Populate {@code conf} with the server-side {@code security.ssl.*} transport options for a TLS
-     * keystore (and, when {@code trustStore != null}, a truststore — needed for mTLS listeners).
-     * The per-listener client-certificate requirement is derived from {@code security.protocol.map}
-     * ({@code mTLS}), which the caller sets.
+     * Populate {@code conf} with the server-side {@code security.ssl.*} transport options: TLS
+     * enabled for the {@link #TLS_LISTENER} listener, a keystore (and, when {@code trustStore !=
+     * null}, a truststore — needed for mTLS listeners). The per-listener client-certificate
+     * requirement is derived from {@code security.protocol.map} ({@code mTLS}), which the caller
+     * sets.
      */
     public static void setServerSslConfig(Configuration conf, Path keyStore, Path trustStore) {
+        conf.setString(ConfigOptions.SERVER_SSL_ENABLED_LISTENERS.key(), TLS_LISTENER);
         conf.setString(ConfigOptions.SERVER_SSL_KEYSTORE_PATH.key(), keyStore.toString());
         conf.setString(ConfigOptions.SERVER_SSL_KEYSTORE_PASSWORD.key(), PASSWORD);
         if (trustStore != null) {
