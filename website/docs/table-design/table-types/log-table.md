@@ -54,7 +54,7 @@ When a query specifies only a subset of columns, Fluss skips reading irrelevant 
 This enables efficient column pruning during query execution and ensures that only the required columns are read,
 minimizing I/O overhead and improving overall system efficiency.
 
-During query execution, query engines like Flink analyzes the query to identify the columns required for processing and tells Fluss to only read the necessary columns.
+During query execution, query engines like Flink analyze the query to identify the columns required for processing and tell Fluss to only read the necessary columns.
 For example the following streaming query:
 
 ```sql

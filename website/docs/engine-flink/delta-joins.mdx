@@ -18,7 +18,7 @@ Starting with **Apache Fluss 0.8**, streaming join jobs running on **Flink 2.1 o
 
 ## How Delta Join Works
 
-Traditional streaming joins in Flink require maintaining both input sides entirely in state to match records across streams. Delta join, by contrast, uses a **index-key lookup mechanism** to transform the behavior of querying data from the state into querying data from the Fluss source table, thereby avoiding redundant storage of the same data in both the Fluss source table and the state. This drastically reduces state size and improves performance for many streaming analytics and enrichment workloads.
+Traditional streaming joins in Flink require maintaining both input sides entirely in state to match records across streams. Delta join, by contrast, uses an **index-key lookup mechanism** to transform the behavior of querying data from the state into querying data from the Fluss source table, thereby avoiding redundant storage of the same data in both the Fluss source table and the state. This drastically reduces state size and improves performance for many streaming analytics and enrichment workloads.
 
 <ThemedImage
     alt="Delta Join"
@@ -54,7 +54,7 @@ CREATE TABLE `fluss_catalog`.`my_db`.`left_src` (
 ) WITH (
     -- prefix key
     'bucket.key' = 'city_id',
-    -- in Flink 2.1, delta join only support append-only source
+    -- in Flink 2.1, delta join only supports append-only source
     'table.merge-engine' = 'first_row'
 );
 ```
@@ -66,7 +66,7 @@ CREATE TABLE `fluss_catalog`.`my_db`.`right_src` (
   `city_name` VARCHAR NOT NULL,
   PRIMARY KEY (city_id) NOT ENFORCED
 ) WITH (
-    -- in Flink 2.1, delta join only support append-only source
+    -- in Flink 2.1, delta join only supports append-only source
     'table.merge-engine' = 'first_row'
 );
 ```
@@ -125,7 +125,7 @@ Sink(table=[fluss_catalog.my_db.snk], fields=[city_id, order_id, content, city_n
 
 Delta Join relies on performing lookups by the join key (e.g., the `city_id` in the above example) on the Fluss source tables. This requires that the Fluss source tables are defined with appropriate index on the join key to enable efficient lookups.
 
-Currently, Fluss only supports to defines a single index key per table, which is also referred to as the **prefix key**. The general secondary index which allows define multiple indexes with arbitrary fields is planned to be supported in the near future releases.
+Currently, Fluss only supports defining a single index key per table, which is also referred to as the **prefix key**. The general secondary index which allows defining multiple indexes with arbitrary fields is planned to be supported in the near future releases.
 
 A prefix key defines the portion of a table’s primary key that can be used for efficient key-based lookups or index pruning.
 
@@ -162,7 +162,7 @@ There is a known issue ([FLINK-38399](https://issues.apache.org/jira/browse/FLIN
 #### Limitations
 
 - The primary key or the prefix key of the tables must be included as part of the equivalence conditions in the join.
-- The join must be a INNER join.
+- The join must be an INNER join.
 - The downstream node of the join must support idempotent updates, typically it's an upsert sink and should not have a `SinkUpsertMaterializer` node before it.
   - Flink planner automatically inserts a `SinkUpsertMaterializer` when the sink’s primary key does not fully cover the upstream update key.
   - You can learn more details about `SinkUpsertMaterializer` by reading this [blog](https://www.ververica.com/blog/flink-sql-secrets-mastering-the-art-of-changelog-events).

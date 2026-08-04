@@ -171,7 +171,7 @@ The following table lists the configurable parameters of the Fluss chart, and th
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `image.registry` | Container image registry | `""` |
-| `image.repository` | Container image repository | `fluss` |
+| `image.repository` | Container image repository | `apache/fluss` |
 | `image.tag` | Container image tag | `$FLUSS_VERSION$` |
 | `image.pullPolicy` | Container image pull policy | `IfNotPresent` |
 | `image.pullSecrets` | Container image pull secrets | `[]` |

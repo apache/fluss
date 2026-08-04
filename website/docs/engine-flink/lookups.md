@@ -135,8 +135,8 @@ For more details about Fluss partitioned table, see [Partitioned Tables](table-d
 
 ### Instructions
 
-- Use a primary key table as a dimension table, and the join condition must a prefix subset of the primary keys of the dimension table.
-- The bucket key of Fluss dimension table need to set as the join key when creating Fluss table. 
+- Use a primary key table as a dimension table, and the join condition must be a prefix subset of the primary keys of the dimension table.
+- The bucket key of Fluss dimension table needs to be set as the join key when creating Fluss table. 
 - Fluss prefix lookup join is in asynchronous mode by default for higher throughput. You can change the mode of prefix lookup join as synchronous mode by setting the SQL Hint `'lookup.async' = 'false'`.
 
 

@@ -567,7 +567,7 @@ Fluss provides procedures to manage KV snapshot leases, allowing you to drop lea
 
 ### drop_kv_snapshot_lease
 
-Drop KV snapshots leased under a specified leaseId. This is typically used for handle the scenario of lease
+Drop KV snapshots leased under a specified leaseId. This is typically used to handle the scenario of lease
 remnants. After an abnormal job termination (e.g., crash or forced cancellation), the registered lease may not 
 be released automatically and could require manual cleanup.
 

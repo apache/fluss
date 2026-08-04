@@ -362,7 +362,7 @@ SELECT * FROM `consumer_catalog`.`fluss`.`fluss_order` LIMIT 10;
 ```
 
 
-Attempting to read data using the `developer` user also get the same result:
+Attempting to read data using the `developer` user also gets the same result:
 ```sql
 SET 'execution.runtime-mode' = 'batch';
 -- use tableau result mode
