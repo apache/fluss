@@ -435,10 +435,6 @@ public final class LogTablet {
 
     /** Register metrics for this log tablet in the metric group. */
     public void registerMetrics(BucketMetricGroup bucketMetricGroup) {
-        MetricGroup physicalStorageMetricGroup = bucketMetricGroup.addGroup("physicalStorage");
-        physicalStorageMetricGroup.gauge(
-                MetricNames.BUCKET_PHYSICAL_STORAGE_LOCAL_LOG_SIZE, this::logSize);
-
         MetricGroup metricGroup = bucketMetricGroup.addGroup("log");
         metricGroup.gauge(
                 MetricNames.LOG_NUM_SEGMENTS, () -> localLog.getSegments().numberOfSegments());

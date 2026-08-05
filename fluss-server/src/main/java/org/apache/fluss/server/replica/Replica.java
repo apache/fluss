@@ -294,6 +294,11 @@ public final class Replica {
         isrShrinks = serverMetrics.isrShrinks();
         failedIsrUpdates = serverMetrics.failedIsrUpdates();
 
+        // physical storage metrics.
+        MetricGroup physicalStorageMetrics = bucketMetricGroup.addGroup("physicalStorage");
+        physicalStorageMetrics.gauge(
+                MetricNames.BUCKET_PHYSICAL_STORAGE_LOCAL_LOG_SIZE, logTablet::logSize);
+
         // logical storage metrics.
         MetricGroup logicalStorageMetrics = bucketMetricGroup.addGroup("logicalStorage");
         logicalStorageMetrics.gauge(
