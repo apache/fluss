@@ -1350,7 +1350,12 @@ public final class LogTablet {
         return deletableSegments;
     }
 
-    /** Returns the contiguous prefix of expired segments and rolls an expired active segment. */
+    /**
+     * Returns the contiguous prefix of expired inactive segments.
+     *
+     * <p>If all inactive segments are deletable, this also checks whether the active segment should
+     * be rolled.
+     */
     private List<LogSegment> deletableExpiredSegments(long endOffset) throws IOException {
         if (localLog.getSegments().isEmpty()) {
             return Collections.emptyList();
@@ -1374,6 +1379,7 @@ public final class LogTablet {
         return deletableSegments;
     }
 
+    /** Rolls the active segment when it is non-empty, expired, and fully committed. */
     private void maybeRollExpiredActiveSegment(long now, LogSegment activeSegment)
             throws IOException {
         if (activeSegment.getSizeInBytes() > 0
