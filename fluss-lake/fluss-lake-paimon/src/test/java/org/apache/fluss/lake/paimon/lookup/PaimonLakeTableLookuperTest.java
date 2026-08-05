@@ -77,6 +77,8 @@ class PaimonLakeTableLookuperTest {
     private static final String DB = "lookup_db";
     private static final short SCHEMA_ID = 1;
     private static final short EVOLVED_SCHEMA_ID = 2;
+    private static final LakeTableLookuper.LookupMetricRecorder NO_OP_LOOKUP_METRIC_RECORDER =
+            (lookupTimeNanos, lookupFileMaterialization) -> {};
 
     @TempDir private File tempWarehouseDir;
 
@@ -433,7 +435,8 @@ class PaimonLakeTableLookuperTest {
                                     Collections.singletonList("pt"), "7"),
                             0,
                             SCHEMA_ID,
-                            schema.getRowType());
+                            schema.getRowType(),
+                            NO_OP_LOOKUP_METRIC_RECORDER);
 
             BinaryValue decodedValue =
                     decodeValue(
@@ -468,7 +471,8 @@ class PaimonLakeTableLookuperTest {
                                     Collections.emptyList(), Collections.emptyList()),
                             0,
                             SCHEMA_ID,
-                            schema.getRowType());
+                            schema.getRowType(),
+                            NO_OP_LOOKUP_METRIC_RECORDER);
 
             assertThatThrownBy(() -> lookuper.lookup(new byte[0], context))
                     .isInstanceOf(UnsupportedOperationException.class)
@@ -609,7 +613,8 @@ class PaimonLakeTableLookuperTest {
                         Collections.singletonList("dt"), partitionName),
                 bucket,
                 schemaId,
-                schema.getRowType());
+                schema.getRowType(),
+                NO_OP_LOOKUP_METRIC_RECORDER);
     }
 
     private static LakeTableLookuper.LookupContext lookupContext(

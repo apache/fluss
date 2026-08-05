@@ -137,6 +137,10 @@ public class MetricNames {
 
     public static final String TOTAL_LOOKUP_REQUESTS_RATE = "totalLookupRequestsPerSecond";
     public static final String FAILED_LOOKUP_REQUESTS_RATE = "failedLookupRequestsPerSecond";
+    public static final String TOTAL_HISTORICAL_LOOKUP_REQUESTS_RATE =
+            "totalHistoricalLookupRequestsPerSecond";
+    public static final String FAILED_HISTORICAL_LOOKUP_REQUESTS_RATE =
+            "failedHistoricalLookupRequestsPerSecond";
     public static final String LAKE_LOOKUPS_RATE = "lakeLookupsPerSecond";
     public static final String LAKE_LOOKUP_TIME_MS = "lakeLookupTimeMs";
     public static final String TOTAL_PUT_KV_REQUESTS_RATE = "totalPutKvRequestsPerSecond";

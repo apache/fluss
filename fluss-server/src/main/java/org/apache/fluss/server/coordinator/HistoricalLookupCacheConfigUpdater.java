@@ -23,9 +23,11 @@ import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.config.cluster.ServerReconfigurable;
 import org.apache.fluss.exception.ConfigException;
 
+import java.time.Duration;
+
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
-/** Applies dynamic historical lookup cache capacity changes to the metadata manager. */
+/** Validates dynamic historical lookup cache settings and updates the metadata manager. */
 final class HistoricalLookupCacheConfigUpdater implements ServerReconfigurable {
 
     private final MetadataManager metadataManager;
@@ -43,6 +45,19 @@ final class HistoricalLookupCacheConfigUpdater implements ServerReconfigurable {
                     String.format(
                             "Invalid configuration for %s, it must be greater than 0 bytes.",
                             ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE
+                                    .key()));
+        }
+
+        Duration newExpiration =
+                newConfig.get(
+                        ConfigOptions
+                                .SERVER_HISTORICAL_PARTITION_LOOKUPER_CACHE_EXPIRE_AFTER_ACCESS);
+        if (newExpiration.toMillis() < 1) {
+            throw new ConfigException(
+                    String.format(
+                            "Invalid configuration for %s, it must be greater than or equal 1 ms.",
+                            ConfigOptions
+                                    .SERVER_HISTORICAL_PARTITION_LOOKUPER_CACHE_EXPIRE_AFTER_ACCESS
                                     .key()));
         }
     }

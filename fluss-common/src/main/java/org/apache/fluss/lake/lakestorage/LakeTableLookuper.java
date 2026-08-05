@@ -61,30 +61,11 @@ public interface LakeTableLookuper extends AutoCloseable {
 
     /** Context for a lake table point lookup. */
     final class LookupContext {
-        private static final LookupMetricRecorder NO_OP_LOOKUP_METRIC_RECORDER =
-                (lookupTimeNanos, lookupFileMaterialization) -> {};
-
         private final ResolvedPartitionSpec partitionSpec;
         private final int bucketId;
         private final short schemaId;
         private final RowType valueRowType;
         private final LookupMetricRecorder lookupMetricRecorder;
-
-        /**
-         * Creates a lookup context.
-         *
-         * @param partitionSpec resolved Fluss partition spec for the lookup
-         * @param bucketId target bucket id in the lake table
-         * @param schemaId schema id to encode the returned Fluss value with
-         * @param valueRowType row type to encode the returned Fluss value with
-         */
-        public LookupContext(
-                ResolvedPartitionSpec partitionSpec,
-                int bucketId,
-                short schemaId,
-                RowType valueRowType) {
-            this(partitionSpec, bucketId, schemaId, valueRowType, NO_OP_LOOKUP_METRIC_RECORDER);
-        }
 
         /**
          * Creates a lookup context.

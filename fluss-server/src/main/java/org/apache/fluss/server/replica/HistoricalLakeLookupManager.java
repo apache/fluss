@@ -63,7 +63,6 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -104,9 +103,6 @@ class HistoricalLakeLookupManager implements AutoCloseable {
 
     private static final Logger LOG = LoggerFactory.getLogger(HistoricalLakeLookupManager.class);
 
-    private static final LakeTableLookuper.LookupMetricRecorder NO_OP_LOOKUP_METRIC_RECORDER =
-            (lookupTimeNanos, lookupFileMaterialization) -> {};
-
     private static final String PAIMON_LOOKUP_DIR_NAME = "paimon-lookup";
     private static final String LOOKUPER_CACHE_EXPIRATION_TASK_NAME =
             "historical-lookuper-cache-expiration";
@@ -119,7 +115,6 @@ class HistoricalLakeLookupManager implements AutoCloseable {
     private volatile long lakeConfigVersion;
     private final @Nullable PluginManager pluginManager;
     private final int serverId;
-    private final Ticker ticker;
     private final HistoricalLookupCacheBudgetManager budgetManager;
     private final Counter capacityEvictions;
     private final int maxQueuedHistoricalRequests;
@@ -155,7 +150,6 @@ class HistoricalLakeLookupManager implements AutoCloseable {
         this.conf = checkNotNull(conf, "conf must not be null.");
         this.pluginManager = pluginManager;
         this.serverId = serverId;
-        this.ticker = checkNotNull(ticker, "ticker must not be null.");
         this.budgetManager =
                 new HistoricalLookupCacheBudgetManager(
                         conf.get(
@@ -185,7 +179,7 @@ class HistoricalLakeLookupManager implements AutoCloseable {
                                 conf.get(
                                         ConfigOptions
                                                 .SERVER_HISTORICAL_PARTITION_LOOKUPER_CACHE_EXPIRE_AFTER_ACCESS))
-                        .ticker(this.ticker)
+                        .ticker(checkNotNull(ticker, "ticker must not be null."))
                         .scheduler(checkNotNull(cacheScheduler, "cacheScheduler must not be null."))
                         .executor(Runnable::run)
                         .removalListener(
@@ -211,14 +205,6 @@ class HistoricalLakeLookupManager implements AutoCloseable {
                         LOOKUPER_CACHE_EXPIRATION_TASK_NAME,
                         () -> executor.execute(command),
                         timeUnit.toMillis(delay));
-    }
-
-    CompletableFuture<LookupResultForBucket> lookup(
-            LookupDataForBucket lookupData,
-            TableInfo tableInfo,
-            SchemaInfo schemaInfo,
-            TableConfig tableConfig) {
-        return lookup(lookupData, tableInfo, schemaInfo, tableConfig, NO_OP_LOOKUP_METRIC_RECORDER);
     }
 
     CompletableFuture<LookupResultForBucket> lookup(
@@ -327,6 +313,11 @@ class HistoricalLakeLookupManager implements AutoCloseable {
     void reconfigure(Configuration newConf) {
         checkNotNull(newConf, "newConf must not be null.");
         boolean lakeConfigChanged;
+        boolean expirationChanged;
+        Duration newExpiration =
+                newConf.get(
+                        ConfigOptions
+                                .SERVER_HISTORICAL_PARTITION_LOOKUPER_CACHE_EXPIRE_AFTER_ACCESS);
         synchronized (this) {
             long newMaxBytes =
                     newConf.get(
@@ -338,12 +329,24 @@ class HistoricalLakeLookupManager implements AutoCloseable {
             }
 
             lakeConfigChanged = hasLakeConfigChanged(conf, newConf);
+            expirationChanged =
+                    !newExpiration.equals(
+                            conf.get(
+                                    ConfigOptions
+                                            .SERVER_HISTORICAL_PARTITION_LOOKUPER_CACHE_EXPIRE_AFTER_ACCESS));
             // Publish the configuration before its version. A lookup that observes the new version
             // must also observe the matching configuration snapshot.
             conf = newConf;
             if (lakeConfigChanged) {
                 lakeConfigVersion++;
             }
+        }
+        if (expirationChanged) {
+            lakeTableLookupers
+                    .policy()
+                    .expireAfterAccess()
+                    .get()
+                    .setExpiresAfter(newExpiration.toMillis(), TimeUnit.MILLISECONDS);
         }
         if (lakeConfigChanged) {
             // Do not invalidate while holding this monitor: lookuper creation holds a cache key
@@ -478,7 +481,7 @@ class HistoricalLakeLookupManager implements AutoCloseable {
                                     // Pin the lookuper before leaving the atomic cache update.
                                     // Eviction or invalidation can then defer closing it until this
                                     // lookup releases it.
-                                    selectedLookuper.acquire(ticker.read());
+                                    selectedLookuper.acquire();
                                     return selectedLookuper;
                                 });
         return matchesLookupConfiguration(
@@ -574,33 +577,24 @@ class HistoricalLakeLookupManager implements AutoCloseable {
     /**
      * Evicts one eligible cached lookuper using best-effort LRU order.
      *
-     * <p>Candidates are ordered by their last-access timestamps without blocking concurrent
-     * lookups. A candidate accessed after it is ordered may therefore still be evicted.
+     * <p>Candidates use Caffeine's expire-after-access order. A candidate accessed after the
+     * snapshot is taken may therefore still be evicted.
      */
     private boolean evictLeastRecentlyUsed(long excludedTableId) {
-        List<EvictionCandidate> candidates = new ArrayList<>();
-        for (CachedLakeTableLookuper cachedLookuper : lakeTableLookupers.asMap().values()) {
-            // Snapshot the timestamp so concurrent accesses cannot change comparator inputs while
-            // the list is being sorted.
-            candidates.add(new EvictionCandidate(cachedLookuper, cachedLookuper.lastAccessNanos()));
-        }
-        candidates.sort(Comparator.comparingLong(candidate -> candidate.lastAccessNanos));
-        for (EvictionCandidate evictionCandidate : candidates) {
-            CachedLakeTableLookuper candidate = evictionCandidate.cachedLookuper;
+        Map<Long, CachedLakeTableLookuper> candidates =
+                lakeTableLookupers
+                        .policy()
+                        .expireAfterAccess()
+                        .get()
+                        .oldest(lakeTableLookupers.asMap().size());
+        for (CachedLakeTableLookuper candidate : candidates.values()) {
             if (candidate.tableId == excludedTableId) {
                 continue;
             }
-            // Claim this victim so concurrent admission threads cannot evict it twice. A false
-            // result means it was already invalidated or claimed by another eviction.
-            if (!candidate.markEvictionPending()) {
-                continue;
-            }
-
             // The snapshot may be stale after expiration or replacement. Compare-and-remove
             // prevents this eviction from removing a newer lookuper for the same table.
             boolean removed = lakeTableLookupers.asMap().remove(candidate.tableId, candidate);
             if (!removed) {
-                candidate.clearEvictionPending();
                 continue;
             }
 
@@ -782,16 +776,6 @@ class HistoricalLakeLookupManager implements AutoCloseable {
         }
     }
 
-    private static final class EvictionCandidate {
-        private final CachedLakeTableLookuper cachedLookuper;
-        private final long lastAccessNanos;
-
-        private EvictionCandidate(CachedLakeTableLookuper cachedLookuper, long lastAccessNanos) {
-            this.cachedLookuper = cachedLookuper;
-            this.lastAccessNanos = lastAccessNanos;
-        }
-    }
-
     private static final class CachedLakeTableLookuper {
         private final long tableId;
         private final TablePath tablePath;
@@ -801,9 +785,7 @@ class HistoricalLakeLookupManager implements AutoCloseable {
         private final File tableLookupDir;
         private final Reservation reservation;
         private final LakeTableLookuper lookuper;
-        private long lastAccessNanos;
         private int activeLookups;
-        private boolean evictionPending;
         private boolean invalidated;
         private boolean closed;
 
@@ -826,28 +808,11 @@ class HistoricalLakeLookupManager implements AutoCloseable {
             this.lookuper = lookuper;
         }
 
-        private synchronized void acquire(long accessNanos) {
+        private synchronized void acquire() {
             if (invalidated) {
                 throw new IllegalStateException("Lake table lookuper has been invalidated.");
             }
-            lastAccessNanos = accessNanos;
             activeLookups++;
-        }
-
-        private synchronized long lastAccessNanos() {
-            return lastAccessNanos;
-        }
-
-        private synchronized boolean markEvictionPending() {
-            if (invalidated || evictionPending) {
-                return false;
-            }
-            evictionPending = true;
-            return true;
-        }
-
-        private synchronized void clearEvictionPending() {
-            evictionPending = false;
         }
 
         private void release() {

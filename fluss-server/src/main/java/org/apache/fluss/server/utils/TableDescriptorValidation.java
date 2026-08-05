@@ -132,7 +132,9 @@ public class TableDescriptorValidation {
         checkDeleteBehavior(tableConf, hasPrimaryKey);
         checkTieredLog(tableConf);
         checkHistoricalPartition(tableDescriptor, tableConf);
-        checkHistoricalLookupCacheSize(tableConf, tablePath, historicalLookupCacheMaxSize);
+        if (tableConf.get(ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED)) {
+            checkHistoricalLookupCacheSize(tableConf, tablePath, historicalLookupCacheMaxSize);
+        }
         checkPartition(tableConf, tableDescriptor.getPartitionKeys(), schema.getRowType());
         checkSystemColumns(schema.getRowType());
         validateStatisticsConfig(tableDescriptor);

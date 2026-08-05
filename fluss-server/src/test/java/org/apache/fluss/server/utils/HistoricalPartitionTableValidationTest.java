@@ -28,6 +28,7 @@ import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
 
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class HistoricalPartitionTableValidationTest {
@@ -97,7 +98,16 @@ class HistoricalPartitionTableValidationTest {
     }
 
     @Test
-    void testRejectInvalidHistoricalLookupCacheSize() {
+    void testValidateHistoricalLookupCacheSize() {
+        TableDescriptor ordinaryTableDescriptor =
+                TableDescriptor.builder()
+                        .schema(Schema.newBuilder().column("id", DataTypes.INT()).build())
+                        .distributedBy(1)
+                        .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 1)
+                        .build();
+        assertThatCode(() -> validate(ordinaryTableDescriptor, MemorySize.parse("4gb")))
+                .doesNotThrowAnyException();
+
         TableDescriptor zeroSizeDescriptor = descriptorWithCacheSize(MemorySize.ZERO);
         assertThatThrownBy(() -> validate(zeroSizeDescriptor, MemorySize.parse("80gb")))
                 .isInstanceOf(InvalidConfigException.class)
@@ -118,9 +128,19 @@ class HistoricalPartitionTableValidationTest {
 
     private static TableDescriptor descriptorWithCacheSize(MemorySize cacheSize) {
         return TableDescriptor.builder()
-                .schema(Schema.newBuilder().column("id", DataTypes.INT()).build())
+                .schema(
+                        Schema.newBuilder()
+                                .column("id", DataTypes.INT())
+                                .column("dt", DataTypes.STRING())
+                                .primaryKey("id", "dt")
+                                .build())
+                .partitionedBy("dt")
                 .distributedBy(1)
                 .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 1)
+                .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
+                .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                .property(ConfigOptions.TABLE_DATALAKE_FORMAT, DataLakeFormat.PAIMON)
+                .property(ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED, true)
                 .property(
                         ConfigOptions
                                 .TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE,

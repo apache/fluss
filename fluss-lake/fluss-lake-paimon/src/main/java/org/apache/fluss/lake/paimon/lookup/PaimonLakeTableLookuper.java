@@ -437,6 +437,7 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
         return checkNotNull(partitionKeyExtractor, "partitionKeyExtractor must be initialized.");
     }
 
+    /** Tracks creation of Paimon lookup files while delegating all local I/O operations. */
     private final class TrackingIOManager implements IOManager {
 
         private final IOManager delegate;

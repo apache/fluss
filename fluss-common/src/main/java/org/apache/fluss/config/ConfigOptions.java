@@ -435,7 +435,6 @@ public class ConfigOptions {
                             .defaultValue(MemorySize.parse("80gb"))
                             .withDescription(
                                     "The total configured disk capacity available to current and creating historical partition lookup caches on a TabletServer. "
-                                            + "Retired cache generations that are still serving active lookups are not included in this limit. "
                                             + "The value must be greater than zero.");
 
     public static final ConfigOption<Duration>
@@ -444,8 +443,7 @@ public class ConfigOptions {
                             .durationType()
                             .defaultValue(Duration.ofHours(3))
                             .withDescription(
-                                    "The duration after which an idle historical partition table lookuper is removed from the cache. "
-                                            + "This option requires a TabletServer restart to take effect.");
+                                    "The duration after which an idle historical partition table lookuper is removed from the cache.");
 
     public static final ConfigOption<Double> SERVER_DATA_DISK_WRITE_LIMIT_RATIO =
             key("server.data-disk.write-limit-ratio")
