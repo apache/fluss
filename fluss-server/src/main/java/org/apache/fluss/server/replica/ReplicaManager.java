@@ -605,10 +605,17 @@ public class ReplicaManager implements ServerReconfigurable {
     private void updateReplicaTableConfig(ClusterMetadata clusterMetadata) {
         Map<Long, Boolean> tableIdToLakeFlag = new HashMap<>();
         Map<Long, Integer> tableIdToTieredLogLocalSegments = new HashMap<>();
+        Map<Long, TableConfig> tableIdToTableConfig = new HashMap<>();
 
         for (TableMetadata tableMetadata : clusterMetadata.getTableMetadataList()) {
             TableInfo tableInfo = tableMetadata.getTableInfo();
             long tableId = tableInfo.getTableId();
+
+            // Deleted-table markers do not carry authoritative table configuration.
+            if (tableId != TableMetadata.DELETED_TABLE_ID
+                    && !tableInfo.getTablePath().equals(TableMetadata.DELETED_TABLE_PATH)) {
+                tableIdToTableConfig.put(tableId, tableInfo.getTableConfig());
+            }
 
             // Collect datalake enabled configuration
             if (tableInfo.getTableConfig().getDataLakeFormat().isPresent()) {
@@ -621,7 +628,9 @@ public class ReplicaManager implements ServerReconfigurable {
             tableIdToTieredLogLocalSegments.put(tableId, tieredLogLocalSegments);
         }
 
-        if (tableIdToLakeFlag.isEmpty() && tableIdToTieredLogLocalSegments.isEmpty()) {
+        if (tableIdToLakeFlag.isEmpty()
+                && tableIdToTieredLogLocalSegments.isEmpty()
+                && tableIdToTableConfig.isEmpty()) {
             return;
         }
 
@@ -640,6 +649,11 @@ public class ReplicaManager implements ServerReconfigurable {
                 if (tableIdToTieredLogLocalSegments.containsKey(tableId)) {
                     replica.updateTieredLogLocalSegments(
                             tableIdToTieredLogLocalSegments.get(tableId));
+                }
+
+                // Publish the new snapshot after applying configuration-specific side effects.
+                if (tableIdToTableConfig.containsKey(tableId)) {
+                    replica.updateTableConfig(tableIdToTableConfig.get(tableId));
                 }
             }
         }
@@ -844,7 +858,10 @@ public class ReplicaManager implements ServerReconfigurable {
                 SchemaInfo latestSchemaInfo = replica.getSchemaGetter().getLatestSchemaInfo();
                 lookupFuture =
                         historicalLakeLookupManager.lookup(
-                                data, replica.getTableInfo(), latestSchemaInfo);
+                                data,
+                                replica.getTableInfo(),
+                                latestSchemaInfo,
+                                replica.getTableConfig());
             } catch (Exception e) {
                 lookupFuture =
                         CompletableFuture.completedFuture(

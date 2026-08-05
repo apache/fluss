@@ -83,7 +83,8 @@ class HistoricalLakeLookupManagerTest {
                 manager.lookup(
                         lookupData(HISTORICAL_BUCKET),
                         PARTITION_TABLE_INFO,
-                        PARTITION_TABLE_INFO.getSchemaInfo());
+                        PARTITION_TABLE_INFO.getSchemaInfo(),
+                        PARTITION_TABLE_INFO.getTableConfig());
         assertThat(first).isNotDone();
         assertThat(executor.numQueuedTasks()).isEqualTo(1);
 
@@ -92,7 +93,8 @@ class HistoricalLakeLookupManagerTest {
                 manager.lookup(
                                 lookupData(secondBucket),
                                 PARTITION_TABLE_INFO,
-                                PARTITION_TABLE_INFO.getSchemaInfo())
+                                PARTITION_TABLE_INFO.getSchemaInfo(),
+                                PARTITION_TABLE_INFO.getTableConfig())
                         .get(1, TimeUnit.SECONDS);
 
         assertThat(second.failed()).isTrue();
@@ -111,7 +113,8 @@ class HistoricalLakeLookupManagerTest {
                 manager.lookup(
                         lookupData(HISTORICAL_BUCKET),
                         PARTITION_TABLE_INFO,
-                        PARTITION_TABLE_INFO.getSchemaInfo());
+                        PARTITION_TABLE_INFO.getSchemaInfo(),
+                        PARTITION_TABLE_INFO.getTableConfig());
         executor.runNext();
         LookupResultForBucket firstResult = first.get(1, TimeUnit.SECONDS);
         assertThat(firstResult.failed()).isTrue();
@@ -122,7 +125,8 @@ class HistoricalLakeLookupManagerTest {
                 manager.lookup(
                         lookupData(HISTORICAL_BUCKET),
                         PARTITION_TABLE_INFO,
-                        PARTITION_TABLE_INFO.getSchemaInfo());
+                        PARTITION_TABLE_INFO.getSchemaInfo(),
+                        PARTITION_TABLE_INFO.getTableConfig());
         assertThat(second).isNotDone();
         assertThat(executor.numQueuedTasks()).isEqualTo(1);
     }
@@ -136,17 +140,20 @@ class HistoricalLakeLookupManagerTest {
                 manager.lookup(
                         lookupData(new TableBucket(PARTITION_TABLE_ID, 1L, 0)),
                         PARTITION_TABLE_INFO,
-                        PARTITION_TABLE_INFO.getSchemaInfo());
+                        PARTITION_TABLE_INFO.getSchemaInfo(),
+                        PARTITION_TABLE_INFO.getTableConfig());
         CompletableFuture<LookupResultForBucket> second =
                 manager.lookup(
                         lookupData(new TableBucket(PARTITION_TABLE_ID, 2L, 0)),
                         PARTITION_TABLE_INFO,
-                        PARTITION_TABLE_INFO.getSchemaInfo());
+                        PARTITION_TABLE_INFO.getSchemaInfo(),
+                        PARTITION_TABLE_INFO.getTableConfig());
         LookupResultForBucket third =
                 manager.lookup(
                                 lookupData(new TableBucket(PARTITION_TABLE_ID, 3L, 0)),
                                 PARTITION_TABLE_INFO,
-                                PARTITION_TABLE_INFO.getSchemaInfo())
+                                PARTITION_TABLE_INFO.getSchemaInfo(),
+                                PARTITION_TABLE_INFO.getTableConfig())
                         .get(1, TimeUnit.SECONDS);
 
         assertThat(first).isNotDone();
@@ -285,6 +292,47 @@ class HistoricalLakeLookupManagerTest {
 
         lookupAndRun(manager, executor, PARTITION_TABLE_INFO, evolvedSchemaInfo);
         assertThat(manager.createdLookupers).hasSize(3);
+    }
+
+    @Test
+    void testReplacesLookuperOnlyWhenEffectiveCacheSizeChanges() throws Exception {
+        ManualExecutor executor = new ManualExecutor();
+        TestingHistoricalLakeLookupManager manager = createTestingManager(executor);
+
+        lookupAndRun(
+                manager,
+                executor,
+                PARTITION_TABLE_INFO,
+                tableConfigWithCacheSize(MemorySize.parse("8gb")));
+        TestingLakeTableLookuper initialLookuper = manager.createdLookupers.get(0);
+
+        Configuration unrelatedChange = new Configuration();
+        unrelatedChange.set(
+                ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS,
+                ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS.defaultValue() + 1);
+        lookupAndRun(manager, executor, PARTITION_TABLE_INFO, new TableConfig(unrelatedChange));
+        lookupAndRun(
+                manager,
+                executor,
+                PARTITION_TABLE_INFO,
+                tableConfigWithCacheSize(MemorySize.parse("8gb")));
+
+        assertThat(manager.createdLookupers).hasSize(1);
+        assertThat(initialLookuper.closed).isFalse();
+
+        lookupAndRun(
+                manager,
+                executor,
+                PARTITION_TABLE_INFO,
+                tableConfigWithCacheSize(MemorySize.parse("4gb")));
+
+        assertThat(initialLookuper.closed).isTrue();
+        assertThat(manager.createdLookupers).hasSize(2);
+        assertThat(
+                        manager.createdTableConfigs
+                                .get(1)
+                                .getHistoricalPartitionLookupCacheMaxDiskSize())
+                .isEqualTo(MemorySize.parse("4gb"));
     }
 
     @Test
@@ -476,10 +524,16 @@ class HistoricalLakeLookupManagerTest {
 
     private static CompletableFuture<LookupResultForBucket> lookup(
             HistoricalLakeLookupManager manager, TableInfo tableInfo) {
+        return lookup(manager, tableInfo, tableInfo.getTableConfig());
+    }
+
+    private static CompletableFuture<LookupResultForBucket> lookup(
+            HistoricalLakeLookupManager manager, TableInfo tableInfo, TableConfig tableConfig) {
         return manager.lookup(
                 lookupData(new TableBucket(tableInfo.getTableId(), 1L, 0)),
                 tableInfo,
-                tableInfo.getSchemaInfo());
+                tableInfo.getSchemaInfo(),
+                tableConfig);
     }
 
     private static TableInfo tableInfo(long tableId, int schemaId) {
@@ -512,10 +566,31 @@ class HistoricalLakeLookupManagerTest {
                 PARTITION_TABLE_INFO.getModifiedTime());
     }
 
+    private static TableConfig tableConfigWithCacheSize(MemorySize cacheSize) {
+        Configuration conf = new Configuration();
+        conf.set(
+                ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE,
+                cacheSize);
+        return new TableConfig(conf);
+    }
+
     private static void lookupAndRun(
             HistoricalLakeLookupManager manager, ManualExecutor executor, TableInfo tableInfo)
             throws Exception {
         lookupAndRun(manager, executor, tableInfo, tableInfo.getSchemaInfo());
+    }
+
+    private static void lookupAndRun(
+            HistoricalLakeLookupManager manager,
+            ManualExecutor executor,
+            TableInfo tableInfo,
+            TableConfig tableConfig)
+            throws Exception {
+        LookupResultForBucket result =
+                lookupResultAndRun(
+                        manager, executor, tableInfo, tableInfo.getSchemaInfo(), tableConfig);
+        assertThat(result.failed()).isFalse();
+        assertThat(result.originalPartitionName()).isEqualTo("2024");
     }
 
     private static void lookupAndRun(
@@ -541,9 +616,20 @@ class HistoricalLakeLookupManagerTest {
             TableInfo tableInfo,
             SchemaInfo schemaInfo)
             throws Exception {
+        return lookupResultAndRun(
+                manager, executor, tableInfo, schemaInfo, tableInfo.getTableConfig());
+    }
+
+    private static LookupResultForBucket lookupResultAndRun(
+            HistoricalLakeLookupManager manager,
+            ManualExecutor executor,
+            TableInfo tableInfo,
+            SchemaInfo schemaInfo,
+            TableConfig tableConfig)
+            throws Exception {
         TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), 1L, 0);
         CompletableFuture<LookupResultForBucket> future =
-                manager.lookup(lookupData(tableBucket), tableInfo, schemaInfo);
+                manager.lookup(lookupData(tableBucket), tableInfo, schemaInfo, tableConfig);
         executor.runNext();
         return future.get(1, TimeUnit.SECONDS);
     }

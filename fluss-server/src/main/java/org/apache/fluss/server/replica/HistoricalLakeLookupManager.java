@@ -210,7 +210,10 @@ class HistoricalLakeLookupManager implements AutoCloseable {
     }
 
     CompletableFuture<LookupResultForBucket> lookup(
-            LookupDataForBucket lookupData, TableInfo tableInfo, SchemaInfo schemaInfo) {
+            LookupDataForBucket lookupData,
+            TableInfo tableInfo,
+            SchemaInfo schemaInfo,
+            TableConfig tableConfig) {
         TableBucket tableBucket = lookupData.tableBucket();
         if (!lookupPermits.tryAcquire()) {
             return CompletableFuture.completedFuture(
@@ -227,7 +230,7 @@ class HistoricalLakeLookupManager implements AutoCloseable {
 
         CompletableFuture<LookupResultForBucket> future;
         try {
-            future = submitLookup(lookupData, tableInfo, schemaInfo);
+            future = submitLookup(lookupData, tableInfo, schemaInfo, tableConfig);
         } catch (RuntimeException e) {
             lookupPermits.release();
             throw e;
@@ -252,10 +255,13 @@ class HistoricalLakeLookupManager implements AutoCloseable {
     }
 
     private CompletableFuture<LookupResultForBucket> submitLookup(
-            LookupDataForBucket lookupData, TableInfo tableInfo, SchemaInfo schemaInfo) {
+            LookupDataForBucket lookupData,
+            TableInfo tableInfo,
+            SchemaInfo schemaInfo,
+            TableConfig tableConfig) {
         CompletableFuture<LookupResultForBucket> future =
                 CompletableFuture.supplyAsync(
-                        () -> lookupInternal(lookupData, tableInfo, schemaInfo),
+                        () -> lookupInternal(lookupData, tableInfo, schemaInfo, tableConfig),
                         historicalPartitionExecutor);
         pendingLookups.add(future);
         return future;
@@ -298,14 +304,16 @@ class HistoricalLakeLookupManager implements AutoCloseable {
     }
 
     private LookupResultForBucket lookupInternal(
-            LookupDataForBucket lookupData, TableInfo tableInfo, SchemaInfo schemaInfo) {
+            LookupDataForBucket lookupData,
+            TableInfo tableInfo,
+            SchemaInfo schemaInfo,
+            TableConfig tableConfig) {
         TableBucket tableBucket = lookupData.tableBucket();
         CachedLakeTableLookuper cachedLookuper = null;
         try {
             LookupContext context = createLookupContext(lookupData, tableInfo, schemaInfo);
             long currentLakeConfigVersion = lakeConfigVersion;
             Configuration currentConf = conf;
-            TableConfig tableConfig = tableInfo.getTableConfig();
             long cacheSizeBytes =
                     tableConfig.getHistoricalPartitionLookupCacheMaxDiskSize().getBytes();
             cachedLookuper =
@@ -391,11 +399,14 @@ class HistoricalLakeLookupManager implements AutoCloseable {
                                 context.tableId,
                                 (ignored, currentLookuper) -> {
                                     CachedLakeTableLookuper selectedLookuper = currentLookuper;
-                                    // Create the lookuper lazily, and recreate it after schema or
-                                    // lake configuration changes so it reloads lake table/query
-                                    // state and uses the current configuration.
+                                    // Create the lookuper lazily, and recreate it after schema,
+                                    // lake configuration, or effective cache size changes so it
+                                    // reloads lake table/query state and uses the current settings.
                                     if (!matchesLookupConfiguration(
-                                            selectedLookuper, context, currentLakeConfigVersion)) {
+                                            selectedLookuper,
+                                            context,
+                                            currentLakeConfigVersion,
+                                            cacheSizeBytes)) {
                                         selectedLookuper =
                                                 tryCreateCachedLookuper(
                                                         context,
@@ -416,7 +427,8 @@ class HistoricalLakeLookupManager implements AutoCloseable {
                                     selectedLookuper.acquire(ticker.read());
                                     return selectedLookuper;
                                 });
-        return matchesLookupConfiguration(cachedLookuper, context, currentLakeConfigVersion)
+        return matchesLookupConfiguration(
+                        cachedLookuper, context, currentLakeConfigVersion, cacheSizeBytes)
                 ? cachedLookuper
                 : null;
     }
@@ -424,10 +436,12 @@ class HistoricalLakeLookupManager implements AutoCloseable {
     private static boolean matchesLookupConfiguration(
             @Nullable CachedLakeTableLookuper cachedLookuper,
             LookupContext context,
-            long currentLakeConfigVersion) {
+            long currentLakeConfigVersion,
+            long cacheSizeBytes) {
         return cachedLookuper != null
                 && cachedLookuper.schemaId == context.schemaId
-                && cachedLookuper.lakeConfigVersion == currentLakeConfigVersion;
+                && cachedLookuper.lakeConfigVersion == currentLakeConfigVersion
+                && cachedLookuper.cacheSizeBytes == cacheSizeBytes;
     }
 
     /**

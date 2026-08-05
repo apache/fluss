@@ -246,7 +246,7 @@ class FlussConfigUtilsTest {
                                 ConfigOptions
                                         .TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE
                                         .key()))
-                .isFalse();
+                .isTrue();
     }
 
     @Test
