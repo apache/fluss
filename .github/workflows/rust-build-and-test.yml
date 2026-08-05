@@ -62,11 +62,6 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Install protoc
-        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Rust Cache
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
@@ -80,3 +75,25 @@ jobs:
         env:
           RUST_LOG: DEBUG
           RUST_BACKTRACE: full
+
+  proto-up-to-date:
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: fluss-rust
+
+      - name: Regenerate protobuf code
+        run: ./crates/fluss/regen.sh
+
+      - name: Verify the checked-in code is up to date
+        run: git diff --exit-code
