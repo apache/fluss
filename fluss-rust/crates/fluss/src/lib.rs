@@ -153,5 +153,5 @@ pub(crate) mod proto {
     // caller yet, and the generated doc comments aren't clippy-clean.
     #![allow(dead_code)]
     #![allow(clippy::doc_lazy_continuation)]
-    include!(concat!(env!("OUT_DIR"), "/fluss.rs"));
+    include!("proto/fluss.rs");
 }
