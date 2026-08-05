@@ -17,28 +17,27 @@
 
 package org.apache.fluss.flink.lake;
 
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.flink.catalog.PaimonSystemCatalogTable;
+import org.apache.fluss.metadata.LakeTableUtil;
 
-import org.apache.flink.table.catalog.CatalogTable;
 import org.apache.flink.table.catalog.ObjectIdentifier;
-import org.apache.flink.table.catalog.ResolvedCatalogTable;
 import org.apache.flink.table.connector.source.DynamicTableSource;
 import org.apache.flink.table.factories.DynamicTableFactory;
 import org.apache.flink.table.factories.DynamicTableSourceFactory;
 import org.apache.flink.table.factories.FactoryUtil;
 
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.Map;
-
-import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** A factory to create {@link DynamicTableSource} for lake table. */
 public class LakeTableFactory {
 
-    public static final String RESOLVED_LAKE_DATABASE = "fluss.internal.resolved-lake-database";
-    public static final String RESOLVED_LAKE_OBJECT = "fluss.internal.resolved-lake-object";
+    private static final String FLUSS_CONF_PREFIX = "fluss.";
+    private static final String FLUSS_TABLE_DATALAKE_DATABASE_NAME =
+            FLUSS_CONF_PREFIX + ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key();
+    private static final String FLUSS_TABLE_DATALAKE_TABLE_NAME =
+            FLUSS_CONF_PREFIX + ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key();
 
     private final LakeFlinkCatalog lakeFlinkCatalog;
 
@@ -46,48 +45,44 @@ public class LakeTableFactory {
         this.lakeFlinkCatalog = lakeFlinkCatalog;
     }
 
-    public DynamicTableSource createDynamicTableSource(DynamicTableFactory.Context context) {
+    public DynamicTableSource createDynamicTableSource(
+            DynamicTableFactory.Context context, String requestedTableName) {
+        ObjectIdentifier lakeIdentifier =
+                toLakeIdentifier(
+                        context.getObjectIdentifier(),
+                        context.getCatalogTable().getOptions(),
+                        requestedTableName);
+
         // For Iceberg and Paimon, pass the table name as-is to their factory.
         // Metadata tables will be handled internally by their respective factories.
-        DynamicTableFactory.Context newContext = createLakeTableContext(context);
+        DynamicTableFactory.Context newContext =
+                new FactoryUtil.DefaultDynamicTableContext(
+                        lakeIdentifier,
+                        context.getCatalogTable(),
+                        context.getEnrichmentOptions(),
+                        context.getConfiguration(),
+                        context.getClassLoader(),
+                        context.isTemporary());
 
         // Get the appropriate factory based on connector type
         DynamicTableSourceFactory factory = getLakeTableFactory();
         return factory.createDynamicTableSource(newContext);
     }
 
-    static DynamicTableFactory.Context createLakeTableContext(DynamicTableFactory.Context context) {
-        Map<String, String> options = new HashMap<>(context.getCatalogTable().getOptions());
+    static ObjectIdentifier toLakeIdentifier(
+            ObjectIdentifier originIdentifier,
+            Map<String, String> lakeTableOptions,
+            String requestedTableName) {
         String lakeDatabaseName =
-                checkNotNull(
-                        options.remove(RESOLVED_LAKE_DATABASE),
-                        "Missing resolved lake database option.");
+                lakeTableOptions.getOrDefault(
+                        FLUSS_TABLE_DATALAKE_DATABASE_NAME, originIdentifier.getDatabaseName());
         String lakeObjectName =
-                checkNotNull(
-                        options.remove(RESOLVED_LAKE_OBJECT),
-                        "Missing resolved lake object option.");
-        ObjectIdentifier lakeIdentifier =
-                ObjectIdentifier.of(
-                        context.getObjectIdentifier().getCatalogName(),
-                        lakeDatabaseName,
-                        lakeObjectName);
-        CatalogTable originTable = context.getCatalogTable().getOrigin();
-        CatalogTable lakeTable;
-        if (originTable instanceof PaimonSystemCatalogTable) {
-            // Unwrap the transient option carrier before delegating to Paimon.
-            lakeTable = ((PaimonSystemCatalogTable) originTable).unwrap();
-        } else {
-            lakeTable = originTable.copy(options);
-        }
-        ResolvedCatalogTable resolvedLakeTable =
-                new ResolvedCatalogTable(lakeTable, context.getCatalogTable().getResolvedSchema());
-        return new FactoryUtil.DefaultDynamicTableContext(
-                lakeIdentifier,
-                resolvedLakeTable,
-                context.getEnrichmentOptions(),
-                context.getConfiguration(),
-                context.getClassLoader(),
-                context.isTemporary());
+                LakeTableUtil.getLakeTableName(
+                        lakeTableOptions.getOrDefault(
+                                FLUSS_TABLE_DATALAKE_TABLE_NAME, requestedTableName),
+                        requestedTableName);
+        return ObjectIdentifier.of(
+                originIdentifier.getCatalogName(), lakeDatabaseName, lakeObjectName);
     }
 
     private DynamicTableSourceFactory getLakeTableFactory() {

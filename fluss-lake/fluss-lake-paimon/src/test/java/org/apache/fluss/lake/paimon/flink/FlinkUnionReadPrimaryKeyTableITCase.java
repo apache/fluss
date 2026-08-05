@@ -1081,6 +1081,11 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
                     toSortedRows(batchTEnv.executeSql("select a, b from " + tableName + "$lake"));
             assertThat(lakeRows.toString().replace("+U", "+I")).isEqualTo("[+I[1, v1], +I[2, v2]]");
 
+            List<String> snapshotRows =
+                    toSortedRows(
+                            batchTEnv.executeSql("select * from " + tableName + "$lake$snapshots"));
+            assertThat(snapshotRows).isNotEmpty();
+
             writeRows(tablePath, Collections.singletonList(row(3, "v3")), false);
 
             List<String> unionRows =

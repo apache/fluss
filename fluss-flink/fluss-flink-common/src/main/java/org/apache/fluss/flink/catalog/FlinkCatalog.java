@@ -92,7 +92,6 @@ import org.apache.flink.table.expressions.Expression;
 import org.apache.flink.table.factories.Factory;
 import org.apache.flink.table.procedures.Procedure;
 import org.apache.flink.table.types.AbstractDataType;
-import org.apache.paimon.flink.SystemCatalogTable;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -114,8 +113,6 @@ import static org.apache.fluss.config.ConfigOptions.BOOTSTRAP_SERVERS;
 import static org.apache.fluss.flink.FlinkConnectorOptions.ALTER_DISALLOW_OPTIONS;
 import static org.apache.fluss.flink.adapter.SchemaAdapter.supportIndex;
 import static org.apache.fluss.flink.adapter.SchemaAdapter.withIndex;
-import static org.apache.fluss.flink.lake.LakeTableFactory.RESOLVED_LAKE_DATABASE;
-import static org.apache.fluss.flink.lake.LakeTableFactory.RESOLVED_LAKE_OBJECT;
 import static org.apache.fluss.flink.utils.CatalogExceptionUtils.isPartitionAlreadyExists;
 import static org.apache.fluss.flink.utils.CatalogExceptionUtils.isPartitionInvalid;
 import static org.apache.fluss.flink.utils.CatalogExceptionUtils.isPartitionNotExist;
@@ -488,24 +485,11 @@ public class FlinkCatalog extends AbstractCatalog {
             Configuration properties,
             Map<String, String> lakeCatalogProperties)
             throws TableNotExistException, CatalogException {
-        CatalogTable lakeTable =
-                (CatalogTable)
-                        lakeFlinkCatalog
-                                .getLakeCatalog(properties, lakeCatalogProperties)
-                                .getTable(new ObjectPath(lakeDatabaseName, lakeObjectName));
-        if (lakeTable instanceof SystemCatalogTable) {
-            Map<String, String> transientOptions = new HashMap<>();
-            transientOptions.put(RESOLVED_LAKE_DATABASE, lakeDatabaseName);
-            transientOptions.put(RESOLVED_LAKE_OBJECT, lakeObjectName);
-            // Paimon's SystemCatalogTable does not expose options. Wrap it only to carry the
-            // resolved lake identifiers through the Flink planner.
-            return new PaimonSystemCatalogTable((SystemCatalogTable) lakeTable, transientOptions);
-        } else {
-            Map<String, String> options = new HashMap<>(lakeTable.getOptions());
-            options.put(RESOLVED_LAKE_DATABASE, lakeDatabaseName);
-            options.put(RESOLVED_LAKE_OBJECT, lakeObjectName);
-            return lakeTable.copy(options);
-        }
+        CatalogBaseTable lakeTable =
+                lakeFlinkCatalog
+                        .getLakeCatalog(properties, lakeCatalogProperties)
+                        .getTable(new ObjectPath(lakeDatabaseName, lakeObjectName));
+        return lakeTable;
     }
 
     @Override
