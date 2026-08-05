@@ -62,7 +62,6 @@ import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsRequest;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsResponse;
-import org.apache.fluss.rpc.messages.PbLookupReqForBucket;
 import org.apache.fluss.rpc.messages.PbScanReqForBucket;
 import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.messages.PrefixLookupResponse;
@@ -123,6 +122,7 @@ import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.hasHistoricalLookup;
 import static org.apache.fluss.security.acl.OperationType.DESCRIBE;
 import static org.apache.fluss.security.acl.OperationType.READ;
 import static org.apache.fluss.security.acl.OperationType.WRITE;
@@ -366,18 +366,6 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                 currentSession().getApiVersion(),
                 value -> response.complete(makePrefixLookupResponse(value, errorResponseMap)));
         return response;
-    }
-
-    private boolean hasHistoricalLookup(LookupRequest request) {
-        for (PbLookupReqForBucket lookupReqForBucket : request.getBucketsReqsList()) {
-            if (lookupReqForBucket.hasOriginalPartitionName()) {
-                // An original partition name is only set for historical lookups, so route the
-                // whole request to the historical path. Conversion rejects requests that mix
-                // normal and historical lookup batches.
-                return true;
-            }
-        }
-        return false;
     }
 
     @Override

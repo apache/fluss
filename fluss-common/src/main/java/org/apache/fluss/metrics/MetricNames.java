@@ -92,6 +92,8 @@ public class MetricNames {
             "delayedFetchFromFollowerExpiresPerSecond";
     public static final String DELAYED_FETCH_FROM_CLIENT_EXPIRES_RATE =
             "delayedFetchFromClientExpiresPerSecond";
+    public static final String HISTORICAL_PARTITION_INFLIGHT_REQUESTS =
+            "historicalPartitionInflightRequests";
 
     public static final String SERVER_LOGICAL_STORAGE_LOG_SIZE = "logSize";
     public static final String SERVER_LOGICAL_STORAGE_KV_SIZE = "kvSize";
@@ -135,6 +137,8 @@ public class MetricNames {
 
     public static final String TOTAL_LOOKUP_REQUESTS_RATE = "totalLookupRequestsPerSecond";
     public static final String FAILED_LOOKUP_REQUESTS_RATE = "failedLookupRequestsPerSecond";
+    public static final String LAKE_LOOKUPS_RATE = "lakeLookupsPerSecond";
+    public static final String LAKE_LOOKUP_TIME_MS = "lakeLookupTimeMs";
     public static final String TOTAL_PUT_KV_REQUESTS_RATE = "totalPutKvRequestsPerSecond";
     public static final String FAILED_PUT_KV_REQUESTS_RATE = "failedPutKvRequestsPerSecond";
     public static final String TOTAL_LIMIT_SCAN_REQUESTS_RATE = "totalLimitScanRequestsPerSecond";

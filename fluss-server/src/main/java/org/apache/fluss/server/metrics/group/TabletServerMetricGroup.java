@@ -23,6 +23,7 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.CharacterFilter;
 import org.apache.fluss.metrics.Counter;
 import org.apache.fluss.metrics.DescriptiveStatisticsHistogram;
+import org.apache.fluss.metrics.Gauge;
 import org.apache.fluss.metrics.Histogram;
 import org.apache.fluss.metrics.MeterView;
 import org.apache.fluss.metrics.MetricNames;
@@ -239,6 +240,20 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
         return failedIsrUpdates;
     }
 
+    /**
+     * Registers the number of in-flight historical partition requests for an operation.
+     *
+     * @param operation historical partition operation
+     * @param inflightRequests gauge for accepted requests that have not completed
+     */
+    public void registerHistoricalPartitionInflightRequests(
+            String operation, Gauge<Integer> inflightRequests) {
+        HistoricalPartitionOperationMetricGroup operationMetricGroup =
+                new HistoricalPartitionOperationMetricGroup(registry, this, operation);
+        operationMetricGroup.gauge(
+                MetricNames.HISTORICAL_PARTITION_INFLIGHT_REQUESTS, inflightRequests);
+    }
+
     // ------------------------------------------------------------------------
     //  table buckets groups
     // ------------------------------------------------------------------------
@@ -265,6 +280,27 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
                 tableMetricGroup.close();
                 metricGroupByTable.remove(tablePath);
             }
+        }
+    }
+
+    private static class HistoricalPartitionOperationMetricGroup extends AbstractMetricGroup {
+
+        private final String operation;
+
+        private HistoricalPartitionOperationMetricGroup(
+                MetricRegistry registry, TabletServerMetricGroup parent, String operation) {
+            super(registry, parent.getScopeComponents(), parent);
+            this.operation = operation;
+        }
+
+        @Override
+        protected void putVariables(Map<String, String> variables) {
+            variables.put("operation", operation);
+        }
+
+        @Override
+        protected String getGroupName(CharacterFilter filter) {
+            return "";
         }
     }
 }

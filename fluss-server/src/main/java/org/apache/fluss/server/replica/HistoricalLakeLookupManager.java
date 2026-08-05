@@ -104,6 +104,9 @@ class HistoricalLakeLookupManager implements AutoCloseable {
 
     private static final Logger LOG = LoggerFactory.getLogger(HistoricalLakeLookupManager.class);
 
+    private static final LakeTableLookuper.LookupMetricRecorder NO_OP_LOOKUP_METRIC_RECORDER =
+            (lookupTimeNanos, lookupFileMaterialization) -> {};
+
     private static final String PAIMON_LOOKUP_DIR_NAME = "paimon-lookup";
     private static final String LOOKUPER_CACHE_EXPIRATION_TASK_NAME =
             "historical-lookuper-cache-expiration";
@@ -119,6 +122,7 @@ class HistoricalLakeLookupManager implements AutoCloseable {
     private final Ticker ticker;
     private final HistoricalLookupCacheBudgetManager budgetManager;
     private final Counter capacityEvictions;
+    private final int maxQueuedHistoricalRequests;
     private final Semaphore lookupPermits;
     // Accepted lookup futures tracked so close() can cancel tasks left after executor shutdown.
     private final Set<CompletableFuture<LookupResultForBucket>> pendingLookups;
@@ -159,7 +163,7 @@ class HistoricalLakeLookupManager implements AutoCloseable {
                                                 .SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE)
                                 .getBytes());
         this.capacityEvictions = new ThreadSafeSimpleCounter();
-        int maxQueuedHistoricalRequests =
+        this.maxQueuedHistoricalRequests =
                 conf.get(ConfigOptions.NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS);
         checkArgument(
                 maxQueuedHistoricalRequests > 0,
@@ -214,6 +218,15 @@ class HistoricalLakeLookupManager implements AutoCloseable {
             TableInfo tableInfo,
             SchemaInfo schemaInfo,
             TableConfig tableConfig) {
+        return lookup(lookupData, tableInfo, schemaInfo, tableConfig, NO_OP_LOOKUP_METRIC_RECORDER);
+    }
+
+    CompletableFuture<LookupResultForBucket> lookup(
+            LookupDataForBucket lookupData,
+            TableInfo tableInfo,
+            SchemaInfo schemaInfo,
+            TableConfig tableConfig,
+            LakeTableLookuper.LookupMetricRecorder lookupMetricRecorder) {
         TableBucket tableBucket = lookupData.tableBucket();
         if (!lookupPermits.tryAcquire()) {
             return CompletableFuture.completedFuture(
@@ -230,7 +243,15 @@ class HistoricalLakeLookupManager implements AutoCloseable {
 
         CompletableFuture<LookupResultForBucket> future;
         try {
-            future = submitLookup(lookupData, tableInfo, schemaInfo, tableConfig);
+            future =
+                    submitLookup(
+                            lookupData,
+                            tableInfo,
+                            schemaInfo,
+                            tableConfig,
+                            checkNotNull(
+                                    lookupMetricRecorder,
+                                    "lookupMetricRecorder must not be null."));
         } catch (RuntimeException e) {
             lookupPermits.release();
             throw e;
@@ -258,10 +279,17 @@ class HistoricalLakeLookupManager implements AutoCloseable {
             LookupDataForBucket lookupData,
             TableInfo tableInfo,
             SchemaInfo schemaInfo,
-            TableConfig tableConfig) {
+            TableConfig tableConfig,
+            LakeTableLookuper.LookupMetricRecorder lookupMetricRecorder) {
         CompletableFuture<LookupResultForBucket> future =
                 CompletableFuture.supplyAsync(
-                        () -> lookupInternal(lookupData, tableInfo, schemaInfo, tableConfig),
+                        () ->
+                                lookupInternal(
+                                        lookupData,
+                                        tableInfo,
+                                        schemaInfo,
+                                        tableConfig,
+                                        lookupMetricRecorder),
                         historicalPartitionExecutor);
         pendingLookups.add(future);
         return future;
@@ -292,8 +320,13 @@ class HistoricalLakeLookupManager implements AutoCloseable {
         return capacityEvictions;
     }
 
+    int numInflightRequests() {
+        return maxQueuedHistoricalRequests - lookupPermits.availablePermits();
+    }
+
     void reconfigure(Configuration newConf) {
         checkNotNull(newConf, "newConf must not be null.");
+        boolean lakeConfigChanged;
         synchronized (this) {
             long newMaxBytes =
                     newConf.get(
@@ -304,7 +337,7 @@ class HistoricalLakeLookupManager implements AutoCloseable {
                 budgetManager.updateGlobalLimit(newMaxBytes);
             }
 
-            boolean lakeConfigChanged = hasLakeConfigChanged(conf, newConf);
+            lakeConfigChanged = hasLakeConfigChanged(conf, newConf);
             // Publish the configuration before its version. A lookup that observes the new version
             // must also observe the matching configuration snapshot.
             conf = newConf;
@@ -312,17 +345,27 @@ class HistoricalLakeLookupManager implements AutoCloseable {
                 lakeConfigVersion++;
             }
         }
+        if (lakeConfigChanged) {
+            // Do not invalidate while holding this monitor: lookuper creation holds a cache key
+            // lock before preparing the lookup directory under the same monitor. Inactive
+            // lookupers close now, while active lookupers close after their last lookup releases
+            // them.
+            lakeTableLookupers.invalidateAll();
+            lakeTableLookupers.cleanUp();
+        }
     }
 
     private LookupResultForBucket lookupInternal(
             LookupDataForBucket lookupData,
             TableInfo tableInfo,
             SchemaInfo schemaInfo,
-            TableConfig tableConfig) {
+            TableConfig tableConfig,
+            LakeTableLookuper.LookupMetricRecorder lookupMetricRecorder) {
         TableBucket tableBucket = lookupData.tableBucket();
         CachedLakeTableLookuper cachedLookuper = null;
         try {
-            LookupContext context = createLookupContext(lookupData, tableInfo, schemaInfo);
+            LookupContext context =
+                    createLookupContext(lookupData, tableInfo, schemaInfo, lookupMetricRecorder);
             long currentLakeConfigVersion = lakeConfigVersion;
             Configuration currentConf = conf;
             long cacheSizeBytes =
@@ -596,7 +639,10 @@ class HistoricalLakeLookupManager implements AutoCloseable {
     }
 
     private LookupContext createLookupContext(
-            LookupDataForBucket lookupData, TableInfo tableInfo, SchemaInfo schemaInfo) {
+            LookupDataForBucket lookupData,
+            TableInfo tableInfo,
+            SchemaInfo schemaInfo,
+            LakeTableLookuper.LookupMetricRecorder lookupMetricRecorder) {
         TableBucket tableBucket = lookupData.tableBucket();
         String originalPartitionName = lookupData.originalPartitionName();
         if (originalPartitionName == null) {
@@ -623,7 +669,8 @@ class HistoricalLakeLookupManager implements AutoCloseable {
                         originalPartitionSpec,
                         tableBucket.getBucket(),
                         (short) schemaInfo.getSchemaId(),
-                        schemaInfo.getSchema().getRowType());
+                        schemaInfo.getSchema().getRowType(),
+                        lookupMetricRecorder);
         return new LookupContext(
                 tableInfo.getTableId(), schemaInfo.getSchemaId(), tablePath, lookupContext);
     }

@@ -23,6 +23,7 @@ import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.HistoricalPartitionThrottledException;
 import org.apache.fluss.lake.lakestorage.LakeTableLookuper;
+import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaInfo;
@@ -78,6 +79,7 @@ class HistoricalLakeLookupManagerTest {
     void testHistoricalLookupThrottledWhenPermitsExhausted() throws Exception {
         ManualExecutor executor = new ManualExecutor();
         HistoricalLakeLookupManager manager = createManager(1, executor);
+        assertThat(manager.numInflightRequests()).isZero();
 
         CompletableFuture<LookupResultForBucket> first =
                 manager.lookup(
@@ -87,6 +89,7 @@ class HistoricalLakeLookupManagerTest {
                         PARTITION_TABLE_INFO.getTableConfig());
         assertThat(first).isNotDone();
         assertThat(executor.numQueuedTasks()).isEqualTo(1);
+        assertThat(manager.numInflightRequests()).isOne();
 
         TableBucket secondBucket = new TableBucket(PARTITION_TABLE_ID, 2L, 0);
         LookupResultForBucket second =
@@ -102,6 +105,7 @@ class HistoricalLakeLookupManagerTest {
         assertThat(second.getError().exception())
                 .isInstanceOf(HistoricalPartitionThrottledException.class);
         assertThat(executor.numQueuedTasks()).isEqualTo(1);
+        assertThat(manager.numInflightRequests()).isOne();
     }
 
     @Test
@@ -120,6 +124,7 @@ class HistoricalLakeLookupManagerTest {
         assertThat(firstResult.failed()).isTrue();
         assertThat(firstResult.getError().error())
                 .isNotEqualTo(Errors.HISTORICAL_PARTITION_THROTTLED);
+        assertThat(manager.numInflightRequests()).isZero();
 
         CompletableFuture<LookupResultForBucket> second =
                 manager.lookup(
@@ -460,6 +465,30 @@ class HistoricalLakeLookupManagerTest {
     }
 
     @Test
+    void testReconfiguresLakePropertiesAndInvalidatesLookuper() throws Exception {
+        Configuration initialConf = conf(1);
+        initialConf.set(ConfigOptions.DATALAKE_FORMAT, DataLakeFormat.PAIMON);
+        initialConf.setString("datalake.paimon.warehouse", "old-warehouse");
+        ManualExecutor executor = new ManualExecutor();
+        TestingHistoricalLakeLookupManager manager =
+                new TestingHistoricalLakeLookupManager(initialConf, executor);
+
+        lookupAndRun(manager, executor, PARTITION_TABLE_INFO);
+        TestingLakeTableLookuper initialLookuper = manager.createdLookupers.get(0);
+
+        Configuration newConf = new Configuration(initialConf);
+        newConf.setString("datalake.paimon.warehouse", "new-warehouse");
+        manager.reconfigure(newConf);
+
+        assertThat(initialLookuper.closed).isTrue();
+        assertThat(manager.cachedTableCount()).isZero();
+        lookupAndRun(manager, executor, PARTITION_TABLE_INFO);
+        assertThat(manager.createdLookupers).hasSize(2);
+        assertThat(manager.createdClusterConfigs.get(1).toMap())
+                .containsEntry("datalake.paimon.warehouse", "new-warehouse");
+    }
+
+    @Test
     void testEvictsOutsideConcurrentTableReplacements() throws Exception {
         ExecutorService executor =
                 Executors.newFixedThreadPool(
@@ -696,6 +725,7 @@ class HistoricalLakeLookupManagerTest {
         private final List<TestingLakeTableLookuper> createdLookupers = new ArrayList<>();
         private final List<String> createdIoTmpDirs = new ArrayList<>();
         private final List<TableConfig> createdTableConfigs = new ArrayList<>();
+        private final List<Configuration> createdClusterConfigs = new ArrayList<>();
 
         private TestingHistoricalLakeLookupManager(Configuration conf, ManualExecutor executor) {
             super(
@@ -725,6 +755,7 @@ class HistoricalLakeLookupManagerTest {
             createdLookupers.add(lookuper);
             createdIoTmpDirs.add(ioTmpDir);
             createdTableConfigs.add(tableConfig);
+            createdClusterConfigs.add(clusterConf);
             return lookuper;
         }
     }

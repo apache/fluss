@@ -24,6 +24,7 @@ import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.config.cluster.ServerReconfigurable;
 import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.exception.FencedLeaderEpochException;
+import org.apache.fluss.exception.HistoricalPartitionThrottledException;
 import org.apache.fluss.exception.InvalidColumnProjectionException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidPartitionException;
@@ -361,6 +362,8 @@ public class ReplicaManager implements ServerReconfigurable {
         this.scannerManager = checkNotNull(scannerManager, "scannerManager");
         this.historicalLakeLookupManager =
                 new HistoricalLakeLookupManager(conf, pluginManager, serverId, scheduler);
+        serverMetricGroup.registerHistoricalPartitionInflightRequests(
+                "lookup", historicalLakeLookupManager::numInflightRequests);
 
         registerMetrics();
     }
@@ -843,8 +846,11 @@ public class ReplicaManager implements ServerReconfigurable {
         AtomicInteger remainingLookups = new AtomicInteger(lookupData.size());
         for (LookupDataForBucket data : lookupData) {
             CompletableFuture<LookupResultForBucket> lookupFuture;
+            TableMetricGroup tableMetrics = null;
             try {
                 Replica replica = getReplicaOrException(data.tableBucket());
+                tableMetrics = replica.tableMetrics();
+                tableMetrics.totalHistoricalLookupRequests().inc();
                 if (!replica.isKvTable()) {
                     throw new NonPrimaryKeyTableException(
                             "Historical lookup is only supported for primary key tables, but "
@@ -861,7 +867,8 @@ public class ReplicaManager implements ServerReconfigurable {
                                 data,
                                 replica.getTableInfo(),
                                 latestSchemaInfo,
-                                replica.getTableConfig());
+                                replica.getTableConfig(),
+                                tableMetrics::recordHistoricalLakeLookup);
             } catch (Exception e) {
                 lookupFuture =
                         CompletableFuture.completedFuture(
@@ -871,18 +878,27 @@ public class ReplicaManager implements ServerReconfigurable {
                                         data.originalPartitionName(),
                                         ApiError.fromThrowable(e)));
             }
+            TableMetricGroup historicalLookupMetrics = tableMetrics;
             lookupFuture.whenComplete(
                     (bucketResult, error) -> {
+                        LookupResultForBucket completedResult;
                         if (error == null) {
-                            result.add(bucketResult);
+                            completedResult = bucketResult;
                         } else {
-                            result.add(
+                            completedResult =
                                     new LookupResultForBucket(
                                             data.tableBucket(),
                                             null,
                                             data.originalPartitionName(),
-                                            ApiError.fromThrowable(error)));
+                                            ApiError.fromThrowable(error));
                         }
+                        if (historicalLookupMetrics != null
+                                && completedResult.failed()
+                                && isUnexpectedHistoricalLookupException(
+                                        completedResult.getError().exception())) {
+                            historicalLookupMetrics.failedHistoricalLookupRequests().inc();
+                        }
+                        result.add(completedResult);
                         if (remainingLookups.decrementAndGet() == 0) {
                             responseCallback.accept(result);
                         }
@@ -1830,6 +1846,13 @@ public class ReplicaManager implements ServerReconfigurable {
                 || e instanceof NotLeaderOrFollowerException
                 || e instanceof LogOffsetOutOfRangeException
                 || e instanceof StorageBackpressureException);
+    }
+
+    private boolean isUnexpectedHistoricalLookupException(Exception e) {
+        return isUnexpectedException(e)
+                && !(e instanceof HistoricalPartitionThrottledException
+                        || e instanceof InvalidPartitionException
+                        || e instanceof NonPrimaryKeyTableException);
     }
 
     /**

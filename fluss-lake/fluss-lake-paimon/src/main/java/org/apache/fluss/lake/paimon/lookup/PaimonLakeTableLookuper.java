@@ -38,6 +38,9 @@ import org.apache.paimon.CoreOptions;
 import org.apache.paimon.catalog.Catalog;
 import org.apache.paimon.catalog.CatalogContext;
 import org.apache.paimon.catalog.CatalogFactory;
+import org.apache.paimon.disk.BufferFileReader;
+import org.apache.paimon.disk.BufferFileWriter;
+import org.apache.paimon.disk.FileIOChannel;
 import org.apache.paimon.disk.IOManager;
 import org.apache.paimon.io.DataFileMeta;
 import org.apache.paimon.memory.MemorySegment;
@@ -98,6 +101,7 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
     private @Nullable LocalTableQuery localTableQuery;
     private @Nullable RowPartitionKeyExtractor partitionKeyExtractor;
     private int primaryKeyFieldCount;
+    private long lookupFileMaterializationCount;
 
     // Both encoders are initialized only for a kv-format-v2 table whose bucket key differs from
     // its physical primary key. They remain null when the incoming Fluss key already uses Paimon's
@@ -135,9 +139,19 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
         org.apache.paimon.data.BinaryRow keyRow = toPaimonLookupKey(key);
         initializeFilesIfNeeded(partition, context.bucketId());
 
-        org.apache.paimon.data.InternalRow paimonRow =
-                lookupWithFileRefresh(
-                        partition, context.bucketId(), keyRow, context.valueRowType());
+        long materializationCountBeforeLookup = lookupFileMaterializationCount;
+        long lookupStartNanos = System.nanoTime();
+        org.apache.paimon.data.InternalRow paimonRow;
+        try {
+            paimonRow =
+                    lookupWithFileRefresh(
+                            partition, context.bucketId(), keyRow, context.valueRowType());
+        } finally {
+            context.lookupMetricRecorder()
+                    .recordLookup(
+                            System.nanoTime() - lookupStartNanos,
+                            lookupFileMaterializationCount > materializationCountBeforeLookup);
+        }
         if (paimonRow == null) {
             return null;
         }
@@ -235,8 +249,8 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
         return table.copy(Collections.singletonMap(key, maxDiskSize));
     }
 
-    private static IOManager createIOManager(String ioTmpDir) {
-        return IOManager.create(ioTmpDir);
+    private IOManager createIOManager(String ioTmpDir) {
+        return new TrackingIOManager(IOManager.create(ioTmpDir));
     }
 
     private static int[] businessFieldProjection(FileStoreTable fileStoreTable) {
@@ -290,7 +304,6 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
             return;
         }
 
-        LinkedHashMap<String, DataFileMeta> beforeFilesByName = new LinkedHashMap<>();
         LinkedHashMap<String, DataFileMeta> dataFilesByName = new LinkedHashMap<>();
 
         InnerTableScan tableScan =
@@ -303,7 +316,6 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
                 continue;
             }
             DataSplit dataSplit = (DataSplit) split;
-            addFilesByName(beforeFilesByName, dataSplit.beforeFiles());
             addFilesByName(dataFilesByName, dataSplit.dataFiles());
         }
 
@@ -312,11 +324,13 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
         // been dropped. This PR does not support writes to expired partitions, so no new rows are
         // expected and initializing the file set once is sufficient. Compaction-related missing
         // files are handled by the IOException refresh path below.
+        // This partition-bucket has no registered lookup levels yet, so there are no old files to
+        // remove when building its lookup state from the active data files.
         localTableQuery()
                 .refreshFiles(
                         partition,
                         bucketId,
-                        new ArrayList<>(beforeFilesByName.values()),
+                        Collections.emptyList(),
                         new ArrayList<>(dataFilesByName.values()));
         initializedBuckets.add(partitionBucket);
     }
@@ -421,5 +435,52 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
 
     private RowPartitionKeyExtractor partitionKeyExtractor() {
         return checkNotNull(partitionKeyExtractor, "partitionKeyExtractor must be initialized.");
+    }
+
+    private final class TrackingIOManager implements IOManager {
+
+        private final IOManager delegate;
+
+        private TrackingIOManager(IOManager delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public FileIOChannel.ID createChannel() {
+            return delegate.createChannel();
+        }
+
+        @Override
+        public FileIOChannel.ID createChannel(String prefix) {
+            lookupFileMaterializationCount++;
+            return delegate.createChannel(prefix);
+        }
+
+        @Override
+        public String[] tempDirs() {
+            return delegate.tempDirs();
+        }
+
+        @Override
+        public FileIOChannel.Enumerator createChannelEnumerator() {
+            return delegate.createChannelEnumerator();
+        }
+
+        @Override
+        public BufferFileWriter createBufferFileWriter(FileIOChannel.ID channelID)
+                throws IOException {
+            return delegate.createBufferFileWriter(channelID);
+        }
+
+        @Override
+        public BufferFileReader createBufferFileReader(FileIOChannel.ID channelID)
+                throws IOException {
+            return delegate.createBufferFileReader(channelID);
+        }
+
+        @Override
+        public void close() throws Exception {
+            delegate.close();
+        }
     }
 }

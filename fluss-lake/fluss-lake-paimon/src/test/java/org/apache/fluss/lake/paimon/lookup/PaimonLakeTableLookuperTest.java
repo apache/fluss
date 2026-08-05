@@ -121,8 +121,15 @@ class PaimonLakeTableLookuperTest {
                         tablePath,
                         tempWarehouseDir.getAbsolutePath(),
                         tableConfig(KvFormat.COMPACTED))) {
+            List<Boolean> lookupFileMaterializations = new ArrayList<>();
             LakeTableLookuper.LookupContext context =
-                    lookupContext(schema, "20240101", 0, SCHEMA_ID);
+                    lookupContext(
+                            schema,
+                            "20240101",
+                            0,
+                            SCHEMA_ID,
+                            (lookupTimeNanos, lookupFileMaterialization) ->
+                                    lookupFileMaterializations.add(lookupFileMaterialization));
 
             byte[] value = lookuper.lookup(paimonKey(schema, 1, "20240101"), context);
             BinaryValue decodedValue = decodeValue(value, SCHEMA_ID, schema);
@@ -136,6 +143,9 @@ class PaimonLakeTableLookuperTest {
                                     lookupContext(schema, "20240101", 1, SCHEMA_ID)))
                     .isNull();
             assertThat(lookuper.lookup(compactedKey(schema, 1, "20240101"), context)).isNull();
+
+            // The first lookup creates the local lookup file, while subsequent lookups reuse it.
+            assertThat(lookupFileMaterializations).containsExactly(true, false, false);
         }
     }
 
@@ -600,6 +610,21 @@ class PaimonLakeTableLookuperTest {
                 bucket,
                 schemaId,
                 schema.getRowType());
+    }
+
+    private static LakeTableLookuper.LookupContext lookupContext(
+            Schema schema,
+            String partitionName,
+            int bucket,
+            short schemaId,
+            LakeTableLookuper.LookupMetricRecorder lookupMetricRecorder) {
+        return new LakeTableLookuper.LookupContext(
+                ResolvedPartitionSpec.fromPartitionName(
+                        Collections.singletonList("dt"), partitionName),
+                bucket,
+                schemaId,
+                schema.getRowType(),
+                lookupMetricRecorder);
     }
 
     private static List<DataFileMeta> dataFiles(
