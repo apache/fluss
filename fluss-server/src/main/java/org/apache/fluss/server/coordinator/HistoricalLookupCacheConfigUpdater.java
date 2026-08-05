@@ -40,7 +40,7 @@ final class HistoricalLookupCacheConfigUpdater implements ServerReconfigurable {
     public void validate(Configuration newConfig) throws ConfigException {
         MemorySize newMaxSize =
                 newConfig.get(ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE);
-        if (newMaxSize.getBytes() == 0) {
+        if (newMaxSize.getBytes() <= 0) {
             throw new ConfigException(
                     String.format(
                             "Invalid configuration for %s, it must be greater than 0 bytes.",
@@ -55,7 +55,7 @@ final class HistoricalLookupCacheConfigUpdater implements ServerReconfigurable {
         if (newExpiration.toMillis() < 1) {
             throw new ConfigException(
                     String.format(
-                            "Invalid configuration for %s, it must be greater than or equal 1 ms.",
+                            "Invalid configuration for %s, it must be greater than or equal to 1 ms.",
                             ConfigOptions
                                     .SERVER_HISTORICAL_PARTITION_LOOKUPER_CACHE_EXPIRE_AFTER_ACCESS
                                     .key()));

@@ -241,7 +241,7 @@ public class FlussConfigUtils {
     private static void validateHistoricalLookupCacheLimit(Configuration conf) {
         MemorySize historicalLookupCacheMaxSize =
                 conf.get(ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE);
-        if (historicalLookupCacheMaxSize.getBytes() == 0) {
+        if (historicalLookupCacheMaxSize.getBytes() <= 0) {
             throw new IllegalConfigurationException(
                     "Invalid configuration for %s, it must be greater than 0 bytes.",
                     ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE.key());

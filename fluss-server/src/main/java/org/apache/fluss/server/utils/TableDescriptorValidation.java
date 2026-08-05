@@ -240,7 +240,7 @@ public class TableDescriptorValidation {
                 tableConf.get(
                         ConfigOptions
                                 .TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE);
-        if (tableCacheSize.getBytes() == 0) {
+        if (tableCacheSize.getBytes() <= 0) {
             throw new InvalidConfigException(
                     String.format(
                             "'%s' for table '%s' must be greater than 0 bytes.",

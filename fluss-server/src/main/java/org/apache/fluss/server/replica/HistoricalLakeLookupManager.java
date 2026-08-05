@@ -57,6 +57,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
+import javax.annotation.concurrent.GuardedBy;
 
 import java.io.File;
 import java.io.IOException;
@@ -78,6 +79,7 @@ import java.util.concurrent.TimeUnit;
 import static org.apache.fluss.server.utils.LakeStorageUtils.extractLakeProperties;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.utils.Preconditions.checkState;
 
 /**
  * Handles server-side point lookup for historical partitions stored in lake storage.
@@ -114,7 +116,6 @@ class HistoricalLakeLookupManager implements AutoCloseable {
     private volatile Configuration conf;
     private volatile long lakeConfigVersion;
     private final @Nullable PluginManager pluginManager;
-    private final int serverId;
     private final HistoricalLookupCacheBudgetManager budgetManager;
     private final Counter capacityEvictions;
     private final int maxQueuedHistoricalRequests;
@@ -123,7 +124,12 @@ class HistoricalLakeLookupManager implements AutoCloseable {
     private final Set<CompletableFuture<LookupResultForBucket>> pendingLookups;
     private final Cache<Long, CachedLakeTableLookuper> lakeTableLookupers;
     private final ExecutorService historicalPartitionExecutor;
-    private @Nullable File paimonLookupTempDir;
+    private final File paimonLookupTempDir;
+
+    @GuardedBy("this")
+    private boolean paimonLookupTempDirCreated;
+
+    private volatile boolean started;
 
     HistoricalLakeLookupManager(
             Configuration conf,
@@ -149,7 +155,7 @@ class HistoricalLakeLookupManager implements AutoCloseable {
             com.github.benmanes.caffeine.cache.Scheduler cacheScheduler) {
         this.conf = checkNotNull(conf, "conf must not be null.");
         this.pluginManager = pluginManager;
-        this.serverId = serverId;
+        this.paimonLookupTempDir = resolvePaimonLookupTempDir(conf, serverId);
         this.budgetManager =
                 new HistoricalLookupCacheBudgetManager(
                         conf.get(
@@ -207,12 +213,34 @@ class HistoricalLakeLookupManager implements AutoCloseable {
                         timeUnit.toMillis(delay));
     }
 
+    /**
+     * Attempts to clean lookup cache files left by a previous TabletServer process.
+     *
+     * <p>Only this server's directory is removed. It is recreated lazily when the first table
+     * lookuper is created.
+     */
+    synchronized void startup() {
+        if (started) {
+            return;
+        }
+        try {
+            FileUtils.deleteDirectory(paimonLookupTempDir);
+        } catch (IOException e) {
+            LOG.warn(
+                    "Failed to clean Paimon lookup temporary directory {}.",
+                    paimonLookupTempDir,
+                    e);
+        }
+        started = true;
+    }
+
     CompletableFuture<LookupResultForBucket> lookup(
             LookupDataForBucket lookupData,
             TableInfo tableInfo,
             SchemaInfo schemaInfo,
             TableConfig tableConfig,
             LakeTableLookuper.LookupMetricRecorder lookupMetricRecorder) {
+        checkState(started, "Historical lake lookup manager has not been started.");
         TableBucket tableBucket = lookupData.tableBucket();
         if (!lookupPermits.tryAcquire()) {
             return CompletableFuture.completedFuture(
@@ -513,11 +541,6 @@ class HistoricalLakeLookupManager implements AutoCloseable {
             long currentLakeConfigVersion,
             long cacheSizeBytes,
             @Nullable CachedLakeTableLookuper currentLookuper) {
-        File tableLookupDir =
-                FlussPaths.historicalLookupTableDir(
-                        getOrPreparePaimonLookupTempDir(clusterConf),
-                        context.tablePath,
-                        context.tableId);
         if (currentLookuper == null) {
             // A cache miss must obtain capacity before creating any local lookup resources.
             Reservation reservation = budgetManager.tryReserve(context.tableId, cacheSizeBytes);
@@ -525,6 +548,11 @@ class HistoricalLakeLookupManager implements AutoCloseable {
                 return null;
             }
             try {
+                File tableLookupDir =
+                        FlussPaths.historicalLookupTableDir(
+                                getOrCreatePaimonLookupTempDir(),
+                                context.tablePath,
+                                context.tableId);
                 LakeTableLookuper lookuper =
                         createLakeTableLookuper(
                                 context.tablePath,
@@ -546,6 +574,9 @@ class HistoricalLakeLookupManager implements AutoCloseable {
             }
         }
 
+        File tableLookupDir =
+                FlussPaths.historicalLookupTableDir(
+                        getOrCreatePaimonLookupTempDir(), context.tablePath, context.tableId);
         // Build the replacement first so a creation failure leaves the current lookuper and its
         // reservation unchanged in the cache.
         LakeTableLookuper lookuper =
@@ -707,30 +738,25 @@ class HistoricalLakeLookupManager implements AutoCloseable {
                         extractLakeProperties(currentConf), extractLakeProperties(newConf));
     }
 
-    private synchronized File getOrPreparePaimonLookupTempDir(Configuration clusterConf) {
-        if (paimonLookupTempDir == null) {
-            paimonLookupTempDir = preparePaimonLookupTempDir(clusterConf, serverId);
+    private synchronized File getOrCreatePaimonLookupTempDir() {
+        if (paimonLookupTempDirCreated) {
+            return paimonLookupTempDir;
+        }
+        try {
+            Files.createDirectories(paimonLookupTempDir.toPath());
+            paimonLookupTempDirCreated = true;
+        } catch (IOException e) {
+            throw new FlussRuntimeException(
+                    "Failed to create Paimon lookup temporary directory: " + paimonLookupTempDir,
+                    e);
         }
         return paimonLookupTempDir;
     }
 
-    private static File preparePaimonLookupTempDir(Configuration conf, int serverId) {
-        File paimonLookupTempDir =
-                new File(
-                        new File(conf.get(ConfigOptions.SERVER_IO_TMP_DIR), PAIMON_LOOKUP_DIR_NAME),
-                        String.valueOf(serverId));
-        try {
-            // A crashed server cannot close the Paimon IOManager, so lookup cache files may be
-            // left behind. Clean only this server's directory before creating the first table
-            // lookuper; cleaning in each table lookuper would delete files used by other tables.
-            FileUtils.deleteDirectory(paimonLookupTempDir);
-            Files.createDirectories(paimonLookupTempDir.toPath());
-            return paimonLookupTempDir;
-        } catch (IOException e) {
-            throw new FlussRuntimeException(
-                    "Failed to prepare Paimon lookup temporary directory: " + paimonLookupTempDir,
-                    e);
-        }
+    private static File resolvePaimonLookupTempDir(Configuration conf, int serverId) {
+        return new File(
+                new File(conf.get(ConfigOptions.SERVER_IO_TMP_DIR), PAIMON_LOOKUP_DIR_NAME),
+                String.valueOf(serverId));
     }
 
     private static void closeLookuper(CachedLakeTableLookuper cachedLookuper) {

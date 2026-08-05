@@ -216,7 +216,7 @@ class HistoricalLakeLookupManagerTest {
     }
 
     @Test
-    void testLazilyCleansPaimonLookupTempDirectory() throws Exception {
+    void testCleansPaimonLookupTempDirectoryOnStartupAndCreatesItLazily() throws Exception {
         File serverLookupDir =
                 new File(new File(ioTmpDir, "paimon-lookup"), String.valueOf(SERVER_ID));
         assertThat(serverLookupDir.mkdirs()).isTrue();
@@ -224,13 +224,21 @@ class HistoricalLakeLookupManagerTest {
         assertThat(staleLookupFile.createNewFile()).isTrue();
 
         ManualExecutor executor = new ManualExecutor();
-        TestingHistoricalLakeLookupManager manager = createTestingManager(executor);
+        TestingHistoricalLakeLookupManager manager =
+                new TestingHistoricalLakeLookupManager(conf(1), executor);
 
         assertThat(staleLookupFile).exists();
-        lookupAndRun(manager, executor, PARTITION_TABLE_INFO);
+        manager.startup();
         assertThat(staleLookupFile).doesNotExist();
+        assertThat(serverLookupDir).doesNotExist();
+        lookupAndRun(manager, executor, PARTITION_TABLE_INFO);
         assertThat(serverLookupDir).isDirectory();
         assertThat(manager.createdIoTmpDirs.get(0)).startsWith(serverLookupDir.getAbsolutePath());
+
+        File liveLookupFile = new File(serverLookupDir, "live-lookup-file");
+        assertThat(liveLookupFile.createNewFile()).isTrue();
+        manager.startup();
+        assertThat(liveLookupFile).exists();
     }
 
     @Test
@@ -371,6 +379,7 @@ class HistoricalLakeLookupManagerTest {
                         executor,
                         tickerNanos::get,
                         cacheScheduler);
+        manager.startup();
 
         lookupAndRun(manager, executor, PARTITION_TABLE_INFO);
         TestingLakeTableLookuper expiredLookuper = manager.createdLookupers.get(0);
@@ -396,6 +405,7 @@ class HistoricalLakeLookupManagerTest {
         TestingHistoricalLakeLookupManager manager =
                 new TestingHistoricalLakeLookupManager(
                         conf, executor, tickerNanos::get, Scheduler.disabledScheduler());
+        manager.startup();
 
         TableInfo first = tableInfo(PARTITION_TABLE_ID, PARTITION_TABLE_INFO.getSchemaId());
         TableInfo second = tableInfo(PARTITION_TABLE_ID + 1, PARTITION_TABLE_INFO.getSchemaId());
@@ -426,6 +436,7 @@ class HistoricalLakeLookupManagerTest {
                 MemorySize.parse("96gb"));
         TestingHistoricalLakeLookupManager manager =
                 new TestingHistoricalLakeLookupManager(conf, executor);
+        manager.startup();
 
         for (int i = 0; i < 12; i++) {
             lookupAndRun(
@@ -482,6 +493,7 @@ class HistoricalLakeLookupManagerTest {
         ManualExecutor executor = new ManualExecutor();
         TestingHistoricalLakeLookupManager manager =
                 new TestingHistoricalLakeLookupManager(initialConf, executor);
+        manager.startup();
 
         lookupAndRun(manager, executor, PARTITION_TABLE_INFO);
         TestingLakeTableLookuper initialLookuper = manager.createdLookupers.get(0);
@@ -517,6 +529,7 @@ class HistoricalLakeLookupManagerTest {
                 replacementCacheSize);
         CoordinatedReplacementManager manager =
                 new CoordinatedReplacementManager(conf, executor, replacementCacheSize);
+        manager.startup();
 
         TableInfo first =
                 tableInfoWithCacheSize(
@@ -566,6 +579,7 @@ class HistoricalLakeLookupManagerTest {
                 MemorySize.parse("8gb"));
         TestingHistoricalLakeLookupManager manager =
                 new TestingHistoricalLakeLookupManager(conf, executor);
+        manager.startup();
 
         LookupResultForBucket result =
                 lookupResultAndRun(
@@ -583,17 +597,23 @@ class HistoricalLakeLookupManagerTest {
 
     private HistoricalLakeLookupManager createManager(
             int maxQueuedHistoricalRequests, ManualExecutor executor) {
-        return new HistoricalLakeLookupManager(
-                conf(maxQueuedHistoricalRequests),
-                null,
-                executor,
-                SERVER_ID,
-                Ticker.systemTicker(),
-                Scheduler.disabledScheduler());
+        HistoricalLakeLookupManager manager =
+                new HistoricalLakeLookupManager(
+                        conf(maxQueuedHistoricalRequests),
+                        null,
+                        executor,
+                        SERVER_ID,
+                        Ticker.systemTicker(),
+                        Scheduler.disabledScheduler());
+        manager.startup();
+        return manager;
     }
 
     private TestingHistoricalLakeLookupManager createTestingManager(ManualExecutor executor) {
-        return new TestingHistoricalLakeLookupManager(conf(1), executor);
+        TestingHistoricalLakeLookupManager manager =
+                new TestingHistoricalLakeLookupManager(conf(1), executor);
+        manager.startup();
+        return manager;
     }
 
     private Configuration conf(int maxQueuedHistoricalRequests) {
