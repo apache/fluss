@@ -19,6 +19,9 @@ package org.apache.fluss.security.auth.sasl.plain;
 
 import org.apache.fluss.exception.AuthenticationException;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import javax.security.auth.callback.Callback;
 import javax.security.auth.callback.CallbackHandler;
 import javax.security.auth.callback.NameCallback;
@@ -39,6 +42,8 @@ import java.util.Map;
 
 /** A {@link SaslServer} implementation for the PLAIN mechanism. */
 public class PlainSaslServer implements SaslServer {
+
+    private static final Logger LOG = LoggerFactory.getLogger(PlainSaslServer.class);
 
     public static final String PLAIN_MECHANISM = "PLAIN";
 
@@ -92,11 +97,31 @@ public class PlainSaslServer implements SaslServer {
                     "Authentication failed: Invalid username or password");
         }
         if (!authorizationIdFromClient.isEmpty() && !authorizationIdFromClient.equals(username)) {
-            throw new AuthenticationException(
-                    "Authentication failed: Client requested an authorization id that is different from username");
+            PlainImpersonationCallback impersonationCallback =
+                    new PlainImpersonationCallback(username, authorizationIdFromClient);
+            try {
+                callbackHandler.handle(new Callback[] {impersonationCallback});
+            } catch (Throwable e) {
+                throw new AuthenticationException(
+                        "Authentication failed: impersonation authorization could not be verified",
+                        e);
+            }
+            if (!impersonationCallback.allowed()) {
+                throw new AuthenticationException(
+                        "Authentication failed: user '"
+                                + username
+                                + "' is not authorized to impersonate '"
+                                + authorizationIdFromClient
+                                + "'");
+            }
+            LOG.info(
+                    "SASL/PLAIN: user '{}' authenticated and is impersonating '{}'",
+                    username,
+                    authorizationIdFromClient);
+            this.authorizationId = authorizationIdFromClient;
+        } else {
+            this.authorizationId = username;
         }
-
-        this.authorizationId = username;
 
         complete = true;
         return new byte[0];

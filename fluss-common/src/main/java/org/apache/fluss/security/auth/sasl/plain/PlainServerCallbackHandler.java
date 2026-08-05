@@ -26,6 +26,7 @@ import javax.security.auth.callback.NameCallback;
 import javax.security.auth.callback.UnsupportedCallbackException;
 import javax.security.auth.login.AppConfigurationEntry;
 
+import java.util.Arrays;
 import java.util.List;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
@@ -44,18 +45,27 @@ import java.util.List;
  * user_${username} = ${password}
  * </pre>
  *
+ * <p>Impersonation grants may be defined using the format:
+ *
+ * <pre>
+ * impersonate_${username} = "*" | "user1,user2,..."
+ * </pre>
+ *
  * <p>During the SASL authentication process, this handler processes callbacks such as:
  *
  * <ul>
  *   <li>{@link NameCallback}: Retrieves the username from the client.
  *   <li>{@link PlainAuthenticateCallback}: Verifies the provided password against the expected
  *       value.
+ *   <li>{@link PlainImpersonationCallback}: Checks whether the authenticated user is allowed to
+ *       impersonate the requested authorization id.
  * </ul>
  *
  * <p>If the username is not found or the password does not match, authentication will fail.
  */
 public class PlainServerCallbackHandler implements AuthenticateCallbackHandler {
     private static final String JAAS_USER_PREFIX = "user_";
+    private static final String JAAS_IMPERSONATE_PREFIX = "impersonate_";
     private List<AppConfigurationEntry> jaasConfigEntries;
 
     @Override
@@ -73,6 +83,13 @@ public class PlainServerCallbackHandler implements AuthenticateCallbackHandler {
                 PlainAuthenticateCallback plainCallback = (PlainAuthenticateCallback) callback;
                 boolean authenticated = authenticate(username, plainCallback.password());
                 plainCallback.authenticated(authenticated);
+            } else if (callback instanceof PlainImpersonationCallback) {
+                PlainImpersonationCallback impersonationCallback =
+                        (PlainImpersonationCallback) callback;
+                impersonationCallback.allowed(
+                        allowImpersonation(
+                                impersonationCallback.authenticatedUser(),
+                                impersonationCallback.requestedAuthorizationId()));
             } else {
                 throw new UnsupportedCallbackException(callback);
             }
@@ -91,5 +108,27 @@ public class PlainServerCallbackHandler implements AuthenticateCallbackHandler {
             return expectedPassword != null
                     && ArrayUtils.isEqualConstantTime(password, expectedPassword.toCharArray());
         }
+    }
+
+    /**
+     * Returns true if the authenticated user is granted to impersonate the requested authorization
+     * id via the {@code impersonate_<username>} JAAS option, either by the wildcard {@code "*"} or
+     * by a comma-separated user list.
+     */
+    protected boolean allowImpersonation(String authenticatedUser, String requestedAuthzId) {
+        String allowed =
+                JaasContext.configEntryOption(
+                        jaasConfigEntries,
+                        JAAS_IMPERSONATE_PREFIX + authenticatedUser,
+                        PlainLoginModule.class.getName());
+        if (allowed == null) {
+            return false;
+        }
+        if ("*".equals(allowed.trim())) {
+            return true;
+        }
+        return Arrays.stream(allowed.split(","))
+                .map(String::trim)
+                .anyMatch(requestedAuthzId::equals);
     }
 }

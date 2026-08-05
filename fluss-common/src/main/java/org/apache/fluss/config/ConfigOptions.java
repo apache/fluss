@@ -1620,6 +1620,17 @@ public class ConfigOptions {
                                     + "This is used when the client connects to the Fluss cluster with SASL authentication enabled. "
                                     + "If not provided, the password will be read from the JAAS configuration string specified by `client.security.sasl.jaas.config`.");
 
+    public static final ConfigOption<String> CLIENT_SASL_AUTHORIZATION_ID =
+            key("client.security.sasl.authorization-id")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The authorization id (i.e. the user to impersonate) requested during SASL/PLAIN "
+                                    + "authentication, as defined by RFC 4616. The server permits it only if the "
+                                    + "authenticated user is granted impersonation via the 'impersonate_<username>' "
+                                    + "option in the server-side JAAS configuration. If not set, the client acts as "
+                                    + "the authenticated user itself.");
+
     // ------------------------------------------------------------------------
     //  ConfigOptions for Fluss Table
     // ------------------------------------------------------------------------
