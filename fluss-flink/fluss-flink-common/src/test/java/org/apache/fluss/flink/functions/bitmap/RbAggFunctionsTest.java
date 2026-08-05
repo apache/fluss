@@ -351,7 +351,7 @@ class RbAggFunctionsTest {
     @Test
     void testXorAggBasic() throws IOException {
         RbXorAggFunction fn = new RbXorAggFunction();
-        RoaringBitmap acc = fn.createAccumulator();
+        RbXorAggFunction.Accumulator acc = fn.createAccumulator();
         fn.accumulate(acc, BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1, 2, 3)));
         fn.accumulate(acc, BitmapUtils.toBytes(RoaringBitmap.bitmapOf(2, 3, 4)));
         // XOR: elements in exactly one bitmap = {1, 4}
@@ -368,7 +368,7 @@ class RbAggFunctionsTest {
     @Test
     void testXorAggNullInputIgnored() throws IOException {
         RbXorAggFunction fn = new RbXorAggFunction();
-        RoaringBitmap acc = fn.createAccumulator();
+        RbXorAggFunction.Accumulator acc = fn.createAccumulator();
         fn.accumulate(acc, null);
         fn.accumulate(acc, new byte[0]);
         fn.accumulate(acc, BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1, 2)));
@@ -381,15 +381,29 @@ class RbAggFunctionsTest {
     @Test
     void testXorAggEmptyReturnsNull() {
         RbXorAggFunction fn = new RbXorAggFunction();
+        // No input accumulated — should return null
         assertThat(fn.getValue(fn.createAccumulator())).isNull();
+    }
+
+    @Test
+    void testXorAggIdenticalBitmapsCancelToEmptyBitmap() throws IOException {
+        // Two identical bitmaps XOR to empty — initialized=true so returns empty bytes, not null
+        RbXorAggFunction fn = new RbXorAggFunction();
+        RbXorAggFunction.Accumulator acc = fn.createAccumulator();
+        fn.accumulate(acc, BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1, 2, 3)));
+        fn.accumulate(acc, BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1, 2, 3)));
+        byte[] result = fn.getValue(acc);
+        assertThat(result).isNotNull(); // not null — input was seen
+        assertThat(BitmapUtils.fromBytes(result).isEmpty()).isTrue();
+        assertThat(BitmapUtils.fromBytes(result).getLongCardinality()).isEqualTo(0L);
     }
 
     @Test
     void testXorAggMerge() throws IOException {
         RbXorAggFunction fn = new RbXorAggFunction();
-        RoaringBitmap acc1 = fn.createAccumulator();
+        RbXorAggFunction.Accumulator acc1 = fn.createAccumulator();
         fn.accumulate(acc1, BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1, 2, 3)));
-        RoaringBitmap acc2 = fn.createAccumulator();
+        RbXorAggFunction.Accumulator acc2 = fn.createAccumulator();
         fn.accumulate(acc2, BitmapUtils.toBytes(RoaringBitmap.bitmapOf(3, 4, 5)));
         fn.merge(acc1, Collections.singletonList(acc2));
         // XOR merge: {1,2,3} XOR {3,4,5} = {1,2,4,5}
@@ -405,41 +419,45 @@ class RbAggFunctionsTest {
     }
 
     @Test
-    void testXorAggRetractThrows() {
-        RbXorAggFunction fn = new RbXorAggFunction();
-        assertThatThrownBy(() -> fn.retract(fn.createAccumulator(), new byte[0]))
-                .isInstanceOf(UnsupportedOperationException.class);
-    }
-
-    @Test
     void testXorAggMergeCancelsToEmpty() throws IOException {
-        // Two partials each holding {1} — XOR merge should cancel to empty, getValue returns null
         RbXorAggFunction fn = new RbXorAggFunction();
-        RoaringBitmap acc1 = fn.createAccumulator();
+        RbXorAggFunction.Accumulator acc1 = fn.createAccumulator();
         fn.accumulate(acc1, BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1)));
-        RoaringBitmap acc2 = fn.createAccumulator();
+        RbXorAggFunction.Accumulator acc2 = fn.createAccumulator();
         fn.accumulate(acc2, BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1)));
         fn.merge(acc1, Collections.singletonList(acc2));
-        // {1} XOR {1} = empty
-        assertThat(fn.getValue(acc1)).isNull();
+        // {1} XOR {1} = empty — but initialized=true so returns empty bytes
+        byte[] result = fn.getValue(acc1);
+        assertThat(result).isNotNull();
+        assertThat(BitmapUtils.fromBytes(result).isEmpty()).isTrue();
     }
 
     @Test
     void testXorAggThreeInputs() throws IOException {
-        // Exercises the "odd number of inputs" contract
-        // {1,2} XOR {2,3} XOR {3,4} = {1,4}
         RbXorAggFunction fn = new RbXorAggFunction();
-        RoaringBitmap acc = fn.createAccumulator();
+        RbXorAggFunction.Accumulator acc = fn.createAccumulator();
         fn.accumulate(acc, BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1, 2)));
         fn.accumulate(acc, BitmapUtils.toBytes(RoaringBitmap.bitmapOf(2, 3)));
         fn.accumulate(acc, BitmapUtils.toBytes(RoaringBitmap.bitmapOf(3, 4)));
+        // {1,2} XOR {2,3} XOR {3,4} = {1,4}
         byte[] result = fn.getValue(acc);
         assertThat(result).isNotNull();
         RoaringBitmap restored = BitmapUtils.fromBytes(result);
         assertThat(restored.getLongCardinality()).isEqualTo(2L);
         assertThat(restored.contains(1)).isTrue();
         assertThat(restored.contains(4)).isTrue();
-        assertThat(restored.contains(2)).isFalse();
-        assertThat(restored.contains(3)).isFalse();
+    }
+
+    @Test
+    void testXorAggRetractThrows() throws IOException {
+        // retract uses XOR (self-inverse), not exception
+        RbXorAggFunction fn = new RbXorAggFunction();
+        RbXorAggFunction.Accumulator acc = fn.createAccumulator();
+        fn.accumulate(acc, BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1, 2, 3)));
+        fn.retract(acc, BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1, 2, 3)));
+        // After retract XOR cancels to empty, but initialized=true
+        byte[] result = fn.getValue(acc);
+        assertThat(result).isNotNull();
+        assertThat(BitmapUtils.fromBytes(result).isEmpty()).isTrue();
     }
 }

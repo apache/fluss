@@ -382,4 +382,27 @@ class RbFunctionsCatalogITCase {
         assertThat(rows).hasSize(1);
         assertThat(rows.get(0).getField(0)).isEqualTo(2L); // {1, 2}
     }
+
+    @Test
+    void testRbXorAggIdenticalBitmapsReturnsEmptyBitmap() throws Exception {
+        byte[] bitmap = BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1, 2, 3));
+
+        Table source =
+                tEnv.fromValues(
+                        DataTypes.ROW(
+                                DataTypes.FIELD("k", DataTypes.INT()),
+                                DataTypes.FIELD("bmap", DataTypes.BYTES())),
+                        Row.of(1, bitmap),
+                        Row.of(1, bitmap));
+        tEnv.createTemporaryView("identical_bitmaps", source);
+
+        TableResult result =
+                tEnv.executeSql(
+                        "SELECT rb_cardinality(rb_xor_agg(bmap)) "
+                                + "FROM identical_bitmaps GROUP BY k");
+        List<Row> rows = CollectionUtil.iteratorToList(result.collect());
+
+        assertThat(rows).hasSize(1);
+        assertThat(rows.get(0).getField(0)).isEqualTo(0L);
+    }
 }
