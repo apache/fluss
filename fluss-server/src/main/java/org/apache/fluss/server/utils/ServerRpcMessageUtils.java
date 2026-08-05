@@ -897,9 +897,8 @@ public class ServerRpcMessageUtils {
     }
 
     public static FreezePartitionRequest makeFreezePartitionRequest(
-            int coordinatorEpoch, Map<TableBucket, Integer> leaderEpochs) {
-        FreezePartitionRequest request =
-                new FreezePartitionRequest().setCoordinatorEpoch(coordinatorEpoch);
+            Map<TableBucket, Integer> leaderEpochs) {
+        FreezePartitionRequest request = new FreezePartitionRequest();
         List<PbFreezePartitionReqForBucket> bucketRequests = new ArrayList<>();
         leaderEpochs.forEach(
                 (tableBucket, leaderEpoch) ->

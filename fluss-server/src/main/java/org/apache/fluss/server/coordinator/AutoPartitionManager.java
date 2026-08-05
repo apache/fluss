@@ -681,14 +681,20 @@ public class AutoPartitionManager implements AutoCloseable {
             dropIterator = entry.getValue().iterator();
         }
 
+        // if the partition is needed to be tiered into lake, the drop operation should be
+        // delegated to the LakeAwarePartitionRetentionManager
+        if (ensureTiered) {
+            while (dropIterator.hasNext()) {
+                String partitionName = dropIterator.next();
+                checkNotNull(lakeAwareRetentionManager).retain(tableInfo, partitionName);
+                dropIterator.remove();
+            }
+            return;
+        }
+
         boolean deletionFailed = false;
         while (dropIterator.hasNext()) {
             String partitionName = dropIterator.next();
-            if (ensureTiered) {
-                checkNotNull(lakeAwareRetentionManager).startRetention(tableInfo, partitionName);
-                continue;
-            }
-
             try {
                 metadataManager.dropPartition(
                         tablePath,
@@ -715,7 +721,7 @@ public class AutoPartitionManager implements AutoCloseable {
                     partitionName,
                     tablePath);
         }
-        if (!ensureTiered && !deletionFailed) {
+        if (!deletionFailed) {
             iterator.remove();
         }
     }

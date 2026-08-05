@@ -331,11 +331,7 @@ public class CoordinatorServer extends ServerBase {
 
             LakeAwarePartitionRetentionManager lakeAwarePartitionRetentionManager =
                     new LakeAwarePartitionRetentionManager(
-                            metadataManager,
-                            zkClient,
-                            coordinatorChannelManager,
-                            zkEpoch.getCoordinatorEpoch(),
-                            ioExecutor);
+                            metadataManager, zkClient, coordinatorChannelManager, ioExecutor);
             this.autoPartitionManager =
                     new AutoPartitionManager(
                             metadataCache,

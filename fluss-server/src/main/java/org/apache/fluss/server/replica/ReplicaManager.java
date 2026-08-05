@@ -680,14 +680,12 @@ public class ReplicaManager implements ServerReconfigurable {
 
     /** Freeze writes to partition bucket leaders and return their stable offsets. */
     public void freezePartitions(
-            int requestCoordinatorEpoch,
             Map<TableBucket, Integer> leaderEpochs,
             Consumer<List<FreezePartitionResultForBucket>> responseCallback) {
         List<FreezePartitionResultForBucket> results = new ArrayList<>();
         inLock(
                 replicaStateChangeLock,
                 () -> {
-                    validateAndApplyCoordinatorEpoch(requestCoordinatorEpoch, "freezePartitions");
                     for (Map.Entry<TableBucket, Integer> entry : leaderEpochs.entrySet()) {
                         TableBucket tableBucket = entry.getKey();
                         try {

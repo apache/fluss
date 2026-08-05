@@ -478,7 +478,6 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                 response,
                 result ->
                         replicaManager.freezePartitions(
-                                request.getCoordinatorEpoch(),
                                 getFreezePartitionData(request),
                                 results -> result.complete(makeFreezePartitionResponse(results))));
     }

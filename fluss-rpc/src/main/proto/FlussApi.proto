@@ -377,7 +377,6 @@ message StopReplicaResponse {
 
 // Freeze writes to partition bucket leaders before lake-aware retention.
 message FreezePartitionRequest {
-  required int32 coordinator_epoch = 1;
   repeated PbFreezePartitionReqForBucket buckets_req = 2;
 }
 

@@ -45,7 +45,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.Executor;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.locks.ReentrantLock;
 
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeFreezePartitionRequest;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTableBucket;
@@ -59,76 +59,40 @@ public class LakeAwarePartitionRetentionManager implements AutoCloseable {
     private final MetadataManager metadataManager;
     private final ZooKeeperClient zooKeeperClient;
     private final CoordinatorChannelManager coordinatorChannelManager;
-    private final int coordinatorEpoch;
     private final Executor executor;
-    private final ConcurrentMap<PhysicalTablePath, RetentionStatus> retainingPartitions =
+    private final ConcurrentMap<PhysicalTablePath, PartitionRetentionInfo> partitionRetentionInfos =
             new ConcurrentHashMap<>();
-    private final AtomicBoolean closed = new AtomicBoolean(false);
 
     public LakeAwarePartitionRetentionManager(
             MetadataManager metadataManager,
             ZooKeeperClient zooKeeperClient,
             CoordinatorChannelManager coordinatorChannelManager,
-            int coordinatorEpoch,
             Executor executor) {
         this.metadataManager = metadataManager;
         this.zooKeeperClient = zooKeeperClient;
         this.coordinatorChannelManager = coordinatorChannelManager;
-        this.coordinatorEpoch = coordinatorEpoch;
         this.executor = executor;
     }
 
-    /** Start or continue lake-aware retention for an expired partition. */
-    public void startRetention(TableInfo tableInfo, String partitionName) {
+    /** Try to retain an expired partition after its data has been tiered to the lake. */
+    public void retain(TableInfo tableInfo, String partitionName) {
         PhysicalTablePath physicalTablePath =
                 PhysicalTablePath.of(tableInfo.getTablePath(), partitionName);
-        if (closed.get()) {
-            return;
-        }
-
-        RetentionStatus newStatus = new RetentionStatus();
-        RetentionStatus retention = retainingPartitions.putIfAbsent(physicalTablePath, newStatus);
-        if (retention == null) {
-            submitFreeze(tableInfo, partitionName, physicalTablePath, newStatus);
-        } else {
-            toNext(tableInfo, partitionName, physicalTablePath, retention);
-        }
+        PartitionRetentionInfo retentionInfo =
+                partitionRetentionInfos.computeIfAbsent(
+                        physicalTablePath, ignored -> new PartitionRetentionInfo());
+        submitAsync(tableInfo, partitionName, physicalTablePath, retentionInfo);
     }
 
-    private void toNext(
+    private void submitAsync(
             TableInfo tableInfo,
             String partitionName,
             PhysicalTablePath physicalTablePath,
-            RetentionStatus retention) {
-        synchronized (retention) {
-            if (closed.get()
-                    || retainingPartitions.get(physicalTablePath) != retention
-                    || retention.operationRunning) {
-                return;
-            }
-            retention.operationRunning = true;
-            if (retention.stage == RetentionStage.FROZEN) {
-                submitLakeCheck(tableInfo, partitionName, physicalTablePath, retention);
-            } else if (retention.stage == RetentionStage.LAKE_TIERED) {
-                submitDrop(tableInfo, partitionName, physicalTablePath, retention);
-            }
-        }
-    }
-
-    private void submitFreeze(
-            TableInfo tableInfo,
-            String partitionName,
-            PhysicalTablePath physicalTablePath,
-            RetentionStatus retention) {
-        if (closed.get()) {
-            retainingPartitions.remove(physicalTablePath, retention);
-            return;
-        }
+            PartitionRetentionInfo retentionInfo) {
         try {
             executor.execute(
-                    () -> freezePartition(tableInfo, partitionName, physicalTablePath, retention));
+                    () -> runInternal(tableInfo, partitionName, physicalTablePath, retentionInfo));
         } catch (RuntimeException e) {
-            retainingPartitions.remove(physicalTablePath, retention);
             LOG.warn(
                     "Failed to submit lake-aware retention for partition {} of table {}.",
                     partitionName,
@@ -137,11 +101,52 @@ public class LakeAwarePartitionRetentionManager implements AutoCloseable {
         }
     }
 
+    private void runInternal(
+            TableInfo tableInfo,
+            String partitionName,
+            PhysicalTablePath physicalTablePath,
+            PartitionRetentionInfo retentionInfo) {
+        if (!retentionInfo.lock.tryLock()) {
+            LOG.debug(
+                    "Skip lake-aware retention for partition {} of table {} because another operation is running.",
+                    partitionName,
+                    tableInfo.getTablePath());
+            return;
+        }
+
+        try {
+            toNext(tableInfo, partitionName, physicalTablePath, retentionInfo);
+        } finally {
+            retentionInfo.lock.unlock();
+        }
+    }
+
+    private void toNext(
+            TableInfo tableInfo,
+            String partitionName,
+            PhysicalTablePath physicalTablePath,
+            PartitionRetentionInfo retentionInfo) {
+        PartitionStatus status = retentionInfo.status;
+        switch (status) {
+            case FREEZING:
+                freezePartition(tableInfo, partitionName, physicalTablePath, retentionInfo);
+                break;
+            case FROZEN:
+                checkLakeTiered(tableInfo, partitionName, physicalTablePath, retentionInfo);
+                break;
+            case LAKE_TIERED:
+                dropPartition(tableInfo, partitionName, physicalTablePath, retentionInfo);
+                break;
+            default:
+                throw new FlussRuntimeException("Unknown partition status " + status);
+        }
+    }
+
     private void freezePartition(
             TableInfo tableInfo,
             String partitionName,
             PhysicalTablePath physicalTablePath,
-            RetentionStatus retention) {
+            PartitionRetentionInfo retentionInfo) {
         Optional<PartitionRegistration> registration;
         try {
             registration =
@@ -153,18 +158,19 @@ public class LakeAwarePartitionRetentionManager implements AutoCloseable {
                     partitionName,
                     tableInfo.getTablePath(),
                     e);
-            retainingPartitions.remove(physicalTablePath, retention);
+            partitionRetentionInfos.remove(physicalTablePath, retentionInfo);
             return;
         }
         if (!registration.isPresent()) {
-            retainingPartitions.remove(physicalTablePath, retention);
+            partitionRetentionInfos.remove(physicalTablePath, retentionInfo);
             return;
         }
         if (registration.get().getTableId() != tableInfo.getTableId()) {
-            retainingPartitions.remove(physicalTablePath, retention);
+            partitionRetentionInfos.remove(physicalTablePath, retentionInfo);
             return;
         }
-        freezePartition(tableInfo, partitionName, registration.get(), physicalTablePath, retention);
+        freezePartition(
+                tableInfo, partitionName, registration.get(), physicalTablePath, retentionInfo);
     }
 
     private void freezePartition(
@@ -172,12 +178,7 @@ public class LakeAwarePartitionRetentionManager implements AutoCloseable {
             String partitionName,
             PartitionRegistration partitionRegistration,
             PhysicalTablePath physicalTablePath,
-            RetentionStatus retention) {
-        if (closed.get()) {
-            retainingPartitions.remove(physicalTablePath, retention);
-            return;
-        }
-
+            PartitionRetentionInfo retentionInfo) {
         try {
             PartitionAssignment partitionAssignment =
                     zooKeeperClient
@@ -188,7 +189,7 @@ public class LakeAwarePartitionRetentionManager implements AutoCloseable {
                         "Waiting to retain partition {} of table {} because its assignment is unavailable.",
                         partitionName,
                         tableInfo.getTablePath());
-                retainingPartitions.remove(physicalTablePath, retention);
+                partitionRetentionInfos.remove(physicalTablePath, retentionInfo);
                 return;
             }
 
@@ -210,7 +211,7 @@ public class LakeAwarePartitionRetentionManager implements AutoCloseable {
                         "Waiting to retain partition {} of table {} because not all bucket leaders are available.",
                         partitionName,
                         tableInfo.getTablePath());
-                retainingPartitions.remove(physicalTablePath, retention);
+                partitionRetentionInfos.remove(physicalTablePath, retentionInfo);
                 return;
             }
 
@@ -225,8 +226,7 @@ public class LakeAwarePartitionRetentionManager implements AutoCloseable {
             List<CompletableFuture<FreezePartitionResponse>> freezeFutures = new ArrayList<>();
             for (Map.Entry<Integer, Map<TableBucket, Integer>> entry :
                     leaderEpochsByServer.entrySet()) {
-                FreezePartitionRequest request =
-                        makeFreezePartitionRequest(coordinatorEpoch, entry.getValue());
+                FreezePartitionRequest request = makeFreezePartitionRequest(entry.getValue());
                 freezeFutures.add(
                         coordinatorChannelManager.sendFreezePartitionRequest(
                                 entry.getKey(), request));
@@ -234,47 +234,22 @@ public class LakeAwarePartitionRetentionManager implements AutoCloseable {
 
             CompletableFuture.allOf(
                             freezeFutures.toArray(new CompletableFuture[freezeFutures.size()]))
-                    .whenCompleteAsync(
-                            (ignored, error) -> {
-                                try {
-                                    if (closed.get()) {
-                                        retainingPartitions.remove(physicalTablePath, retention);
-                                        return;
-                                    }
-                                    if (error != null) {
-                                        LOG.warn(
-                                                "Failed to freeze partition {} of table {} for retention.",
-                                                partitionName,
-                                                tableInfo.getTablePath(),
-                                                error);
-                                        retainingPartitions.remove(physicalTablePath, retention);
-                                        return;
-                                    }
-                                    finishFreeze(
-                                            tableInfo,
-                                            partitionName,
-                                            partitionRegistration,
-                                            leaders,
-                                            freezeFutures,
-                                            physicalTablePath,
-                                            retention);
-                                } catch (Exception e) {
-                                    LOG.warn(
-                                            "Failed to finish freezing partition {} of table {} for retention.",
-                                            partitionName,
-                                            tableInfo.getTablePath(),
-                                            e);
-                                    retainingPartitions.remove(physicalTablePath, retention);
-                                }
-                            },
-                            executor);
+                    .join();
+            finishFreeze(
+                    tableInfo,
+                    partitionName,
+                    partitionRegistration,
+                    leaders,
+                    freezeFutures,
+                    physicalTablePath,
+                    retentionInfo);
         } catch (Exception e) {
             LOG.warn(
-                    "Failed to start lake-aware retention for partition {} of table {}.",
+                    "Failed to freeze partition {} of table {} for retention.",
                     partitionName,
                     tableInfo.getTablePath(),
                     e);
-            retainingPartitions.remove(physicalTablePath, retention);
+            partitionRetentionInfos.remove(physicalTablePath, retentionInfo);
         }
     }
 
@@ -285,132 +260,74 @@ public class LakeAwarePartitionRetentionManager implements AutoCloseable {
             Map<TableBucket, LeaderAndIsr> expectedLeaders,
             List<CompletableFuture<FreezePartitionResponse>> freezeFutures,
             PhysicalTablePath physicalTablePath,
-            RetentionStatus retention)
+            PartitionRetentionInfo retentionInfo)
             throws Exception {
-        Map<Integer, FrozenBucket> frozenBuckets =
-                collectFrozenBuckets(expectedLeaders, freezeFutures);
-        if (!leadersUnchanged(expectedLeaders)) {
-            LOG.info(
-                    "Waiting to retry retention for partition {} of table {} because a bucket leader changed while freezing.",
-                    partitionName,
-                    tableInfo.getTablePath());
-            retainingPartitions.remove(physicalTablePath, retention);
-            return;
-        }
-
         Optional<PartitionRegistration> currentRegistration =
                 metadataManager.getPartitionRegistration(tableInfo.getTablePath(), partitionName);
         if (!currentRegistration.isPresent()
                 || currentRegistration.get().getPartitionId()
                         != initialRegistration.getPartitionId()) {
-            retainingPartitions.remove(physicalTablePath, retention);
+            partitionRetentionInfos.remove(physicalTablePath, retentionInfo);
             return;
         }
 
+        Map<Integer, FrozenBucket> frozenBuckets =
+                collectFrozenBuckets(expectedLeaders, freezeFutures);
         frozenBuckets = mergeFrozenOffsets(currentRegistration.get(), frozenBuckets);
+
         if (!currentRegistration.get().getFrozenBuckets().equals(frozenBuckets)) {
             PartitionRegistration updatedRegistration =
                     currentRegistration.get().withFrozenBuckets(frozenBuckets);
             metadataManager.updatePartitionRegistration(
                     tableInfo.getTablePath(), partitionName, updatedRegistration);
         }
-        completeOperation(physicalTablePath, retention, RetentionStage.FROZEN);
+
+        retentionInfo.status = PartitionStatus.FROZEN;
         LOG.info(
                 "Partition {} of table {} is frozen and ready for the lake tiering check.",
                 partitionName,
                 tableInfo.getTablePath());
-    }
-
-    private void submitLakeCheck(
-            TableInfo tableInfo,
-            String partitionName,
-            PhysicalTablePath physicalTablePath,
-            RetentionStatus retention) {
-        if (closed.get()) {
-            retainingPartitions.remove(physicalTablePath, retention);
-            return;
-        }
-        try {
-            executor.execute(
-                    () -> checkLakeTiered(tableInfo, partitionName, physicalTablePath, retention));
-        } catch (RuntimeException e) {
-            completeOperation(physicalTablePath, retention, RetentionStage.FROZEN);
-            LOG.warn(
-                    "Failed to submit lake tiering check for partition {} of table {}.",
-                    partitionName,
-                    tableInfo.getTablePath(),
-                    e);
-        }
+        toNext(tableInfo, partitionName, physicalTablePath, retentionInfo);
     }
 
     private void checkLakeTiered(
             TableInfo tableInfo,
             String partitionName,
             PhysicalTablePath physicalTablePath,
-            RetentionStatus retention) {
+            PartitionRetentionInfo retentionInfo) {
         try {
             Optional<PartitionRegistration> registration =
                     metadataManager.getPartitionRegistration(
                             tableInfo.getTablePath(), partitionName);
             if (!registration.isPresent()
                     || registration.get().getTableId() != tableInfo.getTableId()) {
-                retainingPartitions.remove(physicalTablePath, retention);
+                partitionRetentionInfos.remove(physicalTablePath, retentionInfo);
                 return;
             }
 
             Map<Integer, FrozenBucket> frozenBuckets = registration.get().getFrozenBuckets();
             TablePartition tablePartition = registration.get().toTablePartition();
-            if (frozenBuckets.isEmpty() || !leadersUnchanged(tablePartition, frozenBuckets)) {
-                retainingPartitions.remove(physicalTablePath, retention);
+            if (frozenBuckets.isEmpty()) {
+                partitionRetentionInfos.remove(physicalTablePath, retentionInfo);
                 return;
             }
 
             if (!isFullyTiered(tablePartition, frozenBuckets)) {
-                completeOperation(physicalTablePath, retention, RetentionStage.FROZEN);
                 LOG.info(
                         "Partition {} of table {} is frozen and waiting for lake tiering.",
                         partitionName,
                         tableInfo.getTablePath());
                 return;
             }
-            if (!leadersUnchanged(tablePartition, frozenBuckets)) {
-                retainingPartitions.remove(physicalTablePath, retention);
+
+            if (partitionRetentionInfos.get(physicalTablePath) != retentionInfo) {
                 return;
             }
-
-            synchronized (retention) {
-                if (retainingPartitions.get(physicalTablePath) != retention) {
-                    return;
-                }
-                retention.stage = RetentionStage.LAKE_TIERED;
-            }
-            dropPartition(tableInfo, partitionName, physicalTablePath, retention);
+            retentionInfo.status = PartitionStatus.LAKE_TIERED;
+            toNext(tableInfo, partitionName, physicalTablePath, retentionInfo);
         } catch (Exception e) {
-            completeOperation(physicalTablePath, retention, RetentionStage.FROZEN);
             LOG.warn(
                     "Failed to check lake tiering for partition {} of table {}.",
-                    partitionName,
-                    tableInfo.getTablePath(),
-                    e);
-        }
-    }
-
-    private void submitDrop(
-            TableInfo tableInfo,
-            String partitionName,
-            PhysicalTablePath physicalTablePath,
-            RetentionStatus retention) {
-        if (closed.get()) {
-            retainingPartitions.remove(physicalTablePath, retention);
-            return;
-        }
-        try {
-            executor.execute(
-                    () -> dropPartition(tableInfo, partitionName, physicalTablePath, retention));
-        } catch (RuntimeException e) {
-            completeOperation(physicalTablePath, retention, RetentionStage.LAKE_TIERED);
-            LOG.warn(
-                    "Failed to submit drop for retained partition {} of table {}.",
                     partitionName,
                     tableInfo.getTablePath(),
                     e);
@@ -421,57 +338,32 @@ public class LakeAwarePartitionRetentionManager implements AutoCloseable {
             TableInfo tableInfo,
             String partitionName,
             PhysicalTablePath physicalTablePath,
-            RetentionStatus retention) {
+            PartitionRetentionInfo retentionInfo) {
         try {
             Optional<PartitionRegistration> registration =
                     metadataManager.getPartitionRegistration(
                             tableInfo.getTablePath(), partitionName);
             if (!registration.isPresent()
                     || registration.get().getTableId() != tableInfo.getTableId()) {
-                retainingPartitions.remove(physicalTablePath, retention);
+                partitionRetentionInfos.remove(physicalTablePath, retentionInfo);
                 return;
             }
-
-            Map<Integer, FrozenBucket> frozenBuckets = registration.get().getFrozenBuckets();
-            TablePartition tablePartition = registration.get().toTablePartition();
-            if (!leadersUnchanged(tablePartition, frozenBuckets)) {
-                retainingPartitions.remove(physicalTablePath, retention);
-                return;
-            }
-            if (!isFullyTiered(tablePartition, frozenBuckets)) {
-                completeOperation(physicalTablePath, retention, RetentionStage.FROZEN);
-                return;
-            }
-
             metadataManager.dropPartition(
                     tableInfo.getTablePath(),
                     ResolvedPartitionSpec.fromPartitionName(
                             tableInfo.getPartitionKeys(), partitionName),
                     false);
-            retainingPartitions.remove(physicalTablePath, retention);
+            partitionRetentionInfos.remove(physicalTablePath, retentionInfo);
             LOG.info(
                     "Deleted partition {} of table {} after all frozen offsets were committed to the lake.",
                     partitionName,
                     tableInfo.getTablePath());
         } catch (Exception e) {
-            completeOperation(physicalTablePath, retention, RetentionStage.LAKE_TIERED);
             LOG.warn(
                     "Failed to drop retained partition {} of table {}.",
                     partitionName,
                     tableInfo.getTablePath(),
                     e);
-        }
-    }
-
-    private void completeOperation(
-            PhysicalTablePath physicalTablePath,
-            RetentionStatus retention,
-            RetentionStage nextStage) {
-        synchronized (retention) {
-            if (retainingPartitions.get(physicalTablePath) == retention) {
-                retention.stage = nextStage;
-                retention.operationRunning = false;
-            }
         }
     }
 
@@ -539,55 +431,6 @@ public class LakeAwarePartitionRetentionManager implements AutoCloseable {
         return merged;
     }
 
-    private boolean leadersUnchanged(Map<TableBucket, LeaderAndIsr> expectedLeaders)
-            throws Exception {
-        Map<TableBucket, LeaderAndIsr> currentLeaders =
-                zooKeeperClient.getLeaderAndIsrs(expectedLeaders.keySet());
-        if (currentLeaders.size() != expectedLeaders.size()) {
-            return false;
-        }
-        for (Map.Entry<TableBucket, LeaderAndIsr> entry : expectedLeaders.entrySet()) {
-            LeaderAndIsr current = currentLeaders.get(entry.getKey());
-            LeaderAndIsr expected = entry.getValue();
-            if (current == null
-                    || current.leader() != expected.leader()
-                    || current.leaderEpoch() != expected.leaderEpoch()) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private boolean leadersUnchanged(
-            TablePartition tablePartition, Map<Integer, FrozenBucket> frozenBuckets)
-            throws Exception {
-        Map<TableBucket, FrozenBucket> expectedLeaders = new HashMap<>();
-        frozenBuckets.forEach(
-                (bucketId, frozenBucket) ->
-                        expectedLeaders.put(
-                                new TableBucket(
-                                        tablePartition.getTableId(),
-                                        tablePartition.getPartitionId(),
-                                        bucketId),
-                                frozenBucket));
-
-        Map<TableBucket, LeaderAndIsr> currentLeaders =
-                zooKeeperClient.getLeaderAndIsrs(expectedLeaders.keySet());
-        if (currentLeaders.size() != expectedLeaders.size()) {
-            return false;
-        }
-        for (Map.Entry<TableBucket, FrozenBucket> entry : expectedLeaders.entrySet()) {
-            LeaderAndIsr current = currentLeaders.get(entry.getKey());
-            FrozenBucket expected = entry.getValue();
-            if (current == null
-                    || current.leader() != expected.getLeaderId()
-                    || current.leaderEpoch() != expected.getLeaderEpoch()) {
-                return false;
-            }
-        }
-        return true;
-    }
-
     private boolean isFullyTiered(
             TablePartition tablePartition, Map<Integer, FrozenBucket> frozenBuckets)
             throws Exception {
@@ -612,19 +455,17 @@ public class LakeAwarePartitionRetentionManager implements AutoCloseable {
 
     @Override
     public void close() {
-        if (closed.compareAndSet(false, true)) {
-            retainingPartitions.clear();
-        }
+        partitionRetentionInfos.clear();
     }
 
-    private enum RetentionStage {
+    private enum PartitionStatus {
         FREEZING,
         FROZEN,
         LAKE_TIERED
     }
 
-    private static class RetentionStatus {
-        private RetentionStage stage = RetentionStage.FREEZING;
-        private boolean operationRunning = true;
+    private static final class PartitionRetentionInfo {
+        private final ReentrantLock lock = new ReentrantLock();
+        private PartitionStatus status = PartitionStatus.FREEZING;
     }
 }
