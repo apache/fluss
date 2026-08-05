@@ -19,12 +19,13 @@ package org.apache.fluss.flink.tiering.source;
 
 import org.apache.fluss.flink.tiering.source.state.TieringSplitState;
 import org.apache.fluss.lake.committer.LakeCommitter;
+import org.apache.fluss.lake.writer.LakeWriteResult;
 
 import org.apache.flink.api.connector.source.SourceOutput;
 import org.apache.flink.connector.base.source.reader.RecordEmitter;
 
 /** The emitter to emit {@link TableBucketWriteResult} to downstream {@link LakeCommitter}. */
-public class TableBucketWriteResultEmitter<WriteResult>
+public class TableBucketWriteResultEmitter<WriteResult extends LakeWriteResult>
         implements RecordEmitter<
                 TableBucketWriteResult<WriteResult>,
                 TableBucketWriteResult<WriteResult>,

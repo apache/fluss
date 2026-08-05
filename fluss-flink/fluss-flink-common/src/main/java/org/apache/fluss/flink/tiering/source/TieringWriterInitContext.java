@@ -17,6 +17,7 @@
 
 package org.apache.fluss.flink.tiering.source;
 
+import org.apache.fluss.lake.watermark.WatermarkExtractor;
 import org.apache.fluss.lake.writer.WriterInitContext;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
@@ -33,6 +34,7 @@ public class TieringWriterInitContext implements WriterInitContext {
     private final TableInfo tableInfo;
     private final int splitIndex;
     private final long tieringRoundTimestamp;
+    @Nullable private final WatermarkExtractor watermarkExtractor;
 
     public TieringWriterInitContext(
             TablePath tablePath,
@@ -45,7 +47,8 @@ public class TieringWriterInitContext implements WriterInitContext {
                 partition,
                 tableInfo,
                 UNKNOWN_SPLIT_INDEX,
-                UNKNOWN_TIERING_ROUND_TIMESTAMP);
+                UNKNOWN_TIERING_ROUND_TIMESTAMP,
+                null);
     }
 
     public TieringWriterInitContext(
@@ -54,13 +57,15 @@ public class TieringWriterInitContext implements WriterInitContext {
             @Nullable String partition,
             TableInfo tableInfo,
             int splitIndex,
-            long tieringRoundTimestamp) {
+            long tieringRoundTimestamp,
+            @Nullable WatermarkExtractor watermarkExtractor) {
         this.tablePath = tablePath;
         this.tableBucket = tableBucket;
         this.partition = partition;
         this.tableInfo = tableInfo;
         this.splitIndex = splitIndex;
         this.tieringRoundTimestamp = tieringRoundTimestamp;
+        this.watermarkExtractor = watermarkExtractor;
     }
 
     @Override
@@ -92,5 +97,11 @@ public class TieringWriterInitContext implements WriterInitContext {
     @Override
     public long tieringRoundTimestamp() {
         return tieringRoundTimestamp;
+    }
+
+    @Nullable
+    @Override
+    public WatermarkExtractor watermarkExtractor() {
+        return watermarkExtractor;
     }
 }
