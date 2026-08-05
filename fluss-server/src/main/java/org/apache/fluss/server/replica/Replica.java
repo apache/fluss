@@ -185,7 +185,8 @@ public final class Replica {
 
     private final SchemaGetter schemaGetter;
     private final TableInfo tableInfo;
-    private final TableConfig tableConfig;
+    // Metadata updates replace this snapshot after applying configuration-specific side effects.
+    private volatile TableConfig tableConfig;
     // logFormat and arrowCompressionInfo are used in hot-path, so cache them here.
     private final LogFormat logFormat;
     private final ArrowCompressionInfo arrowCompressionInfo;
@@ -343,6 +344,14 @@ public final class Replica {
 
     public TableInfo getTableInfo() {
         return tableInfo;
+    }
+
+    TableConfig getTableConfig() {
+        return tableConfig;
+    }
+
+    void updateTableConfig(TableConfig tableConfig) {
+        this.tableConfig = checkNotNull(tableConfig, "tableConfig");
     }
 
     public @Nullable Integer getLeaderId() {

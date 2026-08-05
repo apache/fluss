@@ -19,9 +19,12 @@ package org.apache.fluss.server;
 
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.utils.FlussPaths;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.io.File;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -38,6 +41,21 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link TabletManagerBase}. */
 final class TabletManagerBaseTest {
+
+    @TempDir private File tempDir;
+
+    @Test
+    void testIgnoresHistoricalLookupCacheDirectoryWhenLoadingTablets() {
+        File fakeTabletDir =
+                new File(
+                        new File(FlussPaths.historicalLookupRootDir(tempDir), "database"),
+                        "kv-table-1");
+        assertThat(fakeTabletDir.mkdirs()).isTrue();
+
+        TestingTabletManager tabletManager = new TestingTabletManager(tempDir);
+
+        assertThat(tabletManager.tabletsToLoad(tempDir)).isEmpty();
+    }
 
     @Test
     void testCloseTabletsConcurrentlyWaitsForAllTasksAndShutsDownPoolOnFailure() throws Exception {
@@ -90,6 +108,14 @@ final class TabletManagerBaseTest {
 
         private TestingTabletManager(int closingThreads) {
             super(TabletType.KV, Collections.emptyList(), new Configuration(), closingThreads);
+        }
+
+        private TestingTabletManager(File dataDir) {
+            super(TabletType.KV, Collections.singletonList(dataDir), new Configuration(), 1);
+        }
+
+        private List<File> tabletsToLoad(File dataDir) {
+            return listTabletsToLoad(dataDir);
         }
 
         private CompletableFuture<Void> closeTablets(

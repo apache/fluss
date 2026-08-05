@@ -305,6 +305,7 @@ public class CoordinatorServer extends ServerBase {
             dynamicConfigManager.register(lakeCatalogDynamicLoader);
             dynamicConfigManager.register(remoteDirDynamicLoader);
             dynamicConfigManager.register(replicaCapacityController);
+            dynamicConfigManager.register(new HistoricalLookupCacheConfigUpdater(metadataManager));
             // Register stateless validators for coordinator-side upfront validation
             dynamicConfigManager.register(new DiskWriteLimitConfigValidator());
             rpcServer.getServerReconfigurables().forEach(dynamicConfigManager::register);

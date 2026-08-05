@@ -44,4 +44,17 @@ class TableConfigTest {
         TableConfig tableConfig3 = new TableConfig(conf);
         assertThat(tableConfig3.getDeleteBehavior()).hasValue(DeleteBehavior.IGNORE);
     }
+
+    @Test
+    void testHistoricalPartitionLookupCacheMaxDiskRatio() {
+        Configuration conf = new Configuration();
+        TableConfig tableConfig = new TableConfig(conf);
+        assertThat(tableConfig.getHistoricalPartitionLookupCacheMaxDiskRatio()).isEqualTo(0.01);
+
+        conf.set(
+                ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO,
+                0.02);
+        assertThat(new TableConfig(conf).getHistoricalPartitionLookupCacheMaxDiskRatio())
+                .isEqualTo(0.02);
+    }
 }

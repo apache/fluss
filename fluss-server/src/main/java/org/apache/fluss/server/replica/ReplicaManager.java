@@ -24,6 +24,7 @@ import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.config.cluster.ServerReconfigurable;
 import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.exception.FencedLeaderEpochException;
+import org.apache.fluss.exception.HistoricalPartitionThrottledException;
 import org.apache.fluss.exception.InvalidColumnProjectionException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidPartitionException;
@@ -359,13 +360,26 @@ public class ReplicaManager implements ServerReconfigurable {
         this.ioExecutor = ioExecutor;
         this.minInSyncReplicas = conf.get(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER);
         this.scannerManager = checkNotNull(scannerManager, "scannerManager");
+        // Historical lookup cache capacity currently uses only the first data volume.
+        File historicalLookupDataDir = localDiskManager.dataDirs().get(0);
+        long historicalLookupVolumeBytes =
+                Files.getFileStore(historicalLookupDataDir.toPath()).getTotalSpace();
         this.historicalLakeLookupManager =
-                new HistoricalLakeLookupManager(conf, pluginManager, serverId, scheduler);
+                new HistoricalLakeLookupManager(
+                        conf,
+                        pluginManager,
+                        historicalLookupDataDir,
+                        historicalLookupVolumeBytes,
+                        scheduler);
+        serverMetricGroup.registerHistoricalPartitionInflightRequests(
+                "lookup", historicalLakeLookupManager::numInflightRequests);
 
         registerMetrics();
     }
 
     public void startup() {
+        historicalLakeLookupManager.startup();
+
         // start up ISR expiration thread.
         // A follower can log behind leader for up tp configOptions#LOG_REPLICA_MAX_LAG_TIME x 1.5
         // before it is removed from ISR.
@@ -415,6 +429,7 @@ public class ReplicaManager implements ServerReconfigurable {
 
     @Override
     public void reconfigure(Configuration newConfig) {
+        historicalLakeLookupManager.reconfigure(newConfig);
         int newMinInSyncReplicas =
                 newConfig.get(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER);
         if (newMinInSyncReplicas == minInSyncReplicas) {
@@ -443,6 +458,12 @@ public class ReplicaManager implements ServerReconfigurable {
         serverMetricGroup.gauge(MetricNames.UNDER_REPLICATED, this::underReplicatedCount);
         serverMetricGroup.gauge(MetricNames.UNDER_MIN_ISR, this::underMinIsrCount);
         serverMetricGroup.gauge(MetricNames.AT_MIN_ISR, this::atMinIsrCount);
+        serverMetricGroup.gauge(
+                MetricNames.HISTORICAL_LOOKUP_CACHED_TABLE_COUNT,
+                historicalLakeLookupManager::cachedTableCount);
+        serverMetricGroup.counter(
+                MetricNames.HISTORICAL_LOOKUP_CACHE_EVICTIONS,
+                historicalLakeLookupManager.capacityEvictions());
 
         MetricGroup logicalStorage = serverMetricGroup.addGroup("logicalStorage");
         logicalStorage.gauge(
@@ -598,10 +619,17 @@ public class ReplicaManager implements ServerReconfigurable {
     private void updateReplicaTableConfig(ClusterMetadata clusterMetadata) {
         Map<Long, Boolean> tableIdToLakeFlag = new HashMap<>();
         Map<Long, Integer> tableIdToTieredLogLocalSegments = new HashMap<>();
+        Map<Long, TableConfig> tableIdToTableConfig = new HashMap<>();
 
         for (TableMetadata tableMetadata : clusterMetadata.getTableMetadataList()) {
             TableInfo tableInfo = tableMetadata.getTableInfo();
             long tableId = tableInfo.getTableId();
+
+            // Deleted-table markers do not carry authoritative table configuration.
+            if (tableId != TableMetadata.DELETED_TABLE_ID
+                    && !tableInfo.getTablePath().equals(TableMetadata.DELETED_TABLE_PATH)) {
+                tableIdToTableConfig.put(tableId, tableInfo.getTableConfig());
+            }
 
             // Collect datalake enabled configuration
             if (tableInfo.getTableConfig().getDataLakeFormat().isPresent()) {
@@ -614,7 +642,9 @@ public class ReplicaManager implements ServerReconfigurable {
             tableIdToTieredLogLocalSegments.put(tableId, tieredLogLocalSegments);
         }
 
-        if (tableIdToLakeFlag.isEmpty() && tableIdToTieredLogLocalSegments.isEmpty()) {
+        if (tableIdToLakeFlag.isEmpty()
+                && tableIdToTieredLogLocalSegments.isEmpty()
+                && tableIdToTableConfig.isEmpty()) {
             return;
         }
 
@@ -633,6 +663,11 @@ public class ReplicaManager implements ServerReconfigurable {
                 if (tableIdToTieredLogLocalSegments.containsKey(tableId)) {
                     replica.updateTieredLogLocalSegments(
                             tableIdToTieredLogLocalSegments.get(tableId));
+                }
+
+                // Publish the new snapshot after applying configuration-specific side effects.
+                if (tableIdToTableConfig.containsKey(tableId)) {
+                    replica.updateTableConfig(tableIdToTableConfig.get(tableId));
                 }
             }
         }
@@ -822,8 +857,11 @@ public class ReplicaManager implements ServerReconfigurable {
         AtomicInteger remainingLookups = new AtomicInteger(lookupData.size());
         for (LookupDataForBucket data : lookupData) {
             CompletableFuture<LookupResultForBucket> lookupFuture;
+            TableMetricGroup tableMetrics = null;
             try {
                 Replica replica = getReplicaOrException(data.tableBucket());
+                tableMetrics = replica.tableMetrics();
+                tableMetrics.totalHistoricalLookupRequests().inc();
                 if (!replica.isKvTable()) {
                     throw new NonPrimaryKeyTableException(
                             "Historical lookup is only supported for primary key tables, but "
@@ -837,7 +875,11 @@ public class ReplicaManager implements ServerReconfigurable {
                 SchemaInfo latestSchemaInfo = replica.getSchemaGetter().getLatestSchemaInfo();
                 lookupFuture =
                         historicalLakeLookupManager.lookup(
-                                data, replica.getTableInfo(), latestSchemaInfo);
+                                data,
+                                replica.getTableInfo(),
+                                latestSchemaInfo,
+                                replica.getTableConfig(),
+                                tableMetrics::recordHistoricalLakeLookup);
             } catch (Exception e) {
                 lookupFuture =
                         CompletableFuture.completedFuture(
@@ -847,18 +889,27 @@ public class ReplicaManager implements ServerReconfigurable {
                                         data.originalPartitionName(),
                                         ApiError.fromThrowable(e)));
             }
+            TableMetricGroup historicalLookupMetrics = tableMetrics;
             lookupFuture.whenComplete(
                     (bucketResult, error) -> {
+                        LookupResultForBucket completedResult;
                         if (error == null) {
-                            result.add(bucketResult);
+                            completedResult = bucketResult;
                         } else {
-                            result.add(
+                            completedResult =
                                     new LookupResultForBucket(
                                             data.tableBucket(),
                                             null,
                                             data.originalPartitionName(),
-                                            ApiError.fromThrowable(error)));
+                                            ApiError.fromThrowable(error));
                         }
+                        if (historicalLookupMetrics != null
+                                && completedResult.failed()
+                                && isUnexpectedHistoricalLookupException(
+                                        completedResult.getError().exception())) {
+                            historicalLookupMetrics.failedHistoricalLookupRequests().inc();
+                        }
+                        result.add(completedResult);
                         if (remainingLookups.decrementAndGet() == 0) {
                             responseCallback.accept(result);
                         }
@@ -1806,6 +1857,13 @@ public class ReplicaManager implements ServerReconfigurable {
                 || e instanceof NotLeaderOrFollowerException
                 || e instanceof LogOffsetOutOfRangeException
                 || e instanceof StorageBackpressureException);
+    }
+
+    private boolean isUnexpectedHistoricalLookupException(Exception e) {
+        return isUnexpectedException(e)
+                && !(e instanceof HistoricalPartitionThrottledException
+                        || e instanceof InvalidPartitionException
+                        || e instanceof NonPrimaryKeyTableException);
     }
 
     /**

@@ -41,6 +41,8 @@ import java.util.Optional;
  */
 public class RequestsMetrics {
 
+    private static final String HISTORICAL_LOOKUP_METRICS_KEY = "historicalLookup";
+
     // a map from request name to the metrics registered for the request name
     private final Map<String, Metrics> metricsByRequest = new HashMap<>();
 
@@ -58,6 +60,9 @@ public class RequestsMetrics {
             } else {
                 addMetrics(serverMetricsGroup, toRequestName(apiKey, false));
             }
+        }
+        if (apiKeys.contains(ApiKeys.LOOKUP)) {
+            addMetrics(serverMetricsGroup, HISTORICAL_LOOKUP_METRICS_KEY);
         }
         this.requestMetricGroup = serverMetricsGroup.addGroup("request");
     }
@@ -115,7 +120,11 @@ public class RequestsMetrics {
         }
     }
 
-    public Optional<Metrics> getMetrics(short apiKey, boolean isFromFollower) {
+    public Optional<Metrics> getMetrics(
+            short apiKey, boolean isFromFollower, boolean isHistoricalLookup) {
+        if (apiKey == ApiKeys.LOOKUP.id && isHistoricalLookup) {
+            return Optional.ofNullable(metricsByRequest.get(HISTORICAL_LOOKUP_METRICS_KEY));
+        }
         String requestName = toRequestName(ApiKeys.forId(apiKey), isFromFollower);
         return Optional.ofNullable(metricsByRequest.get(requestName));
     }

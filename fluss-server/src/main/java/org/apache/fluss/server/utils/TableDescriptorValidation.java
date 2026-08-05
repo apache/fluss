@@ -38,6 +38,7 @@ import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeRoot;
 import org.apache.fluss.types.RowType;
@@ -90,7 +91,9 @@ public class TableDescriptorValidation {
     public static void validateTableDescriptor(
             TableDescriptor tableDescriptor,
             int maxBucketNum,
-            @Nullable DataLakeFormat clusterDataLakeFormat) {
+            @Nullable DataLakeFormat clusterDataLakeFormat,
+            TablePath tablePath,
+            double historicalLookupCacheMaxRatio) {
         Schema schema = tableDescriptor.getSchema();
         boolean hasPrimaryKey = schema.getPrimaryKey().isPresent();
         Configuration tableConf = Configuration.fromMap(tableDescriptor.getProperties());
@@ -128,6 +131,9 @@ public class TableDescriptorValidation {
         checkDeleteBehavior(tableConf, hasPrimaryKey);
         checkTieredLog(tableConf);
         checkHistoricalPartition(tableDescriptor, tableConf);
+        if (tableConf.get(ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED)) {
+            checkHistoricalLookupCacheRatio(tableConf, tablePath, historicalLookupCacheMaxRatio);
+        }
         checkPartition(tableConf, tableDescriptor.getPartitionKeys(), schema.getRowType());
         checkSystemColumns(schema.getRowType());
         validateStatisticsConfig(tableDescriptor);
@@ -224,6 +230,36 @@ public class TableDescriptorValidation {
                             "'%s' has unmet requirements: %s.",
                             ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED.key(),
                             String.join("; ", unmetRequirements)));
+        }
+    }
+
+    private static void checkHistoricalLookupCacheRatio(
+            Configuration tableConf, TablePath tablePath, double historicalLookupCacheMaxRatio) {
+        double tableCacheRatio =
+                tableConf.get(
+                        ConfigOptions
+                                .TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO);
+        if (!(tableCacheRatio > 0.0 && tableCacheRatio <= 1.0)) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "'%s' for table '%s' must be within (0.0, 1.0].",
+                            ConfigOptions
+                                    .TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO
+                                    .key(),
+                            tablePath));
+        }
+        if (Double.compare(tableCacheRatio, historicalLookupCacheMaxRatio) > 0) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "'%s' (%s) for table '%s' must be less than or equal to '%s' (%s).",
+                            ConfigOptions
+                                    .TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO
+                                    .key(),
+                            tableCacheRatio,
+                            tablePath,
+                            ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO
+                                    .key(),
+                            historicalLookupCacheMaxRatio));
         }
     }
 

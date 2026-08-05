@@ -19,6 +19,7 @@ package org.apache.fluss.lake.paimon.lookup;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.lake.lakestorage.LakeTableLookuper;
 import org.apache.fluss.lake.lakestorage.TestingLakeCatalogContext;
@@ -77,6 +78,9 @@ class PaimonLakeTableLookuperTest {
     private static final String DB = "lookup_db";
     private static final short SCHEMA_ID = 1;
     private static final short EVOLVED_SCHEMA_ID = 2;
+    private static final long LOOKUP_CACHE_MAX_DISK_BYTES = MemorySize.parse("8gb").getBytes();
+    private static final LakeTableLookuper.LookupMetricRecorder NO_OP_LOOKUP_METRIC_RECORDER =
+            (lookupTimeNanos, lookupFileMaterialization) -> {};
 
     @TempDir private File tempWarehouseDir;
 
@@ -120,9 +124,17 @@ class PaimonLakeTableLookuperTest {
                         paimonConfig,
                         tablePath,
                         tempWarehouseDir.getAbsolutePath(),
-                        tableConfig(KvFormat.COMPACTED))) {
+                        tableConfig(KvFormat.COMPACTED),
+                        LOOKUP_CACHE_MAX_DISK_BYTES)) {
+            List<Boolean> lookupFileMaterializations = new ArrayList<>();
             LakeTableLookuper.LookupContext context =
-                    lookupContext(schema, "20240101", 0, SCHEMA_ID);
+                    lookupContext(
+                            schema,
+                            "20240101",
+                            0,
+                            SCHEMA_ID,
+                            (lookupTimeNanos, lookupFileMaterialization) ->
+                                    lookupFileMaterializations.add(lookupFileMaterialization));
 
             byte[] value = lookuper.lookup(paimonKey(schema, 1, "20240101"), context);
             BinaryValue decodedValue = decodeValue(value, SCHEMA_ID, schema);
@@ -136,6 +148,9 @@ class PaimonLakeTableLookuperTest {
                                     lookupContext(schema, "20240101", 1, SCHEMA_ID)))
                     .isNull();
             assertThat(lookuper.lookup(compactedKey(schema, 1, "20240101"), context)).isNull();
+
+            // The first lookup creates the local lookup file, while subsequent lookups reuse it.
+            assertThat(lookupFileMaterializations).containsExactly(true, false, false);
         }
     }
 
@@ -169,7 +184,8 @@ class PaimonLakeTableLookuperTest {
                         paimonConfig,
                         tablePath,
                         tempWarehouseDir.getAbsolutePath(),
-                        tableConfig(KvFormat.COMPACTED))) {
+                        tableConfig(KvFormat.COMPACTED),
+                        LOOKUP_CACHE_MAX_DISK_BYTES)) {
             BinaryValue firstValue =
                     decodeValue(
                             lookuper.lookup(
@@ -209,7 +225,8 @@ class PaimonLakeTableLookuperTest {
                         paimonConfig,
                         tablePath,
                         tempWarehouseDir.getAbsolutePath(),
-                        tableConfig(KvFormat.INDEXED))) {
+                        tableConfig(KvFormat.INDEXED),
+                        LOOKUP_CACHE_MAX_DISK_BYTES)) {
             LakeTableLookuper.LookupContext context =
                     lookupContext(schema, "20240101", 0, SCHEMA_ID);
 
@@ -253,7 +270,8 @@ class PaimonLakeTableLookuperTest {
                         paimonConfig,
                         tablePath,
                         tempWarehouseDir.getAbsolutePath(),
-                        tableConfig(KvFormat.COMPACTED, KV_FORMAT_VERSION_2))) {
+                        tableConfig(KvFormat.COMPACTED, KV_FORMAT_VERSION_2),
+                        LOOKUP_CACHE_MAX_DISK_BYTES)) {
             LakeTableLookuper.LookupContext context =
                     lookupContext(schema, "20240101", 0, SCHEMA_ID);
             byte[] compactedKey =
@@ -308,7 +326,8 @@ class PaimonLakeTableLookuperTest {
                         paimonConfig,
                         tablePath,
                         tempWarehouseDir.getAbsolutePath(),
-                        tableConfig(KvFormat.COMPACTED, KV_FORMAT_VERSION_2))) {
+                        tableConfig(KvFormat.COMPACTED, KV_FORMAT_VERSION_2),
+                        LOOKUP_CACHE_MAX_DISK_BYTES)) {
             // Inject a late initialization failure: the Paimon table requires sub_id in its
             // lookup key, but the first lookup's value row type deliberately omits that field.
             assertThatThrownBy(
@@ -350,7 +369,8 @@ class PaimonLakeTableLookuperTest {
                         paimonConfig,
                         tablePath,
                         tempWarehouseDir.getAbsolutePath(),
-                        tableConfig(KvFormat.COMPACTED))) {
+                        tableConfig(KvFormat.COMPACTED),
+                        LOOKUP_CACHE_MAX_DISK_BYTES)) {
             LakeTableLookuper.LookupContext context =
                     lookupContext(schema, "20240101", 0, SCHEMA_ID);
             assertThat(lookuper.lookup(paimonKey(schema, 5, "20240101"), context)).isNotNull();
@@ -416,14 +436,16 @@ class PaimonLakeTableLookuperTest {
                         paimonConfig,
                         tablePath,
                         tempWarehouseDir.getAbsolutePath(),
-                        tableConfig(KvFormat.COMPACTED))) {
+                        tableConfig(KvFormat.COMPACTED),
+                        LOOKUP_CACHE_MAX_DISK_BYTES)) {
             LakeTableLookuper.LookupContext context =
                     new LakeTableLookuper.LookupContext(
                             ResolvedPartitionSpec.fromPartitionName(
                                     Collections.singletonList("pt"), "7"),
                             0,
                             SCHEMA_ID,
-                            schema.getRowType());
+                            schema.getRowType(),
+                            NO_OP_LOOKUP_METRIC_RECORDER);
 
             BinaryValue decodedValue =
                     decodeValue(
@@ -451,14 +473,16 @@ class PaimonLakeTableLookuperTest {
                         paimonConfig,
                         tablePath,
                         tempWarehouseDir.getAbsolutePath(),
-                        tableConfig(KvFormat.COMPACTED))) {
+                        tableConfig(KvFormat.COMPACTED),
+                        LOOKUP_CACHE_MAX_DISK_BYTES)) {
             LakeTableLookuper.LookupContext context =
                     new LakeTableLookuper.LookupContext(
                             new ResolvedPartitionSpec(
                                     Collections.emptyList(), Collections.emptyList()),
                             0,
                             SCHEMA_ID,
-                            schema.getRowType());
+                            schema.getRowType(),
+                            NO_OP_LOOKUP_METRIC_RECORDER);
 
             assertThatThrownBy(() -> lookuper.lookup(new byte[0], context))
                     .isInstanceOf(UnsupportedOperationException.class)
@@ -507,7 +531,8 @@ class PaimonLakeTableLookuperTest {
                         paimonConfig,
                         tablePath,
                         tempWarehouseDir.getAbsolutePath(),
-                        tableConfig(KvFormat.COMPACTED))) {
+                        tableConfig(KvFormat.COMPACTED),
+                        LOOKUP_CACHE_MAX_DISK_BYTES)) {
             BinaryValue oldSchemaValue =
                     decodeValue(
                             lookuper.lookup(
@@ -599,7 +624,23 @@ class PaimonLakeTableLookuperTest {
                         Collections.singletonList("dt"), partitionName),
                 bucket,
                 schemaId,
-                schema.getRowType());
+                schema.getRowType(),
+                NO_OP_LOOKUP_METRIC_RECORDER);
+    }
+
+    private static LakeTableLookuper.LookupContext lookupContext(
+            Schema schema,
+            String partitionName,
+            int bucket,
+            short schemaId,
+            LakeTableLookuper.LookupMetricRecorder lookupMetricRecorder) {
+        return new LakeTableLookuper.LookupContext(
+                ResolvedPartitionSpec.fromPartitionName(
+                        Collections.singletonList("dt"), partitionName),
+                bucket,
+                schemaId,
+                schema.getRowType(),
+                lookupMetricRecorder);
     }
 
     private static List<DataFileMeta> dataFiles(

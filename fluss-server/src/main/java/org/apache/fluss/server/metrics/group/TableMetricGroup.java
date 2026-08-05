@@ -21,6 +21,8 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.CharacterFilter;
 import org.apache.fluss.metrics.Counter;
+import org.apache.fluss.metrics.DescriptiveStatisticsHistogram;
+import org.apache.fluss.metrics.Histogram;
 import org.apache.fluss.metrics.MeterView;
 import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.metrics.NoOpCounter;
@@ -33,6 +35,7 @@ import javax.annotation.Nullable;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
 import static org.apache.fluss.metrics.utils.MetricGroupUtils.makeScope;
@@ -186,6 +189,38 @@ public class TableMetricGroup extends AbstractMetricGroup {
             return NoOpCounter.INSTANCE;
         } else {
             return kvMetrics.failedLookupRequests;
+        }
+    }
+
+    /** Returns the counter for historical lookup requests received by this table. */
+    public Counter totalHistoricalLookupRequests() {
+        if (kvMetrics == null) {
+            return NoOpCounter.INSTANCE;
+        } else {
+            return kvMetrics.historicalLookupMetrics.totalLookupRequests();
+        }
+    }
+
+    /** Returns the counter for failed historical lookup requests for this table. */
+    public Counter failedHistoricalLookupRequests() {
+        if (kvMetrics == null) {
+            return NoOpCounter.INSTANCE;
+        } else {
+            return kvMetrics.historicalLookupMetrics.failedLookupRequests();
+        }
+    }
+
+    /**
+     * Records a historical lake table point lookup.
+     *
+     * @param lookupTimeNanos time spent on the lake table point lookup, in nanoseconds
+     * @param lookupFileMaterialization whether the lookup triggered lookup file materialization
+     */
+    public void recordHistoricalLakeLookup(
+            long lookupTimeNanos, boolean lookupFileMaterialization) {
+        if (kvMetrics != null) {
+            kvMetrics.historicalLookupMetrics.recordLakeLookup(
+                    lookupTimeNanos, lookupFileMaterialization);
         }
     }
 
@@ -530,6 +565,7 @@ public class TableMetricGroup extends AbstractMetricGroup {
 
         private final Counter totalLookupRequests;
         private final Counter failedLookupRequests;
+        private final HistoricalLookupMetricGroup historicalLookupMetrics;
         private final Counter totalPutKvRequests;
         private final Counter failedPutKvRequests;
         private final Counter totalLimitScanRequests;
@@ -545,6 +581,7 @@ public class TableMetricGroup extends AbstractMetricGroup {
             meter(MetricNames.TOTAL_LOOKUP_REQUESTS_RATE, new MeterView(totalLookupRequests));
             failedLookupRequests = new ThreadSafeSimpleCounter();
             meter(MetricNames.FAILED_LOOKUP_REQUESTS_RATE, new MeterView(failedLookupRequests));
+            historicalLookupMetrics = new HistoricalLookupMetricGroup(registry, this);
             // for put kv request
             totalPutKvRequests = new ThreadSafeSimpleCounter();
             meter(MetricNames.TOTAL_PUT_KV_REQUESTS_RATE, new MeterView(totalPutKvRequests));
@@ -574,6 +611,91 @@ public class TableMetricGroup extends AbstractMetricGroup {
         @Override
         protected String getGroupName(CharacterFilter filter) {
             return super.getGroupName(filter);
+        }
+    }
+
+    private static class HistoricalLookupMetricGroup extends AbstractMetricGroup {
+
+        private final Counter totalLookupRequests;
+        private final Counter failedLookupRequests;
+        private final LookupFileMaterializationMetricGroup materializedLookupMetrics;
+        private final LookupFileMaterializationMetricGroup nonMaterializedLookupMetrics;
+
+        private HistoricalLookupMetricGroup(MetricRegistry registry, KvMetricGroup parent) {
+            super(registry, parent.getScopeComponents(), parent);
+
+            totalLookupRequests = new ThreadSafeSimpleCounter();
+            meter(
+                    MetricNames.TOTAL_HISTORICAL_LOOKUP_REQUESTS_RATE,
+                    new MeterView(totalLookupRequests));
+            failedLookupRequests = new ThreadSafeSimpleCounter();
+            meter(
+                    MetricNames.FAILED_HISTORICAL_LOOKUP_REQUESTS_RATE,
+                    new MeterView(failedLookupRequests));
+            materializedLookupMetrics =
+                    new LookupFileMaterializationMetricGroup(registry, this, true);
+            nonMaterializedLookupMetrics =
+                    new LookupFileMaterializationMetricGroup(registry, this, false);
+        }
+
+        final Counter totalLookupRequests() {
+            return totalLookupRequests;
+        }
+
+        final Counter failedLookupRequests() {
+            return failedLookupRequests;
+        }
+
+        @Override
+        protected String getGroupName(CharacterFilter filter) {
+            return "";
+        }
+
+        private void recordLakeLookup(long lookupTimeNanos, boolean lookupFileMaterialization) {
+            LookupFileMaterializationMetricGroup metricGroup =
+                    lookupFileMaterialization
+                            ? materializedLookupMetrics
+                            : nonMaterializedLookupMetrics;
+            metricGroup.recordLookup(lookupTimeNanos);
+        }
+    }
+
+    private static class LookupFileMaterializationMetricGroup extends AbstractMetricGroup {
+
+        private static final int WINDOW_SIZE = 1024;
+
+        private final boolean lookupFileMaterialization;
+        private final Counter lakeLookups;
+        private final Histogram lakeLookupTimeMs;
+
+        private LookupFileMaterializationMetricGroup(
+                MetricRegistry registry,
+                HistoricalLookupMetricGroup parent,
+                boolean lookupFileMaterialization) {
+            super(registry, parent.getScopeComponents(), parent);
+            this.lookupFileMaterialization = lookupFileMaterialization;
+
+            lakeLookups = new ThreadSafeSimpleCounter();
+            meter(MetricNames.LAKE_LOOKUPS_RATE, new MeterView(lakeLookups));
+            lakeLookupTimeMs =
+                    histogram(
+                            MetricNames.LAKE_LOOKUP_TIME_MS,
+                            new DescriptiveStatisticsHistogram(WINDOW_SIZE));
+        }
+
+        private void recordLookup(long lookupTimeNanos) {
+            lakeLookups.inc();
+            lakeLookupTimeMs.update(TimeUnit.NANOSECONDS.toMillis(lookupTimeNanos));
+        }
+
+        @Override
+        protected void putVariables(Map<String, String> variables) {
+            variables.put("lookup_file_materialization", String.valueOf(lookupFileMaterialization));
+        }
+
+        @Override
+        protected String getGroupName(CharacterFilter filter) {
+            return "";
         }
     }
 
