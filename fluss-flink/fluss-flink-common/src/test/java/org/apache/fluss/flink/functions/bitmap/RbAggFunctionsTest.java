@@ -460,4 +460,34 @@ class RbAggFunctionsTest {
         assertThat(result).isNotNull();
         assertThat(BitmapUtils.fromBytes(result).isEmpty()).isTrue();
     }
+
+    @Test
+    void testXorAggAccumulatorSerializerRoundTrip() throws IOException {
+        RbXorAggFunction.AccumulatorSerializer serializer =
+                RbXorAggFunction.AccumulatorSerializer.INSTANCE;
+
+        // Test uninitialized accumulator
+        RbXorAggFunction.Accumulator empty = new RbXorAggFunction.Accumulator();
+        RbXorAggFunction.Accumulator emptyCopy = serializer.copy(empty);
+        assertThat(emptyCopy.initialized).isFalse();
+        assertThat(emptyCopy.value.isEmpty()).isTrue();
+
+        // Test initialized accumulator with data
+        RbXorAggFunction.Accumulator acc = new RbXorAggFunction.Accumulator();
+        acc.initialized = true;
+        acc.value = RoaringBitmap.bitmapOf(1, 2, 3);
+
+        RbXorAggFunction.Accumulator copied = serializer.copy(acc);
+        assertThat(copied.initialized).isTrue();
+        assertThat(copied.value.getLongCardinality()).isEqualTo(3L);
+
+        // Verify copy is independent (not same reference)
+        copied.value.add(99);
+        assertThat(acc.value.contains(99)).isFalse();
+
+        // Test snapshot
+        assertThat(serializer.snapshotConfiguration()).isNotNull();
+        assertThat(serializer.getLength()).isEqualTo(-1);
+        assertThat(serializer.isImmutableType()).isFalse();
+    }
 }
