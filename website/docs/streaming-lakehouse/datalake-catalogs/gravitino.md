@@ -19,6 +19,7 @@ When Fluss is configured with Gravitino as its Iceberg REST catalog:
 2. The [tiering service](/docs/next/install-deploy/deploying-streaming-lakehouse/#starting-the-tiering-service) writes data to object storage and commits snapshots via Gravitino
 3. Gravitino provides S3 credentials dynamically through credential vending (no static credentials needed)
 4. Any Iceberg-compatible engine (Flink, Spark, Trino, StarRocks, etc.) can discover and query the tiered tables through Gravitino
+5. The catalog is created once via the Gravitino API (:8090). Fluss then only uses the Iceberg REST service (:9001), which looks up the catalog in the metalake defined in gravitino.conf.
 
 ## Prerequisites
 
@@ -74,7 +75,7 @@ curl -X POST http://<gravitino-host>:8090/api/metalakes/{metalake name}/catalogs
     }'
 ```
 
-> **NOTE**: The `credential-providers: s3-secret-key` property enables credential vending. Gravitino will provide temporary S3 credentials to Fluss instead of requiring static credentials in Fluss configuration.
+> **NOTE**: Gravitino returns the S3 credentials to Fluss, so they don't need to be configured in Fluss
 
 ## Configure Fluss with Gravitino
 
@@ -102,6 +103,14 @@ datalake.iceberg.header.Authorization: Bearer <token>
 - `datalake.iceberg.uri`: Gravitino's Iceberg REST API endpoint (port 9001)
 - `datalake.iceberg.warehouse`: The catalog name created in Gravitino (not `metalake.catalog`, just `catalog`)
 - `datalake.iceberg.header.X-Iceberg-Access-Delegation: vended-credentials`: Enables credential vending
+
+> **Security**: The Gravitino Iceberg REST endpoint (port 9001) does not enforce authentication by default — any client that can reach it can read metadata. Note that credential vending is distinct from endpoint authentication: it controls *what S3 credentials* Fluss receives, not *who* can call the endpoint.
+>
+> For production deployments, you can configure Gravitino's server-side authentication. If authentication is enabled, pass the token via:
+> ```yaml
+> datalake.iceberg.header.Authorization: Bearer <token>
+> ```
+> See the [Gravitino Iceberg REST Service documentation](https://gravitino.apache.org/docs/latest/iceberg-rest-service/) for available authentication options.
 
 With credential vending enabled, you do **not** need to specify `s3-access-key-id` or `s3-secret-access-key` in Fluss configuration. However, you still need S3 endpoint configuration:
 
@@ -183,6 +192,37 @@ SET 'execution.runtime-mode' = 'batch';
 -- Union read: combines fresh data in Fluss with historical data in Iceberg
 SELECT COUNT(*) FROM orders;
 ```
+If you face "Unable to load credentials from any of the providers in the chain" error, you'll need to configure flink for S3 Access
+
+### Configure Flink for S3 Access
+
+When querying tiered data via Flink SQL, Flink needs credentials and configuration to read Parquet files directly from S3.
+
+> **NOTE**: Credential vending secures the Fluss-to-Iceberg communication but doesn't affect Flink-to-S3 reads. Flink requires its own S3 configuration for direct data file access.
+
+Configure S3 access for Flink by following the [Flink S3 FileSystem documentation](https://nightlies.apache.org/flink/flink-docs-stable/docs/deployment/filesystems/s3/). The key configuration options you need are:
+
+**For S3-compatible storage (like MinIO, RustFS):**
+
+```yaml
+# In flink-conf.yaml or FLINK_PROPERTIES
+s3.endpoint: http://<s3-endpoint>:9000
+s3.access-key: <access-key>
+s3.secret-key: <secret-key>
+s3.path-style-access: true
+```
+
+**Additionally, you may need:**
+
+```yaml
+# For Flink's FileSystem implementation
+fs.s3a.endpoint: http://<s3-endpoint>:9000
+fs.s3a.access.key: <access-key>
+fs.s3a.secret.key: <secret-key>
+fs.s3a.path.style.access: true
+```
+
+See the [Configure Access Credentials](https://nightlies.apache.org/flink/flink-docs-stable/docs/deployment/filesystems/s3/#configure-access-credentials) and [Configure Non-S3 Endpoint](https://nightlies.apache.org/flink/flink-docs-stable/docs/deployment/filesystems/s3/#configure-non-s3-endpoint) sections in the Flink documentation for details on different credential configuration methods (IAM roles, access keys, delegation tokens).
 
 For details on union reads, streaming reads, and reading with other engines, see [Iceberg - Read Tables](/docs/next/streaming-lakehouse/datalake-formats/iceberg/#read-tables).
 
