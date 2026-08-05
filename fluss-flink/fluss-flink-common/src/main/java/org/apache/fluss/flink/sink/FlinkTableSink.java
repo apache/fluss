@@ -124,8 +124,8 @@ public class FlinkTableSink
     @Override
     public ChangelogMode getChangelogMode(ChangelogMode requestedMode) {
         if (primaryKeyIndexes.length > 0 || (streaming && sinkIgnoreDelete)) {
-            // Primary-key tables can accept RowKind.DELETE from row-level DELETE in batch mode.
-            // In streaming mode, ignore-delete sinks can also accept and drop DELETE messages.
+            // Primary-key tables can accept row-level changes in batch mode. In streaming mode,
+            // ignore-delete sinks can also accept and drop DELETE messages.
             ChangelogMode.Builder builder = ChangelogMode.newBuilder();
             for (RowKind kind : requestedMode.getContainedKinds()) {
                 // optimize out the update_before messages
@@ -278,7 +278,7 @@ public class FlinkTableSink
 
     @Override
     public boolean applyDeleteFilters(List<ResolvedExpression> filters) {
-        validateUpdatableAndDeletable();
+        validateDeletable();
         if (filters.size() != primaryKeyIndexes.length) {
             // only supports delete on primary key
             return false;
@@ -329,7 +329,7 @@ public class FlinkTableSink
     @Override
     public RowLevelDeleteInfo applyRowLevelDelete(
             @Nullable RowLevelModificationScanContext rowLevelModificationScanContext) {
-        validateUpdatableAndDeletable();
+        validateDeletable();
         return new RowLevelDeleteInfo() {};
     }
 
@@ -337,7 +337,7 @@ public class FlinkTableSink
     public RowLevelUpdateInfo applyRowLevelUpdate(
             List<Column> updatedColumns,
             @Nullable RowLevelModificationScanContext rowLevelModificationScanContext) {
-        validateUpdatableAndDeletable();
+        validateUpdatable();
         Set<String> primaryKeys = getPrimaryKeyNames();
         updatedColumns.forEach(
                 column -> {
@@ -369,7 +369,7 @@ public class FlinkTableSink
         };
     }
 
-    private void validateUpdatableAndDeletable() {
+    private void validateUpdatable() {
         if (primaryKeyIndexes.length == 0) {
             throw new UnsupportedOperationException(
                     String.format(
@@ -382,8 +382,10 @@ public class FlinkTableSink
                             "Table %s uses the '%s' merge engine which does not support DELETE or UPDATE statements.",
                             tablePath, mergeEngineType));
         }
+    }
 
-        // Check table-level delete behavior configuration
+    private void validateDeletable() {
+        validateUpdatable();
         if (tableDeleteBehavior == DeleteBehavior.DISABLE) {
             throw new UnsupportedOperationException(
                     String.format(
