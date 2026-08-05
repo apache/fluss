@@ -56,6 +56,7 @@ import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.utils.FlussPaths.HISTORICAL_LOOKUP_CACHE_DIR_NAME;
 import static org.apache.fluss.utils.FlussPaths.KV_TABLET_DIR_PREFIX;
 import static org.apache.fluss.utils.FlussPaths.LOG_TABLET_DIR_PREFIX;
 import static org.apache.fluss.utils.FlussPaths.isPartitionDir;
@@ -115,6 +116,9 @@ public abstract class TabletManagerBase {
         // Get all database directory.
         File[] dbDirs = FileUtils.listDirectories(dataDir);
         for (File dbDir : dbDirs) {
+            if (dbDir.getName().equals(HISTORICAL_LOOKUP_CACHE_DIR_NAME)) {
+                continue;
+            }
             // Get all table path directory.
             File[] tableDirs = FileUtils.listDirectories(dbDir);
             for (File tableDir : tableDirs) {

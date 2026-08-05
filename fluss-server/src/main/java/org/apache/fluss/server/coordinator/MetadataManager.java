@@ -19,7 +19,6 @@ package org.apache.fluss.server.coordinator;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.exception.DatabaseAlreadyExistException;
 import org.apache.fluss.exception.DatabaseNotEmptyException;
 import org.apache.fluss.exception.DatabaseNotExistException;
@@ -88,7 +87,7 @@ public class MetadataManager {
     private final ZooKeeperClient zookeeperClient;
     private final int maxPartitionNum;
     private final int maxBucketNum;
-    private volatile MemorySize historicalLookupCacheMaxSize;
+    private volatile double historicalLookupCacheMaxRatio;
     private final LakeCatalogDynamicLoader lakeCatalogDynamicLoader;
 
     public static final Set<String> SENSITIVE_TABLE_OPTIONS = new HashSet<>();
@@ -112,8 +111,8 @@ public class MetadataManager {
         this.zookeeperClient = zookeeperClient;
         this.maxPartitionNum = conf.get(ConfigOptions.MAX_PARTITION_NUM);
         this.maxBucketNum = conf.get(ConfigOptions.MAX_BUCKET_NUM);
-        this.historicalLookupCacheMaxSize =
-                conf.get(ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE);
+        this.historicalLookupCacheMaxRatio =
+                conf.get(ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO);
         this.lakeCatalogDynamicLoader = lakeCatalogDynamicLoader;
     }
 
@@ -124,11 +123,11 @@ public class MetadataManager {
                 maxBucketNum,
                 lakeCatalogDynamicLoader.getLakeCatalogContainer().getDataLakeFormat(),
                 tablePath,
-                historicalLookupCacheMaxSize);
+                historicalLookupCacheMaxRatio);
     }
 
-    void updateHistoricalLookupCacheMaxSize(MemorySize newMaxSize) {
-        historicalLookupCacheMaxSize = newMaxSize;
+    void updateHistoricalLookupCacheMaxRatio(double newMaxRatio) {
+        historicalLookupCacheMaxRatio = newMaxRatio;
     }
 
     public void createDatabase(

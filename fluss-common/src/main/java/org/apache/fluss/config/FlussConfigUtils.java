@@ -49,7 +49,8 @@ public class FlussConfigUtils {
                 Arrays.asList(
                         ConfigOptions.TABLE_DATALAKE_ENABLED.key(),
                         ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED.key(),
-                        ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE
+                        ConfigOptions
+                                .TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO
                                 .key(),
                         ConfigOptions.TABLE_DATALAKE_FRESHNESS.key(),
                         ConfigOptions.TABLE_DATALAKE_AUTO_COMPACTION.key(),
@@ -228,7 +229,7 @@ public class FlussConfigUtils {
                 conf,
                 ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUPER_CACHE_EXPIRE_AFTER_ACCESS,
                 1);
-        validateHistoricalLookupCacheLimit(conf);
+        validateHistoricalLookupCacheRatio(conf);
 
         if (conf.get(ConfigOptions.LOG_SEGMENT_FILE_SIZE).getBytes() > Integer.MAX_VALUE) {
             throw new IllegalConfigurationException(
@@ -238,13 +239,13 @@ public class FlussConfigUtils {
         }
     }
 
-    private static void validateHistoricalLookupCacheLimit(Configuration conf) {
-        MemorySize historicalLookupCacheMaxSize =
-                conf.get(ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE);
-        if (historicalLookupCacheMaxSize.getBytes() <= 0) {
+    private static void validateHistoricalLookupCacheRatio(Configuration conf) {
+        double historicalLookupCacheMaxRatio =
+                conf.get(ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO);
+        if (!(historicalLookupCacheMaxRatio > 0.0 && historicalLookupCacheMaxRatio <= 1.0)) {
             throw new IllegalConfigurationException(
-                    "Invalid configuration for %s, it must be greater than 0 bytes.",
-                    ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE.key());
+                    "Invalid configuration for %s, it must be within (0.0, 1.0].",
+                    ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO.key());
         }
     }
 

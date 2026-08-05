@@ -198,7 +198,6 @@ public class ReplicaTestBase {
         } else {
             conf.setString(ConfigOptions.DATA_DIR, tempDir.getAbsolutePath());
         }
-        conf.set(ConfigOptions.SERVER_IO_TMP_DIR, tempDir.getAbsolutePath());
         conf.setString(ConfigOptions.COORDINATOR_HOST, "localhost");
         conf.set(ConfigOptions.REMOTE_DATA_DIR, tempDir.getAbsolutePath() + "/remote_data_dir");
         conf.set(ConfigOptions.SERVER_IO_POOL_SIZE, 2);

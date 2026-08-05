@@ -18,7 +18,6 @@
 package org.apache.fluss.server.utils;
 
 import org.apache.fluss.config.ConfigOptions;
-import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.Schema;
@@ -54,7 +53,7 @@ class HistoricalPartitionTableValidationTest {
                                         DataLakeFormat.PAIMON,
                                         TABLE_PATH,
                                         ConfigOptions
-                                                .SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE
+                                                .SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO
                                                 .defaultValue()))
                 .isInstanceOf(InvalidConfigException.class)
                 .hasMessage(
@@ -86,7 +85,7 @@ class HistoricalPartitionTableValidationTest {
                                         DataLakeFormat.PAIMON,
                                         TABLE_PATH,
                                         ConfigOptions
-                                                .SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE
+                                                .SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO
                                                 .defaultValue()))
                 .isInstanceOf(InvalidConfigException.class)
                 .hasMessage(
@@ -98,35 +97,35 @@ class HistoricalPartitionTableValidationTest {
     }
 
     @Test
-    void testValidateHistoricalLookupCacheSize() {
+    void testValidateHistoricalLookupCacheRatio() {
         TableDescriptor ordinaryTableDescriptor =
                 TableDescriptor.builder()
                         .schema(Schema.newBuilder().column("id", DataTypes.INT()).build())
                         .distributedBy(1)
                         .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 1)
                         .build();
-        assertThatCode(() -> validate(ordinaryTableDescriptor, MemorySize.parse("4gb")))
-                .doesNotThrowAnyException();
+        assertThatCode(() -> validate(ordinaryTableDescriptor, 0.05)).doesNotThrowAnyException();
 
-        TableDescriptor zeroSizeDescriptor = descriptorWithCacheSize(MemorySize.ZERO);
-        assertThatThrownBy(() -> validate(zeroSizeDescriptor, MemorySize.parse("80gb")))
+        TableDescriptor zeroRatioDescriptor = descriptorWithCacheRatio(0.0);
+        assertThatThrownBy(() -> validate(zeroRatioDescriptor, 0.1))
                 .isInstanceOf(InvalidConfigException.class)
                 .hasMessageContaining(
-                        ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE
+                        ConfigOptions
+                                .TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO
                                 .key())
                 .hasMessageContaining(TABLE_PATH.toString())
-                .hasMessageContaining("greater than 0 bytes");
+                .hasMessageContaining("within (0.0, 1.0]");
 
-        TableDescriptor oversizedDescriptor = descriptorWithCacheSize(MemorySize.parse("16gb"));
-        assertThatThrownBy(() -> validate(oversizedDescriptor, MemorySize.parse("8gb")))
+        TableDescriptor oversizedDescriptor = descriptorWithCacheRatio(0.2);
+        assertThatThrownBy(() -> validate(oversizedDescriptor, 0.1))
                 .isInstanceOf(InvalidConfigException.class)
-                .hasMessageContaining("16 gb")
+                .hasMessageContaining("0.2")
                 .hasMessageContaining(
-                        ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE.key())
-                .hasMessageContaining("8 gb");
+                        ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO.key())
+                .hasMessageContaining("0.1");
     }
 
-    private static TableDescriptor descriptorWithCacheSize(MemorySize cacheSize) {
+    private static TableDescriptor descriptorWithCacheRatio(double cacheRatio) {
         return TableDescriptor.builder()
                 .schema(
                         Schema.newBuilder()
@@ -143,13 +142,13 @@ class HistoricalPartitionTableValidationTest {
                 .property(ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED, true)
                 .property(
                         ConfigOptions
-                                .TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE,
-                        cacheSize)
+                                .TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO,
+                        cacheRatio)
                 .build();
     }
 
-    private static void validate(TableDescriptor descriptor, MemorySize globalCacheSize) {
+    private static void validate(TableDescriptor descriptor, double globalCacheRatio) {
         TableDescriptorValidation.validateTableDescriptor(
-                descriptor, 100, DataLakeFormat.PAIMON, TABLE_PATH, globalCacheSize);
+                descriptor, 100, DataLakeFormat.PAIMON, TABLE_PATH, globalCacheRatio);
     }
 }

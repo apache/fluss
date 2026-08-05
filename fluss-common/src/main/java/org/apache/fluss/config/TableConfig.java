@@ -105,10 +105,10 @@ public class TableConfig {
         return config.get(ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED);
     }
 
-    /** Gets the maximum local disk size of the historical partition lookup cache. */
-    public MemorySize getHistoricalPartitionLookupCacheMaxDiskSize() {
+    /** Gets the maximum local disk ratio of the historical partition lookup cache. */
+    public double getHistoricalPartitionLookupCacheMaxDiskRatio() {
         return config.get(
-                ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE);
+                ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO);
     }
 
     /**

@@ -53,6 +53,11 @@ public class FlussPaths {
     /** Prefix of a local kv tablet directory to store kv files for a specific kv tablet. */
     public static final String KV_TABLET_DIR_PREFIX = "kv-";
 
+    /**
+     * The directory name for historical lookup cache files under the first local data directory.
+     */
+    public static final String HISTORICAL_LOOKUP_CACHE_DIR_NAME = ".historical-lookup-cache";
+
     /** Prefix for a partition id to distinguish between table id and partition id. */
     public static final String PARTITION_DIR_PREFIX = "p";
 
@@ -146,6 +151,15 @@ public class FlussPaths {
             File dataDir, PhysicalTablePath tablePath, TableBucket tableBucket) {
         final Path tabletParentDir = tabletParentDir(dataDir, tablePath, tableBucket);
         return tabletParentDir.resolve(KV_TABLET_DIR_PREFIX + tableBucket.getBucket()).toFile();
+    }
+
+    /**
+     * Returns the historical lookup cache root under the first local data directory.
+     *
+     * @param firstDataDir the first available local data directory
+     */
+    public static File historicalLookupRootDir(File firstDataDir) {
+        return new File(firstDataDir, HISTORICAL_LOOKUP_CACHE_DIR_NAME);
     }
 
     /**

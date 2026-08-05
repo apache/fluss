@@ -219,19 +219,20 @@ class FlussConfigUtilsTest {
     void testValidateHistoricalLookupCacheConfigs() {
         Configuration conf = new Configuration();
         conf.set(ConfigOptions.REMOTE_DATA_DIR, "s3://bucket/path");
-        conf.set(
-                ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE,
-                MemorySize.ZERO);
+        conf.set(ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO, 0.0);
 
         assertThatThrownBy(() -> validateCoordinatorConfigs(conf))
                 .isInstanceOf(IllegalConfigurationException.class)
                 .hasMessageContaining(
-                        ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE.key())
-                .hasMessageContaining("greater than 0 bytes");
+                        ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO.key())
+                .hasMessageContaining("within (0.0, 1.0]");
 
-        conf.set(
-                ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE,
-                MemorySize.parse("4gb"));
+        conf.set(ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO, 1.01);
+        assertThatThrownBy(() -> validateCoordinatorConfigs(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining("within (0.0, 1.0]");
+
+        conf.set(ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO, 0.1);
         conf.set(
                 ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUPER_CACHE_EXPIRE_AFTER_ACCESS,
                 Duration.ZERO);
@@ -244,7 +245,7 @@ class FlussConfigUtilsTest {
         assertThat(
                         FlussConfigUtils.isAlterableTableOption(
                                 ConfigOptions
-                                        .TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE
+                                        .TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO
                                         .key()))
                 .isTrue();
     }

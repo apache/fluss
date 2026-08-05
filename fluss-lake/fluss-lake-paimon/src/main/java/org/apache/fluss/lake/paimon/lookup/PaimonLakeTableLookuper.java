@@ -18,6 +18,7 @@
 package org.apache.fluss.lake.paimon.lookup;
 
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.lake.lakestorage.LakeTableLookuper;
@@ -67,6 +68,7 @@ import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_2;
 import static org.apache.fluss.lake.paimon.PaimonLakeCatalog.SYSTEM_COLUMNS;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimonPartition;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /**
@@ -92,6 +94,7 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
     private final TablePath tablePath;
     private final String ioTmpDir;
     private final TableConfig tableConfig;
+    private final long lookupCacheMaxDiskBytes;
 
     private final Set<PaimonPartitionBucket> initializedBuckets;
 
@@ -114,15 +117,20 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
     private @Nullable InternalRow.FieldGetter[] cachedValueFieldGetters;
     private boolean closed;
 
+    /** Creates a lookuper with the specified local lookup cache limit. */
     public PaimonLakeTableLookuper(
             Configuration paimonConfig,
             TablePath tablePath,
             String ioTmpDir,
-            TableConfig tableConfig) {
+            TableConfig tableConfig,
+            long lookupCacheMaxDiskBytes) {
         this.paimonConfig = checkNotNull(paimonConfig, "paimonConfig must not be null.");
         this.tablePath = checkNotNull(tablePath, "tablePath must not be null.");
         this.ioTmpDir = checkNotNull(ioTmpDir, "ioTmpDir must not be null.");
         this.tableConfig = checkNotNull(tableConfig, "tableConfig must not be null.");
+        checkArgument(
+                lookupCacheMaxDiskBytes > 0, "lookupCacheMaxDiskBytes must be greater than 0.");
+        this.lookupCacheMaxDiskBytes = lookupCacheMaxDiskBytes;
         this.initializedBuckets = new HashSet<>();
     }
 
@@ -245,7 +253,7 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
 
     private FileStoreTable withLookupCacheOptions(FileStoreTable table) {
         String key = CoreOptions.LOOKUP_CACHE_MAX_DISK_SIZE.key();
-        String maxDiskSize = tableConfig.getHistoricalPartitionLookupCacheMaxDiskSize().toString();
+        String maxDiskSize = new MemorySize(lookupCacheMaxDiskBytes).toString();
         return table.copy(Collections.singletonMap(key, maxDiskSize));
     }
 

@@ -46,16 +46,15 @@ class TableConfigTest {
     }
 
     @Test
-    void testHistoricalPartitionLookupCacheMaxDiskSize() {
+    void testHistoricalPartitionLookupCacheMaxDiskRatio() {
         Configuration conf = new Configuration();
         TableConfig tableConfig = new TableConfig(conf);
-        assertThat(tableConfig.getHistoricalPartitionLookupCacheMaxDiskSize())
-                .isEqualTo(MemorySize.parse("8gb"));
+        assertThat(tableConfig.getHistoricalPartitionLookupCacheMaxDiskRatio()).isEqualTo(0.01);
 
         conf.set(
-                ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE,
-                MemorySize.parse("16gb"));
-        assertThat(new TableConfig(conf).getHistoricalPartitionLookupCacheMaxDiskSize())
-                .isEqualTo(MemorySize.parse("16gb"));
+                ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO,
+                0.02);
+        assertThat(new TableConfig(conf).getHistoricalPartitionLookupCacheMaxDiskRatio())
+                .isEqualTo(0.02);
     }
 }

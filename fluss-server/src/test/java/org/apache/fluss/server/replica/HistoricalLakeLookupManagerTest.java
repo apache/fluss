@@ -35,6 +35,7 @@ import org.apache.fluss.rpc.entity.LookupResultForBucket;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.entity.LookupDataForBucket;
 import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.utils.FlussPaths;
 
 import com.github.benmanes.caffeine.cache.Scheduler;
 import com.github.benmanes.caffeine.cache.Ticker;
@@ -70,7 +71,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /** Tests for {@link HistoricalLakeLookupManager}. */
 class HistoricalLakeLookupManagerTest {
 
-    private static final int SERVER_ID = 1;
+    private static final long LOOKUP_VOLUME_BYTES = MemorySize.parse("800gb").getBytes();
     private static final TableBucket HISTORICAL_BUCKET = new TableBucket(PARTITION_TABLE_ID, 1L, 0);
     private static final LakeTableLookuper.LookupMetricRecorder NO_OP_LOOKUP_METRIC_RECORDER =
             (lookupTimeNanos, lookupFileMaterialization) -> {};
@@ -187,7 +188,8 @@ class HistoricalLakeLookupManagerTest {
                                         conf,
                                         null,
                                         executor,
-                                        SERVER_ID,
+                                        ioTmpDir,
+                                        LOOKUP_VOLUME_BYTES,
                                         Ticker.systemTicker(),
                                         Scheduler.disabledScheduler()))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -207,7 +209,8 @@ class HistoricalLakeLookupManagerTest {
                                         conf,
                                         null,
                                         null,
-                                        SERVER_ID,
+                                        ioTmpDir,
+                                        LOOKUP_VOLUME_BYTES,
                                         Ticker.systemTicker(),
                                         Scheduler.disabledScheduler()))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -216,9 +219,8 @@ class HistoricalLakeLookupManagerTest {
     }
 
     @Test
-    void testCleansPaimonLookupTempDirectoryOnStartupAndCreatesItLazily() throws Exception {
-        File serverLookupDir =
-                new File(new File(ioTmpDir, "paimon-lookup"), String.valueOf(SERVER_ID));
+    void testCleansLookupCacheDirectoryOnStartupAndCreatesItLazily() throws Exception {
+        File serverLookupDir = FlussPaths.historicalLookupRootDir(ioTmpDir);
         assertThat(serverLookupDir.mkdirs()).isTrue();
         File staleLookupFile = new File(serverLookupDir, "stale-lookup-file");
         assertThat(staleLookupFile.createNewFile()).isTrue();
@@ -317,15 +319,11 @@ class HistoricalLakeLookupManagerTest {
     }
 
     @Test
-    void testReplacesLookuperOnlyWhenEffectiveCacheSizeChanges() throws Exception {
+    void testReplacesLookuperOnlyWhenEffectiveCacheRatioChanges() throws Exception {
         ManualExecutor executor = new ManualExecutor();
         TestingHistoricalLakeLookupManager manager = createTestingManager(executor);
 
-        lookupAndRun(
-                manager,
-                executor,
-                PARTITION_TABLE_INFO,
-                tableConfigWithCacheSize(MemorySize.parse("8gb")));
+        lookupAndRun(manager, executor, PARTITION_TABLE_INFO, tableConfigWithCacheRatio(0.01));
         TestingLakeTableLookuper initialLookuper = manager.createdLookupers.get(0);
 
         Configuration unrelatedChange = new Configuration();
@@ -333,28 +331,16 @@ class HistoricalLakeLookupManagerTest {
                 ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS,
                 ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS.defaultValue() + 1);
         lookupAndRun(manager, executor, PARTITION_TABLE_INFO, new TableConfig(unrelatedChange));
-        lookupAndRun(
-                manager,
-                executor,
-                PARTITION_TABLE_INFO,
-                tableConfigWithCacheSize(MemorySize.parse("8gb")));
+        lookupAndRun(manager, executor, PARTITION_TABLE_INFO, tableConfigWithCacheRatio(0.01));
 
         assertThat(manager.createdLookupers).hasSize(1);
         assertThat(initialLookuper.closed).isFalse();
 
-        lookupAndRun(
-                manager,
-                executor,
-                PARTITION_TABLE_INFO,
-                tableConfigWithCacheSize(MemorySize.parse("4gb")));
+        lookupAndRun(manager, executor, PARTITION_TABLE_INFO, tableConfigWithCacheRatio(0.005));
 
         assertThat(initialLookuper.closed).isTrue();
         assertThat(manager.createdLookupers).hasSize(2);
-        assertThat(
-                        manager.createdTableConfigs
-                                .get(1)
-                                .getHistoricalPartitionLookupCacheMaxDiskSize())
-                .isEqualTo(MemorySize.parse("4gb"));
+        assertThat(manager.createdCacheSizes.get(1)).isEqualTo(MemorySize.parse("4gb").getBytes());
     }
 
     @Test
@@ -399,9 +385,7 @@ class HistoricalLakeLookupManagerTest {
         ManualExecutor executor = new ManualExecutor();
         AtomicLong tickerNanos = new AtomicLong();
         Configuration conf = conf(1);
-        conf.set(
-                ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE,
-                MemorySize.parse("16gb"));
+        conf.set(ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO, 0.02);
         TestingHistoricalLakeLookupManager manager =
                 new TestingHistoricalLakeLookupManager(
                         conf, executor, tickerNanos::get, Scheduler.disabledScheduler());
@@ -431,9 +415,7 @@ class HistoricalLakeLookupManagerTest {
     void testReconfiguresGlobalCapacityLazily() throws Exception {
         ManualExecutor executor = new ManualExecutor();
         Configuration conf = conf(1);
-        conf.set(
-                ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE,
-                MemorySize.parse("96gb"));
+        conf.set(ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO, 0.12);
         TestingHistoricalLakeLookupManager manager =
                 new TestingHistoricalLakeLookupManager(conf, executor);
         manager.startup();
@@ -452,8 +434,7 @@ class HistoricalLakeLookupManagerTest {
         // Changing only the global limit must not recreate an existing lookuper.
         Configuration increasedConf = new Configuration(conf);
         increasedConf.set(
-                ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE,
-                MemorySize.parse("104gb"));
+                ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO, 0.13);
         manager.reconfigure(increasedConf);
         lookupAndRun(
                 manager,
@@ -467,8 +448,7 @@ class HistoricalLakeLookupManagerTest {
         // A reduction is lazy: cached lookupers remain until another admission needs capacity.
         Configuration reducedConf = new Configuration(increasedConf);
         reducedConf.set(
-                ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE,
-                MemorySize.parse("88gb"));
+                ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO, 0.11);
         manager.reconfigure(reducedConf);
 
         assertThat(manager.cachedTableCount()).isEqualTo(12);
@@ -521,24 +501,24 @@ class HistoricalLakeLookupManagerTest {
                             thread.setDaemon(true);
                             return thread;
                         });
-        MemorySize initialCacheSize = MemorySize.parse("4gb");
-        MemorySize replacementCacheSize = MemorySize.parse("8gb");
+        double initialCacheRatio = 0.005;
+        double replacementCacheRatio = 0.01;
         Configuration conf = conf(2);
         conf.set(
-                ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE,
-                replacementCacheSize);
+                ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO,
+                replacementCacheRatio);
         CoordinatedReplacementManager manager =
-                new CoordinatedReplacementManager(conf, executor, replacementCacheSize);
+                new CoordinatedReplacementManager(conf, executor, replacementCacheRatio);
         manager.startup();
 
         TableInfo first =
-                tableInfoWithCacheSize(
-                        PARTITION_TABLE_ID, PARTITION_TABLE_INFO.getSchemaId(), initialCacheSize);
+                tableInfoWithCacheRatio(
+                        PARTITION_TABLE_ID, PARTITION_TABLE_INFO.getSchemaId(), initialCacheRatio);
         TableInfo second =
-                tableInfoWithCacheSize(
+                tableInfoWithCacheRatio(
                         PARTITION_TABLE_ID + 1,
                         PARTITION_TABLE_INFO.getSchemaId(),
-                        initialCacheSize);
+                        initialCacheRatio);
         try {
             assertThat(lookup(manager, first).get(5, TimeUnit.SECONDS).failed()).isFalse();
             assertThat(lookup(manager, second).get(5, TimeUnit.SECONDS).failed()).isFalse();
@@ -546,11 +526,11 @@ class HistoricalLakeLookupManagerTest {
             // Both replacements hold their own table's compute lock before admission fails. LRU
             // eviction must happen after those locks are released to avoid cross-key deadlock.
             TableInfo firstReplacement =
-                    tableInfoWithCacheSize(
-                            first.getTableId(), first.getSchemaId() + 1, replacementCacheSize);
+                    tableInfoWithCacheRatio(
+                            first.getTableId(), first.getSchemaId() + 1, replacementCacheRatio);
             TableInfo secondReplacement =
-                    tableInfoWithCacheSize(
-                            second.getTableId(), second.getSchemaId() + 1, replacementCacheSize);
+                    tableInfoWithCacheRatio(
+                            second.getTableId(), second.getSchemaId() + 1, replacementCacheRatio);
             CompletableFuture<LookupResultForBucket> firstResult =
                     lookup(manager, firstReplacement);
             CompletableFuture<LookupResultForBucket> secondResult =
@@ -571,12 +551,10 @@ class HistoricalLakeLookupManagerTest {
     }
 
     @Test
-    void testThrottlesWhenTableCacheSizeExceedsRuntimeLimit() throws Exception {
+    void testThrottlesWhenTableCacheRatioExceedsRuntimeLimit() throws Exception {
         ManualExecutor executor = new ManualExecutor();
         Configuration conf = conf(1);
-        conf.set(
-                ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE,
-                MemorySize.parse("8gb"));
+        conf.set(ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO, 0.01);
         TestingHistoricalLakeLookupManager manager =
                 new TestingHistoricalLakeLookupManager(conf, executor);
         manager.startup();
@@ -585,10 +563,8 @@ class HistoricalLakeLookupManagerTest {
                 lookupResultAndRun(
                         manager,
                         executor,
-                        tableInfoWithCacheSize(
-                                PARTITION_TABLE_ID,
-                                PARTITION_TABLE_INFO.getSchemaId(),
-                                MemorySize.parse("16gb")));
+                        tableInfoWithCacheRatio(
+                                PARTITION_TABLE_ID, PARTITION_TABLE_INFO.getSchemaId(), 0.02));
 
         assertThat(result.getError().error()).isEqualTo(Errors.HISTORICAL_PARTITION_THROTTLED);
         assertThat(manager.createdLookupers).isEmpty();
@@ -602,7 +578,8 @@ class HistoricalLakeLookupManagerTest {
                         conf(maxQueuedHistoricalRequests),
                         null,
                         executor,
-                        SERVER_ID,
+                        ioTmpDir,
+                        LOOKUP_VOLUME_BYTES,
                         Ticker.systemTicker(),
                         Scheduler.disabledScheduler());
         manager.startup();
@@ -621,7 +598,7 @@ class HistoricalLakeLookupManagerTest {
         conf.set(
                 ConfigOptions.NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS,
                 maxQueuedHistoricalRequests);
-        conf.set(ConfigOptions.SERVER_IO_TMP_DIR, ioTmpDir.getAbsolutePath());
+        conf.set(ConfigOptions.DATA_DIR, ioTmpDir.getAbsolutePath());
         return conf;
     }
 
@@ -664,14 +641,14 @@ class HistoricalLakeLookupManagerTest {
                 PARTITION_TABLE_INFO.getModifiedTime());
     }
 
-    private static TableInfo tableInfoWithCacheSize(
-            long tableId, int schemaId, MemorySize cacheSize) {
+    private static TableInfo tableInfoWithCacheRatio(
+            long tableId, int schemaId, double cacheRatio) {
         TableDescriptor descriptor =
                 TableDescriptor.builder(PARTITION_TABLE_INFO.toTableDescriptor())
                         .property(
                                 ConfigOptions
-                                        .TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE,
-                                cacheSize)
+                                        .TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO,
+                                cacheRatio)
                         .build();
         return TableInfo.of(
                 PARTITION_TABLE_INFO.getTablePath(),
@@ -683,11 +660,11 @@ class HistoricalLakeLookupManagerTest {
                 PARTITION_TABLE_INFO.getModifiedTime());
     }
 
-    private static TableConfig tableConfigWithCacheSize(MemorySize cacheSize) {
+    private static TableConfig tableConfigWithCacheRatio(double cacheRatio) {
         Configuration conf = new Configuration();
         conf.set(
-                ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE,
-                cacheSize);
+                ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO,
+                cacheRatio);
         return new TableConfig(conf);
     }
 
@@ -761,6 +738,7 @@ class HistoricalLakeLookupManagerTest {
         private final List<TestingLakeTableLookuper> createdLookupers = new ArrayList<>();
         private final List<String> createdIoTmpDirs = new ArrayList<>();
         private final List<TableConfig> createdTableConfigs = new ArrayList<>();
+        private final List<Long> createdCacheSizes = new ArrayList<>();
         private final List<Configuration> createdClusterConfigs = new ArrayList<>();
 
         private TestingHistoricalLakeLookupManager(Configuration conf, ManualExecutor executor) {
@@ -768,7 +746,8 @@ class HistoricalLakeLookupManagerTest {
                     conf,
                     null,
                     executor,
-                    SERVER_ID,
+                    new File(conf.get(ConfigOptions.DATA_DIR)),
+                    LOOKUP_VOLUME_BYTES,
                     Ticker.systemTicker(),
                     Scheduler.disabledScheduler());
         }
@@ -778,7 +757,14 @@ class HistoricalLakeLookupManagerTest {
                 ManualExecutor executor,
                 Ticker ticker,
                 Scheduler cacheScheduler) {
-            super(conf, null, executor, SERVER_ID, ticker, cacheScheduler);
+            super(
+                    conf,
+                    null,
+                    executor,
+                    new File(conf.get(ConfigOptions.DATA_DIR)),
+                    LOOKUP_VOLUME_BYTES,
+                    ticker,
+                    cacheScheduler);
         }
 
         @Override
@@ -786,11 +772,13 @@ class HistoricalLakeLookupManagerTest {
                 TablePath tablePath,
                 String ioTmpDir,
                 TableConfig tableConfig,
+                long cacheSizeBytes,
                 Configuration clusterConf) {
             TestingLakeTableLookuper lookuper = new TestingLakeTableLookuper();
             createdLookupers.add(lookuper);
             createdIoTmpDirs.add(ioTmpDir);
             createdTableConfigs.add(tableConfig);
+            createdCacheSizes.add(cacheSizeBytes);
             createdClusterConfigs.add(clusterConf);
             return lookuper;
         }
@@ -816,20 +804,21 @@ class HistoricalLakeLookupManagerTest {
     }
 
     private static final class CoordinatedReplacementManager extends HistoricalLakeLookupManager {
-        private final MemorySize replacementCacheSize;
+        private final double replacementCacheRatio;
         private final CyclicBarrier replacementBarrier = new CyclicBarrier(2);
         private final AtomicInteger coordinatedCreations = new AtomicInteger();
 
         private CoordinatedReplacementManager(
-                Configuration conf, ExecutorService executor, MemorySize replacementCacheSize) {
+                Configuration conf, ExecutorService executor, double replacementCacheRatio) {
             super(
                     conf,
                     null,
                     executor,
-                    SERVER_ID,
+                    new File(conf.get(ConfigOptions.DATA_DIR)),
+                    LOOKUP_VOLUME_BYTES,
                     Ticker.systemTicker(),
                     Scheduler.disabledScheduler());
-            this.replacementCacheSize = replacementCacheSize;
+            this.replacementCacheRatio = replacementCacheRatio;
         }
 
         @Override
@@ -837,10 +826,12 @@ class HistoricalLakeLookupManagerTest {
                 TablePath tablePath,
                 String ioTmpDir,
                 TableConfig tableConfig,
+                long cacheSizeBytes,
                 Configuration clusterConf) {
-            if (tableConfig
-                            .getHistoricalPartitionLookupCacheMaxDiskSize()
-                            .equals(replacementCacheSize)
+            if (Double.compare(
+                                    tableConfig.getHistoricalPartitionLookupCacheMaxDiskRatio(),
+                                    replacementCacheRatio)
+                            == 0
                     && coordinatedCreations.getAndIncrement() < 2) {
                 try {
                     replacementBarrier.await(5, TimeUnit.SECONDS);

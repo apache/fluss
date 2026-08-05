@@ -22,7 +22,6 @@ import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.config.ReadableConfig;
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.InvalidAlterTableException;
@@ -94,7 +93,7 @@ public class TableDescriptorValidation {
             int maxBucketNum,
             @Nullable DataLakeFormat clusterDataLakeFormat,
             TablePath tablePath,
-            MemorySize historicalLookupCacheMaxSize) {
+            double historicalLookupCacheMaxRatio) {
         Schema schema = tableDescriptor.getSchema();
         boolean hasPrimaryKey = schema.getPrimaryKey().isPresent();
         Configuration tableConf = Configuration.fromMap(tableDescriptor.getProperties());
@@ -133,7 +132,7 @@ public class TableDescriptorValidation {
         checkTieredLog(tableConf);
         checkHistoricalPartition(tableDescriptor, tableConf);
         if (tableConf.get(ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED)) {
-            checkHistoricalLookupCacheSize(tableConf, tablePath, historicalLookupCacheMaxSize);
+            checkHistoricalLookupCacheRatio(tableConf, tablePath, historicalLookupCacheMaxRatio);
         }
         checkPartition(tableConf, tableDescriptor.getPartitionKeys(), schema.getRowType());
         checkSystemColumns(schema.getRowType());
@@ -234,33 +233,33 @@ public class TableDescriptorValidation {
         }
     }
 
-    private static void checkHistoricalLookupCacheSize(
-            Configuration tableConf, TablePath tablePath, MemorySize historicalLookupCacheMaxSize) {
-        MemorySize tableCacheSize =
+    private static void checkHistoricalLookupCacheRatio(
+            Configuration tableConf, TablePath tablePath, double historicalLookupCacheMaxRatio) {
+        double tableCacheRatio =
                 tableConf.get(
                         ConfigOptions
-                                .TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE);
-        if (tableCacheSize.getBytes() <= 0) {
+                                .TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO);
+        if (!(tableCacheRatio > 0.0 && tableCacheRatio <= 1.0)) {
             throw new InvalidConfigException(
                     String.format(
-                            "'%s' for table '%s' must be greater than 0 bytes.",
+                            "'%s' for table '%s' must be within (0.0, 1.0].",
                             ConfigOptions
-                                    .TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE
+                                    .TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO
                                     .key(),
                             tablePath));
         }
-        if (tableCacheSize.compareTo(historicalLookupCacheMaxSize) > 0) {
+        if (Double.compare(tableCacheRatio, historicalLookupCacheMaxRatio) > 0) {
             throw new InvalidConfigException(
                     String.format(
                             "'%s' (%s) for table '%s' must be less than or equal to '%s' (%s).",
                             ConfigOptions
-                                    .TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE
+                                    .TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO
                                     .key(),
-                            tableCacheSize,
+                            tableCacheRatio,
                             tablePath,
-                            ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE
+                            ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO
                                     .key(),
-                            historicalLookupCacheMaxSize));
+                            historicalLookupCacheMaxRatio));
         }
     }
 

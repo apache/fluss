@@ -19,7 +19,6 @@ package org.apache.fluss.server.coordinator;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.config.cluster.ServerReconfigurable;
 import org.apache.fluss.exception.ConfigException;
 
@@ -38,13 +37,14 @@ final class HistoricalLookupCacheConfigUpdater implements ServerReconfigurable {
 
     @Override
     public void validate(Configuration newConfig) throws ConfigException {
-        MemorySize newMaxSize =
-                newConfig.get(ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE);
-        if (newMaxSize.getBytes() <= 0) {
+        double newMaxRatio =
+                newConfig.get(
+                        ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO);
+        if (!(newMaxRatio > 0.0 && newMaxRatio <= 1.0)) {
             throw new ConfigException(
                     String.format(
-                            "Invalid configuration for %s, it must be greater than 0 bytes.",
-                            ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE
+                            "Invalid configuration for %s, it must be within (0.0, 1.0].",
+                            ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO
                                     .key()));
         }
 
@@ -64,8 +64,8 @@ final class HistoricalLookupCacheConfigUpdater implements ServerReconfigurable {
 
     @Override
     public void reconfigure(Configuration newConfig) {
-        metadataManager.updateHistoricalLookupCacheMaxSize(
+        metadataManager.updateHistoricalLookupCacheMaxRatio(
                 newConfig.get(
-                        ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE));
+                        ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO));
     }
 }

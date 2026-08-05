@@ -360,8 +360,17 @@ public class ReplicaManager implements ServerReconfigurable {
         this.ioExecutor = ioExecutor;
         this.minInSyncReplicas = conf.get(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER);
         this.scannerManager = checkNotNull(scannerManager, "scannerManager");
+        // Historical lookup cache capacity currently uses only the first data volume.
+        File historicalLookupDataDir = localDiskManager.dataDirs().get(0);
+        long historicalLookupVolumeBytes =
+                Files.getFileStore(historicalLookupDataDir.toPath()).getTotalSpace();
         this.historicalLakeLookupManager =
-                new HistoricalLakeLookupManager(conf, pluginManager, serverId, scheduler);
+                new HistoricalLakeLookupManager(
+                        conf,
+                        pluginManager,
+                        historicalLookupDataDir,
+                        historicalLookupVolumeBytes,
+                        scheduler);
         serverMetricGroup.registerHistoricalPartitionInflightRequests(
                 "lookup", historicalLakeLookupManager::numInflightRequests);
 

@@ -401,12 +401,12 @@ public abstract class FlinkProcedureITCase {
         try (CloseableIterator<Row> resultIterator =
                 tEnv.executeSql(
                                 String.format(
-                                        "Call %s.sys.set_cluster_configs('%s', '300MB', '%s', 'paimon', '%s', '96GB')",
+                                        "Call %s.sys.set_cluster_configs('%s', '300MB', '%s', 'paimon', '%s', '0.12')",
                                         CATALOG_NAME,
                                         ConfigOptions.KV_SHARED_RATE_LIMITER_BYTES_PER_SEC.key(),
                                         ConfigOptions.DATALAKE_FORMAT.key(),
                                         ConfigOptions
-                                                .SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE
+                                                .SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO
                                                 .key()))
                         .collect()) {
             List<Row> results = CollectionUtil.iteratorToList(resultIterator);
@@ -423,9 +423,9 @@ public abstract class FlinkProcedureITCase {
 
             assertThat(results.get(2).getField(0))
                     .asString()
-                    .contains("Successfully set to '96GB'")
+                    .contains("Successfully set to '0.12'")
                     .contains(
-                            ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE
+                            ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO
                                     .key());
         }
 
@@ -448,12 +448,12 @@ public abstract class FlinkProcedureITCase {
                                         "Call %s.sys.get_cluster_configs('%s')",
                                         CATALOG_NAME,
                                         ConfigOptions
-                                                .SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE
+                                                .SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO
                                                 .key()))
                         .collect()) {
             List<Row> results = CollectionUtil.iteratorToList(resultIterator);
             assertThat(results).hasSize(1);
-            assertThat(results.get(0).getField(1)).isEqualTo("96GB");
+            assertThat(results.get(0).getField(1)).isEqualTo("0.12");
         }
 
         // reset cluster configs.
@@ -463,7 +463,8 @@ public abstract class FlinkProcedureITCase {
                                 CATALOG_NAME,
                                 ConfigOptions.KV_SHARED_RATE_LIMITER_BYTES_PER_SEC.key(),
                                 ConfigOptions.DATALAKE_FORMAT.key(),
-                                ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE
+                                ConfigOptions
+                                        .SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO
                                         .key()))
                 .await();
     }

@@ -105,7 +105,6 @@ class HistoricalLakeLookupManager implements AutoCloseable {
 
     private static final Logger LOG = LoggerFactory.getLogger(HistoricalLakeLookupManager.class);
 
-    private static final String PAIMON_LOOKUP_DIR_NAME = "paimon-lookup";
     private static final String LOOKUPER_CACHE_EXPIRATION_TASK_NAME =
             "historical-lookuper-cache-expiration";
     private static final Duration HISTORICAL_PARTITION_THREAD_KEEP_ALIVE = Duration.ofMinutes(10);
@@ -124,23 +123,26 @@ class HistoricalLakeLookupManager implements AutoCloseable {
     private final Set<CompletableFuture<LookupResultForBucket>> pendingLookups;
     private final Cache<Long, CachedLakeTableLookuper> lakeTableLookupers;
     private final ExecutorService historicalPartitionExecutor;
-    private final File paimonLookupTempDir;
+    private final File historicalLookupCacheRootDir;
+    private final long lookupVolumeBytes;
 
     @GuardedBy("this")
-    private boolean paimonLookupTempDirCreated;
+    private boolean historicalLookupCacheRootDirCreated;
 
     private volatile boolean started;
 
     HistoricalLakeLookupManager(
             Configuration conf,
             @Nullable PluginManager pluginManager,
-            int serverId,
+            File firstDataDir,
+            long lookupVolumeBytes,
             Scheduler scheduler) {
         this(
                 conf,
                 pluginManager,
                 null,
-                serverId,
+                firstDataDir,
+                lookupVolumeBytes,
                 Ticker.systemTicker(),
                 createCacheScheduler(scheduler));
     }
@@ -150,18 +152,23 @@ class HistoricalLakeLookupManager implements AutoCloseable {
             Configuration conf,
             @Nullable PluginManager pluginManager,
             @Nullable ExecutorService historicalPartitionExecutor,
-            int serverId,
+            File firstDataDir,
+            long lookupVolumeBytes,
             Ticker ticker,
             com.github.benmanes.caffeine.cache.Scheduler cacheScheduler) {
         this.conf = checkNotNull(conf, "conf must not be null.");
         this.pluginManager = pluginManager;
-        this.paimonLookupTempDir = resolvePaimonLookupTempDir(conf, serverId);
+        this.historicalLookupCacheRootDir =
+                FlussPaths.historicalLookupRootDir(
+                        checkNotNull(firstDataDir, "firstDataDir must not be null."));
+        checkArgument(lookupVolumeBytes > 0, "lookupVolumeBytes must be greater than 0.");
+        this.lookupVolumeBytes = lookupVolumeBytes;
         this.budgetManager =
                 new HistoricalLookupCacheBudgetManager(
-                        conf.get(
+                        capacityBytes(
+                                conf.get(
                                         ConfigOptions
-                                                .SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE)
-                                .getBytes());
+                                                .SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO)));
         this.capacityEvictions = new ThreadSafeSimpleCounter();
         this.maxQueuedHistoricalRequests =
                 conf.get(ConfigOptions.NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS);
@@ -216,19 +223,19 @@ class HistoricalLakeLookupManager implements AutoCloseable {
     /**
      * Attempts to clean lookup cache files left by a previous TabletServer process.
      *
-     * <p>Only this server's directory is removed. It is recreated lazily when the first table
-     * lookuper is created.
+     * <p>The cache root under this server's first data directory is removed. It is recreated lazily
+     * when the first table lookuper is created.
      */
     synchronized void startup() {
         if (started) {
             return;
         }
         try {
-            FileUtils.deleteDirectory(paimonLookupTempDir);
+            FileUtils.deleteDirectory(historicalLookupCacheRootDir);
         } catch (IOException e) {
             LOG.warn(
-                    "Failed to clean Paimon lookup temporary directory {}.",
-                    paimonLookupTempDir,
+                    "Failed to clean historical lookup cache directory {}.",
+                    historicalLookupCacheRootDir,
                     e);
         }
         started = true;
@@ -348,10 +355,10 @@ class HistoricalLakeLookupManager implements AutoCloseable {
                                 .SERVER_HISTORICAL_PARTITION_LOOKUPER_CACHE_EXPIRE_AFTER_ACCESS);
         synchronized (this) {
             long newMaxBytes =
-                    newConf.get(
+                    capacityBytes(
+                            newConf.get(
                                     ConfigOptions
-                                            .SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE)
-                            .getBytes();
+                                            .SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO));
             if (newMaxBytes != budgetManager.maxBytes()) {
                 budgetManager.updateGlobalLimit(newMaxBytes);
             }
@@ -400,7 +407,7 @@ class HistoricalLakeLookupManager implements AutoCloseable {
             long currentLakeConfigVersion = lakeConfigVersion;
             Configuration currentConf = conf;
             long cacheSizeBytes =
-                    tableConfig.getHistoricalPartitionLookupCacheMaxDiskSize().getBytes();
+                    capacityBytes(tableConfig.getHistoricalPartitionLookupCacheMaxDiskRatio());
             cachedLookuper =
                     acquireCachedLookuper(
                             context,
@@ -550,7 +557,7 @@ class HistoricalLakeLookupManager implements AutoCloseable {
             try {
                 File tableLookupDir =
                         FlussPaths.historicalLookupTableDir(
-                                getOrCreatePaimonLookupTempDir(),
+                                getOrCreateHistoricalLookupCacheRootDir(),
                                 context.tablePath,
                                 context.tableId);
                 LakeTableLookuper lookuper =
@@ -558,6 +565,7 @@ class HistoricalLakeLookupManager implements AutoCloseable {
                                 context.tablePath,
                                 tableLookupDir.getAbsolutePath(),
                                 tableConfig,
+                                cacheSizeBytes,
                                 clusterConf);
                 return new CachedLakeTableLookuper(
                         context.tableId,
@@ -576,7 +584,9 @@ class HistoricalLakeLookupManager implements AutoCloseable {
 
         File tableLookupDir =
                 FlussPaths.historicalLookupTableDir(
-                        getOrCreatePaimonLookupTempDir(), context.tablePath, context.tableId);
+                        getOrCreateHistoricalLookupCacheRootDir(),
+                        context.tablePath,
+                        context.tableId);
         // Build the replacement first so a creation failure leaves the current lookuper and its
         // reservation unchanged in the cache.
         LakeTableLookuper lookuper =
@@ -584,6 +594,7 @@ class HistoricalLakeLookupManager implements AutoCloseable {
                         context.tablePath,
                         tableLookupDir.getAbsolutePath(),
                         tableConfig,
+                        cacheSizeBytes,
                         clusterConf);
         // Replace the reservation atomically: the old and replacement cache sizes never count
         // against the global budget at the same time.
@@ -704,6 +715,7 @@ class HistoricalLakeLookupManager implements AutoCloseable {
             TablePath tablePath,
             String ioTmpDir,
             TableConfig tableConfig,
+            long cacheSizeBytes,
             Configuration clusterConf) {
         DataLakeFormat dataLakeFormat = clusterConf.get(ConfigOptions.DATALAKE_FORMAT);
         if (dataLakeFormat == null) {
@@ -728,7 +740,7 @@ class HistoricalLakeLookupManager implements AutoCloseable {
         LakeStorage lakeStorage =
                 lakeStoragePlugin.createLakeStorage(Configuration.fromMap(lakeProperties));
         return lakeStorage.createLakeTableLookuper(
-                tablePath, new LakeStorage.LookuperContext(ioTmpDir, tableConfig));
+                tablePath, new LakeStorage.LookuperContext(ioTmpDir, tableConfig, cacheSizeBytes));
     }
 
     private static boolean hasLakeConfigChanged(Configuration currentConf, Configuration newConf) {
@@ -738,25 +750,26 @@ class HistoricalLakeLookupManager implements AutoCloseable {
                         extractLakeProperties(currentConf), extractLakeProperties(newConf));
     }
 
-    private synchronized File getOrCreatePaimonLookupTempDir() {
-        if (paimonLookupTempDirCreated) {
-            return paimonLookupTempDir;
+    private synchronized File getOrCreateHistoricalLookupCacheRootDir() {
+        if (historicalLookupCacheRootDirCreated) {
+            return historicalLookupCacheRootDir;
         }
         try {
-            Files.createDirectories(paimonLookupTempDir.toPath());
-            paimonLookupTempDirCreated = true;
+            Files.createDirectories(historicalLookupCacheRootDir.toPath());
+            historicalLookupCacheRootDirCreated = true;
         } catch (IOException e) {
             throw new FlussRuntimeException(
-                    "Failed to create Paimon lookup temporary directory: " + paimonLookupTempDir,
+                    "Failed to create historical lookup cache directory: "
+                            + historicalLookupCacheRootDir,
                     e);
         }
-        return paimonLookupTempDir;
+        return historicalLookupCacheRootDir;
     }
 
-    private static File resolvePaimonLookupTempDir(Configuration conf, int serverId) {
-        return new File(
-                new File(conf.get(ConfigOptions.SERVER_IO_TMP_DIR), PAIMON_LOOKUP_DIR_NAME),
-                String.valueOf(serverId));
+    private long capacityBytes(double ratio) {
+        checkArgument(ratio > 0.0 && ratio <= 1.0, "ratio must be within (0.0, 1.0].");
+        long bytes = (long) Math.ceil(lookupVolumeBytes * ratio);
+        return Math.min(lookupVolumeBytes, bytes);
     }
 
     private static void closeLookuper(CachedLakeTableLookuper cachedLookuper) {
