@@ -40,14 +40,16 @@ import static org.apache.fluss.utils.Preconditions.checkArgument;
  * <ul>
  *   <li>Each table ID has at most one current reservation.
  *   <li>{@code reservedBytes} is the sum of the reservations in {@code reservationsByTableId}.
- *   <li>{@code 0 <= reservedBytes <= maxBytes}.
+ *   <li>{@code reservedBytes >= 0}. After a dynamic limit reduction, existing reservations may
+ *       exceed {@code maxBytes}; the caller may evict cached lookupers before retrying the next
+ *       admission.
  * </ul>
  */
 @ThreadSafe
 final class HistoricalLookupCacheBudgetManager {
 
-    // The configured limit is immutable in this version, so readers do not need synchronization.
-    private final long maxBytes;
+    @GuardedBy("this")
+    private long maxBytes;
 
     // Contains only reservations that currently count against the budget. Retired lookupers are
     // deliberately absent even when they are still serving an already acquired lookup.
@@ -114,6 +116,12 @@ final class HistoricalLookupCacheBudgetManager {
         return newReservation;
     }
 
+    /** Updates the limit used by subsequent attempts without modifying existing reservations. */
+    synchronized void updateGlobalLimit(long newMaxBytes) {
+        checkArgument(newMaxBytes > 0, "newMaxBytes must be greater than 0.");
+        maxBytes = newMaxBytes;
+    }
+
     /**
      * Releases a reservation if it is still the table's current reservation.
      *
@@ -137,14 +145,14 @@ final class HistoricalLookupCacheBudgetManager {
     }
 
     /** Returns the configured capacity limit. */
-    long maxBytes() {
+    synchronized long maxBytes() {
         return maxBytes;
     }
 
     /**
-     * An immutable capacity reservation for one cached lookuper.
+     * A capacity reservation for one cached lookuper.
      *
-     * <p>Each reserve or replace operation creates a new instance. The budget manager compares
+     * <p>Each reserve or replace operation creates an immutable instance. The manager compares
      * object identity so delayed callbacks carrying an older instance are harmless.
      */
     static final class Reservation {

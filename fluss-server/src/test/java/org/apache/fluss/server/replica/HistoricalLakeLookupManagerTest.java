@@ -403,6 +403,63 @@ class HistoricalLakeLookupManagerTest {
     }
 
     @Test
+    void testReconfiguresGlobalCapacityLazily() throws Exception {
+        ManualExecutor executor = new ManualExecutor();
+        Configuration conf = conf(1);
+        conf.set(
+                ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE,
+                MemorySize.parse("96gb"));
+        TestingHistoricalLakeLookupManager manager =
+                new TestingHistoricalLakeLookupManager(conf, executor);
+
+        for (int i = 0; i < 12; i++) {
+            lookupAndRun(
+                    manager,
+                    executor,
+                    tableInfo(PARTITION_TABLE_ID + i, PARTITION_TABLE_INFO.getSchemaId()));
+        }
+
+        assertThat(manager.createdLookupers).hasSize(12);
+        assertThat(manager.cachedTableCount()).isEqualTo(12);
+        assertThat(manager.capacityEvictions().getCount()).isZero();
+
+        // Changing only the global limit must not recreate an existing lookuper.
+        Configuration increasedConf = new Configuration(conf);
+        increasedConf.set(
+                ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE,
+                MemorySize.parse("104gb"));
+        manager.reconfigure(increasedConf);
+        lookupAndRun(
+                manager,
+                executor,
+                tableInfo(PARTITION_TABLE_ID, PARTITION_TABLE_INFO.getSchemaId()));
+
+        assertThat(manager.createdLookupers).hasSize(12);
+        assertThat(manager.cachedTableCount()).isEqualTo(12);
+        assertThat(manager.capacityEvictions().getCount()).isZero();
+
+        // A reduction is lazy: cached lookupers remain until another admission needs capacity.
+        Configuration reducedConf = new Configuration(increasedConf);
+        reducedConf.set(
+                ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE,
+                MemorySize.parse("88gb"));
+        manager.reconfigure(reducedConf);
+
+        assertThat(manager.cachedTableCount()).isEqualTo(12);
+        assertThat(manager.capacityEvictions().getCount()).isZero();
+
+        lookupAndRun(
+                manager,
+                executor,
+                tableInfo(PARTITION_TABLE_ID + 12, PARTITION_TABLE_INFO.getSchemaId()));
+
+        assertThat(manager.createdLookupers).hasSize(13);
+        assertThat(manager.cachedTableCount()).isEqualTo(11);
+        assertThat(manager.createdLookupers).filteredOn(lookuper -> lookuper.closed).hasSize(2);
+        assertThat(manager.capacityEvictions().getCount()).isEqualTo(2);
+    }
+
+    @Test
     void testEvictsOutsideConcurrentTableReplacements() throws Exception {
         ExecutorService executor =
                 Executors.newFixedThreadPool(

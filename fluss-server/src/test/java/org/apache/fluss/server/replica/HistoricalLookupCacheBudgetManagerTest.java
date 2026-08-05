@@ -41,7 +41,8 @@ class HistoricalLookupCacheBudgetManagerTest {
         manager.release(first);
         manager.release(first);
         assertThat(manager.reservedBytes()).isEqualTo(6);
-        assertThat(manager.tryReserve(3, 4)).isNotNull();
+        Reservation third = manager.tryReserve(3, 4);
+        assertThat(third).isNotNull();
         assertThat(manager.reservedBytes()).isEqualTo(10);
     }
 
@@ -69,5 +70,26 @@ class HistoricalLookupCacheBudgetManagerTest {
         assertThat(manager.reservedBytes()).isEqualTo(11);
         manager.release(replacement);
         assertThat(manager.reservedBytes()).isEqualTo(6);
+    }
+
+    @Test
+    void testReducedLimitAppliesToSubsequentReservations() {
+        HistoricalLookupCacheBudgetManager manager = new HistoricalLookupCacheBudgetManager(10);
+        Reservation first = manager.tryReserve(1, 6);
+        Reservation second = manager.tryReserve(2, 4);
+        assertThat(first).isNotNull();
+        assertThat(second).isNotNull();
+
+        // Shrinking is lazy: existing reservations remain even though their total exceeds the new
+        // limit.
+        manager.updateGlobalLimit(7);
+        assertThat(manager.maxBytes()).isEqualTo(7);
+        assertThat(manager.reservedBytes()).isEqualTo(10);
+
+        // Subsequent reservations use the reduced limit and succeed only after capacity is freed.
+        assertThat(manager.tryReserve(3, 1)).isNull();
+
+        manager.release(second);
+        assertThat(manager.tryReserve(3, 1)).isNotNull();
     }
 }

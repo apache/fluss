@@ -292,14 +292,25 @@ class HistoricalLakeLookupManager implements AutoCloseable {
         return capacityEvictions;
     }
 
-    synchronized void reconfigure(Configuration newConf) {
+    void reconfigure(Configuration newConf) {
         checkNotNull(newConf, "newConf must not be null.");
-        boolean lakeConfigChanged = hasLakeConfigChanged(conf, newConf);
-        // Publish the configuration before its version. A lookup that observes the new version
-        // must also observe the matching configuration snapshot.
-        conf = newConf;
-        if (lakeConfigChanged) {
-            lakeConfigVersion++;
+        synchronized (this) {
+            long newMaxBytes =
+                    newConf.get(
+                                    ConfigOptions
+                                            .SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE)
+                            .getBytes();
+            if (newMaxBytes != budgetManager.maxBytes()) {
+                budgetManager.updateGlobalLimit(newMaxBytes);
+            }
+
+            boolean lakeConfigChanged = hasLakeConfigChanged(conf, newConf);
+            // Publish the configuration before its version. A lookup that observes the new version
+            // must also observe the matching configuration snapshot.
+            conf = newConf;
+            if (lakeConfigChanged) {
+                lakeConfigVersion++;
+            }
         }
     }
 
@@ -447,7 +458,7 @@ class HistoricalLakeLookupManager implements AutoCloseable {
     /**
      * Creates a lookuper after atomically reserving its configured cache capacity.
      *
-     * @return the new cached lookuper, or {@code null} if the capacity cannot be reserved
+     * @return the new cached lookuper, or {@code null} if its capacity cannot be reserved
      */
     private @Nullable CachedLakeTableLookuper tryCreateCachedLookuper(
             LookupContext context,
@@ -524,10 +535,15 @@ class HistoricalLakeLookupManager implements AutoCloseable {
      * lookups. A candidate accessed after it is ordered may therefore still be evicted.
      */
     private boolean evictLeastRecentlyUsed(long excludedTableId) {
-        List<CachedLakeTableLookuper> candidates =
-                new ArrayList<>(lakeTableLookupers.asMap().values());
-        candidates.sort(Comparator.comparingLong(CachedLakeTableLookuper::lastAccessNanos));
-        for (CachedLakeTableLookuper candidate : candidates) {
+        List<EvictionCandidate> candidates = new ArrayList<>();
+        for (CachedLakeTableLookuper cachedLookuper : lakeTableLookupers.asMap().values()) {
+            // Snapshot the timestamp so concurrent accesses cannot change comparator inputs while
+            // the list is being sorted.
+            candidates.add(new EvictionCandidate(cachedLookuper, cachedLookuper.lastAccessNanos()));
+        }
+        candidates.sort(Comparator.comparingLong(candidate -> candidate.lastAccessNanos));
+        for (EvictionCandidate evictionCandidate : candidates) {
+            CachedLakeTableLookuper candidate = evictionCandidate.cachedLookuper;
             if (candidate.tableId == excludedTableId) {
                 continue;
             }
@@ -716,6 +732,16 @@ class HistoricalLakeLookupManager implements AutoCloseable {
             this.schemaId = schemaId;
             this.tablePath = tablePath;
             this.lookupContext = lookupContext;
+        }
+    }
+
+    private static final class EvictionCandidate {
+        private final CachedLakeTableLookuper cachedLookuper;
+        private final long lastAccessNanos;
+
+        private EvictionCandidate(CachedLakeTableLookuper cachedLookuper, long lastAccessNanos) {
+            this.cachedLookuper = cachedLookuper;
+            this.lastAccessNanos = lastAccessNanos;
         }
     }
 

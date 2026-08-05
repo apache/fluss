@@ -221,17 +221,17 @@ class FlussConfigUtilsTest {
         conf.set(ConfigOptions.REMOTE_DATA_DIR, "s3://bucket/path");
         conf.set(
                 ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE,
-                MemorySize.parse("4gb"));
+                MemorySize.ZERO);
 
         assertThatThrownBy(() -> validateCoordinatorConfigs(conf))
                 .isInstanceOf(IllegalConfigurationException.class)
                 .hasMessageContaining(
                         ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE.key())
-                .hasMessageContaining("8 gb");
+                .hasMessageContaining("greater than 0 bytes");
 
         conf.set(
                 ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE,
-                MemorySize.parse("8gb"));
+                MemorySize.parse("4gb"));
         conf.set(
                 ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUPER_CACHE_EXPIRE_AFTER_ACCESS,
                 Duration.ZERO);

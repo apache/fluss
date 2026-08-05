@@ -435,7 +435,8 @@ public class ConfigOptions {
                             .defaultValue(MemorySize.parse("80gb"))
                             .withDescription(
                                     "The total configured disk capacity available to current and creating historical partition lookup caches on a TabletServer. "
-                                            + "Retired cache generations that are still serving active lookups are not included in this limit.");
+                                            + "Retired cache generations that are still serving active lookups are not included in this limit. "
+                                            + "The value must be greater than zero.");
 
     public static final ConfigOption<Duration>
             SERVER_HISTORICAL_PARTITION_LOOKUPER_CACHE_EXPIRE_AFTER_ACCESS =
@@ -1875,7 +1876,7 @@ public class ConfigOptions {
                             .defaultValue(MemorySize.parse("8gb"))
                             .withDescription(
                                     "The maximum local disk capacity reserved for this table's historical partition lookup cache on each TabletServer. "
-                                            + "The value must be greater than zero and no greater than the TabletServer historical lookup cache limit.");
+                                            + "When the table is created or altered, the value must be greater than zero and no greater than the current TabletServer historical lookup cache limit.");
 
     public static final ConfigOption<DataLakeFormat> TABLE_DATALAKE_FORMAT =
             key("table.datalake.format")

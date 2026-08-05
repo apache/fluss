@@ -241,14 +241,10 @@ public class FlussConfigUtils {
     private static void validateHistoricalLookupCacheLimit(Configuration conf) {
         MemorySize historicalLookupCacheMaxSize =
                 conf.get(ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE);
-        MemorySize defaultTableHistoricalLookupCacheSize =
-                ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE
-                        .defaultValue();
-        if (historicalLookupCacheMaxSize.compareTo(defaultTableHistoricalLookupCacheSize) < 0) {
+        if (historicalLookupCacheMaxSize.getBytes() == 0) {
             throw new IllegalConfigurationException(
-                    "Invalid configuration for %s, it must be greater than or equal to the default table cache size %s.",
-                    ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE.key(),
-                    defaultTableHistoricalLookupCacheSize);
+                    "Invalid configuration for %s, it must be greater than 0 bytes.",
+                    ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE.key());
         }
     }
 

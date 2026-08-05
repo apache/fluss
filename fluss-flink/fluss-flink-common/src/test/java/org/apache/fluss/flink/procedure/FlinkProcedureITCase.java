@@ -401,13 +401,16 @@ public abstract class FlinkProcedureITCase {
         try (CloseableIterator<Row> resultIterator =
                 tEnv.executeSql(
                                 String.format(
-                                        "Call %s.sys.set_cluster_configs('%s', '300MB', '%s', 'paimon')",
+                                        "Call %s.sys.set_cluster_configs('%s', '300MB', '%s', 'paimon', '%s', '96GB')",
                                         CATALOG_NAME,
                                         ConfigOptions.KV_SHARED_RATE_LIMITER_BYTES_PER_SEC.key(),
-                                        ConfigOptions.DATALAKE_FORMAT.key()))
+                                        ConfigOptions.DATALAKE_FORMAT.key(),
+                                        ConfigOptions
+                                                .SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE
+                                                .key()))
                         .collect()) {
             List<Row> results = CollectionUtil.iteratorToList(resultIterator);
-            assertThat(results).hasSize(2);
+            assertThat(results).hasSize(3);
             assertThat(results.get(0).getField(0))
                     .asString()
                     .contains("Successfully set to '300MB'")
@@ -417,6 +420,13 @@ public abstract class FlinkProcedureITCase {
                     .asString()
                     .contains("Successfully set to 'paimon'")
                     .contains(ConfigOptions.DATALAKE_FORMAT.key());
+
+            assertThat(results.get(2).getField(0))
+                    .asString()
+                    .contains("Successfully set to '96GB'")
+                    .contains(
+                            ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE
+                                    .key());
         }
 
         // Verify the config was actually set
@@ -432,13 +442,29 @@ public abstract class FlinkProcedureITCase {
             assertThat(results.get(0).getField(1)).isEqualTo("300MB");
         }
 
+        try (CloseableIterator<Row> resultIterator =
+                tEnv.executeSql(
+                                String.format(
+                                        "Call %s.sys.get_cluster_configs('%s')",
+                                        CATALOG_NAME,
+                                        ConfigOptions
+                                                .SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE
+                                                .key()))
+                        .collect()) {
+            List<Row> results = CollectionUtil.iteratorToList(resultIterator);
+            assertThat(results).hasSize(1);
+            assertThat(results.get(0).getField(1)).isEqualTo("96GB");
+        }
+
         // reset cluster configs.
         tEnv.executeSql(
                         String.format(
-                                "Call %s.sys.reset_cluster_configs('%s', '%s')",
+                                "Call %s.sys.reset_cluster_configs('%s', '%s', '%s')",
                                 CATALOG_NAME,
                                 ConfigOptions.KV_SHARED_RATE_LIMITER_BYTES_PER_SEC.key(),
-                                ConfigOptions.DATALAKE_FORMAT.key()))
+                                ConfigOptions.DATALAKE_FORMAT.key(),
+                                ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE
+                                        .key()))
                 .await();
     }
 

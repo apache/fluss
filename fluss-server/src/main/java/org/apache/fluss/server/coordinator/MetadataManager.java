@@ -88,7 +88,7 @@ public class MetadataManager {
     private final ZooKeeperClient zookeeperClient;
     private final int maxPartitionNum;
     private final int maxBucketNum;
-    private final MemorySize historicalLookupCacheMaxSize;
+    private volatile MemorySize historicalLookupCacheMaxSize;
     private final LakeCatalogDynamicLoader lakeCatalogDynamicLoader;
 
     public static final Set<String> SENSITIVE_TABLE_OPTIONS = new HashSet<>();
@@ -125,6 +125,10 @@ public class MetadataManager {
                 lakeCatalogDynamicLoader.getLakeCatalogContainer().getDataLakeFormat(),
                 tablePath,
                 historicalLookupCacheMaxSize);
+    }
+
+    void updateHistoricalLookupCacheMaxSize(MemorySize newMaxSize) {
+        historicalLookupCacheMaxSize = newMaxSize;
     }
 
     public void createDatabase(
