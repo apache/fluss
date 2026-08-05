@@ -23,6 +23,7 @@ import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
 import org.apache.fluss.lake.committer.CommitterInitContext;
 import org.apache.fluss.lake.committer.LakeCommitResult;
 import org.apache.fluss.lake.committer.LakeCommitter;
+import org.apache.fluss.lake.committer.PartitionMarkDoneMaintainer;
 import org.apache.fluss.lake.committer.TieringStats;
 import org.apache.fluss.lake.paimon.utils.DvTableReadableSnapshotRetriever;
 import org.apache.fluss.metadata.TablePath;
@@ -59,7 +60,9 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.paimon.table.sink.BatchWriteBuilder.COMMIT_IDENTIFIER;
 
 /** Implementation of {@link LakeCommitter} for Paimon. */
-public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, PaimonCommittable> {
+public class PaimonLakeCommitter
+        implements LakeCommitter<PaimonWriteResult, PaimonCommittable>,
+                PartitionMarkDoneMaintainer {
 
     private static final Logger LOG = LoggerFactory.getLogger(PaimonLakeCommitter.class);
 

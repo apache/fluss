@@ -23,6 +23,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
 import org.apache.fluss.lake.committer.CommitterInitContext;
 import org.apache.fluss.lake.committer.LakeCommitter;
+import org.apache.fluss.lake.committer.PartitionMarkDoneMaintainer;
 import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.lake.writer.WriterInitContext;
 import org.apache.fluss.metadata.TableBucket;
@@ -105,7 +106,7 @@ class PaimonPartitionMarkDoneTest {
         Thread.sleep(50);
         try (LakeCommitter<PaimonWriteResult, PaimonCommittable> lakeCommitter =
                 createLakeCommitter(tablePath, tableInfo)) {
-            CommittedLakeSnapshot maintenanceSnapshot = lakeCommitter.commitMarkDoneMaintenance();
+            CommittedLakeSnapshot maintenanceSnapshot = commitMarkDoneMaintenance(lakeCommitter);
             assertThat(maintenanceSnapshot).isNotNull();
             assertThat(maintenanceSnapshot.getLakeSnapshotId()).isEqualTo(snapshot1 + 1);
             assertThat(maintenanceSnapshot.getSnapshotProperties())
@@ -124,7 +125,7 @@ class PaimonPartitionMarkDoneTest {
         // another empty round: state unchanged, no snapshot created
         try (LakeCommitter<PaimonWriteResult, PaimonCommittable> lakeCommitter =
                 createLakeCommitter(tablePath, tableInfo)) {
-            assertThat(lakeCommitter.commitMarkDoneMaintenance()).isNull();
+            assertThat(commitMarkDoneMaintenance(lakeCommitter)).isNull();
         }
 
         // late data for 2024-01-01: re-added to pending and marked done again later
@@ -135,7 +136,7 @@ class PaimonPartitionMarkDoneTest {
         Thread.sleep(50);
         try (LakeCommitter<PaimonWriteResult, PaimonCommittable> lakeCommitter =
                 createLakeCommitter(tablePath, tableInfo)) {
-            assertThat(lakeCommitter.commitMarkDoneMaintenance()).isNotNull();
+            assertThat(commitMarkDoneMaintenance(lakeCommitter)).isNotNull();
         }
         assertThat(getMarkDoneState(tablePath, snapshot3 + 1).getPendingPartitions()).isEmpty();
         assertThat(successFile(tablePath, "2024-01-01")).exists();
@@ -159,7 +160,7 @@ class PaimonPartitionMarkDoneTest {
                 false);
         try (LakeCommitter<PaimonWriteResult, PaimonCommittable> lakeCommitter =
                 createLakeCommitter(tablePath, tableInfo)) {
-            assertThat(lakeCommitter.commitMarkDoneMaintenance()).isNotNull();
+            assertThat(commitMarkDoneMaintenance(lakeCommitter)).isNotNull();
         }
         MarkDoneState state = getMarkDoneState(tablePath, snapshot1 + 1);
         assertThat(state.isInitialized()).isTrue();
@@ -179,7 +180,7 @@ class PaimonPartitionMarkDoneTest {
         Thread.sleep(50);
         try (LakeCommitter<PaimonWriteResult, PaimonCommittable> lakeCommitter =
                 createLakeCommitter(tablePath, tableInfo)) {
-            assertThat(lakeCommitter.commitMarkDoneMaintenance()).isNotNull();
+            assertThat(commitMarkDoneMaintenance(lakeCommitter)).isNotNull();
         }
         // the ancient partition is done, the future partition is guarded by its end time
         MarkDoneState state = getMarkDoneState(tablePath, snapshot1 + 1);
@@ -205,6 +206,11 @@ class PaimonPartitionMarkDoneTest {
                         "{\"initialized\":true,\"pending\":{\"p1\":100},\"unknown\":\"x\"}");
         assertThat(state.isInitialized()).isTrue();
         assertThat(state.getPendingPartitions()).containsEntry("p1", 100L);
+    }
+
+    private static CommittedLakeSnapshot commitMarkDoneMaintenance(
+            LakeCommitter<PaimonWriteResult, PaimonCommittable> lakeCommitter) throws IOException {
+        return ((PartitionMarkDoneMaintainer) lakeCommitter).commitMarkDoneMaintenance();
     }
 
     private static Map<String, String> markDoneOptions() {

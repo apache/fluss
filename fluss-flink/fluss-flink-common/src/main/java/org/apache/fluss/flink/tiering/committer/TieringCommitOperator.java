@@ -30,6 +30,7 @@ import org.apache.fluss.flink.tiering.source.TieringSource;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
 import org.apache.fluss.lake.committer.LakeCommitResult;
 import org.apache.fluss.lake.committer.LakeCommitter;
+import org.apache.fluss.lake.committer.PartitionMarkDoneMaintainer;
 import org.apache.fluss.lake.committer.TieringStats;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.lake.writer.LakeWriter;
@@ -296,7 +297,11 @@ public class TieringCommitOperator<WriteResult, Committable>
                 lakeTieringFactory.createLakeCommitter(
                         new TieringCommitterInitContext(
                                 tablePath, tableInfo, lakeTieringConfig, flussConfig))) {
-            CommittedLakeSnapshot maintenanceSnapshot = lakeCommitter.commitMarkDoneMaintenance();
+            if (!(lakeCommitter instanceof PartitionMarkDoneMaintainer)) {
+                return;
+            }
+            CommittedLakeSnapshot maintenanceSnapshot =
+                    ((PartitionMarkDoneMaintainer) lakeCommitter).commitMarkDoneMaintenance();
             if (maintenanceSnapshot != null) {
                 flussTableLakeSnapshotCommitter.commit(
                         tableId,
