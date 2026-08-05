@@ -1,6 +1,6 @@
 ---
 title: Connector Options
-sidebar_position: 9
+sidebar_position: 10
 ---
 
 # Flink Connector Options
