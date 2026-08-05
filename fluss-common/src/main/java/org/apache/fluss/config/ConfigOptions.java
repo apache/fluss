@@ -1553,6 +1553,17 @@ public class ConfigOptions {
                             "Setting a value greater than zero will cause the client to resend any lookup request "
                                     + "that fails with a potentially transient error.");
 
+    public static final ConfigOption<Duration> CLIENT_LOOKUP_CLOSE_TIMEOUT =
+            key("client.lookup.close-timeout")
+                    .durationType()
+                    .defaultValue(Duration.ofMillis(Long.MAX_VALUE))
+                    .withDescription(
+                            "The timeout for closing the lookup client. By default, the lookup client "
+                                    + "will wait indefinitely for pending lookup requests to complete during "
+                                    + "close. Set a smaller value to bound the close time, which is useful "
+                                    + "in scenarios where the client must shut down within a bounded time "
+                                    + "(e.g., on SIGTERM in Kubernetes).");
+
     public static final ConfigOption<Integer> CLIENT_SCANNER_REMOTE_LOG_PREFETCH_NUM =
             key("client.scanner.remote-log.prefetch-num")
                     .intType()
