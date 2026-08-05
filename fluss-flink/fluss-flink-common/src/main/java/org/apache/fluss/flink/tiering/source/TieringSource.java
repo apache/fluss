@@ -66,14 +66,17 @@ public class TieringSource<WriteResult>
             new OperatorID(generateOperatorHash());
 
     private final Configuration flussConf;
+    private final Configuration lakeTieringConfig;
     private final LakeTieringFactory<WriteResult, ?> lakeTieringFactory;
     private final long pollTieringTableIntervalMs;
 
     public TieringSource(
             Configuration flussConf,
+            Configuration lakeTieringConfig,
             LakeTieringFactory<WriteResult, ?> lakeTieringFactory,
             long pollTieringTableIntervalMs) {
         this.flussConf = flussConf;
+        this.lakeTieringConfig = lakeTieringConfig;
         this.lakeTieringFactory = lakeTieringFactory;
         this.pollTieringTableIntervalMs = pollTieringTableIntervalMs;
     }
@@ -126,7 +129,7 @@ public class TieringSource<WriteResult>
                 sourceReaderContext,
                 connection,
                 lakeTieringFactory,
-                getLakeTieringIoTmpDirs(flussConf, sourceReaderContext.getConfiguration()));
+                getLakeTieringIoTmpDirs(lakeTieringConfig, sourceReaderContext.getConfiguration()));
     }
 
     /** This follows the operator uid hash generation logic of flink {@link StreamGraphHasherV2}. */
@@ -141,13 +144,17 @@ public class TieringSource<WriteResult>
     public static class Builder<WriteResult> {
 
         private final Configuration flussConf;
+        private final Configuration lakeTieringConfig;
         private final LakeTieringFactory<WriteResult, ?> lakeTieringFactory;
         private long pollTieringTableIntervalMs =
                 POLL_TIERING_TABLE_INTERVAL.defaultValue().toMillis();
 
         public Builder(
-                Configuration flussConf, LakeTieringFactory<WriteResult, ?> lakeTieringFactory) {
+                Configuration flussConf,
+                Configuration lakeTieringConfig,
+                LakeTieringFactory<WriteResult, ?> lakeTieringFactory) {
             this.flussConf = flussConf;
+            this.lakeTieringConfig = lakeTieringConfig;
             this.lakeTieringFactory = lakeTieringFactory;
         }
 
@@ -157,7 +164,8 @@ public class TieringSource<WriteResult>
         }
 
         public TieringSource<WriteResult> build() {
-            return new TieringSource<>(flussConf, lakeTieringFactory, pollTieringTableIntervalMs);
+            return new TieringSource<>(
+                    flussConf, lakeTieringConfig, lakeTieringFactory, pollTieringTableIntervalMs);
         }
     }
 }

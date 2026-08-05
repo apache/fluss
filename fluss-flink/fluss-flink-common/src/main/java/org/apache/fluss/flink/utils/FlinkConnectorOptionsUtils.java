@@ -42,7 +42,7 @@ import java.util.Optional;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.config.ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR;
-import static org.apache.fluss.config.ConfigOptions.LAKE_TIERING_IO_TMP_DIR;
+import static org.apache.fluss.config.ConfigOptions.LAKE_TIERING_IO_TMP_DIRS;
 import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE;
 import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_STARTUP_MODE;
 import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_STARTUP_TIMESTAMP;
@@ -212,19 +212,20 @@ public class FlinkConnectorOptionsUtils {
                                         .getAbsolutePath());
     }
 
-    public static String getFlinkIoTmpDir(
-            org.apache.flink.configuration.Configuration flinkConfig) {
-        return new File(getFlinkIoTmpDirs(flinkConfig)[0], "fluss").getAbsolutePath();
-    }
-
+    /**
+     * Returns the configured lake-tiering temporary directories, or Flink's temporary directories
+     * with a {@code fluss} child directory when no tiering-specific value is configured.
+     */
     public static String[] getLakeTieringIoTmpDirs(
-            Configuration flussConf, org.apache.flink.configuration.Configuration flinkConfig) {
-        Optional<String> configuredTmpDirs = flussConf.getOptional(LAKE_TIERING_IO_TMP_DIR);
+            Configuration lakeTieringConfig,
+            org.apache.flink.configuration.Configuration flinkConfig) {
+        Optional<String> configuredTmpDirs =
+                lakeTieringConfig.getOptional(LAKE_TIERING_IO_TMP_DIRS);
         if (configuredTmpDirs.isPresent()) {
-            return splitPaths(configuredTmpDirs.get());
+            return ConfigurationUtils.splitPaths(configuredTmpDirs.get());
         }
 
-        String[] flinkTmpDirs = getFlinkIoTmpDirs(flinkConfig);
+        String[] flinkTmpDirs = ConfigurationUtils.parseTempDirectories(flinkConfig);
         String[] lakeTieringTmpDirs = new String[flinkTmpDirs.length];
         for (int i = 0; i < flinkTmpDirs.length; i++) {
             lakeTieringTmpDirs[i] = new File(flinkTmpDirs[i], "fluss").getAbsolutePath();

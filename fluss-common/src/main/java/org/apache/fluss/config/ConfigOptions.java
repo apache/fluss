@@ -2512,8 +2512,8 @@ public class ConfigOptions {
                                     + ConfigOptions.TABLE_DATALAKE_AUTO_EXPIRE_SNAPSHOT
                                     + " is false.");
 
-    public static final ConfigOption<String> LAKE_TIERING_IO_TMP_DIR =
-            key("lake.tiering.io.tmpdir")
+    public static final ConfigOption<String> LAKE_TIERING_IO_TMP_DIRS =
+            key("lake.tiering.io.tmp.dirs")
                     .stringType()
                     .noDefaultValue()
                     .withDescription(

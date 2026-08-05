@@ -35,8 +35,6 @@ import org.apache.flink.connector.base.source.reader.synchronization.FutureCompl
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.annotation.Nullable;
-
 import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
@@ -62,17 +60,8 @@ public final class TieringSourceReader<WriteResult>
                     elementsQueue,
             SourceReaderContext context,
             Connection connection,
-            LakeTieringFactory<WriteResult, ?> lakeTieringFactory) {
-        this(elementsQueue, context, connection, lakeTieringFactory, (String[]) null);
-    }
-
-    public TieringSourceReader(
-            FutureCompletingBlockingQueue<RecordsWithSplitIds<TableBucketWriteResult<WriteResult>>>
-                    elementsQueue,
-            SourceReaderContext context,
-            Connection connection,
             LakeTieringFactory<WriteResult, ?> lakeTieringFactory,
-            @Nullable String[] ioTmpDirs) {
+            String[] ioTmpDirs) {
         this(
                 elementsQueue,
                 context,
@@ -90,7 +79,7 @@ public final class TieringSourceReader<WriteResult>
             Connection connection,
             LakeTieringFactory<WriteResult, ?> lakeTieringFactory,
             Duration pollTimeout) {
-        this(elementsQueue, context, connection, lakeTieringFactory, pollTimeout, null);
+        this(elementsQueue, context, connection, lakeTieringFactory, pollTimeout, new String[0]);
     }
 
     @VisibleForTesting
@@ -101,7 +90,7 @@ public final class TieringSourceReader<WriteResult>
             Connection connection,
             LakeTieringFactory<WriteResult, ?> lakeTieringFactory,
             Duration pollTimeout,
-            @Nullable String[] ioTmpDirs) {
+            String[] ioTmpDirs) {
         super(
                 elementsQueue,
                 createFetcherManager(
@@ -124,7 +113,7 @@ public final class TieringSourceReader<WriteResult>
             Connection connection,
             LakeTieringFactory<WriteResult, ?> lakeTieringFactory,
             Duration pollTimeout,
-            @Nullable String[] ioTmpDirs) {
+            String[] ioTmpDirs) {
         TieringMetrics tieringMetrics = new TieringMetrics(context.metricGroup());
         ClassLoader userClassLoader = context.getUserCodeClassLoader().asClassLoader();
         return new TieringSourceFetcherManager<>(

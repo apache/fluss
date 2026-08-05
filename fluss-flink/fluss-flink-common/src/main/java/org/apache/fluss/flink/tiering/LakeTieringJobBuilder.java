@@ -84,7 +84,7 @@ public class LakeTieringJobBuilder {
 
         // build tiering source
         TieringSource.Builder<?> tieringSourceBuilder =
-                new TieringSource.Builder<>(flussConfig, lakeTieringFactory);
+                new TieringSource.Builder<>(flussConfig, lakeTieringConfig, lakeTieringFactory);
         if (flussConfig.get(POLL_TIERING_TABLE_INTERVAL) != null) {
             tieringSourceBuilder.withPollTieringTableIntervalMs(
                     flussConfig.get(POLL_TIERING_TABLE_INTERVAL).toMillis());
