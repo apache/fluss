@@ -468,6 +468,11 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
             splitIdByTableBucket.put(scanBucket, splitId);
             tableScanBuckets.add(scanBucket);
             List<ScanRecord> bucketScanRecords = scanRecords.records(scanBucket);
+            Long consumedUpToOffset = scanRecords.consumedUpToOffset(scanBucket);
+            if (consumedUpToOffset != null && consumedUpToOffset >= stoppingOffset) {
+                stoppingOffsets.put(scanBucket, stoppingOffset);
+                finishedSplits.add(splitId);
+            }
             if (!bucketScanRecords.isEmpty()) {
                 final ScanRecord lastRecord = bucketScanRecords.get(bucketScanRecords.size() - 1);
                 // We keep the maximum message timestamp in the fetch for calculating lags
