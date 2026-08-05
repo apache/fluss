@@ -687,7 +687,6 @@ public class AutoPartitionManager implements AutoCloseable {
             while (dropIterator.hasNext()) {
                 String partitionName = dropIterator.next();
                 checkNotNull(lakeAwareRetentionManager).retain(tableInfo, partitionName);
-                dropIterator.remove();
             }
             return;
         }
