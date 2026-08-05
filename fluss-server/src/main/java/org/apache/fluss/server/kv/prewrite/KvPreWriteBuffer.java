@@ -18,6 +18,8 @@
 package org.apache.fluss.server.kv.prewrite;
 
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.exception.RecordTooLargeException;
+import org.apache.fluss.exception.StorageBackpressureException;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.metrics.Counter;
 import org.apache.fluss.record.ChangeType;
@@ -87,7 +89,11 @@ import static org.apache.fluss.utils.UnsafeUtils.BYTE_ARRAY_BASE_OFFSET;
  * head to tail, it will stop flush.
  */
 @NotThreadSafe
-public class KvPreWriteBuffer {
+public class KvPreWriteBuffer extends KvMemoryConsumer implements AutoCloseable {
+
+    // A conservative estimate of heap retained by a KvEntry, its wrappers, the linked-list node,
+    // the hash-map entry, and associated object/array headers. Payload bytes are added separately.
+    private static final long ENTRY_OVERHEAD_BYTES = 128L;
 
     // a mapping from the key to the kv-entry
     private final Map<Key, KvEntry> kvEntryMap = new HashMap<>();
@@ -105,7 +111,16 @@ public class KvPreWriteBuffer {
     // Accumulated byte size of entries not yet completed by a flush.
     private long pendingFlushBytes = 0;
 
+    /** Creates a pre-write buffer with the defensive memory guard disabled. */
     public KvPreWriteBuffer(TabletServerMetricGroup serverMetricGroup) {
+        this(serverMetricGroup, KvPreWriteBufferMemoryManager.disabled());
+    }
+
+    /** Creates a pre-write buffer backed by the TabletServer-wide memory guard. */
+    public KvPreWriteBuffer(
+            TabletServerMetricGroup serverMetricGroup,
+            KvPreWriteBufferMemoryManager memoryManager) {
+        super(memoryManager);
         truncateAsDuplicatedCount = serverMetricGroup.kvTruncateAsDuplicatedCount();
         truncateAsErrorCount = serverMetricGroup.kvTruncateAsErrorCount();
     }
@@ -146,6 +161,8 @@ public class KvPreWriteBuffer {
                             + ", but the new log sequence number is "
                             + lsn);
         }
+
+        reserveMemory(key, value);
 
         // create the kv entry with previous pointer if exists, and put the new entry to the map
         KvEntry kvEntry =
@@ -205,6 +222,7 @@ public class KvPreWriteBuffer {
                                 + targetLogSequenceNumber);
             }
             pendingFlushBytes -= entryBytes(entry.getKey(), entry.getValue());
+            releaseMemory(entry);
             boolean removed = kvEntryMap.remove(entry.getKey(), entry);
             // if the latest entry is removed, we need to rollback the previous entry to the map
             if (removed) {
@@ -260,6 +278,7 @@ public class KvPreWriteBuffer {
             }
             entry.state = EntryState.FLUSHED;
             pendingFlushBytes -= entryBytes(entry.getKey(), entry.getValue());
+            releaseMemory(entry);
             kvEntryMap.remove(entry.getKey(), entry);
         }
         if (allKvEntries.isEmpty()) {
@@ -289,8 +308,53 @@ public class KvPreWriteBuffer {
         }
     }
 
+    /** Returns the normalized TabletServer-wide pre-write-buffer memory pressure. */
+    public float currentPressure() {
+        return memoryManager().currentPressure();
+    }
+
+    /** Releases every memory reservation still owned by this buffer. */
+    @Override
+    public void close() {
+        freeAllMemory();
+    }
+
     private static long entryBytes(Key key, Value value) {
         return (long) key.key.length + (value.value != null ? value.value.length : 0L);
+    }
+
+    private static long estimatedRetainedBytes(Key key, Value value) {
+        return ENTRY_OVERHEAD_BYTES + entryBytes(key, value);
+    }
+
+    private void reserveMemory(Key key, Value value) {
+        if (!isMemoryGuardEnabled()) {
+            return;
+        }
+        long memorySize = estimatedRetainedBytes(key, value);
+        if (memorySize > memoryManager().highWatermarkBytes()) {
+            throw new RecordTooLargeException(
+                    String.format(
+                            "The KV entry requires %s bytes, which exceeds the global KV "
+                                    + "pre-write-buffer high watermark of %s bytes.",
+                            memorySize, memoryManager().highWatermarkBytes()));
+        }
+        if (!tryAcquireMemory(memorySize)) {
+            throw new StorageBackpressureException(
+                    String.format(
+                            "Write rejected by the TabletServer-wide KV pre-write-buffer memory "
+                                    + "guard (requested: %s bytes, used: %s bytes, high watermark: "
+                                    + "%s bytes). Retry after backoff.",
+                            memorySize,
+                            memoryManager().usedBytes(),
+                            memoryManager().highWatermarkBytes()));
+        }
+    }
+
+    private void releaseMemory(KvEntry entry) {
+        if (isMemoryGuardEnabled()) {
+            freeMemory(estimatedRetainedBytes(entry.getKey(), entry.getValue()));
+        }
     }
 
     /** Contribution of one entry to the table row count: +1 for INSERT, -1 for DELETE. */

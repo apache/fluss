@@ -17,6 +17,8 @@
 
 package org.apache.fluss.server.kv.prewrite;
 
+import org.apache.fluss.exception.RecordTooLargeException;
+import org.apache.fluss.exception.StorageBackpressureException;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.PreparedFlush;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.TruncateReason;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
@@ -452,6 +454,93 @@ class KvPreWriteBufferTest {
         // Flush remaining (key2): decreases by 11
         flushBuffer(buffer, Long.MAX_VALUE);
         assertThat(buffer.pendingFlushBytes()).isEqualTo(0);
+    }
+
+    @Test
+    void testDisabledMemoryGuardDoesNotAccount() {
+        KvPreWriteBufferMemoryManager manager = KvPreWriteBufferMemoryManager.disabled();
+        KvPreWriteBuffer buffer =
+                new KvPreWriteBuffer(TestingMetricGroups.TABLET_SERVER_METRICS, manager);
+
+        bufferInsert(buffer, "key1", "value1", 1);
+
+        assertThat(manager.usedBytes()).isZero();
+        assertThat(buffer.currentPressure()).isZero();
+    }
+
+    @Test
+    void testGlobalMemoryGuardAcrossBuffers() {
+        KvPreWriteBufferMemoryManager manager = new KvPreWriteBufferMemoryManager(300, 200);
+        KvPreWriteBuffer first =
+                new KvPreWriteBuffer(TestingMetricGroups.TABLET_SERVER_METRICS, manager);
+        KvPreWriteBuffer second =
+                new KvPreWriteBuffer(TestingMetricGroups.TABLET_SERVER_METRICS, manager);
+
+        bufferInsert(first, "key1", "value1", 1);
+        bufferInsert(second, "key2", "value2", 1);
+        assertThat(manager.usedBytes()).isEqualTo(276);
+
+        assertThatThrownBy(() -> bufferInsert(first, "key3", "value3", 2))
+                .isInstanceOf(StorageBackpressureException.class)
+                .hasMessageContaining("TabletServer-wide KV pre-write-buffer memory guard");
+        assertThat(manager.usedBytes()).isEqualTo(276);
+        assertThat(manager.isUnderPressure()).isTrue();
+
+        first.close();
+        assertThat(manager.usedBytes()).isEqualTo(138);
+        assertThat(manager.isUnderPressure()).isFalse();
+        bufferInsert(second, "key3", "value3", 2);
+    }
+
+    @Test
+    void testRejectedReservationDoesNotMutateBuffer() {
+        KvPreWriteBufferMemoryManager manager = new KvPreWriteBufferMemoryManager(200, 160);
+        KvPreWriteBuffer buffer =
+                new KvPreWriteBuffer(TestingMetricGroups.TABLET_SERVER_METRICS, manager);
+
+        bufferInsert(buffer, "key1", "value1", 1);
+        assertThatThrownBy(() -> bufferInsert(buffer, "key2", "value2", 2))
+                .isInstanceOf(StorageBackpressureException.class);
+
+        assertThat(buffer.getMaxLSN()).isEqualTo(1);
+        assertThat(buffer.getAllKvEntries()).hasSize(1);
+        assertThat(buffer.getKvEntryMap()).hasSize(1);
+        assertThat(manager.usedBytes()).isEqualTo(138);
+    }
+
+    @Test
+    void testMemoryReleasedOnlyAfterFlushCompletion() {
+        KvPreWriteBufferMemoryManager manager = new KvPreWriteBufferMemoryManager(1_000, 800);
+        KvPreWriteBuffer buffer =
+                new KvPreWriteBuffer(TestingMetricGroups.TABLET_SERVER_METRICS, manager);
+
+        bufferInsert(buffer, "key1", "value1", 1);
+        bufferInsert(buffer, "key2", "value2", 2);
+        assertThat(manager.usedBytes()).isEqualTo(276);
+
+        PreparedFlush prepared = buffer.prepareFlush(2);
+        assertThat(manager.usedBytes()).isEqualTo(276);
+        buffer.abortFlush(prepared);
+        assertThat(manager.usedBytes()).isEqualTo(276);
+
+        prepared = buffer.prepareFlush(2);
+        buffer.completeFlush(prepared);
+        assertThat(manager.usedBytes()).isEqualTo(138);
+
+        buffer.truncateTo(2, TruncateReason.ERROR);
+        assertThat(manager.usedBytes()).isZero();
+    }
+
+    @Test
+    void testEntryLargerThanGlobalGuardIsNotRetriable() {
+        KvPreWriteBufferMemoryManager manager = new KvPreWriteBufferMemoryManager(128, 64);
+        KvPreWriteBuffer buffer =
+                new KvPreWriteBuffer(TestingMetricGroups.TABLET_SERVER_METRICS, manager);
+
+        assertThatThrownBy(() -> bufferInsert(buffer, "key", "value", 1))
+                .isInstanceOf(RecordTooLargeException.class)
+                .hasMessageContaining("exceeds the global KV pre-write-buffer high watermark");
+        assertThat(manager.usedBytes()).isZero();
     }
 
     private static String getValue(KvPreWriteBuffer preWriteBuffer, String keyStr) {

@@ -799,6 +799,32 @@ public class ConfigOptions {
                                     + ". "
                                     + "This option allows to allocate memory in batches to have better CPU-cached friendliness due to contiguous segments.");
 
+    public static final ConfigOption<Double>
+            SERVER_KV_PRE_WRITE_BUFFER_MEMORY_HIGH_WATERMARK_RATIO =
+                    key("server.kv.pre-write-buffer.memory-high-watermark-ratio")
+                            .doubleType()
+                            .noDefaultValue()
+                            .withDescription(
+                                    "The optional defensive high watermark, as a ratio of the TabletServer JVM maximum "
+                                            + "heap size, for memory retained by all KV pre-write buffers. KV writes are "
+                                            + "rejected with storage backpressure when usage reaches this watermark. "
+                                            + "This fallback guard is disabled unless both this option and "
+                                            + "server.kv.pre-write-buffer.memory-low-watermark-ratio are explicitly "
+                                            + "configured. The valid range is "
+                                            + "(server.kv.pre-write-buffer.memory-low-watermark-ratio, 1.0].");
+
+    public static final ConfigOption<Double> SERVER_KV_PRE_WRITE_BUFFER_MEMORY_LOW_WATERMARK_RATIO =
+            key("server.kv.pre-write-buffer.memory-low-watermark-ratio")
+                    .doubleType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The optional low watermark, as a ratio of the TabletServer JVM maximum heap size, "
+                                    + "for memory retained by all KV pre-write buffers. KV writes resume after "
+                                    + "usage reaches or drops below this watermark. This fallback guard is disabled "
+                                    + "unless both this option and server.kv.pre-write-buffer.memory-high-watermark-ratio "
+                                    + "are explicitly configured. The valid range is "
+                                    + "[0.0, server.kv.pre-write-buffer.memory-high-watermark-ratio).");
+
     public static final ConfigOption<Duration> SERVER_BUFFER_POOL_WAIT_TIMEOUT =
             key("server.buffer.wait-timeout")
                     .durationType()

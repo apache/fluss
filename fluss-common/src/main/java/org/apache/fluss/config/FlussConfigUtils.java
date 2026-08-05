@@ -132,6 +132,52 @@ public class FlussConfigUtils {
                             "Configuration %s must be set.", ConfigOptions.TABLET_SERVER_ID.key()));
         }
         validMinValue(ConfigOptions.TABLET_SERVER_ID, serverId.get(), 0);
+        validateKvPreWriteBufferMemoryWatermarks(conf);
+    }
+
+    private static void validateKvPreWriteBufferMemoryWatermarks(Configuration conf) {
+        Optional<Double> highWatermarkRatioOptional =
+                conf.getOptional(
+                        ConfigOptions.SERVER_KV_PRE_WRITE_BUFFER_MEMORY_HIGH_WATERMARK_RATIO);
+        Optional<Double> lowWatermarkRatioOptional =
+                conf.getOptional(
+                        ConfigOptions.SERVER_KV_PRE_WRITE_BUFFER_MEMORY_LOW_WATERMARK_RATIO);
+        if (!highWatermarkRatioOptional.isPresent() && !lowWatermarkRatioOptional.isPresent()) {
+            return;
+        }
+        if (!highWatermarkRatioOptional.isPresent() || !lowWatermarkRatioOptional.isPresent()) {
+            throw new IllegalConfigurationException(
+                    String.format(
+                            "Configurations %s and %s must be configured together to enable the "
+                                    + "defensive KV pre-write-buffer memory guard.",
+                            ConfigOptions.SERVER_KV_PRE_WRITE_BUFFER_MEMORY_HIGH_WATERMARK_RATIO
+                                    .key(),
+                            ConfigOptions.SERVER_KV_PRE_WRITE_BUFFER_MEMORY_LOW_WATERMARK_RATIO
+                                    .key()));
+        }
+
+        double highWatermarkRatio = highWatermarkRatioOptional.get();
+        double lowWatermarkRatio = lowWatermarkRatioOptional.get();
+        if (!(highWatermarkRatio > 0.0 && highWatermarkRatio <= 1.0)) {
+            throw new IllegalConfigurationException(
+                    String.format(
+                            "Invalid configuration for %s: %s. It must be within (0.0, 1.0].",
+                            ConfigOptions.SERVER_KV_PRE_WRITE_BUFFER_MEMORY_HIGH_WATERMARK_RATIO
+                                    .key(),
+                            highWatermarkRatio));
+        }
+        if (!(lowWatermarkRatio >= 0.0 && lowWatermarkRatio < highWatermarkRatio)) {
+            throw new IllegalConfigurationException(
+                    String.format(
+                            "Invalid configuration for %s: %s. It must be within [0.0, %s), "
+                                    + "where %s is the configured high watermark ratio.",
+                            ConfigOptions.SERVER_KV_PRE_WRITE_BUFFER_MEMORY_LOW_WATERMARK_RATIO
+                                    .key(),
+                            lowWatermarkRatio,
+                            highWatermarkRatio,
+                            ConfigOptions.SERVER_KV_PRE_WRITE_BUFFER_MEMORY_HIGH_WATERMARK_RATIO
+                                    .key()));
+        }
     }
 
     public static void validateRemoteDataDirs(Configuration conf) {

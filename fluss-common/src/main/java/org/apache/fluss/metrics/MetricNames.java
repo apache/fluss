@@ -158,6 +158,8 @@ public class MetricNames {
             "preWriteBufferTruncateAsDuplicatedPerSecond";
     public static final String KV_PRE_WRITE_BUFFER_TRUNCATE_AS_ERROR_RATE =
             "preWriteBufferTruncateAsErrorPerSecond";
+    public static final String KV_PRE_WRITE_BUFFER_MEMORY_USAGE = "preWriteBufferMemoryUsage";
+    public static final String KV_PRE_WRITE_BUFFER_UNDER_PRESSURE = "preWriteBufferUnderPressure";
 
     // --------------------------------------------------------------------------------------------
     // RocksDB metrics
@@ -190,14 +192,15 @@ public class MetricNames {
     // --------------------------------------------------------------------------------------------
     /**
      * Maximum normalized backpressure value across all buckets of this table, in {@code [0, 1]}.
-     * Reflects how close the hottest bucket is to the storage engine's hard-rejection trigger.
+     * Reflects how close the hottest bucket or the TabletServer-wide pre-write memory pool is to a
+     * hard-rejection trigger.
      */
     public static final String KV_BACKPRESSURE_MAX_PRESSURE = "kvBackpressureMaxPressure";
 
     /**
      * Total number of write requests rejected with {@code StorageBackpressureException} on this
-     * table since process start. The rate of this counter reflects how often the storage engine
-     * crosses its hard-rejection trigger.
+     * table since process start. The rate of this counter reflects how often a KV write-pressure
+     * source crosses its hard-rejection trigger.
      */
     public static final String KV_BACKPRESSURE_REJECTIONS_TOTAL = "kvBackpressureRejectionsTotal";
 

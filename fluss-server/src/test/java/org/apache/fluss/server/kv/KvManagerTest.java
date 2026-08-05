@@ -34,6 +34,7 @@ import org.apache.fluss.record.KvRecordTestUtils;
 import org.apache.fluss.record.TestData;
 import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.row.encode.ValueEncoder;
+import org.apache.fluss.server.kv.prewrite.KvPreWriteBufferMemoryManager;
 import org.apache.fluss.server.log.LogManager;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
@@ -144,6 +145,14 @@ final class KvManagerTest {
                         TestingMetricGroups.TABLET_SERVER_METRICS,
                         localDiskManager);
         kvManager.startup();
+    }
+
+    @Test
+    void testPreWriteBufferMemoryGuardDisabledByDefault() {
+        KvPreWriteBufferMemoryManager memoryManager = kvManager.preWriteBufferMemoryManager();
+
+        assertThat(memoryManager.isEnabled()).isFalse();
+        assertThat(memoryManager.usedBytes()).isZero();
     }
 
     @AfterEach

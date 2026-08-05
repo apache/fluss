@@ -54,6 +54,7 @@ import org.apache.fluss.server.kv.autoinc.AutoIncrementUpdater;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.PreparedFlush;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.TruncateReason;
+import org.apache.fluss.server.kv.prewrite.KvPreWriteBufferMemoryManager;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKv;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKvBuilder;
 import org.apache.fluss.server.kv.rocksdb.RocksDBResourceContainer;
@@ -213,7 +214,8 @@ public final class KvTablet {
             KvFlushScheduler kvFlushScheduler,
             boolean closeFlushScheduler,
             @Nullable Runnable flushCompleteListener,
-            AutoIncrementManager autoIncrementManager) {
+            AutoIncrementManager autoIncrementManager,
+            KvPreWriteBufferMemoryManager preWriteBufferMemoryManager) {
         this.physicalPath = physicalPath;
         this.tableBucket = tableBucket;
         this.logTablet = logTablet;
@@ -223,7 +225,8 @@ public final class KvTablet {
         this.serverMetricGroup = serverMetricGroup;
         this.kvFlushScheduler = kvFlushScheduler;
         this.closeFlushScheduler = closeFlushScheduler;
-        this.kvPreWriteBuffer = new KvPreWriteBuffer(serverMetricGroup);
+        this.kvPreWriteBuffer =
+                new KvPreWriteBuffer(serverMetricGroup, preWriteBufferMemoryManager);
         this.logFormat = logFormat;
         this.arrowWriterProvider = new ArrowWriterPool(arrowBufferAllocator);
         this.memorySegmentPool = memorySegmentPool;
@@ -283,10 +286,49 @@ public final class KvTablet {
                 schemaGetter,
                 changelogImage,
                 sharedRateLimiter,
+                autoIncrementManager,
+                KvPreWriteBufferMemoryManager.disabled());
+    }
+
+    @VisibleForTesting
+    static KvTablet create(
+            PhysicalTablePath tablePath,
+            TableBucket tableBucket,
+            LogTablet logTablet,
+            File kvTabletDir,
+            Configuration serverConf,
+            TabletServerMetricGroup serverMetricGroup,
+            BufferAllocator arrowBufferAllocator,
+            MemorySegmentPool memorySegmentPool,
+            KvFormat kvFormat,
+            RowMerger rowMerger,
+            ArrowCompressionInfo arrowCompressionInfo,
+            SchemaGetter schemaGetter,
+            ChangelogImage changelogImage,
+            RateLimiter sharedRateLimiter,
+            AutoIncrementManager autoIncrementManager,
+            KvPreWriteBufferMemoryManager preWriteBufferMemoryManager)
+            throws IOException {
+        return create(
+                tablePath,
+                tableBucket,
+                logTablet,
+                kvTabletDir,
+                serverConf,
+                serverMetricGroup,
+                arrowBufferAllocator,
+                memorySegmentPool,
+                kvFormat,
+                rowMerger,
+                arrowCompressionInfo,
+                schemaGetter,
+                changelogImage,
+                sharedRateLimiter,
                 new KvFlushScheduler(serverConf),
                 true,
                 null,
-                autoIncrementManager);
+                autoIncrementManager,
+                preWriteBufferMemoryManager);
     }
 
     public static KvTablet create(
@@ -324,9 +366,51 @@ public final class KvTablet {
                 changelogImage,
                 sharedRateLimiter,
                 kvFlushScheduler,
+                flushCompleteListener,
+                autoIncrementManager,
+                KvPreWriteBufferMemoryManager.disabled());
+    }
+
+    public static KvTablet create(
+            PhysicalTablePath tablePath,
+            TableBucket tableBucket,
+            LogTablet logTablet,
+            File kvTabletDir,
+            Configuration serverConf,
+            TabletServerMetricGroup serverMetricGroup,
+            BufferAllocator arrowBufferAllocator,
+            MemorySegmentPool memorySegmentPool,
+            KvFormat kvFormat,
+            RowMerger rowMerger,
+            ArrowCompressionInfo arrowCompressionInfo,
+            SchemaGetter schemaGetter,
+            ChangelogImage changelogImage,
+            RateLimiter sharedRateLimiter,
+            KvFlushScheduler kvFlushScheduler,
+            @Nullable Runnable flushCompleteListener,
+            AutoIncrementManager autoIncrementManager,
+            KvPreWriteBufferMemoryManager preWriteBufferMemoryManager)
+            throws IOException {
+        return create(
+                tablePath,
+                tableBucket,
+                logTablet,
+                kvTabletDir,
+                serverConf,
+                serverMetricGroup,
+                arrowBufferAllocator,
+                memorySegmentPool,
+                kvFormat,
+                rowMerger,
+                arrowCompressionInfo,
+                schemaGetter,
+                changelogImage,
+                sharedRateLimiter,
+                kvFlushScheduler,
                 false,
                 flushCompleteListener,
-                autoIncrementManager);
+                autoIncrementManager,
+                preWriteBufferMemoryManager);
     }
 
     private static KvTablet create(
@@ -347,7 +431,8 @@ public final class KvTablet {
             KvFlushScheduler kvFlushScheduler,
             boolean closeFlushScheduler,
             @Nullable Runnable flushCompleteListener,
-            AutoIncrementManager autoIncrementManager)
+            AutoIncrementManager autoIncrementManager,
+            KvPreWriteBufferMemoryManager preWriteBufferMemoryManager)
             throws IOException {
         RocksDBKv kv = buildRocksDBKv(serverConf, kvTabletDir, sharedRateLimiter);
 
@@ -383,7 +468,8 @@ public final class KvTablet {
                 kvFlushScheduler,
                 closeFlushScheduler,
                 flushCompleteListener,
-                autoIncrementManager);
+                autoIncrementManager,
+                preWriteBufferMemoryManager);
     }
 
     private static RocksDBKv buildRocksDBKv(
@@ -1308,6 +1394,7 @@ public final class KvTablet {
                             // Terminal transition: closing forces IDLE regardless of the current
                             // state, see the FlushState state graph.
                             flushState = FlushState.IDLE;
+                            kvPreWriteBuffer.close();
                             return true;
                         });
         if (shouldClose && closeFlushScheduler) {
@@ -1359,7 +1446,7 @@ public final class KvTablet {
 
     /** Returns the recent normalized backpressure pressure in {@code [0, 1)}. */
     public float currentPressure() {
-        return rocksDBKv.currentPressure();
+        return Math.max(rocksDBKv.currentPressure(), kvPreWriteBuffer.currentPressure());
     }
 
     /**

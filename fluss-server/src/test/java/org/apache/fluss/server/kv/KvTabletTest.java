@@ -58,6 +58,7 @@ import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.Key;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.KvEntry;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.PreparedFlush;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.Value;
+import org.apache.fluss.server.kv.prewrite.KvPreWriteBufferMemoryManager;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKv;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKvTestUtils;
 import org.apache.fluss.server.kv.rocksdb.RocksDBStatistics;
@@ -223,6 +224,27 @@ class KvTabletTest {
             Map<String, String> tableConfig,
             @Nullable KvFlushScheduler kvFlushScheduler)
             throws Exception {
+        return createKvTablet(
+                tablePath,
+                tableBucket,
+                logTablet,
+                tmpKvDir,
+                schemaGetter,
+                tableConfig,
+                kvFlushScheduler,
+                KvPreWriteBufferMemoryManager.disabled());
+    }
+
+    private KvTablet createKvTablet(
+            PhysicalTablePath tablePath,
+            TableBucket tableBucket,
+            LogTablet logTablet,
+            File tmpKvDir,
+            SchemaGetter schemaGetter,
+            Map<String, String> tableConfig,
+            @Nullable KvFlushScheduler kvFlushScheduler,
+            KvPreWriteBufferMemoryManager preWriteBufferMemoryManager)
+            throws Exception {
         TableConfig tableConf = new TableConfig(Configuration.fromMap(tableConfig));
         RowMerger rowMerger = RowMerger.create(tableConf, KvFormat.COMPACTED, schemaGetter);
         AutoIncrementManager autoIncrementManager =
@@ -248,7 +270,8 @@ class KvTabletTest {
                     schemaGetter,
                     tableConf.getChangelogImage(),
                     KvManager.getDefaultRateLimiter(),
-                    autoIncrementManager);
+                    autoIncrementManager,
+                    preWriteBufferMemoryManager);
         }
         return KvTablet.create(
                 tablePath,
@@ -267,7 +290,8 @@ class KvTabletTest {
                 KvManager.getDefaultRateLimiter(),
                 kvFlushScheduler,
                 null,
-                autoIncrementManager);
+                autoIncrementManager,
+                preWriteBufferMemoryManager);
     }
 
     @Test
@@ -1591,6 +1615,38 @@ class KvTabletTest {
         assertThatThrownBy(() -> kvTablet.putAsLeader(largeBatch, null))
                 .isInstanceOf(StorageBackpressureException.class);
         assertThat(logTablet.localLogEndOffset()).isEqualTo(0L);
+    }
+
+    @Test
+    void testPreWriteBufferMemoryPressureAndCloseRelease() throws Exception {
+        KvPreWriteBufferMemoryManager memoryManager = new KvPreWriteBufferMemoryManager(10_000, 0);
+        ManualKvFlushScheduler manualScheduler = new ManualKvFlushScheduler(conf);
+        PhysicalTablePath physicalTablePath = PhysicalTablePath.of(TablePath.of("testDb", "t1"));
+        schemaGetter = new TestingSchemaGetter(new SchemaInfo(DATA1_SCHEMA_PK, schemaId));
+        logTablet = createLogTablet(tempLogDir, 0L, physicalTablePath);
+        kvTablet =
+                createKvTablet(
+                        physicalTablePath,
+                        logTablet.getTableBucket(),
+                        logTablet,
+                        tmpKvDir,
+                        schemaGetter,
+                        new HashMap<>(),
+                        manualScheduler,
+                        memoryManager);
+
+        assertThat(memoryManager.tryReserve(5_000)).isTrue();
+        assertThat(kvTablet.currentPressure()).isEqualTo(0.5f);
+        memoryManager.release(5_000);
+
+        kvTablet.putAsLeader(
+                kvRecordBatchFactory.ofRecords(
+                        kvRecordFactory.ofRecord("key".getBytes(), new Object[] {1, "value"})),
+                null);
+        assertThat(memoryManager.usedBytes()).isPositive();
+
+        kvTablet.close();
+        assertThat(memoryManager.usedBytes()).isZero();
     }
 
     @Test
