@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.flink.tiering.source.split;
+package org.apache.fluss.client.tiering;
 
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
@@ -24,43 +24,52 @@ import javax.annotation.Nullable;
 
 import java.util.Objects;
 
-/**
- * The table split for tiering service. It's used to describe the snapshot data of a primary key
- * table bucket.
- */
-public class TieringSnapshotSplit extends TieringSplit {
+/** The table split for tiering service. It's used to describe the log data of a table bucket. */
+public class TieringLogSplit extends TieringSplit {
 
-    private static final String TIERING_SNAPSHOT_SPLIT_PREFIX = "tiering-snapshot-split-";
+    private static final String TIERING_LOG_SPLIT_PREFIX = "tiering-log-split-";
 
-    /** The snapshot id. It's used to identify the snapshot for a primary key table bucket. */
-    private final long snapshotId;
+    private final long startingOffset;
+    private final long stoppingOffset;
 
-    /** The log offset corresponding to the primary key table bucket snapshot finished. */
-    private final long logOffsetOfSnapshot;
-
-    public TieringSnapshotSplit(
+    public TieringLogSplit(
             TablePath tablePath,
             TableBucket tableBucket,
             @Nullable String partitionName,
-            long snapshotId,
-            long logOffsetOfSnapshot,
+            long startingOffset,
+            long stoppingOffset) {
+        this(
+                tablePath,
+                tableBucket,
+                partitionName,
+                startingOffset,
+                stoppingOffset,
+                UNKNOWN_NUMBER_OF_SPLITS);
+    }
+
+    public TieringLogSplit(
+            TablePath tablePath,
+            TableBucket tableBucket,
+            @Nullable String partitionName,
+            long startingOffset,
+            long stoppingOffset,
             int numberOfSplits) {
         this(
                 tablePath,
                 tableBucket,
                 partitionName,
-                snapshotId,
-                logOffsetOfSnapshot,
+                startingOffset,
+                stoppingOffset,
                 numberOfSplits,
                 false);
     }
 
-    public TieringSnapshotSplit(
+    public TieringLogSplit(
             TablePath tablePath,
             TableBucket tableBucket,
             @Nullable String partitionName,
-            long snapshotId,
-            long logOffsetOfSnapshot,
+            long startingOffset,
+            long stoppingOffset,
             int numberOfSplits,
             int splitIndex,
             long tieringRoundTimestamp) {
@@ -68,40 +77,40 @@ public class TieringSnapshotSplit extends TieringSplit {
                 tablePath,
                 tableBucket,
                 partitionName,
-                snapshotId,
-                logOffsetOfSnapshot,
+                startingOffset,
+                stoppingOffset,
                 numberOfSplits,
                 false,
                 splitIndex,
                 tieringRoundTimestamp);
     }
 
-    public TieringSnapshotSplit(
+    public TieringLogSplit(
             TablePath tablePath,
             TableBucket tableBucket,
             @Nullable String partitionName,
-            long snapshotId,
-            long logOffsetOfSnapshot,
+            long startingOffset,
+            long stoppingOffset,
             int numberOfSplits,
             boolean skipCurrentRound) {
         this(
                 tablePath,
                 tableBucket,
                 partitionName,
-                snapshotId,
-                logOffsetOfSnapshot,
+                startingOffset,
+                stoppingOffset,
                 numberOfSplits,
                 skipCurrentRound,
                 UNKNOWN_SPLIT_INDEX,
                 UNKNOWN_TIERING_ROUND_TIMESTAMP);
     }
 
-    public TieringSnapshotSplit(
+    public TieringLogSplit(
             TablePath tablePath,
             TableBucket tableBucket,
             @Nullable String partitionName,
-            long snapshotId,
-            long logOffsetOfSnapshot,
+            long startingOffset,
+            long stoppingOffset,
             int numberOfSplits,
             boolean skipCurrentRound,
             int splitIndex,
@@ -114,26 +123,26 @@ public class TieringSnapshotSplit extends TieringSplit {
                 skipCurrentRound,
                 splitIndex,
                 tieringRoundTimestamp);
-        this.snapshotId = snapshotId;
-        this.logOffsetOfSnapshot = logOffsetOfSnapshot;
+        this.startingOffset = startingOffset;
+        this.stoppingOffset = stoppingOffset;
     }
 
     @Override
     public String splitId() {
-        return toSplitId(TIERING_SNAPSHOT_SPLIT_PREFIX, this.tableBucket);
+        return toSplitId(TIERING_LOG_SPLIT_PREFIX, this.tableBucket);
     }
 
-    public long getSnapshotId() {
-        return snapshotId;
+    public long getStartingOffset() {
+        return startingOffset;
     }
 
-    public long getLogOffsetOfSnapshot() {
-        return logOffsetOfSnapshot;
+    public long getStoppingOffset() {
+        return stoppingOffset;
     }
 
     @Override
     public String toString() {
-        return "TieringSnapshotSplit{"
+        return "TieringLogSplit{"
                 + "tablePath="
                 + tablePath
                 + ", tableBucket="
@@ -145,10 +154,10 @@ public class TieringSnapshotSplit extends TieringSplit {
                 + numberOfSplits
                 + ", skipCurrentRound="
                 + skipCurrentRound
-                + ", snapshotId="
-                + snapshotId
-                + ", logOffsetOfSnapshot="
-                + logOffsetOfSnapshot
+                + ", startingOffset="
+                + startingOffset
+                + ", stoppingOffset="
+                + stoppingOffset
                 + ", splitIndex="
                 + splitIndex
                 + ", tieringRoundTimestamp="
@@ -157,14 +166,13 @@ public class TieringSnapshotSplit extends TieringSplit {
     }
 
     @Override
-    public TieringSnapshotSplit copy(
-            int numberOfSplits, int splitIndex, long tieringRoundTimestamp) {
-        return new TieringSnapshotSplit(
+    public TieringLogSplit copy(int numberOfSplits, int splitIndex, long tieringRoundTimestamp) {
+        return new TieringLogSplit(
                 tablePath,
                 tableBucket,
                 partitionName,
-                snapshotId,
-                logOffsetOfSnapshot,
+                startingOffset,
+                stoppingOffset,
                 numberOfSplits,
                 skipCurrentRound,
                 splitIndex,
@@ -173,18 +181,18 @@ public class TieringSnapshotSplit extends TieringSplit {
 
     @Override
     public boolean equals(Object object) {
-        if (!(object instanceof TieringSnapshotSplit)) {
+        if (!(object instanceof TieringLogSplit)) {
             return false;
         }
         if (!super.equals(object)) {
             return false;
         }
-        TieringSnapshotSplit that = (TieringSnapshotSplit) object;
-        return snapshotId == that.snapshotId && logOffsetOfSnapshot == that.logOffsetOfSnapshot;
+        TieringLogSplit that = (TieringLogSplit) object;
+        return startingOffset == that.startingOffset && stoppingOffset == that.stoppingOffset;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(super.hashCode(), snapshotId, logOffsetOfSnapshot);
+        return Objects.hash(super.hashCode(), startingOffset, stoppingOffset);
     }
 }
