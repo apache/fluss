@@ -105,6 +105,12 @@ public class TableConfig {
         return config.get(ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED);
     }
 
+    /** Gets the maximum local disk size of the historical partition lookup cache. */
+    public MemorySize getHistoricalPartitionLookupCacheMaxDiskSize() {
+        return config.get(
+                ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE);
+    }
+
     /**
      * Return the data lake format of the table. It'll be the datalake format configured in Fluss
      * whiling creating the table. Return empty if no datalake format configured while creating.

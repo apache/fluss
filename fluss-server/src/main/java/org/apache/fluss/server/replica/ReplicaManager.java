@@ -444,6 +444,12 @@ public class ReplicaManager implements ServerReconfigurable {
         serverMetricGroup.gauge(MetricNames.UNDER_REPLICATED, this::underReplicatedCount);
         serverMetricGroup.gauge(MetricNames.UNDER_MIN_ISR, this::underMinIsrCount);
         serverMetricGroup.gauge(MetricNames.AT_MIN_ISR, this::atMinIsrCount);
+        serverMetricGroup.gauge(
+                MetricNames.HISTORICAL_LOOKUP_CACHED_TABLE_COUNT,
+                historicalLakeLookupManager::cachedTableCount);
+        serverMetricGroup.counter(
+                MetricNames.HISTORICAL_LOOKUP_CACHE_EVICTIONS,
+                historicalLakeLookupManager.capacityEvictions());
 
         MetricGroup logicalStorage = serverMetricGroup.addGroup("logicalStorage");
         logicalStorage.gauge(

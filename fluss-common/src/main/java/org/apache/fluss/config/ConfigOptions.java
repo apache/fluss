@@ -428,6 +428,24 @@ public class ConfigOptions {
                             "The maximum number of threads used for historical partition operations, such as lake lookups and writes. "
                                     + "Threads are started lazily and released after the keep-alive timeout when idle.");
 
+    public static final ConfigOption<MemorySize>
+            SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE =
+                    key("server.historical-partition.lookup-cache.max-disk-size")
+                            .memoryType()
+                            .defaultValue(MemorySize.parse("80gb"))
+                            .withDescription(
+                                    "The total configured disk capacity available to current and creating historical partition lookup caches on a TabletServer. "
+                                            + "Retired cache generations that are still serving active lookups are not included in this limit.");
+
+    public static final ConfigOption<Duration>
+            SERVER_HISTORICAL_PARTITION_LOOKUPER_CACHE_EXPIRE_AFTER_ACCESS =
+                    key("server.historical-partition.lookuper-cache.expire-after-access")
+                            .durationType()
+                            .defaultValue(Duration.ofHours(3))
+                            .withDescription(
+                                    "The duration after which an idle historical partition table lookuper is removed from the cache. "
+                                            + "This option requires a TabletServer restart to take effect.");
+
     public static final ConfigOption<Double> SERVER_DATA_DISK_WRITE_LIMIT_RATIO =
             key("server.data-disk.write-limit-ratio")
                     .doubleType()
@@ -1849,6 +1867,15 @@ public class ConfigOptions {
                                     + "After changing this option, restart existing lookup jobs that need "
                                     + "to look up historical partition data so that their clients load the "
                                     + "updated table configuration.");
+
+    public static final ConfigOption<MemorySize>
+            TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE =
+                    key("table.datalake.historical-partition.lookup-cache.max-disk-size")
+                            .memoryType()
+                            .defaultValue(MemorySize.parse("8gb"))
+                            .withDescription(
+                                    "The maximum local disk capacity reserved for this table's historical partition lookup cache on each TabletServer. "
+                                            + "The value must be greater than zero and no greater than the TabletServer historical lookup cache limit.");
 
     public static final ConfigOption<DataLakeFormat> TABLE_DATALAKE_FORMAT =
             key("table.datalake.format")

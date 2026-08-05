@@ -44,4 +44,18 @@ class TableConfigTest {
         TableConfig tableConfig3 = new TableConfig(conf);
         assertThat(tableConfig3.getDeleteBehavior()).hasValue(DeleteBehavior.IGNORE);
     }
+
+    @Test
+    void testHistoricalPartitionLookupCacheMaxDiskSize() {
+        Configuration conf = new Configuration();
+        TableConfig tableConfig = new TableConfig(conf);
+        assertThat(tableConfig.getHistoricalPartitionLookupCacheMaxDiskSize())
+                .isEqualTo(MemorySize.parse("8gb"));
+
+        conf.set(
+                ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE,
+                MemorySize.parse("16gb"));
+        assertThat(new TableConfig(conf).getHistoricalPartitionLookupCacheMaxDiskSize())
+                .isEqualTo(MemorySize.parse("16gb"));
+    }
 }

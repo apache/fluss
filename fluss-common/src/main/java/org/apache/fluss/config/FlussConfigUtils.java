@@ -222,12 +222,31 @@ public class FlussConfigUtils {
         validMinValue(conf, ConfigOptions.SERVER_IO_POOL_SIZE, 1);
         validMinValue(conf, ConfigOptions.BACKGROUND_THREADS, 1);
         validMinDuration(conf, ConfigOptions.LOG_RETENTION_CHECK_INTERVAL, 1);
+        validMinDuration(
+                conf,
+                ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUPER_CACHE_EXPIRE_AFTER_ACCESS,
+                1);
+        validateHistoricalLookupCacheLimit(conf);
 
         if (conf.get(ConfigOptions.LOG_SEGMENT_FILE_SIZE).getBytes() > Integer.MAX_VALUE) {
             throw new IllegalConfigurationException(
                     String.format(
                             "Invalid configuration for %s, it must be less than or equal %d bytes.",
                             ConfigOptions.LOG_SEGMENT_FILE_SIZE.key(), Integer.MAX_VALUE));
+        }
+    }
+
+    private static void validateHistoricalLookupCacheLimit(Configuration conf) {
+        MemorySize historicalLookupCacheMaxSize =
+                conf.get(ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE);
+        MemorySize defaultTableHistoricalLookupCacheSize =
+                ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE
+                        .defaultValue();
+        if (historicalLookupCacheMaxSize.compareTo(defaultTableHistoricalLookupCacheSize) < 0) {
+            throw new IllegalConfigurationException(
+                    "Invalid configuration for %s, it must be greater than or equal to the default table cache size %s.",
+                    ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE.key(),
+                    defaultTableHistoricalLookupCacheSize);
         }
     }
 

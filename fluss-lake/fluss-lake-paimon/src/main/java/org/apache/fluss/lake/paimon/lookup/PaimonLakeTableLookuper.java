@@ -41,7 +41,6 @@ import org.apache.paimon.catalog.CatalogFactory;
 import org.apache.paimon.disk.IOManager;
 import org.apache.paimon.io.DataFileMeta;
 import org.apache.paimon.memory.MemorySegment;
-import org.apache.paimon.options.MemorySize;
 import org.apache.paimon.options.Options;
 import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.table.query.LocalTableQuery;
@@ -85,13 +84,6 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  * cache, and value-encoding state.
  */
 public class PaimonLakeTableLookuper implements LakeTableLookuper {
-
-    // Each TabletServer caches at most ten table lookupers, bounding their retained lookup cache
-    // capacity to 20GB. See HistoricalLakeLookupManager for the follow-up to make this configurable
-    // and use a global Paimon IOManager limit.
-    private static final String LOOKUP_CACHE_MAX_DISK_SIZE = "2gb";
-    private static final MemorySize LOOKUP_CACHE_MAX_DISK_MEMORY_SIZE =
-            MemorySize.parse(LOOKUP_CACHE_MAX_DISK_SIZE);
 
     private final Configuration paimonConfig;
     private final TablePath tablePath;
@@ -239,14 +231,8 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
 
     private FileStoreTable withLookupCacheOptions(FileStoreTable table) {
         String key = CoreOptions.LOOKUP_CACHE_MAX_DISK_SIZE.key();
-        String configuredMaxDiskSize = table.options().get(key);
-        if (configuredMaxDiskSize != null
-                && MemorySize.parse(configuredMaxDiskSize)
-                                .compareTo(LOOKUP_CACHE_MAX_DISK_MEMORY_SIZE)
-                        <= 0) {
-            return table;
-        }
-        return table.copy(Collections.singletonMap(key, LOOKUP_CACHE_MAX_DISK_SIZE));
+        String maxDiskSize = tableConfig.getHistoricalPartitionLookupCacheMaxDiskSize().toString();
+        return table.copy(Collections.singletonMap(key, maxDiskSize));
     }
 
     private static IOManager createIOManager(String ioTmpDir) {

@@ -18,10 +18,12 @@
 package org.apache.fluss.server.utils;
 
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
@@ -29,6 +31,8 @@ import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class HistoricalPartitionTableValidationTest {
+
+    private static final TablePath TABLE_PATH = TablePath.of("test_db", "test_table");
 
     @Test
     void testReportsAllUnmetHistoricalPartitionRequirements() {
@@ -46,7 +50,11 @@ class HistoricalPartitionTableValidationTest {
                                 TableDescriptorValidation.validateTableDescriptor(
                                         allRequirementsMissingDescriptor,
                                         100,
-                                        DataLakeFormat.PAIMON))
+                                        DataLakeFormat.PAIMON,
+                                        TABLE_PATH,
+                                        ConfigOptions
+                                                .SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE
+                                                .defaultValue()))
                 .isInstanceOf(InvalidConfigException.class)
                 .hasMessage(
                         "'table.datalake.historical-partition.enabled' has unmet requirements: "
@@ -74,7 +82,11 @@ class HistoricalPartitionTableValidationTest {
                                 TableDescriptorValidation.validateTableDescriptor(
                                         relatedValidationFailuresDescriptor,
                                         100,
-                                        DataLakeFormat.PAIMON))
+                                        DataLakeFormat.PAIMON,
+                                        TABLE_PATH,
+                                        ConfigOptions
+                                                .SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE
+                                                .defaultValue()))
                 .isInstanceOf(InvalidConfigException.class)
                 .hasMessage(
                         "'table.datalake.historical-partition.enabled' has unmet requirements: "
@@ -82,5 +94,42 @@ class HistoricalPartitionTableValidationTest {
                                 + "(currently 'iceberg'); "
                                 + "the table must define a primary key; "
                                 + "the table must define exactly one partition key (found 0).");
+    }
+
+    @Test
+    void testRejectInvalidHistoricalLookupCacheSize() {
+        TableDescriptor zeroSizeDescriptor = descriptorWithCacheSize(MemorySize.ZERO);
+        assertThatThrownBy(() -> validate(zeroSizeDescriptor, MemorySize.parse("80gb")))
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining(
+                        ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE
+                                .key())
+                .hasMessageContaining(TABLE_PATH.toString())
+                .hasMessageContaining("greater than 0 bytes");
+
+        TableDescriptor oversizedDescriptor = descriptorWithCacheSize(MemorySize.parse("16gb"));
+        assertThatThrownBy(() -> validate(oversizedDescriptor, MemorySize.parse("8gb")))
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining("16 gb")
+                .hasMessageContaining(
+                        ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE.key())
+                .hasMessageContaining("8 gb");
+    }
+
+    private static TableDescriptor descriptorWithCacheSize(MemorySize cacheSize) {
+        return TableDescriptor.builder()
+                .schema(Schema.newBuilder().column("id", DataTypes.INT()).build())
+                .distributedBy(1)
+                .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 1)
+                .property(
+                        ConfigOptions
+                                .TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE,
+                        cacheSize)
+                .build();
+    }
+
+    private static void validate(TableDescriptor descriptor, MemorySize globalCacheSize) {
+        TableDescriptorValidation.validateTableDescriptor(
+                descriptor, 100, DataLakeFormat.PAIMON, TABLE_PATH, globalCacheSize);
     }
 }

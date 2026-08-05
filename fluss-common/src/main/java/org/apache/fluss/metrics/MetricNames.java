@@ -102,6 +102,11 @@ public class MetricNames {
     public static final String DISK_USAGE_RATIO = "diskUsageRatio";
     public static final String DISK_WRITE_LOCKED = "diskWriteLocked";
 
+    // for historical lookup cache
+    public static final String HISTORICAL_LOOKUP_CACHED_TABLE_COUNT =
+            "historicalLookupCachedTableCount";
+    public static final String HISTORICAL_LOOKUP_CACHE_EVICTIONS = "historicalLookupCacheEvictions";
+
     // --------------------------------------------------------------------------------------------
     // metrics for user
     // --------------------------------------------------------------------------------------------

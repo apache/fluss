@@ -22,6 +22,7 @@ import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.config.ReadableConfig;
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.InvalidAlterTableException;
@@ -38,6 +39,7 @@ import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeRoot;
 import org.apache.fluss.types.RowType;
@@ -90,7 +92,9 @@ public class TableDescriptorValidation {
     public static void validateTableDescriptor(
             TableDescriptor tableDescriptor,
             int maxBucketNum,
-            @Nullable DataLakeFormat clusterDataLakeFormat) {
+            @Nullable DataLakeFormat clusterDataLakeFormat,
+            TablePath tablePath,
+            MemorySize historicalLookupCacheMaxSize) {
         Schema schema = tableDescriptor.getSchema();
         boolean hasPrimaryKey = schema.getPrimaryKey().isPresent();
         Configuration tableConf = Configuration.fromMap(tableDescriptor.getProperties());
@@ -128,6 +132,7 @@ public class TableDescriptorValidation {
         checkDeleteBehavior(tableConf, hasPrimaryKey);
         checkTieredLog(tableConf);
         checkHistoricalPartition(tableDescriptor, tableConf);
+        checkHistoricalLookupCacheSize(tableConf, tablePath, historicalLookupCacheMaxSize);
         checkPartition(tableConf, tableDescriptor.getPartitionKeys(), schema.getRowType());
         checkSystemColumns(schema.getRowType());
         validateStatisticsConfig(tableDescriptor);
@@ -224,6 +229,36 @@ public class TableDescriptorValidation {
                             "'%s' has unmet requirements: %s.",
                             ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED.key(),
                             String.join("; ", unmetRequirements)));
+        }
+    }
+
+    private static void checkHistoricalLookupCacheSize(
+            Configuration tableConf, TablePath tablePath, MemorySize historicalLookupCacheMaxSize) {
+        MemorySize tableCacheSize =
+                tableConf.get(
+                        ConfigOptions
+                                .TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE);
+        if (tableCacheSize.getBytes() == 0) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "'%s' for table '%s' must be greater than 0 bytes.",
+                            ConfigOptions
+                                    .TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE
+                                    .key(),
+                            tablePath));
+        }
+        if (tableCacheSize.compareTo(historicalLookupCacheMaxSize) > 0) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "'%s' (%s) for table '%s' must be less than or equal to '%s' (%s).",
+                            ConfigOptions
+                                    .TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE
+                                    .key(),
+                            tableCacheSize,
+                            tablePath,
+                            ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_SIZE
+                                    .key(),
+                            historicalLookupCacheMaxSize));
         }
     }
 
