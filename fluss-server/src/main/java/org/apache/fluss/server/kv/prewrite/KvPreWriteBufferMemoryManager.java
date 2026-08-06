@@ -21,6 +21,8 @@ import org.apache.fluss.annotation.Internal;
 
 import javax.annotation.concurrent.ThreadSafe;
 
+import java.util.concurrent.atomic.AtomicLong;
+
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
@@ -30,12 +32,19 @@ import static org.apache.fluss.utils.Preconditions.checkState;
  * <p>This is a defensive memory guard rather than the primary backpressure mechanism. Every
  * pre-write-buffer entry reserves its estimated retained heap before it is admitted. Once the high
  * watermark is reached, reservations remain blocked until usage falls to the low watermark.
+ *
+ * <p>The usage and the pressure latch are kept in one {@link AtomicLong}. The low 63 bits store the
+ * reserved bytes and the sign bit stores whether the manager is latched under pressure. Keeping
+ * both values in one compare-and-set word prevents a concurrent release from being overwritten by a
+ * reservation that was calculated from an older state.
  */
 @Internal
 @ThreadSafe
 public final class KvPreWriteBufferMemoryManager {
 
     private static final float MAX_PRESSURE = 0.999f;
+    private static final long UNDER_PRESSURE_FLAG = Long.MIN_VALUE;
+    private static final long USED_BYTES_MASK = Long.MAX_VALUE;
     private static final KvPreWriteBufferMemoryManager DISABLED =
             new KvPreWriteBufferMemoryManager();
 
@@ -43,8 +52,7 @@ public final class KvPreWriteBufferMemoryManager {
     private final long highWatermarkBytes;
     private final long lowWatermarkBytes;
 
-    private long usedBytes;
-    private boolean underPressure;
+    private final AtomicLong used = new AtomicLong();
 
     /** Creates a TabletServer-wide pre-write-buffer memory guard. */
     public KvPreWriteBufferMemoryManager(long highWatermarkBytes, long lowWatermarkBytes) {
@@ -88,21 +96,37 @@ public final class KvPreWriteBufferMemoryManager {
         if (bytes == 0) {
             return true;
         }
-        synchronized (this) {
-            if (underPressure) {
+
+        long currentState = used.get();
+        while (true) {
+            long currentUsedBytes = usedBytes(currentState);
+            if (isUnderPressure(currentState)) {
                 return false;
             }
-            if (bytes > highWatermarkBytes - usedBytes) {
+            if (bytes > highWatermarkBytes - currentUsedBytes) {
                 // Do not latch pressure at or below the low watermark. Otherwise, a single large
                 // reservation could block all writes even though no release is required to cross
                 // the resume threshold.
-                underPressure = usedBytes > lowWatermarkBytes;
-                return false;
+                long nextState =
+                        currentUsedBytes > lowWatermarkBytes
+                                ? underPressureState(currentUsedBytes)
+                                : currentUsedBytes;
+                if (used.compareAndSet(currentState, nextState)) {
+                    return false;
+                }
+                currentState = used.get();
+                continue;
             }
 
-            usedBytes += bytes;
-            underPressure = usedBytes >= highWatermarkBytes;
-            return true;
+            long nextUsedBytes = currentUsedBytes + bytes;
+            long nextState =
+                    nextUsedBytes >= highWatermarkBytes
+                            ? underPressureState(nextUsedBytes)
+                            : nextUsedBytes;
+            if (used.compareAndSet(currentState, nextState)) {
+                return true;
+            }
+            currentState = used.get();
         }
     }
 
@@ -115,16 +139,29 @@ public final class KvPreWriteBufferMemoryManager {
         if (bytes == 0) {
             return;
         }
-        synchronized (this) {
+
+        long currentState = used.get();
+        while (true) {
+            long currentUsedBytes = usedBytes(currentState);
             checkState(
-                    bytes <= usedBytes,
+                    bytes <= currentUsedBytes,
                     "Cannot release %s bytes when only %s bytes are reserved.",
                     bytes,
-                    usedBytes);
-            usedBytes -= bytes;
-            if (usedBytes <= lowWatermarkBytes) {
-                underPressure = false;
+                    currentUsedBytes);
+
+            long nextUsedBytes = currentUsedBytes - bytes;
+            // Preserve the pressure latch above the low watermark and clear it once the resume
+            // threshold is reached. This transition is part of the same CAS as the counter update.
+            long nextState =
+                    nextUsedBytes <= lowWatermarkBytes
+                            ? nextUsedBytes
+                            : (isUnderPressure(currentState)
+                                    ? underPressureState(nextUsedBytes)
+                                    : nextUsedBytes);
+            if (used.compareAndSet(currentState, nextState)) {
+                return;
             }
+            currentState = used.get();
         }
     }
 
@@ -133,9 +170,7 @@ public final class KvPreWriteBufferMemoryManager {
         if (!enabled) {
             return 0;
         }
-        synchronized (this) {
-            return usedBytes;
-        }
+        return usedBytes(used.get());
     }
 
     /** Returns the usage at which writes are rejected. */
@@ -153,9 +188,7 @@ public final class KvPreWriteBufferMemoryManager {
         if (!enabled) {
             return false;
         }
-        synchronized (this) {
-            return underPressure;
-        }
+        return isUnderPressure(used.get());
     }
 
     /**
@@ -169,17 +202,29 @@ public final class KvPreWriteBufferMemoryManager {
         if (!enabled) {
             return 0f;
         }
-        synchronized (this) {
-            if (underPressure) {
-                return MAX_PRESSURE;
-            }
-            if (usedBytes <= lowWatermarkBytes) {
-                return 0f;
-            }
-            double pressure =
-                    (double) (usedBytes - lowWatermarkBytes)
-                            / (highWatermarkBytes - lowWatermarkBytes);
-            return (float) Math.min(pressure, MAX_PRESSURE);
+        long currentState = used.get();
+        long currentUsedBytes = usedBytes(currentState);
+        if (isUnderPressure(currentState)) {
+            return MAX_PRESSURE;
         }
+        if (currentUsedBytes <= lowWatermarkBytes) {
+            return 0f;
+        }
+        double pressure =
+                (double) (currentUsedBytes - lowWatermarkBytes)
+                        / (highWatermarkBytes - lowWatermarkBytes);
+        return (float) Math.min(pressure, MAX_PRESSURE);
+    }
+
+    private static long usedBytes(long memoryState) {
+        return memoryState & USED_BYTES_MASK;
+    }
+
+    private static boolean isUnderPressure(long memoryState) {
+        return (memoryState & UNDER_PRESSURE_FLAG) != 0;
+    }
+
+    private static long underPressureState(long usedBytes) {
+        return usedBytes | UNDER_PRESSURE_FLAG;
     }
 }
