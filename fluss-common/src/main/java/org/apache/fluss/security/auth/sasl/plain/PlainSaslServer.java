@@ -25,6 +25,7 @@ import org.slf4j.LoggerFactory;
 import javax.security.auth.callback.Callback;
 import javax.security.auth.callback.CallbackHandler;
 import javax.security.auth.callback.NameCallback;
+import javax.security.sasl.AuthorizeCallback;
 import javax.security.sasl.Sasl;
 import javax.security.sasl.SaslException;
 import javax.security.sasl.SaslServer;
@@ -97,16 +98,16 @@ public class PlainSaslServer implements SaslServer {
                     "Authentication failed: Invalid username or password");
         }
         if (!authorizationIdFromClient.isEmpty() && !authorizationIdFromClient.equals(username)) {
-            PlainImpersonationCallback impersonationCallback =
-                    new PlainImpersonationCallback(username, authorizationIdFromClient);
+            AuthorizeCallback authorizeCallback =
+                    new AuthorizeCallback(username, authorizationIdFromClient);
             try {
-                callbackHandler.handle(new Callback[] {impersonationCallback});
+                callbackHandler.handle(new Callback[] {authorizeCallback});
             } catch (Throwable e) {
                 throw new AuthenticationException(
                         "Authentication failed: impersonation authorization could not be verified",
                         e);
             }
-            if (!impersonationCallback.allowed()) {
+            if (!authorizeCallback.isAuthorized()) {
                 throw new AuthenticationException(
                         "Authentication failed: user '"
                                 + username

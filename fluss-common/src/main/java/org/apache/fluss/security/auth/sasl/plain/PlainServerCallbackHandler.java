@@ -25,6 +25,7 @@ import javax.security.auth.callback.Callback;
 import javax.security.auth.callback.NameCallback;
 import javax.security.auth.callback.UnsupportedCallbackException;
 import javax.security.auth.login.AppConfigurationEntry;
+import javax.security.sasl.AuthorizeCallback;
 
 import java.util.Arrays;
 import java.util.List;
@@ -57,8 +58,8 @@ import java.util.List;
  *   <li>{@link NameCallback}: Retrieves the username from the client.
  *   <li>{@link PlainAuthenticateCallback}: Verifies the provided password against the expected
  *       value.
- *   <li>{@link PlainImpersonationCallback}: Checks whether the authenticated user is allowed to
- *       impersonate the requested authorization id.
+ *   <li>{@link AuthorizeCallback}: Checks whether the authenticated user is allowed to act as the
+ *       requested authorization id.
  * </ul>
  *
  * <p>If the username is not found or the password does not match, authentication will fail.
@@ -83,13 +84,13 @@ public class PlainServerCallbackHandler implements AuthenticateCallbackHandler {
                 PlainAuthenticateCallback plainCallback = (PlainAuthenticateCallback) callback;
                 boolean authenticated = authenticate(username, plainCallback.password());
                 plainCallback.authenticated(authenticated);
-            } else if (callback instanceof PlainImpersonationCallback) {
-                PlainImpersonationCallback impersonationCallback =
-                        (PlainImpersonationCallback) callback;
-                impersonationCallback.allowed(
-                        allowImpersonation(
-                                impersonationCallback.authenticatedUser(),
-                                impersonationCallback.requestedAuthorizationId()));
+            } else if (callback instanceof AuthorizeCallback) {
+                AuthorizeCallback authorizeCallback = (AuthorizeCallback) callback;
+                String authenticationId = authorizeCallback.getAuthenticationID();
+                String authorizationId = authorizeCallback.getAuthorizationID();
+                authorizeCallback.setAuthorized(
+                        authenticationId.equals(authorizationId)
+                                || allowImpersonation(authenticationId, authorizationId));
             } else {
                 throw new UnsupportedCallbackException(callback);
             }
