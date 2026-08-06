@@ -219,6 +219,14 @@ public class ConfigOptions {
                             "The interval of auto partition check. "
                                     + "The default value is 10 minutes.");
 
+    public static final ConfigOption<Duration> AUTO_PARTITION_DROP_FREEZE_TIMEOUT =
+            key("auto-partition.drop.freeze-timeout")
+                    .durationType()
+                    .defaultValue(Duration.ofSeconds(30))
+                    .withDescription(
+                            "The maximum time to wait for all partition bucket leaders to freeze "
+                                    + "writes before retrying in the next auto-partition cycle.");
+
     public static final ConfigOption<Duration> COORDINATOR_LIFECYCLE_THROTTLER_INFLIGHT_TIMEOUT =
             key("coordinator.lifecycle-throttler.inflight-timeout")
                     .durationType()

@@ -331,7 +331,11 @@ public class CoordinatorServer extends ServerBase {
 
             LakeAwarePartitionDropManager lakeAwarePartitionDropManager =
                     new LakeAwarePartitionDropManager(
-                            metadataManager, zkClient, coordinatorChannelManager, ioExecutor);
+                            metadataManager,
+                            zkClient,
+                            coordinatorChannelManager,
+                            ioExecutor,
+                            conf.get(ConfigOptions.AUTO_PARTITION_DROP_FREEZE_TIMEOUT).toMillis());
             this.autoPartitionManager =
                     new AutoPartitionManager(
                             metadataCache,
