@@ -24,9 +24,6 @@ import org.apache.fluss.utils.json.JsonDeserializer;
 import org.apache.fluss.utils.json.JsonSerializer;
 
 import java.io.IOException;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.TreeMap;
 
 /** Json serializer and deserializer for {@link PartitionRegistration}. */
 @Internal
@@ -40,12 +37,8 @@ public class PartitionRegistrationJsonSerde
     private static final String TABLE_ID_KEY = "table_id";
     private static final String PARTITION_ID_KEY = "partition_id";
     private static final String REMOTE_DATA_DIR_KEY = "remote_data_dir";
-    private static final String FROZEN_BUCKETS_KEY = "retention_frozen_buckets";
-    private static final String BUCKET_ID_KEY = "bucket_id";
-    private static final String LEADER_ID_KEY = "leader_id";
-    private static final String LEADER_EPOCH_KEY = "leader_epoch";
-    private static final String HIGH_WATERMARK_KEY = "high_watermark";
-    private static final String LOG_END_OFFSET_KEY = "log_end_offset";
+    private static final String FROZEN_KEY = "frozen";
+    private static final String LEGACY_FROZEN_BUCKETS_KEY = "retention_frozen_buckets";
     private static final int VERSION = 2;
 
     @Override
@@ -58,20 +51,8 @@ public class PartitionRegistrationJsonSerde
         if (registration.getRemoteDataDir() != null) {
             generator.writeStringField(REMOTE_DATA_DIR_KEY, registration.getRemoteDataDir());
         }
-        if (registration.isFrozenForRetention()) {
-            generator.writeArrayFieldStart(FROZEN_BUCKETS_KEY);
-            for (Map.Entry<Integer, PartitionRegistration.FrozenBucket> entry :
-                    new TreeMap<>(registration.getFrozenBuckets()).entrySet()) {
-                PartitionRegistration.FrozenBucket frozenBucket = entry.getValue();
-                generator.writeStartObject();
-                generator.writeNumberField(BUCKET_ID_KEY, entry.getKey());
-                generator.writeNumberField(LEADER_ID_KEY, frozenBucket.getLeaderId());
-                generator.writeNumberField(LEADER_EPOCH_KEY, frozenBucket.getLeaderEpoch());
-                generator.writeNumberField(HIGH_WATERMARK_KEY, frozenBucket.getHighWatermark());
-                generator.writeNumberField(LOG_END_OFFSET_KEY, frozenBucket.getLogEndOffset());
-                generator.writeEndObject();
-            }
-            generator.writeEndArray();
+        if (registration.isFrozen()) {
+            generator.writeBooleanField(FROZEN_KEY, true);
         }
         generator.writeEndObject();
     }
@@ -86,18 +67,10 @@ public class PartitionRegistrationJsonSerde
         if (node.has(REMOTE_DATA_DIR_KEY)) {
             remoteDataDir = node.get(REMOTE_DATA_DIR_KEY).asText();
         }
-        Map<Integer, PartitionRegistration.FrozenBucket> frozenBuckets = new HashMap<>();
-        if (node.has(FROZEN_BUCKETS_KEY)) {
-            for (JsonNode frozenBucketNode : node.get(FROZEN_BUCKETS_KEY)) {
-                frozenBuckets.put(
-                        frozenBucketNode.get(BUCKET_ID_KEY).asInt(),
-                        new PartitionRegistration.FrozenBucket(
-                                frozenBucketNode.get(LEADER_ID_KEY).asInt(),
-                                frozenBucketNode.get(LEADER_EPOCH_KEY).asInt(),
-                                frozenBucketNode.get(HIGH_WATERMARK_KEY).asLong(),
-                                frozenBucketNode.get(LOG_END_OFFSET_KEY).asLong()));
-            }
-        }
-        return new PartitionRegistration(tableId, partitionId, remoteDataDir, frozenBuckets);
+        boolean frozen =
+                (node.has(FROZEN_KEY) && node.get(FROZEN_KEY).asBoolean())
+                        || (node.has(LEGACY_FROZEN_BUCKETS_KEY)
+                                && node.get(LEGACY_FROZEN_BUCKETS_KEY).size() > 0);
+        return new PartitionRegistration(tableId, partitionId, remoteDataDir, frozen);
     }
 }

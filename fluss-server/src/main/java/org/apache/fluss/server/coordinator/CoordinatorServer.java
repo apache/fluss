@@ -329,8 +329,8 @@ public class CoordinatorServer extends ServerBase {
 
             this.coordinatorChannelManager = new CoordinatorChannelManager(rpcClient);
 
-            LakeAwarePartitionRetentionManager lakeAwarePartitionRetentionManager =
-                    new LakeAwarePartitionRetentionManager(
+            LakeAwarePartitionDropManager lakeAwarePartitionDropManager =
+                    new LakeAwarePartitionDropManager(
                             metadataManager, zkClient, coordinatorChannelManager, ioExecutor);
             this.autoPartitionManager =
                     new AutoPartitionManager(
@@ -339,7 +339,7 @@ public class CoordinatorServer extends ServerBase {
                             remoteDirDynamicLoader,
                             conf,
                             replicaCapacityController,
-                            lakeAwarePartitionRetentionManager);
+                            lakeAwarePartitionDropManager);
 
             // start coordinator event processor after we register coordinator leader to zk
             // so that the event processor can get the coordinator leader node from zk during
@@ -384,16 +384,6 @@ public class CoordinatorServer extends ServerBase {
         synchronized (lock) {
             LOG.info("Cleaning up coordinator leader services.");
 
-            try {
-                // make sure the current coordinator leader node is unregistered.
-                // Different from ZK disconnection,
-                // when we actively release the Leader's election,
-                // we need to manually delete the node
-                unregisterCoordinatorLeader();
-            } catch (Throwable t) {
-                LOG.warn("Failed to unregister coordinator leader from Zookeeper", t);
-            }
-
             // Clean up leader-specific resources in reverse order of initialization
             try {
                 if (coordinatorEventProcessor != null) {
@@ -402,6 +392,15 @@ public class CoordinatorServer extends ServerBase {
                 }
             } catch (Throwable t) {
                 LOG.warn("Failed to shutdown coordinator event processor", t);
+            }
+
+            try {
+                if (autoPartitionManager != null) {
+                    autoPartitionManager.close();
+                    autoPartitionManager = null;
+                }
+            } catch (Throwable t) {
+                LOG.warn("Failed to close auto partition manager", t);
             }
 
             try {
@@ -414,12 +413,11 @@ public class CoordinatorServer extends ServerBase {
             }
 
             try {
-                if (autoPartitionManager != null) {
-                    autoPartitionManager.close();
-                    autoPartitionManager = null;
-                }
+                // Release leadership only after all leader-owned partition-drop work has stopped.
+                // Different from ZK disconnection, an active release must delete the node.
+                unregisterCoordinatorLeader();
             } catch (Throwable t) {
-                LOG.warn("Failed to close auto partition manager", t);
+                LOG.warn("Failed to unregister coordinator leader from Zookeeper", t);
             }
 
             try {

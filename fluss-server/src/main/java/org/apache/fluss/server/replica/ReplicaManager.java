@@ -119,6 +119,7 @@ import org.apache.fluss.server.storage.LocalDiskManager;
 import org.apache.fluss.server.utils.FatalErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
@@ -141,6 +142,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -691,7 +693,7 @@ public class ReplicaManager implements ServerReconfigurable {
                         try {
                             Replica.FrozenOffsets frozenOffsets =
                                     getReplicaOrException(tableBucket)
-                                            .freezeForRetention(entry.getValue());
+                                            .freezeWrites(entry.getValue());
                             results.add(
                                     new FreezePartitionResultForBucket(
                                             tableBucket,
@@ -1287,19 +1289,60 @@ public class ReplicaManager implements ServerReconfigurable {
         if (replicasToBeLeader.isEmpty()) {
             return;
         }
+
+        Map<PhysicalTablePath, List<NotifyLeaderAndIsrData>> leadersByPhysicalTablePath =
+                new LinkedHashMap<>();
+        for (NotifyLeaderAndIsrData data : replicasToBeLeader) {
+            leadersByPhysicalTablePath
+                    .computeIfAbsent(data.getPhysicalTablePath(), ignored -> new ArrayList<>())
+                    .add(data);
+        }
+        for (List<NotifyLeaderAndIsrData> leadersForPhysicalTablePath :
+                leadersByPhysicalTablePath.values()) {
+            makeLeadersForPhysicalTablePath(leadersForPhysicalTablePath, result);
+        }
+    }
+
+    private void makeLeadersForPhysicalTablePath(
+            List<NotifyLeaderAndIsrData> replicasToBeLeader,
+            Map<TableBucket, NotifyLeaderAndIsrResultForBucket> result) {
+        Map<PhysicalTablePath, Optional<PartitionRegistration>> partitionRegistrations =
+                new HashMap<>();
+        Map<TableBucket, Boolean> frozen = new HashMap<>();
+        List<NotifyLeaderAndIsrData> readyToBecomeLeader = new ArrayList<>();
+        for (NotifyLeaderAndIsrData data : replicasToBeLeader) {
+            TableBucket tableBucket = data.getTableBucket();
+            try {
+                frozen.put(tableBucket, isPartitionFrozen(data, partitionRegistrations));
+                readyToBecomeLeader.add(data);
+            } catch (Exception e) {
+                LOG.error(
+                        "Failed to load the frozen state before making replica {} leader.",
+                        tableBucket,
+                        e);
+                result.put(
+                        tableBucket,
+                        new NotifyLeaderAndIsrResultForBucket(
+                                tableBucket, ApiError.fromThrowable(e)));
+            }
+        }
+        if (readyToBecomeLeader.isEmpty()) {
+            return;
+        }
+
         replicaFetcherManager.removeFetcherForBuckets(
-                replicasToBeLeader.stream()
+                readyToBecomeLeader.stream()
                         .map(NotifyLeaderAndIsrData::getTableBucket)
                         .collect(Collectors.toSet()));
 
-        for (NotifyLeaderAndIsrData data : replicasToBeLeader) {
+        for (NotifyLeaderAndIsrData data : readyToBecomeLeader) {
             TableBucket tb = data.getTableBucket();
             try {
                 Replica replica = getReplicaOrException(tb);
                 // register replica to remote log manager first.
                 remoteLogManager.registerReplica(replica);
 
-                replica.makeLeader(data);
+                replica.makeLeader(data, frozen.get(tb));
                 if (replica.isDataLakeEnabled()) {
                     updateWithLakeTableSnapshot(replica);
                 }
@@ -1313,6 +1356,41 @@ public class ReplicaManager implements ServerReconfigurable {
                         tb, new NotifyLeaderAndIsrResultForBucket(tb, ApiError.fromThrowable(e)));
             }
         }
+    }
+
+    private boolean isPartitionFrozen(
+            NotifyLeaderAndIsrData data,
+            Map<PhysicalTablePath, Optional<PartitionRegistration>> partitionRegistrations)
+            throws Exception {
+        TableBucket tableBucket = data.getTableBucket();
+        Long partitionId = tableBucket.getPartitionId();
+        if (partitionId == null) {
+            return false;
+        }
+
+        PhysicalTablePath physicalTablePath = data.getPhysicalTablePath();
+        String partitionName = physicalTablePath.getPartitionName();
+        if (partitionName == null) {
+            throw new InvalidPartitionException(
+                    String.format("Partition name is missing for bucket %s.", tableBucket));
+        }
+
+        Optional<PartitionRegistration> registration =
+                partitionRegistrations.get(physicalTablePath);
+        if (registration == null) {
+            registration =
+                    zkClient.getSyncedPartition(physicalTablePath.getTablePath(), partitionName);
+            partitionRegistrations.put(physicalTablePath, registration);
+        }
+        if (!registration.isPresent()
+                || registration.get().getTableId() != tableBucket.getTableId()
+                || registration.get().getPartitionId() != partitionId) {
+            throw new InvalidPartitionException(
+                    String.format(
+                            "Partition registration for bucket %s does not exist or no longer matches.",
+                            tableBucket));
+        }
+        return registration.get().isFrozen();
     }
 
     // NOTE: This method can be removed when fetchFromLake is deprecated
