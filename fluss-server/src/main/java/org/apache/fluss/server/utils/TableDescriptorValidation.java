@@ -530,7 +530,7 @@ public class TableDescriptorValidation {
             throw new InvalidConfigException(
                     String.format(
                             "'%s' requires both '%s' and '%s' to be enabled.",
-                            ConfigOptions.TABLE_AUTO_PARTITION_RETENTION_ENSURE_TIERED.key(),
+                            ConfigOptions.TABLE_AUTO_PARTITION_DROP_ENSURE_TIERED.key(),
                             ConfigOptions.TABLE_AUTO_PARTITION_ENABLED.key(),
                             ConfigOptions.TABLE_DATALAKE_ENABLED.key()));
         }

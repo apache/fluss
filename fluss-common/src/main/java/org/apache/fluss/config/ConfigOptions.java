@@ -1818,8 +1818,8 @@ public class ConfigOptions {
                                     + "The partitions earlier than 20241108 will be deleted. "
                                     + "The default value is 7.");
 
-    public static final ConfigOption<Boolean> TABLE_AUTO_PARTITION_RETENTION_ENSURE_TIERED =
-            key("table.auto-partition.retention.ensure-tiered")
+    public static final ConfigOption<Boolean> TABLE_AUTO_PARTITION_DROP_ENSURE_TIERED =
+            key("table.auto-partition.drop.ensure-tiered")
                     .booleanType()
                     .defaultValue(false)
                     .withDescription(
