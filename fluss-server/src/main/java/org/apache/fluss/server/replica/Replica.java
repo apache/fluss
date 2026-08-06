@@ -229,7 +229,7 @@ public final class Replica {
     private volatile boolean isStandbyReplica = false;
 
     @GuardedBy("leaderIsrUpdateLock")
-    private boolean frozenForRetention = false;
+    private boolean frozen = false;
 
     // null if table without pk or haven't become leader
     private volatile @Nullable KvTablet kvTablet;
@@ -492,6 +492,10 @@ public final class Replica {
     }
 
     public void makeLeader(NotifyLeaderAndIsrData data) throws IOException {
+        makeLeader(data, false);
+    }
+
+    void makeLeader(NotifyLeaderAndIsrData data, boolean frozen) throws IOException {
         boolean leaderHWIncremented =
                 inWriteLock(
                         leaderIsrUpdateLock,
@@ -521,6 +525,9 @@ public final class Replica {
                             if (requestLeaderEpoch > leaderEpoch) {
                                 boolean isNewLeader = !isLeader();
                                 leaderEpoch = requestLeaderEpoch;
+                                // The write fence is monotonic and must never be cleared by a later
+                                // or duplicate leader notification.
+                                this.frozen |= frozen;
                                 onBecomeNewLeader(recovery);
                                 leaderReplicaIdOpt.set(localTabletServerId);
                                 // onBecomeNewLeader may recover a KV snapshot, so start the ISR lag
@@ -541,6 +548,8 @@ public final class Replica {
                                         localTabletServerId,
                                         tableBucket);
                             } else if (requestLeaderEpoch == leaderEpoch) {
+                                // Also restore the fence when replaying the current leader state.
+                                this.frozen |= frozen;
                                 LOG.info(
                                         "Skipped the become-leader state change for bucket {} since "
                                                 + "it's already the leader with leader epoch {}",
@@ -1291,7 +1300,7 @@ public final class Replica {
                         throw new InvalidPartitionException(
                                 "Produce-log request must not target a primary-key table.");
                     }
-                    checkNotFrozenForRetention();
+                    checkNotFrozen();
 
                     validateInSyncReplicaSize(requiredAcks);
 
@@ -1356,7 +1365,7 @@ public final class Replica {
                         throw new InvalidPartitionException(
                                 "Normal write request must not target a historical partition.");
                     }
-                    checkNotFrozenForRetention();
+                    checkNotFrozen();
 
                     validateInSyncReplicaSize(requiredAcks);
                     KvTablet kv = this.kvTablet;
@@ -1509,8 +1518,8 @@ public final class Replica {
                 });
     }
 
-    /** Freeze leader writes and return a stable offset boundary for partition retention. */
-    public FrozenOffsets freezeForRetention(int expectedLeaderEpoch) {
+    /** Freeze leader writes and return their stable offset boundary. */
+    public FrozenOffsets freezeWrites(int expectedLeaderEpoch) {
         return inWriteLock(
                 leaderIsrUpdateLock,
                 () -> {
@@ -1526,18 +1535,17 @@ public final class Replica {
                                         "Expected leader epoch %s for bucket %s, but current epoch is %s.",
                                         expectedLeaderEpoch, tableBucket, leaderEpoch));
                     }
-                    frozenForRetention = true;
+                    frozen = true;
                     return new FrozenOffsets(
                             logTablet.getHighWatermark(), logTablet.localLogEndOffset());
                 });
     }
 
-    private void checkNotFrozenForRetention() {
-        if (frozenForRetention) {
+    private void checkNotFrozen() {
+        if (frozen) {
             throw new InvalidPartitionException(
                     String.format(
-                            "Partition %s is frozen for retention and no longer accepts writes.",
-                            physicalPath));
+                            "Partition %s is frozen and no longer accepts writes.", physicalPath));
         }
     }
 
