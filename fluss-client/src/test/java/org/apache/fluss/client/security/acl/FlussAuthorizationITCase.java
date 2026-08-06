@@ -420,6 +420,10 @@ public class FlussAuthorizationITCase {
         // 6. getLatestLakeSnapshot
         // 7. listOffsets
 
+        TableInfo tableInfo = rootAdmin.getTableInfo(DATA1_TABLE_PATH_PK).get();
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(
+                new TableBucket(tableInfo.getTableId(), 0));
+
         // first check call these methods without authorization.
         assertThat(guestAdmin.listTables(DATA1_TABLE_PATH_PK.getDatabaseName()).get())
                 .isEqualTo(Collections.emptyList());
