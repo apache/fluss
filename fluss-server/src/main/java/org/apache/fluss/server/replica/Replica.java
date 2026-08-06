@@ -213,7 +213,7 @@ public final class Replica {
     private volatile boolean isStandbyReplica = false;
 
     @GuardedBy("leaderIsrUpdateLock")
-    private boolean frozen = false;
+    private volatile boolean frozen = false;
 
     // null if table without pk or haven't become leader
     private volatile @Nullable KvTablet kvTablet;

@@ -43,7 +43,7 @@ import org.apache.fluss.server.utils.RpcGatewayManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.annotation.concurrent.ThreadSafe;
+import javax.annotation.concurrent.NotThreadSafe;
 
 import java.util.Collection;
 import java.util.Optional;
@@ -56,7 +56,7 @@ import static org.apache.fluss.utils.Preconditions.checkState;
  * Using by coordinator server. It's a manager to manage the rpc channels to tablet servers and send
  * request to the servers.
  */
-@ThreadSafe
+@NotThreadSafe
 public class CoordinatorChannelManager {
 
     private static final Logger LOG = LoggerFactory.getLogger(CoordinatorChannelManager.class);
