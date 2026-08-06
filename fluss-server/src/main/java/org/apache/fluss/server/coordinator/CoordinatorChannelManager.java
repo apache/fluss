@@ -51,7 +51,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
-import javax.annotation.concurrent.ThreadSafe;
+import javax.annotation.concurrent.NotThreadSafe;
 
 import java.util.Collection;
 import java.util.HashMap;
@@ -72,7 +72,7 @@ import static org.apache.fluss.utils.Preconditions.checkState;
  * sizes. Mirrors Kafka's {@code ControllerChannelManager} which uses a {@code brokerLock} for the
  * same purpose.
  */
-@ThreadSafe
+@NotThreadSafe
 public class CoordinatorChannelManager {
 
     private static final Logger LOG = LoggerFactory.getLogger(CoordinatorChannelManager.class);
