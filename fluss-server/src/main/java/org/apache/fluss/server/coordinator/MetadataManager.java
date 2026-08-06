@@ -1358,11 +1358,6 @@ public class MetadataManager {
         }
     }
 
-    Optional<PartitionRegistration> getPartitionRegistration(
-            TablePath tablePath, String partitionName) {
-        return getOptionalPartitionRegistration(tablePath, partitionName);
-    }
-
     Optional<PartitionRegistration> markPartitionFrozen(
             TablePath tablePath,
             String partitionName,

@@ -333,7 +333,7 @@ public class LakeAwarePartitionDropManager implements AutoCloseable {
     }
 
     private Optional<PartitionRegistration> getPartitionRegistration(PartitionDropState dropState) {
-        return metadataManager.getPartitionRegistration(
+        return metadataManager.getOptionalPartitionRegistration(
                 dropState.physicalTablePath.getTablePath(),
                 dropState.physicalTablePath.getPartitionName());
     }
