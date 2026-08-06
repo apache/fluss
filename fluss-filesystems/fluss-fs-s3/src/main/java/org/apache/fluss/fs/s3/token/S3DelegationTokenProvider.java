@@ -17,6 +17,7 @@
 
 package org.apache.fluss.fs.s3.token;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.fs.token.CredentialsJsonSerde;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
 import org.apache.fluss.utils.StringUtils;
@@ -158,6 +159,11 @@ public class S3DelegationTokenProvider {
         }
     }
 
+    @VisibleForTesting
+    static URI parseStsEndpoint(String stsEndpoint) {
+        return URI.create(stsEndpoint.contains("://") ? stsEndpoint : "https://" + stsEndpoint);
+    }
+
     private StsClient buildStsClient() {
         StsClientBuilder builder = StsClient.builder().region(Region.of(region));
 
@@ -167,7 +173,7 @@ public class S3DelegationTokenProvider {
         }
 
         if (stsEndpoint != null) {
-            builder.endpointOverride(URI.create(stsEndpoint));
+            builder.endpointOverride(parseStsEndpoint(stsEndpoint));
         }
 
         return builder.build();

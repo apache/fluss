@@ -174,6 +174,26 @@ public class S3DelegationTokenProviderTest {
                 .isEqualTo("configured-value");
     }
 
+    @Test
+    void testStsEndpointWithoutSchemeDefaultsToHttps() {
+        assertThat(S3DelegationTokenProvider.parseStsEndpoint("sts.amazonaws.com"))
+                .isEqualTo(URI.create("https://sts.amazonaws.com"));
+        assertThat(S3DelegationTokenProvider.parseStsEndpoint("localhost:4566"))
+                .isEqualTo(URI.create("https://localhost:4566"));
+    }
+
+    @Test
+    void testHttpStsEndpointIsPreserved() {
+        assertThat(S3DelegationTokenProvider.parseStsEndpoint("http://localhost:4566"))
+                .isEqualTo(URI.create("http://localhost:4566"));
+    }
+
+    @Test
+    void testHttpsStsEndpointIsPreserved() {
+        assertThat(S3DelegationTokenProvider.parseStsEndpoint("https://sts.amazonaws.com"))
+                .isEqualTo(URI.create("https://sts.amazonaws.com"));
+    }
+
     private static void setConfiguredProvider(
             Configuration conf, Class<? extends AwsCredentialsProvider> providerClass) {
         conf.set(PROVIDER_CONFIG, providerClass.getName());
