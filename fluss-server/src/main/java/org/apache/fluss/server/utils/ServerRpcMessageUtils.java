@@ -54,7 +54,9 @@ import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.remote.RemoteLogFetchInfo;
+import org.apache.fluss.remote.RemoteLogFetchInfoV2;
 import org.apache.fluss.remote.RemoteLogSegment;
+import org.apache.fluss.remote.RemoteLogSegmentReference;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.entity.LimitScanResultForBucket;
 import org.apache.fluss.rpc.entity.ListOffsetsResultForBucket;
@@ -148,6 +150,7 @@ import org.apache.fluss.rpc.messages.PbRebalancePlanForBucket;
 import org.apache.fluss.rpc.messages.PbRebalanceProgressForBucket;
 import org.apache.fluss.rpc.messages.PbRemoteLogManifestEntry;
 import org.apache.fluss.rpc.messages.PbRemoteLogSegment;
+import org.apache.fluss.rpc.messages.PbRemoteLogSegmentReference;
 import org.apache.fluss.rpc.messages.PbRemotePathAndLocalFile;
 import org.apache.fluss.rpc.messages.PbRenameColumn;
 import org.apache.fluss.rpc.messages.PbServerNode;
@@ -188,6 +191,7 @@ import org.apache.fluss.server.entity.NotifyLakeTableOffsetData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 import org.apache.fluss.server.entity.NotifyRemoteLogOffsetsData;
+import org.apache.fluss.server.entity.RemoteLogManifestExpectedHandleState;
 import org.apache.fluss.server.entity.StopReplicaData;
 import org.apache.fluss.server.entity.StopReplicaResultForBucket;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
@@ -1025,30 +1029,44 @@ public class ServerRpcMessageUtils {
                         .setLogStartOffset(0L);
 
                 if (bucketResult.fetchFromRemote()) {
-                    // set remote log fetch info.
-                    RemoteLogFetchInfo rlfInfo = bucketResult.remoteLogFetchInfo();
-                    checkNotNull(rlfInfo, "Remote log fetch info is null.");
-                    List<PbRemoteLogSegment> remoteLogSegmentList = new ArrayList<>();
-                    for (RemoteLogSegment logSegment : rlfInfo.remoteLogSegmentList()) {
-                        PbRemoteLogSegment pbRemoteLogSegment =
-                                new PbRemoteLogSegment()
-                                        .setRemoteLogStartOffset(logSegment.remoteLogStartOffset())
-                                        .setRemoteLogSegmentId(
-                                                logSegment.remoteLogSegmentId().toString())
-                                        .setRemoteLogEndOffset(logSegment.remoteLogEndOffset())
-                                        .setSegmentSizeInBytes(logSegment.segmentSizeInBytes())
-                                        .setMaxTimestamp(logSegment.maxTimestamp());
-                        remoteLogSegmentList.add(pbRemoteLogSegment);
-                    }
-                    fetchLogRespForBucket
-                            .setRemoteLogFetchInfo()
-                            .setRemoteLogTabletDir(rlfInfo.remoteLogTabletDir())
-                            .addAllRemoteLogSegments(remoteLogSegmentList)
-                            .setFirstStartPos(rlfInfo.firstStartPos());
-                    if (rlfInfo.partitionName() != null) {
+                    RemoteLogFetchInfoV2 rlfInfoV2 = bucketResult.remoteLogFetchInfoV2();
+                    if (rlfInfoV2 != null) {
+                        List<PbRemoteLogSegmentReference> references = new ArrayList<>();
+                        for (RemoteLogSegmentReference reference : rlfInfoV2.activeReferences()) {
+                            references.add(
+                                    new PbRemoteLogSegmentReference()
+                                            .setSegment(
+                                                    toPbRemoteLogSegment(
+                                                            reference.remoteLogSegment()))
+                                            .setLogicalStartOffset(reference.logicalStartOffset())
+                                            .setLogicalEndOffset(reference.logicalEndOffset()));
+                        }
+                        fetchLogRespForBucket
+                                .setRemoteLogFetchInfoV2()
+                                .setRemoteLogTabletDir(rlfInfoV2.remoteLogTabletDir())
+                                .addAllActiveReferences(references);
+                        if (rlfInfoV2.partitionName() != null) {
+                            fetchLogRespForBucket
+                                    .setRemoteLogFetchInfoV2()
+                                    .setPartitionName(rlfInfoV2.partitionName());
+                        }
+                    } else {
+                        RemoteLogFetchInfo rlfInfo = bucketResult.remoteLogFetchInfo();
+                        checkNotNull(rlfInfo, "Remote log fetch info is null.");
+                        List<PbRemoteLogSegment> remoteLogSegmentList = new ArrayList<>();
+                        for (RemoteLogSegment logSegment : rlfInfo.remoteLogSegmentList()) {
+                            remoteLogSegmentList.add(toPbRemoteLogSegment(logSegment));
+                        }
                         fetchLogRespForBucket
                                 .setRemoteLogFetchInfo()
-                                .setPartitionName(rlfInfo.partitionName());
+                                .setRemoteLogTabletDir(rlfInfo.remoteLogTabletDir())
+                                .addAllRemoteLogSegments(remoteLogSegmentList)
+                                .setFirstStartPos(rlfInfo.firstStartPos());
+                        if (rlfInfo.partitionName() != null) {
+                            fetchLogRespForBucket
+                                    .setRemoteLogFetchInfo()
+                                    .setPartitionName(rlfInfo.partitionName());
+                        }
                     }
                 } else {
                     // set records
@@ -1099,6 +1117,15 @@ public class ServerRpcMessageUtils {
         FetchLogResponse fetchLogResponse = new FetchLogResponse();
         fetchLogResponse.addAllTablesResps(fetchLogRespForTables);
         return fetchLogResponse;
+    }
+
+    private static PbRemoteLogSegment toPbRemoteLogSegment(RemoteLogSegment logSegment) {
+        return new PbRemoteLogSegment()
+                .setRemoteLogStartOffset(logSegment.remoteLogStartOffset())
+                .setRemoteLogSegmentId(logSegment.remoteLogSegmentId().toString())
+                .setRemoteLogEndOffset(logSegment.remoteLogEndOffset())
+                .setSegmentSizeInBytes(logSegment.segmentSizeInBytes())
+                .setMaxTimestamp(logSegment.maxTimestamp());
     }
 
     public static Map<TableBucket, KvRecordBatch> getPutKvData(PutKvRequest putKvRequest) {
@@ -1676,14 +1703,68 @@ public class ServerRpcMessageUtils {
 
     public static CommitRemoteLogManifestData getCommitRemoteLogManifestData(
             CommitRemoteLogManifestRequest request) {
-        return new CommitRemoteLogManifestData(
+        TableBucket tableBucket =
                 new TableBucket(
                         request.getTableId(),
                         request.hasPartitionId() ? request.getPartitionId() : null,
-                        request.getBucketId()),
-                new FsPath(request.getRemoteLogManifestPath()),
+                        request.getBucketId());
+        FsPath manifestPath = new FsPath(request.getRemoteLogManifestPath());
+        if (!request.hasManifestFormatVersion()) {
+            if (request.hasExpectedHandleState()
+                    || request.hasExpectedManifestPath()
+                    || request.hasExpectedManifestGeneration()
+                    || request.hasExpectedZkVersion()
+                    || request.hasNewManifestGeneration()) {
+                throw new IllegalArgumentException("Legacy manifest commit contains V2 CAS fields");
+            }
+            return new CommitRemoteLogManifestData(
+                    tableBucket,
+                    manifestPath,
+                    request.getRemoteLogStartOffset(),
+                    request.getRemoteLogEndOffset(),
+                    request.getCoordinatorEpoch(),
+                    request.getBucketLeaderEpoch());
+        }
+
+        if (request.getManifestFormatVersion() != 2
+                || !request.hasExpectedHandleState()
+                || !request.hasNewManifestGeneration()) {
+            throw new IllegalArgumentException(
+                    "Manifest V2 commit requires format version, expected state, and generation");
+        }
+        RemoteLogManifestExpectedHandleState expectedState =
+                RemoteLogManifestExpectedHandleState.fromCode(request.getExpectedHandleState());
+        if (expectedState == RemoteLogManifestExpectedHandleState.ABSENT) {
+            if (request.hasExpectedManifestPath()
+                    || request.hasExpectedManifestGeneration()
+                    || request.hasExpectedZkVersion()) {
+                throw new IllegalArgumentException(
+                        "ABSENT manifest commit contains PRESENT-only fields");
+            }
+            return CommitRemoteLogManifestData.v2Absent(
+                    tableBucket,
+                    manifestPath,
+                    request.getRemoteLogStartOffset(),
+                    request.getRemoteLogEndOffset(),
+                    request.getNewManifestGeneration(),
+                    request.getCoordinatorEpoch(),
+                    request.getBucketLeaderEpoch());
+        }
+        if (!request.hasExpectedManifestPath()
+                || !request.hasExpectedManifestGeneration()
+                || !request.hasExpectedZkVersion()) {
+            throw new IllegalArgumentException(
+                    "PRESENT manifest commit requires expected path, generation, and ZK version");
+        }
+        return CommitRemoteLogManifestData.v2Present(
+                tableBucket,
+                manifestPath,
                 request.getRemoteLogStartOffset(),
                 request.getRemoteLogEndOffset(),
+                request.getNewManifestGeneration(),
+                new FsPath(request.getExpectedManifestPath()),
+                request.getExpectedManifestGeneration(),
+                request.getExpectedZkVersion(),
                 request.getCoordinatorEpoch(),
                 request.getBucketLeaderEpoch());
     }
@@ -1703,6 +1784,21 @@ public class ServerRpcMessageUtils {
                 .setRemoteLogEndOffset(commitRemoteLogManifestData.getRemoteLogEndOffset())
                 .setCoordinatorEpoch(commitRemoteLogManifestData.getCoordinatorEpoch())
                 .setBucketLeaderEpoch(commitRemoteLogManifestData.getBucketLeaderEpoch());
+        if (commitRemoteLogManifestData.isV2CasCommit()) {
+            request.setManifestFormatVersion(commitRemoteLogManifestData.getManifestFormatVersion())
+                    .setExpectedHandleState(
+                            commitRemoteLogManifestData.getExpectedHandleState().code())
+                    .setNewManifestGeneration(
+                            commitRemoteLogManifestData.getNewManifestGeneration());
+            if (commitRemoteLogManifestData.getExpectedHandleState()
+                    == RemoteLogManifestExpectedHandleState.PRESENT) {
+                request.setExpectedManifestPath(
+                                commitRemoteLogManifestData.getExpectedManifestPath().toString())
+                        .setExpectedManifestGeneration(
+                                commitRemoteLogManifestData.getExpectedManifestGeneration())
+                        .setExpectedZkVersion(commitRemoteLogManifestData.getExpectedZkVersion());
+            }
+        }
         return request;
     }
 

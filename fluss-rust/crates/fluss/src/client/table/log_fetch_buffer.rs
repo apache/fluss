@@ -365,6 +365,7 @@ pub struct DefaultCompletedFetch {
     resolver: Arc<ReadContextResolver>,
     is_remote: bool,
     next_fetch_offset: i64,
+    logical_end_offset: i64,
     high_watermark: i64,
     size_in_bytes: usize,
     consumed: bool,
@@ -405,6 +406,7 @@ impl DefaultCompletedFetch {
             resolver,
             is_remote,
             next_fetch_offset: fetch_offset,
+            logical_end_offset: i64::MAX,
             high_watermark,
             size_in_bytes,
             consumed: false,
@@ -418,6 +420,11 @@ impl DefaultCompletedFetch {
             cached_record_error: None,
             corrupt_last_record: false,
         }
+    }
+
+    fn with_logical_end(mut self, logical_end_offset: i64) -> Self {
+        self.logical_end_offset = logical_end_offset;
+        self
     }
 
     pub(crate) fn from_error(
@@ -435,6 +442,7 @@ impl DefaultCompletedFetch {
             resolver,
             is_remote: false,
             next_fetch_offset: fetch_offset,
+            logical_end_offset: i64::MAX,
             high_watermark: -1,
             size_in_bytes: 0,
             consumed: false,
@@ -466,6 +474,7 @@ impl DefaultCompletedFetch {
             resolver,
             is_remote: false,
             next_fetch_offset: fetch_offset,
+            logical_end_offset: i64::MAX,
             high_watermark: -1,
             size_in_bytes: 0,
             consumed: false,
@@ -508,6 +517,21 @@ impl DefaultCompletedFetch {
                     .pending_record_batch
                     .as_ref()
                     .expect("pending batch must be set before schema resolution");
+                if batch.base_log_offset() >= self.logical_end_offset {
+                    self.drain();
+                    return Ok(FetchStep::End);
+                }
+                if batch.next_log_offset() > self.logical_end_offset {
+                    return Err(Error::UnexpectedError {
+                        message: format!(
+                            "Remote log batch [{}, {}) crosses logical end offset {}",
+                            batch.base_log_offset(),
+                            batch.next_log_offset(),
+                            self.logical_end_offset
+                        ),
+                        source: None,
+                    });
+                }
                 let Some(read_context) = self.resolve_context_for_batch(batch) else {
                     return Ok(FetchStep::SchemaRequired(batch.schema_id()));
                 };
@@ -598,6 +622,21 @@ impl DefaultCompletedFetch {
                 .pending_record_batch
                 .as_ref()
                 .expect("pending batch must be set before schema resolution");
+            if log_batch.base_log_offset() >= self.logical_end_offset {
+                self.drain();
+                return Ok(FetchStep::End);
+            }
+            if log_batch.next_log_offset() > self.logical_end_offset {
+                return Err(Error::UnexpectedError {
+                    message: format!(
+                        "Remote log batch [{}, {}) crosses logical end offset {}",
+                        log_batch.base_log_offset(),
+                        log_batch.next_log_offset(),
+                        self.logical_end_offset
+                    ),
+                    source: None,
+                });
+            }
             let Some(read_context) = self.resolve_context_for_batch(log_batch) else {
                 return Ok(FetchStep::SchemaRequired(log_batch.schema_id()));
             };
@@ -892,6 +931,7 @@ pub struct RemotePendingFetch {
     pos_in_log_segment: i32,
     fetch_offset: i64,
     high_watermark: i64,
+    logical_end_offset: i64,
     resolver: Arc<ReadContextResolver>,
 }
 
@@ -902,6 +942,7 @@ impl RemotePendingFetch {
         pos_in_log_segment: i32,
         fetch_offset: i64,
         high_watermark: i64,
+        logical_end_offset: i64,
         resolver: Arc<ReadContextResolver>,
     ) -> Self {
         Self {
@@ -910,6 +951,7 @@ impl RemotePendingFetch {
             pos_in_log_segment,
             fetch_offset,
             high_watermark,
+            logical_end_offset,
             resolver,
         }
     }
@@ -966,7 +1008,8 @@ impl PendingFetch for RemotePendingFetch {
             true, // is_remote
             self.fetch_offset,
             self.high_watermark,
-        );
+        )
+        .with_logical_end(self.logical_end_offset);
 
         // Wrap it with RemoteCompletedFetch to hold the permit
         // Permit manages the prefetch slot (releases semaphore and notifies coordinator) when dropped;

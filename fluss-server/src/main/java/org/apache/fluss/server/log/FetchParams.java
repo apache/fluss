@@ -71,6 +71,7 @@ public final class FetchParams {
     private final int minFetchBytes;
     private final long maxWaitMs;
     private final FetchLogReadPreference readPreference;
+    private final short apiVersion;
     // TODO: add more params like epoch etc.
 
     public FetchParams(int replicaId, int maxFetchBytes) {
@@ -104,6 +105,27 @@ public final class FetchParams {
             long maxWaitMs,
             @Nullable Map<Long, FilterInfo> tableFilterInfoMap,
             FetchLogReadPreference readPreference) {
+        this(
+                replicaId,
+                fetchOnlyLeader,
+                maxFetchBytes,
+                minFetchBytes,
+                maxWaitMs,
+                tableFilterInfoMap,
+                readPreference,
+                (short) 0);
+    }
+
+    @VisibleForTesting
+    public FetchParams(
+            int replicaId,
+            boolean fetchOnlyLeader,
+            int maxFetchBytes,
+            int minFetchBytes,
+            long maxWaitMs,
+            @Nullable Map<Long, FilterInfo> tableFilterInfoMap,
+            FetchLogReadPreference readPreference,
+            short apiVersion) {
         this.replicaId = replicaId;
         this.fetchOnlyLeader = fetchOnlyLeader;
         this.maxFetchBytes = maxFetchBytes;
@@ -114,6 +136,7 @@ public final class FetchParams {
         this.maxWaitMs = maxWaitMs;
         this.tableFilterInfoMap = tableFilterInfoMap;
         this.readPreference = readPreference;
+        this.apiVersion = apiVersion;
     }
 
     @VisibleForTesting
@@ -231,6 +254,10 @@ public final class FetchParams {
         return isFromFollower() || fetchOnlyLeader;
     }
 
+    public short apiVersion() {
+        return apiVersion;
+    }
+
     public long fetchOffset() {
         return fetchOffset;
     }
@@ -248,6 +275,7 @@ public final class FetchParams {
                 && maxFetchBytes == that.maxFetchBytes
                 && minFetchBytes == that.minFetchBytes
                 && maxWaitMs == that.maxWaitMs
+                && apiVersion == that.apiVersion
                 && readPreference == that.readPreference
                 && Objects.equals(tableFilterInfoMap, that.tableFilterInfoMap);
     }
@@ -260,7 +288,8 @@ public final class FetchParams {
                 minFetchBytes,
                 maxWaitMs,
                 tableFilterInfoMap,
-                readPreference);
+                readPreference,
+                apiVersion);
     }
 
     @Override
@@ -278,6 +307,8 @@ public final class FetchParams {
                 + tableFilterInfoMap
                 + ", readPreference="
                 + readPreference
+                + ", apiVersion="
+                + apiVersion
                 + ')';
     }
 }

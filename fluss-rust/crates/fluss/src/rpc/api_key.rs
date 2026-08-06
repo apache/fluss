@@ -94,7 +94,6 @@ impl ApiKey {
             | ApiKey::GetTableSchema
             | ApiKey::MetaData
             | ApiKey::ProduceLog
-            | ApiKey::FetchLog
             | ApiKey::ListOffsets
             | ApiKey::GetLatestKvSnapshots
             | ApiKey::GetKvSnapshotMetadata
@@ -129,6 +128,9 @@ impl ApiKey {
             | ApiKey::GetClusterHealth
             | ApiKey::ListRemoteLogManifests
             | ApiKey::ListKvSnapshots => Some(ApiVersionRange::new(ApiVersion(0), ApiVersion(0))),
+            // FetchLog v1 adds logical remote-log segment references. The request body is
+            // unchanged, so clients can negotiate v1 without changing request construction.
+            ApiKey::FetchLog => Some(ApiVersionRange::new(ApiVersion(0), ApiVersion(1))),
             // PutKv / Lookup / PrefixLookup support v0 (legacy key encoding)
             // and v1 (Paimon BinaryRow key encoding for kv_format_version=2
             // non-default bucket keys). The Rust client encodes both.
@@ -332,5 +334,13 @@ mod tests {
         assert_eq!(unknown, ApiKey::Unknown(9999));
         let mapped: i16 = unknown.into();
         assert_eq!(mapped, 9999);
+    }
+
+    #[test]
+    fn fetch_log_supports_logical_reference_version() {
+        assert_eq!(
+            ApiKey::FetchLog.supported_versions(),
+            Some(ApiVersionRange::new(ApiVersion(0), ApiVersion(1)))
+        );
     }
 }

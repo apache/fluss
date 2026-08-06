@@ -22,6 +22,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.remote.RemoteLogFetchInfo;
+import org.apache.fluss.remote.RemoteLogFetchInfoV2;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.rpc.protocol.ApiError;
 
@@ -33,6 +34,7 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 @Internal
 public class FetchLogResultForBucket extends ResultForBucket {
     private final @Nullable RemoteLogFetchInfo remoteLogFetchInfo;
+    private final @Nullable RemoteLogFetchInfoV2 remoteLogFetchInfoV2;
     private final @Nullable LogRecords records;
     private final long highWatermark;
     private final long filteredEndOffset;
@@ -41,6 +43,7 @@ public class FetchLogResultForBucket extends ResultForBucket {
             TableBucket tableBucket, LogRecords records, long highWatermark) {
         this(
                 tableBucket,
+                null,
                 null,
                 checkNotNull(records, "records can not be null"),
                 highWatermark,
@@ -56,6 +59,7 @@ public class FetchLogResultForBucket extends ResultForBucket {
         this(
                 tableBucket,
                 null,
+                null,
                 checkNotNull(records, "records can not be null"),
                 highWatermark,
                 filteredEndOffset,
@@ -63,7 +67,7 @@ public class FetchLogResultForBucket extends ResultForBucket {
     }
 
     public FetchLogResultForBucket(TableBucket tableBucket, ApiError error) {
-        this(tableBucket, null, null, -1L, -1L, error);
+        this(tableBucket, null, null, null, -1L, -1L, error);
     }
 
     public FetchLogResultForBucket(
@@ -71,6 +75,21 @@ public class FetchLogResultForBucket extends ResultForBucket {
         this(
                 tableBucket,
                 checkNotNull(remoteLogFetchInfo, "remote log fetch info can not be null"),
+                null,
+                null,
+                highWatermark,
+                -1L,
+                ApiError.NONE);
+    }
+
+    public FetchLogResultForBucket(
+            TableBucket tableBucket,
+            RemoteLogFetchInfoV2 remoteLogFetchInfoV2,
+            long highWatermark) {
+        this(
+                tableBucket,
+                null,
+                checkNotNull(remoteLogFetchInfoV2, "remote log fetch info V2 can not be null"),
                 null,
                 highWatermark,
                 -1L,
@@ -84,18 +103,20 @@ public class FetchLogResultForBucket extends ResultForBucket {
      */
     public FetchLogResultForBucket(
             TableBucket tableBucket, long highWatermark, long filteredEndOffset) {
-        this(tableBucket, null, null, highWatermark, filteredEndOffset, ApiError.NONE);
+        this(tableBucket, null, null, null, highWatermark, filteredEndOffset, ApiError.NONE);
     }
 
     private FetchLogResultForBucket(
             TableBucket tableBucket,
             @Nullable RemoteLogFetchInfo remoteLogFetchInfo,
+            @Nullable RemoteLogFetchInfoV2 remoteLogFetchInfoV2,
             @Nullable LogRecords records,
             long highWatermark,
             long filteredEndOffset,
             ApiError error) {
         super(tableBucket, error);
         this.remoteLogFetchInfo = remoteLogFetchInfo;
+        this.remoteLogFetchInfoV2 = remoteLogFetchInfoV2;
         this.records = records;
         this.highWatermark = highWatermark;
         this.filteredEndOffset = filteredEndOffset;
@@ -109,7 +130,7 @@ public class FetchLogResultForBucket extends ResultForBucket {
      * @return {@code true} if the log is fetched from remote.
      */
     public boolean fetchFromRemote() {
-        return remoteLogFetchInfo != null;
+        return remoteLogFetchInfo != null || remoteLogFetchInfoV2 != null;
     }
 
     public @Nullable LogRecords records() {
@@ -126,6 +147,10 @@ public class FetchLogResultForBucket extends ResultForBucket {
 
     public @Nullable RemoteLogFetchInfo remoteLogFetchInfo() {
         return remoteLogFetchInfo;
+    }
+
+    public @Nullable RemoteLogFetchInfoV2 remoteLogFetchInfoV2() {
+        return remoteLogFetchInfoV2;
     }
 
     public long getHighWatermark() {

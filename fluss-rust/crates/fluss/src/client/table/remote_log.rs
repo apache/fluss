@@ -19,7 +19,7 @@ use crate::error::{Error, Result};
 use crate::io::{FileIO, Storage};
 use crate::metadata::TableBucket;
 use crate::metrics::ScannerMetrics;
-use crate::proto::{PbRemoteLogFetchInfo, PbRemoteLogSegment};
+use crate::proto::{PbRemoteLogFetchInfo, PbRemoteLogFetchInfoV2, PbRemoteLogSegment};
 use futures::TryStreamExt;
 use parking_lot::Mutex;
 use std::{
@@ -139,6 +139,9 @@ pub struct RemoteLogFetchInfo {
     pub partition_name: Option<String>,
     pub remote_log_segments: Vec<RemoteLogSegment>,
     pub first_start_pos: i32,
+    /// Logical half-open ranges corresponding one-to-one with `remote_log_segments`.
+    /// Absent for FetchLog v0, whose byte position already selects the first offset.
+    pub logical_ranges: Option<Vec<(i64, i64)>>,
 }
 
 impl RemoteLogFetchInfo {
@@ -154,7 +157,60 @@ impl RemoteLogFetchInfo {
             partition_name: info.partition_name.clone(),
             remote_log_segments: segments,
             first_start_pos: info.first_start_pos.unwrap_or(0),
+            logical_ranges: None,
         }
+    }
+
+    pub fn from_proto_v2(info: &PbRemoteLogFetchInfoV2, table_bucket: TableBucket) -> Result<Self> {
+        let mut segments = Vec::with_capacity(info.active_references.len());
+        let mut logical_ranges = Vec::with_capacity(info.active_references.len());
+        let mut previous_logical_end = None;
+        for reference in &info.active_references {
+            let segment = &reference.segment;
+            if reference.logical_start_offset >= reference.logical_end_offset
+                || reference.logical_start_offset < segment.remote_log_start_offset
+                || reference.logical_end_offset > segment.remote_log_end_offset
+            {
+                return Err(Error::UnexpectedError {
+                    message: format!(
+                        "Invalid remote log logical range [{}, {}) for physical range [{}, {})",
+                        reference.logical_start_offset,
+                        reference.logical_end_offset,
+                        segment.remote_log_start_offset,
+                        segment.remote_log_end_offset
+                    ),
+                    source: None,
+                });
+            }
+            if let Some(previous_end) = previous_logical_end
+                && reference.logical_start_offset != previous_end
+            {
+                return Err(Error::UnexpectedError {
+                    message: format!(
+                        "Remote log logical references are not contiguous: previous end {}, next start {}",
+                        previous_end, reference.logical_start_offset
+                    ),
+                    source: None,
+                });
+            }
+            segments.push(RemoteLogSegment::from_proto(segment, table_bucket.clone()));
+            logical_ranges.push((reference.logical_start_offset, reference.logical_end_offset));
+            previous_logical_end = Some(reference.logical_end_offset);
+        }
+        if segments.is_empty() {
+            return Err(Error::UnexpectedError {
+                message: "Remote log fetch info v2 contains no active references".to_string(),
+                source: None,
+            });
+        }
+
+        Ok(Self {
+            remote_log_tablet_dir: info.remote_log_tablet_dir.clone(),
+            partition_name: info.partition_name.clone(),
+            remote_log_segments: segments,
+            first_start_pos: 0,
+            logical_ranges: Some(logical_ranges),
+        })
     }
 }
 

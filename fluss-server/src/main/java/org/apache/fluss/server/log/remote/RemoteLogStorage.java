@@ -27,6 +27,8 @@ import org.apache.fluss.remote.RemoteLogSegment;
 
 import java.io.Closeable;
 import java.io.InputStream;
+import java.util.List;
+import java.util.UUID;
 
 import static org.apache.fluss.utils.FlussPaths.INDEX_FILE_SUFFIX;
 import static org.apache.fluss.utils.FlussPaths.TIME_INDEX_FILE_SUFFIX;
@@ -149,6 +151,21 @@ public interface RemoteLogStorage extends Closeable {
      *     snapshot.
      */
     void deleteRemoteLogManifestSnapshot(FsPath remoteLogManifestPath)
+            throws RemoteStorageException;
+
+    /** Lists UUID segment directories for a single bucket for orphan collection. */
+    List<RemoteLogStorageObject> listRemoteLogSegmentObjects(
+            PhysicalTablePath physicalTablePath, TableBucket tableBucket)
+            throws RemoteStorageException;
+
+    /** Lists manifest snapshots for a single bucket for orphan collection. */
+    List<RemoteLogStorageObject> listRemoteLogManifestSnapshots(
+            PhysicalTablePath physicalTablePath, TableBucket tableBucket)
+            throws RemoteStorageException;
+
+    /** Recursively deletes one bucket-scoped UUID segment directory found by the orphan sweeper. */
+    void deleteRemoteLogSegmentObject(
+            PhysicalTablePath physicalTablePath, TableBucket tableBucket, UUID segmentId)
             throws RemoteStorageException;
 
     /**

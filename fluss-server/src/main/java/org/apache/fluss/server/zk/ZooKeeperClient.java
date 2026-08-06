@@ -24,6 +24,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.ConfigurationUtils;
 import org.apache.fluss.config.FlussConfigUtils;
 import org.apache.fluss.exception.CoordinatorEpochFencedException;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.DatabaseSummary;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
@@ -58,6 +59,7 @@ import org.apache.fluss.server.zk.data.ServerTags;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
+import org.apache.fluss.server.zk.data.VersionedRemoteLogManifestHandle;
 import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.server.zk.data.ZkData.AclChangeNotificationNode;
 import org.apache.fluss.server.zk.data.ZkData.BucketIdsZNode;
@@ -1349,6 +1351,72 @@ public class ZooKeeperClient implements AutoCloseable {
             throws Exception {
         String path = BucketRemoteLogsZNode.path(tableBucket);
         return getOrEmpty(path).map(BucketRemoteLogsZNode::decode);
+    }
+
+    /** Returns the authoritative remote log handle together with its ZK data version. */
+    public Optional<VersionedRemoteLogManifestHandle> getVersionedRemoteLogManifestHandle(
+            TableBucket tableBucket) throws Exception {
+        String path = BucketRemoteLogsZNode.path(tableBucket);
+        Stat stat = new Stat();
+        try {
+            byte[] data = zkClient.getData().storingStatIn(stat).forPath(path);
+            return Optional.of(
+                    new VersionedRemoteLogManifestHandle(
+                            BucketRemoteLogsZNode.decode(data), stat.getVersion()));
+        } catch (KeeperException.NoNodeException e) {
+            return Optional.empty();
+        }
+    }
+
+    /** Creates the first V2 remote log handle only if no authoritative handle exists. */
+    public boolean createRemoteLogManifestHandleIfAbsent(
+            TableBucket tableBucket, RemoteLogManifestHandle newHandle) throws Exception {
+        String path = BucketRemoteLogsZNode.path(tableBucket);
+        try {
+            zkClient.create()
+                    .creatingParentsIfNeeded()
+                    .forPath(path, BucketRemoteLogsZNode.encode(newHandle));
+            return true;
+        } catch (KeeperException.NodeExistsException e) {
+            return false;
+        }
+    }
+
+    /**
+     * Replaces an existing authoritative handle only when path, virtual generation, and ZK version
+     * all match the caller's base snapshot.
+     */
+    public boolean compareAndSetRemoteLogManifestHandle(
+            TableBucket tableBucket,
+            FsPath expectedManifestPath,
+            long expectedManifestGeneration,
+            int expectedZkVersion,
+            RemoteLogManifestHandle newHandle)
+            throws Exception {
+        Optional<VersionedRemoteLogManifestHandle> currentOpt =
+                getVersionedRemoteLogManifestHandle(tableBucket);
+        if (!currentOpt.isPresent()) {
+            return false;
+        }
+        VersionedRemoteLogManifestHandle current = currentOpt.get();
+        RemoteLogManifestHandle currentHandle = current.handle();
+        long currentGeneration = currentHandle.getManifestGeneration().orElse(0L);
+        if (current.zkVersion() != expectedZkVersion
+                || !currentHandle.getRemoteLogManifestPath().equals(expectedManifestPath)
+                || currentGeneration != expectedManifestGeneration) {
+            return false;
+        }
+
+        try {
+            zkClient.setData()
+                    .withVersion(expectedZkVersion)
+                    .forPath(
+                            BucketRemoteLogsZNode.path(tableBucket),
+                            BucketRemoteLogsZNode.encode(newHandle));
+            return true;
+        } catch (KeeperException.BadVersionException | KeeperException.NoNodeException e) {
+            return false;
+        }
     }
 
     /**

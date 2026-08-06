@@ -17,10 +17,16 @@
 
 package org.apache.fluss.server.log.remote;
 
+import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.remote.RemoteLogManifest;
 import org.apache.fluss.remote.RemoteLogSegment;
+import org.apache.fluss.remote.RemoteLogSegmentReference;
 import org.apache.fluss.server.log.LogTablet;
+import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
+import org.apache.fluss.server.zk.data.VersionedRemoteLogManifestHandle;
 
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -179,6 +185,91 @@ class RemoteLogTabletTest extends RemoteLogTestBase {
         assertThat(remoteLogTablet.findSegmentByTimestamp(50L).remoteLogStartOffset())
                 .isEqualTo(40L);
         assertThat(remoteLogTablet.findSegmentByTimestamp(51L)).isNull();
+    }
+
+    @Test
+    void testReplaceV2ManifestAndLookupLogicalReferences() throws Exception {
+        LogTablet logTablet = makeLogTabletAndAddSegments(false);
+        RemoteLogTablet remoteLogTablet = buildRemoteLogTablet(logTablet);
+        RemoteLogSegment segmentA = createLogSegmentWithMaxTimestamp(logTablet, 10, 0, 10);
+        RemoteLogSegment segmentB = createLogSegmentWithMaxTimestamp(logTablet, 20, 5, 20);
+        RemoteLogManifest manifest =
+                RemoteLogManifest.createV2(
+                        1L,
+                        logTablet.getPhysicalTablePath(),
+                        logTablet.getTableBucket(),
+                        Arrays.asList(segmentA, segmentB),
+                        0L,
+                        Collections.emptyList());
+
+        remoteLogTablet.replaceManifest(manifest);
+
+        assertThat(remoteLogTablet.currentManifest()).isSameAs(manifest);
+        assertThat(remoteLogTablet.getRemoteLogStartOffset()).isEqualTo(0L);
+        assertThat(remoteLogTablet.getRemoteLogEndOffset()).hasValue(20L);
+        assertThat(remoteLogTablet.relevantRemoteLogSegmentReferences(2L))
+                .containsExactly(
+                        new RemoteLogSegmentReference(segmentA, 0L, 5L),
+                        new RemoteLogSegmentReference(segmentB, 5L, 20L));
+        assertThat(remoteLogTablet.relevantRemoteLogSegmentReferences(7L))
+                .containsExactly(new RemoteLogSegmentReference(segmentB, 5L, 20L));
+        assertThat(remoteLogTablet.relevantRemoteLogSegmentsForFetchV0(2L))
+                .containsExactly(segmentA);
+        assertThat(remoteLogTablet.relevantRemoteLogSegmentsForFetchV0(7L))
+                .containsExactly(segmentB);
+        assertThat(remoteLogTablet.relevantRemoteLogSegmentReferences(20L)).isEmpty();
+    }
+
+    @Test
+    void testFetchV0ReturnsContiguousV2PrefixBeforeOverlap() throws Exception {
+        LogTablet logTablet = makeLogTabletAndAddSegments(false);
+        RemoteLogTablet remoteLogTablet = buildRemoteLogTablet(logTablet);
+        RemoteLogSegment segmentA = createLogSegmentWithMaxTimestamp(logTablet, 5, 0, 5);
+        RemoteLogSegment segmentB = createLogSegmentWithMaxTimestamp(logTablet, 10, 5, 10);
+        RemoteLogSegment segmentC = createLogSegmentWithMaxTimestamp(logTablet, 20, 8, 20);
+        RemoteLogManifest manifest =
+                RemoteLogManifest.createV2(
+                        1L,
+                        logTablet.getPhysicalTablePath(),
+                        logTablet.getTableBucket(),
+                        Arrays.asList(segmentA, segmentB, segmentC),
+                        0L,
+                        Collections.emptyList());
+
+        remoteLogTablet.replaceManifest(manifest);
+
+        assertThat(remoteLogTablet.relevantRemoteLogSegmentsForFetchV0(0L))
+                .containsExactly(segmentA, segmentB);
+        assertThat(remoteLogTablet.relevantRemoteLogSegmentsForFetchV0(5L))
+                .containsExactly(segmentB);
+        assertThat(remoteLogTablet.relevantRemoteLogSegmentsForFetchV0(10L))
+                .containsExactly(segmentC);
+    }
+
+    @Test
+    void testReplaceManifestAndAuthoritativeHandleAtomically() throws Exception {
+        LogTablet logTablet = makeLogTabletAndAddSegments(false);
+        RemoteLogTablet remoteLogTablet = buildRemoteLogTablet(logTablet);
+        RemoteLogSegment segment = createLogSegmentWithMaxTimestamp(logTablet, 10, 0, 10);
+        RemoteLogManifest manifest =
+                RemoteLogManifest.createV2(
+                        2L,
+                        logTablet.getPhysicalTablePath(),
+                        logTablet.getTableBucket(),
+                        Collections.singletonList(segment),
+                        0L,
+                        Collections.emptyList());
+        VersionedRemoteLogManifestHandle handle =
+                new VersionedRemoteLogManifestHandle(
+                        RemoteLogManifestHandle.v2(new FsPath("file:///remote/m2"), 2L, 0L, 10L),
+                        7);
+
+        remoteLogTablet.replaceManifest(manifest, handle);
+
+        assertThat(remoteLogTablet.currentManifest()).isSameAs(manifest);
+        assertThat(remoteLogTablet.currentHandle()).isSameAs(handle);
+        assertThat(remoteLogTablet.allRemoteLogSegmentReferences())
+                .containsExactly(new RemoteLogSegmentReference(segment, 0L, 10L));
     }
 
     RemoteLogSegment createLogSegmentWithMaxTimestamp(

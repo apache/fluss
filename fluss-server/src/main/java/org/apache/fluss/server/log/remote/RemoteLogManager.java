@@ -27,6 +27,7 @@ import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.remote.RemoteLogManifest;
 import org.apache.fluss.remote.RemoteLogSegment;
+import org.apache.fluss.remote.RemoteLogSegmentReference;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.server.log.LogManager;
 import org.apache.fluss.server.log.LogTablet;
@@ -34,6 +35,7 @@ import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.storage.LocalDiskManager;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
+import org.apache.fluss.server.zk.data.VersionedRemoteLogManifestHandle;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
@@ -75,6 +77,9 @@ public class RemoteLogManager implements Closeable {
 
     private final long taskInterval;
     private final int maxUploadSegmentsPerTask;
+    private final boolean manifestV2WriterEnabled;
+    private final boolean manifestV2GcEnabled;
+    private final long manifestV2GcGracePeriodMs;
     private final Map<File, RemoteLogIndexCache> remoteLogIndexCachesByDir;
     private final RemoteLogStorage remoteLogStorage;
     private final CoordinatorGateway coordinatorGateway;
@@ -132,6 +137,18 @@ public class RemoteLogManager implements Closeable {
         this.taskInterval = conf.get(ConfigOptions.REMOTE_LOG_TASK_INTERVAL_DURATION).toMillis();
         this.maxUploadSegmentsPerTask =
                 conf.getInt(ConfigOptions.REMOTE_LOG_TASK_MAX_UPLOAD_SEGMENTS);
+        this.manifestV2WriterEnabled =
+                conf.getBoolean(ConfigOptions.REMOTE_LOG_MANIFEST_V2_WRITER_ENABLED);
+        this.manifestV2GcEnabled = conf.getBoolean(ConfigOptions.REMOTE_LOG_MANIFEST_V2_GC_ENABLED);
+        this.manifestV2GcGracePeriodMs =
+                conf.get(ConfigOptions.REMOTE_LOG_MANIFEST_V2_GC_GRACE_PERIOD).toMillis();
+        if (manifestV2GcEnabled && !manifestV2WriterEnabled) {
+            throw new IllegalArgumentException(
+                    "Manifest V2 GC requires remote.log.manifest-v2-writer-enabled=true");
+        }
+        if (manifestV2GcGracePeriodMs < 0L) {
+            throw new IllegalArgumentException("Manifest V2 GC grace period must not be negative");
+        }
         this.rlManagerScheduledThreadPool = scheduledExecutor;
         this.clock = clock;
     }
@@ -154,15 +171,17 @@ public class RemoteLogManager implements Closeable {
         LogTablet log = replica.getLogTablet();
         RemoteLogTablet remoteLog =
                 new RemoteLogTablet(physicalTablePath, tableBucket, replica.getLogTTLMs());
-        Optional<RemoteLogManifestHandle> remoteLogManifestHandleOpt =
-                zkClient.getRemoteLogManifestHandle(tableBucket);
+        Optional<VersionedRemoteLogManifestHandle> remoteLogManifestHandleOpt =
+                zkClient.getVersionedRemoteLogManifestHandle(tableBucket);
         if (remoteLogManifestHandleOpt.isPresent()) {
             // If there is remote log manifest handle in remote, we will download
             // the manifest snapshot from remote storage and write to cache.
+            VersionedRemoteLogManifestHandle versionedHandle = remoteLogManifestHandleOpt.get();
             RemoteLogManifest manifest =
                     remoteLogStorage.readRemoteLogManifestSnapshot(
-                            remoteLogManifestHandleOpt.get().getRemoteLogManifestPath());
-            remoteLog.loadRemoteLogManifest(manifest);
+                            versionedHandle.handle().getRemoteLogManifestPath());
+            validateManifestHandle(versionedHandle.handle(), manifest);
+            remoteLog.loadRemoteLogManifest(manifest, versionedHandle);
         }
         remoteLog.getRemoteLogEndOffset().ifPresent(log::updateRemoteLogEndOffset);
         log.updateRemoteLogStartOffset(remoteLog.getRemoteLogStartOffset());
@@ -258,13 +277,22 @@ public class RemoteLogManager implements Closeable {
             return -1L;
         }
 
-        RemoteLogSegment segment = remoteLogTablet.findSegmentByTimestamp(timestamp);
-        if (segment == null) {
-            return -1L;
-        } else {
-            return remoteLogIndexCacheForBucket(tableBucket)
-                    .lookupOffsetForTimestamp(segment, timestamp);
+        for (RemoteLogSegmentReference reference :
+                remoteLogTablet.allRemoteLogSegmentReferences()) {
+            RemoteLogSegment segment = reference.remoteLogSegment();
+            // A clipped segment's physical max timestamp is only a conservative candidate: it
+            // may come from the hidden suffix. Validate the index result against logical bounds.
+            if (segment.maxTimestamp() < timestamp) {
+                continue;
+            }
+            long offset =
+                    remoteLogIndexCacheForBucket(tableBucket)
+                            .lookupOffsetForTimestamp(segment, timestamp);
+            if (offset >= 0L && offset < reference.logicalEndOffset()) {
+                return Math.max(offset, reference.logicalStartOffset());
+            }
         }
+        return -1L;
     }
 
     /**
@@ -276,8 +304,40 @@ public class RemoteLogManager implements Closeable {
         return remoteLogTablet(tableBucket).relevantRemoteLogSegments(offset);
     }
 
+    /** Returns the physical segment prefix to include in a FetchLog v0 response. */
+    public List<RemoteLogSegment> relevantRemoteLogSegmentsForFetchV0(
+            TableBucket tableBucket, long offset) {
+        return remoteLogTablet(tableBucket).relevantRemoteLogSegmentsForFetchV0(offset);
+    }
+
+    /** Returns active logical remote log references needed to read from the given offset. */
+    public List<RemoteLogSegmentReference> relevantRemoteLogSegmentReferences(
+            TableBucket tableBucket, long offset) {
+        return remoteLogTablet(tableBucket).relevantRemoteLogSegmentReferences(offset);
+    }
+
     private boolean remoteDisabled() {
         return taskInterval <= 0L;
+    }
+
+    @VisibleForTesting
+    static void validateManifestHandle(RemoteLogManifestHandle handle, RemoteLogManifest manifest) {
+        if (handle.getVersion() == RemoteLogManifestHandle.VERSION_1) {
+            if (manifest.getVersion() != RemoteLogManifest.VERSION_1
+                    || handle.getRemoteLogEndOffset() != manifest.getRemoteLogEndOffset()) {
+                throw new IllegalStateException(
+                        "V1 remote log manifest handle does not match manifest content");
+            }
+            return;
+        }
+        if (manifest.getVersion() != RemoteLogManifest.VERSION_2
+                || handle.getManifestGeneration().getAsLong() != manifest.getGeneration()
+                || handle.getRemoteLogStartOffset().getAsLong()
+                        != manifest.getRemoteLogStartOffset()
+                || handle.getRemoteLogEndOffset() != manifest.getRemoteLogEndOffset()) {
+            throw new IllegalStateException(
+                    "V2 remote log manifest handle hints do not match manifest content");
+        }
     }
 
     /**
@@ -317,8 +377,12 @@ public class RemoteLogManager implements Closeable {
                                     remoteLogStorage,
                                     remoteLogIndexCache(replica.getLogTablet().getDataDir()),
                                     coordinatorGateway,
+                                    zkClient,
                                     clock,
-                                    maxUploadSegmentsPerTask);
+                                    maxUploadSegmentsPerTask,
+                                    manifestV2WriterEnabled,
+                                    manifestV2GcEnabled,
+                                    manifestV2GcGracePeriodMs);
                     LOG.info(
                             "Created a new remote log task for table-bucket{}: {} and getting scheduled",
                             tableBucket,

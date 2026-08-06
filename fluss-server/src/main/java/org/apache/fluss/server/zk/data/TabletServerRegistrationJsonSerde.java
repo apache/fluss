@@ -27,8 +27,11 @@ import org.apache.fluss.utils.json.JsonSerializer;
 
 import java.io.IOException;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
+import static java.util.Collections.emptySet;
 import static org.apache.fluss.config.ConfigOptions.DEFAULT_LISTENER_NAME;
 
 /** Json serializer and deserializer for {@link TabletServerRegistration}. */
@@ -41,7 +44,9 @@ public class TabletServerRegistrationJsonSerde
             new TabletServerRegistrationJsonSerde();
 
     private static final String VERSION_KEY = "version";
-    private static final int VERSION = 4;
+    private static final int VERSION = 5;
+    private static final int RESOURCE_VERSION = 4;
+    private static final int CAPABILITIES_VERSION = 5;
 
     @Deprecated private static final String HOST = "host";
     @Deprecated private static final String PORT = "port";
@@ -50,6 +55,7 @@ public class TabletServerRegistrationJsonSerde
     private static final String RACK = "rack";
     private static final String CPU_CORES = "cpu_cores";
     private static final String MEMORY_BYTES = "memory_bytes";
+    private static final String CAPABILITIES = "capabilities";
 
     @Override
     public void serialize(
@@ -71,6 +77,11 @@ public class TabletServerRegistrationJsonSerde
         if (resource.getMemoryBytes() != null) {
             generator.writeNumberField(MEMORY_BYTES, resource.getMemoryBytes());
         }
+        generator.writeArrayFieldStart(CAPABILITIES);
+        for (String capability : tabletServerRegistration.getCapabilities()) {
+            generator.writeString(capability);
+        }
+        generator.writeEndArray();
         generator.writeEndObject();
     }
 
@@ -80,6 +91,7 @@ public class TabletServerRegistrationJsonSerde
         List<Endpoint> endpoints;
         String rack = null;
         TabletServerResource resource = TabletServerResource.unknown();
+        Set<String> capabilities = emptySet();
         if (version == 1) {
             String host = node.get(HOST).asText();
             int port = node.get(PORT).asInt();
@@ -91,14 +103,23 @@ public class TabletServerRegistrationJsonSerde
             if (node.has(RACK)) {
                 rack = node.get(RACK).asText();
             }
-            if (version >= VERSION) {
+            if (version >= RESOURCE_VERSION) {
                 Double cpuCores = node.has(CPU_CORES) ? node.get(CPU_CORES).asDouble() : null;
                 Long memoryBytes = node.has(MEMORY_BYTES) ? node.get(MEMORY_BYTES).asLong() : null;
                 resource = new TabletServerResource(cpuCores, memoryBytes);
             }
+            if (version >= CAPABILITIES_VERSION) {
+                capabilities = new HashSet<>();
+                if (node.has(CAPABILITIES)) {
+                    for (JsonNode capability : node.get(CAPABILITIES)) {
+                        capabilities.add(capability.asText());
+                    }
+                }
+            }
         }
 
         long registerTimestamp = node.get(REGISTER_TIMESTAMP).asLong();
-        return new TabletServerRegistration(rack, endpoints, registerTimestamp, resource);
+        return new TabletServerRegistration(
+                rack, endpoints, registerTimestamp, resource, capabilities);
     }
 }

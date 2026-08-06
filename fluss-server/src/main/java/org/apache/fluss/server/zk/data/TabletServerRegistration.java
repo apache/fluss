@@ -24,6 +24,11 @@ import javax.annotation.Nullable;
 
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
+import java.util.TreeSet;
+
+import static java.util.Collections.emptySet;
+import static java.util.Collections.unmodifiableSet;
 
 /**
  * The register information of tablet server stored in {@link ZkData.ServerIdZNode}.
@@ -31,14 +36,18 @@ import java.util.Objects;
  * @see TabletServerRegistrationJsonSerde for json serialization and deserialization.
  */
 public class TabletServerRegistration {
+    public static final String REMOTE_MANIFEST_VERSION_DISPATCH_CAPABILITY =
+            "remote-manifest-version-dispatch";
+
     private final @Nullable String rack;
     private final List<Endpoint> endpoints;
     private final long registerTimestamp;
     private final TabletServerResource resource;
+    private final Set<String> capabilities;
 
     public TabletServerRegistration(
             @Nullable String rack, List<Endpoint> endpoints, long registerTimestamp) {
-        this(rack, endpoints, registerTimestamp, TabletServerResource.unknown());
+        this(rack, endpoints, registerTimestamp, TabletServerResource.unknown(), emptySet());
     }
 
     public TabletServerRegistration(
@@ -46,10 +55,20 @@ public class TabletServerRegistration {
             List<Endpoint> endpoints,
             long registerTimestamp,
             TabletServerResource resource) {
+        this(rack, endpoints, registerTimestamp, resource, emptySet());
+    }
+
+    public TabletServerRegistration(
+            @Nullable String rack,
+            List<Endpoint> endpoints,
+            long registerTimestamp,
+            TabletServerResource resource,
+            Set<String> capabilities) {
         this.rack = rack;
         this.endpoints = endpoints;
         this.registerTimestamp = registerTimestamp;
         this.resource = resource;
+        this.capabilities = unmodifiableSet(new TreeSet<>(capabilities));
     }
 
     public List<Endpoint> getEndpoints() {
@@ -68,6 +87,14 @@ public class TabletServerRegistration {
         return resource;
     }
 
+    public Set<String> getCapabilities() {
+        return capabilities;
+    }
+
+    public boolean supportsCapability(String capability) {
+        return capabilities.contains(capability);
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) {
@@ -80,12 +107,13 @@ public class TabletServerRegistration {
         return registerTimestamp == that.registerTimestamp
                 && Objects.equals(endpoints, that.endpoints)
                 && Objects.equals(rack, that.rack)
-                && Objects.equals(resource, that.resource);
+                && Objects.equals(resource, that.resource)
+                && Objects.equals(capabilities, that.capabilities);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(endpoints, registerTimestamp, rack, resource);
+        return Objects.hash(endpoints, registerTimestamp, rack, resource, capabilities);
     }
 
     @Override
@@ -99,6 +127,8 @@ public class TabletServerRegistration {
                 + rack
                 + "', resource="
                 + resource
+                + ", capabilities="
+                + capabilities
                 + '}';
     }
 }

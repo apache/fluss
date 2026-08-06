@@ -194,16 +194,16 @@ abstract class OrphanFilesCleanITCase extends AbstractTestBase {
                         + "\"remote_log_segments\":["
                         + "{\"segment_id\":\""
                         + activeId1
-                        + "\",\"start_offset\":0,\"end_offset\":99,"
+                        + "\",\"start_offset\":0,\"end_offset\":100,"
                         + "\"max_timestamp\":0,\"size_in_bytes\":1},"
                         + "{\"segment_id\":\""
                         + activeId2
-                        + "\",\"start_offset\":100,\"end_offset\":199,"
+                        + "\",\"start_offset\":100,\"end_offset\":200,"
                         + "\"max_timestamp\":0,\"size_in_bytes\":1}"
                         + "]}";
         Files.write(manifest, manifestContent.getBytes(StandardCharsets.UTF_8));
         makeOld(manifest);
-        upsertManifest(tableBucket, manifestPath, 199L);
+        upsertManifest(tableBucket, manifestPath, 200L);
 
         Path activeFile1 = writeSegmentFile(remoteLogTabletDir, activeId1, 0L);
         Path activeFile2 = writeSegmentFile(remoteLogTabletDir, activeId2, 100L);
@@ -299,8 +299,8 @@ abstract class OrphanFilesCleanITCase extends AbstractTestBase {
                                 .toString());
         String activeSegmentId = UUID.randomUUID().toString();
         Path activeSegment =
-                seedManifestAndSegment(remoteLogTabletDir, manifestPath, activeSegmentId, 0L, 0L);
-        upsertManifest(tableBucket, manifestPath, 0L);
+                seedManifestAndSegment(remoteLogTabletDir, manifestPath, activeSegmentId, 0L, 1L);
+        upsertManifest(tableBucket, manifestPath, 1L);
         return activeSegment;
     }
 
@@ -512,8 +512,8 @@ abstract class OrphanFilesCleanITCase extends AbstractTestBase {
                                 .resolve("metadata/p0.manifest")
                                 .toUri()
                                 .toString());
-        Path oldSegment = seedManifestAndSegment(remoteLogTabletDir, manifest0, segmentId, 0L, 0L);
-        upsertManifest(tableBucket, manifest0, 0L);
+        Path oldSegment = seedManifestAndSegment(remoteLogTabletDir, manifest0, segmentId, 0L, 1L);
+        upsertManifest(tableBucket, manifest0, 1L);
 
         runCleanerForDatabase(false, dbName);
 
@@ -526,8 +526,8 @@ abstract class OrphanFilesCleanITCase extends AbstractTestBase {
                                 .toUri()
                                 .toString());
         Path newSegment =
-                seedManifestAndSegment(remoteLogTabletDir, manifest1, segmentId, 100L, 100L);
-        upsertManifest(tableBucket, manifest1, 100L);
+                seedManifestAndSegment(remoteLogTabletDir, manifest1, segmentId, 100L, 101L);
+        upsertManifest(tableBucket, manifest1, 101L);
 
         runCleanerForDatabase(false, dbName);
 

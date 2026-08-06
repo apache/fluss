@@ -1106,6 +1106,33 @@ public class ConfigOptions {
                                     + "prevent overwhelming the remote storage when there is a large "
                                     + "backlog of segments to upload.");
 
+    public static final ConfigOption<Boolean> REMOTE_LOG_MANIFEST_V2_WRITER_ENABLED =
+            key("remote.log.manifest-v2-writer-enabled")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Enables CAS publishing of Manifest V2 snapshots and overlap-aware "
+                                    + "remote segment replacement. Keep disabled until every "
+                                    + "remote-log reader supports manifest version dispatch.");
+
+    public static final ConfigOption<Boolean> REMOTE_LOG_MANIFEST_V2_GC_ENABLED =
+            key("remote.log.manifest-v2-gc-enabled")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Enables grace-period deletion of Manifest V2 unreferenced segments "
+                                    + "and orphan remote objects. This option only takes effect "
+                                    + "when the Manifest V2 writer is enabled.");
+
+    public static final ConfigOption<Duration> REMOTE_LOG_MANIFEST_V2_GC_GRACE_PERIOD =
+            key("remote.log.manifest-v2-gc-grace-period")
+                    .durationType()
+                    .defaultValue(Duration.ofHours(1))
+                    .withDescription(
+                            "Minimum time that an unreferenced segment, superseded manifest, or "
+                                    + "orphan object is retained before Manifest V2 garbage "
+                                    + "collection can delete it.");
+
     public static final ConfigOption<MemorySize> REMOTE_LOG_INDEX_FILE_CACHE_SIZE =
             key("remote.log.index-file-cache-size")
                     .memoryType()

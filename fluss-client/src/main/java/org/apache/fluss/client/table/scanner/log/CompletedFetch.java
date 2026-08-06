@@ -63,6 +63,7 @@ public abstract class CompletedFetch {
     final long highWatermark;
     private final long fetchOffset;
     private final long filteredEndOffset;
+    private final long logicalEndOffset;
 
     private final boolean isCheckCrcs;
     private final Iterator<LogRecordBatch> batches;
@@ -92,6 +93,34 @@ public abstract class CompletedFetch {
             boolean isCheckCrcs,
             long fetchOffset,
             long filteredEndOffset) {
+        this(
+                tableBucket,
+                tablePath,
+                error,
+                sizeInBytes,
+                highWatermark,
+                batches,
+                readContext,
+                logScannerStatus,
+                isCheckCrcs,
+                fetchOffset,
+                filteredEndOffset,
+                Long.MAX_VALUE);
+    }
+
+    public CompletedFetch(
+            TableBucket tableBucket,
+            TablePath tablePath,
+            ApiError error,
+            int sizeInBytes,
+            long highWatermark,
+            Iterator<LogRecordBatch> batches,
+            LogRecordReadContext readContext,
+            LogScannerStatus logScannerStatus,
+            boolean isCheckCrcs,
+            long fetchOffset,
+            long filteredEndOffset,
+            long logicalEndOffset) {
         this.tableBucket = tableBucket;
         this.tablePath = tablePath;
         this.error = error;
@@ -110,6 +139,13 @@ public abstract class CompletedFetch {
                 fetchOffset,
                 tableBucket);
         this.filteredEndOffset = filteredEndOffset;
+        checkArgument(
+                logicalEndOffset > fetchOffset,
+                "logicalEndOffset (%s) must be greater than fetchOffset (%s) for bucket %s.",
+                logicalEndOffset,
+                fetchOffset,
+                tableBucket);
+        this.logicalEndOffset = logicalEndOffset;
         this.nextFetchOffset = fetchOffset;
     }
 
@@ -370,15 +406,29 @@ public abstract class CompletedFetch {
 
     private LogRecordBatch nextFetchedBatch() {
         maybeCloseRecordStream();
-        if (!batches.hasNext()) {
-            finishFetchedBatches();
-            return null;
+        while (batches.hasNext()) {
+            LogRecordBatch nextBatch = batches.next();
+            if (nextBatch.baseLogOffset() >= logicalEndOffset) {
+                finishFetchedBatches();
+                return null;
+            }
+            if (nextBatch.nextLogOffset() > logicalEndOffset) {
+                throw new FetchException(
+                        "Remote logical end offset "
+                                + logicalEndOffset
+                                + " is not a batch boundary for bucket "
+                                + tableBucket);
+            }
+            if (nextBatch.nextLogOffset() <= nextFetchOffset) {
+                currentBatch = nextBatch;
+                continue;
+            }
+            currentBatch = nextBatch;
+            maybeEnsureValid(currentBatch);
+            return currentBatch;
         }
-
-        currentBatch = batches.next();
-        // TODO get last epoch.
-        maybeEnsureValid(currentBatch);
-        return currentBatch;
+        finishFetchedBatches();
+        return null;
     }
 
     private void finishFetchedBatches() {

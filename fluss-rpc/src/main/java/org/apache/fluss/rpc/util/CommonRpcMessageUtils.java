@@ -24,7 +24,9 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.remote.RemoteLogFetchInfo;
+import org.apache.fluss.remote.RemoteLogFetchInfoV2;
 import org.apache.fluss.remote.RemoteLogSegment;
+import org.apache.fluss.remote.RemoteLogSegmentReference;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.messages.PbAclFilter;
 import org.apache.fluss.rpc.messages.PbAclInfo;
@@ -32,7 +34,9 @@ import org.apache.fluss.rpc.messages.PbFetchLogRespForBucket;
 import org.apache.fluss.rpc.messages.PbKeyValue;
 import org.apache.fluss.rpc.messages.PbPartitionSpec;
 import org.apache.fluss.rpc.messages.PbRemoteLogFetchInfo;
+import org.apache.fluss.rpc.messages.PbRemoteLogFetchInfoV2;
 import org.apache.fluss.rpc.messages.PbRemoteLogSegment;
+import org.apache.fluss.rpc.messages.PbRemoteLogSegmentReference;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.security.acl.AccessControlEntry;
 import org.apache.fluss.security.acl.AccessControlEntryFilter;
@@ -161,31 +165,40 @@ public class CommonRpcMessageUtils {
             fetchLogResultForBucket =
                     new FetchLogResultForBucket(tb, ApiError.fromErrorMessage(respForBucket));
         } else {
-            if (respForBucket.hasRemoteLogFetchInfo()) {
+            if (respForBucket.hasRemoteLogFetchInfo() && respForBucket.hasRemoteLogFetchInfoV2()) {
+                throw new IllegalArgumentException(
+                        "FetchLog response contains both v0 and v1 remote fetch info");
+            }
+            if (respForBucket.hasRemoteLogFetchInfoV2()) {
+                PbRemoteLogFetchInfoV2 pbRlfInfo = respForBucket.getRemoteLogFetchInfoV2();
+                String partitionName =
+                        pbRlfInfo.hasPartitionName() ? pbRlfInfo.getPartitionName() : null;
+                PhysicalTablePath physicalTablePath = PhysicalTablePath.of(tp, partitionName);
+                List<RemoteLogSegmentReference> references = new ArrayList<>();
+                for (PbRemoteLogSegmentReference pbReference :
+                        pbRlfInfo.getActiveReferencesList()) {
+                    references.add(
+                            new RemoteLogSegmentReference(
+                                    fromPbRemoteLogSegment(
+                                            pbReference.getSegment(), physicalTablePath, tb),
+                                    pbReference.getLogicalStartOffset(),
+                                    pbReference.getLogicalEndOffset()));
+                }
+                RemoteLogFetchInfoV2 rlFetchInfo =
+                        new RemoteLogFetchInfoV2(
+                                pbRlfInfo.getRemoteLogTabletDir(), partitionName, references);
+                fetchLogResultForBucket =
+                        new FetchLogResultForBucket(
+                                tb, rlFetchInfo, respForBucket.getHighWatermark());
+            } else if (respForBucket.hasRemoteLogFetchInfo()) {
                 PbRemoteLogFetchInfo pbRlfInfo = respForBucket.getRemoteLogFetchInfo();
                 String partitionName =
                         pbRlfInfo.hasPartitionName() ? pbRlfInfo.getPartitionName() : null;
                 PhysicalTablePath physicalTablePath = PhysicalTablePath.of(tp, partitionName);
                 List<RemoteLogSegment> remoteLogSegmentList = new ArrayList<>();
                 for (PbRemoteLogSegment pbRemoteLogSegment : pbRlfInfo.getRemoteLogSegmentsList()) {
-                    long maxTimestamp =
-                            pbRemoteLogSegment.hasMaxTimestamp()
-                                    ? pbRemoteLogSegment.getMaxTimestamp()
-                                    : -1;
-                    RemoteLogSegment remoteLogSegment =
-                            RemoteLogSegment.Builder.builder()
-                                    .tableBucket(tb)
-                                    .physicalTablePath(physicalTablePath)
-                                    .remoteLogSegmentId(
-                                            UUID.fromString(
-                                                    pbRemoteLogSegment.getRemoteLogSegmentId()))
-                                    .remoteLogEndOffset(pbRemoteLogSegment.getRemoteLogEndOffset())
-                                    .remoteLogStartOffset(
-                                            pbRemoteLogSegment.getRemoteLogStartOffset())
-                                    .segmentSizeInBytes(pbRemoteLogSegment.getSegmentSizeInBytes())
-                                    .maxTimestamp(maxTimestamp)
-                                    .build();
-                    remoteLogSegmentList.add(remoteLogSegment);
+                    remoteLogSegmentList.add(
+                            fromPbRemoteLogSegment(pbRemoteLogSegment, physicalTablePath, tb));
                 }
                 RemoteLogFetchInfo rlFetchInfo =
                         new RemoteLogFetchInfo(
@@ -219,6 +232,22 @@ public class CommonRpcMessageUtils {
         }
 
         return fetchLogResultForBucket;
+    }
+
+    private static RemoteLogSegment fromPbRemoteLogSegment(
+            PbRemoteLogSegment segment,
+            PhysicalTablePath physicalTablePath,
+            TableBucket tableBucket) {
+        long maxTimestamp = segment.hasMaxTimestamp() ? segment.getMaxTimestamp() : -1;
+        return RemoteLogSegment.Builder.builder()
+                .tableBucket(tableBucket)
+                .physicalTablePath(physicalTablePath)
+                .remoteLogSegmentId(UUID.fromString(segment.getRemoteLogSegmentId()))
+                .remoteLogEndOffset(segment.getRemoteLogEndOffset())
+                .remoteLogStartOffset(segment.getRemoteLogStartOffset())
+                .segmentSizeInBytes(segment.getSegmentSizeInBytes())
+                .maxTimestamp(maxTimestamp)
+                .build();
     }
 
     public static ByteBuffer toByteBuffer(ByteBuf buf) {

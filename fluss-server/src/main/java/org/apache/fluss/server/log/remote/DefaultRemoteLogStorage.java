@@ -21,6 +21,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.RemoteStorageException;
 import org.apache.fluss.fs.FSDataInputStream;
+import org.apache.fluss.fs.FileStatus;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -54,6 +55,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 
 import static org.apache.fluss.utils.FlussPaths.INDEX_FILE_SUFFIX;
+import static org.apache.fluss.utils.FlussPaths.REMOTE_LOG_METADATA_DIR_NAME;
 import static org.apache.fluss.utils.FlussPaths.TIME_INDEX_FILE_SUFFIX;
 import static org.apache.fluss.utils.FlussPaths.WRITER_SNAPSHOT_FILE_SUFFIX;
 import static org.apache.fluss.utils.FlussPaths.remoteLogIndexFile;
@@ -233,6 +235,82 @@ public class DefaultRemoteLogStorage implements RemoteLogStorage {
         } catch (IOException e) {
             throw new RemoteStorageException(
                     "Failed to delete log segment manifest: " + remoteLogManifestPath, e);
+        }
+    }
+
+    @Override
+    public List<RemoteLogStorageObject> listRemoteLogSegmentObjects(
+            PhysicalTablePath physicalTablePath, TableBucket tableBucket)
+            throws RemoteStorageException {
+        FsPath tabletDir =
+                FlussPaths.remoteLogTabletDir(remoteLogDir, physicalTablePath, tableBucket);
+        try {
+            if (!fileSystem.exists(tabletDir)) {
+                return new ArrayList<>();
+            }
+            List<RemoteLogStorageObject> objects = new ArrayList<>();
+            for (FileStatus status : fileSystem.listStatus(tabletDir)) {
+                if (!status.isDir()
+                        || REMOTE_LOG_METADATA_DIR_NAME.equals(status.getPath().getName())) {
+                    continue;
+                }
+                try {
+                    UUID.fromString(status.getPath().getName());
+                    objects.add(
+                            new RemoteLogStorageObject(
+                                    status.getPath(), status.getModificationTime()));
+                } catch (IllegalArgumentException ignored) {
+                    LOG.warn(
+                            "Ignoring unexpected remote log bucket directory {}", status.getPath());
+                }
+            }
+            return objects;
+        } catch (IOException e) {
+            throw new RemoteStorageException(
+                    "Failed to list remote log segment objects under " + tabletDir, e);
+        }
+    }
+
+    @Override
+    public List<RemoteLogStorageObject> listRemoteLogManifestSnapshots(
+            PhysicalTablePath physicalTablePath, TableBucket tableBucket)
+            throws RemoteStorageException {
+        FsPath metadataDir =
+                new FsPath(
+                        FlussPaths.remoteLogTabletDir(remoteLogDir, physicalTablePath, tableBucket),
+                        REMOTE_LOG_METADATA_DIR_NAME);
+        try {
+            if (!fileSystem.exists(metadataDir)) {
+                return new ArrayList<>();
+            }
+            List<RemoteLogStorageObject> objects = new ArrayList<>();
+            for (FileStatus status : fileSystem.listStatus(metadataDir)) {
+                if (!status.isDir() && status.getPath().getName().endsWith(".manifest")) {
+                    objects.add(
+                            new RemoteLogStorageObject(
+                                    status.getPath(), status.getModificationTime()));
+                }
+            }
+            return objects;
+        } catch (IOException e) {
+            throw new RemoteStorageException(
+                    "Failed to list remote log manifest snapshots under " + metadataDir, e);
+        }
+    }
+
+    @Override
+    public void deleteRemoteLogSegmentObject(
+            PhysicalTablePath physicalTablePath, TableBucket tableBucket, UUID segmentId)
+            throws RemoteStorageException {
+        FsPath segmentDirectory =
+                FlussPaths.remoteLogSegmentDir(
+                        FlussPaths.remoteLogTabletDir(remoteLogDir, physicalTablePath, tableBucket),
+                        segmentId);
+        try {
+            fileSystem.delete(segmentDirectory, true);
+        } catch (IOException e) {
+            throw new RemoteStorageException(
+                    "Failed to delete orphan remote log segment object " + segmentDirectory, e);
         }
     }
 

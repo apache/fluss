@@ -239,7 +239,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         }
 
         CompletableFuture<FetchLogResponse> response = new CompletableFuture<>();
-        FetchParams fetchParams = getFetchParams(request);
+        FetchParams fetchParams = getFetchParams(request, currentSession().getApiVersion());
         replicaManager.fetchLogRecords(
                 fetchParams,
                 interesting,
@@ -250,7 +250,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         return response;
     }
 
-    private static FetchParams getFetchParams(FetchLogRequest request) {
+    private static FetchParams getFetchParams(FetchLogRequest request, short apiVersion) {
         FetchParams fetchParams;
         Map<Long, FilterInfo> tableFilterInfoMap = getTableFilterInfoMap(request);
         FetchLogReadPreference readPreference =
@@ -267,12 +267,14 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                                             : DEFAULT_MAX_WAIT_MS_WHEN_MIN_BYTES_ENABLE)
                             .withTableFilterInfoMap(tableFilterInfoMap)
                             .withReadPreference(readPreference)
+                            .withApiVersion(apiVersion)
                             .build();
         } else {
             fetchParams =
                     new FetchParamsBuilder(request.getFollowerServerId(), request.getMaxBytes())
                             .withTableFilterInfoMap(tableFilterInfoMap)
                             .withReadPreference(readPreference)
+                            .withApiVersion(apiVersion)
                             .build();
         }
 

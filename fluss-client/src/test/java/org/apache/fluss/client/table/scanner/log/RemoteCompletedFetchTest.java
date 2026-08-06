@@ -18,6 +18,7 @@
 package org.apache.fluss.client.table.scanner.log;
 
 import org.apache.fluss.client.table.scanner.ScanRecord;
+import org.apache.fluss.exception.FetchException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -55,6 +56,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
 import static org.apache.fluss.record.TestData.DATA2;
 import static org.apache.fluss.record.TestData.DATA2_PHYSICAL_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA2_ROW_TYPE;
@@ -64,9 +66,11 @@ import static org.apache.fluss.record.TestData.DATA2_TABLE_INFO;
 import static org.apache.fluss.record.TestData.DATA2_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
+import static org.apache.fluss.testutils.DataTestUtils.createRecordsWithoutBaseLogOffset;
 import static org.apache.fluss.testutils.DataTestUtils.genLogFile;
 import static org.apache.fluss.utils.FlussPaths.remoteLogSegmentDir;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link org.apache.fluss.client.table.scanner.log.RemoteCompletedFetch}. */
 class RemoteCompletedFetchTest {
@@ -197,6 +201,86 @@ class RemoteCompletedFetchTest {
         assertThat(scanRecords.size()).isEqualTo(0);
     }
 
+    @Test
+    void testClipPhysicalPrefixAtLogicalStart() throws Exception {
+        TableBucket tableBucket = new TableBucket(DATA2_TABLE_ID, 0);
+        FileLogRecords fileLogRecords =
+                createFileLogRecords(
+                        tableBucket, DATA2_PHYSICAL_TABLE_PATH, DATA2, LogFormat.ARROW);
+        RemoteCompletedFetch completedFetch =
+                new RemoteCompletedFetch(
+                        tableBucket,
+                        DATA2_TABLE_PATH,
+                        fileLogRecords,
+                        10L,
+                        remoteReadContext,
+                        logScannerStatus,
+                        true,
+                        5L,
+                        10L,
+                        () -> {});
+
+        List<ScanRecord> scanRecords = completedFetch.fetchRecords(10);
+
+        assertThat(scanRecords).hasSize(5);
+        assertThat(scanRecords)
+                .extracting(ScanRecord::logOffset)
+                .containsExactly(5L, 6L, 7L, 8L, 9L);
+    }
+
+    @Test
+    void testClipPhysicalSuffixAtLogicalEnd() throws Exception {
+        TableBucket tableBucket = new TableBucket(DATA2_TABLE_ID, 0);
+        FileLogRecords fileLogRecords =
+                createTwoBatchFileLogRecords(
+                        tableBucket, DATA2_PHYSICAL_TABLE_PATH, DATA2, LogFormat.ARROW);
+        RemoteCompletedFetch completedFetch =
+                new RemoteCompletedFetch(
+                        tableBucket,
+                        DATA2_TABLE_PATH,
+                        fileLogRecords,
+                        10L,
+                        remoteReadContext,
+                        logScannerStatus,
+                        true,
+                        0L,
+                        5L,
+                        () -> {});
+
+        List<ScanRecord> scanRecords = completedFetch.fetchRecords(10);
+
+        assertThat(scanRecords).hasSize(5);
+        assertThat(scanRecords)
+                .extracting(ScanRecord::logOffset)
+                .containsExactly(0L, 1L, 2L, 3L, 4L);
+    }
+
+    @Test
+    void testRejectLogicalEndInsideBatch() throws Exception {
+        TableBucket tableBucket = new TableBucket(DATA2_TABLE_ID, 0);
+        FileLogRecords fileLogRecords =
+                createTwoBatchFileLogRecords(
+                        tableBucket, DATA2_PHYSICAL_TABLE_PATH, DATA2, LogFormat.ARROW);
+        RemoteCompletedFetch completedFetch =
+                new RemoteCompletedFetch(
+                        tableBucket,
+                        DATA2_TABLE_PATH,
+                        fileLogRecords,
+                        10L,
+                        remoteReadContext,
+                        logScannerStatus,
+                        true,
+                        0L,
+                        6L,
+                        () -> {});
+
+        assertThat(completedFetch.fetchRecords(10)).hasSize(5);
+        assertThatThrownBy(() -> completedFetch.fetchRecords(10))
+                .isInstanceOf(FetchException.class)
+                .rootCause()
+                .hasMessageContaining("not a batch boundary");
+    }
+
     @ParameterizedTest
     @ValueSource(strings = {"INDEXED", "ARROW"})
     void testProjection(String format) throws Exception {
@@ -282,13 +366,38 @@ class RemoteCompletedFetchTest {
                         .physicalTablePath(physicalTablePath)
                         .remoteLogSegmentId(segmentId)
                         .remoteLogStartOffset(0L)
-                        .remoteLogEndOffset(9L)
+                        .remoteLogEndOffset(10L)
                         .segmentSizeInBytes(Integer.MAX_VALUE)
                         .build();
         File logFile =
                 genRemoteLogSegmentFile(
                         DATA2_ROW_TYPE, tempDir, remoteLogSegment, objects, 0L, logFormat);
         return FileLogRecords.open(logFile, false);
+    }
+
+    private FileLogRecords createTwoBatchFileLogRecords(
+            TableBucket tableBucket,
+            PhysicalTablePath physicalTablePath,
+            List<Object[]> objects,
+            LogFormat logFormat)
+            throws Exception {
+        FileLogRecords firstBatch =
+                createFileLogRecords(
+                        tableBucket, physicalTablePath, objects.subList(0, 5), logFormat);
+        File logFile = firstBatch.file();
+        firstBatch.close();
+        FileLogRecords twoBatches = FileLogRecords.open(logFile, false, 1024 * 1024, false);
+        twoBatches.append(
+                createRecordsWithoutBaseLogOffset(
+                        DATA2_ROW_TYPE,
+                        DEFAULT_SCHEMA_ID,
+                        5L,
+                        System.currentTimeMillis(),
+                        CURRENT_LOG_MAGIC_VALUE,
+                        objects.subList(5, 10),
+                        logFormat));
+        twoBatches.flush();
+        return twoBatches;
     }
 
     private RemoteCompletedFetch makeCompletedFetch(

@@ -565,10 +565,21 @@ message CommitRemoteLogManifestRequest {
   required int64 remote_log_end_offset = 6;
   required int32 coordinator_epoch = 7;
   required int32 bucket_leader_epoch = 8;
+  // Manifest V2 CAS fields. All are omitted by the legacy V1 commit path.
+  optional int32 manifest_format_version = 9;
+  // 0 = ABSENT, 1 = PRESENT.
+  optional int32 expected_handle_state = 10;
+  optional string expected_manifest_path = 11;
+  optional int64 expected_manifest_generation = 12;
+  optional int32 expected_zk_version = 13;
+  optional int64 new_manifest_generation = 14;
 }
 
 message CommitRemoteLogManifestResponse {
   required bool commitSuccess = 1;
+  // 0 = COMMITTED, 1 = CONFLICT, 2 = FENCED, 3 = INVALID_MANIFEST.
+  // Omitted by legacy coordinators.
+  optional int32 commit_result = 2;
 }
 
 // notify remote log offsets request and response
@@ -925,6 +936,8 @@ message PbFetchLogRespForBucket {
   // filter. When set (>= 0), the records field MUST be empty — the two fields are mutually
   // exclusive. The client should use this offset as the starting offset for the next fetch.
   optional int64 filtered_end_offset = 9;
+  // FetchLog v1 only. Mutually exclusive with remote_log_fetch_info.
+  optional PbRemoteLogFetchInfoV2 remote_log_fetch_info_v2 = 10;
 }
 
 message PbPutKvReqForBucket {
@@ -1111,6 +1124,18 @@ message PbRemoteLogSegment {
   required int64 remote_log_end_offset = 3;
   required int32 segment_size_in_bytes = 4;
   optional int64 max_timestamp = 5;
+}
+
+message PbRemoteLogSegmentReference {
+  required PbRemoteLogSegment segment = 1;
+  required int64 logical_start_offset = 2;
+  required int64 logical_end_offset = 3;
+}
+
+message PbRemoteLogFetchInfoV2 {
+  required string remote_log_tablet_dir = 1;
+  optional string partition_name = 2;
+  repeated PbRemoteLogSegmentReference active_references = 3;
 }
 
 message PbPartitionInfo {

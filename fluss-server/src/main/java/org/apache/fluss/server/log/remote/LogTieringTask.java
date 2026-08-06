@@ -23,25 +23,37 @@ import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.remote.RemoteLogManifest;
+import org.apache.fluss.remote.RemoteLogManifestReplacementPlanner;
+import org.apache.fluss.remote.RemoteLogManifestReplacementPlanner.PlanType;
+import org.apache.fluss.remote.RemoteLogManifestV2Migration;
 import org.apache.fluss.remote.RemoteLogSegment;
+import org.apache.fluss.remote.UnreferencedRemoteLogSegment;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.CommitRemoteLogManifestRequest;
 import org.apache.fluss.server.entity.CommitRemoteLogManifestData;
+import org.apache.fluss.server.entity.RemoteLogManifestCommitResult;
 import org.apache.fluss.server.log.LogSegment;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.metrics.group.TableMetricGroup;
 import org.apache.fluss.server.replica.Replica;
+import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.data.VersionedRemoteLogManifestHandle;
 import org.apache.fluss.utils.clock.Clock;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.File;
+import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -60,12 +72,18 @@ public class LogTieringTask implements Runnable {
     private final RemoteLogStorage remoteLogStorage;
     private final RemoteLogIndexCache remoteLogIndexCache;
     private final CoordinatorGateway coordinatorGateway;
+    private final RemoteLogManifestCommitter remoteLogManifestCommitter;
+    private final ZooKeeperClient zooKeeperClient;
     private final Clock clock;
     private final int maxUploadSegmentsPerTask;
+    private final boolean manifestV2WriterEnabled;
+    private final boolean manifestV2GcEnabled;
+    private final long manifestV2GcGracePeriodMs;
 
     // The copied offset is empty initially for a new leader LogTieringTask, and needs to
     // be fetched inside the task's run() method.
-    private volatile Long copiedOffset = null;
+    /** Exclusive offset from which the next remote copy should resume. */
+    private volatile Long nextCopyOffset = null;
 
     private volatile boolean cancelled = false;
 
@@ -75,8 +93,12 @@ public class LogTieringTask implements Runnable {
             RemoteLogStorage remoteLogStorage,
             RemoteLogIndexCache remoteLogIndexCache,
             CoordinatorGateway coordinatorGateway,
+            ZooKeeperClient zooKeeperClient,
             Clock clock,
-            int maxUploadSegmentsPerTask) {
+            int maxUploadSegmentsPerTask,
+            boolean manifestV2WriterEnabled,
+            boolean manifestV2GcEnabled,
+            long manifestV2GcGracePeriodMs) {
         this.replica = replica;
         this.remoteLog = remoteLog;
         this.physicalTablePath = replica.getPhysicalTablePath();
@@ -84,8 +106,14 @@ public class LogTieringTask implements Runnable {
         this.remoteLogStorage = remoteLogStorage;
         this.remoteLogIndexCache = remoteLogIndexCache;
         this.coordinatorGateway = coordinatorGateway;
+        this.zooKeeperClient = zooKeeperClient;
+        this.remoteLogManifestCommitter =
+                new RemoteLogManifestCommitter(coordinatorGateway, zooKeeperClient);
         this.clock = clock;
         this.maxUploadSegmentsPerTask = maxUploadSegmentsPerTask;
+        this.manifestV2WriterEnabled = manifestV2WriterEnabled;
+        this.manifestV2GcEnabled = manifestV2GcEnabled;
+        this.manifestV2GcGracePeriodMs = manifestV2GcGracePeriodMs;
     }
 
     @Override
@@ -130,7 +158,11 @@ public class LogTieringTask implements Runnable {
         try {
             LogTablet logTablet = replica.getLogTablet();
             TableMetricGroup metricGroup = replica.tableMetrics();
-            maybeUpdateCopiedOffset(logTablet);
+            maybeInitializeNextCopyOffset(logTablet);
+            if (manifestV2WriterEnabled) {
+                runOnceV2(logTablet, metricGroup, true);
+                return;
+            }
 
             // Get these candidate log segments to copy and these expired remote log segments to
             // clean up.
@@ -170,10 +202,8 @@ public class LogTieringTask implements Runnable {
                                         .collect(Collectors.toList()));
                     }
 
-                    if (endOffset > 0) {
-                        // endOffset is the next segment base offset, so we need to decrement it
-                        // by 1 to get the last copied segment's highest offset.
-                        copiedOffset = endOffset - 1;
+                    if (endOffset >= 0) {
+                        nextCopyOffset = endOffset;
                     }
                 } else {
                     LOG.error(
@@ -201,6 +231,437 @@ public class LogTieringTask implements Runnable {
         }
     }
 
+    private void runOnceV2(
+            LogTablet logTablet, TableMetricGroup metricGroup, boolean allowConflictReplan)
+            throws Exception {
+        RemoteLogManifest baseManifest = remoteLog.currentManifest();
+        VersionedRemoteLogManifestHandle baseHandle = remoteLog.currentHandle();
+        if (baseHandle != null) {
+            RemoteLogManager.validateManifestHandle(baseHandle.handle(), baseManifest);
+        } else if (!baseManifest.getRemoteLogSegmentList().isEmpty()) {
+            throw new IllegalStateException("Remote manifest has no authoritative handle");
+        }
+
+        long now = clock.milliseconds();
+        if (manifestV2GcEnabled) {
+            sweepOrphanObjects(baseManifest, baseHandle, now, metricGroup);
+        }
+        long targetGeneration =
+                baseHandle == null
+                        ? 1L
+                        : baseHandle.handle().getManifestGeneration().orElse(0L) + 1L;
+        RemoteLogManifest normalizedBase =
+                normalizeBaseManifest(baseManifest, targetGeneration, now);
+        List<EnrichedLogSegment> candidates = candidateToCopyLogSegments(logTablet);
+        List<CandidatePlan> candidatePlans = planCandidates(normalizedBase, candidates, now);
+
+        RemoteLogManifest resultManifest = normalizedBase;
+        List<RemoteLogSegment> copiedSegments = new ArrayList<>();
+        List<PlanType> appliedPlanTypes = new ArrayList<>();
+        long successfulNextCopyOffset = nextCopyOffset;
+        for (CandidatePlan candidatePlan : candidatePlans) {
+            if (candidatePlan.planType == PlanType.GAP) {
+                LOG.warn(
+                        "Stopping Manifest V2 planning at remote gap for bucket {} and segment {}",
+                        tableBucket,
+                        candidatePlan.remoteLogSegment);
+                break;
+            }
+            if (candidatePlan.planType == PlanType.ALREADY_COVERED) {
+                appliedPlanTypes.add(candidatePlan.planType);
+                successfulNextCopyOffset = candidatePlan.enrichedLogSegment.nextSegmentOffset;
+                continue;
+            }
+            if (!copyPlannedSegment(logTablet, candidatePlan, metricGroup)) {
+                break;
+            }
+            copiedSegments.add(candidatePlan.remoteLogSegment);
+            RemoteLogManifestReplacementPlanner.Result replayed =
+                    RemoteLogManifestReplacementPlanner.plan(
+                            resultManifest, candidatePlan.remoteLogSegment, now);
+            resultManifest = withGeneration(replayed.resultManifest(), targetGeneration);
+            appliedPlanTypes.add(candidatePlan.planType);
+            successfulNextCopyOffset = candidatePlan.enrichedLogSegment.nextSegmentOffset;
+        }
+
+        RemoteLogManifest beforeExpiration = resultManifest;
+        resultManifest =
+                RemoteLogManifestReplacementPlanner.expireContinuousPrefix(
+                        resultManifest,
+                        now,
+                        replica.getLogTTLMs(),
+                        logTablet.isDataLakeEnabled() ? logTablet.getLakeLogEndOffset() : null,
+                        now);
+        boolean expirationChanged = resultManifest != beforeExpiration;
+        RemoteLogManifest beforeGarbageCollection = resultManifest;
+        if (manifestV2GcEnabled) {
+            resultManifest = collectUnreferencedSegments(resultManifest, now, metricGroup);
+        }
+        boolean garbageCollectionChanged = resultManifest != beforeGarbageCollection;
+        if (copiedSegments.isEmpty() && !expirationChanged && !garbageCollectionChanged) {
+            nextCopyOffset = successfulNextCopyOffset;
+            return;
+        }
+
+        RemoteLogManifestUpdatePlan updatePlan =
+                new RemoteLogManifestUpdatePlan(
+                        baseHandle,
+                        resultManifest,
+                        copiedSegments,
+                        newlyUnreferencedSegments(baseManifest, resultManifest),
+                        appliedPlanTypes,
+                        successfulNextCopyOffset);
+        FsPath manifestPath;
+        try {
+            manifestPath = remoteLogStorage.writeRemoteLogManifestSnapshot(resultManifest);
+        } catch (Exception e) {
+            deleteRemoteLogSegmentFiles(copiedSegments, metricGroup);
+            throw e;
+        }
+
+        CommitRemoteLogManifestData commitData =
+                updatePlan.toCommitData(
+                        manifestPath, replica.getCoordinatorEpoch(), replica.getBucketEpoch());
+        RemoteLogManifestCommitResult commitResult;
+        try {
+            commitResult =
+                    remoteLogManifestCommitter.commitAndApply(
+                            commitData, resultManifest, remoteLog);
+        } catch (Exception unknownResult) {
+            // The result is UNKNOWN or was superseded before local apply. Objects must remain
+            // untouched until a later authoritative reconciliation proves they are unreferenced.
+            throw unknownResult;
+        }
+
+        if (commitResult == RemoteLogManifestCommitResult.COMMITTED) {
+            applyPublishedOffsets(logTablet, resultManifest);
+            nextCopyOffset = updatePlan.nextCopyOffset();
+            return;
+        }
+
+        cleanupRejectedPlan(updatePlan, manifestPath, metricGroup, logTablet);
+        if (commitResult == RemoteLogManifestCommitResult.CONFLICT && allowConflictReplan) {
+            nextCopyOffset = findNextCopyOffset(logTablet);
+            runOnceV2(logTablet, metricGroup, false);
+        }
+    }
+
+    private RemoteLogManifest collectUnreferencedSegments(
+            RemoteLogManifest manifest, long now, TableMetricGroup metricGroup) {
+        List<UnreferencedRemoteLogSegment> retained = new ArrayList<>();
+        List<UUID> deletedSegmentIds = new ArrayList<>();
+        for (UnreferencedRemoteLogSegment unreferenced :
+                manifest.getUnreferencedRemoteLogSegments()) {
+            if (!gracePeriodElapsed(unreferenced.unreferencedAtMs(), now)) {
+                retained.add(unreferenced);
+                continue;
+            }
+            try {
+                remoteLogStorage.deleteLogSegmentFiles(unreferenced.remoteLogSegment());
+                metricGroup.remoteLogDeleteRequests().inc();
+                deletedSegmentIds.add(unreferenced.remoteLogSegment().remoteLogSegmentId());
+            } catch (Exception e) {
+                retained.add(unreferenced);
+                metricGroup.remoteLogDeleteErrors().inc();
+                metricGroup.remoteGcFailures().inc();
+                LOG.warn(
+                        "Manifest V2 GC will retry deleting unreferenced segment {} for {}",
+                        unreferenced.remoteLogSegment().remoteLogSegmentId(),
+                        tableBucket,
+                        e);
+            }
+        }
+        if (retained.size() == manifest.getUnreferencedRemoteLogSegments().size()) {
+            return manifest;
+        }
+        remoteLogIndexCache.removeAll(deletedSegmentIds);
+        return RemoteLogManifest.createV2(
+                manifest.getGeneration(),
+                manifest.getPhysicalTablePath(),
+                manifest.getTableBucket(),
+                manifest.getRemoteLogSegmentList(),
+                manifest.getRemoteLogSegmentList().isEmpty()
+                        ? null
+                        : manifest.getRemoteLogStartOffset(),
+                retained);
+    }
+
+    private void sweepOrphanObjects(
+            RemoteLogManifest baseManifest,
+            VersionedRemoteLogManifestHandle baseHandle,
+            long now,
+            TableMetricGroup metricGroup) {
+        try {
+            if (!authoritativeHandleUnchanged(baseHandle)) {
+                LOG.info("Skipping orphan sweep for {} because its handle changed", tableBucket);
+                return;
+            }
+            Set<UUID> referencedSegmentIds = new HashSet<>();
+            baseManifest
+                    .getRemoteLogSegmentList()
+                    .forEach(segment -> referencedSegmentIds.add(segment.remoteLogSegmentId()));
+            baseManifest
+                    .getUnreferencedRemoteLogSegments()
+                    .forEach(
+                            segment ->
+                                    referencedSegmentIds.add(
+                                            segment.remoteLogSegment().remoteLogSegmentId()));
+
+            for (RemoteLogStorageObject object :
+                    remoteLogStorage.listRemoteLogSegmentObjects(physicalTablePath, tableBucket)) {
+                UUID segmentId = UUID.fromString(object.path().getName());
+                if (!referencedSegmentIds.contains(segmentId)
+                        && orphanGracePeriodElapsed(object.modificationTimeMs(), now)
+                        && authoritativeHandleUnchanged(baseHandle)) {
+                    try {
+                        remoteLogStorage.deleteRemoteLogSegmentObject(
+                                physicalTablePath, tableBucket, segmentId);
+                        metricGroup.remoteLogDeleteRequests().inc();
+                    } catch (Exception e) {
+                        metricGroup.remoteGcFailures().inc();
+                        LOG.warn(
+                                "Failed to delete orphan segment object {} for {}",
+                                object.path(),
+                                tableBucket,
+                                e);
+                    }
+                }
+            }
+
+            FsPath authoritativeManifestPath =
+                    baseHandle == null ? null : baseHandle.handle().getRemoteLogManifestPath();
+            List<RemoteLogStorageObject> manifestSnapshots =
+                    remoteLogStorage.listRemoteLogManifestSnapshots(physicalTablePath, tableBucket);
+            long orphanManifestCount = 0L;
+            for (RemoteLogStorageObject object : manifestSnapshots) {
+                if (sameStoragePath(object.path(), authoritativeManifestPath)) {
+                    continue;
+                }
+                boolean deleted = false;
+                if (orphanGracePeriodElapsed(object.modificationTimeMs(), now)
+                        && authoritativeHandleUnchanged(baseHandle)) {
+                    try {
+                        remoteLogStorage.deleteRemoteLogManifestSnapshot(object.path());
+                        deleted = true;
+                    } catch (Exception e) {
+                        metricGroup.remoteGcFailures().inc();
+                        LOG.warn(
+                                "Failed to delete orphan manifest snapshot {} for {}",
+                                object.path(),
+                                tableBucket,
+                                e);
+                    }
+                }
+                if (!deleted) {
+                    orphanManifestCount++;
+                }
+            }
+            remoteLog.updateOrphanManifestCount(orphanManifestCount);
+        } catch (Exception e) {
+            metricGroup.remoteGcFailures().inc();
+            LOG.warn("Failed to sweep orphan remote objects for {}", tableBucket, e);
+        }
+    }
+
+    private boolean authoritativeHandleUnchanged(VersionedRemoteLogManifestHandle expected)
+            throws Exception {
+        Optional<VersionedRemoteLogManifestHandle> current =
+                zooKeeperClient.getVersionedRemoteLogManifestHandle(tableBucket);
+        if (expected == null) {
+            return !current.isPresent();
+        }
+        if (!current.isPresent()) {
+            return false;
+        }
+        VersionedRemoteLogManifestHandle actual = current.get();
+        return actual.zkVersion() == expected.zkVersion()
+                && actual.handle()
+                        .getRemoteLogManifestPath()
+                        .equals(expected.handle().getRemoteLogManifestPath())
+                && actual.handle().getManifestGeneration().orElse(0L)
+                        == expected.handle().getManifestGeneration().orElse(0L);
+    }
+
+    private boolean gracePeriodElapsed(long timestampMs, long now) {
+        return timestampMs >= 0L
+                && timestampMs != Long.MAX_VALUE
+                && timestampMs <= now
+                && now - timestampMs >= manifestV2GcGracePeriodMs;
+    }
+
+    private boolean orphanGracePeriodElapsed(long modificationTimeMs, long now) {
+        // A zero or unavailable timestamp is not trustworthy enough for destructive orphan GC.
+        return modificationTimeMs > 0L && gracePeriodElapsed(modificationTimeMs, now);
+    }
+
+    private static boolean sameStoragePath(FsPath first, FsPath second) {
+        return first != null && second != null && first.getPath().equals(second.getPath());
+    }
+
+    private List<CandidatePlan> planCandidates(
+            RemoteLogManifest normalizedBase,
+            List<EnrichedLogSegment> candidates,
+            long unreferencedAtMs)
+            throws IOException {
+        List<CandidatePlan> plans = new ArrayList<>();
+        RemoteLogManifest workingManifest = normalizedBase;
+        for (EnrichedLogSegment candidate : candidates) {
+            RemoteLogSegment remoteLogSegment = createRemoteLogSegment(candidate);
+            RemoteLogManifestReplacementPlanner.Result result =
+                    RemoteLogManifestReplacementPlanner.plan(
+                            workingManifest, remoteLogSegment, unreferencedAtMs);
+            plans.add(new CandidatePlan(candidate, remoteLogSegment, result.planType()));
+            if (result.planType() == PlanType.GAP) {
+                break;
+            }
+            if (result.requiresManifestCommit()) {
+                workingManifest =
+                        withGeneration(result.resultManifest(), normalizedBase.getGeneration());
+            }
+        }
+        return plans;
+    }
+
+    private RemoteLogManifest normalizeBaseManifest(
+            RemoteLogManifest baseManifest, long targetGeneration, long unreferencedAtMs) {
+        if (baseManifest.getVersion() == RemoteLogManifest.VERSION_1) {
+            return RemoteLogManifestV2Migration.migrate(
+                    baseManifest, targetGeneration, unreferencedAtMs);
+        }
+        return RemoteLogManifest.createV2(
+                targetGeneration,
+                baseManifest.getPhysicalTablePath(),
+                baseManifest.getTableBucket(),
+                baseManifest.getRemoteLogSegmentList(),
+                baseManifest.getRemoteLogSegmentList().isEmpty()
+                        ? null
+                        : baseManifest.getRemoteLogStartOffset(),
+                baseManifest.getUnreferencedRemoteLogSegments());
+    }
+
+    private static RemoteLogManifest withGeneration(RemoteLogManifest manifest, long generation) {
+        return RemoteLogManifest.createV2(
+                generation,
+                manifest.getPhysicalTablePath(),
+                manifest.getTableBucket(),
+                manifest.getRemoteLogSegmentList(),
+                manifest.getRemoteLogSegmentList().isEmpty()
+                        ? null
+                        : manifest.getRemoteLogStartOffset(),
+                manifest.getUnreferencedRemoteLogSegments());
+    }
+
+    private static List<RemoteLogSegment> newlyUnreferencedSegments(
+            RemoteLogManifest baseManifest, RemoteLogManifest resultManifest) {
+        Set<UUID> baseUnreferencedIds = new HashSet<>();
+        for (UnreferencedRemoteLogSegment entry : baseManifest.getUnreferencedRemoteLogSegments()) {
+            baseUnreferencedIds.add(entry.remoteLogSegment().remoteLogSegmentId());
+        }
+        List<RemoteLogSegment> result = new ArrayList<>();
+        for (UnreferencedRemoteLogSegment entry :
+                resultManifest.getUnreferencedRemoteLogSegments()) {
+            if (!baseUnreferencedIds.contains(entry.remoteLogSegment().remoteLogSegmentId())) {
+                result.add(entry.remoteLogSegment());
+            }
+        }
+        return result;
+    }
+
+    private RemoteLogSegment createRemoteLogSegment(EnrichedLogSegment enrichedSegment)
+            throws IOException {
+        LogSegment segment = enrichedSegment.logSegment;
+        return RemoteLogSegment.Builder.builder()
+                .physicalTablePath(physicalTablePath)
+                .tableBucket(tableBucket)
+                .remoteLogSegmentId(UUID.randomUUID())
+                .remoteLogStartOffset(segment.getBaseOffset())
+                .remoteLogEndOffset(enrichedSegment.nextSegmentOffset)
+                .maxTimestamp(segment.maxTimestampSoFar())
+                .segmentSizeInBytes(segment.getFileLogRecords().sizeInBytes())
+                .build();
+    }
+
+    private boolean copyPlannedSegment(
+            LogTablet logTablet, CandidatePlan candidatePlan, TableMetricGroup metricGroup)
+            throws Exception {
+        LogSegment segment = candidatePlan.enrichedLogSegment.logSegment;
+        File writerIdSnapshotFile =
+                logTablet
+                        .writerStateManager()
+                        .fetchSnapshot(candidatePlan.enrichedLogSegment.nextSegmentOffset)
+                        .orElse(null);
+        LogSegmentFiles logSegmentFiles =
+                new LogSegmentFiles(
+                        segment.getFileLogRecords().file().toPath(),
+                        toPathIfExists(segment.offsetIndex().file()),
+                        toPathIfExists(segment.timeIndex().file()),
+                        writerIdSnapshotFile == null ? null : writerIdSnapshotFile.toPath());
+        try {
+            remoteLogStorage.copyLogSegmentFiles(candidatePlan.remoteLogSegment, logSegmentFiles);
+        } catch (RemoteStorageException e) {
+            metricGroup.remoteLogCopyErrors().inc();
+            LOG.warn(
+                    "Failed to copy planned Manifest V2 segment {} for bucket {}",
+                    candidatePlan.remoteLogSegment,
+                    tableBucket,
+                    e);
+            return false;
+        }
+        metricGroup.remoteLogCopyRequests().inc();
+        metricGroup.remoteLogCopyBytes().inc(candidatePlan.remoteLogSegment.segmentSizeInBytes());
+        return true;
+    }
+
+    private void cleanupRejectedPlan(
+            RemoteLogManifestUpdatePlan updatePlan,
+            FsPath manifestPath,
+            TableMetricGroup metricGroup,
+            LogTablet logTablet)
+            throws Exception {
+        Optional<VersionedRemoteLogManifestHandle> authoritativeHandleOpt =
+                zooKeeperClient.getVersionedRemoteLogManifestHandle(tableBucket);
+        Set<UUID> authoritativeSegmentIds = new HashSet<>();
+        if (authoritativeHandleOpt.isPresent()) {
+            VersionedRemoteLogManifestHandle authoritativeHandle = authoritativeHandleOpt.get();
+            RemoteLogManifest authoritativeManifest =
+                    remoteLogStorage.readRemoteLogManifestSnapshot(
+                            authoritativeHandle.handle().getRemoteLogManifestPath());
+            RemoteLogManager.validateManifestHandle(
+                    authoritativeHandle.handle(), authoritativeManifest);
+            authoritativeManifest
+                    .getRemoteLogSegmentList()
+                    .forEach(segment -> authoritativeSegmentIds.add(segment.remoteLogSegmentId()));
+            authoritativeManifest
+                    .getUnreferencedRemoteLogSegments()
+                    .forEach(
+                            segment ->
+                                    authoritativeSegmentIds.add(
+                                            segment.remoteLogSegment().remoteLogSegmentId()));
+            remoteLog.replaceManifest(authoritativeManifest, authoritativeHandle);
+            applyPublishedOffsets(logTablet, authoritativeManifest);
+        } else {
+            remoteLog.replaceManifest(
+                    new RemoteLogManifest(physicalTablePath, tableBucket, Collections.emptyList()),
+                    null);
+        }
+
+        for (RemoteLogSegment copiedSegment : updatePlan.segmentsToCopy()) {
+            if (authoritativeSegmentIds.contains(copiedSegment.remoteLogSegmentId())) {
+                throw new IllegalStateException(
+                        "Rejected plan segment is referenced by the authoritative manifest: "
+                                + copiedSegment.remoteLogSegmentId());
+            }
+        }
+        deleteRemoteLogSegmentFiles(updatePlan.segmentsToCopy(), metricGroup);
+        remoteLogStorage.deleteRemoteLogManifestSnapshot(manifestPath);
+    }
+
+    private void applyPublishedOffsets(LogTablet logTablet, RemoteLogManifest manifest) {
+        logTablet.updateRemoteLogStartOffset(manifest.getRemoteLogStartOffset());
+        logTablet.updateRemoteLogEndOffset(manifest.getRemoteLogEndOffset());
+        logTablet.updateRemoteLogSize(manifest.getRemoteLogSize());
+    }
+
     private List<EnrichedLogSegment> candidateToCopyLogSegments(LogTablet log) {
         List<EnrichedLogSegment> candidateLogSegments = new ArrayList<>();
         // Get highWatermark.
@@ -210,32 +671,32 @@ public class LogTieringTask implements Runnable {
                     "The highWatermark for bucket {} is {}, which should not be negative",
                     tableBucket,
                     highWatermark);
-        } else if (highWatermark > 0 && copiedOffset < highWatermark) {
-            // local-log-start-offset can be ahead of the copied-offset, when enabling the
+        } else if (highWatermark > 0 && nextCopyOffset < highWatermark) {
+            // local-log-start-offset can be ahead of the next-copy-offset, when enabling the
             // remote log for the first time
-            long fromOffset = Math.max(copiedOffset + 1, log.localLogStartOffset());
+            long fromOffset = Math.max(nextCopyOffset, log.localLogStartOffset());
             candidateLogSegments = candidateLogSegments(log, fromOffset, highWatermark);
             LOG.debug(
-                    "Candidate log segments for bucket {}: logLocalStartOffset: {}, copiedOffset: {}, "
+                    "Candidate log segments for bucket {}: logLocalStartOffset: {}, nextCopyOffset: {}, "
                             + "fromOffset: {}, highWatermark: {} and candidateLogSegments: {}",
                     tableBucket,
                     log.localLogStartOffset(),
-                    copiedOffset,
+                    nextCopyOffset,
                     fromOffset,
                     highWatermark,
                     candidateLogSegments);
             if (candidateLogSegments.isEmpty()) {
                 LOG.debug(
-                        "no segments found to be copied for bucket {} which copied-offset: {} and active segment's base-offset: {}",
+                        "no segments found to be copied for bucket {} which next-copy-offset: {} and active segment's base-offset: {}",
                         tableBucket,
-                        copiedOffset,
+                        nextCopyOffset,
                         log.activeLogSegment().getBaseOffset());
             }
         } else {
             LOG.debug(
-                    "Skipping copying segments for bucket {} to remote, current read-offset:{}, and highWatermark:{}",
+                    "Skipping copying segments for bucket {} to remote, next-copy-offset:{}, and highWatermark:{}",
                     tableBucket,
-                    copiedOffset,
+                    nextCopyOffset,
                     highWatermark);
         }
 
@@ -373,7 +834,8 @@ public class LogTieringTask implements Runnable {
                                         //  and this should be moved into Replica under read lock of
                                         //  leaderIsrUpdateLock, see FLUSS-56282058
                                         replica.getCoordinatorEpoch(),
-                                        replica.getBucketEpoch()));
+                                        replica.getBucketEpoch()),
+                                newRemoteLogManifest);
                 if (!success) {
                     // the commit failed, it means the commit snapshot is invalid or register zk
                     // failed, we will revert this commit and delete the remote log manifest
@@ -387,8 +849,11 @@ public class LogTieringTask implements Runnable {
                     return false;
                 } else {
                     // commit succeed.
-                    // TODO: commit with version to avoid the manifest has been updated
-                    remoteLogTablet.addAndDeleteLogSegments(newAddedSegments, expiredSegments);
+                    if (newRemoteLogManifest.getVersion() == RemoteLogManifest.VERSION_1) {
+                        // The legacy V1 writer mutates the in-memory indexes incrementally. V2
+                        // commitAndApply has already installed the complete immutable snapshot.
+                        remoteLogTablet.addAndDeleteLogSegments(newAddedSegments, expiredSegments);
+                    }
                     LogTablet logTablet = replica.getLogTablet();
                     logTablet.updateRemoteLogStartOffset(newRemoteLogStartOffset);
                     // make the local log cleaner clean log segments that are committed to remote.
@@ -416,7 +881,12 @@ public class LogTieringTask implements Runnable {
         return false;
     }
 
-    private boolean commitRemoteLogManifest(CommitRemoteLogManifestData data) throws Exception {
+    private boolean commitRemoteLogManifest(
+            CommitRemoteLogManifestData data, RemoteLogManifest manifest) throws Exception {
+        if (data.isV2CasCommit()) {
+            return remoteLogManifestCommitter.commitAndApply(data, manifest, remoteLog)
+                    == RemoteLogManifestCommitResult.COMMITTED;
+        }
         CommitRemoteLogManifestRequest request = makeCommitRemoteLogManifestRequest(data);
         return coordinatorGateway.commitRemoteLogManifest(request).get().isCommitSuccess();
     }
@@ -425,19 +895,19 @@ public class LogTieringTask implements Runnable {
         return file.exists() ? file.toPath() : null;
     }
 
-    private void maybeUpdateCopiedOffset(LogTablet logTablet) {
-        if (copiedOffset == null) {
-            copiedOffset = findRemoteLogEndOffset(logTablet);
+    private void maybeInitializeNextCopyOffset(LogTablet logTablet) {
+        if (nextCopyOffset == null) {
+            nextCopyOffset = findNextCopyOffset(logTablet);
             LOG.info(
-                    "Found the copied remote log end offset: {} for bucket {} after becoming leader",
-                    copiedOffset,
+                    "Found the next remote copy offset: {} for bucket {} after becoming leader",
+                    nextCopyOffset,
                     tableBucket);
         }
     }
 
-    private long findRemoteLogEndOffset(LogTablet logTablet) {
+    private long findNextCopyOffset(LogTablet logTablet) {
         OptionalLong remoteLogEndOffsetOpt = remoteLog.getRemoteLogEndOffset();
-        long newRemoteLogEndOffset;
+        long nextOffset;
         if (remoteLogEndOffsetOpt.isPresent()) {
             long remoteLogEndOffset = remoteLogEndOffsetOpt.getAsLong();
             long localEndOffset = logTablet.localLogEndOffset();
@@ -449,15 +919,15 @@ public class LogTieringTask implements Runnable {
                         tableBucket,
                         localEndOffset,
                         remoteLogEndOffset);
-                newRemoteLogEndOffset = localEndOffset;
+                nextOffset = localEndOffset;
             } else {
-                newRemoteLogEndOffset = remoteLogEndOffset;
+                nextOffset = remoteLogEndOffset;
             }
         } else {
-            newRemoteLogEndOffset = -1L;
+            nextOffset = 0L;
         }
 
-        return newRemoteLogEndOffset;
+        return nextOffset;
     }
 
     /**
@@ -466,8 +936,8 @@ public class LogTieringTask implements Runnable {
      *
      * <p>1. Segment is not the active segment.
      *
-     * <p>2. Segment end-offset is less than the highWatermark as remote storage should contain only
-     * committed/acked records.
+     * <p>2. The segment's exclusive end offset is not greater than the high watermark, as remote
+     * storage should contain only committed/acked records.
      *
      * <p>The number of returned segments is capped at {@code maxUploadSegmentsPerTask} to prevent
      * overwhelming the remote storage when there is a large backlog.
@@ -524,6 +994,21 @@ public class LogTieringTask implements Runnable {
 
     public String toString() {
         return this.getClass() + "[" + tableBucket + "]";
+    }
+
+    private static final class CandidatePlan {
+        private final EnrichedLogSegment enrichedLogSegment;
+        private final RemoteLogSegment remoteLogSegment;
+        private final PlanType planType;
+
+        private CandidatePlan(
+                EnrichedLogSegment enrichedLogSegment,
+                RemoteLogSegment remoteLogSegment,
+                PlanType planType) {
+            this.enrichedLogSegment = enrichedLogSegment;
+            this.remoteLogSegment = remoteLogSegment;
+            this.planType = planType;
+        }
     }
 
     private static class EnrichedLogSegment {

@@ -48,6 +48,30 @@ class RemoteCompletedFetch extends CompletedFetch {
             boolean isCheckCrc,
             long fetchOffset,
             Runnable recycleCallback) {
+        this(
+                tableBucket,
+                tablePath,
+                fileLogRecords,
+                highWatermark,
+                readContext,
+                logScannerStatus,
+                isCheckCrc,
+                fetchOffset,
+                Long.MAX_VALUE,
+                recycleCallback);
+    }
+
+    RemoteCompletedFetch(
+            TableBucket tableBucket,
+            TablePath tablePath,
+            FileLogRecords fileLogRecords,
+            long highWatermark,
+            LogRecordReadContext readContext,
+            LogScannerStatus logScannerStatus,
+            boolean isCheckCrc,
+            long fetchOffset,
+            long logicalEndOffset,
+            Runnable recycleCallback) {
         super(
                 tableBucket,
                 tablePath,
@@ -59,7 +83,8 @@ class RemoteCompletedFetch extends CompletedFetch {
                 logScannerStatus,
                 isCheckCrc,
                 fetchOffset,
-                CompletedFetch.NO_FILTERED_END_OFFSET);
+                CompletedFetch.NO_FILTERED_END_OFFSET,
+                logicalEndOffset);
         this.fileLogRecords = fileLogRecords;
         this.recycleCallback = recycleCallback;
     }

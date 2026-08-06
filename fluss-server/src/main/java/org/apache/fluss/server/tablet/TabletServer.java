@@ -74,6 +74,7 @@ import javax.annotation.concurrent.GuardedBy;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
@@ -84,6 +85,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import static org.apache.fluss.config.ConfigOptions.BACKGROUND_THREADS;
 import static org.apache.fluss.config.FlussConfigUtils.validateTabletConfigs;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTableBucket;
+import static org.apache.fluss.server.zk.data.TabletServerRegistration.REMOTE_MANIFEST_VERSION_DISPATCH_CAPABILITY;
 
 /**
  * Tablet server implementation. The tablet server is responsible to manage the log tablet and kv
@@ -390,7 +392,8 @@ public class TabletServer extends ServerBase {
                         rack,
                         Endpoint.loadAdvertisedEndpoints(bindEndpoints, conf),
                         startTime,
-                        tabletServerResource);
+                        tabletServerResource,
+                        Collections.singleton(REMOTE_MANIFEST_VERSION_DISPATCH_CAPABILITY));
 
         while (true) {
             try {

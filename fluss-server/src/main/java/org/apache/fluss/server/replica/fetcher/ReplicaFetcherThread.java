@@ -28,7 +28,9 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.remote.RemoteLogFetchInfo;
+import org.apache.fluss.remote.RemoteLogFetchInfoV2;
 import org.apache.fluss.remote.RemoteLogSegment;
+import org.apache.fluss.remote.RemoteLogSegmentReference;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.server.log.LogAppendInfo;
@@ -68,7 +70,7 @@ import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
 
-import static org.apache.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
@@ -603,7 +605,10 @@ final class ReplicaFetcherThread extends ShutdownableThread {
     private long processFetchResultFromRemoteStorage(
             TableBucket tb, FetchLogResultForBucket replicaData) {
         RemoteLogFetchInfo rlFetchInfo = replicaData.remoteLogFetchInfo();
-        checkNotNull(rlFetchInfo, "RemoteLogFetchInfo is null");
+        RemoteLogFetchInfoV2 rlFetchInfoV2 = replicaData.remoteLogFetchInfoV2();
+        checkArgument(
+                rlFetchInfo != null || rlFetchInfoV2 != null,
+                "Both RemoteLogFetchInfo versions are null");
         Replica replica = replicaManager.getReplicaOrException(tb);
         RemoteLogManager rlm = replicaManager.getRemoteLogManager();
 
@@ -611,13 +616,24 @@ final class ReplicaFetcherThread extends ShutdownableThread {
         // cache. Trace by https://github.com/apache/fluss/issues/673
 
         // update next fetch offset and writer id snapshot in local.
-        RemoteLogSegment remoteLogSegmentWithMaxStartOffset =
-                rlFetchInfo
-                        .remoteLogSegmentList()
-                        .get(rlFetchInfo.remoteLogSegmentList().size() - 1);
+        RemoteLogSegment remoteLogSegmentWithMaxStartOffset;
+        long nextFetchOffset;
+        if (rlFetchInfoV2 != null) {
+            RemoteLogSegmentReference lastReference =
+                    rlFetchInfoV2
+                            .activeReferences()
+                            .get(rlFetchInfoV2.activeReferences().size() - 1);
+            remoteLogSegmentWithMaxStartOffset = lastReference.remoteLogSegment();
+            nextFetchOffset = lastReference.logicalEndOffset();
+        } else {
+            remoteLogSegmentWithMaxStartOffset =
+                    rlFetchInfo
+                            .remoteLogSegmentList()
+                            .get(rlFetchInfo.remoteLogSegmentList().size() - 1);
+            nextFetchOffset = remoteLogSegmentWithMaxStartOffset.remoteLogEndOffset();
+        }
         // build writer snapshots until remoteLogSegment.endOffset() and start segment from
         // until remoteLogSegment.endOffset().
-        long nextFetchOffset = remoteLogSegmentWithMaxStartOffset.remoteLogEndOffset();
 
         try {
             // Truncate the existing local log before restoring the writer id snapshots.

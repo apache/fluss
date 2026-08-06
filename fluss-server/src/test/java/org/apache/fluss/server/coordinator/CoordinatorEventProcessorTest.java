@@ -64,6 +64,7 @@ import org.apache.fluss.server.entity.AdjustIsrResultForBucket;
 import org.apache.fluss.server.entity.CommitKvSnapshotData;
 import org.apache.fluss.server.entity.CommitRemoteLogManifestData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
+import org.apache.fluss.server.entity.RemoteLogManifestCommitResult;
 import org.apache.fluss.server.entity.TablePropertyChanges;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.ZooKeeperCompletedSnapshotHandleStore;
@@ -72,6 +73,7 @@ import org.apache.fluss.server.metadata.ClusterMetadata;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.metadata.TableMetadata;
+import org.apache.fluss.server.metadata.TabletServerResource;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.server.tablet.TestTabletServerGateway;
 import org.apache.fluss.server.zk.NOPErrorHandler;
@@ -82,8 +84,10 @@ import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.CoordinatorAddress;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
+import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
+import org.apache.fluss.server.zk.data.VersionedRemoteLogManifestHandle;
 import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.server.zk.data.ZkData.PartitionIdsZNode;
 import org.apache.fluss.server.zk.data.ZkData.TableIdsZNode;
@@ -135,6 +139,7 @@ import static org.apache.fluss.server.testutils.KvTestUtils.mockCompletedSnapsho
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getAdjustIsrResponseData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getUpdateMetadataRequestData;
 import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
+import static org.apache.fluss.server.zk.data.TabletServerRegistration.REMOTE_MANIFEST_VERSION_DISPATCH_CAPABILITY;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -177,6 +182,7 @@ class CoordinatorEventProcessorTest {
     private KvSnapshotLeaseManager kvSnapshotLeaseManager;
     private Scheduler scheduler;
     private String remoteDataDir;
+    private boolean manifestV2WriterEnabledForTest;
 
     @BeforeAll
     static void baseBeforeAll() throws Exception {
@@ -204,7 +210,9 @@ class CoordinatorEventProcessorTest {
                             "rack" + i,
                             Collections.singletonList(
                                     new Endpoint("host" + i, 1000, DEFAULT_LISTENER_NAME)),
-                            System.currentTimeMillis()));
+                            System.currentTimeMillis(),
+                            TabletServerResource.unknown(),
+                            Collections.singleton(REMOTE_MANIFEST_VERSION_DISPATCH_CAPABILITY)));
         }
     }
 
@@ -1145,6 +1153,10 @@ class CoordinatorEventProcessorTest {
 
     @Test
     void testNotifyOffsetsWithShrinkISR(@TempDir Path tempDir) throws Exception {
+        eventProcessor.shutdown();
+        manifestV2WriterEnabledForTest = true;
+        eventProcessor = buildCoordinatorEventProcessor();
+        eventProcessor.startup();
         initCoordinatorChannel(Collections.singleton(ApiKeys.UPDATE_METADATA));
         TablePath t1 = TablePath.of(defaultDatabase, "test_notify_with_shrink_isr");
         final long t1Id =
@@ -1218,6 +1230,67 @@ class CoordinatorEventProcessorTest {
                 () ->
                         verifyReceiveRequestExceptFor(
                                 3, leader, NotifyKvSnapshotOffsetRequest.class));
+
+        VersionedRemoteLogManifestHandle legacyHandle =
+                zookeeperClient.getVersionedRemoteLogManifestHandle(tableBucket).get();
+        CommitRemoteLogManifestData v2Commit =
+                CommitRemoteLogManifestData.v2Present(
+                        tableBucket,
+                        new FsPath(tempDir.resolve("v2.manifest").toString()),
+                        0L,
+                        10L,
+                        1L,
+                        legacyHandle.handle().getRemoteLogManifestPath(),
+                        0L,
+                        legacyHandle.zkVersion(),
+                        coordinatorEpoch,
+                        bucketLeaderEpoch);
+        CompletableFuture<CommitRemoteLogManifestResponse> v2Response = new CompletableFuture<>();
+        coordinatorEventManager.put(new CommitRemoteLogManifestEvent(v2Commit, v2Response));
+        assertThat(v2Response.get().getCommitResult())
+                .isEqualTo(RemoteLogManifestCommitResult.COMMITTED.code());
+
+        CompletableFuture<CommitRemoteLogManifestResponse> legacyOverwriteResponse =
+                new CompletableFuture<>();
+        coordinatorEventManager.put(
+                new CommitRemoteLogManifestEvent(
+                        new CommitRemoteLogManifestData(
+                                tableBucket,
+                                new FsPath(tempDir.resolve("legacy-overwrite.manifest").toString()),
+                                0L,
+                                20L,
+                                coordinatorEpoch,
+                                bucketLeaderEpoch),
+                        legacyOverwriteResponse));
+        assertThat(legacyOverwriteResponse.get().isCommitSuccess()).isFalse();
+        assertThat(zookeeperClient.getRemoteLogManifestHandle(tableBucket).get().getVersion())
+                .isEqualTo(RemoteLogManifestHandle.VERSION_2);
+
+        CompletableFuture<CommitRemoteLogManifestResponse> conflictResponse =
+                new CompletableFuture<>();
+        coordinatorEventManager.put(new CommitRemoteLogManifestEvent(v2Commit, conflictResponse));
+        assertThat(conflictResponse.get().getCommitResult())
+                .isEqualTo(RemoteLogManifestCommitResult.CONFLICT.code());
+
+        VersionedRemoteLogManifestHandle currentHandle =
+                zookeeperClient.getVersionedRemoteLogManifestHandle(tableBucket).get();
+        CommitRemoteLogManifestData fencedCommit =
+                CommitRemoteLogManifestData.v2Present(
+                        tableBucket,
+                        new FsPath(tempDir.resolve("v3.manifest").toString()),
+                        0L,
+                        20L,
+                        2L,
+                        currentHandle.handle().getRemoteLogManifestPath(),
+                        1L,
+                        currentHandle.zkVersion(),
+                        coordinatorEpoch,
+                        bucketLeaderEpoch - 1);
+        CompletableFuture<CommitRemoteLogManifestResponse> fencedResponse =
+                new CompletableFuture<>();
+        coordinatorEventManager.put(new CommitRemoteLogManifestEvent(fencedCommit, fencedResponse));
+        assertThat(fencedResponse.get().getCommitResult())
+                .isEqualTo(RemoteLogManifestCommitResult.FENCED.code());
     }
 
     @Test
@@ -2110,6 +2183,9 @@ class CoordinatorEventProcessorTest {
     private CoordinatorEventProcessor buildCoordinatorEventProcessor() {
         Configuration conf = new Configuration();
         conf.set(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
+        conf.set(
+                ConfigOptions.REMOTE_LOG_MANIFEST_V2_WRITER_ENABLED,
+                manifestV2WriterEnabledForTest);
         conf.set(ConfigOptions.COORDINATOR_OFFLINE_LEADER_RETRY_DELAY, Duration.ofDays(1));
         return new CoordinatorEventProcessor(
                 zookeeperClient,

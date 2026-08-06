@@ -87,7 +87,8 @@ public class TabletServerChangeWatcher extends ServerBaseChangeWatcher {
                                                     registration.getRack(),
                                                     registration.getEndpoints(),
                                                     ServerType.TABLET_SERVER,
-                                                    registration.getResource())));
+                                                    registration.getResource(),
+                                                    registration.getCapabilities())));
                         }
                         break;
                     }

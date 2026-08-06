@@ -694,7 +694,7 @@ class RemoteLogDownloaderTest {
                             .physicalTablePath(physicalTablePath)
                             .remoteLogSegmentId(segmentId)
                             .remoteLogStartOffset(baseOffset)
-                            .remoteLogEndOffset(baseOffset + 9)
+                            .remoteLogEndOffset(baseOffset + 10)
                             .maxTimestamp(maxTimestamp)
                             .segmentSizeInBytes(Integer.MAX_VALUE)
                             .build();

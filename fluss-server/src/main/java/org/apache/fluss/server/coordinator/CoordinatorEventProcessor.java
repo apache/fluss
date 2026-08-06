@@ -105,6 +105,8 @@ import org.apache.fluss.server.entity.CommitLakeTableSnapshotsData;
 import org.apache.fluss.server.entity.CommitRemoteLogManifestData;
 import org.apache.fluss.server.entity.DeleteReplicaResultForBucket;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
+import org.apache.fluss.server.entity.RemoteLogManifestCommitResult;
+import org.apache.fluss.server.entity.RemoteLogManifestExpectedHandleState;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotStore;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
@@ -120,6 +122,7 @@ import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
 import org.apache.fluss.server.zk.data.ServerTags;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
+import org.apache.fluss.server.zk.data.VersionedRemoteLogManifestHandle;
 import org.apache.fluss.server.zk.data.ZkData.PartitionIdsZNode;
 import org.apache.fluss.server.zk.data.ZkData.TableIdsZNode;
 import org.apache.fluss.server.zk.data.lake.LakeTableHelper;
@@ -194,6 +197,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
     private final RebalanceManager rebalanceManager;
     private final Scheduler scheduler;
     private final long offlineLeaderRetryDelayMs;
+    private final boolean manifestV2WriterEnabled;
     private final CompletedSnapshotStoreManager completedSnapshotStoreManager;
     private final LakeTableHelper lakeTableHelper;
     private ScheduledFuture<?> offlineLeaderRetryTask;
@@ -275,6 +279,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         this, zooKeeperClient, coordinatorEventManager, SystemClock.getInstance());
         this.offlineLeaderRetryDelayMs =
                 conf.get(ConfigOptions.COORDINATOR_OFFLINE_LEADER_RETRY_DELAY).toMillis();
+        this.manifestV2WriterEnabled =
+                conf.getBoolean(ConfigOptions.REMOTE_LOG_MANIFEST_V2_WRITER_ENABLED);
         if (offlineLeaderRetryDelayMs <= 0) {
             throw new IllegalArgumentException(
                     String.format(
@@ -389,13 +395,23 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 zooKeeperClient.getTabletServers(currentServers);
         for (int server : currentServers) {
             TabletServerRegistration registration = tabletServerRegistrations.get(server);
+            if (manifestV2WriterEnabled
+                    && !registration.supportsCapability(
+                            TabletServerRegistration.REMOTE_MANIFEST_VERSION_DISPATCH_CAPABILITY)) {
+                LOG.error(
+                        "Excluding tablet server {} because Manifest V2 writer is enabled but "
+                                + "the server lacks version-dispatch capability.",
+                        server);
+                continue;
+            }
             ServerInfo serverInfo =
                     new ServerInfo(
                             server,
                             registration.getRack(),
                             registration.getEndpoints(),
                             ServerType.TABLET_SERVER,
-                            registration.getResource());
+                            registration.getResource(),
+                            registration.getCapabilities());
             // Get internal listener endpoint to send request to tablet server.
             Endpoint internalEndpoint = serverInfo.endpoint(internalListenerName);
             if (internalEndpoint == null) {
@@ -1292,6 +1308,15 @@ public class CoordinatorEventProcessor implements EventProcessor {
         // when we finish the logic of tablet server
         ServerInfo serverInfo = newTabletServerEvent.getServerInfo();
         int tabletServerId = serverInfo.id();
+        if (manifestV2WriterEnabled
+                && !serverInfo.supportsCapability(
+                        TabletServerRegistration.REMOTE_MANIFEST_VERSION_DISPATCH_CAPABILITY)) {
+            LOG.error(
+                    "Rejecting tablet server {} while Manifest V2 writer is enabled because it "
+                            + "lacks version-dispatch capability.",
+                    tabletServerId);
+            return;
+        }
         if (coordinatorContext.getLiveTabletServers().containsKey(serverInfo.id())) {
             // if the dead server is already in live servers, return directly
             // it may happen during coordinator server initiation, the watcher watch a new tablet
@@ -2143,23 +2168,84 @@ public class CoordinatorEventProcessor implements EventProcessor {
         CommitRemoteLogManifestData manifestData = event.getCommitRemoteLogManifestData();
         CommitRemoteLogManifestResponse response = new CommitRemoteLogManifestResponse();
         TableBucket tb = event.getTableBucket();
-        try {
-            validateFencedEvent(event);
-            // do commit remote log manifest snapshot path to zk.
-            zooKeeperClient.upsertRemoteLogManifestHandle(
-                    tb,
-                    new RemoteLogManifestHandle(
-                            manifestData.getRemoteLogManifestPath(),
-                            manifestData.getRemoteLogEndOffset()));
-        } catch (Exception e) {
-            LOG.error(
-                    "Error when commit remote log manifest, the leader need to revert the commit.",
-                    e);
-            response.setCommitSuccess(false);
-            return response;
-        }
+        if (manifestData.isV2CasCommit()) {
+            if (!manifestV2WriterEnabled || !allAssignedReplicasSupportManifestV2(tb)) {
+                LOG.error(
+                        "Rejected Manifest V2 commit for {} because the writer gate is disabled "
+                                + "or an assigned replica lacks version-dispatch capability.",
+                        tb);
+                return response.setCommitSuccess(false)
+                        .setCommitResult(RemoteLogManifestCommitResult.INVALID_MANIFEST.code());
+            }
+            try {
+                validateFencedEvent(event);
+            } catch (RuntimeException e) {
+                LOG.warn("Rejected fenced remote log manifest commit for {}.", tb, e);
+                return response.setCommitSuccess(false)
+                        .setCommitResult(RemoteLogManifestCommitResult.FENCED.code());
+            }
 
-        response.setCommitSuccess(true);
+            RemoteLogManifestHandle newHandle =
+                    RemoteLogManifestHandle.v2(
+                            manifestData.getRemoteLogManifestPath(),
+                            manifestData.getNewManifestGeneration(),
+                            manifestData.getRemoteLogStartOffset(),
+                            manifestData.getRemoteLogEndOffset());
+            boolean committed;
+            try {
+                if (manifestData.getExpectedHandleState()
+                        == RemoteLogManifestExpectedHandleState.ABSENT) {
+                    committed =
+                            zooKeeperClient.createRemoteLogManifestHandleIfAbsent(tb, newHandle);
+                } else {
+                    committed =
+                            zooKeeperClient.compareAndSetRemoteLogManifestHandle(
+                                    tb,
+                                    manifestData.getExpectedManifestPath(),
+                                    manifestData.getExpectedManifestGeneration(),
+                                    manifestData.getExpectedZkVersion(),
+                                    newHandle);
+                }
+            } catch (Exception e) {
+                // An I/O/transport failure is UNKNOWN. Complete exceptionally so the writer must
+                // reconcile against the authoritative handle before retrying or cleaning up.
+                throw new RuntimeException(
+                        "Unable to determine remote log manifest CAS result for " + tb, e);
+            }
+            if (!committed) {
+                return response.setCommitSuccess(false)
+                        .setCommitResult(RemoteLogManifestCommitResult.CONFLICT.code());
+            }
+            response.setCommitSuccess(true)
+                    .setCommitResult(RemoteLogManifestCommitResult.COMMITTED.code());
+        } else {
+            try {
+                validateFencedEvent(event);
+                Optional<VersionedRemoteLogManifestHandle> currentHandle =
+                        zooKeeperClient.getVersionedRemoteLogManifestHandle(tb);
+                if (currentHandle.isPresent()
+                        && currentHandle.get().handle().getVersion()
+                                == RemoteLogManifestHandle.VERSION_2) {
+                    LOG.error(
+                            "Rejected legacy remote log writer for {} because Manifest V2 is "
+                                    + "already authoritative.",
+                            tb);
+                    return response.setCommitSuccess(false);
+                }
+                zooKeeperClient.upsertRemoteLogManifestHandle(
+                        tb,
+                        new RemoteLogManifestHandle(
+                                manifestData.getRemoteLogManifestPath(),
+                                manifestData.getRemoteLogEndOffset()));
+            } catch (Exception e) {
+                LOG.error(
+                        "Error when commit remote log manifest, the leader need to revert the commit.",
+                        e);
+                response.setCommitSuccess(false);
+                return response;
+            }
+            response.setCommitSuccess(true);
+        }
         // send notify remote log offsets request to all replicas.
         coordinatorRequestBatch.newBatch();
         coordinatorContext
@@ -2176,6 +2262,32 @@ public class CoordinatorEventProcessor implements EventProcessor {
         coordinatorRequestBatch.sendNotifyRemoteLogOffsetsRequest(
                 coordinatorContext.getCoordinatorEpoch());
         return response;
+    }
+
+    private boolean allAssignedReplicasSupportManifestV2(TableBucket tableBucket) {
+        List<Integer> assignedReplicas = coordinatorContext.getAssignment(tableBucket);
+        if (assignedReplicas.isEmpty()) {
+            return false;
+        }
+        try {
+            int[] replicaIds = assignedReplicas.stream().mapToInt(Integer::intValue).toArray();
+            Map<Integer, TabletServerRegistration> registrations =
+                    zooKeeperClient.getTabletServers(replicaIds);
+            for (Integer replicaId : assignedReplicas) {
+                TabletServerRegistration registration = registrations.get(replicaId);
+                if (registration == null
+                        || !registration.supportsCapability(
+                                TabletServerRegistration
+                                        .REMOTE_MANIFEST_VERSION_DISPATCH_CAPABILITY)) {
+                    return false;
+                }
+            }
+            return true;
+        } catch (Exception e) {
+            LOG.error(
+                    "Failed to verify Manifest V2 capability for replicas of {}.", tableBucket, e);
+            return false;
+        }
     }
 
     private <T> void processAccessContext(AccessContextEvent<T> event) {

@@ -1621,8 +1621,53 @@ impl LogFetcher {
                     continue;
                 }
 
-                // Check if this is a remote log fetch
-                if let Some(ref remote_log_fetch_info) = fetch_log_for_bucket.remote_log_fetch_info
+                // Check if this is a remote log fetch. V0 and V1 response fields are mutually
+                // exclusive so that a client never has to guess which logical view is active.
+                if fetch_log_for_bucket.remote_log_fetch_info.is_some()
+                    && fetch_log_for_bucket.remote_log_fetch_info_v2.is_some()
+                {
+                    log_fetch_buffer.add(Box::new(DefaultCompletedFetch::from_error(
+                        table_bucket.clone(),
+                        Error::UnexpectedError {
+                            message:
+                                "FetchLog response contains both remote log v0 and v2 metadata"
+                                    .to_string(),
+                            source: None,
+                        },
+                        fetch_offset,
+                        Arc::clone(&resolver),
+                    )));
+                } else if let Some(ref remote_log_fetch_info) =
+                    fetch_log_for_bucket.remote_log_fetch_info_v2
+                {
+                    // Remote fs props are already set by the background SecurityTokenManager.
+                    match RemoteLogFetchInfo::from_proto_v2(
+                        remote_log_fetch_info,
+                        table_bucket.clone(),
+                    ) {
+                        Ok(remote_fetch_info) => {
+                            let high_watermark = fetch_log_for_bucket.high_watermark.unwrap_or(-1);
+                            Self::pending_remote_fetches(
+                                remote_log_downloader.clone(),
+                                log_fetch_buffer.clone(),
+                                Arc::clone(&resolver),
+                                &table_bucket,
+                                remote_fetch_info,
+                                fetch_offset,
+                                high_watermark,
+                            );
+                        }
+                        Err(error) => {
+                            log_fetch_buffer.add(Box::new(DefaultCompletedFetch::from_error(
+                                table_bucket.clone(),
+                                error,
+                                fetch_offset,
+                                Arc::clone(&resolver),
+                            )));
+                        }
+                    }
+                } else if let Some(ref remote_log_fetch_info) =
+                    fetch_log_for_bucket.remote_log_fetch_info
                 {
                     // Remote fs props are already set by the background SecurityTokenManager
                     let remote_fetch_info =
@@ -1673,10 +1718,23 @@ impl LogFetcher {
         let mut pos_in_log_segment = remote_fetch_info.first_start_pos;
         let mut current_fetch_offset = fetch_offset;
         for (i, segment) in remote_fetch_info.remote_log_segments.iter().enumerate() {
-            if i > 0 {
-                pos_in_log_segment = 0;
-                current_fetch_offset = segment.start_offset;
-            }
+            let logical_end_offset =
+                if let Some(logical_ranges) = remote_fetch_info.logical_ranges.as_ref() {
+                    let (logical_start_offset, logical_end_offset) = logical_ranges[i];
+                    pos_in_log_segment = 0;
+                    current_fetch_offset = if i == 0 {
+                        fetch_offset.max(logical_start_offset)
+                    } else {
+                        logical_start_offset
+                    };
+                    logical_end_offset
+                } else {
+                    if i > 0 {
+                        pos_in_log_segment = 0;
+                        current_fetch_offset = segment.start_offset;
+                    }
+                    segment.end_offset
+                };
 
             // todo:
             // 1: control the max threads to download remote segment
@@ -1699,6 +1757,7 @@ impl LogFetcher {
                 pos_in_log_segment,
                 current_fetch_offset,
                 high_watermark,
+                logical_end_offset,
                 Arc::clone(&resolver),
             );
             // Add to pending fetches in buffer (similar to Java's logFetchBuffer.pend)
@@ -2602,6 +2661,7 @@ mod tests {
                     high_watermark: None,
                     log_start_offset: None,
                     remote_log_fetch_info: None,
+                    remote_log_fetch_info_v2: None,
                     records: None,
                     filtered_end_offset: None,
                 }],
@@ -2660,6 +2720,7 @@ mod tests {
                     high_watermark: None,
                     log_start_offset: None,
                     remote_log_fetch_info: None,
+                    remote_log_fetch_info_v2: None,
                     records: None,
                     filtered_end_offset: None,
                 }],
@@ -3006,6 +3067,7 @@ mod tests {
                             high_watermark: Some(7),
                             log_start_offset: Some(0),
                             remote_log_fetch_info: None,
+                            remote_log_fetch_info_v2: None,
                             records: None,
                             filtered_end_offset: None,
                         }],

@@ -36,6 +36,7 @@ public final class FetchParamsBuilder {
     private int minFetchBytes;
     private long maxWaitMs;
     private FetchLogReadPreference readPreference = FetchLogReadPreference.LOCAL_FIRST;
+    private short apiVersion;
 
     public FetchParamsBuilder(int replicaId, int maxFetchBytes) {
         this.replicaId = replicaId;
@@ -70,6 +71,11 @@ public final class FetchParamsBuilder {
         return this;
     }
 
+    public FetchParamsBuilder withApiVersion(short apiVersion) {
+        this.apiVersion = apiVersion;
+        return this;
+    }
+
     public FetchParams build() {
         return new FetchParams(
                 replicaId,
@@ -78,6 +84,7 @@ public final class FetchParamsBuilder {
                 minFetchBytes,
                 maxWaitMs,
                 tableFilterInfoMap,
-                readPreference);
+                readPreference,
+                apiVersion);
     }
 }

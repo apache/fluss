@@ -27,6 +27,10 @@ import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.Collections;
+
+import static org.apache.fluss.server.zk.data.TabletServerRegistration.REMOTE_MANIFEST_VERSION_DISPATCH_CAPABILITY;
+import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link TabletServerRegistrationJsonSerde}. */
 public class TabletServerRegistrationJsonSerdeTest
@@ -57,17 +61,29 @@ public class TabletServerRegistrationJsonSerdeTest
                                 "CLIENT://localhost:2345,FLUSS://127.0.0.1:2346"),
                         10000,
                         new TabletServerResource(8.0, 1024L));
+        TabletServerRegistration tabletServerRegistration4 =
+                new TabletServerRegistration(
+                        "cn-hangzhou-server10",
+                        Endpoint.fromListenersString(
+                                "CLIENT://localhost:2345,FLUSS://127.0.0.1:2346"),
+                        10000,
+                        new TabletServerResource(8.0, 1024L),
+                        Collections.singleton(REMOTE_MANIFEST_VERSION_DISPATCH_CAPABILITY));
         return new TabletServerRegistration[] {
-            tabletServerRegistration1, tabletServerRegistration2, tabletServerRegistration3
+            tabletServerRegistration1,
+            tabletServerRegistration2,
+            tabletServerRegistration3,
+            tabletServerRegistration4
         };
     }
 
     @Override
     protected String[] expectedJsons() {
         return new String[] {
-            "{\"version\":4,\"listeners\":\"CLIENT://localhost:2345,FLUSS://127.0.0.1:2346\",\"register_timestamp\":10000}",
-            "{\"version\":4,\"listeners\":\"CLIENT://localhost:2345,FLUSS://127.0.0.1:2346\",\"register_timestamp\":10000,\"rack\":\"cn-hangzhou-server10\"}",
-            "{\"version\":4,\"listeners\":\"CLIENT://localhost:2345,FLUSS://127.0.0.1:2346\",\"register_timestamp\":10000,\"rack\":\"cn-hangzhou-server10\",\"cpu_cores\":8.0,\"memory_bytes\":1024}"
+            "{\"version\":5,\"listeners\":\"CLIENT://localhost:2345,FLUSS://127.0.0.1:2346\",\"register_timestamp\":10000,\"capabilities\":[]}",
+            "{\"version\":5,\"listeners\":\"CLIENT://localhost:2345,FLUSS://127.0.0.1:2346\",\"register_timestamp\":10000,\"rack\":\"cn-hangzhou-server10\",\"capabilities\":[]}",
+            "{\"version\":5,\"listeners\":\"CLIENT://localhost:2345,FLUSS://127.0.0.1:2346\",\"register_timestamp\":10000,\"rack\":\"cn-hangzhou-server10\",\"cpu_cores\":8.0,\"memory_bytes\":1024,\"capabilities\":[]}",
+            "{\"version\":5,\"listeners\":\"CLIENT://localhost:2345,FLUSS://127.0.0.1:2346\",\"register_timestamp\":10000,\"rack\":\"cn-hangzhou-server10\",\"cpu_cores\":8.0,\"memory_bytes\":1024,\"capabilities\":[\"remote-manifest-version-dispatch\"]}"
         };
     }
 
@@ -85,7 +101,7 @@ public class TabletServerRegistrationJsonSerdeTest
         TabletServerRegistration expectedTabletServerRegistration =
                 new TabletServerRegistration(
                         null, Endpoint.fromListenersString("FLUSS://localhost:1001"), 10000);
-        assertEquals(tabletServerRegistration, expectedTabletServerRegistration);
+        assertThat(tabletServerRegistration).isEqualTo(expectedTabletServerRegistration);
 
         // compatibility with version 2
         JsonNode jsonInVersion2 =
@@ -102,7 +118,7 @@ public class TabletServerRegistrationJsonSerdeTest
                         Endpoint.fromListenersString(
                                 "CLIENT://localhost:2345,FLUSS://127.0.0.1:2346"),
                         10000);
-        assertEquals(tabletServerRegistration, expectedTabletServerRegistration);
+        assertThat(tabletServerRegistration).isEqualTo(expectedTabletServerRegistration);
 
         // compatibility with version 3
         JsonNode jsonInVersion3 =
@@ -119,6 +135,24 @@ public class TabletServerRegistrationJsonSerdeTest
                         Endpoint.fromListenersString(
                                 "CLIENT://localhost:2345,FLUSS://127.0.0.1:2346"),
                         10000);
-        assertEquals(tabletServerRegistration, expectedTabletServerRegistration);
+        assertThat(tabletServerRegistration).isEqualTo(expectedTabletServerRegistration);
+
+        // compatibility with version 4: a legacy registration has no capabilities.
+        JsonNode jsonInVersion4 =
+                new ObjectMapper()
+                        .readTree(
+                                ("{\"version\":4,\"listeners\":\"CLIENT://localhost:2345,FLUSS://127.0.0.1:2346\","
+                                                + "\"register_timestamp\":10000,\"rack\":\"cn-hangzhou-server10\","
+                                                + "\"cpu_cores\":8.0,\"memory_bytes\":1024}")
+                                        .getBytes(StandardCharsets.UTF_8));
+        tabletServerRegistration =
+                TabletServerRegistrationJsonSerde.INSTANCE.deserialize(jsonInVersion4);
+        assertThat(tabletServerRegistration.getResource())
+                .isEqualTo(new TabletServerResource(8.0, 1024L));
+        assertThat(tabletServerRegistration.getCapabilities()).isEmpty();
+        assertThat(
+                        tabletServerRegistration.supportsCapability(
+                                REMOTE_MANIFEST_VERSION_DISPATCH_CAPABILITY))
+                .isFalse();
     }
 }

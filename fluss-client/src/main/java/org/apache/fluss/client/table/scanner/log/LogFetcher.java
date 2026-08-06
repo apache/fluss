@@ -41,7 +41,9 @@ import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.remote.RemoteLogFetchInfo;
+import org.apache.fluss.remote.RemoteLogFetchInfoV2;
 import org.apache.fluss.remote.RemoteLogSegment;
+import org.apache.fluss.remote.RemoteLogSegmentReference;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
@@ -459,11 +461,19 @@ public class LogFetcher implements Closeable {
                                 tb);
                     } else {
                         if (fetchResultForBucket.fetchFromRemote()) {
-                            pendRemoteFetches(
-                                    trc,
-                                    fetchResultForBucket.remoteLogFetchInfo(),
-                                    fetchOffset,
-                                    fetchResultForBucket.getHighWatermark());
+                            if (fetchResultForBucket.remoteLogFetchInfoV2() != null) {
+                                pendRemoteFetchesV2(
+                                        trc,
+                                        fetchResultForBucket.remoteLogFetchInfoV2(),
+                                        fetchOffset,
+                                        fetchResultForBucket.getHighWatermark());
+                            } else {
+                                pendRemoteFetches(
+                                        trc,
+                                        fetchResultForBucket.remoteLogFetchInfo(),
+                                        fetchOffset,
+                                        fetchResultForBucket.getHighWatermark());
+                            }
                         } else {
                             LogRecords logRecords = fetchResultForBucket.recordsOrEmpty();
                             boolean hasRecords = !MemoryLogRecords.EMPTY.equals(logRecords);
@@ -552,6 +562,39 @@ public class LogFetcher implements Closeable {
                             tableReadContext.tablePath,
                             posInLogSegment,
                             fetchOffset,
+                            highWatermark,
+                            tableReadContext.remoteReadContext,
+                            logScannerStatus,
+                            isCheckCrcs);
+            logFetchBuffer.pend(pendingFetch);
+            downloadFuture.onComplete(() -> logFetchBuffer.tryComplete(segment.tableBucket()));
+        }
+    }
+
+    private void pendRemoteFetchesV2(
+            TableReadContext tableReadContext,
+            RemoteLogFetchInfoV2 remoteLogFetchInfo,
+            long firstFetchOffset,
+            long highWatermark) {
+        FsPath remoteLogTabletDir = new FsPath(remoteLogFetchInfo.remoteLogTabletDir());
+        List<RemoteLogSegmentReference> references = remoteLogFetchInfo.activeReferences();
+        for (int i = 0; i < references.size(); i++) {
+            RemoteLogSegmentReference reference = references.get(i);
+            RemoteLogSegment segment = reference.remoteLogSegment();
+            long fetchOffset =
+                    i == 0
+                            ? Math.max(firstFetchOffset, reference.logicalStartOffset())
+                            : reference.logicalStartOffset();
+            RemoteLogDownloadFuture downloadFuture =
+                    remoteLogDownloader.requestRemoteLog(remoteLogTabletDir, segment);
+            RemotePendingFetch pendingFetch =
+                    new RemotePendingFetch(
+                            segment,
+                            downloadFuture,
+                            tableReadContext.tablePath,
+                            0,
+                            fetchOffset,
+                            reference.logicalEndOffset(),
                             highWatermark,
                             tableReadContext.remoteReadContext,
                             logScannerStatus,

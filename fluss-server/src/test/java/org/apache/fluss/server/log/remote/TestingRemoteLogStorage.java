@@ -20,6 +20,8 @@ package org.apache.fluss.server.log.remote;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.RemoteStorageException;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.remote.RemoteLogManifest;
 import org.apache.fluss.remote.RemoteLogSegment;
 
@@ -47,6 +49,12 @@ public class TestingRemoteLogStorage extends DefaultRemoteLogStorage {
      * (default) disables this failure injection.
      */
     public final AtomicInteger copySegmentFailAfterNCopies = new AtomicInteger(-1);
+
+    /** Number of upcoming metadata-driven segment deletions that should fail. */
+    public final AtomicInteger deleteSegmentFailFirstN = new AtomicInteger(0);
+
+    /** Number of upcoming orphan-directory deletions that should fail. */
+    public final AtomicInteger deleteSegmentObjectFailFirstN = new AtomicInteger(0);
 
     private final AtomicInteger copySegmentCount = new AtomicInteger(0);
 
@@ -123,6 +131,25 @@ public class TestingRemoteLogStorage extends DefaultRemoteLogStorage {
             throw new RuntimeException("failed to upload remote log manifest snapshot");
         }
         return super.writeRemoteLogManifestSnapshot(manifest);
+    }
+
+    @Override
+    public void deleteLogSegmentFiles(RemoteLogSegment remoteLogSegment)
+            throws RemoteStorageException {
+        if (deleteSegmentFailFirstN.getAndUpdate(n -> n > 0 ? n - 1 : 0) > 0) {
+            throw new RemoteStorageException("Simulated segment delete failure");
+        }
+        super.deleteLogSegmentFiles(remoteLogSegment);
+    }
+
+    @Override
+    public void deleteRemoteLogSegmentObject(
+            PhysicalTablePath physicalTablePath, TableBucket tableBucket, UUID segmentId)
+            throws RemoteStorageException {
+        if (deleteSegmentObjectFailFirstN.getAndUpdate(n -> n > 0 ? n - 1 : 0) > 0) {
+            throw new RemoteStorageException("Simulated orphan segment delete failure");
+        }
+        super.deleteRemoteLogSegmentObject(physicalTablePath, tableBucket, segmentId);
     }
 
     @Override

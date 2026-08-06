@@ -43,7 +43,9 @@ public enum ApiKeys {
     GET_METADATA(1012, 0, 0, PUBLIC),
     UPDATE_METADATA(1013, 0, 0, PRIVATE),
     PRODUCE_LOG(1014, 0, 0, PUBLIC),
-    FETCH_LOG(1015, 0, 0, PUBLIC),
+    // Version 0: Returns physical-only remote log segments.
+    // Version 1: Returns remote log segment references with authoritative logical bounds.
+    FETCH_LOG(1015, 0, 1, PUBLIC),
 
     // Version 0: Uses lake's encoder for primary key encoding (legacy behavior).
     // Version 1: Uses CompactedKeyEncoder for primary key encoding when bucket key differs from
