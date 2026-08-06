@@ -158,6 +158,8 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
             context.lookupMetricRecorder()
                     .recordLookup(
                             System.nanoTime() - lookupStartNanos,
+                            // An increase means this lookup materialized at least one local lookup
+                            // file through the tracking IO manager.
                             lookupFileMaterializationCount > materializationCountBeforeLookup);
         }
         if (paimonRow == null) {

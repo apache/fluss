@@ -463,8 +463,8 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </thead>
   <tbody>
     <tr>
-      <th rowspan="33"><strong>tabletserver</strong></th>
-      <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="25">-</td>
+      <th rowspan="36"><strong>tabletserver</strong></th>
+      <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="28">-</td>
       <td>messagesInPerSecond</td>
       <td>The number of messages written per second to this server.</td>
       <td>Meter</td>
@@ -590,6 +590,21 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>Meter</td>
     </tr>
     <tr>
+      <td>historicalPartitionInflightRequests</td>
+      <td>The number of accepted historical partition requests that have not completed, labeled with <code>operation</code>. Historical lookup requests use <code>operation="lookup"</code>.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>historicalLookupCachedTableCount</td>
+      <td>The number of table lookupers currently retained in the historical lookup cache.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>historicalLookupCachedTableCapacityEvictions</td>
+      <td>The cumulative number of cached table lookupers evicted to free historical lookup cache capacity.</td>
+      <td>Counter</td>
+    </tr>
+    <tr>
       <td rowspan="2">logicalStorage</td>
       <td>logSize</td>
       <td>The logical storage size of log managed by this TabletServer.</td>
@@ -679,6 +694,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
           request_produceLog
           request_putKv
           request_lookup
+          request_historicalLookup
           request_prefixLookup
           request_metadata
           request_fetchLogClient
@@ -767,8 +783,8 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </thead>
   <tbody>
     <tr>
-      <th rowspan="31"><strong>tabletserver</strong></th>
-      <td rowspan="20">table</td>
+      <th rowspan="36"><strong>tabletserver</strong></th>
+      <td rowspan="24">table</td>
       <td>messagesInPerSecond</td>
       <td>The number of messages written per second to this table.</td>
       <td>Meter</td>
@@ -822,6 +838,26 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>failedLookupRequestsPerSecond</td>
       <td>The number of failed lookup requests to lookup value by key from this table per second.</td>
       <td>Meter</td>
+    </tr>
+    <tr>
+      <td>totalHistoricalLookupRequestsPerSecond</td>
+      <td>The number of historical lookup requests to this table per second.</td>
+      <td>Meter</td>
+    </tr>
+    <tr>
+      <td>failedHistoricalLookupRequestsPerSecond</td>
+      <td>The number of historical lookup requests that failed unexpectedly for this table per second.</td>
+      <td>Meter</td>
+    </tr>
+    <tr>
+      <td>lakeLookupsPerSecond</td>
+      <td>The number of historical lake point lookups performed for this table per second, labeled with <code>lookup_file_materialization</code>.</td>
+      <td>Meter</td>
+    </tr>
+    <tr>
+      <td>lakeLookupTimeMs</td>
+      <td>The time spent on a historical lake point lookup, in milliseconds, labeled with <code>lookup_file_materialization</code>.</td>
+      <td>Histogram</td>
     </tr>
     <tr>
       <td>totalLimitScanRequestsPerSecond</td>
@@ -934,6 +970,10 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
     </tr>
   </tbody>
 </table>
+
+For <code>lakeLookupsPerSecond</code> and <code>lakeLookupTimeMs</code>,
+<code>lookup_file_materialization="true"</code> means that the lookup created at least one local
+lookup file; <code>false</code> means that it did not create a local lookup file.
 
 ### RocksDB
 

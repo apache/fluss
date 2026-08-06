@@ -107,7 +107,8 @@ public class MetricNames {
     // for historical lookup cache
     public static final String HISTORICAL_LOOKUP_CACHED_TABLE_COUNT =
             "historicalLookupCachedTableCount";
-    public static final String HISTORICAL_LOOKUP_CACHE_EVICTIONS = "historicalLookupCacheEvictions";
+    public static final String HISTORICAL_LOOKUP_CACHED_TABLE_CAPACITY_EVICTIONS =
+            "historicalLookupCachedTableCapacityEvictions";
 
     // --------------------------------------------------------------------------------------------
     // metrics for user

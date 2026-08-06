@@ -134,14 +134,14 @@ class HistoricalLakeLookupManager implements AutoCloseable {
     HistoricalLakeLookupManager(
             Configuration conf,
             @Nullable PluginManager pluginManager,
-            File firstDataDir,
+            File dataDir,
             long lookupVolumeBytes,
             Scheduler scheduler) {
         this(
                 conf,
                 pluginManager,
                 null,
-                firstDataDir,
+                dataDir,
                 lookupVolumeBytes,
                 Ticker.systemTicker(),
                 createCacheScheduler(scheduler));
@@ -152,7 +152,7 @@ class HistoricalLakeLookupManager implements AutoCloseable {
             Configuration conf,
             @Nullable PluginManager pluginManager,
             @Nullable ExecutorService historicalPartitionExecutor,
-            File firstDataDir,
+            File dataDir,
             long lookupVolumeBytes,
             Ticker ticker,
             com.github.benmanes.caffeine.cache.Scheduler cacheScheduler) {
@@ -160,7 +160,7 @@ class HistoricalLakeLookupManager implements AutoCloseable {
         this.pluginManager = pluginManager;
         this.historicalLookupCacheRootDir =
                 FlussPaths.historicalLookupRootDir(
-                        checkNotNull(firstDataDir, "firstDataDir must not be null."));
+                        checkNotNull(dataDir, "dataDir must not be null."));
         checkArgument(lookupVolumeBytes > 0, "lookupVolumeBytes must be greater than 0.");
         this.lookupVolumeBytes = lookupVolumeBytes;
         this.budgetManager =
@@ -519,6 +519,8 @@ class HistoricalLakeLookupManager implements AutoCloseable {
                                     selectedLookuper.acquire();
                                     return selectedLookuper;
                                 });
+        // Replacement admission may preserve the old mapping without acquiring it. Return null for
+        // that stale mapping so the caller can evict another table and retry.
         return matchesLookupConfiguration(
                         cachedLookuper, context, currentLakeConfigVersion, cacheSizeBytes)
                 ? cachedLookuper

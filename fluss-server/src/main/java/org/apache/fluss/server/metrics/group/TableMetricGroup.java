@@ -614,6 +614,10 @@ public class TableMetricGroup extends AbstractMetricGroup {
         }
     }
 
+    /**
+     * Collects historical lookup metrics in the KV table scope and separates lake lookup metrics by
+     * whether the lookup materialized local files.
+     */
     private static class HistoricalLookupMetricGroup extends AbstractMetricGroup {
 
         private final Counter totalLookupRequests;

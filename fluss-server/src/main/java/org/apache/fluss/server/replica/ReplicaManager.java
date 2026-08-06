@@ -462,7 +462,7 @@ public class ReplicaManager implements ServerReconfigurable {
                 MetricNames.HISTORICAL_LOOKUP_CACHED_TABLE_COUNT,
                 historicalLakeLookupManager::cachedTableCount);
         serverMetricGroup.counter(
-                MetricNames.HISTORICAL_LOOKUP_CACHE_EVICTIONS,
+                MetricNames.HISTORICAL_LOOKUP_CACHED_TABLE_CAPACITY_EVICTIONS,
                 historicalLakeLookupManager.capacityEvictions());
 
         MetricGroup logicalStorage = serverMetricGroup.addGroup("logicalStorage");
