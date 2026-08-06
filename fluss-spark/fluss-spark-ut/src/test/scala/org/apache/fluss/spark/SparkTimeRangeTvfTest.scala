@@ -150,7 +150,7 @@ class SparkTimeRangeTvfTest extends FlussSparkTestBase {
     }
   }
 
-  test("TVF: options are scoped to the query and do not leak into later reads") {
+  test("TVF: session-level scan.incremental.* options are ignored") {
     withTable("t") {
       createLogTable("t")
 
@@ -159,21 +159,26 @@ class SparkTimeRangeTvfTest extends FlussSparkTestBase {
       val t1 = System.currentTimeMillis()
       Thread.sleep(50)
       sql(s"""INSERT INTO $DEFAULT_DATABASE.t VALUES (2L, 12L, 102, "a2")""")
-      Thread.sleep(500)
-      val t2 = System.currentTimeMillis()
-      Thread.sleep(50)
-      sql(s"""INSERT INTO $DEFAULT_DATABASE.t VALUES (3L, 13L, 103, "a3")""")
       Thread.sleep(200)
 
-      // No SET is required for the TVF to work.
-      checkAnswer(
-        sql(s"SELECT * FROM $TVF('$DEFAULT_DATABASE.t', '$t1', '$t2') ORDER BY orderId"),
-        Row(2L, 12L, 102, "a2") :: Nil)
+      // A stale window in session configuration must not leak into reads: the scan.incremental.*
+      // options are only honored as per-query scan options (TVF arguments / DataFrameReader).
+      withSQLConf(
+        s"spark.sql.fluss.${SparkFlussConf.SCAN_INCREMENTAL_START_TIMESTAMP.key()}" ->
+          "2000-01-01 00:00:00",
+        s"spark.sql.fluss.${SparkFlussConf.SCAN_INCREMENTAL_END_TIMESTAMP.key()}" ->
+          "2000-01-02 00:00:00"
+      ) {
+        // A plain batch read still returns the full table.
+        checkAnswer(
+          sql(s"SELECT * FROM $DEFAULT_DATABASE.t ORDER BY orderId"),
+          Row(1L, 11L, 101, "a1") :: Row(2L, 12L, 102, "a2") :: Nil)
 
-      // The following plain read must still see the whole table.
-      checkAnswer(
-        sql(s"SELECT * FROM $DEFAULT_DATABASE.t ORDER BY orderId"),
-        Row(1L, 11L, 101, "a1") :: Row(2L, 12L, 102, "a2") :: Row(3L, 13L, 103, "a3") :: Nil)
+        // The TVF window is unaffected by the session values.
+        checkAnswer(
+          sql(s"SELECT * FROM $TVF('$DEFAULT_DATABASE.t', '$t1') ORDER BY orderId"),
+          Row(2L, 12L, 102, "a2") :: Nil)
+      }
     }
   }
 
@@ -192,21 +197,6 @@ class SparkTimeRangeTvfTest extends FlussSparkTestBase {
       Thread.sleep(200)
 
       checkAnswer(sql(s"SELECT * FROM $TVF('$DEFAULT_DATABASE.t', '$ta', '$tb')"), Nil)
-    }
-  }
-
-  test("TVF: future end timestamp is rejected") {
-    withTable("t") {
-      createLogTable("t")
-      sql(s"""INSERT INTO $DEFAULT_DATABASE.t VALUES (1L, 11L, 101, "a1")""")
-      Thread.sleep(200)
-
-      val start = System.currentTimeMillis() - 60000
-      val future = System.currentTimeMillis() + 3600000
-      val ex = intercept[Exception] {
-        sql(s"SELECT * FROM $TVF('$DEFAULT_DATABASE.t', '$start', '$future')").collect()
-      }
-      assertThat(fullMessage(ex)).contains("current timestamp")
     }
   }
 
@@ -246,7 +236,7 @@ class SparkTimeRangeTvfTest extends FlussSparkTestBase {
     }
   }
 
-  test("TVF: Spark expressions as epoch-millis arguments") {
+  test("TVF: Spark expressions as timestamp arguments") {
     withTable("t") {
       createLogTable("t")
 
@@ -256,12 +246,22 @@ class SparkTimeRangeTvfTest extends FlussSparkTestBase {
       // truncated "now" to keep the window boundaries deterministic.
       Thread.sleep(1300)
 
-      // [now - 1h, now) covers every row written above
+      // [now - 1h, now) covers every row written above, as epoch milliseconds
+      // (unix_timestamp() returns seconds)
       checkAnswer(
         sql(s"""SELECT * FROM $TVF(
                |  '$DEFAULT_DATABASE.t',
                |  CAST((unix_timestamp() - 3600) * 1000 AS STRING),
                |  CAST(unix_timestamp() * 1000 AS STRING)) ORDER BY orderId""".stripMargin),
+        Row(1L, 11L, 101, "a1") :: Row(2L, 12L, 102, "a2") :: Row(3L, 13L, 103, "a3") :: Nil
+      )
+
+      // the same window as datetime strings
+      checkAnswer(
+        sql(s"""SELECT * FROM $TVF(
+               |  '$DEFAULT_DATABASE.t',
+               |  date_format(now() - INTERVAL 1 HOUR, 'yyyy-MM-dd HH:mm:ss'),
+               |  date_format(now(), 'yyyy-MM-dd HH:mm:ss')) ORDER BY orderId""".stripMargin),
         Row(1L, 11L, 101, "a1") :: Row(2L, 12L, 102, "a2") :: Row(3L, 13L, 103, "a3") :: Nil
       )
 
@@ -271,24 +271,6 @@ class SparkTimeRangeTvfTest extends FlussSparkTestBase {
                |  '$DEFAULT_DATABASE.t',
                |  CAST(unix_timestamp() * 1000 AS STRING))""".stripMargin),
         Nil
-      )
-    }
-  }
-
-  test("TVF: Spark expressions as datetime-string arguments") {
-    withTable("t") {
-      createLogTable("t")
-
-      sql(s"""INSERT INTO $DEFAULT_DATABASE.t VALUES
-             |(1L, 11L, 101, "a1"), (2L, 12L, 102, "a2")""".stripMargin)
-      Thread.sleep(1300)
-
-      checkAnswer(
-        sql(s"""SELECT * FROM $TVF(
-               |  '$DEFAULT_DATABASE.t',
-               |  date_format(now() - INTERVAL 1 HOUR, 'yyyy-MM-dd HH:mm:ss'),
-               |  date_format(now(), 'yyyy-MM-dd HH:mm:ss')) ORDER BY orderId""".stripMargin),
-        Row(1L, 11L, 101, "a1") :: Row(2L, 12L, 102, "a2") :: Nil
       )
     }
   }

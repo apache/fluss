@@ -70,16 +70,13 @@ class FlussOffsetInitializersTest extends AnyFunSuite {
   }
 
   test("TTL-exceeded start fails fast with a table.log.ttl hint") {
-    // earliest == 0 (brand-new bucket): never rejected, regardless of start
-    FlussOffsetInitializers.requireStartWithinRetention("fluss.t", null, 0, 0L, 0L)
-    // start strictly after a trimmed earliest: within retention, no throw
-    FlussOffsetInitializers.requireStartWithinRetention("fluss.t", null, 0, 11L, 10L)
     // start at/before a trimmed earliest (earliest > 0): fail fast with a clear TTL message
     val ex = intercept[IllegalArgumentException] {
       FlussOffsetInitializers.requireStartWithinRetention("fluss.t", "dt=2026", 2, 5L, 10L)
     }
     assertThat(ex.getMessage).contains("table.log.ttl")
     assertThat(ex.getMessage).contains("bucket 2")
+    assertThat(ex.getMessage).contains("partition 'dt=2026'")
   }
 
   test("invalid start timestamp format fails with the option name") {

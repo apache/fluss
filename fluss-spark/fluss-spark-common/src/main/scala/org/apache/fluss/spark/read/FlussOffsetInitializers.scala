@@ -140,11 +140,14 @@ object FlussOffsetInitializers {
     }
   }
 
-  /** Reads a `scan.incremental.*` option from the scan options, falling back to its default. */
+  /**
+   * Reads a `scan.incremental.*` option from the scan options, falling back to its default. A blank
+   * value counts as unset, so a whitespace-only start timestamp never enables an incremental read.
+   */
   private def incrementalOption(
       options: CaseInsensitiveStringMap,
       option: ConfigOption[String]): Option[String] =
-    Option(options.getOrDefault(option.key(), option.defaultValue()))
+    Option(options.getOrDefault(option.key(), option.defaultValue())).filter(_.trim.nonEmpty)
 
   private def resolveStartupMode(
       options: CaseInsensitiveStringMap,
