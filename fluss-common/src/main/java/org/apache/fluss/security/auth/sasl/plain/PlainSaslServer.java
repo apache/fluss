@@ -115,7 +115,7 @@ public class PlainSaslServer implements SaslServer {
                                 + authorizationIdFromClient
                                 + "'");
             }
-            LOG.info(
+            LOG.debug(
                     "SASL/PLAIN: user '{}' authenticated and is impersonating '{}'",
                     username,
                     authorizationIdFromClient);
