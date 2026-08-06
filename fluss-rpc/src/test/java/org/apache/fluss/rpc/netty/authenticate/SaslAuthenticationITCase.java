@@ -474,12 +474,75 @@ public class SaslAuthenticationITCase {
         }
     }
 
+    @Test
+    void testImpersonation() throws Exception {
+        Configuration serverConfig = getDefaultServerConfig();
+        serverConfig.setString(
+                "security.sasl.plain.jaas.config",
+                "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required"
+                        + " user_admin=\"admin-secret\""
+                        + " user_alice=\"alice-secret\""
+                        + " impersonate_admin=\"alice\";");
+
+        MetricGroup metricGroup = NOPMetricsGroup.newInstance();
+        TestingAuthenticateGatewayService service = new TestingAuthenticateGatewayService();
+        try (NetUtils.Port port = getAvailablePort();
+                NettyServer nettyServer =
+                        new NettyServer(
+                                serverConfig,
+                                Collections.singletonList(
+                                        new Endpoint("localhost", port.getPort(), "CLIENT")),
+                                service,
+                                metricGroup,
+                                RequestsMetrics.createCoordinatorServerRequestMetrics(
+                                        metricGroup))) {
+            nettyServer.start();
+            ServerNode serverNode =
+                    new ServerNode(1, "localhost", port.getPort(), ServerType.TABLET_SERVER);
+
+            // admin is granted to impersonate alice
+            try (NettyClient client = createSaslClient("admin", "admin-secret", "alice")) {
+                verifyListTables(client, serverNode);
+            }
+
+            // without authorization id, the behavior is unchanged
+            try (NettyClient client = createSaslClient("admin", "admin-secret")) {
+                verifyListTables(client, serverNode);
+            }
+
+            // admin is not granted to impersonate bob
+            try (NettyClient client = createSaslClient("admin", "admin-secret", "bob")) {
+                assertThatThrownBy(() -> verifyListTables(client, serverNode))
+                        .cause()
+                        .isExactlyInstanceOf(AuthenticationException.class)
+                        .hasMessage(
+                                "Authentication failed: user 'admin' is not authorized to impersonate 'bob'");
+            }
+
+            // alice has no impersonation grant at all
+            try (NettyClient client = createSaslClient("alice", "alice-secret", "admin")) {
+                assertThatThrownBy(() -> verifyListTables(client, serverNode))
+                        .cause()
+                        .isExactlyInstanceOf(AuthenticationException.class)
+                        .hasMessage(
+                                "Authentication failed: user 'alice' is not authorized to impersonate 'admin'");
+            }
+        }
+    }
+
     private NettyClient createSaslClient(String username, String password) {
+        return createSaslClient(username, password, null);
+    }
+
+    private NettyClient createSaslClient(String username, String password, String authorizationId) {
         Configuration clientConfig = new Configuration();
         clientConfig.setString("client.security.protocol", "sasl");
         clientConfig.setString("client.security.sasl.mechanism", "plain");
         clientConfig.setString("client.security.sasl.username", username);
         clientConfig.setString("client.security.sasl.password", password);
+        if (authorizationId != null) {
+            clientConfig.setString("client.security.sasl.authorization-id", authorizationId);
+        }
         return new NettyClient(clientConfig, TestingClientMetricGroup.newInstance());
     }
 

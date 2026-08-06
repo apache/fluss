@@ -345,6 +345,36 @@ public class FlussAuthorizationITCase {
     }
 
     @Test
+    void testImpersonation() throws Exception {
+        // proxy authenticates with its own credentials but acts as guest,
+        // so authorization is evaluated against the guest principal
+        Configuration proxyConf = new Configuration(guestConf);
+        proxyConf.setString("client.security.sasl.username", "proxy");
+        proxyConf.setString("client.security.sasl.password", "password3");
+        proxyConf.setString("client.security.sasl.authorization-id", "guest");
+        try (Connection proxyConn = ConnectionFactory.createConnection(proxyConf);
+                Admin proxyAdmin = proxyConn.getAdmin()) {
+            // guest has no DESCRIBE permission on the table yet
+            assertNoTableDescribeAuth(() -> proxyAdmin.getTableInfo(DATA1_TABLE_PATH_PK).get());
+
+            // grant DESCRIBE to guest, then the impersonated connection can access it
+            List<AclBinding> aclBindings =
+                    Collections.singletonList(
+                            new AclBinding(
+                                    Resource.table(DATA1_TABLE_PATH_PK),
+                                    new AccessControlEntry(
+                                            guestPrincipal,
+                                            "*",
+                                            OperationType.DESCRIBE,
+                                            PermissionType.ALLOW)));
+            rootAdmin.createAcls(aclBindings).all().get();
+            FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(aclBindings, true);
+            assertThat(proxyAdmin.getTableInfo(DATA1_TABLE_PATH_PK).get().getTablePath())
+                    .isEqualTo(DATA1_TABLE_PATH_PK);
+        }
+    }
+
+    @Test
     void testListDatabases() throws ExecutionException, InterruptedException {
         assertThat(guestAdmin.listDatabases().get())
                 .containsExactlyInAnyOrderElementsOf(Collections.emptyList());
@@ -1409,7 +1439,9 @@ public class FlussAuthorizationITCase {
                 "security.sasl.plain.jaas.config",
                 "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required "
                         + "    user_root=\"password\" "
-                        + "    user_guest=\"password2\";");
+                        + "    user_guest=\"password2\" "
+                        + "    user_proxy=\"password3\" "
+                        + "    impersonate_proxy=\"guest\";");
         conf.set(ConfigOptions.SUPER_USERS, "User:root");
         conf.set(ConfigOptions.AUTHORIZER_ENABLED, true);
         return conf;
