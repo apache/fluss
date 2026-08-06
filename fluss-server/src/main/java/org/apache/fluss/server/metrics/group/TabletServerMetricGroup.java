@@ -231,9 +231,6 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
     /** Registers TabletServer-wide metrics for the global KV pre-write-buffer memory guard. */
     public void registerKvPreWriteBufferMemoryManager(KvPreWriteBufferMemoryManager memoryManager) {
         gauge(MetricNames.KV_PRE_WRITE_BUFFER_MEMORY_USAGE, memoryManager::usedBytes);
-        gauge(
-                MetricNames.KV_PRE_WRITE_BUFFER_UNDER_PRESSURE,
-                () -> memoryManager.isUnderPressure() ? 1 : 0);
     }
 
     public Counter isrShrinks() {

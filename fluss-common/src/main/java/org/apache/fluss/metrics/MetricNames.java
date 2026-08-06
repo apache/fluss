@@ -159,7 +159,6 @@ public class MetricNames {
     public static final String KV_PRE_WRITE_BUFFER_TRUNCATE_AS_ERROR_RATE =
             "preWriteBufferTruncateAsErrorPerSecond";
     public static final String KV_PRE_WRITE_BUFFER_MEMORY_USAGE = "preWriteBufferMemoryUsage";
-    public static final String KV_PRE_WRITE_BUFFER_UNDER_PRESSURE = "preWriteBufferUnderPressure";
 
     // --------------------------------------------------------------------------------------------
     // RocksDB metrics

@@ -39,15 +39,11 @@ class TabletServerMetricGroupTest {
 
         assertThat(gaugeValue(metricGroup, MetricNames.KV_PRE_WRITE_BUFFER_MEMORY_USAGE))
                 .isEqualTo(0L);
-        assertThat(gaugeValue(metricGroup, MetricNames.KV_PRE_WRITE_BUFFER_UNDER_PRESSURE))
-                .isEqualTo(0);
 
         assertThat(manager.tryReserve(100)).isTrue();
 
         assertThat(gaugeValue(metricGroup, MetricNames.KV_PRE_WRITE_BUFFER_MEMORY_USAGE))
                 .isEqualTo(100L);
-        assertThat(gaugeValue(metricGroup, MetricNames.KV_PRE_WRITE_BUFFER_UNDER_PRESSURE))
-                .isEqualTo(1);
     }
 
     private static Object gaugeValue(TabletServerMetricGroup metricGroup, String metricName) {
