@@ -197,6 +197,7 @@ class FlinkTieringTestBase {
                         new Configuration(),
                         lakeTieringConfig,
                         DataLakeFormat.LANCE.toString())
+                .withFastFailOnCompletionAckTimeout(false)
                 .build();
     }
 

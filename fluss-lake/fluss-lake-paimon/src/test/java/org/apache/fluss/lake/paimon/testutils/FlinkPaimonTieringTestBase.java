@@ -132,6 +132,7 @@ public abstract class FlinkPaimonTieringTestBase {
                         Configuration.fromMap(getPaimonCatalogConf()),
                         new Configuration(),
                         DataLakeFormat.PAIMON.toString())
+                .withFastFailOnCompletionAckTimeout(false)
                 .build();
     }
 

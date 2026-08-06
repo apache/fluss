@@ -105,6 +105,7 @@ public class TieringSourceEnumerator
     private final ScheduledExecutorService timerService;
     private final SplitEnumeratorMetricGroup enumeratorMetricGroup;
     private final long pollTieringTableIntervalMs;
+    private final boolean fastFailOnCompletionAckTimeout;
     private final List<TieringSplit> pendingSplits;
     private final Set<Integer> readersAwaitingSplit;
 
@@ -130,6 +131,15 @@ public class TieringSourceEnumerator
             SplitEnumeratorContext<TieringSplit> context,
             LakeTieringFactory<?, ?> lakeTieringFactory,
             long pollTieringTableIntervalMs) {
+        this(flussConf, context, lakeTieringFactory, pollTieringTableIntervalMs, true);
+    }
+
+    public TieringSourceEnumerator(
+            Configuration flussConf,
+            SplitEnumeratorContext<TieringSplit> context,
+            LakeTieringFactory<?, ?> lakeTieringFactory,
+            long pollTieringTableIntervalMs,
+            boolean fastFailOnCompletionAckTimeout) {
         this.flussConf = flussConf;
         this.context = context;
         this.lakeTieringFactory = lakeTieringFactory;
@@ -138,6 +148,7 @@ public class TieringSourceEnumerator
                         r -> new Thread(r, "Tiering-Timer-Thread"));
         this.enumeratorMetricGroup = context.metricGroup();
         this.pollTieringTableIntervalMs = pollTieringTableIntervalMs;
+        this.fastFailOnCompletionAckTimeout = fastFailOnCompletionAckTimeout;
         this.pendingSplits = Collections.synchronizedList(new ArrayList<>());
         this.readersAwaitingSplit = Collections.synchronizedSet(new TreeSet<>());
         this.tieringTableEpochs = new ConcurrentHashMap<>();
@@ -356,30 +367,33 @@ public class TieringSourceEnumerator
                 context.sendEventToSourceReader(reader, tieringReachMaxDurationEvent);
             }
 
-            timerService.schedule(
-                    () ->
-                            context.runInCoordinatorThread(
-                                    () ->
-                                            failTieringJobIfNotFinished(
-                                                    tablePath,
-                                                    tableId,
-                                                    tieringEpoch,
-                                                    maxTieringDurationMs)),
-                    maxTieringDurationMs,
-                    TimeUnit.MILLISECONDS);
+            if (fastFailOnCompletionAckTimeout) {
+                long completionTimeoutThreshold = maxTieringDurationMs;
+                timerService.schedule(
+                        () ->
+                                context.runInCoordinatorThread(
+                                        () ->
+                                                failTieringJobIfNotFinished(
+                                                        tablePath,
+                                                        tableId,
+                                                        tieringEpoch,
+                                                        completionTimeoutThreshold)),
+                        completionTimeoutThreshold,
+                        TimeUnit.MILLISECONDS);
+            }
         }
     }
 
     @VisibleForTesting
     void failTieringJobIfNotFinished(
-            TablePath tablePath, long tableId, long tieringEpoch, long maxTieringDurationMs) {
+            TablePath tablePath, long tableId, long tieringEpoch, long completionTimeoutThreshold) {
         Long currentEpoch = tieringTableEpochs.get(tableId);
         if (currentEpoch != null && currentEpoch.equals(tieringEpoch)) {
             throw new FlinkRuntimeException(
                     String.format(
                             "Tiering table %s-%d did not finish within %d ms after reaching max duration. "
                                     + "Failing the tiering job to recover the stuck source readers.",
-                            tablePath, tableId, maxTieringDurationMs));
+                            tablePath, tableId, completionTimeoutThreshold));
         }
     }
 
