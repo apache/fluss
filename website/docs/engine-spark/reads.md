@@ -254,6 +254,86 @@ INSERT INTO fluss_order_with_lake VALUES
 SELECT SUM(total_price) AS total_revenue FROM fluss_order_with_lake;
 ```
 
+## Time-Range Batch Read
+
+A time-range batch read returns the data written to Fluss within a `[start, end)` time window (left-closed, right-open on the commit timestamp). This is the building block for incremental pipelines, e.g. an hourly job that reads only the rows written in the past hour.
+
+The timestamp value is either epoch milliseconds or a `yyyy-MM-dd HH:mm:ss` datetime interpreted in the Spark session time zone (`spark.sql.session.timeZone`).
+
+### Output semantics
+
+| Table type | Output of a `[t1, t2)` read |
+|------------|-----------------------------|
+| **Log table** | Every record appended within the window. |
+| **Primary key table** | The rows whose keys were **inserted or updated** within the window, folded to their latest value as of `t2`. Keys that were only deleted in the window are excluded (i.e. the result keeps `+I`/`+U` after-images and drops `-U`/`-D`). |
+| **Lake-enabled table** | Same as the underlying log or primary key table, but read **only from Fluss**. A time-range read never unions the lake snapshot, so it is limited to the data still retained in Fluss (see below). |
+
+### Using the table-valued function (recommended for SQL)
+
+`fluss_incremental_between_timestamp(table, start[, end])` reads a time window in a single statement. Omit `end` to read up to the latest committed data at planning time.
+
+```sql title="Spark SQL"
+-- Read the past hour on a log table (epoch-millis form)
+SELECT * FROM fluss_incremental_between_timestamp('log_table', '1767225600000', '1767312000000')
+ORDER BY order_id;
+```
+
+```sql title="Spark SQL"
+-- Incremental changes on a primary key table (datetime form)
+-- Returns the latest value of every key changed in the window; deleted keys are excluded
+SELECT * FROM fluss_incremental_between_timestamp(
+  'pk_table', '2026-01-01 00:00:00', '2026-01-02 00:00:00')
+ORDER BY order_id;
+```
+
+```sql title="Spark SQL"
+-- Omit the end to read from a start timestamp up to the latest data
+SELECT * FROM fluss_incremental_between_timestamp('log_table', '2026-01-01 00:00:00');
+```
+
+The start/end arguments may be any constant expression, so a rolling window does not need to be computed outside SQL:
+
+```sql title="Spark SQL"
+-- The past hour, as epoch milliseconds (unix_timestamp() returns seconds)
+SELECT * FROM fluss_incremental_between_timestamp(
+  'log_table',
+  CAST((unix_timestamp() - 3600) * 1000 AS STRING),
+  CAST(unix_timestamp() * 1000 AS STRING));
+
+-- The past hour, as datetime strings
+SELECT * FROM fluss_incremental_between_timestamp(
+  'log_table',
+  date_format(now() - INTERVAL 1 HOUR, 'yyyy-MM-dd HH:mm:ss'),
+  date_format(now(), 'yyyy-MM-dd HH:mm:ss'));
+```
+
+The table argument is a string and accepts `table`, `database.table` or `catalog.database.table`; unqualified names resolve against the current catalog and database. The start/end arguments accept a string (epoch milliseconds or `yyyy-MM-dd HH:mm:ss`), an integral epoch-milliseconds value, or a `TIMESTAMP`, and may be produced by constant expressions such as the datetime functions above (column references are not allowed). The result is an ordinary relation, so projection, filters and joins work as usual.
+
+:::note
+The function is provided by the Fluss Spark session extension, so `spark.sql.extensions=org.apache.fluss.spark.FlussSparkSessionExtensions` must be configured (see [Getting Started](getting-started.md)). Its options apply to that single query only.
+
+Fluss uses `[start, end)` (start inclusive, end exclusive). This differs from Paimon's similarly named `paimon_incremental_between_timestamp`, which is start-exclusive and end-inclusive.
+:::
+
+### Using the DataFrame API
+
+The same window can be expressed with scan options, which is how it is configured from the DataFrame API. Setting `scan.incremental.start.timestamp` is what turns a batch read into an incremental one; `scan.incremental.end.timestamp` defaults to the reserved value `latest`:
+
+```scala title="Spark Scala"
+spark.read
+  .option("scan.incremental.start.timestamp", "2026-01-01 00:00:00")
+  .option("scan.incremental.end.timestamp", "2026-01-02 00:00:00")
+  .table("fluss_catalog.fluss.log_table")
+```
+
+:::note
+The `scan.incremental.*` options are per-query read options only. Unlike the options in [Options](options.md), they are **not** picked up from session configuration (`SET spark.sql.fluss.scan.incremental...` has no effect), which keeps a time window from silently applying to later reads in the same session.
+:::
+
+:::warning Retention boundary
+A time-range read only sees data still retained by Fluss, which is bounded by `table.log.ttl` (default 7 days). If the start timestamp predates the earliest retained data, the default behavior (`scan.incremental.timestamp.out-of-range=error`) **fails fast** with a clear error instead of silently returning a truncated window — narrow the time range or increase `table.log.ttl`. Set `scan.incremental.timestamp.out-of-range=adjust` to instead clamp the start to the earliest retained data and read from there. An end timestamp in the future is rejected by the server. Reading data older than the Fluss retention (including from tiered lake storage) is not supported by this mode.
+:::
+
 ## All Data Types
 
 Fluss Spark connector supports reading all Fluss data types including nested types:
