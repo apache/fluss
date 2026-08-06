@@ -28,6 +28,7 @@ import javax.security.auth.login.AppConfigurationEntry;
 import javax.security.sasl.AuthorizeCallback;
 
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
@@ -67,6 +68,16 @@ import java.util.List;
 public class PlainServerCallbackHandler implements AuthenticateCallbackHandler {
     private static final String JAAS_USER_PREFIX = "user_";
     private static final String JAAS_IMPERSONATE_PREFIX = "impersonate_";
+
+    /**
+     * The JAAS option prefixes this handler consumes, and the registry the protocol plugin must
+     * preserve when it regenerates the JAAS config from {@code security.sasl.plain.credentials}.
+     * Register a new prefix here when this handler starts consuming a new option; a unit test
+     * asserts the plugin's extraction covers every prefix listed here.
+     */
+    public static final List<String> KNOWN_OPTION_PREFIXES =
+            Collections.unmodifiableList(Arrays.asList(JAAS_USER_PREFIX, JAAS_IMPERSONATE_PREFIX));
+
     private List<AppConfigurationEntry> jaasConfigEntries;
 
     @Override

@@ -530,6 +530,104 @@ public class SaslAuthenticationITCase {
         }
     }
 
+    @Test
+    void testImpersonationPreservedWhenCredentialsMapConfiguredAtStartup() throws Exception {
+        // Credentials-map materialization at startup must not drop the impersonate_* grant.
+        Configuration serverConfig = new Configuration();
+        serverConfig.setString(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:sasl");
+        serverConfig.setString("security.sasl.enabled.mechanisms", "plain");
+        serverConfig.setString(
+                "security.sasl.plain.jaas.config",
+                "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required"
+                        + " user_admin=\"admin-secret\""
+                        + " user_alice=\"alice-secret\""
+                        + " impersonate_admin=\"alice\";");
+        serverConfig.setString("security.sasl.plain.credentials", "bob:bob-secret");
+        serverConfig.setString(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS.key(), "3");
+
+        MetricGroup metricGroup = NOPMetricsGroup.newInstance();
+        TestingAuthenticateGatewayService service = new TestingAuthenticateGatewayService();
+        try (NetUtils.Port port = getAvailablePort();
+                NettyServer nettyServer =
+                        new NettyServer(
+                                serverConfig,
+                                Collections.singletonList(
+                                        new Endpoint("localhost", port.getPort(), "CLIENT")),
+                                service,
+                                metricGroup,
+                                RequestsMetrics.createCoordinatorServerRequestMetrics(
+                                        metricGroup))) {
+            nettyServer.start();
+            ServerNode serverNode =
+                    new ServerNode(1, "localhost", port.getPort(), ServerType.TABLET_SERVER);
+
+            // bob from the credentials map can authenticate
+            try (NettyClient client = createSaslClient("bob", "bob-secret")) {
+                verifyListTables(client, serverNode);
+            }
+
+            // impersonate_* grant survived the startup materialization
+            try (NettyClient client = createSaslClient("admin", "admin-secret", "alice")) {
+                verifyListTables(client, serverNode);
+            }
+        }
+    }
+
+    @Test
+    void testImpersonationSurvivesDynamicCredentialUpdate() throws Exception {
+        // Start with an impersonation grant only (no credentials map yet).
+        Configuration serverConfig = new Configuration();
+        serverConfig.setString(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:sasl");
+        serverConfig.setString("security.sasl.enabled.mechanisms", "plain");
+        serverConfig.setString(
+                "security.sasl.plain.jaas.config",
+                "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required"
+                        + " user_admin=\"admin-secret\""
+                        + " user_alice=\"alice-secret\""
+                        + " impersonate_admin=\"alice\";");
+        serverConfig.setString(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS.key(), "3");
+
+        MetricGroup metricGroup = NOPMetricsGroup.newInstance();
+        TestingAuthenticateGatewayService service = new TestingAuthenticateGatewayService();
+        try (NetUtils.Port port = getAvailablePort();
+                NettyServer nettyServer =
+                        new NettyServer(
+                                serverConfig,
+                                Collections.singletonList(
+                                        new Endpoint("localhost", port.getPort(), "CLIENT")),
+                                service,
+                                metricGroup,
+                                RequestsMetrics.createCoordinatorServerRequestMetrics(
+                                        metricGroup))) {
+            nettyServer.start();
+            ServerNode serverNode =
+                    new ServerNode(1, "localhost", port.getPort(), ServerType.TABLET_SERVER);
+            ServerReconfigurable reconfigurable = nettyServer.getServerReconfigurables().get(0);
+
+            // impersonation works before any credentials update
+            try (NettyClient client = createSaslClient("admin", "admin-secret", "alice")) {
+                verifyListTables(client, serverNode);
+            }
+
+            // dynamically add user 'bob' through the credentials map
+            Configuration newConfig = new Configuration();
+            newConfig.setString(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:sasl");
+            newConfig.setString("security.sasl.plain.credentials", "bob:bob-secret");
+            reconfigurable.validate(newConfig);
+            reconfigurable.reconfigure(newConfig);
+
+            // the new user is usable
+            try (NettyClient client = createSaslClient("bob", "bob-secret")) {
+                verifyListTables(client, serverNode);
+            }
+
+            // impersonation must still work after the dynamic credentials update
+            try (NettyClient client = createSaslClient("admin", "admin-secret", "alice")) {
+                verifyListTables(client, serverNode);
+            }
+        }
+    }
+
     private NettyClient createSaslClient(String username, String password) {
         return createSaslClient(username, password, null);
     }
