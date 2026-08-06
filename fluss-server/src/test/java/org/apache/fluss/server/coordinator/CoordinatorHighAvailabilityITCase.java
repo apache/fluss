@@ -395,6 +395,11 @@ class CoordinatorHighAvailabilityITCase {
         CoordinatorServer leader = findServerById(firstLeaderAddr.getId());
         CoordinatorServer standby = findServerByNotId(firstLeaderAddr.getId());
 
+        int oldLeaderEpochZkVersion =
+                leader.getCoordinatorEventProcessor()
+                        .getCoordinatorContext()
+                        .getCoordinatorZkVersion();
+
         killZkSession(leader);
         waitUntilNewLeaderElected(leader.getServerId());
         assertThat(zookeeperClient.getCoordinatorLeaderAddress().get().getId())
@@ -407,10 +412,6 @@ class CoordinatorHighAvailabilityITCase {
 
         int newLeaderEpochZkVersion =
                 standby.getCoordinatorEventProcessor()
-                        .getCoordinatorContext()
-                        .getCoordinatorZkVersion();
-        int oldLeaderEpochZkVersion =
-                leader.getCoordinatorEventProcessor()
                         .getCoordinatorContext()
                         .getCoordinatorZkVersion();
 
