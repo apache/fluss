@@ -30,6 +30,7 @@ import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
+import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -44,6 +45,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
 
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeFreezePartitionRequest;
@@ -58,6 +60,7 @@ public class LakeAwarePartitionDropManager implements AutoCloseable {
     private final ZooKeeperClient zooKeeperClient;
     private final CoordinatorChannelManager coordinatorChannelManager;
     private final Executor executor;
+    private final long freezeTimeoutMs;
     private final ConcurrentMap<PhysicalTablePath, PartitionDropState> partitionDropStates =
             new ConcurrentHashMap<>();
 
@@ -65,11 +68,13 @@ public class LakeAwarePartitionDropManager implements AutoCloseable {
             MetadataManager metadataManager,
             ZooKeeperClient zooKeeperClient,
             CoordinatorChannelManager coordinatorChannelManager,
-            Executor executor) {
+            Executor executor,
+            long freezeTimeoutMs) {
         this.metadataManager = metadataManager;
         this.zooKeeperClient = zooKeeperClient;
         this.coordinatorChannelManager = coordinatorChannelManager;
         this.executor = executor;
+        this.freezeTimeoutMs = freezeTimeoutMs;
     }
 
     /** Try to drop an expired partition after its data has been tiered to the lake. */
@@ -224,9 +229,16 @@ public class LakeAwarePartitionDropManager implements AutoCloseable {
                                 entry.getKey(), request));
             }
 
-            // TODO: Add timeout.
-            CompletableFuture.allOf(
-                            freezeFutures.toArray(new CompletableFuture[freezeFutures.size()]))
+            CompletableFuture<Void> allFreezeFutures =
+                    CompletableFuture.allOf(
+                            freezeFutures.toArray(new CompletableFuture[freezeFutures.size()]));
+            FutureUtils.orTimeout(
+                            allFreezeFutures,
+                            freezeTimeoutMs,
+                            TimeUnit.MILLISECONDS,
+                            String.format(
+                                    "Timed out after %s ms while freezing partition %s.",
+                                    freezeTimeoutMs, dropState.physicalTablePath))
                     .join();
             finishFreeze(dropState, partitionRegistration, leaders, freezeFutures);
         } catch (Exception e) {
