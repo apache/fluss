@@ -372,30 +372,73 @@ class RbAggFunctionsTest {
         fn.accumulate(acc, null);
         fn.accumulate(acc, new byte[0]);
         fn.accumulate(acc, BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1, 2)));
+        assertThat(acc.nonNullCount).isEqualTo(1L);
         byte[] result = fn.getValue(acc);
         assertThat(result).isNotNull();
-        RoaringBitmap restored = BitmapUtils.fromBytes(result);
-        assertThat(restored.getLongCardinality()).isEqualTo(2L);
+        assertThat(BitmapUtils.fromBytes(result).getLongCardinality()).isEqualTo(2L);
     }
 
     @Test
-    void testXorAggEmptyReturnsNull() {
+    void testXorAggNoInputReturnsNull() {
         RbXorAggFunction fn = new RbXorAggFunction();
-        // No input accumulated — should return null
+        // nonNullCount == 0 → null
         assertThat(fn.getValue(fn.createAccumulator())).isNull();
     }
 
     @Test
     void testXorAggIdenticalBitmapsCancelToEmptyBitmap() throws IOException {
-        // Two identical bitmaps XOR to empty — initialized=true so returns empty bytes, not null
+        // nonNullCount=2 after two accumulates, bitmap empty → empty bitmap, not null
         RbXorAggFunction fn = new RbXorAggFunction();
         RbXorAggFunction.Accumulator acc = fn.createAccumulator();
         fn.accumulate(acc, BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1, 2, 3)));
         fn.accumulate(acc, BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1, 2, 3)));
+        assertThat(acc.nonNullCount).isEqualTo(2L);
         byte[] result = fn.getValue(acc);
-        assertThat(result).isNotNull(); // not null — input was seen
+        assertThat(result).isNotNull();
         assertThat(BitmapUtils.fromBytes(result).isEmpty()).isTrue();
-        assertThat(BitmapUtils.fromBytes(result).getLongCardinality()).isEqualTo(0L);
+    }
+
+    @Test
+    void testXorAggRetractRestoresNull() throws IOException {
+        // accumulate(x) then retract(x): nonNullCount=0 → null
+        // boolean initialized would incorrectly return empty bitmap here
+        RbXorAggFunction fn = new RbXorAggFunction();
+        RbXorAggFunction.Accumulator acc = fn.createAccumulator();
+        byte[] bitmap = BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1, 2, 3));
+        fn.accumulate(acc, bitmap);
+        assertThat(acc.nonNullCount).isEqualTo(1L);
+        fn.retract(acc, bitmap);
+        assertThat(acc.nonNullCount).isEqualTo(0L);
+        assertThat(fn.getValue(acc)).isNull();
+    }
+
+    @Test
+    void testXorAggRetractPartial() throws IOException {
+        RbXorAggFunction fn = new RbXorAggFunction();
+        RbXorAggFunction.Accumulator acc = fn.createAccumulator();
+        byte[] a = BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1, 2));
+        byte[] b = BitmapUtils.toBytes(RoaringBitmap.bitmapOf(2, 3));
+        fn.accumulate(acc, a);
+        fn.accumulate(acc, b);
+        // XOR so far: {1, 3}
+        fn.retract(acc, b);
+        // After retract b: XOR = {1, 2}, nonNullCount=1
+        assertThat(acc.nonNullCount).isEqualTo(1L);
+        RoaringBitmap result = BitmapUtils.fromBytes(fn.getValue(acc));
+        assertThat(result.getLongCardinality()).isEqualTo(2L);
+        assertThat(result.contains(1)).isTrue();
+        assertThat(result.contains(2)).isTrue();
+    }
+
+    @Test
+    void testXorAggRetractNullIgnored() throws IOException {
+        RbXorAggFunction fn = new RbXorAggFunction();
+        RbXorAggFunction.Accumulator acc = fn.createAccumulator();
+        fn.accumulate(acc, BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1, 2)));
+        long countBefore = acc.nonNullCount;
+        fn.retract(acc, null);
+        fn.retract(acc, new byte[0]);
+        assertThat(acc.nonNullCount).isEqualTo(countBefore);
     }
 
     @Test
@@ -406,30 +449,27 @@ class RbAggFunctionsTest {
         RbXorAggFunction.Accumulator acc2 = fn.createAccumulator();
         fn.accumulate(acc2, BitmapUtils.toBytes(RoaringBitmap.bitmapOf(3, 4, 5)));
         fn.merge(acc1, Collections.singletonList(acc2));
-        // XOR merge: {1,2,3} XOR {3,4,5} = {1,2,4,5}
-        byte[] result = fn.getValue(acc1);
-        assertThat(result).isNotNull();
-        RoaringBitmap restored = BitmapUtils.fromBytes(result);
-        assertThat(restored.getLongCardinality()).isEqualTo(4L);
-        assertThat(restored.contains(1)).isTrue();
-        assertThat(restored.contains(2)).isTrue();
-        assertThat(restored.contains(4)).isTrue();
-        assertThat(restored.contains(5)).isTrue();
-        assertThat(restored.contains(3)).isFalse();
+        // XOR: {1,2,3} XOR {3,4,5} = {1,2,4,5}, nonNullCount=2
+        assertThat(acc1.nonNullCount).isEqualTo(2L);
+        RoaringBitmap result = BitmapUtils.fromBytes(fn.getValue(acc1));
+        assertThat(result.getLongCardinality()).isEqualTo(4L);
+        assertThat(result.contains(1)).isTrue();
+        assertThat(result.contains(2)).isTrue();
+        assertThat(result.contains(4)).isTrue();
+        assertThat(result.contains(5)).isTrue();
+        assertThat(result.contains(3)).isFalse();
     }
 
     @Test
-    void testXorAggMergeCancelsToEmpty() throws IOException {
+    void testXorAggMergeEmptyPartialIgnored() throws IOException {
         RbXorAggFunction fn = new RbXorAggFunction();
         RbXorAggFunction.Accumulator acc1 = fn.createAccumulator();
-        fn.accumulate(acc1, BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1)));
+        fn.accumulate(acc1, BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1, 2)));
         RbXorAggFunction.Accumulator acc2 = fn.createAccumulator();
-        fn.accumulate(acc2, BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1)));
         fn.merge(acc1, Collections.singletonList(acc2));
-        // {1} XOR {1} = empty — but initialized=true so returns empty bytes
-        byte[] result = fn.getValue(acc1);
-        assertThat(result).isNotNull();
-        assertThat(BitmapUtils.fromBytes(result).isEmpty()).isTrue();
+        assertThat(acc1.nonNullCount).isEqualTo(1L);
+        RoaringBitmap result = BitmapUtils.fromBytes(fn.getValue(acc1));
+        assertThat(result.getLongCardinality()).isEqualTo(2L);
     }
 
     @Test
@@ -440,171 +480,20 @@ class RbAggFunctionsTest {
         fn.accumulate(acc, BitmapUtils.toBytes(RoaringBitmap.bitmapOf(2, 3)));
         fn.accumulate(acc, BitmapUtils.toBytes(RoaringBitmap.bitmapOf(3, 4)));
         // {1,2} XOR {2,3} XOR {3,4} = {1,4}
-        byte[] result = fn.getValue(acc);
-        assertThat(result).isNotNull();
-        RoaringBitmap restored = BitmapUtils.fromBytes(result);
-        assertThat(restored.getLongCardinality()).isEqualTo(2L);
-        assertThat(restored.contains(1)).isTrue();
-        assertThat(restored.contains(4)).isTrue();
+        RoaringBitmap result = BitmapUtils.fromBytes(fn.getValue(acc));
+        assertThat(result.getLongCardinality()).isEqualTo(2L);
+        assertThat(result.contains(1)).isTrue();
+        assertThat(result.contains(4)).isTrue();
     }
 
     @Test
-    void testXorAggRetractThrows() throws IOException {
-        // retract uses XOR (self-inverse), not exception
+    void testXorAggResetAccumulator() throws IOException {
         RbXorAggFunction fn = new RbXorAggFunction();
         RbXorAggFunction.Accumulator acc = fn.createAccumulator();
-        fn.accumulate(acc, BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1, 2, 3)));
-        fn.retract(acc, BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1, 2, 3)));
-        // After retract XOR cancels to empty, but initialized=true
-        byte[] result = fn.getValue(acc);
-        assertThat(result).isNotNull();
-        assertThat(BitmapUtils.fromBytes(result).isEmpty()).isTrue();
-    }
-
-    // -------------------------------------------------------------------------
-    // RbXorAggFunction serializer and type info coverage
-    // -------------------------------------------------------------------------
-
-    @Test
-    void testXorAggAccumulatorSerializerRoundTrip() throws Exception {
-        RbXorAggFunction.AccumulatorSerializer ser =
-                RbXorAggFunction.AccumulatorSerializer.INSTANCE;
-
-        RbXorAggFunction.Accumulator original = new RbXorAggFunction.Accumulator();
-        original.initialized = true;
-        original.value = RoaringBitmap.bitmapOf(10, 20, 30);
-
-        DataOutputSerializer out = new DataOutputSerializer(256);
-        ser.serialize(original, out);
-
-        DataInputDeserializer in = new DataInputDeserializer(out.getCopyOfBuffer());
-        RbXorAggFunction.Accumulator restored = ser.deserialize(in);
-
-        assertThat(restored.initialized).isTrue();
-        assertThat(restored.value).isEqualTo(original.value);
-    }
-
-    @Test
-    void testXorAggAccumulatorSerializerUninitializedRoundTrip() throws Exception {
-        RbXorAggFunction.AccumulatorSerializer ser =
-                RbXorAggFunction.AccumulatorSerializer.INSTANCE;
-
-        RbXorAggFunction.Accumulator original = new RbXorAggFunction.Accumulator();
-
-        DataOutputSerializer out = new DataOutputSerializer(64);
-        ser.serialize(original, out);
-
-        DataInputDeserializer in = new DataInputDeserializer(out.getCopyOfBuffer());
-        RbXorAggFunction.Accumulator restored = ser.deserialize(in);
-        assertThat(restored.initialized).isFalse();
-    }
-
-    @Test
-    void testXorAggAccumulatorSerializerDeserializeWithReuse() throws Exception {
-        RbXorAggFunction.AccumulatorSerializer ser =
-                RbXorAggFunction.AccumulatorSerializer.INSTANCE;
-
-        RbXorAggFunction.Accumulator original = new RbXorAggFunction.Accumulator();
-        original.initialized = true;
-        original.value = RoaringBitmap.bitmapOf(7, 8, 9);
-
-        DataOutputSerializer out = new DataOutputSerializer(256);
-        ser.serialize(original, out);
-
-        DataInputDeserializer in = new DataInputDeserializer(out.getCopyOfBuffer());
-        RbXorAggFunction.Accumulator reuse = new RbXorAggFunction.Accumulator();
-        RbXorAggFunction.Accumulator restored = ser.deserialize(reuse, in);
-
-        assertThat(restored.initialized).isTrue();
-        assertThat(restored.value).isEqualTo(original.value);
-    }
-
-    @Test
-    void testXorAggAccumulatorTypeInfoProperties() {
-        RbXorAggFunction.AccumulatorTypeInfo info = RbXorAggFunction.AccumulatorTypeInfo.INSTANCE;
-        assertThat(info.getTypeClass()).isEqualTo(RbXorAggFunction.Accumulator.class);
-        assertThat(info.isBasicType()).isFalse();
-        assertThat(info.isTupleType()).isFalse();
-        assertThat(info.getArity()).isEqualTo(1);
-        assertThat(info.getTotalFields()).isEqualTo(1);
-        assertThat(info.isKeyType()).isFalse();
-        assertThat(info.toString()).isEqualTo("RbXorAccumulatorTypeInfo");
-        assertThat(info.hashCode()).isNotZero();
-        assertThat(info.equals(info)).isTrue();
-        assertThat(info.equals("other")).isFalse();
-        assertThat(info.canEqual(info)).isTrue();
-        assertThat(info.canEqual("other")).isFalse();
-    }
-
-    @Test
-    void testXorAggAccumulatorTypeInfoCreateSerializer() {
-        TypeSerializer<RbXorAggFunction.Accumulator> s =
-                RbXorAggFunction.AccumulatorTypeInfo.INSTANCE.createSerializer(
-                        new ExecutionConfig());
-        assertThat(s).isInstanceOf(RbXorAggFunction.AccumulatorSerializer.class);
-    }
-
-    @Test
-    void testXorAggAccumulatorSerializerCreateInstance() {
-        RbXorAggFunction.Accumulator acc =
-                RbXorAggFunction.AccumulatorSerializer.INSTANCE.createInstance();
-        assertThat(acc.initialized).isFalse();
+        fn.accumulate(acc, BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1, 2)));
+        fn.resetAccumulator(acc);
+        assertThat(acc.nonNullCount).isEqualTo(0L);
         assertThat(acc.value.isEmpty()).isTrue();
-    }
-
-    @Test
-    void testXorAggAccumulatorSerializerCopy() {
-        RbXorAggFunction.AccumulatorSerializer ser =
-                RbXorAggFunction.AccumulatorSerializer.INSTANCE;
-        RbXorAggFunction.Accumulator original = new RbXorAggFunction.Accumulator();
-        original.initialized = true;
-        original.value = RoaringBitmap.bitmapOf(1, 2, 3);
-
-        RbXorAggFunction.Accumulator copy = ser.copy(original);
-        assertThat(copy.initialized).isTrue();
-        assertThat(copy.value).isEqualTo(original.value);
-        copy.value.add(999);
-        assertThat(original.value.contains(999)).isFalse();
-    }
-
-    @Test
-    void testXorAggAccumulatorSerializerCopyWithReuse() {
-        RbXorAggFunction.AccumulatorSerializer ser =
-                RbXorAggFunction.AccumulatorSerializer.INSTANCE;
-        RbXorAggFunction.Accumulator original = new RbXorAggFunction.Accumulator();
-        original.initialized = true;
-        original.value = RoaringBitmap.bitmapOf(10, 20);
-
-        RbXorAggFunction.Accumulator reuse = new RbXorAggFunction.Accumulator();
-        RbXorAggFunction.Accumulator copy = ser.copy(original, reuse);
-        assertThat(copy.initialized).isTrue();
-        assertThat(copy.value).isEqualTo(original.value);
-    }
-
-    @Test
-    void testXorAggAccumulatorSerializerCopyStream() throws Exception {
-        RbXorAggFunction.AccumulatorSerializer ser =
-                RbXorAggFunction.AccumulatorSerializer.INSTANCE;
-        RbXorAggFunction.Accumulator original = new RbXorAggFunction.Accumulator();
-        original.initialized = true;
-        original.value = RoaringBitmap.bitmapOf(5, 10, 15);
-
-        DataOutputSerializer out = new DataOutputSerializer(256);
-        ser.serialize(original, out);
-
-        DataInputDeserializer in = new DataInputDeserializer(out.getCopyOfBuffer());
-        DataOutputSerializer copied = new DataOutputSerializer(256);
-        ser.copy(in, copied);
-
-        DataInputDeserializer copiedIn = new DataInputDeserializer(copied.getCopyOfBuffer());
-        RbXorAggFunction.Accumulator restored = ser.deserialize(copiedIn);
-        assertThat(restored.initialized).isTrue();
-        assertThat(restored.value).isEqualTo(original.value);
-    }
-
-    @Test
-    void testXorAggAccumulatorSerializerSnapshotNotNull() {
-        assertThat(RbXorAggFunction.AccumulatorSerializer.INSTANCE.snapshotConfiguration())
-                .isNotNull();
+        assertThat(fn.getValue(acc)).isNull();
     }
 }

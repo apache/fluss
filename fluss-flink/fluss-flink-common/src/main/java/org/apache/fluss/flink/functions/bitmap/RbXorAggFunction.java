@@ -45,18 +45,19 @@ import java.util.Objects;
  * Returns elements that appear in an odd number of input bitmaps — useful for change detection and
  * symmetric difference analysis.
  *
- * <p>Unlike {@link RbOrAggFunction}, this function requires a custom {@link Accumulator} that
- * carries an {@code initialized} flag alongside the bitmap. This is necessary because XOR of
- * identical bitmaps cancels to an empty bitmap, which must be distinguishable from "no input
- * received yet". An uninitialized accumulator returns {@code null}; an initialized but empty
- * accumulator returns an empty serialized bitmap.
+ * <p>The accumulator uses {@code nonNullCount} to track net non-null inputs, following the pattern
+ * of Flink's {@code AbstractBitmapXorWithRetractAggFunction}. This correctly handles retraction:
+ * after {@code accumulate(x)} followed by {@code retract(x)}, {@code nonNullCount} returns to zero
+ * and {@code getValue} returns {@code null}. A simple {@code boolean initialized} flag cannot
+ * represent this state because it remains {@code true} after retraction, incorrectly returning an
+ * empty bitmap instead of {@code null}.
  *
- * <p>XOR is self-inverse, so retraction applies the same XOR operation, making this function
- * suitable for use on retractable streams, unlike {@link RbAndAggFunction}.
+ * <p>XOR is self-inverse, so retraction applies the same XOR operation, making {@code rb_xor_agg}
+ * safe on retractable streams, unlike {@link RbAndAggFunction}.
  *
  * <p>Note: there is no server-side {@code FieldRoaringBitmapXorAgg} counterpart. This function
- * executes entirely in Flink. Users should be aware that combining it with {@code
- * table.merge-engine=aggregation} may produce unexpected results during server-side compaction.
+ * executes entirely in Flink. Combining with {@code table.merge-engine=aggregation} may produce
+ * unexpected results during server-side compaction.
  */
 @FunctionHint(
         accumulator = @DataTypeHint(value = "RAW", bridgedTo = RbXorAggFunction.Accumulator.class))
@@ -66,14 +67,39 @@ public class RbXorAggFunction extends AggregateFunction<byte[], RbXorAggFunction
     // Accumulator
     // -------------------------------------------------------------------------
 
-    /** Mutable accumulator that tracks initialization state for XOR aggregation. */
+    /**
+     * Accumulator for XOR aggregation with retraction support.
+     *
+     * <ul>
+     *   <li>{@code nonNullCount == 0}: no net non-null input → {@link #getValue} returns null
+     *   <li>{@code nonNullCount > 0}, bitmap empty: inputs XOR-cancelled → returns empty bitmap
+     *   <li>{@code nonNullCount > 0}, bitmap non-empty: normal result → returns serialized bitmap
+     * </ul>
+     */
     public static final class Accumulator {
 
-        /** True after the first non-null input has been accumulated. */
-        public boolean initialized = false;
+        /** Net count of non-null inputs: incremented by accumulate, decremented by retract. */
+        public long nonNullCount = 0L;
 
-        /** Current XOR result; meaningless if {@code initialized} is false. */
+        /** Running XOR result. Meaningful only when {@code nonNullCount > 0}. */
         public RoaringBitmap value = new RoaringBitmap();
+
+        @Override
+        public boolean equals(Object obj) {
+            if (this == obj) {
+                return true;
+            }
+            if (obj == null || getClass() != obj.getClass()) {
+                return false;
+            }
+            Accumulator that = (Accumulator) obj;
+            return nonNullCount == that.nonNullCount && Objects.equals(value, that.value);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(nonNullCount, value);
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -86,7 +112,7 @@ public class RbXorAggFunction extends AggregateFunction<byte[], RbXorAggFunction
     }
 
     /**
-     * XORs the input bitmap into the accumulator.
+     * XORs the input bitmap into the accumulator and increments {@code nonNullCount}.
      *
      * @param acc the running accumulator
      * @param bitmapBytes serialized RoaringBitmap bytes; null and empty arrays are ignored
@@ -96,11 +122,12 @@ public class RbXorAggFunction extends AggregateFunction<byte[], RbXorAggFunction
             return;
         }
         acc.value.xor(BitmapUtils.fromBytes(bitmapBytes));
-        acc.initialized = true;
+        acc.nonNullCount++;
     }
 
     /**
-     * XOR is self-inverse, so retraction applies the same XOR operation.
+     * Retracts a previously accumulated bitmap by applying the same XOR (self-inverse) and
+     * decrementing {@code nonNullCount}.
      *
      * @param acc the running accumulator
      * @param bitmapBytes serialized RoaringBitmap bytes; null and empty arrays are ignored
@@ -110,34 +137,39 @@ public class RbXorAggFunction extends AggregateFunction<byte[], RbXorAggFunction
             return;
         }
         acc.value.xor(BitmapUtils.fromBytes(bitmapBytes));
-        acc.initialized = true;
+        acc.nonNullCount--;
     }
 
-    /** Merges partial accumulators using XOR, required for two-phase aggregation. */
+    /**
+     * Merges partial accumulators using XOR. Sums {@code nonNullCount} across partials.
+     *
+     * @param acc target accumulator
+     * @param it partial accumulators from other partitions
+     */
     public void merge(Accumulator acc, Iterable<Accumulator> it) {
         for (Accumulator other : it) {
-            if (other.initialized) {
+            if (other.nonNullCount != 0) {
                 acc.value.xor(other.value);
-                acc.initialized = true;
+                acc.nonNullCount += other.nonNullCount;
             }
         }
     }
 
     public void resetAccumulator(Accumulator acc) {
-        acc.initialized = false;
+        acc.nonNullCount = 0L;
         acc.value.clear();
     }
 
     @Override
     @Nullable
     public byte[] getValue(Accumulator acc) {
-        if (!acc.initialized) {
+        if (acc.nonNullCount <= 0) {
             return null;
         }
         try {
             return BitmapUtils.toBytes(acc.value);
         } catch (IOException e) {
-            throw new FlussRuntimeException("Failed to serialize rb_xor_agg accumulator.", e);
+            throw new FlussRuntimeException("Failed to serialize rb_xor_agg result.", e);
         }
     }
 
@@ -147,7 +179,7 @@ public class RbXorAggFunction extends AggregateFunction<byte[], RbXorAggFunction
     }
 
     // -------------------------------------------------------------------------
-    // TypeSerializer and TypeInformation for Accumulator
+    // TypeInformation and TypeSerializer for Accumulator
     // -------------------------------------------------------------------------
 
     /** {@link TypeInformation} for {@link Accumulator}. */
@@ -216,7 +248,7 @@ public class RbXorAggFunction extends AggregateFunction<byte[], RbXorAggFunction
         }
     }
 
-    /** {@link TypeSerializer} for {@link Accumulator}. */
+    /** {@link TypeSerializer} for {@link Accumulator}. Serializes {@code nonNullCount} as long. */
     @ThreadSafe
     public static final class AccumulatorSerializer extends TypeSerializerSingleton<Accumulator> {
 
@@ -239,7 +271,7 @@ public class RbXorAggFunction extends AggregateFunction<byte[], RbXorAggFunction
         @Override
         public Accumulator copy(Accumulator from) {
             Accumulator copy = new Accumulator();
-            copy.initialized = from.initialized;
+            copy.nonNullCount = from.nonNullCount;
             copy.value = from.value.clone();
             return copy;
         }
@@ -256,8 +288,8 @@ public class RbXorAggFunction extends AggregateFunction<byte[], RbXorAggFunction
 
         @Override
         public void serialize(Accumulator record, DataOutputView target) throws IOException {
-            target.writeBoolean(record.initialized);
-            if (record.initialized) {
+            target.writeLong(record.nonNullCount);
+            if (record.nonNullCount > 0) {
                 byte[] bytes = BitmapUtils.toBytes(record.value);
                 target.writeInt(bytes.length);
                 target.write(bytes);
@@ -267,8 +299,8 @@ public class RbXorAggFunction extends AggregateFunction<byte[], RbXorAggFunction
         @Override
         public Accumulator deserialize(DataInputView source) throws IOException {
             Accumulator acc = new Accumulator();
-            acc.initialized = source.readBoolean();
-            if (acc.initialized) {
+            acc.nonNullCount = source.readLong();
+            if (acc.nonNullCount > 0) {
                 int size = source.readInt();
                 byte[] bytes = new byte[size];
                 source.readFully(bytes);
@@ -284,9 +316,9 @@ public class RbXorAggFunction extends AggregateFunction<byte[], RbXorAggFunction
 
         @Override
         public void copy(DataInputView source, DataOutputView target) throws IOException {
-            boolean initialized = source.readBoolean();
-            target.writeBoolean(initialized);
-            if (initialized) {
+            long count = source.readLong();
+            target.writeLong(count);
+            if (count > 0) {
                 int size = source.readInt();
                 target.writeInt(size);
                 byte[] buffer = new byte[size];
