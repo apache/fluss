@@ -648,14 +648,45 @@ class KvTabletTest {
                         Collections.singletonList(
                                 data2kvRecordFactory.ofRecord(
                                         "k1".getBytes(), new Object[] {1, null, "str"})));
+        // column c is omitted from the target columns, so it would be written as null
         assertThatThrownBy(() -> kvTablet.putAsLeader(kvRecordBatch, new int[] {0, 1}))
                 .isInstanceOf(InvalidTargetColumnException.class)
                 .hasMessage(
-                        "Partial Update requires all columns except primary key to be nullable, but column c is NOT NULL.");
-        assertThatThrownBy(() -> kvTablet.putAsLeader(kvRecordBatch, new int[] {0, 2}))
+                        "Partial Update requires all columns omitted from the target columns to be nullable, "
+                                + "but omitted column c is NOT NULL.");
+        // column c is listed in the target columns, so it is always provided by the writer
+        assertThatCode(() -> kvTablet.putAsLeader(kvRecordBatch, new int[] {0, 2}))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void testPartialDeleteWithNotNullTargetColumn() throws Exception {
+        final Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .column("c", new StringType(false))
+                        .primaryKey("a")
+                        .build();
+        initLogTabletAndKvTablet(schema, new HashMap<>());
+        KvRecordTestUtils.KvRecordFactory recordFactory =
+                KvRecordTestUtils.KvRecordFactory.of(schema.getRowType());
+        // seed a full row so the delete really has to null out column c
+        kvTablet.putAsLeader(
+                kvRecordBatchFactory.ofRecords(
+                        Collections.singletonList(
+                                recordFactory.ofRecord(
+                                        "k1".getBytes(), new Object[] {1, "bbb", "str"}))),
+                null);
+
+        KvRecordBatch deleteBatch =
+                kvRecordBatchFactory.ofRecords(
+                        Collections.singletonList(recordFactory.ofRecord("k1".getBytes(), null)));
+        assertThatThrownBy(() -> kvTablet.putAsLeader(deleteBatch, new int[] {0, 2}))
                 .isInstanceOf(InvalidTargetColumnException.class)
                 .hasMessage(
-                        "Partial Update requires all columns except primary key to be nullable, but column c is NOT NULL.");
+                        "Partial Delete sets the target columns to null, so it requires all target columns "
+                                + "except primary key to be nullable, but target column c is NOT NULL.");
     }
 
     @Test
