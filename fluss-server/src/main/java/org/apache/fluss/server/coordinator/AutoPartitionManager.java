@@ -354,7 +354,21 @@ public class AutoPartitionManager implements AutoCloseable {
                 lock,
                 () -> {
                     if (autoPartitionTables.containsKey(tableId)) {
-                        partitionsByTable.get(tableId).remove(partitionName);
+                        TableInfo tableInfo = autoPartitionTables.get(tableId);
+                        TreeMap<String, Set<String>> partitionMap = partitionsByTable.get(tableId);
+                        if (tableInfo.getPartitionKeys().size() > 1) {
+                            String autoPartitionValue =
+                                    extractAutoPartitionValue(tableInfo, partitionName);
+                            Set<String> partitionSet = partitionMap.get(autoPartitionValue);
+                            if (partitionSet != null) {
+                                partitionSet.remove(partitionName);
+                                if (partitionSet.isEmpty()) {
+                                    partitionMap.remove(autoPartitionValue);
+                                }
+                            }
+                        } else {
+                            partitionMap.remove(partitionName);
+                        }
                     }
                 });
     }
@@ -671,6 +685,30 @@ public class AutoPartitionManager implements AutoCloseable {
     @Nullable
     protected Integer getAutoCreateDayDelayMinutes(long tableId) {
         return autoCreateDayPartitionDelayMinutes.get(tableId);
+    }
+
+    /** Returns a snapshot of the cached partitions for the specified table. */
+    @VisibleForTesting
+    @Nullable
+    protected Map<String, Set<String>> getPartitionsByTable(long tableId) {
+        return inLock(
+                lock,
+                () -> {
+                    TreeMap<String, Set<String>> partitionMap = partitionsByTable.get(tableId);
+                    if (partitionMap == null) {
+                        return null;
+                    }
+
+                    Map<String, Set<String>> snapshot = new TreeMap<>();
+                    partitionMap.forEach(
+                            (partitionTime, partitionSet) ->
+                                    snapshot.put(
+                                            partitionTime,
+                                            partitionSet == null
+                                                    ? null
+                                                    : new HashSet<>(partitionSet)));
+                    return snapshot;
+                });
     }
 
     @Override
