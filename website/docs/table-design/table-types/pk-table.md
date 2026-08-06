@@ -74,6 +74,21 @@ follows:
 | 1 | 2.0 | t1 |
 | 2 | 3.0 | t2 |
 
+### Nullability requirements
+
+A column left out of the written columns is set to `null` when the row does not exist yet, so every column outside the
+written columns must be nullable. Columns that are written are always supplied by the writer, so they may be declared
+`NOT NULL`. An auto increment column is always left out of the written columns and only receives its value on the
+server, so it must be nullable as well.
+
+Partial delete has a stricter requirement. It sets the written columns other than the primary key to `null`, so it is
+rejected when one of them is `NOT NULL`, unless every column outside the written columns is already `null`, in which
+case the whole row is removed instead.
+
+Tables using the `aggregation` merge engine keep the stricter rule for partial update as well: every column other than
+the primary key must be nullable, including the written ones. The write is rejected by the server rather than when the
+writer is created.
+
 ## Merge Engines
 
 The **Merge Engine** in Fluss is a core component designed to efficiently handle and consolidate data updates for Primary Key Tables.

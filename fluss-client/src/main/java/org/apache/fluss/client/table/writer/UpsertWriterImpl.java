@@ -126,7 +126,6 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
             targetColumnsSet.set(targetColumnIndex);
         }
 
-        BitSet pkColumnSet = new BitSet();
         // check the target columns contains the primary key
         for (String key : primaryKeys) {
             int pkIndex = rowType.getFieldIndex(key);
@@ -136,7 +135,6 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
                                 "The target write columns %s must contain the primary key columns %s.",
                                 rowType.project(targetColumns).getFieldNames(), primaryKeys));
             }
-            pkColumnSet.set(pkIndex);
         }
 
         BitSet autoIncrementColumnSet = new BitSet();
@@ -152,17 +150,21 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
             autoIncrementColumnSet.set(autoIncrementColumnIndex);
         }
 
-        // check the columns not in targetColumns should be nullable
+        // an omitted column is written as null, so it must be nullable. auto increment columns
+        // are always omitted and only get their value on the server.
         for (int i = 0; i < rowType.getFieldCount(); i++) {
-            // column not in primary key and not in auto increment column
-            if (!pkColumnSet.get(i) && !autoIncrementColumnSet.get(i)) {
-                // the column should be nullable
-                if (!rowType.getTypeAt(i).isNullable()) {
+            if (!targetColumnsSet.get(i) && !rowType.getTypeAt(i).isNullable()) {
+                String columnName = rowType.getFieldNames().get(i);
+                if (autoIncrementColumnSet.get(i)) {
                     throw new IllegalArgumentException(
                             String.format(
-                                    "Partial Update requires all columns except primary key to be nullable, but column %s is NOT NULL.",
-                                    rowType.getFieldNames().get(i)));
+                                    "Partial Update requires the auto increment column %s to be nullable, since it is always omitted from the target columns and assigned by the server.",
+                                    columnName));
                 }
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Partial Update requires all columns omitted from the target columns to be nullable, but omitted column %s is NOT NULL.",
+                                columnName));
             }
         }
     }

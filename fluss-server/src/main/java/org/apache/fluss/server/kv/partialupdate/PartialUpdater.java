@@ -44,6 +44,14 @@ public class PartialUpdater {
     private final boolean updatePrimaryKeyOnly;
     private final DataType[] fieldDataTypes;
 
+    /** The target columns that are NOT NULL, checked by {@link #updateRow}. */
+    private final BitSet notNullTargetCols = new BitSet();
+
+    /** The same columns without the primary key, checked by {@link #deleteRow}. */
+    private final BitSet notNullNonPkTargetCols = new BitSet();
+
+    private final String[] fieldNames;
+
     public PartialUpdater(KvFormat kvFormat, short schemaId, Schema schema, int[] targetColumns) {
         this.targetSchemaId = schemaId;
         for (int targetColumn : targetColumns) {
@@ -54,6 +62,15 @@ public class PartialUpdater {
         }
         this.fieldDataTypes = schema.getRowType().getChildren().toArray(new DataType[0]);
         sanityCheck(schema, targetColumns);
+        this.fieldNames = schema.getRowType().getFieldNames().toArray(new String[0]);
+        for (int i = 0; i < fieldDataTypes.length; i++) {
+            if (partialUpdateCols.get(i) && !fieldDataTypes[i].isNullable()) {
+                notNullTargetCols.set(i);
+                if (!primaryKeyCols.get(i)) {
+                    notNullNonPkTargetCols.set(i);
+                }
+            }
+        }
 
         // getter for the fields in row
         flussFieldGetters = new InternalRow.FieldGetter[fieldDataTypes.length];
@@ -65,7 +82,6 @@ public class PartialUpdater {
     }
 
     private void sanityCheck(Schema schema, int[] targetColumns) {
-        BitSet pkColumnSet = new BitSet();
         // check the target columns contains the primary key
         for (int pkIndex : schema.getPrimaryKeyIndexes()) {
             if (!partialUpdateCols.get(pkIndex)) {
@@ -75,19 +91,28 @@ public class PartialUpdater {
                                 schema.getColumnNames(targetColumns),
                                 schema.getColumnNames(schema.getPrimaryKeyIndexes())));
             }
-            pkColumnSet.set(pkIndex);
         }
 
-        // check the columns not in targetColumns should be nullable
+        BitSet autoIncrementCols = new BitSet();
+        for (String name : schema.getAutoIncrementColumnNames()) {
+            autoIncrementCols.set(schema.getRowType().getFieldIndex(name));
+        }
+
+        // an omitted column is written as null, so it must be nullable. auto increment columns
+        // are always omitted and only get their value after the merge.
         for (int i = 0; i < fieldDataTypes.length; i++) {
-            // the columns not in primary key should be nullable
-            if (!pkColumnSet.get(i)) {
-                if (!fieldDataTypes[i].isNullable()) {
+            if (!partialUpdateCols.get(i) && !fieldDataTypes[i].isNullable()) {
+                String columnName = schema.getRowType().getFieldNames().get(i);
+                if (autoIncrementCols.get(i)) {
                     throw new InvalidTargetColumnException(
                             String.format(
-                                    "Partial Update requires all columns except primary key to be nullable, but column %s is NOT NULL.",
-                                    schema.getRowType().getFieldNames().get(i)));
+                                    "Partial Update requires the auto increment column %s to be nullable, since it is always omitted from the target columns and assigned by the server.",
+                                    columnName));
                 }
+                throw new InvalidTargetColumnException(
+                        String.format(
+                                "Partial Update requires all columns omitted from the target columns to be nullable, but omitted column %s is NOT NULL.",
+                                columnName));
             }
         }
     }
@@ -106,6 +131,8 @@ public class PartialUpdater {
             // only primary key columns are updated, return the old value directly
             return oldValue;
         }
+
+        checkNotNullTargetCols(partialValue);
 
         rowEncoder.startNewRow();
         // write each field
@@ -127,6 +154,23 @@ public class PartialUpdater {
     }
 
     /**
+     * Rejects a null in a non-nullable slot, which would desynchronise the encoded row. Runs before
+     * any field getter, since a getter deserialises the whole row and would fail first.
+     */
+    private void checkNotNullTargetCols(BinaryValue partialValue) {
+        for (int i = notNullTargetCols.nextSetBit(0);
+                i >= 0;
+                i = notNullTargetCols.nextSetBit(i + 1)) {
+            if (partialValue.row.isNullAt(i)) {
+                throw new InvalidTargetColumnException(
+                        String.format(
+                                "Target column %s is NOT NULL but the written row has no value for it.",
+                                fieldNames[i]));
+            }
+        }
+    }
+
+    /**
      * Partial delete the given {@code value}. If all the fields except for {@link
      * #partialUpdateCols} in {@code value.row} are null, return null. Otherwise, update all the
      * {@link #partialUpdateCols} in the {@code value.row} except for the primary key columns to
@@ -134,11 +178,20 @@ public class PartialUpdater {
      *
      * @param value the value to be deleted
      * @return the value after partial deleted
+     * @throws InvalidTargetColumnException if a non-primary-key target column is NOT NULL, since it
+     *     would have to be set to null
      */
     public @Nullable BinaryValue deleteRow(BinaryValue value) {
         if (isFieldsNull(value.row, partialUpdateCols)) {
+            // the whole row is removed, so no column is set to null
             return null;
         } else {
+            if (!notNullNonPkTargetCols.isEmpty()) {
+                throw new InvalidTargetColumnException(
+                        String.format(
+                                "Partial Delete sets the target columns to null, so it requires all target columns except primary key to be nullable, but target column %s is NOT NULL.",
+                                fieldNames[notNullNonPkTargetCols.nextSetBit(0)]));
+            }
             rowEncoder.startNewRow();
             // write each field
             for (int i = 0; i < fieldDataTypes.length; i++) {
