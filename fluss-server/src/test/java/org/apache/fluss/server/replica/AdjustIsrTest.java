@@ -142,9 +142,8 @@ public class AdjustIsrTest extends ReplicaTestBase {
         notifyLeaderAndIsr(replica, replicas, replica.getLeaderEpoch(), newBucketEpoch);
         assertThat(replica.getBucketEpoch()).isEqualTo(newBucketEpoch);
 
-        manualClock.advanceTime(
-                conf.get(ConfigOptions.LOG_REPLICA_MAX_LAG_TIME).toMillis() + 1,
-                TimeUnit.MILLISECONDS);
+        // Move the leader LEO ahead so isCaughtUp relies on the preserved lastCaughtUpTimeMs.
+        replica.appendRecordsToLeader(genMemoryLogRecordsByObject(DATA1), 0);
         replica.maybeShrinkIsr();
         assertThat(replica.getIsr()).containsExactlyInAnyOrder(1, 2, 3);
     }

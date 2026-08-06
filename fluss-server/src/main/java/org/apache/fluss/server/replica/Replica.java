@@ -441,6 +441,8 @@ public final class Replica {
                                 leaderEpoch = requestLeaderEpoch;
                                 onBecomeNewLeader();
                                 leaderReplicaIdOpt.set(localTabletServerId);
+                                // onBecomeNewLeader may recover a KV snapshot, so start the ISR lag
+                                // grace period after it completes.
                                 currentTimeMs = clock.milliseconds();
                                 long leaderEndOffset = logTablet.localLogEndOffset();
                                 for (FollowerReplica followerReplica :
