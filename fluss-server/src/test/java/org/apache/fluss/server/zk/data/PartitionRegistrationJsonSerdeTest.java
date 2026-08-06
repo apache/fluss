@@ -36,7 +36,7 @@ class PartitionRegistrationJsonSerdeTest extends JsonSerdeTestBase<PartitionRegi
 
     @Override
     protected PartitionRegistration[] createObjects() {
-        PartitionRegistration[] partitionRegistrations = new PartitionRegistration[3];
+        PartitionRegistration[] partitionRegistrations = new PartitionRegistration[4];
 
         partitionRegistrations[0] =
                 new PartitionRegistration(1234L, 5678L, "file://local/remote", null);
@@ -44,6 +44,7 @@ class PartitionRegistrationJsonSerdeTest extends JsonSerdeTestBase<PartitionRegi
         // a partition with a per-partition bucket count
         partitionRegistrations[2] =
                 new PartitionRegistration(1234L, 5678L, "file://local/remote", 8);
+        partitionRegistrations[3] = partitionRegistrations[2].withFrozen();
 
         return partitionRegistrations;
     }
@@ -53,7 +54,8 @@ class PartitionRegistrationJsonSerdeTest extends JsonSerdeTestBase<PartitionRegi
         return new String[] {
             "{\"version\":2,\"table_id\":1234,\"partition_id\":5678,\"remote_data_dir\":\"file://local/remote\"}",
             "{\"version\":2,\"table_id\":246,\"partition_id\":135}",
-            "{\"version\":2,\"table_id\":1234,\"partition_id\":5678,\"remote_data_dir\":\"file://local/remote\",\"bucket_count\":8}"
+            "{\"version\":2,\"table_id\":1234,\"partition_id\":5678,\"remote_data_dir\":\"file://local/remote\",\"bucket_count\":8}",
+            "{\"version\":2,\"table_id\":1234,\"partition_id\":5678,\"remote_data_dir\":\"file://local/remote\",\"bucket_count\":8,\"frozen\":true}"
         };
     }
 

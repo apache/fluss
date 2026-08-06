@@ -55,10 +55,6 @@ public class PartitionRegistration {
     /** Whether writes to the partition have been permanently frozen. */
     private final boolean frozen;
 
-    public PartitionRegistration(long tableId, long partitionId, @Nullable String remoteDataDir) {
-        this(tableId, partitionId, remoteDataDir, null);
-    }
-
     public PartitionRegistration(
             long tableId,
             long partitionId,
@@ -150,7 +146,9 @@ public class PartitionRegistration {
 
     /** Returns a new registration whose partition is permanently frozen. */
     public PartitionRegistration withFrozen() {
-        return frozen ? this : new PartitionRegistration(tableId, partitionId, remoteDataDir, bucketCount, true);
+        return frozen
+                ? this
+                : new PartitionRegistration(tableId, partitionId, remoteDataDir, bucketCount, true);
     }
 
     @Override

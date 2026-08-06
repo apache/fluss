@@ -931,6 +931,9 @@ public class MetadataManager {
                                 reg.getPartitionId(),
                                 reg.getRemoteDataDir(),
                                 oldBucketCount);
+                if (reg.isFrozen()) {
+                    updatedReg = updatedReg.withFrozen();
+                }
                 backfills.put(
                         partitionName,
                         new ZooKeeperClient.VersionedData<>(
