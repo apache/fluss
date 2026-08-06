@@ -1239,13 +1239,6 @@ public class ZooKeeperClient implements AutoCloseable {
         }
     }
 
-    /** Sync with the ZooKeeper leader before reading a partition registration. */
-    public Optional<PartitionRegistration> getSyncedPartition(
-            TablePath tablePath, String partitionName) throws Exception {
-        zkClient.sync().forPath(PartitionZNode.path(tablePath, partitionName));
-        return getPartition(tablePath, partitionName);
-    }
-
     /** Get partition id and table id for each partition in a batch async way. */
     public Map<PhysicalTablePath, TablePartition> getPartitionIds(
             Collection<PhysicalTablePath> partitionPaths) throws Exception {
