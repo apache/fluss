@@ -68,7 +68,7 @@ public class AutoPartitionStrategy {
                 conf.getOptional(ConfigOptions.TABLE_AUTO_PARTITION_TIME_FORMAT).orElse(null),
                 conf.getInt(ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE),
                 conf.getInt(ConfigOptions.TABLE_AUTO_PARTITION_NUM_RETENTION),
-                conf.getBoolean(ConfigOptions.TABLE_AUTO_PARTITION_RETENTION_ENSURE_TIERED),
+                conf.getBoolean(ConfigOptions.TABLE_AUTO_PARTITION_DROP_ENSURE_TIERED),
                 TimeZone.getTimeZone(conf.getString(ConfigOptions.TABLE_AUTO_PARTITION_TIMEZONE)));
     }
 
