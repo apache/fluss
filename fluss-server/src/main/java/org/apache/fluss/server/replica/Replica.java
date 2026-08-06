@@ -114,7 +114,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
-import javax.annotation.concurrent.GuardedBy;
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.io.Closeable;
@@ -212,7 +211,6 @@ public final class Replica {
     private volatile int coordinatorEpoch = CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
     private volatile boolean isStandbyReplica = false;
 
-    @GuardedBy("leaderIsrUpdateLock")
     private volatile boolean frozen = false;
 
     // null if table without pk or haven't become leader
