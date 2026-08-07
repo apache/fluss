@@ -75,9 +75,20 @@ public class PaimonRecordReader implements RecordReader {
         } else {
             org.apache.paimon.reader.RecordReader<InternalRow> recordReader =
                     tableRead.createReader(split.dataSplit());
-            iterator =
-                    new PaimonRecordReader.PaimonRowAsFlussRecordIterator(
-                            recordReader.toCloseableIterator(), paimonRowType);
+            org.apache.paimon.utils.CloseableIterator<InternalRow> closeableIterator =
+                    recordReader.toCloseableIterator();
+            try {
+                iterator =
+                        new PaimonRecordReader.PaimonRowAsFlussRecordIterator(
+                                closeableIterator, paimonRowType);
+            } catch (Throwable t) {
+                try {
+                    closeableIterator.close();
+                } catch (Exception closeException) {
+                    t.addSuppressed(closeException);
+                }
+                throw t;
+            }
         }
     }
 
