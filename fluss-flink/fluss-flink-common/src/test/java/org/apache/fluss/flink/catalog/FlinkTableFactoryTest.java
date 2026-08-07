@@ -22,12 +22,14 @@ import org.apache.fluss.flink.sink.FlinkTableSink;
 import org.apache.fluss.flink.source.FlinkTableSource;
 import org.apache.fluss.flink.source.lookup.FlinkAsyncLookupFunction;
 import org.apache.fluss.flink.source.lookup.FlinkLookupFunction;
+import org.apache.fluss.flink.source.lookup.HybridLakeAsyncLookupFunction;
 
 import org.apache.flink.api.common.RuntimeExecutionMode;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.ExecutionOptions;
 import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.api.Schema;
+import org.apache.flink.table.api.TableException;
 import org.apache.flink.table.api.ValidationException;
 import org.apache.flink.table.catalog.CatalogTable;
 import org.apache.flink.table.catalog.Column;
@@ -188,6 +190,78 @@ abstract class FlinkTableFactoryTest {
     }
 
     @Test
+    void testLakeFallbackLookupSource() {
+        ResolvedSchema schema = createPartitionedPkSchema();
+        FlinkTableSource tableSource =
+                (FlinkTableSource)
+                        createTableSource(
+                                schema, getLakeFallbackOptions(), Collections.singletonList("pt"));
+
+        LookupTableSource.LookupRuntimeProvider lookupProvider =
+                tableSource.getLookupRuntimeProvider(
+                        new LookupRuntimeProviderContext(new int[][] {{0}, {1}, {2}}));
+        assertThat(lookupProvider).isInstanceOf(AsyncLookupFunctionProvider.class);
+        AsyncLookupFunction asyncLookupFunction =
+                ((AsyncLookupFunctionProvider) lookupProvider).createAsyncLookupFunction();
+        assertThat(asyncLookupFunction).isInstanceOf(HybridLakeAsyncLookupFunction.class);
+    }
+
+    @Test
+    void testLakeFallbackLookupSourceValidation() {
+        ResolvedSchema schema = createPartitionedPkSchema();
+
+        Map<String, String> syncLookupProperties = getLakeFallbackOptions();
+        syncLookupProperties.put(FlinkConnectorOptions.LOOKUP_ASYNC.key(), "false");
+        assertThatThrownBy(
+                        () ->
+                                ((FlinkTableSource)
+                                                createTableSource(
+                                                        schema,
+                                                        syncLookupProperties,
+                                                        Collections.singletonList("pt")))
+                                        .getLookupRuntimeProvider(
+                                                new LookupRuntimeProviderContext(
+                                                        new int[][] {{0}, {1}, {2}})))
+                .isInstanceOf(TableException.class)
+                .hasMessageContaining(
+                        "Option 'lookup.lake-fallback.enabled' requires 'lookup.async' to be true.");
+
+        Map<String, String> partialLookupProperties = getLakeFallbackOptions();
+        partialLookupProperties.put("lookup.cache", "partial");
+        partialLookupProperties.put(PARTIAL_CACHE_EXPIRE_AFTER_ACCESS.key(), "18000");
+        partialLookupProperties.put(PARTIAL_CACHE_EXPIRE_AFTER_WRITE.key(), "36000");
+        partialLookupProperties.put(PARTIAL_CACHE_MAX_ROWS.key(), "100000");
+        assertThatThrownBy(
+                        () ->
+                                ((FlinkTableSource)
+                                                createTableSource(
+                                                        schema,
+                                                        partialLookupProperties,
+                                                        Collections.singletonList("pt")))
+                                        .getLookupRuntimeProvider(
+                                                new LookupRuntimeProviderContext(
+                                                        new int[][] {{0}, {1}, {2}})))
+                .isInstanceOf(TableException.class)
+                .hasMessageContaining(
+                        "Option 'lookup.lake-fallback.enabled' cannot be used with lookup cache.");
+
+        Map<String, String> nonFullLookupProperties = getLakeFallbackOptions();
+        assertThatThrownBy(
+                        () ->
+                                ((FlinkTableSource)
+                                                createTableSource(
+                                                        schema,
+                                                        nonFullLookupProperties,
+                                                        Collections.singletonList("pt")))
+                                        .getLookupRuntimeProvider(
+                                                new LookupRuntimeProviderContext(
+                                                        new int[][] {{0}, {2}})))
+                .isInstanceOf(TableException.class)
+                .hasMessageContaining(
+                        "Option 'lookup.lake-fallback.enabled' only supports full primary-key lookup.");
+    }
+
+    @Test
     void testVirtualLogTableSourceDoesNotSupportBatchMode() {
         ResolvedSchema schema = createBasicSchema();
         Map<String, String> properties = getBasicOptions();
@@ -242,6 +316,18 @@ abstract class FlinkTableFactoryTest {
                 UniqueConstraint.primaryKey("PK_first_third", Arrays.asList("first", "third")));
     }
 
+    private ResolvedSchema createPartitionedPkSchema() {
+        return new ResolvedSchema(
+                Arrays.asList(
+                        Column.physical("id", DataTypes.INT().notNull()),
+                        Column.physical("sub_id", DataTypes.INT().notNull()),
+                        Column.physical("pt", DataTypes.STRING().notNull()),
+                        Column.physical("value", DataTypes.STRING())),
+                Collections.emptyList(),
+                UniqueConstraint.primaryKey(
+                        "PK_id_sub_id_pt", Arrays.asList("id", "sub_id", "pt")));
+    }
+
     private ResolvedSchema createBinlogSchema() {
         return new ResolvedSchema(
                 Arrays.asList(
@@ -277,9 +363,30 @@ abstract class FlinkTableFactoryTest {
         return basicOptions;
     }
 
+    private static Map<String, String> getLakeFallbackOptions() {
+        Map<String, String> options = getBasicOptions();
+        options.put(BUCKET_KEY.key(), "id");
+        options.put("table.datalake.enabled", "true");
+        options.put("table.datalake.format", "paimon");
+        options.put(FlinkConnectorOptions.LOOKUP_ASYNC.key(), "true");
+        options.put(FlinkConnectorOptions.LOOKUP_LAKE_FALLBACK_ENABLED.key(), "true");
+        return options;
+    }
+
     private static DynamicTableSource createTableSource(
             ResolvedSchema schema, Map<String, String> options) {
         return createTableSource(schema, options, Collections.emptyMap());
+    }
+
+    private static DynamicTableSource createTableSource(
+            ResolvedSchema schema, Map<String, String> options, List<String> partitionKeys) {
+        return createTableSource(
+                OBJECT_IDENTIFIER,
+                schema,
+                options,
+                Collections.emptyMap(),
+                new Configuration(),
+                partitionKeys);
     }
 
     private static DynamicTableSource createTableSource(
@@ -296,6 +403,24 @@ abstract class FlinkTableFactoryTest {
             Map<String, String> options,
             Map<String, String> enrichmentOptions,
             Configuration configuration) {
+        return createTableSource(
+                objectIdentifier,
+                schema,
+                options,
+                enrichmentOptions,
+                configuration,
+                schema.getPrimaryKey()
+                        .map(UniqueConstraint::getColumns)
+                        .orElse(Collections.emptyList()));
+    }
+
+    private static DynamicTableSource createTableSource(
+            ObjectIdentifier objectIdentifier,
+            ResolvedSchema schema,
+            Map<String, String> options,
+            Map<String, String> enrichmentOptions,
+            Configuration configuration,
+            List<String> partitionKeys) {
         FlinkTableFactory tableFactory = createFlinkTableFactory();
         FactoryUtil.DefaultDynamicTableContext context =
                 new FactoryUtil.DefaultDynamicTableContext(
@@ -304,9 +429,7 @@ abstract class FlinkTableFactoryTest {
                                 CatalogTable.of(
                                         Schema.newBuilder().fromResolvedSchema(schema).build(),
                                         "mock source",
-                                        schema.getPrimaryKey()
-                                                .map(UniqueConstraint::getColumns)
-                                                .orElse(Collections.emptyList()),
+                                        partitionKeys,
                                         options),
                                 schema),
                         enrichmentOptions,
