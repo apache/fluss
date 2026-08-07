@@ -248,12 +248,13 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         } else {
             assertThat(insertPlan).contains("\"ship_strategy\" : \"FORWARD\"");
         }
-        // there shouldn't have REBALANCE shuffle strategy, this asserts operator parallelism
+        // there shouldn't have REBALANCE shuffle strategy, this asserts operator
+        // parallelism
         assertThat(insertPlan).doesNotContain("\"ship_strategy\" : \"REBALANCE\"");
         tEnv.executeSql(insertSql).await();
 
         CloseableIterator<Row> rowIter = tEnv.executeSql("select * from sink_test").collect();
-        //noinspection ArraysAsListWithZeroOrOneArgument
+        // noinspection ArraysAsListWithZeroOrOneArgument
         List<List<String>> expectedGroups =
                 Arrays.asList(
                         Arrays.asList(
@@ -407,7 +408,7 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         tEnv.executeSql(insertSql).await();
 
         CloseableIterator<Row> rowIter = tEnv.executeSql("select * from sink_test").collect();
-        //noinspection ArraysAsListWithZeroOrOneArgument
+        // noinspection ArraysAsListWithZeroOrOneArgument
         List<List<String>> expectedGroups =
                 Arrays.asList(
                         Arrays.asList(
@@ -551,7 +552,8 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         // partial delete
         org.apache.flink.table.api.Table changeLogTable =
                 tEnv.fromChangelogStream(
-                        env.fromElements(
+                        env.fromCollection(
+                                Arrays.asList(
                                         Row.ofKind(
                                                 org.apache.flink.types.RowKind.INSERT,
                                                 1,
@@ -561,8 +563,8 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                                                 org.apache.flink.types.RowKind.DELETE,
                                                 1,
                                                 333L,
-                                                "c11"))
-                                .returns(Types.ROW(Types.INT, Types.LONG, Types.STRING)));
+                                                "c11")),
+                                Types.ROW(Types.INT, Types.LONG, Types.STRING)));
         tEnv.createTemporaryView("changeLog", changeLogTable);
 
         // check the target fields in row 1 is set to null
@@ -572,7 +574,8 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                         "-U[1, 111, c1]", "+U[1, 333, c1]", "-U[1, 333, c1]", "+U[1, null, c1]");
         assertResultsIgnoreOrder(rowIter, expectedRows, false);
 
-        // check the row 1 will be deleted finally since all the fields in the row are set to null
+        // check the row 1 will be deleted finally since all the fields in the row are
+        // set to null
         tEnv.executeSql("INSERT INTO sink_test(a, c) SELECT f0, f2 FROM changeLog").await();
         expectedRows = Arrays.asList("-U[1, null, c1]", "+U[1, null, c11]", "-D[1, null, c11]");
         assertResultsIgnoreOrder(rowIter, expectedRows, true);
@@ -636,7 +639,8 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                         + " b string) with('table.merge-engine' = 'first_row')");
         tEnv.executeSql("create table log_sink (a int, b string)");
 
-        // insert the primary table with first_row merge engine into the log table to verify that
+        // insert the primary table with first_row merge engine into the log table to
+        // verify that
         // the first_row merge engine only generates append-only stream
         JobClient insertJobClient =
                 tEnv.executeSql("insert into log_sink select * from first_row_source")
@@ -708,7 +712,9 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                                         Row.ofKind(RowKind.DELETE, 1, 3501L, "Tim"),
                                         Row.ofKind(RowKind.INSERT, 2, 3502L, "Fabian"),
                                         Row.ofKind(RowKind.UPDATE_BEFORE, 2, 3502L, "Fabian"),
-                                        Row.ofKind(RowKind.UPDATE_AFTER, 3, 3503L, "coco"))));
+                                        Row.ofKind(RowKind.UPDATE_AFTER, 3, 3503L, "coco")),
+                                Types.ROW(Types.INT, Types.LONG, Types.STRING)));
+
         tEnv.createTemporaryView(String.format("%s", sourceName), cdcSourceData);
 
         tEnv.executeSql(
@@ -790,7 +796,8 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                 .await();
 
         // This test requires dynamically discovering newly created partitions, so
-        // 'scan.partition.discovery.interval' needs to be set to 2s (default is 1 minute),
+        // 'scan.partition.discovery.interval' needs to be set to 2s (default is 1
+        // minute),
         // otherwise the test may hang for 1 minute.
         CloseableIterator<Row> rowIter =
                 tEnv.executeSql(
@@ -1310,7 +1317,8 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
 
     @Test
     void testComprehensiveAggregationFunctions() throws Exception {
-        // Test all 11 aggregate functions (each function tested once with representative data type)
+        // Test all 11 aggregate functions (each function tested once with
+        // representative data type)
         tEnv.executeSql(
                 "create table comprehensive_agg ("
                         + "id int not null primary key not enforced, "
@@ -1464,7 +1472,8 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
 
         assertResultsIgnoreOrder(rowIter, expectedRows, false);
 
-        // Partial insert on a new key (no prior full insert) — unspecified columns should be null
+        // Partial insert on a new key (no prior full insert) — unspecified columns
+        // should be null
         tEnv.executeSql("INSERT INTO agg_partial_update(id, sum_a) VALUES (2, 77)").await();
 
         expectedRows = Arrays.asList("+I[2, 77, null]");
@@ -1553,7 +1562,8 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                             "TableSourceScan(table=[[testcatalog, defaultdb, delete_behavior_ignore_table]], fields=[a, b], "
                                     + "changelogMode=[I,UB,UA,D])");
         } else {
-            // For 'ignore' and 'disable', delete operations are not emitted in the changelog
+            // For 'ignore' and 'disable', delete operations are not emitted in the
+            // changelog
             assertThat(changelogModePlan)
                     .contains(
                             "TableSourceScan(table=[[testcatalog, defaultdb, delete_behavior_ignore_table]], fields=[a, b], "
@@ -1576,7 +1586,9 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                                 Arrays.asList(
                                         Row.ofKind(RowKind.INSERT, 4, "test4"),
                                         Row.ofKind(RowKind.DELETE, 1, "test1"), // Should be ignored
-                                        Row.ofKind(RowKind.UPDATE_AFTER, 2, "updated_test2"))));
+                                        Row.ofKind(RowKind.UPDATE_AFTER, 2, "updated_test2")),
+                                Types.ROW(Types.INT, Types.STRING)));
+
         tEnv.createTemporaryView("changelog_source", changelogData);
 
         // Disable upsert materialization to avoid generate SinkMaterializer operator,
@@ -1594,13 +1606,15 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
 
         // 3. Verify the final table state based on delete behavior
         if (deleteBehavior.equals("disable")) {
-            // For 'disable', the delete operation is not supported, so we expect an exception
+            // For 'disable', the delete operation is not supported, so we expect an
+            // exception
             assertThatThrownBy(tableResult::await)
                     .hasStackTraceContaining(
                             "DeletionDisabledException: Delete operations are disabled for this table."
                                     + " The table.delete.behavior is set to 'disable'.");
         } else {
-            // For 'ignore', the delete operation is ignored, so we just wait for the insert and
+            // For 'ignore', the delete operation is ignored, so we just wait for the insert
+            // and
             // update to be applied
             tableResult.await();
             CloseableIterator<Row> rowIter =
@@ -1674,8 +1688,10 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
 
         // Explain the aggregation query to check for ChangelogNormalize
         String aggPlan = tEnv.explainSql(aggQuery);
-        // ChangelogNormalize should be present to normalize the changelog for aggregation
-        // In Flink, when the source produces changelog with primary key semantics (I, UA, D),
+        // ChangelogNormalize should be present to normalize the changelog for
+        // aggregation
+        // In Flink, when the source produces changelog with primary key semantics (I,
+        // UA, D),
         // a ChangelogNormalize operator is inserted before aggregation
         assertThat(aggPlan).contains("ChangelogNormalize");
 
@@ -1706,6 +1722,53 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     }
 
     @Test
+    void testRowUpdateWithComputedColumn() throws Exception {
+        String tableName = "fluss_order";
+        tEnv.executeSql(
+                "CREATE TABLE "
+                        + tableName
+                        + " ("
+                        + "    order_key BIGINT,"
+                        + "    cust_key BIGINT,"
+                        + "    order_status VARCHAR,"
+                        + "    total_price DOUBLE,"
+                        + "    order_date DATE,"
+                        + "    order_priority VARCHAR,"
+                        + "    ptime AS PROCTIME(),"
+                        + "    PRIMARY KEY (order_key) NOT ENFORCED"
+                        + ") WITH ("
+                        + "    'table.changelog.image' = 'wal'"
+                        + ")");
+
+        tEnv.executeSql(
+                        "INSERT INTO "
+                                + tableName
+                                + " VALUES "
+                                + "(14404096, 1, 'o', 10.0, DATE '2026-01-01', 'low')")
+                .await();
+
+        tBatchEnv
+                .executeSql(
+                        "UPDATE "
+                                + tableName
+                                + " SET order_priority = 'high' WHERE order_key = 14404096")
+                .await();
+
+        // Verify the update was applied correctly (regression guard: computed column
+        // ptime must not corrupt or displace the physical columns during serialization).
+        CloseableIterator<Row> rowIter =
+                tBatchEnv
+                        .executeSql(
+                                "SELECT order_key, cust_key, order_status, total_price, order_priority"
+                                        + " FROM "
+                                        + tableName
+                                        + " WHERE order_key = 14404096")
+                        .collect();
+        assertResultsIgnoreOrder(
+                rowIter, Collections.singletonList("+I[14404096, 1, o, 10.0, high]"), true);
+    }
+
+    @Test
     void testAutoIncrementWithTargetColumns() throws Exception {
         // use single parallelism to make result ordering stable
         tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
@@ -1723,7 +1786,8 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                         tableName));
 
         // Insert rows one by one to preserve auto-increment ID ordering.
-        // Partial-column INSERT ... VALUES is rewritten into a UNION ALL of Value Sources
+        // Partial-column INSERT ... VALUES is rewritten into a UNION ALL of Value
+        // Sources
         // by Flink, whose runtime does not guarantee UNION ALL input ordering.
         List<Tuple2<Integer, Integer>> inserts =
                 Arrays.asList(
@@ -1819,7 +1883,8 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                         tableName));
 
         // Insert rows one by one to preserve auto-increment ID ordering.
-        // Partial-column INSERT ... VALUES is rewritten into a UNION ALL of Value Sources
+        // Partial-column INSERT ... VALUES is rewritten into a UNION ALL of Value
+        // Sources
         // by Flink, whose runtime does not guarantee UNION ALL input ordering.
         List<Tuple2<Integer, Integer>> inserts =
                 Arrays.asList(
