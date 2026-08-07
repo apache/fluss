@@ -44,9 +44,7 @@ public class FlinkLookupFunction extends LookupFunction {
     private static final Logger LOG = LoggerFactory.getLogger(FlinkLookupFunction.class);
     private static final long serialVersionUID = 1L;
 
-    private final RowType flinkRowType;
     private final LookupNormalizer lookupNormalizer;
-    private final int[] projection;
     private final FlussLookupRuntime flussLookupRuntime;
     private transient LookupResultConverter lookupResultConverter;
 
@@ -57,25 +55,25 @@ public class FlinkLookupFunction extends LookupFunction {
             LookupNormalizer lookupNormalizer,
             @Nullable int[] projection,
             boolean insertIfNotExists) {
-        this.flinkRowType = flinkRowType;
         this.lookupNormalizer = lookupNormalizer;
-        this.projection =
-                projection == null
-                        ? IntStream.range(0, flinkRowType.getFieldCount()).toArray()
-                        : projection;
         this.flussLookupRuntime =
                 new FlussLookupRuntime(
                         flussConfig, tablePath, flinkRowType, lookupNormalizer, insertIfNotExists);
+
+        int[] resolvedProjection =
+                projection == null
+                        ? IntStream.range(0, flinkRowType.getFieldCount()).toArray()
+                        : projection;
+        RowType outputRowType = FlinkUtils.projectRowType(flinkRowType, resolvedProjection);
+        this.lookupResultConverter =
+                new LookupResultConverter(
+                        FlinkConversions.toFlussRowType(outputRowType), resolvedProjection);
     }
 
     @Override
     public void open(FunctionContext context) {
         LOG.info("start open ...");
         flussLookupRuntime.open();
-        RowType outputRowType = FlinkUtils.projectRowType(flinkRowType, projection);
-        lookupResultConverter =
-                new LookupResultConverter(
-                        FlinkConversions.toFlussRowType(outputRowType), projection);
         LOG.info("end open.");
     }
 

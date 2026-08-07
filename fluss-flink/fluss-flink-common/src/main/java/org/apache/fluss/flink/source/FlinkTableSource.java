@@ -549,7 +549,6 @@ public class FlinkTableSource
                             tablePath,
                             tableOutputType,
                             primaryKeyIndexes,
-                            partitionKeyIndexes,
                             lookupNormalizer,
                             projectedFields,
                             tableOptions,
@@ -618,6 +617,10 @@ public class FlinkTableSource
         if (partitionKeyIndexes.length == 0) {
             throw new TableException(
                     "Option 'lookup.lake-fallback.enabled' requires a partitioned table.");
+        }
+        if (!tableConfig.getAutoPartitionStrategy().isAutoPartitionEnabled()) {
+            throw new TableException(
+                    "Option 'lookup.lake-fallback.enabled' requires an auto-partitioned table.");
         }
         if (lakeFallbackExecutorThreads <= 0 || lakeFallbackMaxConcurrency <= 0) {
             throw new TableException(

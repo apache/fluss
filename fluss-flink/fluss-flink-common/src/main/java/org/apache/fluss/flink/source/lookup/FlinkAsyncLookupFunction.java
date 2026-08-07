@@ -47,9 +47,7 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
     private static final long serialVersionUID = 1L;
 
     private final TablePath tablePath;
-    private final RowType flinkRowType;
     private final LookupNormalizer lookupNormalizer;
-    private final int[] projection;
     private final FlussLookupRuntime flussLookupRuntime;
     private transient LookupResultConverter lookupResultConverter;
 
@@ -61,25 +59,25 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
             @Nullable int[] projection,
             boolean insertIfNotExists) {
         this.tablePath = tablePath;
-        this.flinkRowType = flinkRowType;
         this.lookupNormalizer = lookupNormalizer;
-        this.projection =
-                projection == null
-                        ? IntStream.range(0, flinkRowType.getFieldCount()).toArray()
-                        : projection;
         this.flussLookupRuntime =
                 new FlussLookupRuntime(
                         flussConfig, tablePath, flinkRowType, lookupNormalizer, insertIfNotExists);
+
+        int[] resolvedProjection =
+                projection == null
+                        ? IntStream.range(0, flinkRowType.getFieldCount()).toArray()
+                        : projection;
+        RowType outputRowType = FlinkUtils.projectRowType(flinkRowType, resolvedProjection);
+        lookupResultConverter =
+                new LookupResultConverter(
+                        FlinkConversions.toFlussRowType(outputRowType), resolvedProjection);
     }
 
     @Override
     public void open(FunctionContext context) {
         LOG.info("start open ...");
         flussLookupRuntime.open();
-        RowType outputRowType = FlinkUtils.projectRowType(flinkRowType, projection);
-        lookupResultConverter =
-                new LookupResultConverter(
-                        FlinkConversions.toFlussRowType(outputRowType), projection);
         LOG.info("end open.");
     }
 

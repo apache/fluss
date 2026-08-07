@@ -259,6 +259,22 @@ abstract class FlinkTableFactoryTest {
                 .isInstanceOf(TableException.class)
                 .hasMessageContaining(
                         "Option 'lookup.lake-fallback.enabled' only supports full primary-key lookup.");
+
+        Map<String, String> nonAutoPartitionProperties = getLakeFallbackOptions();
+        nonAutoPartitionProperties.put("table.auto-partition.enabled", "false");
+        assertThatThrownBy(
+                        () ->
+                                ((FlinkTableSource)
+                                                createTableSource(
+                                                        schema,
+                                                        nonAutoPartitionProperties,
+                                                        Collections.singletonList("pt")))
+                                        .getLookupRuntimeProvider(
+                                                new LookupRuntimeProviderContext(
+                                                        new int[][] {{0}, {1}, {2}})))
+                .isInstanceOf(TableException.class)
+                .hasMessageContaining(
+                        "Option 'lookup.lake-fallback.enabled' requires an auto-partitioned table.");
     }
 
     @Test
@@ -368,6 +384,7 @@ abstract class FlinkTableFactoryTest {
         options.put(BUCKET_KEY.key(), "id");
         options.put("table.datalake.enabled", "true");
         options.put("table.datalake.format", "paimon");
+        options.put("table.auto-partition.enabled", "true");
         options.put(FlinkConnectorOptions.LOOKUP_ASYNC.key(), "true");
         options.put(FlinkConnectorOptions.LOOKUP_LAKE_FALLBACK_ENABLED.key(), "true");
         return options;

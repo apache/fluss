@@ -18,18 +18,18 @@
 package org.apache.fluss.flink.source.lookup;
 
 import org.apache.fluss.client.admin.Admin;
-import org.apache.fluss.client.lookup.LookupType;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.flink.utils.FlinkConversions;
 import org.apache.fluss.flink.utils.FlinkUtils;
+import org.apache.fluss.metadata.PartitionInfo;
+import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 
-import org.apache.flink.table.api.TableException;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.functions.AsyncLookupFunction;
 import org.apache.flink.table.functions.FunctionContext;
@@ -42,10 +42,13 @@ import javax.annotation.Nullable;
 import java.time.Duration;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -55,8 +58,6 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.stream.IntStream;
-
-import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /**
  * An async lookup function that first looks up Fluss and falls back to a lake point lookup when the
@@ -73,7 +74,10 @@ public class HybridLakeAsyncLookupFunction extends AsyncLookupFunction {
     private final TablePath tablePath;
     private final LookupNormalizer lookupNormalizer;
     private final FlussLookupRuntime flussLookupRuntime;
-    private transient LookupResultConverter lookupResultConverter;
+    private final LookupResultConverter lookupResultConverter;
+
+    // Auto-created partitions cached as absent are expired and will never become live again.
+    private final Map<PartitionSpec, Boolean> partitionExistenceCache = new ConcurrentHashMap<>();
 
     private final LakeLookupRuntime lakeLookupRuntime;
     private final Duration lakeFallbackTimeout;
@@ -81,13 +85,13 @@ public class HybridLakeAsyncLookupFunction extends AsyncLookupFunction {
     private final int lakeFallbackMaxConcurrency;
     private transient ThreadPoolExecutor lakeLookupExecutor;
     private transient ScheduledExecutorService timeoutExecutor;
+    private transient Admin admin;
 
     public HybridLakeAsyncLookupFunction(
             Configuration flussConfig,
             TablePath tablePath,
             RowType flinkRowType,
             int[] primaryKeyIndexes,
-            int[] partitionKeyIndexes,
             LookupNormalizer lookupNormalizer,
             @Nullable int[] projection,
             Map<String, String> tableOptions,
@@ -100,14 +104,6 @@ public class HybridLakeAsyncLookupFunction extends AsyncLookupFunction {
         this.lakeFallbackTimeout = lakeFallbackTimeout;
         this.lakeFallbackExecutorThreads = lakeFallbackExecutorThreads;
         this.lakeFallbackMaxConcurrency = lakeFallbackMaxConcurrency;
-
-        validateLookupShape(
-                primaryKeyIndexes,
-                partitionKeyIndexes,
-                lookupNormalizer,
-                lakeFallbackTimeout,
-                lakeFallbackExecutorThreads,
-                lakeFallbackMaxConcurrency);
 
         int[] resolvedProjection =
                 projection == null
@@ -135,6 +131,8 @@ public class HybridLakeAsyncLookupFunction extends AsyncLookupFunction {
     public void open(@Nullable FunctionContext context) {
         LOG.info("Starting hybrid lake async lookup function for table {}.", tablePath);
         flussLookupRuntime.open();
+        admin = flussLookupRuntime.getAdmin();
+        initializePartitionExistenceCache();
 
         TableInfo tableInfo = flussLookupRuntime.getTableInfo();
         lakeLookupRuntime.open(tableInfo);
@@ -146,6 +144,47 @@ public class HybridLakeAsyncLookupFunction extends AsyncLookupFunction {
         LOG.info("Finished opening hybrid lake async lookup function for table {}.", tablePath);
     }
 
+    private void initializePartitionExistenceCache() {
+        partitionExistenceCache.clear();
+        try {
+            List<PartitionInfo> partitionInfos = admin.listPartitionInfos(tablePath).get();
+            for (PartitionInfo partitionInfo : partitionInfos) {
+                partitionExistenceCache.put(partitionInfo.getPartitionSpec(), true);
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException(
+                    "Interrupted while initializing partitions for table " + tablePath + ".", e);
+        } catch (ExecutionException e) {
+            throw new RuntimeException(
+                    "Failed to initialize partitions for table " + tablePath + ".", e.getCause());
+        }
+    }
+
+    private synchronized boolean getOrRefreshPartitionExistence(PartitionSpec partitionSpec) {
+        Boolean partitionExists = partitionExistenceCache.get(partitionSpec);
+        if (partitionExists != null) {
+            return partitionExists;
+        }
+        try {
+            partitionExists = !admin.listPartitionInfos(tablePath, partitionSpec).get().isEmpty();
+            partitionExistenceCache.put(partitionSpec, partitionExists);
+            return partitionExists;
+        } catch (Exception e) {
+            throw new RuntimeException(
+                    "Failed to refresh partition "
+                            + partitionSpec
+                            + " for table "
+                            + tablePath
+                            + ".",
+                    e.getCause());
+        }
+    }
+
+    private void markPartitionInvalid(PartitionSpec partitionSpec) {
+        partitionExistenceCache.put(partitionSpec, false);
+    }
+
     @Override
     public CompletableFuture<Collection<RowData>> asyncLookup(RowData keyRow) {
         RowData normalizedKeyRow = lookupNormalizer.normalizeLookupKey(keyRow);
@@ -155,6 +194,37 @@ public class HybridLakeAsyncLookupFunction extends AsyncLookupFunction {
                 lakeLookupRuntime.createLookupKey(normalizedKeyRow);
 
         CompletableFuture<Collection<RowData>> future = new CompletableFuture<>();
+        lookupByPartition(normalizedKeyRow, lakeLookupKey, remainingFilter, future);
+        return future;
+    }
+
+    private void lookupByPartition(
+            RowData normalizedKeyRow,
+            LakeLookupRuntime.LakeLookupKey lakeLookupKey,
+            @Nullable LookupNormalizer.RemainingFilter remainingFilter,
+            CompletableFuture<Collection<RowData>> future) {
+        try {
+            PartitionSpec partitionSpec = lakeLookupKey.getPartitionSpec().toPartitionSpec();
+            Boolean partitionExists = partitionExistenceCache.get(partitionSpec);
+            if (partitionExists == null) {
+                partitionExists = getOrRefreshPartitionExistence(partitionSpec);
+            }
+            if (partitionExists) {
+                lookupFlussAsync(normalizedKeyRow, lakeLookupKey, remainingFilter, future);
+            } else {
+                lookupLakeAsync(lakeLookupKey, remainingFilter, future);
+            }
+        } catch (Throwable t) {
+            future.completeExceptionally(t);
+        }
+    }
+
+    private void lookupFlussAsync(
+            RowData normalizedKeyRow,
+            LakeLookupRuntime.LakeLookupKey lakeLookupKey,
+            @Nullable LookupNormalizer.RemainingFilter remainingFilter,
+            CompletableFuture<Collection<RowData>> future) {
+        PartitionSpec partitionSpec = lakeLookupKey.getPartitionSpec().toPartitionSpec();
         try {
             flussLookupRuntime
                     .lookup(normalizedKeyRow)
@@ -165,8 +235,8 @@ public class HybridLakeAsyncLookupFunction extends AsyncLookupFunction {
                                         if (ExceptionUtils.findThrowable(
                                                         throwable, PartitionNotExistException.class)
                                                 .isPresent()) {
-                                            checkPartitionAndLookupLake(
-                                                    lakeLookupKey, remainingFilter, future);
+                                            markPartitionInvalid(partitionSpec);
+                                            lookupLakeAsync(lakeLookupKey, remainingFilter, future);
                                             return;
                                         }
                                         LOG.error(
@@ -181,18 +251,12 @@ public class HybridLakeAsyncLookupFunction extends AsyncLookupFunction {
                                         return;
                                     }
 
-                                    boolean hit = result != null && !result.getRowList().isEmpty();
-                                    if (hit) {
+                                    if (result != null && !result.getRowList().isEmpty()) {
                                         future.complete(
-                                                checkNotNull(
-                                                                lookupResultConverter,
-                                                                "Lookup result converter is not initialized.")
-                                                        .convert(
-                                                                result.getRowList(),
-                                                                remainingFilter));
+                                                lookupResultConverter.convert(
+                                                        result.getRowList(), remainingFilter));
                                     } else {
-                                        checkPartitionAndLookupLake(
-                                                lakeLookupKey, remainingFilter, future);
+                                        future.complete(Collections.emptyList());
                                     }
                                 } catch (Throwable t) {
                                     future.completeExceptionally(t);
@@ -200,37 +264,12 @@ public class HybridLakeAsyncLookupFunction extends AsyncLookupFunction {
                             });
         } catch (Throwable t) {
             if (ExceptionUtils.findThrowable(t, PartitionNotExistException.class).isPresent()) {
-                checkPartitionAndLookupLake(lakeLookupKey, remainingFilter, future);
+                markPartitionInvalid(partitionSpec);
+                lookupLakeAsync(lakeLookupKey, remainingFilter, future);
             } else {
                 future.completeExceptionally(t);
             }
         }
-        return future;
-    }
-
-    private void checkPartitionAndLookupLake(
-            LakeLookupRuntime.LakeLookupKey lakeLookupKey,
-            @Nullable LookupNormalizer.RemainingFilter remainingFilter,
-            CompletableFuture<Collection<RowData>> future) {
-        Admin admin = flussLookupRuntime.getAdmin();
-        admin.listPartitionInfos(tablePath, lakeLookupKey.getPartitionSpec().toPartitionSpec())
-                .whenComplete(
-                        (partitionInfos, throwable) -> {
-                            try {
-                                if (throwable != null) {
-                                    future.completeExceptionally(throwable);
-                                    return;
-                                }
-                                boolean partitionExists = !partitionInfos.isEmpty();
-                                if (partitionExists) {
-                                    future.complete(Collections.emptyList());
-                                } else {
-                                    lookupLakeAsync(lakeLookupKey, remainingFilter, future);
-                                }
-                            } catch (Throwable t) {
-                                future.completeExceptionally(t);
-                            }
-                        });
     }
 
     private ThreadPoolExecutor createLakeLookupExecutor() {
@@ -313,34 +352,6 @@ public class HybridLakeAsyncLookupFunction extends AsyncLookupFunction {
             return Collections.emptyList();
         }
         return lookupResultConverter.convert(Collections.singletonList(row), remainingFilter);
-    }
-
-    private static void validateLookupShape(
-            int[] primaryKeyIndexes,
-            int[] partitionKeyIndexes,
-            LookupNormalizer lookupNormalizer,
-            Duration lakeFallbackTimeout,
-            int lakeFallbackExecutorThreads,
-            int lakeFallbackMaxConcurrency) {
-        if (primaryKeyIndexes.length == 0) {
-            throw new TableException("Lake fallback lookup requires a primary-key table.");
-        }
-        if (partitionKeyIndexes.length == 0) {
-            throw new TableException("Lake fallback lookup requires a partitioned table.");
-        }
-        if (lookupNormalizer.getLookupType() != LookupType.LOOKUP) {
-            throw new TableException("Lake fallback lookup only supports full primary-key lookup.");
-        }
-        if (lakeFallbackTimeout.isZero() || lakeFallbackTimeout.isNegative()) {
-            throw new TableException("Lake fallback lookup timeout must be positive.");
-        }
-        if (lakeFallbackExecutorThreads <= 0 || lakeFallbackMaxConcurrency <= 0) {
-            throw new TableException("Lake fallback lookup executor settings must be positive.");
-        }
-        if (lakeFallbackExecutorThreads > lakeFallbackMaxConcurrency) {
-            throw new TableException(
-                    "Lake fallback lookup executor threads must not exceed max concurrency.");
-        }
     }
 
     @Override

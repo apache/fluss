@@ -26,16 +26,19 @@ import org.apache.flink.table.data.RowData;
 
 import javax.annotation.Nullable;
 
+import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 
 /** Converts Fluss lookup results to projected and filtered Flink rows. */
-final class LookupResultConverter {
+final class LookupResultConverter implements Serializable {
+
+    private static final long serialVersionUID = 1L;
 
     private final int[] projection;
-    private final FlussRowToFlinkRowConverter rowConverter;
+    private transient volatile FlussRowToFlinkRowConverter rowConverter;
 
     LookupResultConverter(RowType outputRowType, int[] projection) {
         this.projection = projection;
@@ -50,16 +53,22 @@ final class LookupResultConverter {
         }
 
         List<RowData> projectedRows = new ArrayList<>(lookupRows.size());
-        // ProjectedRow must not be shared between concurrent async lookup requests.
-        ProjectedRow projectedRow = ProjectedRow.from(projection);
         for (InternalRow row : lookupRows) {
             if (row != null) {
-                RowData flinkRow = rowConverter.toFlinkRowData(projectedRow.replaceRow(row));
+                RowData flinkRow = rowConverter.toFlinkRowData(maybeProject(row));
                 if (remainingFilter == null || remainingFilter.isMatch(flinkRow)) {
                     projectedRows.add(flinkRow);
                 }
             }
         }
         return projectedRows;
+    }
+
+    private InternalRow maybeProject(InternalRow row) {
+        if (projection == null) {
+            return row;
+        }
+        // should not reuse objects for async operations
+        return ProjectedRow.from(projection).replaceRow(row);
     }
 }
