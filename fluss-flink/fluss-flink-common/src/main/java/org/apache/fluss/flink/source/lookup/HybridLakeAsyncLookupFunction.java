@@ -48,6 +48,7 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
+import java.util.function.Supplier;
 import java.util.stream.IntStream;
 
 /**
@@ -186,8 +187,15 @@ public class HybridLakeAsyncLookupFunction extends AsyncLookupFunction {
             if (partitionExists == null) {
                 partitionExists = getOrRefreshPartitionExistence(partitionSpec);
             }
+
             if (partitionExists) {
-                return lookupFlussAsync(normalizedKeyRow, partitionSpec, remainingFilter);
+                return lookupFlussAsync(
+                        normalizedKeyRow,
+                        remainingFilter,
+                        () -> {
+                            markPartitionInvalid(partitionSpec);
+                            return lookupLakeAsync(normalizedKeyRow, remainingFilter);
+                        });
             } else {
                 return lookupLakeAsync(normalizedKeyRow, remainingFilter);
             }
@@ -198,8 +206,8 @@ public class HybridLakeAsyncLookupFunction extends AsyncLookupFunction {
 
     private CompletableFuture<Collection<RowData>> lookupFlussAsync(
             RowData normalizedKeyRow,
-            PartitionSpec partitionSpec,
-            @Nullable LookupNormalizer.RemainingFilter remainingFilter) {
+            @Nullable LookupNormalizer.RemainingFilter remainingFilter,
+            Supplier<CompletableFuture<Collection<RowData>>> lakefallbackLookupFunc) {
         CompletableFuture<Collection<RowData>> future = new CompletableFuture<>();
         try {
             flussLookupRuntime
@@ -211,8 +219,8 @@ public class HybridLakeAsyncLookupFunction extends AsyncLookupFunction {
                                         if (ExceptionUtils.findThrowable(
                                                         throwable, PartitionNotExistException.class)
                                                 .isPresent()) {
-                                            markPartitionInvalid(partitionSpec);
-                                            lookupLakeAsync(normalizedKeyRow, remainingFilter)
+                                            lakefallbackLookupFunc
+                                                    .get()
                                                     .whenComplete(
                                                             (rows, error) ->
                                                                     FutureUtils.doForward(
@@ -244,8 +252,7 @@ public class HybridLakeAsyncLookupFunction extends AsyncLookupFunction {
                             });
         } catch (Throwable t) {
             if (ExceptionUtils.findThrowable(t, PartitionNotExistException.class).isPresent()) {
-                markPartitionInvalid(partitionSpec);
-                return lookupLakeAsync(normalizedKeyRow, remainingFilter);
+                return lakefallbackLookupFunc.get();
             } else {
                 future.completeExceptionally(t);
             }
