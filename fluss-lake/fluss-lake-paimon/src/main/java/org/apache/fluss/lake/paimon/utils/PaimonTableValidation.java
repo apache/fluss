@@ -31,6 +31,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
+import static org.apache.fluss.lake.paimon.utils.PaimonConversions.PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY;
+import static org.apache.fluss.lake.paimon.utils.PaimonConversions.isPartitionLegacyNameDisabled;
 import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
 
 /** Utils to verify whether the existing Paimon table is compatible with the table to be created. */
@@ -103,7 +105,11 @@ public class PaimonTableValidation {
                         newSchema.options().get(CoreOptions.BUCKET.key()))
                 && Objects.equals(
                         existingSchema.options().get(CoreOptions.BUCKET_KEY.key()),
-                        newSchema.options().get(CoreOptions.BUCKET_KEY.key()));
+                        newSchema.options().get(CoreOptions.BUCKET_KEY.key()))
+                && isPartitionLegacyNameDisabled(existingSchema.options())
+                && Objects.equals(
+                        existingSchema.options().get(PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY),
+                        newSchema.options().get(PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY));
     }
 
     private static boolean equalDataFieldIgnoreFieldId(

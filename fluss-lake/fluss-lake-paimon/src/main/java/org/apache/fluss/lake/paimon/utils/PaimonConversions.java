@@ -46,6 +46,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Function;
@@ -61,7 +62,8 @@ public class PaimonConversions {
     // can help avoid NoSuchField error
     // todo: after upgrade paimon version, we call fall back to use PARTITION_GENERATE_LEGACY_NAME
     // again
-    private static final String PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY = "partition.legacy-name";
+    /** Option controlling whether Paimon uses legacy partition value encoding. */
+    public static final String PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY = "partition.legacy-name";
 
     // for fluss config
     public static final String FLUSS_CONF_PREFIX = "fluss.";
@@ -341,6 +343,11 @@ public class PaimonConversions {
         // set partition.legacy-name to false, otherwise paimon will use toString for all types,
         // which will cause inconsistent partition value for the same binary value
         options.set(PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY, Boolean.FALSE.toString());
+    }
+
+    public static boolean isPartitionLegacyNameDisabled(Map<String, String> options) {
+        return Objects.equals(
+                options.get(PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY), Boolean.FALSE.toString());
     }
 
     private static void setFlussPropertyToPaimon(String key, String value, Options options) {

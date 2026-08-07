@@ -45,6 +45,7 @@ import java.util.List;
 
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_ENABLED;
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_FORMAT;
+import static org.apache.fluss.lake.paimon.utils.PaimonConversions.PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
 import static org.apache.fluss.lake.paimon.utils.PaimonTableValidation.isPaimonSchemaCompatible;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -257,6 +258,25 @@ class PaimonLakeCatalogTest {
                                         "1",
                                         "id")))
                 .isFalse();
+        assertThat(
+                        isPaimonSchemaCompatible(
+                                schema,
+                                createPaimonSchema(
+                                        Arrays.asList("id", "pt"),
+                                        Collections.singletonList("pt"),
+                                        "1",
+                                        "id",
+                                        Boolean.TRUE.toString())))
+                .isFalse();
+        assertThat(
+                        isPaimonSchemaCompatible(
+                                schema,
+                                createPaimonSchemaWithoutPartitionLegacyName(
+                                        Arrays.asList("id", "pt"),
+                                        Collections.singletonList("pt"),
+                                        "1",
+                                        "id")))
+                .isFalse();
     }
 
     @Test
@@ -460,15 +480,35 @@ class PaimonLakeCatalogTest {
 
     private org.apache.paimon.schema.Schema createPaimonSchema(
             List<String> primaryKeys, List<String> partitionKeys, String bucket, String bucketKey) {
-        org.apache.paimon.schema.Schema.Builder builder =
-                org.apache.paimon.schema.Schema.newBuilder()
-                        .column("id", org.apache.paimon.types.DataTypes.INT().notNull())
-                        .column("pt", org.apache.paimon.types.DataTypes.STRING().notNull())
-                        .primaryKey(primaryKeys.toArray(new String[0]))
-                        .partitionKeys(partitionKeys.toArray(new String[0]))
-                        .option(CoreOptions.BUCKET.key(), bucket)
-                        .option(CoreOptions.BUCKET_KEY.key(), bucketKey);
-        return builder.build();
+        return createPaimonSchema(
+                primaryKeys, partitionKeys, bucket, bucketKey, Boolean.FALSE.toString());
+    }
+
+    private org.apache.paimon.schema.Schema createPaimonSchema(
+            List<String> primaryKeys,
+            List<String> partitionKeys,
+            String bucket,
+            String bucketKey,
+            String partitionLegacyName) {
+        return createPaimonSchemaBuilder(primaryKeys, partitionKeys, bucket, bucketKey)
+                .option(PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY, partitionLegacyName)
+                .build();
+    }
+
+    private org.apache.paimon.schema.Schema createPaimonSchemaWithoutPartitionLegacyName(
+            List<String> primaryKeys, List<String> partitionKeys, String bucket, String bucketKey) {
+        return createPaimonSchemaBuilder(primaryKeys, partitionKeys, bucket, bucketKey).build();
+    }
+
+    private org.apache.paimon.schema.Schema.Builder createPaimonSchemaBuilder(
+            List<String> primaryKeys, List<String> partitionKeys, String bucket, String bucketKey) {
+        return org.apache.paimon.schema.Schema.newBuilder()
+                .column("id", org.apache.paimon.types.DataTypes.INT().notNull())
+                .column("pt", org.apache.paimon.types.DataTypes.STRING().notNull())
+                .primaryKey(primaryKeys.toArray(new String[0]))
+                .partitionKeys(partitionKeys.toArray(new String[0]))
+                .option(CoreOptions.BUCKET.key(), bucket)
+                .option(CoreOptions.BUCKET_KEY.key(), bucketKey);
     }
 
     private void createTable(String database, String tableName) {
