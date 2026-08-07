@@ -42,7 +42,7 @@ jobs:
       MVN_VALIDATION_DIR: "/tmp/fluss-validation-deployment"
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set JDK
         uses: actions/setup-java@v5
