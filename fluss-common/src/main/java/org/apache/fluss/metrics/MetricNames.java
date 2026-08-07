@@ -92,6 +92,8 @@ public class MetricNames {
             "delayedFetchFromFollowerExpiresPerSecond";
     public static final String DELAYED_FETCH_FROM_CLIENT_EXPIRES_RATE =
             "delayedFetchFromClientExpiresPerSecond";
+    /** Timeouts in follower replica fetcher threads waiting for leader fetchLog responses. */
+    public static final String REPLICA_FETCH_TIMEOUT_RATE = "replicaFetchTimeoutPerSecond";
 
     public static final String SERVER_LOGICAL_STORAGE_LOG_SIZE = "logSize";
     public static final String SERVER_LOGICAL_STORAGE_KV_SIZE = "kvSize";
