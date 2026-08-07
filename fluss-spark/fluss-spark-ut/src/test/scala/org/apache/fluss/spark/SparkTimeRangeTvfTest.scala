@@ -17,12 +17,13 @@
 
 package org.apache.fluss.spark
 
+import org.apache.fluss.client.table.Table
 import org.apache.fluss.row.{BinaryString, GenericRow}
 
 import org.apache.spark.sql.Row
 import org.assertj.core.api.Assertions.assertThat
 
-import java.time.{Instant, ZoneId}
+import java.time.{Duration, Instant, ZoneId}
 import java.time.format.DateTimeFormatter
 
 /**
@@ -112,14 +113,25 @@ class SparkTimeRangeTvfTest extends FlussSparkTestBase {
     }
   }
 
+  private def createPkTable(name: String): Unit =
+    sql(s"""
+           |CREATE TABLE $DEFAULT_DATABASE.$name
+           |(orderId BIGINT, itemId BIGINT, amount INT, address STRING)
+           |TBLPROPERTIES("primary.key" = "orderId", "bucket.num" = 1)
+           |""".stripMargin)
+
+  private def createPartitionedPkTable(name: String): Unit =
+    sql(s"""
+           |CREATE TABLE $DEFAULT_DATABASE.$name
+           |(orderId BIGINT, itemId BIGINT, amount INT, address STRING, dt STRING)
+           |PARTITIONED BY (dt)
+           |TBLPROPERTIES("primary.key" = "orderId,dt", "bucket.num" = 1)
+           |""".stripMargin)
+
   test("TVF: primary key table folds to +I/+U and excludes deletes") {
     withTable("t") {
       val tablePath = createTablePath("t")
-      sql(s"""
-             |CREATE TABLE $DEFAULT_DATABASE.t
-             |(orderId BIGINT, itemId BIGINT, amount INT, address STRING)
-             |TBLPROPERTIES("primary.key" = "orderId", "bucket.num" = 1)
-             |""".stripMargin)
+      createPkTable("t")
 
       val writer = loadFlussTable(tablePath).newUpsert().createWriter()
       writer.upsert(row(1L, 11L, 101, "a1")).get()
@@ -144,9 +156,212 @@ class SparkTimeRangeTvfTest extends FlussSparkTestBase {
       writer.flush()
       Thread.sleep(200)
 
+      val table = loadFlussTable(tablePath)
+      // evidence: the window changelog really contains -U/+U (key 2), +I (key 4), -D (key 1)
+      val changes = changelogInWindow(table, t1, t2)
+      assertThat(changes.filter(_._1 == "-U").map(_._2)).isEqualTo(Seq(2L))
+      assertThat(changes.filter(_._1 == "+U").map(_._2)).isEqualTo(Seq(2L))
+      assertThat(changes.filter(_._1 == "+I").map(_._2)).isEqualTo(Seq(4L))
+      assertThat(changes.filter(_._1 == "-D").map(_._2)).isEqualTo(Seq(1L))
+
       checkAnswer(
         sql(s"SELECT * FROM $TVF('$DEFAULT_DATABASE.t', '$t1', '$t2') ORDER BY orderId"),
         Row(2L, 120L, 1002, "a2_upd") :: Row(4L, 14L, 104, "a4") :: Nil)
+    }
+  }
+
+  test("TVF: primary key table collapses repeated -U/+U updates into the latest value") {
+    withTable("t") {
+      val tablePath = createTablePath("t")
+      createPkTable("t")
+
+      val writer = loadFlussTable(tablePath).newUpsert().createWriter()
+      // before the window: keys 1-3 inserted
+      writer.upsert(row(1L, 11L, 101, "a1")).get()
+      writer.upsert(row(2L, 12L, 102, "a2")).get()
+      writer.upsert(row(3L, 13L, 103, "a3")).get()
+      writer.flush()
+      Thread.sleep(500)
+      val t1 = System.currentTimeMillis()
+      Thread.sleep(50)
+
+      // in-window: -U/+U twice on key 1, -U/+U once on key 2, key 3 untouched
+      writer.upsert(row(1L, 110L, 1001, "a1_v2")).get()
+      writer.upsert(row(1L, 111L, 1002, "a1_v3")).get()
+      writer.upsert(row(2L, 120L, 2001, "a2_v2")).get()
+      writer.flush()
+      Thread.sleep(500)
+      val t2 = System.currentTimeMillis()
+      Thread.sleep(50)
+
+      // after the window
+      writer.upsert(row(1L, 112L, 1003, "a1_v4")).get()
+      writer.flush()
+      Thread.sleep(200)
+
+      // evidence: three genuine -U/+U pairs exist in the window changelog (two for key 1, one
+      // for key 2), so the folding assertions below operate on real -U/+U records
+      val changes = changelogInWindow(loadFlussTable(tablePath), t1, t2)
+      assertThat(changes.filter(_._1 == "-U").map(_._2)).isEqualTo(Seq(1L, 1L, 2L))
+      assertThat(changes.filter(_._1 == "+U").map(_._2)).isEqualTo(Seq(1L, 1L, 2L))
+
+      // each updated key appears exactly once, with its last in-window value
+      checkAnswer(
+        sql(s"SELECT * FROM $TVF('$DEFAULT_DATABASE.t', '$t1', '$t2') ORDER BY orderId"),
+        Row(1L, 111L, 1002, "a1_v3") :: Row(2L, 120L, 2001, "a2_v2") :: Nil)
+
+      // the two-argument form reads through to the latest state
+      checkAnswer(
+        sql(s"SELECT * FROM $TVF('$DEFAULT_DATABASE.t', '$t1') ORDER BY orderId"),
+        Row(1L, 112L, 1003, "a1_v4") :: Row(2L, 120L, 2001, "a2_v2") :: Nil)
+    }
+  }
+
+  test("TVF: primary key table cancels out +I followed by -D in the window") {
+    withTable("t") {
+      val tablePath = createTablePath("t")
+      createPkTable("t")
+
+      val writer = loadFlussTable(tablePath).newUpsert().createWriter()
+      // before the window
+      writer.upsert(row(1L, 11L, 101, "a1")).get()
+      writer.flush()
+      Thread.sleep(500)
+      val t1 = System.currentTimeMillis()
+      Thread.sleep(50)
+
+      // in-window: insert key 2 then delete it again (cancels out), insert key 3 (survives)
+      writer.upsert(row(2L, 12L, 102, "a2")).get()
+      writer.delete(deleteKey(2L)).get()
+      writer.upsert(row(3L, 13L, 103, "a3")).get()
+      writer.flush()
+      Thread.sleep(500)
+      val t2 = System.currentTimeMillis()
+      Thread.sleep(50)
+
+      // evidence: the window changelog holds +I then -D for key 2, and +I for key 3
+      val changes = changelogInWindow(loadFlussTable(tablePath), t1, t2)
+      assertThat(changes.filter(r => r._1 == "+I" || r._1 == "-D"))
+        .isEqualTo(Seq(("+I", 2L), ("-D", 2L), ("+I", 3L)))
+
+      checkAnswer(
+        sql(s"SELECT * FROM $TVF('$DEFAULT_DATABASE.t', '$t1', '$t2') ORDER BY orderId"),
+        Row(3L, 13L, 103, "a3") :: Nil)
+    }
+  }
+
+  test("TVF: primary key table keeps a key deleted then re-inserted in the window") {
+    withTable("t") {
+      val tablePath = createTablePath("t")
+      createPkTable("t")
+
+      val writer = loadFlussTable(tablePath).newUpsert().createWriter()
+      // before the window
+      writer.upsert(row(1L, 11L, 101, "a1")).get()
+      writer.upsert(row(2L, 12L, 102, "a2")).get()
+      writer.flush()
+      Thread.sleep(500)
+      val t1 = System.currentTimeMillis()
+      Thread.sleep(50)
+
+      // in-window: delete key 1 then re-insert it with new values (-D then +I survives),
+      // delete key 2 permanently (-D only, excluded)
+      writer.delete(deleteKey(1L)).get()
+      writer.upsert(row(1L, 110L, 1001, "a1_new")).get()
+      writer.delete(deleteKey(2L)).get()
+      writer.flush()
+      Thread.sleep(500)
+      val t2 = System.currentTimeMillis()
+      Thread.sleep(50)
+
+      // evidence: the window changelog holds -D then +I for key 1, and -D for key 2
+      assertThat(changelogInWindow(loadFlussTable(tablePath), t1, t2))
+        .isEqualTo(Seq(("-D", 1L), ("+I", 1L), ("-D", 2L)))
+
+      checkAnswer(
+        sql(s"SELECT * FROM $TVF('$DEFAULT_DATABASE.t', '$t1', '$t2') ORDER BY orderId"),
+        Row(1L, 110L, 1001, "a1_new") :: Nil)
+    }
+  }
+
+  test("TVF: primary key table window containing only -D returns nothing") {
+    withTable("t") {
+      val tablePath = createTablePath("t")
+      createPkTable("t")
+
+      val writer = loadFlussTable(tablePath).newUpsert().createWriter()
+      writer.upsert(row(1L, 11L, 101, "a1")).get()
+      writer.upsert(row(2L, 12L, 102, "a2")).get()
+      writer.flush()
+      Thread.sleep(500)
+      val t1 = System.currentTimeMillis()
+      Thread.sleep(50)
+
+      writer.delete(deleteKey(1L)).get()
+      writer.delete(deleteKey(2L)).get()
+      writer.flush()
+      Thread.sleep(500)
+      val t2 = System.currentTimeMillis()
+      Thread.sleep(50)
+
+      // evidence: the window changelog holds exactly two -D records, so the empty result below
+      // reflects genuine delete folding rather than an empty window
+      val changes = changelogInWindow(loadFlussTable(tablePath), t1, t2)
+      assertThat(changes.map(_._1)).isEqualTo(Seq("-D", "-D"))
+      assertThat(changes.map(_._2)).isEqualTo(Seq(1L, 2L))
+
+      checkAnswer(sql(s"SELECT * FROM $TVF('$DEFAULT_DATABASE.t', '$t1', '$t2')"), Nil)
+    }
+  }
+
+  test("TVF: partitioned primary key table folds changes across partitions") {
+    withTable("t_pk_part") {
+      val tablePath = createTablePath("t_pk_part")
+      createPartitionedPkTable("t_pk_part")
+
+      val writer = loadFlussTable(tablePath).newUpsert().createWriter()
+      // before the window: one row per partition
+      writer.upsert(pkRow(1L, 11L, 101, "a1", "2026-01-01")).get()
+      writer.upsert(pkRow(2L, 12L, 102, "a2", "2026-01-02")).get()
+      writer.flush()
+      Thread.sleep(500)
+      val t1 = System.currentTimeMillis()
+      Thread.sleep(50)
+
+      // in-window: update key 1 (partition 1), permanent delete of key 2 (partition 2),
+      // insert key 3 then delete it again in partition 1 (cancels out)
+      writer.upsert(pkRow(1L, 110L, 1001, "a1_upd", "2026-01-01")).get()
+      writer.delete(deleteKey(2L, "2026-01-02")).get()
+      writer.upsert(pkRow(3L, 13L, 103, "a3", "2026-01-01")).get()
+      writer.delete(deleteKey(3L, "2026-01-01")).get()
+      writer.flush()
+      Thread.sleep(500)
+      val t2 = System.currentTimeMillis()
+      Thread.sleep(50)
+
+      // after the window
+      writer.upsert(pkRow(4L, 14L, 104, "a4", "2026-01-01")).get()
+      writer.flush()
+      Thread.sleep(200)
+
+      // evidence: the window changelog holds -U/+U (key 1), -D (key 2), +I then -D (key 3);
+      // the -D comparison sorts first because poll order across partitions is not deterministic
+      val changes = changelogInWindow(loadFlussTable(tablePath), t1, t2)
+      assertThat(changes.filter(_._1 == "-U").map(_._2)).isEqualTo(Seq(1L))
+      assertThat(changes.filter(_._1 == "+U").map(_._2)).isEqualTo(Seq(1L))
+      assertThat(changes.filter(_._1 == "-D").map(_._2).sorted).isEqualTo(Seq(2L, 3L))
+      assertThat(changes.filter(_._1 == "+I").map(_._2)).isEqualTo(Seq(3L))
+
+      checkAnswer(
+        sql(s"SELECT * FROM $TVF('$DEFAULT_DATABASE.t_pk_part', '$t1', '$t2') ORDER BY orderId"),
+        Row(1L, 110L, 1001, "a1_upd", "2026-01-01") :: Nil)
+
+      // partition filter on top of the TVF relation
+      checkAnswer(
+        sql(s"""SELECT orderId FROM $TVF('$DEFAULT_DATABASE.t_pk_part', '$t1')
+               |WHERE dt = '2026-01-01' ORDER BY orderId""".stripMargin),
+        Row(1L) :: Row(4L) :: Nil
+      )
     }
   }
 
@@ -344,6 +559,64 @@ class SparkTimeRangeTvfTest extends FlussSparkTestBase {
       Int.box(amount),
       BinaryString.fromString(address))
 
+  /**
+   * Raw changelog records of `table` whose commit timestamp falls inside [start, end), as
+   * (changeType, orderId) pairs in log order. Used to prove the claimed change types (-U/+U/-D/+I)
+   * really exist in the window, so the folded-output assertions below cannot pass vacuously.
+   */
+  private def changelogInWindow(table: Table, start: Long, end: Long): Seq[(String, Long)] = {
+    val scanner = table.newScan().createLogScanner()
+    try {
+      if (table.getTableInfo.isPartitioned) {
+        admin.listPartitionInfos(table.getTableInfo.getTablePath).get().forEach {
+          pi => scanner.subscribeFromBeginning(pi.getPartitionId, 0)
+        }
+      } else {
+        scanner.subscribeFromBeginning(0)
+      }
+      val records = scala.collection.mutable.ArrayBuffer[(String, Long)]()
+      // Poll until records arrive and a poll comes back empty (all caught up), or the deadline.
+      // Mirrors FlussSparkTestBase.getRowsWithChangeType: the high watermark may advance in
+      // stages, so a single early empty poll must not end the scan.
+      val deadline = System.currentTimeMillis() + 10000
+      var hasReceivedAny = false
+      var done = false
+      while (!done && System.currentTimeMillis() < deadline) {
+        val polled = scanner.poll(Duration.ofSeconds(1))
+        if (!polled.isEmpty) {
+          hasReceivedAny = true
+          polled.forEach {
+            r =>
+              if (r.timestamp() >= start && r.timestamp() < end) {
+                records += ((r.getChangeType.shortString(), r.getRow.getLong(0)))
+              }
+          }
+        } else if (hasReceivedAny) {
+          done = true
+        }
+      }
+      records.toSeq
+    } finally {
+      scanner.close()
+    }
+  }
+
+  private def pkRow(
+      orderId: Long,
+      itemId: Long,
+      amount: Int,
+      address: String,
+      dt: String): GenericRow =
+    GenericRow.of(
+      Long.box(orderId),
+      Long.box(itemId),
+      Int.box(amount),
+      BinaryString.fromString(address),
+      BinaryString.fromString(dt))
+
   private def deleteKey(orderId: Long): GenericRow =
     GenericRow.of(Long.box(orderId), null, null, null)
+
+  private def deleteKey(orderId: Long, dt: String): GenericRow =
+    GenericRow.of(Long.box(orderId), null, null, null, BinaryString.fromString(dt))
 }
