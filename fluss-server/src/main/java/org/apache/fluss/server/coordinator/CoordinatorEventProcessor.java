@@ -96,8 +96,11 @@ import org.apache.fluss.server.coordinator.event.watcher.TableChangeWatcher;
 import org.apache.fluss.server.coordinator.event.watcher.TabletServerChangeWatcher;
 import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseManager;
 import org.apache.fluss.server.coordinator.rebalance.RebalanceManager;
+import org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElection;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElection.ControlledShutdownLeaderElection;
+import org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElection.DefaultLeaderElection;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElection.ReassignmentLeaderElection;
+import org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElection.UncleanLeaderElection;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaStateMachine;
 import org.apache.fluss.server.coordinator.statemachine.TableBucketStateMachine;
 import org.apache.fluss.server.entity.AdjustIsrResultForBucket;
@@ -194,6 +197,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
     private final RebalanceManager rebalanceManager;
     private final Scheduler scheduler;
     private final long offlineLeaderRetryDelayMs;
+    private final OfflineLeaderRecoveryConfig offlineLeaderRecoveryConfig;
     private final CompletedSnapshotStoreManager completedSnapshotStoreManager;
     private final LakeTableHelper lakeTableHelper;
     private ScheduledFuture<?> offlineLeaderRetryTask;
@@ -212,7 +216,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
             MetadataManager metadataManager,
             KvSnapshotLeaseManager kvSnapshotLeaseManager,
             Scheduler scheduler,
-            Clock clock) {
+            Clock clock,
+            OfflineLeaderRecoveryConfig offlineLeaderRecoveryConfig) {
         this.zooKeeperClient = zooKeeperClient;
         this.serverMetadataCache = serverMetadataCache;
         this.coordinatorChannelManager = coordinatorChannelManager;
@@ -283,6 +288,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                             offlineLeaderRetryDelayMs));
         }
         this.scheduler = scheduler;
+        this.offlineLeaderRecoveryConfig = offlineLeaderRecoveryConfig;
         this.ioExecutor = ioExecutor;
         this.lakeTableHelper =
                 new LakeTableHelper(zooKeeperClient, conf.getString(ConfigOptions.REMOTE_DATA_DIR));
@@ -330,6 +336,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
         // start the event manager which will then process the event
         coordinatorEventManager.start();
+
+        // Buckets loaded with an unavailable or NO_LEADER leader are indexed by the bucket state
+        // machine during startup. Schedule their recovery after the event thread is ready.
+        scheduleOfflineLeaderRetryIfNeeded();
 
         // start rebalance manager.
         rebalanceManager.startup();
@@ -639,9 +649,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
         // Keep CoordinatorContext access on the coordinator event thread. The scheduled task only
         // enqueues a retry event.
-        Set<TableBucketReplica> retryableOfflineReplicas =
-                retryableOfflineReplicasOnLiveTabletServers();
-        if (retryableOfflineReplicas.isEmpty()) {
+        Set<TableBucket> retryableOfflineLeaderBuckets = retryableOfflineLeaderBuckets();
+        if (retryableOfflineLeaderBuckets.isEmpty()) {
             return;
         }
 
@@ -651,10 +660,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         this::enqueueRetryOfflineLeaderEventSafely,
                         offlineLeaderRetryDelayMs);
         LOG.info(
-                "Offline leader retry task scheduled after {} ms for {} replicas: {}.",
+                "Offline leader retry task scheduled after {} ms for {} buckets: {}.",
                 offlineLeaderRetryDelayMs,
-                retryableOfflineReplicas.size(),
-                retryableOfflineReplicas);
+                retryableOfflineLeaderBuckets.size(),
+                retryableOfflineLeaderBuckets);
     }
 
     private void enqueueRetryOfflineLeaderEventSafely() {
@@ -788,46 +797,168 @@ public class CoordinatorEventProcessor implements EventProcessor {
     }
 
     private void processRetryOfflineLeader() {
-        // This event consumes the currently scheduled one-shot retry. If the NotifyLeaderAndIsr
-        // request sent below is rejected by the target tablet server again, its response handler
-        // will call onReplicaBecomeOffline(), put the offline marker back, and schedule the next
-        // one-shot retry.
         clearOfflineLeaderRetryTask();
-        Set<TableBucketReplica> offlineReplicas = retryableOfflineReplicasOnLiveTabletServers();
+        Set<TableBucket> offlineLeaderBuckets = retryableOfflineLeaderBuckets();
 
-        if (offlineReplicas.isEmpty()) {
+        if (offlineLeaderBuckets.isEmpty()) {
             return;
         }
 
         LOG.info(
-                "Retrying {} offline replicas on live tablet servers before triggering "
-                        + "offline leader election: {}.",
-                offlineReplicas.size(),
-                offlineReplicas);
+                "Retrying leader recovery for {} precisely indexed offline buckets: {}.",
+                offlineLeaderBuckets.size(),
+                offlineLeaderBuckets);
 
-        // replicasOnOffline is checked by CoordinatorContext#isReplicaOnline and therefore also
-        // by leader election. Remove the marker before probing the live server again; if the
-        // server still cannot become leader, NotifyLeaderAndIsr will fail and the replica will be
-        // put back to OfflineReplica. TODO: once standby replicas maintain local KV snapshots,
-        // distinguish standby promotion from fresh snapshot download when retrying KV leaders.
-        for (TableBucketReplica offlineReplica : offlineReplicas) {
-            coordinatorContext.removeOfflineBucketInServer(
-                    offlineReplica.getTableBucket(), offlineReplica.getReplica());
+        for (TableBucket tableBucket : offlineLeaderBuckets) {
+            retryOfflineLeader(tableBucket);
         }
 
-        replicaStateMachine.handleStateChanges(offlineReplicas, OnlineReplica);
-        tableBucketStateMachine.triggerOnlineBucketStateChange();
+        // Retry again only for buckets that are still explicitly leaderless or OfflineBucket. A
+        // successful election moves the bucket online and its leader ACK removes it from the
+        // index. A failed NotifyLeaderAndIsr response moves it offline and schedules another task.
+        scheduleOfflineLeaderRetryIfNeeded();
     }
 
-    private Set<TableBucketReplica> retryableOfflineReplicasOnLiveTabletServers() {
-        // offlineReplicasOnLiveTabletServers() returns replicas from replicasOnOffline, which is
-        // only a leader-election exclusion marker. The replica state may have changed after the
-        // marker was added, for example because deletion or migration started. Retry only replicas
-        // that are still OfflineReplica in the state machine.
-        return coordinatorContext.offlineReplicasOnLiveTabletServers().stream()
-                .filter(replica -> !coordinatorContext.isToBeDeleted(replica.getTableBucket()))
-                .filter(replica -> coordinatorContext.getReplicaState(replica) == OfflineReplica)
+    private Set<TableBucket> retryableOfflineLeaderBuckets() {
+        return coordinatorContext.getOfflineLeaderBuckets().stream()
+                .filter(tableBucket -> !coordinatorContext.isToBeDeleted(tableBucket))
+                .filter(this::requiresOfflineLeaderRecovery)
                 .collect(Collectors.toSet());
+    }
+
+    private boolean requiresOfflineLeaderRecovery(TableBucket tableBucket) {
+        Optional<LeaderAndIsr> leaderAndIsr = coordinatorContext.getBucketLeaderAndIsr(tableBucket);
+        if (!leaderAndIsr.isPresent()) {
+            return false;
+        }
+        return leaderAndIsr.get().leader() == LeaderAndIsr.NO_LEADER
+                || coordinatorContext.getBucketState(tableBucket) == OfflineBucket;
+    }
+
+    private void retryOfflineLeader(TableBucket tableBucket) {
+        Optional<LeaderAndIsr> leaderAndIsrOpt =
+                coordinatorContext.getBucketLeaderAndIsr(tableBucket);
+        if (!leaderAndIsrOpt.isPresent()) {
+            coordinatorContext.removeOfflineLeaderBucket(tableBucket);
+            return;
+        }
+
+        LeaderAndIsr leaderAndIsr = leaderAndIsrOpt.get();
+        int cleanRetryLimit = offlineLeaderRecoveryConfig.getCleanRetryCount();
+        int completedCleanRetries = coordinatorContext.getOfflineLeaderCleanRetryCount(tableBucket);
+        boolean uncleanElectionAllowed =
+                cleanRetryLimit >= 0 && completedCleanRetries >= cleanRetryLimit;
+
+        if (!uncleanElectionAllowed || hasEligibleCleanLeader(tableBucket, leaderAndIsr)) {
+            retryCleanLeaderElection(tableBucket, leaderAndIsr, completedCleanRetries);
+        } else {
+            retryUncleanLeaderElection(tableBucket, leaderAndIsr);
+        }
+    }
+
+    private boolean hasEligibleCleanLeader(TableBucket tableBucket, LeaderAndIsr leaderAndIsr) {
+        return coordinatorContext.getAssignment(tableBucket).stream()
+                .anyMatch(
+                        replica ->
+                                leaderAndIsr.isr().contains(replica)
+                                        && coordinatorContext.isReplicaOnline(
+                                                replica, tableBucket));
+    }
+
+    private void retryCleanLeaderElection(
+            TableBucket tableBucket, LeaderAndIsr leaderAndIsr, int completedCleanRetries) {
+        List<Integer> liveIsrReplicas =
+                coordinatorContext.getAssignment(tableBucket).stream()
+                        .filter(coordinatorContext.liveTabletServerSet()::contains)
+                        .filter(leaderAndIsr.isr()::contains)
+                        .collect(Collectors.toList());
+        int newRetryCount = coordinatorContext.incrementOfflineLeaderCleanRetryCount(tableBucket);
+        if (liveIsrReplicas.isEmpty()) {
+            LOG.info(
+                    "Clean leader-election retry {} for {} found no live ISR replica.",
+                    newRetryCount,
+                    tableBucket);
+            return;
+        }
+
+        List<Integer> eligibleLiveIsrReplicas =
+                liveIsrReplicas.stream()
+                        .filter(replica -> coordinatorContext.isReplicaOnline(replica, tableBucket))
+                        .collect(Collectors.toList());
+        List<Integer> candidates =
+                eligibleLiveIsrReplicas.isEmpty() ? liveIsrReplicas : eligibleLiveIsrReplicas;
+        int candidate = candidates.get(completedCleanRetries % candidates.size());
+        makeReplicaEligibleForLeaderRecovery(tableBucket, candidate);
+
+        LOG.info(
+                "Executing clean leader-election retry {} for {} with ISR candidate {}.",
+                newRetryCount,
+                tableBucket,
+                candidate);
+        triggerOfflineLeaderElection(tableBucket, new DefaultLeaderElection());
+    }
+
+    private void retryUncleanLeaderElection(TableBucket tableBucket, LeaderAndIsr leaderAndIsr) {
+        List<Integer> liveAssignment =
+                coordinatorContext.getAssignment(tableBucket).stream()
+                        .filter(coordinatorContext.liveTabletServerSet()::contains)
+                        .collect(Collectors.toList());
+        if (liveAssignment.isEmpty()) {
+            LOG.info(
+                    "Unclean leader election for {} found no live assignment replica.",
+                    tableBucket);
+            return;
+        }
+
+        // Prefer non-ISR replicas after clean retries are exhausted, but rotate over the entire
+        // live assignment. This avoids retrying one permanently failing replica forever and also
+        // lets a formerly failed ISR replica be selected again after the other candidates fail.
+        List<Integer> candidates =
+                liveAssignment.stream()
+                        .filter(replica -> !leaderAndIsr.isr().contains(replica))
+                        .collect(Collectors.toList());
+        candidates.addAll(
+                liveAssignment.stream()
+                        .filter(leaderAndIsr.isr()::contains)
+                        .collect(Collectors.toList()));
+
+        int attempt = coordinatorContext.getOfflineLeaderUncleanAttemptCount(tableBucket);
+        int candidate = candidates.get(attempt % candidates.size());
+        coordinatorContext.incrementOfflineLeaderUncleanAttemptCount(tableBucket);
+        makeReplicaEligibleForLeaderRecovery(tableBucket, candidate);
+
+        if (leaderAndIsr.isr().contains(candidate)) {
+            LOG.info(
+                    "Retrying ISR replica {} for {} while unclean election is allowed.",
+                    candidate,
+                    tableBucket);
+            triggerOfflineLeaderElection(tableBucket, new DefaultLeaderElection());
+        } else {
+            LOG.warn(
+                    "Executing unclean leader election attempt {} for {} with non-ISR replica {}. "
+                            + "This may cause data loss.",
+                    attempt + 1,
+                    tableBucket,
+                    candidate);
+            triggerOfflineLeaderElection(tableBucket, new UncleanLeaderElection(candidate));
+        }
+    }
+
+    private void makeReplicaEligibleForLeaderRecovery(TableBucket tableBucket, int replica) {
+        coordinatorContext.removeOfflineBucketInServer(tableBucket, replica);
+        TableBucketReplica tableBucketReplica = new TableBucketReplica(tableBucket, replica);
+        if (coordinatorContext.getReplicaState(tableBucketReplica) == OfflineReplica) {
+            // The following leader election sends the authoritative NotifyLeaderAndIsr. Avoid an
+            // extra notification with the old NO_LEADER state, which could race with that request.
+            coordinatorContext.putReplicaState(tableBucketReplica, OnlineReplica);
+        }
+    }
+
+    private void triggerOfflineLeaderElection(
+            TableBucket tableBucket, ReplicaLeaderElection strategy) {
+        Set<TableBucket> bucket = Collections.singleton(tableBucket);
+        tableBucketStateMachine.handleStateChange(bucket, OfflineBucket);
+        tableBucketStateMachine.handleStateChange(bucket, OnlineBucket, strategy);
     }
 
     private void clearOfflineLeaderRetryTask() {
@@ -1203,6 +1334,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
             Optional<LeaderAndIsr> laiOpt = coordinatorContext.getBucketLeaderAndIsr(tb);
             if (laiOpt.isPresent() && laiOpt.get().leader() == serverId) {
                 coordinatorContext.clearPendingLeaderActivation(tb);
+                coordinatorContext.removeOfflineLeaderBucket(tb);
             }
         }
         if (!offlineReplicas.isEmpty()) {
@@ -1236,6 +1368,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
                             leaderAndIsr -> {
                                 if (leaderAndIsr.leader() == offlineReplica.getReplica()) {
                                     bucketWithOfflineLeader.add(offlineReplica.getTableBucket());
+                                    coordinatorContext.addOfflineLeaderBucket(
+                                            offlineReplica.getTableBucket());
                                 }
                             });
         }
@@ -1250,7 +1384,9 @@ public class CoordinatorEventProcessor implements EventProcessor {
         // kafka, todo: but we may need to select another tablet server to put
         // replica
         replicaStateMachine.handleStateChanges(offlineReplicas, OfflineReplica);
-        scheduleOfflineLeaderRetryIfNeeded();
+        if (!bucketWithOfflineLeader.isEmpty()) {
+            scheduleOfflineLeaderRetryIfNeeded();
+        }
     }
 
     private void processNewCoordinator(NewCoordinatorEvent newCoordinatorEvent) {
@@ -1386,6 +1522,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                                 // don't consider buckets to be deleted
                                 tableBucket -> !coordinatorContext.isToBeDeleted(tableBucket))
                         .collect(Collectors.toSet());
+        bucketsWithOfflineLeader.forEach(coordinatorContext::addOfflineLeaderBucket);
         // trigger offline state for all the table buckets whose current leader
         // is the failed tablet server
         tableBucketStateMachine.handleStateChange(bucketsWithOfflineLeader, OfflineBucket);
@@ -1408,6 +1545,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
         // update tabletServer metadata cache by send updateMetadata request.
         updateTabletServerMetadataCache(serverInfos, null, null, bucketsWithOfflineLeader);
+        scheduleOfflineLeaderRetryIfNeeded();
     }
 
     private AddServerTagResponse processAddServerTag(AddServerTagEvent event) {

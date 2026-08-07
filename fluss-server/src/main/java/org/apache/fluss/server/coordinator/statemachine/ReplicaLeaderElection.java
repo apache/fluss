@@ -65,6 +65,46 @@ public abstract class ReplicaLeaderElection {
         }
     }
 
+    /** Elects a specified live assignment replica even when it is outside the current ISR. */
+    public static class UncleanLeaderElection extends ReplicaLeaderElection {
+        private final int preferredReplica;
+
+        public UncleanLeaderElection(int preferredReplica) {
+            this.preferredReplica = preferredReplica;
+        }
+
+        /**
+         * Elects the preferred replica and starts a new ISR containing only that replica.
+         *
+         * @param assignments the bucket assignment
+         * @param aliveReplicas replicas currently eligible on live tablet servers
+         * @param leaderAndIsr the original leader and ISR
+         * @param standbyReplicaEnabled whether standby replicas are enabled
+         * @return the election result, or empty if the preferred replica is not eligible
+         */
+        public Optional<ElectionResult> leaderElection(
+                List<Integer> assignments,
+                List<Integer> aliveReplicas,
+                LeaderAndIsr leaderAndIsr,
+                boolean standbyReplicaEnabled) {
+            if (!assignments.contains(preferredReplica)
+                    || !aliveReplicas.contains(preferredReplica)) {
+                return Optional.empty();
+            }
+
+            List<Integer> newIsr = Collections.singletonList(preferredReplica);
+            List<Integer> standbyReplicas =
+                    standbyReplicaEnabled
+                            ? findNewStandby(aliveReplicas, preferredReplica)
+                            : Collections.emptyList();
+            return Optional.of(
+                    new ElectionResult(
+                            aliveReplicas,
+                            leaderAndIsr.newLeaderAndIsr(
+                                    preferredReplica, newIsr, standbyReplicas)));
+        }
+    }
+
     /** The controlled shutdown replica leader election. */
     public static class ControlledShutdownLeaderElection extends ReplicaLeaderElection {
         /**

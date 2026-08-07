@@ -64,6 +64,12 @@ While a TabletServer is under disk write protection, it's also a less attractive
 tablet servers that were recently rejected for temporary conditions like this one, giving the disk time to recover
 before the server is considered for leadership again.
 
+By default, `coordinator.offline-leader.clean-retry-count` is `-1`, so these retries only elect replicas from the
+current ISR. Setting it to a non-negative value allows the coordinator to elect a live non-ISR replica after that
+many clean retry rounds. This restores availability when every ISR replica remains unavailable, but can lose data
+that was not replicated to the elected replica. The value can be updated dynamically; existing retry counts are
+retained, so lowering it takes effect on the next recovery round.
+
 ### Metrics
 
 Each TabletServer exposes:
