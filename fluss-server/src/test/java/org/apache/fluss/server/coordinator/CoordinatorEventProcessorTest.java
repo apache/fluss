@@ -45,6 +45,7 @@ import org.apache.fluss.rpc.messages.NotifyKvSnapshotOffsetRequest;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsRequest;
+import org.apache.fluss.rpc.messages.PbNotifyLeaderAndIsrReqForBucket;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.ApiKeys;
@@ -174,6 +175,7 @@ class CoordinatorEventProcessorTest {
     private CompletedSnapshotStoreManager completedSnapshotStoreManager;
     private CoordinatorMetadataCache serverMetadataCache;
     private ReplicaCapacityController replicaCapacityController;
+    private OfflineLeaderRecoveryConfig offlineLeaderRecoveryConfig;
     private KvSnapshotLeaseManager kvSnapshotLeaseManager;
     private Scheduler scheduler;
     private String remoteDataDir;
@@ -218,6 +220,7 @@ class CoordinatorEventProcessorTest {
         remoteDataDir = zookeeperClient.getDefaultRemoteDataDir();
         Configuration conf = new Configuration();
         conf.setString(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
+        offlineLeaderRecoveryConfig = new OfflineLeaderRecoveryConfig(conf);
         replicaCapacityController = new ReplicaCapacityController(conf, serverMetadataCache);
         autoPartitionManager =
                 new AutoPartitionManager(
@@ -1302,19 +1305,132 @@ class CoordinatorEventProcessorTest {
         eventProcessor
                 .getCoordinatorEventManager()
                 .put(
+                        notifyLeaderAndIsrResponseEvent(
+                                tableBucket,
+                                leader,
+                                new ApiError(Errors.DISK_WRITE_LOCKED, "disk write locked")));
+
+        fromCtx(
+                ctx -> {
+                    assertThat(ctx.getReplicaState(tableBucketReplica)).isEqualTo(OfflineReplica);
+                    assertThat(ctx.isReplicaOnline(leader, tableBucket)).isFalse();
+                    return null;
+                });
+    }
+
+    @Test
+    void testFollowerNotifyFailureDoesNotScheduleOfflineLeaderRecovery() throws Exception {
+        initCoordinatorChannel();
+        TablePath tablePath = TablePath.of(defaultDatabase, "follower_notify_failure");
+        TableAssignment tableAssignment =
+                generateAssignment(
+                        1,
+                        3,
+                        new TabletServerInfo[] {
+                            new TabletServerInfo(0, "rack0"),
+                            new TabletServerInfo(1, "rack1"),
+                            new TabletServerInfo(2, "rack2")
+                        });
+        long tableId =
+                metadataManager.createTable(
+                        tablePath, remoteDataDir, TEST_TABLE, tableAssignment, false);
+        verifyTableCreated(tableId, tableAssignment, 1, 3);
+
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+        List<Integer> replicas = tableAssignment.getBucketAssignment(0).getReplicas();
+        int leader = replicas.get(0);
+        int follower = replicas.get(1);
+
+        eventProcessor
+                .getCoordinatorEventManager()
+                .put(
+                        notifyLeaderAndIsrResponseEvent(
+                                tableBucket,
+                                follower,
+                                new ApiError(Errors.DISK_WRITE_LOCKED, "disk write locked")));
+
+        retryVerifyContext(
+                ctx -> {
+                    assertThat(ctx.getReplicaState(new TableBucketReplica(tableBucket, follower)))
+                            .isEqualTo(OfflineReplica);
+                    assertThat(ctx.getBucketLeaderAndIsr(tableBucket).get().leader())
+                            .isEqualTo(leader);
+                    assertThat(ctx.getOfflineLeaderBuckets()).doesNotContain(tableBucket);
+                });
+        assertThat(eventProcessor.hasOfflineLeaderRetryTaskScheduled()).isFalse();
+    }
+
+    @Test
+    void testDelayedFollowerResponsesCannotAffectNewLeaderTerm() throws Exception {
+        initCoordinatorChannel();
+        TablePath tablePath = TablePath.of(defaultDatabase, "stale_follower_notify_response");
+        TableAssignment tableAssignment =
+                generateAssignment(
+                        1,
+                        3,
+                        new TabletServerInfo[] {
+                            new TabletServerInfo(0, "rack0"),
+                            new TabletServerInfo(1, "rack1"),
+                            new TabletServerInfo(2, "rack2")
+                        });
+        long tableId =
+                metadataManager.createTable(
+                        tablePath, remoteDataDir, TEST_TABLE, tableAssignment, false);
+        verifyTableCreated(tableId, tableAssignment, 1, 3);
+
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+        List<Integer> replicas = tableAssignment.getBucketAssignment(0).getReplicas();
+        int formerFollower = replicas.get(1);
+        LeaderAndIsr oldLeaderAndIsr = fromCtx(ctx -> ctx.getBucketLeaderAndIsr(tableBucket).get());
+        LeaderAndIsr newLeaderAndIsr =
+                oldLeaderAndIsr.newLeaderAndIsr(
+                        formerFollower, oldLeaderAndIsr.isr(), oldLeaderAndIsr.standbyReplicas());
+        zookeeperClient.updateLeaderAndIsr(
+                tableBucket, newLeaderAndIsr, fromCtx(CoordinatorContext::getCoordinatorZkVersion));
+        fromCtx(
+                ctx -> {
+                    ctx.putBucketLeaderAndIsr(tableBucket, newLeaderAndIsr);
+                    ctx.addPendingLeaderActivation(tableBucket);
+                    ctx.addOfflineLeaderBucket(tableBucket);
+                    return null;
+                });
+
+        Map<TableBucket, PbNotifyLeaderAndIsrReqForBucket> oldRequest =
+                Collections.singletonMap(
+                        tableBucket,
+                        new PbNotifyLeaderAndIsrReqForBucket()
+                                .setLeader(oldLeaderAndIsr.leader())
+                                .setLeaderEpoch(oldLeaderAndIsr.leaderEpoch()));
+        eventProcessor
+                .getCoordinatorEventManager()
+                .put(
+                        new NotifyLeaderAndIsrResponseReceivedEvent(
+                                Collections.singletonList(
+                                        new NotifyLeaderAndIsrResultForBucket(tableBucket)),
+                                formerFollower,
+                                oldRequest));
+        eventProcessor
+                .getCoordinatorEventManager()
+                .put(
                         new NotifyLeaderAndIsrResponseReceivedEvent(
                                 Collections.singletonList(
                                         new NotifyLeaderAndIsrResultForBucket(
                                                 tableBucket,
                                                 new ApiError(
                                                         Errors.DISK_WRITE_LOCKED,
-                                                        "disk write locked"))),
-                                leader));
+                                                        "delayed follower failure"))),
+                                formerFollower,
+                                oldRequest));
 
         fromCtx(
                 ctx -> {
-                    assertThat(ctx.getReplicaState(tableBucketReplica)).isEqualTo(OfflineReplica);
-                    assertThat(ctx.isReplicaOnline(leader, tableBucket)).isFalse();
+                    assertThat(ctx.getBucketLeaderAndIsr(tableBucket)).contains(newLeaderAndIsr);
+                    assertThat(
+                                    ctx.getReplicaState(
+                                            new TableBucketReplica(tableBucket, formerFollower)))
+                            .isEqualTo(OnlineReplica);
+                    assertThat(ctx.getPendingLeaderActivationBuckets()).contains(tableBucket);
+                    assertThat(ctx.getOfflineLeaderBuckets()).contains(tableBucket);
                     return null;
                 });
     }
@@ -1348,20 +1464,19 @@ class CoordinatorEventProcessorTest {
         eventProcessor
                 .getCoordinatorEventManager()
                 .put(
-                        new NotifyLeaderAndIsrResponseReceivedEvent(
-                                Collections.singletonList(
-                                        new NotifyLeaderAndIsrResultForBucket(
-                                                tableBucket,
-                                                new ApiError(
-                                                        Errors.DISK_WRITE_LOCKED,
-                                                        "disk write locked"))),
-                                leader));
+                        notifyLeaderAndIsrResponseEvent(
+                                tableBucket,
+                                leader,
+                                new ApiError(Errors.DISK_WRITE_LOCKED, "disk write locked")));
 
         retryVerifyContext(
                 ctx -> {
                     assertThat(ctx.getReplicaState(tableBucketReplica)).isEqualTo(OfflineReplica);
                     assertThat(ctx.getBucketState(tableBucket)).isEqualTo(OfflineBucket);
                     assertThat(ctx.isReplicaOnline(leader, tableBucket)).isFalse();
+                    assertThat(ctx.getBucketLeaderAndIsr(tableBucket).get().leader())
+                            .isEqualTo(LeaderAndIsr.NO_LEADER);
+                    assertThat(ctx.getOfflineLeaderBuckets()).contains(tableBucket);
                 });
         assertThat(eventProcessor.hasOfflineLeaderRetryTaskScheduled()).isTrue();
 
@@ -1406,14 +1521,10 @@ class CoordinatorEventProcessorTest {
         eventProcessor
                 .getCoordinatorEventManager()
                 .put(
-                        new NotifyLeaderAndIsrResponseReceivedEvent(
-                                Collections.singletonList(
-                                        new NotifyLeaderAndIsrResultForBucket(
-                                                tableBucket,
-                                                new ApiError(
-                                                        Errors.DISK_WRITE_LOCKED,
-                                                        "disk write locked"))),
-                                leader));
+                        notifyLeaderAndIsrResponseEvent(
+                                tableBucket,
+                                leader,
+                                new ApiError(Errors.DISK_WRITE_LOCKED, "disk write locked")));
 
         retryVerifyContext(
                 ctx -> {
@@ -1435,8 +1546,95 @@ class CoordinatorEventProcessorTest {
                     assertThat(ctx.getReplicaState(tableBucketReplica)).isEqualTo(OfflineReplica);
                     assertThat(ctx.getBucketState(tableBucket)).isEqualTo(OfflineBucket);
                     assertThat(ctx.isReplicaOnline(leader, tableBucket)).isFalse();
+                    assertThat(ctx.getBucketLeaderAndIsr(tableBucket).get().leader())
+                            .isEqualTo(LeaderAndIsr.NO_LEADER);
+                    assertThat(ctx.getOfflineLeaderBuckets()).contains(tableBucket);
                 });
         assertThat(eventProcessor.hasOfflineLeaderRetryTaskScheduled()).isTrue();
+    }
+
+    @Test
+    void testDynamicCleanRetryLimitEnablesUncleanElectionOnNextRound() throws Exception {
+        initCoordinatorChannel();
+        TablePath tablePath = TablePath.of(defaultDatabase, "dynamic_unclean_leader_election");
+        TableAssignment tableAssignment =
+                generateAssignment(
+                        1,
+                        3,
+                        new TabletServerInfo[] {
+                            new TabletServerInfo(0, "rack0"),
+                            new TabletServerInfo(1, "rack1"),
+                            new TabletServerInfo(2, "rack2")
+                        });
+        long tableId =
+                metadataManager.createTable(
+                        tablePath, remoteDataDir, TEST_TABLE, tableAssignment, false);
+        verifyTableCreated(tableId, tableAssignment, 1, 3);
+
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+        List<Integer> replicas = tableAssignment.getBucketAssignment(0).getReplicas();
+        int originalLeader = replicas.get(0);
+        int expectedUncleanLeader = replicas.get(1);
+        LeaderAndIsr leaderAndIsr = fromCtx(ctx -> ctx.getBucketLeaderAndIsr(tableBucket).get());
+        LeaderAndIsr singleReplicaIsr =
+                leaderAndIsr.newLeaderAndIsr(
+                        originalLeader,
+                        Collections.singletonList(originalLeader),
+                        Collections.emptyList());
+        zookeeperClient.updateLeaderAndIsr(
+                tableBucket,
+                singleReplicaIsr,
+                fromCtx(CoordinatorContext::getCoordinatorZkVersion));
+        fromCtx(
+                ctx -> {
+                    ctx.putBucketLeaderAndIsr(tableBucket, singleReplicaIsr);
+                    return null;
+                });
+
+        // The original ISR leader keeps rejecting activation. The default -1 configuration keeps
+        // this first scheduled retry clean.
+        initCoordinatorChannel(originalLeader);
+        eventProcessor
+                .getCoordinatorEventManager()
+                .put(
+                        notifyLeaderAndIsrResponseEvent(
+                                tableBucket,
+                                originalLeader,
+                                new ApiError(Errors.DISK_WRITE_LOCKED, "disk write locked")));
+        retryVerifyContext(
+                ctx -> {
+                    assertThat(ctx.getBucketLeaderAndIsr(tableBucket).get().leader())
+                            .isEqualTo(LeaderAndIsr.NO_LEADER);
+                    assertThat(ctx.getOfflineLeaderBuckets()).contains(tableBucket);
+                });
+
+        eventProcessor.getCoordinatorEventManager().put(new RetryOfflineLeaderEvent());
+        retryVerifyContext(
+                ctx -> {
+                    assertThat(ctx.getOfflineLeaderCleanRetryCount(tableBucket)).isEqualTo(1);
+                    assertThat(ctx.getBucketLeaderAndIsr(tableBucket).get().leader())
+                            .isEqualTo(LeaderAndIsr.NO_LEADER);
+                });
+
+        // Lowering the dynamic limit does not reset accumulated retries. The next recovery round
+        // therefore elects the first live non-ISR replica.
+        Configuration updatedConfig = new Configuration();
+        updatedConfig.set(ConfigOptions.COORDINATOR_OFFLINE_LEADER_CLEAN_RETRY_COUNT, 1);
+        offlineLeaderRecoveryConfig.validate(updatedConfig);
+        offlineLeaderRecoveryConfig.reconfigure(updatedConfig);
+        initCoordinatorChannel();
+        eventProcessor.getCoordinatorEventManager().put(new RetryOfflineLeaderEvent());
+
+        retryVerifyContext(
+                ctx -> {
+                    LeaderAndIsr recoveredLeaderAndIsr =
+                            ctx.getBucketLeaderAndIsr(tableBucket).get();
+                    assertThat(recoveredLeaderAndIsr.leader()).isEqualTo(expectedUncleanLeader);
+                    assertThat(recoveredLeaderAndIsr.isr()).containsExactly(expectedUncleanLeader);
+                    assertThat(ctx.getOfflineLeaderBuckets()).doesNotContain(tableBucket);
+                    assertThat(ctx.getOfflineLeaderCleanRetryCount(tableBucket)).isZero();
+                });
+        assertThat(eventProcessor.hasOfflineLeaderRetryTaskScheduled()).isFalse();
     }
 
     @Test
@@ -1467,14 +1665,10 @@ class CoordinatorEventProcessorTest {
         eventProcessor
                 .getCoordinatorEventManager()
                 .put(
-                        new NotifyLeaderAndIsrResponseReceivedEvent(
-                                Collections.singletonList(
-                                        new NotifyLeaderAndIsrResultForBucket(
-                                                tableBucket,
-                                                new ApiError(
-                                                        Errors.DISK_WRITE_LOCKED,
-                                                        "disk write locked"))),
-                                leader));
+                        notifyLeaderAndIsrResponseEvent(
+                                tableBucket,
+                                leader,
+                                new ApiError(Errors.DISK_WRITE_LOCKED, "disk write locked")));
 
         retryVerifyContext(
                 ctx -> {
@@ -2125,7 +2319,8 @@ class CoordinatorEventProcessorTest {
                 metadataManager,
                 kvSnapshotLeaseManager,
                 scheduler,
-                SystemClock.getInstance());
+                SystemClock.getInstance(),
+                offlineLeaderRecoveryConfig);
     }
 
     private static class RecordingAutoPartitionManager extends AutoPartitionManager {
@@ -2541,6 +2736,21 @@ class CoordinatorEventProcessorTest {
         return IntStream.range(0, numBuckets)
                 .mapToObj(i -> new TableBucket(tableId, partitionId, i))
                 .collect(Collectors.toList());
+    }
+
+    private NotifyLeaderAndIsrResponseReceivedEvent notifyLeaderAndIsrResponseEvent(
+            TableBucket tableBucket, int responseServerId, ApiError error) throws Exception {
+        LeaderAndIsr requestLeaderAndIsr =
+                fromCtx(ctx -> ctx.getBucketLeaderAndIsr(tableBucket).get());
+        PbNotifyLeaderAndIsrReqForBucket request =
+                new PbNotifyLeaderAndIsrReqForBucket()
+                        .setLeader(requestLeaderAndIsr.leader())
+                        .setLeaderEpoch(requestLeaderAndIsr.leaderEpoch());
+        return new NotifyLeaderAndIsrResponseReceivedEvent(
+                Collections.singletonList(
+                        new NotifyLeaderAndIsrResultForBucket(tableBucket, error)),
+                responseServerId,
+                Collections.singletonMap(tableBucket, request));
     }
 
     private static void drainPendingNotifyTriggers(

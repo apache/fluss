@@ -26,6 +26,7 @@ import org.apache.fluss.server.coordinator.CoordinatorRequestBatch;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElection.ControlledShutdownLeaderElection;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElection.DefaultLeaderElection;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElection.ReassignmentLeaderElection;
+import org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElection.UncleanLeaderElection;
 import org.apache.fluss.server.entity.BatchRegisterLeadAndIsr;
 import org.apache.fluss.server.entity.RegisterTableBucketLeadAndIsrInfo;
 import org.apache.fluss.server.zk.ZooKeeperClient;
@@ -87,6 +88,7 @@ public class TableBucketStateMachine {
      */
     private void initializeBucketState() {
         Set<TableBucket> tableBuckets = coordinatorContext.getAllBuckets();
+        Set<TableBucket> indexedOfflineLeaderBuckets = new HashSet<>();
         for (TableBucket tableBucket : tableBuckets) {
             BucketState bucketState =
                     coordinatorContext
@@ -104,6 +106,19 @@ public class TableBucketStateMachine {
                             // if the leader info not exist, then it's in NEW state
                             .orElse(BucketState.NewBucket);
             coordinatorContext.putBucketState(tableBucket, bucketState);
+            if (bucketState == BucketState.OfflineBucket) {
+                coordinatorContext.addOfflineLeaderBucket(tableBucket);
+                indexedOfflineLeaderBuckets.add(tableBucket);
+            }
+        }
+        if (!indexedOfflineLeaderBuckets.isEmpty()) {
+            LOG.info(
+                    "[OfflineLeaderRecovery] Indexed {} offline buckets while initializing the "
+                            + "bucket state machine.",
+                    indexedOfflineLeaderBuckets.size());
+            LOG.debug(
+                    "[OfflineLeaderRecovery] Offline buckets indexed during initialization: {}.",
+                    indexedOfflineLeaderBuckets);
         }
     }
 
@@ -782,7 +797,7 @@ public class TableBucketStateMachine {
     }
 
     /**
-     * Elect a new leader for bucket, it'll always elect one from the live replicas in isr set.
+     * Elect a new leader for a bucket using the supplied election strategy.
      *
      * <p>The elect cases including:
      *
@@ -830,6 +845,11 @@ public class TableBucketStateMachine {
             resultOpt =
                     ((ReassignmentLeaderElection) electionStrategy)
                             .leaderElection(liveReplicas, leaderAndIsr, standbyReplicaEnabled);
+        } else if (electionStrategy instanceof UncleanLeaderElection) {
+            resultOpt =
+                    ((UncleanLeaderElection) electionStrategy)
+                            .leaderElection(
+                                    assignment, liveReplicas, leaderAndIsr, standbyReplicaEnabled);
         }
 
         if (!resultOpt.isPresent()) {

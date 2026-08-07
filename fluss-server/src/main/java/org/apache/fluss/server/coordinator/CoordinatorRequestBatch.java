@@ -413,6 +413,8 @@ public class CoordinatorRequestBatch {
             NotifyLeaderAndIsrRequest notifyLeaderAndIsrRequest =
                     makeNotifyLeaderAndIsrRequest(
                             coordinatorEpoch, notifyRequestEntry.getValue().values());
+            Map<TableBucket, PbNotifyLeaderAndIsrReqForBucket> requestsForBuckets =
+                    new HashMap<>(notifyRequestEntry.getValue());
 
             // Track exactly which buckets THIS request marked as pending leader activation. Only
             // those entries (where leader == serverId) need to be cleared if the request fails
@@ -461,7 +463,9 @@ public class CoordinatorRequestBatch {
                         // put the response receive event into the event manager
                         eventManager.put(
                                 new NotifyLeaderAndIsrResponseReceivedEvent(
-                                        getNotifyLeaderAndIsrResponseData(response), serverId));
+                                        getNotifyLeaderAndIsrResponseData(response),
+                                        serverId,
+                                        requestsForBuckets));
                     });
         }
         notifyLeaderAndIsrRequestMap.clear();
