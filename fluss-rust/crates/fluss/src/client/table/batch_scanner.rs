@@ -18,12 +18,14 @@
 //! Bounded batch scanner backed by a single `LimitScanRequest`, polled with
 //! `next_batch` until it returns `None` (like `RecordBatchLogReader`).
 //!
-//! The KV branch decodes a [`ValueRecordBatch`], decoding each record against
-//! its own schema id via [`FixedSchemaDecoder`] so older records are projected
-//! onto the current schema (the same path as lookup).
+//! Both log and KV batches are decoded against their write-time schema id and
+//! aligned to the current table schema. The KV branch uses [`FixedSchemaDecoder`]
+//! (the same path as lookup), while the log branch resolves an Arrow read
+//! context per batch.
 
 use crate::client::ClientSchemaGetter;
 use crate::client::metadata::Metadata;
+use crate::client::table::read_context_resolver::ReadContextResolver;
 use crate::error::{ApiError, Error, FlussError, Result};
 use crate::metadata::{KvFormat, RowType, Schema, TableBucket, TableInfo};
 use crate::proto::ErrorResponse;
@@ -158,7 +160,9 @@ async fn run_limit_scan(pending: &PendingScan, bucket: &TableBucket) -> Result<S
     // Choose the payload format from table metadata, not the response's advisory
     // `is_log_table` flag.
     let (batch, base_offset) = if !pending.table_info.has_primary_key() {
-        decode_log_batch(&pending.table_info, projected, raw, limit)?
+        let resolver = create_log_read_context_resolver(&pending.table_info)?
+            .with_schema_getter(Arc::clone(&pending.schema_getter));
+        decode_log_batch(&pending.table_info, &resolver, projected, raw, limit).await?
     } else {
         // KV (primary-key) limit scan: no log offset, so base_offset is 0.
         let batch = decode_kv_batch(
@@ -175,21 +179,18 @@ async fn run_limit_scan(pending: &PendingScan, bucket: &TableBucket) -> Result<S
     Ok(ScanBatch::new(bucket.clone(), batch, base_offset))
 }
 
-/// Decode the log payload into a single Arrow `RecordBatch`, concatenating any
-/// inner batches. If more than `limit` rows are returned, the last `limit` are
+/// Decode each log batch with its write-time schema, align it to the current
+/// table schema, and concatenate the aligned batches into one Arrow
+/// `RecordBatch`. If more than `limit` rows are returned, the last `limit` are
 /// kept and `base_offset` is advanced by the number dropped.
-fn decode_log_batch(
+async fn decode_log_batch(
     table_info: &TableInfo,
+    resolver: &ReadContextResolver,
     projected_fields: Option<&[usize]>,
     raw: Vec<u8>,
     limit: usize,
 ) -> Result<(RecordBatch, i64)> {
-    let row_type = Arc::new(table_info.get_row_type().clone());
     let full_schema = to_arrow_schema(table_info.get_row_type())?;
-    // A limit scan returns every column (never projected server-side); decode
-    // the full batch and project after, like the KV path. Pushdown here would
-    // misparse the full-column body and corrupt the buffers.
-    let read_context = ArrowReadContext::new(full_schema.clone(), row_type.clone(), false);
 
     if raw.is_empty() {
         let empty = RecordBatch::new_empty(full_schema);
@@ -206,6 +207,19 @@ fn decode_log_batch(
         if base_offset.is_none() {
             base_offset = Some(log_batch.base_log_offset());
         }
+        let schema_id = log_batch.schema_id();
+        let read_context = match resolver.resolve(schema_id, false) {
+            Some(read_context) => read_context,
+            None => {
+                resolver.fetch_and_register(schema_id).await?;
+                resolver
+                    .resolve(schema_id, false)
+                    .ok_or_else(|| Error::UnexpectedError {
+                        message: format!("No read context built for schema id {schema_id}"),
+                        source: None,
+                    })?
+            }
+        };
         let rb = log_batch.record_batch(&read_context)?;
         batches.push(rb);
     }
@@ -227,6 +241,31 @@ fn decode_log_batch(
         project_batch(trimmed, table_info.get_row_type(), projected_fields)?,
         base_offset,
     ))
+}
+
+fn create_log_read_context_resolver(table_info: &TableInfo) -> Result<ReadContextResolver> {
+    let row_type = Arc::new(table_info.get_row_type().clone());
+    let arrow_schema = to_arrow_schema(table_info.get_row_type())?;
+    let local_context = Arc::new(
+        ArrowReadContext::new(arrow_schema.clone(), Arc::clone(&row_type), false)
+            .with_fluss_row_type(Arc::clone(&row_type)),
+    );
+    let remote_context = Arc::new(
+        ArrowReadContext::new(arrow_schema, Arc::clone(&row_type), true)
+            .with_fluss_row_type(row_type),
+    );
+    let schema_id =
+        i16::try_from(table_info.get_schema_id()).map_err(|_| Error::UnexpectedError {
+            message: format!(
+                "Schema id {} does not fit in 16 bits — wire format violated",
+                table_info.get_schema_id()
+            ),
+            source: None,
+        })?;
+    Ok(
+        ReadContextResolver::new(schema_id, local_context, remote_context, None)
+            .with_fixed_schema(table_info.get_schema()),
+    )
 }
 
 /// Decode a KV limit-scan [`ValueRecordBatch`] into a single Arrow
@@ -413,7 +452,8 @@ mod tests {
         DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
     };
     use crate::metadata::{
-        Column, DataField, DataType, DataTypes, PhysicalTablePath, Schema, TableInfo, TablePath,
+        Column, DataField, DataType, DataTypes, PhysicalTablePath, Schema, TableDescriptor,
+        TableInfo, TablePath,
     };
     use crate::record::MemoryLogRecordsArrowBuilder;
     use crate::row::GenericRow;
@@ -434,6 +474,25 @@ mod tests {
         )
     }
 
+    fn build_table_info_at_schema(
+        table_path: TablePath,
+        table_id: i64,
+        schema_id: i32,
+        fields: Vec<DataField>,
+    ) -> TableInfo {
+        let row_type = DataTypes::row(fields);
+        let schema = Schema::builder()
+            .with_row_type(&row_type)
+            .build()
+            .expect("schema");
+        let descriptor = TableDescriptor::builder()
+            .schema(schema)
+            .distributed_by(Some(1), vec![])
+            .build()
+            .expect("descriptor");
+        TableInfo::of(table_path, table_id, schema_id, descriptor, 0, 0)
+    }
+
     /// Encode `rows` (built against `table_info`'s row type) as one Arrow log batch.
     fn build_log_batch(table_info: &TableInfo, rows: &[GenericRow]) -> Vec<u8> {
         let table_info_arc = Arc::new(table_info.clone());
@@ -441,7 +500,7 @@ mod tests {
             table_info.table_path.clone(),
         )));
         let mut builder = MemoryLogRecordsArrowBuilder::new(
-            1,
+            table_info.get_schema_id(),
             table_info.get_row_type(),
             false,
             ArrowCompressionInfo {
@@ -488,46 +547,60 @@ mod tests {
 
     // ---- log path ----------------------------------------------------------
 
-    #[test]
-    fn decode_log_batch_empty_returns_empty_record_batch() {
+    #[tokio::test]
+    async fn decode_log_batch_empty_returns_empty_record_batch() {
         let table_info = build_two_col_table_info();
+        let resolver = create_log_read_context_resolver(&table_info).expect("resolver");
         let (batch, base_offset) =
-            decode_log_batch(&table_info, None, Vec::new(), usize::MAX).expect("decode empty");
+            decode_log_batch(&table_info, &resolver, None, Vec::new(), usize::MAX)
+                .await
+                .expect("decode empty");
         assert_eq!(batch.num_rows(), 0);
         assert_eq!(batch.num_columns(), 2);
         assert_eq!(base_offset, 0);
     }
 
-    #[test]
-    fn decode_log_batch_empty_with_projection() {
+    #[tokio::test]
+    async fn decode_log_batch_empty_with_projection() {
         let table_info = build_two_col_table_info();
-        let (batch, base_offset) =
-            decode_log_batch(&table_info, Some(&[1usize]), Vec::new(), usize::MAX)
-                .expect("decode empty");
+        let resolver = create_log_read_context_resolver(&table_info).expect("resolver");
+        let (batch, base_offset) = decode_log_batch(
+            &table_info,
+            &resolver,
+            Some(&[1usize]),
+            Vec::new(),
+            usize::MAX,
+        )
+        .await
+        .expect("decode empty");
         assert_eq!(batch.num_rows(), 0);
         assert_eq!(batch.num_columns(), 1);
         assert_eq!(batch.schema().field(0).name(), "name");
         assert_eq!(base_offset, 0);
     }
 
-    #[test]
-    fn decode_log_batch_extracts_base_offset_and_rows() {
+    #[tokio::test]
+    async fn decode_log_batch_extracts_base_offset_and_rows() {
         let table_info = build_two_col_table_info();
+        let resolver = create_log_read_context_resolver(&table_info).expect("resolver");
         let raw = build_log_records(&table_info, 17, &[(1, "alice"), (2, "bob"), (3, "carol")]);
 
-        let (batch, base_offset) =
-            decode_log_batch(&table_info, None, raw, usize::MAX).expect("decode populated");
+        let (batch, base_offset) = decode_log_batch(&table_info, &resolver, None, raw, usize::MAX)
+            .await
+            .expect("decode populated");
         assert_eq!(batch.num_rows(), 3);
         assert_eq!(batch.num_columns(), 2);
         assert_eq!(base_offset, 17);
     }
 
-    #[test]
-    fn decode_log_batch_projection_keeps_requested_columns() {
+    #[tokio::test]
+    async fn decode_log_batch_projection_keeps_requested_columns() {
         let table_info = build_two_col_table_info();
+        let resolver = create_log_read_context_resolver(&table_info).expect("resolver");
         let raw = build_log_records(&table_info, 0, &[(7, "x"), (8, "y")]);
 
-        let (batch, _) = decode_log_batch(&table_info, Some(&[0usize]), raw, usize::MAX)
+        let (batch, _) = decode_log_batch(&table_info, &resolver, Some(&[0usize]), raw, usize::MAX)
+            .await
             .expect("decode projected");
         assert_eq!(batch.num_rows(), 2);
         assert_eq!(batch.num_columns(), 1);
@@ -536,8 +609,8 @@ mod tests {
 
     /// Projection skipping a middle variable-length column — catches a
     /// full-column body being misparsed as the projected schema.
-    #[test]
-    fn decode_log_batch_projection_skips_middle_variable_length_column() {
+    #[tokio::test]
+    async fn decode_log_batch_projection_skips_middle_variable_length_column() {
         let table_info = build_table_info_with_columns(
             TablePath::new("db".to_string(), "tbl".to_string()),
             43,
@@ -559,9 +632,17 @@ mod tests {
             })
             .collect();
         let raw = build_log_batch(&table_info, &rows);
+        let resolver = create_log_read_context_resolver(&table_info).expect("resolver");
 
-        let (batch, _) = decode_log_batch(&table_info, Some(&[0usize, 2usize]), raw, usize::MAX)
-            .expect("decode projected");
+        let (batch, _) = decode_log_batch(
+            &table_info,
+            &resolver,
+            Some(&[0usize, 2usize]),
+            raw,
+            usize::MAX,
+        )
+        .await
+        .expect("decode projected");
         assert_eq!(batch.num_columns(), 2);
         assert_eq!(batch.num_rows(), 2);
         assert_eq!(batch.schema().field(0).name(), "c1");
@@ -580,14 +661,22 @@ mod tests {
         assert_eq!((c3.value(0), c3.value(1)), (100, 200));
     }
 
-    #[test]
-    fn decode_log_batch_non_prefix_projection_reorders_columns() {
+    #[tokio::test]
+    async fn decode_log_batch_non_prefix_projection_reorders_columns() {
         let table_info = build_two_col_table_info();
+        let resolver = create_log_read_context_resolver(&table_info).expect("resolver");
         let raw = build_log_records(&table_info, 0, &[(1, "alice"), (2, "bob")]);
 
         // `[name, id]`: reversed, so neither a leading prefix nor in source order.
-        let (batch, _) = decode_log_batch(&table_info, Some(&[1usize, 0usize]), raw, usize::MAX)
-            .expect("decode reordered projection");
+        let (batch, _) = decode_log_batch(
+            &table_info,
+            &resolver,
+            Some(&[1usize, 0usize]),
+            raw,
+            usize::MAX,
+        )
+        .await
+        .expect("decode reordered projection");
 
         assert_eq!(batch.num_columns(), 2);
         assert_eq!(batch.schema().field(0).name(), "name");
@@ -610,13 +699,16 @@ mod tests {
         assert_eq!(ids.value(1), 2);
     }
 
-    #[test]
-    fn decode_log_batch_truncates_to_last_limit_rows() {
+    #[tokio::test]
+    async fn decode_log_batch_truncates_to_last_limit_rows() {
         let table_info = build_two_col_table_info();
+        let resolver = create_log_read_context_resolver(&table_info).expect("resolver");
         // Server returned 4 rows starting at offset 100, but limit is 2.
         let raw = build_log_records(&table_info, 100, &[(1, "a"), (2, "b"), (3, "c"), (4, "d")]);
 
-        let (batch, base_offset) = decode_log_batch(&table_info, None, raw, 2).expect("decode");
+        let (batch, base_offset) = decode_log_batch(&table_info, &resolver, None, raw, 2)
+            .await
+            .expect("decode");
         assert_eq!(batch.num_rows(), 2);
         // The last two rows are kept, so the base offset advances by 2.
         assert_eq!(base_offset, 102);
@@ -627,6 +719,71 @@ mod tests {
             .unwrap();
         assert_eq!(ids.value(0), 3);
         assert_eq!(ids.value(1), 4);
+    }
+
+    #[tokio::test]
+    async fn decode_log_batch_projects_old_schema_after_add_column() {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let source_table_info = build_table_info_at_schema(
+            table_path.clone(),
+            42,
+            1,
+            vec![
+                DataField::new("id", DataTypes::int(), None),
+                DataField::new("name", DataTypes::string(), None),
+            ],
+        );
+        let target_table_info = build_table_info_at_schema(
+            table_path,
+            42,
+            2,
+            vec![
+                DataField::new("id", DataTypes::int(), None),
+                DataField::new("name", DataTypes::string(), None),
+                DataField::new("age", DataTypes::bigint(), None),
+            ],
+        );
+        let mut row = GenericRow::new(2);
+        row.set_field(0, 1_i32);
+        row.set_field(1, "alice");
+        let mut raw = build_log_batch(&source_table_info, &[row]);
+        let mut current_row = GenericRow::new(3);
+        current_row.set_field(0, 2_i32);
+        current_row.set_field(1, "bob");
+        current_row.set_field(2, 30_i64);
+        raw.extend(build_log_batch(&target_table_info, &[current_row]));
+        let resolver = create_log_read_context_resolver(&target_table_info).expect("resolver");
+        resolver
+            .register_schema(1, source_table_info.get_schema())
+            .expect("register source schema");
+
+        let (batch, _) = decode_log_batch(&target_table_info, &resolver, None, raw, usize::MAX)
+            .await
+            .expect("decode old-schema batch with current schema");
+
+        assert_eq!(batch.num_rows(), 2);
+        assert_eq!(batch.num_columns(), 3);
+        assert_eq!(batch.column(2).null_count(), 1);
+        let ids = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("id column");
+        let names = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("name column");
+        let ages = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .expect("age column");
+        assert_eq!(ids.values(), &[1, 2]);
+        assert_eq!(names.value(0), "alice");
+        assert_eq!(names.value(1), "bob");
+        assert!(ages.is_null(0));
+        assert_eq!(ages.value(1), 30);
     }
 
     // ---- KV path -----------------------------------------------------------
