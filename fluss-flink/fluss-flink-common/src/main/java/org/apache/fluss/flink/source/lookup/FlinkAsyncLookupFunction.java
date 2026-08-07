@@ -49,7 +49,7 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
     private final TablePath tablePath;
     private final LookupNormalizer lookupNormalizer;
     private final FlussLookupRuntime flussLookupRuntime;
-    private transient LookupResultConverter lookupResultConverter;
+    private final LookupResultConverter lookupResultConverter;
 
     public FlinkAsyncLookupFunction(
             Configuration flussConfig,
@@ -69,7 +69,7 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
                         ? IntStream.range(0, flinkRowType.getFieldCount()).toArray()
                         : projection;
         RowType outputRowType = FlinkUtils.projectRowType(flinkRowType, resolvedProjection);
-        lookupResultConverter =
+        this.lookupResultConverter =
                 new LookupResultConverter(
                         FlinkConversions.toFlussRowType(outputRowType), resolvedProjection);
     }

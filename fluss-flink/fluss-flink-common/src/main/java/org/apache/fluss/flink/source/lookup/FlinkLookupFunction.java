@@ -46,7 +46,7 @@ public class FlinkLookupFunction extends LookupFunction {
 
     private final LookupNormalizer lookupNormalizer;
     private final FlussLookupRuntime flussLookupRuntime;
-    private transient LookupResultConverter lookupResultConverter;
+    private final LookupResultConverter lookupResultConverter;
 
     public FlinkLookupFunction(
             Configuration flussConfig,
