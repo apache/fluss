@@ -18,6 +18,7 @@
 package org.apache.fluss.server.log.remote;
 
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.TableBucket;
@@ -532,6 +533,64 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
 
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
+    void testLogRemoteCopyDisabledTableDoesNotUploadRemoteSegments(boolean partitionedTable)
+            throws Exception {
+        long tableId =
+                registerTableInZkClient(
+                        DATA1_TABLE_PATH,
+                        DATA1_SCHEMA,
+                        200L,
+                        Collections.emptyList(),
+                        Collections.singletonMap("table.log.remote-copy.enabled", "false"));
+        TableBucket tb = makeTableBucket(tableId, partitionedTable);
+
+        makeLogTableAsLeader(tb, partitionedTable);
+        Replica replica = replicaManager.getReplicaOrException(tb);
+        LogTablet logTablet = replica.getLogTablet();
+        addMultiSegmentsToLogTablet(logTablet, 5);
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+
+        assertThat(remoteLogManager.getTaskWithFuture(tb)).isNull();
+        assertThatThrownBy(() -> remoteLogManager.remoteLogTablet(tb))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("RemoteLogTablet can't be found for table-bucket " + tb);
+        FsPath remoteLogTabletDir =
+                remoteLogTabletDir(
+                        remoteLogDir(conf),
+                        partitionedTable
+                                ? DATA1_PHYSICAL_TABLE_PATH_PA_2024
+                                : DATA1_PHYSICAL_TABLE_PATH,
+                        tb);
+        assertThat(remoteLogTabletDir.getFileSystem().exists(remoteLogTabletDir)).isFalse();
+        assertThat(logTablet.getSegments()).hasSize(5);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testLogRemoteCopyDefaultEnabledTableUploadsRemoteSegments(boolean partitionedTable)
+            throws Exception {
+        long tableId =
+                registerTableInZkClient(
+                        DATA1_TABLE_PATH,
+                        DATA1_SCHEMA,
+                        201L,
+                        Collections.emptyList(),
+                        Collections.emptyMap());
+        TableBucket tb = makeTableBucket(tableId, partitionedTable);
+
+        makeLogTableAsLeader(tb, partitionedTable);
+        LogTablet logTablet = replicaManager.getReplicaOrException(tb).getLogTablet();
+        addMultiSegmentsToLogTablet(logTablet, 5);
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+
+        assertThat(remoteLogManager.getTaskWithFuture(tb)).isNotNull();
+        assertThat(remoteLogManager.relevantRemoteLogSegments(tb, 0L)).hasSize(4);
+        assertThat(listRemoteLogFiles(tb)).hasSize(4);
+        assertThat(logTablet.getSegments()).hasSize(2);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
     void testConfigureTieredLogLocalSegments(boolean partitionedTable) throws Exception {
         int tieredLogLocalSegments = 8;
         long tableId =
@@ -882,5 +941,62 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
                 .anyMatch(name -> name.contains(segment2.remoteLogSegmentId().toString()));
         assertThat(dir2Files)
                 .noneMatch(name -> name.contains(segment1.remoteLogSegmentId().toString()));
+    }
+}
+
+class RemoteLogManagerClusterDisabledTest extends RemoteLogTestBase {
+
+    @Override
+    public Configuration getServerConf() {
+        Configuration conf = super.getServerConf();
+        conf.set(ConfigOptions.REMOTE_LOG_TASK_INTERVAL_DURATION, Duration.ZERO);
+        return conf;
+    }
+
+    @BeforeEach
+    public void setup() throws Exception {
+        super.setup();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testClusterDisabledPreventsUploadsWhenTableRemoteCopyExplicitlyEnabled(
+            boolean partitionedTable) throws Exception {
+        long tableId =
+                registerTableInZkClient(
+                        DATA1_TABLE_PATH,
+                        DATA1_SCHEMA,
+                        202L,
+                        Collections.emptyList(),
+                        Collections.singletonMap("table.log.remote-copy.enabled", "true"));
+        TableBucket tb = makeTableBucket(tableId, partitionedTable);
+
+        makeLogTableAsLeader(tb, partitionedTable);
+        Replica replica = replicaManager.getReplicaOrException(tb);
+        LogTablet logTablet = replica.getLogTablet();
+        addMultiSegmentsToLogTablet(logTablet, 5);
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+
+        assertThat(remoteLogManager.getTaskWithFuture(tb)).isNull();
+        assertThatThrownBy(() -> remoteLogManager.remoteLogTablet(tb))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("RemoteLogTablet can't be found for table-bucket " + tb);
+        FsPath remoteLogTabletDir =
+                remoteLogTabletDir(
+                        remoteLogDir(conf),
+                        partitionedTable
+                                ? DATA1_PHYSICAL_TABLE_PATH_PA_2024
+                                : DATA1_PHYSICAL_TABLE_PATH,
+                        tb);
+        assertThat(remoteLogTabletDir.getFileSystem().exists(remoteLogTabletDir)).isFalse();
+        assertThat(logTablet.getSegments()).hasSize(5);
+    }
+
+    private TableBucket makeTableBucket(long tableId, boolean partitionedTable) {
+        if (partitionedTable) {
+            return new TableBucket(tableId, 0L, 0);
+        } else {
+            return new TableBucket(tableId, 0);
+        }
     }
 }
