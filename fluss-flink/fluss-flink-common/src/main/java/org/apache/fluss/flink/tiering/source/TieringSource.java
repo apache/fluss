@@ -69,32 +69,16 @@ public class TieringSource<WriteResult>
     private final Configuration lakeTieringConfig;
     private final LakeTieringFactory<WriteResult, ?> lakeTieringFactory;
     private final long pollTieringTableIntervalMs;
-    private final boolean fastFailOnCompletionAckTimeout;
 
     public TieringSource(
             Configuration flussConf,
             Configuration lakeTieringConfig,
             LakeTieringFactory<WriteResult, ?> lakeTieringFactory,
             long pollTieringTableIntervalMs) {
-        this(
-                flussConf,
-                lakeTieringConfig,
-                lakeTieringFactory,
-                pollTieringTableIntervalMs,
-                true);
-    }
-
-    public TieringSource(
-            Configuration flussConf,
-            Configuration lakeTieringConfig,
-            LakeTieringFactory<WriteResult, ?> lakeTieringFactory,
-            long pollTieringTableIntervalMs,
-            boolean fastFailOnCompletionAckTimeout) {
         this.flussConf = flussConf;
         this.lakeTieringConfig = lakeTieringConfig;
         this.lakeTieringFactory = lakeTieringFactory;
         this.pollTieringTableIntervalMs = pollTieringTableIntervalMs;
-        this.fastFailOnCompletionAckTimeout = fastFailOnCompletionAckTimeout;
     }
 
     @Override
@@ -106,11 +90,7 @@ public class TieringSource<WriteResult>
     public SplitEnumerator<TieringSplit, TieringSourceEnumeratorState> createEnumerator(
             SplitEnumeratorContext<TieringSplit> splitEnumeratorContext) {
         return new TieringSourceEnumerator(
-                flussConf,
-                splitEnumeratorContext,
-                lakeTieringFactory,
-                pollTieringTableIntervalMs,
-                fastFailOnCompletionAckTimeout);
+                flussConf, splitEnumeratorContext, lakeTieringFactory, pollTieringTableIntervalMs);
     }
 
     @Override
@@ -119,11 +99,7 @@ public class TieringSource<WriteResult>
             TieringSourceEnumeratorState tieringSourceEnumeratorState) {
         // stateless operator
         return new TieringSourceEnumerator(
-                flussConf,
-                splitEnumeratorContext,
-                lakeTieringFactory,
-                pollTieringTableIntervalMs,
-                fastFailOnCompletionAckTimeout);
+                flussConf, splitEnumeratorContext, lakeTieringFactory, pollTieringTableIntervalMs);
     }
 
     @Override
@@ -172,7 +148,6 @@ public class TieringSource<WriteResult>
         private final LakeTieringFactory<WriteResult, ?> lakeTieringFactory;
         private long pollTieringTableIntervalMs =
                 POLL_TIERING_TABLE_INTERVAL.defaultValue().toMillis();
-        private boolean fastFailOnCompletionAckTimeout = true;
 
         public Builder(
                 Configuration flussConf,
@@ -188,19 +163,9 @@ public class TieringSource<WriteResult>
             return this;
         }
 
-        public Builder<WriteResult> withFastFailOnCompletionAckTimeout(
-                boolean fastFailOnCompletionAckTimeout) {
-            this.fastFailOnCompletionAckTimeout = fastFailOnCompletionAckTimeout;
-            return this;
-        }
-
         public TieringSource<WriteResult> build() {
             return new TieringSource<>(
-                    flussConf,
-                    lakeTieringConfig,
-                    lakeTieringFactory,
-                    pollTieringTableIntervalMs,
-                    fastFailOnCompletionAckTimeout);
+                    flussConf, lakeTieringConfig, lakeTieringFactory, pollTieringTableIntervalMs);
         }
     }
 }

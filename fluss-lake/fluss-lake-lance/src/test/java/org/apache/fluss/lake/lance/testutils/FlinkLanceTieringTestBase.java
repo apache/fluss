@@ -294,7 +294,6 @@ public class FlinkLanceTieringTestBase {
                         Configuration.fromMap(getLanceCatalogConf()),
                         new Configuration(),
                         DataLakeFormat.LANCE.toString())
-                .withFastFailOnCompletionAckTimeout(false)
                 .build();
     }
 }

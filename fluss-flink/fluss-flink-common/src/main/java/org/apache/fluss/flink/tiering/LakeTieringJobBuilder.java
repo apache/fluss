@@ -48,7 +48,6 @@ public class LakeTieringJobBuilder {
     private final Configuration dataLakeConfig;
     private final Configuration lakeTieringConfig;
     private final String dataLakeFormat;
-    private boolean fastFailOnCompletionAckTimeout = true;
 
     private LakeTieringJobBuilder(
             StreamExecutionEnvironment env,
@@ -73,12 +72,6 @@ public class LakeTieringJobBuilder {
                 env, flussConfig, dataLakeConfig, lakeTieringConfig, dataLakeFormat);
     }
 
-    public LakeTieringJobBuilder withFastFailOnCompletionAckTimeout(
-            boolean fastFailOnCompletionAckTimeout) {
-        this.fastFailOnCompletionAckTimeout = fastFailOnCompletionAckTimeout;
-        return this;
-    }
-
     @SuppressWarnings({"rawtypes", "unchecked"})
     public JobClient build() throws Exception {
         // get the lake storage plugin
@@ -96,7 +89,6 @@ public class LakeTieringJobBuilder {
             tieringSourceBuilder.withPollTieringTableIntervalMs(
                     flussConfig.get(POLL_TIERING_TABLE_INTERVAL).toMillis());
         }
-        tieringSourceBuilder.withFastFailOnCompletionAckTimeout(fastFailOnCompletionAckTimeout);
 
         TieringSource<?> tieringSource = tieringSourceBuilder.build();
         DataStreamSource<?> source =

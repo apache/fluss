@@ -165,7 +165,6 @@ public class FlinkIcebergTieringTestBase {
                         Configuration.fromMap(getIcebergCatalogConf()),
                         new Configuration(),
                         DataLakeFormat.ICEBERG.toString())
-                .withFastFailOnCompletionAckTimeout(false)
                 .build();
     }
 

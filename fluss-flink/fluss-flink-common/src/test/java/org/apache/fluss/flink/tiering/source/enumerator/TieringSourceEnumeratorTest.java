@@ -61,6 +61,7 @@ import java.util.stream.IntStream;
 
 import static org.apache.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
 import static org.apache.fluss.config.ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE;
+import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.TIERING_FORCE_COMPLETE_FINISH_TIMEOUT;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -846,6 +847,9 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
 
         appendRow(tablePath, DEFAULT_LOG_TABLE_DESCRIPTOR, 0, 10);
 
+        Configuration testFlussConf = new Configuration(flussConf);
+        testFlussConf.set(TIERING_FORCE_COMPLETE_FINISH_TIMEOUT, completionTimeout);
+
         AtomicReference<Throwable> coordinatorError = new AtomicReference<>();
         try (FlussMockSplitEnumeratorContext<TieringSplit> context =
                         new FlussMockSplitEnumeratorContext<TieringSplit>(1) {
@@ -859,15 +863,14 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                             }
                         };
                 TieringSourceEnumerator enumerator =
-                        createTieringSourceEnumerator(flussConf, context)) {
+                        createTieringSourceEnumerator(testFlussConf, context)) {
             enumerator.start();
             registerSingleReaderAndHandleSplitRequests(context, enumerator, 0, 0);
 
             assertThat(context.getSplitsAssignmentSequence()).isNotEmpty();
             Long tieringEpoch = enumerator.getTieringEpoch(tableId);
             assertThat(tieringEpoch).isNotNull();
-            enumerator.handleTableTieringReachMaxDuration(
-                    tablePath, tableId, tieringEpoch, completionTimeout.toMillis());
+            enumerator.handleTableTieringReachMaxDuration(tablePath, tableId, tieringEpoch);
             retry(
                     Duration.ofSeconds(30),
                     () ->
@@ -885,7 +888,6 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         TablePath tablePath = TablePath.of(DEFAULT_DB, "tiering-max-duration-test-log-table");
         long tableId = createTable(tablePath, DEFAULT_LOG_TABLE_DESCRIPTOR);
         int numSubtasks = 2;
-        Duration maxTieringDuration = Duration.ofMinutes(10);
         conn.getAdmin()
                 .alterTable(
                         tablePath,
@@ -917,8 +919,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
 
             Long firstTieringEpoch = enumerator.getTieringEpoch(tableId);
             assertThat(firstTieringEpoch).isNotNull();
-            enumerator.handleTableTieringReachMaxDuration(
-                    tablePath, tableId, firstTieringEpoch, maxTieringDuration.toMillis());
+            enumerator.handleTableTieringReachMaxDuration(tablePath, tableId, firstTieringEpoch);
 
             retry(
                     Duration.ofSeconds(30),
@@ -993,10 +994,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             assertThatCode(
                             () ->
                                     enumerator.failTieringJobIfNotFinished(
-                                            tablePath,
-                                            tableId,
-                                            firstTieringEpoch,
-                                            maxTieringDuration.toMillis()))
+                                            tablePath, tableId, firstTieringEpoch, 1000L))
                     .doesNotThrowAnyException();
         }
     }

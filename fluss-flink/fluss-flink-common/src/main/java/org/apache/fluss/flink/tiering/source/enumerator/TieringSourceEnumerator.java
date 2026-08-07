@@ -59,6 +59,7 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 
 import java.io.IOException;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -74,6 +75,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.TIERING_FORCE_COMPLETE_FINISH_TIMEOUT;
 import static org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper.basicHeartBeat;
 import static org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper.failedTableHeartBeat;
 import static org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper.heartBeatWithRequestNewTieringTable;
@@ -105,7 +107,6 @@ public class TieringSourceEnumerator
     private final ScheduledExecutorService timerService;
     private final SplitEnumeratorMetricGroup enumeratorMetricGroup;
     private final long pollTieringTableIntervalMs;
-    private final boolean fastFailOnCompletionAckTimeout;
     private final List<TieringSplit> pendingSplits;
     private final Set<Integer> readersAwaitingSplit;
 
@@ -131,15 +132,6 @@ public class TieringSourceEnumerator
             SplitEnumeratorContext<TieringSplit> context,
             LakeTieringFactory<?, ?> lakeTieringFactory,
             long pollTieringTableIntervalMs) {
-        this(flussConf, context, lakeTieringFactory, pollTieringTableIntervalMs, true);
-    }
-
-    public TieringSourceEnumerator(
-            Configuration flussConf,
-            SplitEnumeratorContext<TieringSplit> context,
-            LakeTieringFactory<?, ?> lakeTieringFactory,
-            long pollTieringTableIntervalMs,
-            boolean fastFailOnCompletionAckTimeout) {
         this.flussConf = flussConf;
         this.context = context;
         this.lakeTieringFactory = lakeTieringFactory;
@@ -148,7 +140,6 @@ public class TieringSourceEnumerator
                         r -> new Thread(r, "Tiering-Timer-Thread"));
         this.enumeratorMetricGroup = context.metricGroup();
         this.pollTieringTableIntervalMs = pollTieringTableIntervalMs;
-        this.fastFailOnCompletionAckTimeout = fastFailOnCompletionAckTimeout;
         this.pendingSplits = Collections.synchronizedList(new ArrayList<>());
         this.readersAwaitingSplit = Collections.synchronizedSet(new TreeSet<>());
         this.tieringTableEpochs = new ConcurrentHashMap<>();
@@ -343,7 +334,7 @@ public class TieringSourceEnumerator
 
     @VisibleForTesting
     protected void handleTableTieringReachMaxDuration(
-            TablePath tablePath, long tableId, long tieringEpoch, long maxTieringDurationMs) {
+            TablePath tablePath, long tableId, long tieringEpoch) {
         Long currentEpoch = tieringTableEpochs.get(tableId);
         if (currentEpoch != null && currentEpoch.equals(tieringEpoch)) {
             LOG.info("Table {}-{} reached max duration. Force completing.", tablePath, tableId);
@@ -367,8 +358,10 @@ public class TieringSourceEnumerator
                 context.sendEventToSourceReader(reader, tieringReachMaxDurationEvent);
             }
 
-            if (fastFailOnCompletionAckTimeout) {
-                long completionTimeoutThreshold = maxTieringDurationMs;
+            Duration forceCompleteFinishTimeout =
+                    flussConf.get(TIERING_FORCE_COMPLETE_FINISH_TIMEOUT);
+            if (!forceCompleteFinishTimeout.isZero() && !forceCompleteFinishTimeout.isNegative()) {
+                long completionTimeoutThreshold = forceCompleteFinishTimeout.toMillis();
                 timerService.schedule(
                         () ->
                                 context.runInCoordinatorThread(
@@ -531,8 +524,7 @@ public class TieringSourceEnumerator
                                                 handleTableTieringReachMaxDuration(
                                                         tablePath,
                                                         tieringTable.f0,
-                                                        tieringTable.f1,
-                                                        maxTieringDurationMs)),
+                                                        tieringTable.f1)),
 
                         // for simplicity, we use the freshness as
                         maxTieringDurationMs,

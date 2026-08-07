@@ -167,7 +167,6 @@ public abstract class FlinkHudiTieringTestBase {
                         Configuration.fromMap(getHudiCatalogConf()),
                         new Configuration(),
                         DataLakeFormat.HUDI.toString())
-                .withFastFailOnCompletionAckTimeout(false)
                 .build();
     }
 
