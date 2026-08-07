@@ -39,10 +39,8 @@ import org.slf4j.LoggerFactory;
 import java.io.Serializable;
 import java.util.concurrent.CompletableFuture;
 
-import static org.apache.fluss.utils.Preconditions.checkNotNull;
-
 /** The shared Fluss client-side lookup runtime. */
-final class FlussLookupRuntime implements Serializable {
+final class FlussLookupRuntime implements LookupRuntime, Serializable {
 
     private static final Logger LOG = LoggerFactory.getLogger(FlussLookupRuntime.class);
 
@@ -54,9 +52,9 @@ final class FlussLookupRuntime implements Serializable {
     private final LookupNormalizer lookupNormalizer;
     private final boolean insertIfNotExists;
 
-    private transient Connection connection;
-    private transient Table table;
-    private transient Lookuper lookuper;
+    private Connection connection;
+    private Table table;
+    private Lookuper lookuper;
 
     FlussLookupRuntime(
             Configuration flussConfig,
@@ -71,7 +69,8 @@ final class FlussLookupRuntime implements Serializable {
         this.insertIfNotExists = insertIfNotExists;
     }
 
-    void open() {
+    @Override
+    public void open() {
         LOG.info("Starting Fluss lookup runtime for table {}.", tablePath);
         connection = ConnectionFactory.createConnection(flussConfig);
         table = connection.getTable(tablePath);
@@ -88,20 +87,21 @@ final class FlussLookupRuntime implements Serializable {
         LOG.info("Finished starting Fluss lookup runtime.");
     }
 
-    CompletableFuture<LookupResult> lookup(RowData normalizedKeyRow) {
-        return checkNotNull(lookuper, "Fluss lookuper must be initialized.")
-                .lookup(new FlinkAsFlussRow(normalizedKeyRow));
+    @Override
+    public CompletableFuture<LookupResult> lookup(RowData normalizedKeyRow) {
+        return lookuper.lookup(new FlinkAsFlussRow(normalizedKeyRow));
     }
 
     TableInfo getTableInfo() {
-        return checkNotNull(table, "Fluss table must be initialized.").getTableInfo();
+        return table.getTableInfo();
     }
 
     Admin getAdmin() {
-        return checkNotNull(connection, "Fluss connection must be initialized.").getAdmin();
+        return connection.getAdmin();
     }
 
-    void close() throws Exception {
+    @Override
+    public void close() throws Exception {
         LOG.info("Closing Fluss lookup runtime for table {}.", tablePath);
         if (table != null) {
             table.close();

@@ -18,6 +18,8 @@
 package org.apache.fluss.flink.source.lookup;
 
 import org.apache.fluss.bucketing.BucketingFunction;
+import org.apache.fluss.client.lookup.LookupResult;
+import org.apache.fluss.client.table.getter.PartitionGetter;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.row.FlinkAsFlussRow;
@@ -34,57 +36,75 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.decode.FixedSchemaDecoder;
 import org.apache.fluss.row.encode.KeyEncoder;
+import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
+import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import org.apache.flink.table.api.TableException;
 import org.apache.flink.table.data.RowData;
 
-import javax.annotation.Nullable;
-
 import java.io.Serializable;
+import java.time.Duration;
 import java.util.Map;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
-/** Runtime for blocking point lookups against a lake table. */
-final class LakeLookupRuntime implements Serializable {
+/** Runtime for asynchronous point lookups against a lake table. */
+final class LakeLookupRuntime implements LookupRuntime, Serializable {
 
     private static final long serialVersionUID = 1L;
 
+    private final FlussLookupRuntime flussLookupRuntime;
     private final Configuration flussConfig;
     private final TablePath tablePath;
     private final org.apache.fluss.types.RowType flussFullRowType;
     private final int[] primaryKeyIndexes;
     private final Map<String, String> tableOptions;
+    private final Duration lookupTimeout;
+    private final int executorThreads;
+    private final int maxConcurrency;
 
-    @Nullable private transient LakeTableLookuper lakeTableLookuper;
-    @Nullable private transient FixedSchemaDecoder lakeValueDecoder;
-    @Nullable private transient KeyEncoder lakePrimaryKeyEncoder;
-    @Nullable private transient KeyEncoder lakeBucketKeyEncoder;
-    @Nullable private transient BucketingFunction bucketingFunction;
+    private LakeTableLookuper lakeTableLookuper;
+    private FixedSchemaDecoder lakeValueDecoder;
+    private KeyEncoder lakePrimaryKeyEncoder;
+    private KeyEncoder lakeBucketKeyEncoder;
+    private BucketingFunction bucketingFunction;
+    private PartitionGetter partitionGetter;
+    private ThreadPoolExecutor lookupExecutor;
 
-    @Nullable
-    private transient org.apache.fluss.client.table.getter.PartitionGetter partitionGetter;
-
-    private transient short lakeSchemaId;
-    private transient int numBuckets;
+    private short lakeSchemaId;
+    private int numBuckets;
 
     LakeLookupRuntime(
+            FlussLookupRuntime flussLookupRuntime,
             Configuration flussConfig,
             TablePath tablePath,
             org.apache.fluss.types.RowType flussFullRowType,
             int[] primaryKeyIndexes,
-            Map<String, String> tableOptions) {
-        this.flussConfig = checkNotNull(flussConfig, "flussConfig must not be null.");
-        this.tablePath = checkNotNull(tablePath, "tablePath must not be null.");
-        this.flussFullRowType =
-                checkNotNull(flussFullRowType, "flussFullRowType must not be null.");
-        this.primaryKeyIndexes =
-                checkNotNull(primaryKeyIndexes, "primaryKeyIndexes must not be null.");
-        this.tableOptions = checkNotNull(tableOptions, "tableOptions must not be null.");
+            Map<String, String> tableOptions,
+            Duration lookupTimeout,
+            int executorThreads,
+            int maxConcurrency) {
+        this.flussLookupRuntime = flussLookupRuntime;
+        this.flussConfig = flussConfig;
+        this.tablePath = tablePath;
+        this.flussFullRowType = flussFullRowType;
+        this.primaryKeyIndexes = primaryKeyIndexes;
+        this.tableOptions = tableOptions;
+        this.lookupTimeout = lookupTimeout;
+        this.executorThreads = executorThreads;
+        this.maxConcurrency = maxConcurrency;
     }
 
-    void open(TableInfo tableInfo) {
-        TableInfo resolvedTableInfo = checkNotNull(tableInfo, "tableInfo must not be null.");
+    @Override
+    public void open() {
+        TableInfo resolvedTableInfo = flussLookupRuntime.getTableInfo();
         DataLakeFormat dataLakeFormat = validateAndGetDataLakeFormat(resolvedTableInfo);
         org.apache.fluss.types.RowType lookupRowType = flussFullRowType.project(primaryKeyIndexes);
         lakePrimaryKeyEncoder =
@@ -101,9 +121,7 @@ final class LakeLookupRuntime implements Serializable {
                         resolvedTableInfo.isDefaultBucketKey(),
                         lakePrimaryKeyEncoder);
         bucketingFunction = BucketingFunction.of(dataLakeFormat);
-        partitionGetter =
-                new org.apache.fluss.client.table.getter.PartitionGetter(
-                        lookupRowType, resolvedTableInfo.getPartitionKeys());
+        partitionGetter = new PartitionGetter(lookupRowType, resolvedTableInfo.getPartitionKeys());
         numBuckets = resolvedTableInfo.getNumBuckets();
         lakeSchemaId = (short) resolvedTableInfo.getSchemaId();
         lakeValueDecoder =
@@ -111,56 +129,103 @@ final class LakeLookupRuntime implements Serializable {
                         resolvedTableInfo.getTableConfig().getKvFormat(),
                         resolvedTableInfo.getSchema());
         lakeTableLookuper = createLakeTableLookuper(dataLakeFormat, resolvedTableInfo);
+        lookupExecutor = createLookupExecutor();
     }
 
-    LakeLookupKey createLookupKey(RowData normalizedKeyRow) {
-        InternalRow lookupRow = new FlinkAsFlussRow(normalizedKeyRow);
-        KeyEncoder primaryKeyEncoder =
-                checkNotNull(
-                        lakePrimaryKeyEncoder, "Lake primary-key encoder must be initialized.");
-        byte[] keyBytes = primaryKeyEncoder.encodeKey(lookupRow);
+    @Override
+    public CompletableFuture<LookupResult> lookup(RowData normalizedKeyRow) {
+        final LakeTableLookuper lookuper = lakeTableLookuper;
+        final FixedSchemaDecoder valueDecoder = lakeValueDecoder;
+        final ThreadPoolExecutor executor = lookupExecutor;
+        final byte[] keyBytes;
+        final LakeTableLookuper.LookupContext lookupContext;
+
+        try {
+            InternalRow lookupRow = new FlinkAsFlussRow(normalizedKeyRow);
+            keyBytes = encodePrimaryKey(lookupRow);
+            lookupContext = createLookupContext(lookupRow, keyBytes);
+        } catch (Throwable t) {
+            return FutureUtils.completedExceptionally(t);
+        }
+
+        CompletableFuture<LookupResult> future = new CompletableFuture<>();
+        try {
+            executor.execute(
+                    () -> {
+                        try {
+                            byte[] value = lookuper.lookup(keyBytes, lookupContext);
+                            InternalRow row =
+                                    value == null
+                                            ? null
+                                            : valueDecoder.decode(MemorySegment.wrap(value));
+                            future.complete(new LookupResult(row));
+                        } catch (Throwable t) {
+                            future.completeExceptionally(
+                                    new RuntimeException(
+                                            "Execution of lake fallback lookup failed: "
+                                                    + t.getMessage(),
+                                            t));
+                        }
+                    });
+        } catch (RejectedExecutionException e) {
+            future.completeExceptionally(
+                    new RuntimeException("Lake fallback lookup executor is overloaded.", e));
+        }
+
+        return FutureUtils.orTimeout(
+                future,
+                lookupTimeout.toMillis(),
+                TimeUnit.MILLISECONDS,
+                "Lake fallback lookup timed out after " + lookupTimeout);
+    }
+
+    private byte[] encodePrimaryKey(InternalRow lookupRow) {
+        return lakePrimaryKeyEncoder.encodeKey(lookupRow);
+    }
+
+    private LakeTableLookuper.LookupContext createLookupContext(
+            InternalRow lookupRow, byte[] keyBytes) {
+        final KeyEncoder primaryKeyEncoder = lakePrimaryKeyEncoder;
         byte[] bucketKeyBytes =
                 lakeBucketKeyEncoder == primaryKeyEncoder
                         ? keyBytes
-                        : checkNotNull(
-                                        lakeBucketKeyEncoder,
-                                        "Lake bucket-key encoder must be initialized.")
-                                .encodeKey(lookupRow);
-        int bucketId =
-                checkNotNull(bucketingFunction, "Bucketing function must be initialized.")
-                        .bucketing(bucketKeyBytes, numBuckets);
-        ResolvedPartitionSpec partitionSpec =
-                checkNotNull(partitionGetter, "Partition getter must be initialized.")
-                        .getResolvedPartitionSpec(lookupRow);
+                        : lakeBucketKeyEncoder.encodeKey(lookupRow);
+        int bucketId = bucketingFunction.bucketing(bucketKeyBytes, numBuckets);
+        ResolvedPartitionSpec partitionSpec = partitionGetter.getResolvedPartitionSpec(lookupRow);
         LakeTableLookuper.LookupContext lookupContext =
                 new LakeTableLookuper.LookupContext(
                         partitionSpec, bucketId, lakeSchemaId, flussFullRowType);
-        return new LakeLookupKey(keyBytes, lookupContext);
+        return lookupContext;
     }
 
-    @Nullable
-    InternalRow lookup(LakeLookupKey lakeLookupKey) throws Exception {
-        byte[] value =
-                checkNotNull(lakeTableLookuper, "Lake table lookuper must be initialized.")
-                        .lookup(lakeLookupKey.keyBytes, lakeLookupKey.lookupContext);
-        if (value == null) {
-            return null;
+    @Override
+    public void close() throws Exception {
+        if (lookupExecutor != null) {
+            lookupExecutor.shutdownNow();
         }
-        return checkNotNull(lakeValueDecoder, "Lake value decoder must be initialized.")
-                .decode(MemorySegment.wrap(value));
-    }
-
-    void close() throws Exception {
         if (lakeTableLookuper != null) {
             lakeTableLookuper.close();
         }
     }
 
+    private ThreadPoolExecutor createLookupExecutor() {
+        int queueCapacity = maxConcurrency - executorThreads;
+        BlockingQueue<Runnable> queue =
+                queueCapacity == 0
+                        ? new SynchronousQueue<>()
+                        : new ArrayBlockingQueue<>(queueCapacity);
+        return new ThreadPoolExecutor(
+                executorThreads,
+                executorThreads,
+                0L,
+                TimeUnit.MILLISECONDS,
+                queue,
+                new ExecutorThreadFactory("fluss-lake-fallback-lookup"),
+                new ThreadPoolExecutor.AbortPolicy());
+    }
+
     private DataLakeFormat validateAndGetDataLakeFormat(TableInfo tableInfo) {
-        DataLakeFormat dataLakeFormat =
-                checkNotNull(
-                        tableInfo.getTableConfig().getDataLakeFormat().orElse(null),
-                        "Data lake format must be configured for lake fallback lookup.");
+        DataLakeFormat dataLakeFormat = tableInfo.getTableConfig().getDataLakeFormat().orElse(null);
         if (dataLakeFormat != DataLakeFormat.PAIMON) {
             throw new TableException(
                     "Hybrid lake lookup currently only supports Paimon, but table "
@@ -189,20 +254,5 @@ final class LakeLookupRuntime implements Serializable {
                                 flussConfig.get(ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR),
                                 tableInfo.getTableConfig())),
                 "Lake table lookuper must not be null.");
-    }
-
-    /** The encoded lake lookup key and its lake lookup context. */
-    static final class LakeLookupKey {
-        private final byte[] keyBytes;
-        private final LakeTableLookuper.LookupContext lookupContext;
-
-        private LakeLookupKey(byte[] keyBytes, LakeTableLookuper.LookupContext lookupContext) {
-            this.keyBytes = keyBytes;
-            this.lookupContext = lookupContext;
-        }
-
-        ResolvedPartitionSpec getPartitionSpec() {
-            return lookupContext.partitionSpec();
-        }
     }
 }
