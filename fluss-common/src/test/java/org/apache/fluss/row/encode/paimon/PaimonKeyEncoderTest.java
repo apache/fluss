@@ -109,8 +109,8 @@ class PaimonKeyEncoderTest {
                 (int)
                         TypeUtils.castFromString(
                                 "09:30:00.0", org.apache.fluss.types.DataTypes.TIME()));
-        binaryRowWriter.writeBinary(9, "1234567890".getBytes());
-        binaryRowWriter.writeBinary(10, "20".getBytes());
+        binaryRowWriter.writeBinary(9, "1234567890".getBytes(), 0, "1234567890".getBytes().length);
+        binaryRowWriter.writeBinary(10, "20".getBytes(), 0, "20".getBytes().length);
         binaryRowWriter.writeString(11, BinaryString.fromString("1"));
         binaryRowWriter.writeString(12, BinaryString.fromString("hello"));
         binaryRowWriter.writeDecimal(13, Decimal.fromUnscaledLong(9, 5, 2), 5);
