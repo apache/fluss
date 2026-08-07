@@ -676,4 +676,36 @@ class RbAggFunctionsTest {
         assertThat(RbXorAggFunction.AccumulatorSerializer.INSTANCE.snapshotConfiguration())
                 .isNotNull();
     }
+
+    @Test
+    void testXorAggAccumulatorEqualsAndHashCode() {
+        RbXorAggFunction.Accumulator acc1 = new RbXorAggFunction.Accumulator();
+        acc1.nonNullCount = 2L;
+        acc1.value = RoaringBitmap.bitmapOf(1, 2, 3);
+
+        RbXorAggFunction.Accumulator acc2 = new RbXorAggFunction.Accumulator();
+        acc2.nonNullCount = 2L;
+        acc2.value = RoaringBitmap.bitmapOf(1, 2, 3);
+
+        RbXorAggFunction.Accumulator differentCount = new RbXorAggFunction.Accumulator();
+        differentCount.nonNullCount = 3L;
+        differentCount.value = RoaringBitmap.bitmapOf(1, 2, 3);
+
+        RbXorAggFunction.Accumulator differentValue = new RbXorAggFunction.Accumulator();
+        differentValue.nonNullCount = 2L;
+        differentValue.value = RoaringBitmap.bitmapOf(9, 9, 9);
+
+        // same reference
+        assertThat(acc1.equals(acc1)).isTrue();
+        // equal fields, different instances
+        assertThat(acc1).isEqualTo(acc2);
+        assertThat(acc1.hashCode()).isEqualTo(acc2.hashCode());
+        // different nonNullCount
+        assertThat(acc1).isNotEqualTo(differentCount);
+        // different value
+        assertThat(acc1).isNotEqualTo(differentValue);
+        // null and wrong-class checks
+        assertThat(acc1.equals(null)).isFalse();
+        assertThat(acc1.equals("not an accumulator")).isFalse();
+    }
 }
