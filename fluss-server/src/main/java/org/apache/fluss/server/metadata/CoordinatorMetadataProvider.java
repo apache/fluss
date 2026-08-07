@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.metadata;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
@@ -30,6 +31,7 @@ import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import javax.annotation.Nullable;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -115,9 +117,9 @@ public class CoordinatorMetadataProvider extends ZkBasedMetadataProvider {
      * Constructs bucket metadata list from coordinator context information.
      *
      * <p>This method builds a complete list of bucket metadata by combining assignment information
-     * from the provided table assignment map with leader and epoch data from the coordinator
-     * context. Each bucket's metadata includes its ID, current leader server, leader epoch, and
-     * replica assignments.
+     * from the provided table assignment map with leader and ISR data from the coordinator context.
+     * Each bucket's metadata includes its ID, current leader server, leader epoch, ISR, bucket
+     * epoch, and replica assignments.
      *
      * @param ctx the coordinator context containing leader and epoch information
      * @param tableId the table identifier
@@ -125,7 +127,8 @@ public class CoordinatorMetadataProvider extends ZkBasedMetadataProvider {
      * @param tableAssignment the assignment map from bucket ID to list of replica server IDs
      * @return a list of bucket metadata objects containing complete bucket information
      */
-    private static List<BucketMetadata> getBucketMetadataFromContext(
+    @VisibleForTesting
+    static List<BucketMetadata> getBucketMetadataFromContext(
             CoordinatorContext ctx,
             long tableId,
             @Nullable Long partitionId,
@@ -135,13 +138,27 @@ public class CoordinatorMetadataProvider extends ZkBasedMetadataProvider {
                 (bucketId, serverIds) -> {
                     TableBucket tableBucket = new TableBucket(tableId, partitionId, bucketId);
                     Optional<LeaderAndIsr> optLeaderAndIsr = ctx.getBucketLeaderAndIsr(tableBucket);
-                    Integer leader = optLeaderAndIsr.map(LeaderAndIsr::leader).orElse(null);
-                    BucketMetadata bucketMetadata =
-                            new BucketMetadata(
-                                    bucketId,
-                                    leader,
-                                    ctx.getBucketLeaderEpoch(tableBucket),
-                                    serverIds);
+                    BucketMetadata bucketMetadata;
+                    if (optLeaderAndIsr.isPresent()) {
+                        LeaderAndIsr leaderAndIsr = optLeaderAndIsr.get();
+                        bucketMetadata =
+                                new BucketMetadata(
+                                        bucketId,
+                                        leaderAndIsr.leader(),
+                                        leaderAndIsr.leaderEpoch(),
+                                        serverIds,
+                                        leaderAndIsr.isr(),
+                                        leaderAndIsr.bucketEpoch());
+                    } else {
+                        bucketMetadata =
+                                new BucketMetadata(
+                                        bucketId,
+                                        null,
+                                        null,
+                                        serverIds,
+                                        Collections.emptyList(),
+                                        BucketMetadata.NO_LEADER_ISR_STATE_EPOCH);
+                    }
                     bucketMetadataList.add(bucketMetadata);
                 });
         return bucketMetadataList;
