@@ -19,13 +19,18 @@ package org.apache.fluss.flink.sink;
 
 import org.apache.fluss.flink.sink.serializer.OrderSerializationSchema;
 import org.apache.fluss.flink.sink.shuffle.DistributionMode;
+import org.apache.fluss.flink.sink.undo.RecoveryAction;
 import org.apache.fluss.flink.source.testutils.Order;
+import org.apache.fluss.metadata.DeleteBehavior;
+import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePath;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Field;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -224,6 +229,57 @@ class FlussSinkBuilderTest {
                                         Arrays.asList("id", "unknown")))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("not found in table schema");
+    }
+
+    @Test
+    void testDataStreamRecoveryActionUsesDeletePolicyAndEffectiveTargets() {
+        assertThat(
+                        FlussSinkBuilder.determineRecoveryAction(
+                                createAggregationTableInfo(DeleteBehavior.ALLOW), new int[] {0, 1}))
+                .isEqualTo(RecoveryAction.UNDO);
+
+        TableInfo ignoringDeletes = createAggregationTableInfo(DeleteBehavior.IGNORE);
+        assertThat(FlussSinkBuilder.determineRecoveryAction(ignoringDeletes, new int[] {0, 1}))
+                .isEqualTo(RecoveryAction.NO_OP);
+        assertThat(FlussSinkBuilder.determineRecoveryAction(ignoringDeletes, new int[] {0, 2}))
+                .isEqualTo(RecoveryAction.UNDO);
+    }
+
+    private static TableInfo createAggregationTableInfo(DeleteBehavior deleteBehavior) {
+        org.apache.fluss.metadata.Schema schema =
+                org.apache.fluss.metadata.Schema.newBuilder()
+                        .column("id", org.apache.fluss.types.DataTypes.BIGINT())
+                        .column(
+                                "max_value",
+                                org.apache.fluss.types.DataTypes.BIGINT(),
+                                org.apache.fluss.metadata.AggFunctions.MAX())
+                        .column(
+                                "sum_value",
+                                org.apache.fluss.types.DataTypes.BIGINT(),
+                                org.apache.fluss.metadata.AggFunctions.SUM())
+                        .primaryKey("id")
+                        .build();
+        org.apache.fluss.config.Configuration properties =
+                new org.apache.fluss.config.Configuration();
+        properties.set(
+                org.apache.fluss.config.ConfigOptions.TABLE_MERGE_ENGINE,
+                org.apache.fluss.metadata.MergeEngineType.AGGREGATION);
+        properties.set(org.apache.fluss.config.ConfigOptions.TABLE_DELETE_BEHAVIOR, deleteBehavior);
+
+        return new TableInfo(
+                TablePath.of("db", "mixed"),
+                1L,
+                1,
+                schema,
+                Collections.singletonList("id"),
+                Collections.emptyList(),
+                1,
+                properties,
+                new org.apache.fluss.config.Configuration(),
+                null,
+                null,
+                0L,
+                0L);
     }
 
     // Helper method to get private field values using reflection

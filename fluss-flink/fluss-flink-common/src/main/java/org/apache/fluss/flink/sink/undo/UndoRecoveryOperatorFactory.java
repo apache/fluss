@@ -49,11 +49,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * chaining. This allows the UndoRecoveryOperator to be chained with downstream operators (like the
  * SinkWriter) for better performance by reducing serialization overhead and network communication.
  *
- * <p><b>ProducerOffsetReporter:</b> The factory creates a shared {@link
- * ProducerOffsetReporterHolder} that acts as a bridge between the factory and the operator. The
- * holder is passed to the downstream SinkWriter via {@link #getProducerOffsetReporter()}, and when
- * the operator is created at runtime, it registers itself with the holder. This enables the
- * SinkWriter to report written offsets back to the operator for state tracking.
+ * <p><b>ProducerOffsetReporter:</b> For UNDO, the factory's shared {@link
+ * ProducerOffsetReporterHolder} bridges the downstream SinkWriter and the operator. NO_OP keeps the
+ * same operator topology but does not attach or register this callback.
  *
  * @param <IN> The type of input elements
  * @see UndoRecoveryOperator
@@ -89,9 +87,12 @@ public class UndoRecoveryOperatorFactory<IN> extends AbstractStreamOperatorFacto
      * The producer ID used for producer offset snapshot management.
      *
      * <p>This is used by {@link RecoveryOffsetManager} to register and retrieve producer offsets
-     * for pre-checkpoint failure recovery. If null, the operator will use the Flink job ID.
+     * for pre-checkpoint failure recovery. If null, UNDO uses the Flink job ID while NO_OP performs
+     * no producer-offset operation.
      */
     @Nullable private final String producerId;
+
+    private final RecoveryAction recoveryAction;
 
     /** The polling interval in milliseconds for producer offsets synchronization. */
     private final long producerOffsetsPollIntervalMs;
@@ -104,60 +105,24 @@ public class UndoRecoveryOperatorFactory<IN> extends AbstractStreamOperatorFacto
     /**
      * The shared ProducerOffsetReporter holder.
      *
-     * <p>This holder is created in the constructor and passed to both the downstream SinkWriter
-     * (via {@link #getProducerOffsetReporter()}) and the operator (when created at runtime). The
-     * holder delegates offset reports to the actual operator once it's registered.
+     * <p>For UNDO, this holder is passed to the downstream SinkWriter via {@link
+     * #getProducerOffsetReporter()} and delegates offset reports to the operator once registered.
      */
     private final ProducerOffsetReporterHolder offsetReporterHolder;
 
     // ==================== Constructors ====================
 
     /**
-     * Creates a new UndoRecoveryOperatorFactory with default producer offset poll interval.
+     * Creates a factory with an explicit failover correction action.
      *
-     * @param tablePath the table path for the Fluss table
-     * @param flussConfig the Fluss configuration
-     * @param tableRowType the row type of the table
-     * @param targetColumnIndexes target column indexes for partial update (null for full row)
-     * @param numBuckets the number of buckets in the table
+     * @param tablePath the target table
+     * @param flussConfig client configuration
+     * @param tableRowType target row type
+     * @param targetColumnIndexes partial-update targets, or null for full update
+     * @param numBuckets table bucket count
      * @param isPartitioned whether the table is partitioned
-     * @param producerId the producer ID for producer offset management (null to use Flink job ID)
-     */
-    public UndoRecoveryOperatorFactory(
-            TablePath tablePath,
-            Configuration flussConfig,
-            RowType tableRowType,
-            @Nullable int[] targetColumnIndexes,
-            int numBuckets,
-            boolean isPartitioned,
-            @Nullable String producerId) {
-        this(
-                tablePath,
-                flussConfig,
-                tableRowType,
-                targetColumnIndexes,
-                numBuckets,
-                isPartitioned,
-                producerId,
-                RecoveryOffsetManager.DEFAULT_PRODUCER_OFFSETS_POLL_INTERVAL_MS,
-                RecoveryOffsetManager.DEFAULT_MAX_POLL_TIMEOUT_MS);
-    }
-
-    /**
-     * Creates a new UndoRecoveryOperatorFactory.
-     *
-     * <p>The factory is configured with {@link ChainingStrategy#ALWAYS} to enable operator chaining
-     * with downstream operators for better performance.
-     *
-     * @param tablePath the table path for the Fluss table
-     * @param flussConfig the Fluss configuration
-     * @param tableRowType the row type of the table
-     * @param targetColumnIndexes target column indexes for partial update (null for full row)
-     * @param numBuckets the number of buckets in the table
-     * @param isPartitioned whether the table is partitioned
-     * @param producerId the producer ID for producer offset management (null to use Flink job ID)
-     * @param producerOffsetsPollIntervalMs the polling interval for producer offsets
-     * @param maxPollTimeoutMs the maximum total time to poll for producer offsets
+     * @param producerId producer ID, or null to use the Flink job ID for UNDO only
+     * @param recoveryAction failover correction action
      */
     public UndoRecoveryOperatorFactory(
             TablePath tablePath,
@@ -167,6 +132,29 @@ public class UndoRecoveryOperatorFactory<IN> extends AbstractStreamOperatorFacto
             int numBuckets,
             boolean isPartitioned,
             @Nullable String producerId,
+            RecoveryAction recoveryAction) {
+        this(
+                tablePath,
+                flussConfig,
+                tableRowType,
+                targetColumnIndexes,
+                numBuckets,
+                isPartitioned,
+                producerId,
+                recoveryAction,
+                RecoveryOffsetManager.DEFAULT_PRODUCER_OFFSETS_POLL_INTERVAL_MS,
+                RecoveryOffsetManager.DEFAULT_MAX_POLL_TIMEOUT_MS);
+    }
+
+    UndoRecoveryOperatorFactory(
+            TablePath tablePath,
+            Configuration flussConfig,
+            RowType tableRowType,
+            @Nullable int[] targetColumnIndexes,
+            int numBuckets,
+            boolean isPartitioned,
+            @Nullable String producerId,
+            RecoveryAction recoveryAction,
             long producerOffsetsPollIntervalMs,
             long maxPollTimeoutMs) {
         this.tablePath = tablePath;
@@ -176,6 +164,7 @@ public class UndoRecoveryOperatorFactory<IN> extends AbstractStreamOperatorFacto
         this.numBuckets = numBuckets;
         this.isPartitioned = isPartitioned;
         this.producerId = producerId;
+        this.recoveryAction = recoveryAction;
         this.producerOffsetsPollIntervalMs = producerOffsetsPollIntervalMs;
         this.maxPollTimeoutMs = maxPollTimeoutMs;
 
@@ -193,8 +182,8 @@ public class UndoRecoveryOperatorFactory<IN> extends AbstractStreamOperatorFacto
      * Creates a new {@link UndoRecoveryOperator} instance.
      *
      * <p>This method is called by Flink's runtime to create the operator instance. The created
-     * operator is registered with the {@link ProducerOffsetReporterHolder} so that offset reports
-     * from the downstream SinkWriter are forwarded to the operator.
+     * operator is registered with the {@link ProducerOffsetReporterHolder} for UNDO so that offset
+     * reports from the downstream SinkWriter are forwarded to the operator.
      *
      * @param parameters the stream operator parameters from Flink runtime
      * @param <T> the type of the stream operator
@@ -213,12 +202,14 @@ public class UndoRecoveryOperatorFactory<IN> extends AbstractStreamOperatorFacto
                         numBuckets,
                         isPartitioned,
                         producerId,
+                        recoveryAction,
                         producerOffsetsPollIntervalMs,
                         maxPollTimeoutMs,
                         offsetReporterHolder.getHolderId());
 
-        // Register the operator with the static registry so offset reports are forwarded
-        registerDelegate(offsetReporterHolder.getHolderId(), operator);
+        if (recoveryAction == RecoveryAction.UNDO) {
+            registerDelegate(offsetReporterHolder.getHolderId(), operator);
+        }
 
         @SuppressWarnings("unchecked")
         final T castedOperator = (T) operator;
@@ -241,7 +232,7 @@ public class UndoRecoveryOperatorFactory<IN> extends AbstractStreamOperatorFacto
     // ==================== Getters ====================
 
     /**
-     * Returns the ProducerOffsetReporter that can be passed to the downstream SinkWriter.
+     * Returns the ProducerOffsetReporter for an UNDO sink path.
      *
      * @return the ProducerOffsetReporter holder
      */
@@ -277,6 +268,15 @@ public class UndoRecoveryOperatorFactory<IN> extends AbstractStreamOperatorFacto
     @Nullable
     public String getProducerId() {
         return producerId;
+    }
+
+    /**
+     * Returns the failover correction action.
+     *
+     * @return NO_OP or UNDO
+     */
+    public RecoveryAction getRecoveryAction() {
+        return recoveryAction;
     }
 
     public long getProducerOffsetsPollIntervalMs() {

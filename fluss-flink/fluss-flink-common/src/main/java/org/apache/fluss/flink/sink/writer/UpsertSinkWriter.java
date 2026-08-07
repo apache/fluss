@@ -49,7 +49,8 @@ public class UpsertSinkWriter<InputT> extends FlinkSinkWriter<InputT> {
      * <p>When provided (non-null), the writer will report offsets after each successful write
      * operation. This is used when the UndoRecoveryOperator manages state for aggregation tables.
      *
-     * <p>When null, offset reporting is skipped (for non-aggregation tables).
+     * <p>When null, offset reporting is skipped for non-aggregation tables and for aggregation
+     * tables using {@code RecoveryAction.NO_OP}.
      */
     @Nullable private final ProducerOffsetReporter offsetReporter;
 

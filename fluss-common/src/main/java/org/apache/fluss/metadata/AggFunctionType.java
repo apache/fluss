@@ -38,28 +38,44 @@ import static org.apache.fluss.utils.Preconditions.checkArgument;
 @PublicEvolving
 public enum AggFunctionType {
     // Numeric aggregation
-    SUM,
-    PRODUCT,
-    MAX,
-    MIN,
+    SUM(false),
+    PRODUCT(false),
+    MAX(true),
+    MIN(true),
 
     // Value selection
-    LAST_VALUE,
-    LAST_VALUE_IGNORE_NULLS,
-    FIRST_VALUE,
-    FIRST_VALUE_IGNORE_NULLS,
+    LAST_VALUE(true),
+    LAST_VALUE_IGNORE_NULLS(true),
+    FIRST_VALUE(true),
+    FIRST_VALUE_IGNORE_NULLS(true),
 
     // String aggregation
-    LISTAGG,
-    STRING_AGG, // Alias for LISTAGG - maps to same factory
+    LISTAGG(false),
+    STRING_AGG(false), // Alias for LISTAGG - maps to same factory
 
     // Boolean aggregation
-    BOOL_AND,
-    BOOL_OR,
+    BOOL_AND(true),
+    BOOL_OR(true),
 
     // Roaring bitmap aggregation
-    RBM32,
-    RBM64;
+    RBM32(true),
+    RBM64(true);
+
+    private final boolean idempotent;
+
+    AggFunctionType(boolean idempotent) {
+        this.idempotent = idempotent;
+    }
+
+    /**
+     * Returns whether applying the same aggregation input again leaves the final materialized
+     * aggregate unchanged.
+     *
+     * @return true when duplicate aggregation input is idempotent
+     */
+    public boolean isIdempotent() {
+        return idempotent;
+    }
 
     // ------------------------------------------------------------------------------------------
 

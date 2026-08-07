@@ -30,6 +30,7 @@ import org.apache.fluss.flink.source.ChangelogFlinkTableSource;
 import org.apache.fluss.flink.source.FlinkTableSource;
 import org.apache.fluss.flink.source.reader.LeaseContext;
 import org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils;
+import org.apache.fluss.flink.utils.FlinkConversions;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.TablePath;
 
@@ -185,6 +186,8 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
         List<String> partitionKeys = resolvedCatalogTable.getPartitionKeys();
 
         RowType rowType = (RowType) context.getPhysicalRowDataType().getLogicalType();
+        org.apache.fluss.metadata.Schema tableSchema =
+                FlinkConversions.toFlussTable(resolvedCatalogTable).getSchema();
 
         MergeEngineType mergeEngineType =
                 tableOptions.get(toFlinkOption(ConfigOptions.TABLE_MERGE_ENGINE));
@@ -203,6 +206,7 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                 toFlussClientConfig(
                         context.getCatalogTable().getOptions(), context.getConfiguration()),
                 rowType,
+                tableSchema,
                 primaryKeyIndexes,
                 partitionKeys,
                 isStreamingMode,

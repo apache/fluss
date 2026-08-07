@@ -37,34 +37,16 @@ import org.apache.flink.table.types.logical.RowType;
 
 import javax.annotation.Nullable;
 
+import java.io.File;
+import java.io.IOException;
 import java.io.Serializable;
 import java.nio.ByteBuffer;
-import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
-import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 
-/**
- * A counting source that can inject failures at specified points for testing checkpoint-based
- * failover recovery.
- *
- * <p>This source emits records like CountingSource but throws a RuntimeException after emitting a
- * configured number of records. The failure is "one-shot" - after recovery from checkpoint, the
- * source continues without failing again.
- *
- * <p>The source operates in three phases:
- *
- * <ol>
- *   <li>Phase 1: Emit {@code recordsBeforeFailure} records
- *   <li>Phase 2: Throw RuntimeException to trigger job failover
- *   <li>Phase 3: After recovery, emit {@code recordsAfterFailure} records
- * </ol>
- *
- * <p>The {@code hasFailed} flag is tracked using a file-based marker. This allows failure state to
- * persist across Enumerator and Reader restarts, even when different ClassLoaders are used.
- */
+/** A deterministic single-key source for checkpoint failover tests. */
 public class FailingCountingSource
         implements Source<
                         RowData,
@@ -72,93 +54,100 @@ public class FailingCountingSource
                         FailingCountingSource.FailingEnumeratorState>,
                 ResultTypeQueryable<RowData> {
 
-    private static final long serialVersionUID = 1L;
+    private static final long serialVersionUID = 2L;
+    private static final long MARKER_POLL_INTERVAL_MILLIS = 10L;
+    private static final String DIRTY_RELEASE_MARKER_SUFFIX = ".release-dirty";
+    private static final String FAILURE_TRIGGER_MARKER_SUFFIX = ".trigger-failure";
+    private static final String FAILURE_MARKER_SUFFIX = ".failed";
+    private static final String RESTART_MARKER_SUFFIX = ".restarted";
+    private static final String RECOVERY_COMPLETE_MARKER_SUFFIX = ".recovery-complete";
+    private static final CompletableFuture<Void> AVAILABLE =
+            CompletableFuture.completedFuture(null);
 
-    // Unique identifier for this source instance
     private final String sourceId;
-    // Directory for failure marker files (passed from test, survives ClassLoader changes)
     private final String markerDirPath;
     private final long key;
-    private final long value;
-    private final int recordsBeforeFailure;
-    private final int recordsAfterFailure;
-    private final boolean multiKey;
+    private final long committedValue;
+    private final int committedRecords;
+    private final long dirtyValue;
+    private final int dirtyRecords;
+    private final long recoveryValue;
+    private final int recoveryRecords;
 
     private FailingCountingSource(
             String sourceId,
             String markerDirPath,
             long key,
-            long value,
-            int recordsBeforeFailure,
-            int recordsAfterFailure,
-            boolean multiKey) {
+            long committedValue,
+            int committedRecords,
+            long dirtyValue,
+            int dirtyRecords,
+            long recoveryValue,
+            int recoveryRecords) {
+        if (committedRecords < 0 || dirtyRecords < 0 || recoveryRecords <= 0) {
+            throw new IllegalArgumentException(
+                    "Committed and dirty record counts must not be negative, and recovery records must be positive");
+        }
         this.sourceId = sourceId;
         this.markerDirPath = markerDirPath;
         this.key = key;
-        this.value = value;
-        this.recordsBeforeFailure = recordsBeforeFailure;
-        this.recordsAfterFailure = recordsAfterFailure;
-        this.multiKey = multiKey;
+        this.committedValue = committedValue;
+        this.committedRecords = committedRecords;
+        this.dirtyValue = dirtyValue;
+        this.dirtyRecords = dirtyRecords;
+        this.recoveryValue = recoveryValue;
+        this.recoveryRecords = recoveryRecords;
     }
 
-    /**
-     * Creates a single-key source that emits records for the specified key with failure injection.
-     *
-     * @param markerDir directory for failure marker files (use @TempDir for test isolation)
-     * @param key the key to emit records for
-     * @param value the value for each record
-     * @param recordsBeforeFailure number of records to emit before triggering failure
-     * @param recordsAfterFailure number of records to emit after recovery
-     * @return a new FailingCountingSource instance
-     */
-    public static FailingCountingSource singleKey(
-            java.io.File markerDir,
+    /** Creates a source with independently controlled committed, dirty, and recovery phases. */
+    public static FailingCountingSource coordinatedSingleKey(
+            File markerDir,
             long key,
-            long value,
-            int recordsBeforeFailure,
-            int recordsAfterFailure) {
-        String sourceId = "single-" + key + "-" + System.nanoTime();
+            long committedValue,
+            int committedRecords,
+            long dirtyValue,
+            int dirtyRecords,
+            long recoveryValue,
+            int recoveryRecords) {
         return new FailingCountingSource(
-                sourceId,
+                "coordinated-single-" + key + "-" + System.nanoTime(),
                 markerDir.getAbsolutePath(),
                 key,
-                value,
-                recordsBeforeFailure,
-                recordsAfterFailure,
-                false);
+                committedValue,
+                committedRecords,
+                dirtyValue,
+                dirtyRecords,
+                recoveryValue,
+                recoveryRecords);
     }
 
-    /**
-     * Creates a multi-key source that emits records for keys 1, 2, 3 in round-robin with failure
-     * injection.
-     *
-     * @param markerDir directory for failure marker files (use @TempDir for test isolation)
-     * @param value the value for each record
-     * @param recordsBeforeFailurePerKey number of records per key to emit before triggering failure
-     * @param recordsAfterFailurePerKey number of records per key to emit after recovery
-     * @return a new FailingCountingSource instance
-     */
-    public static FailingCountingSource multiKey(
-            java.io.File markerDir,
-            long value,
-            int recordsBeforeFailurePerKey,
-            int recordsAfterFailurePerKey) {
-        String sourceId = "multi-" + System.nanoTime();
-        return new FailingCountingSource(
-                sourceId,
-                markerDir.getAbsolutePath(),
-                0,
-                value,
-                recordsBeforeFailurePerKey,
-                recordsAfterFailurePerKey,
-                true);
+    /** Releases the source's dirty suffix. */
+    public void releaseDirtyEmission() throws IOException {
+        createMarker(DIRTY_RELEASE_MARKER_SUFFIX);
+    }
+
+    /** Triggers the source's one-shot failure. */
+    public void triggerFailure() throws IOException {
+        createMarker(FAILURE_TRIGGER_MARKER_SUFFIX);
+    }
+
+    /** Returns whether the source has injected its failure. */
+    public boolean hasFailed() {
+        return markerExists(FAILURE_MARKER_SUFFIX);
+    }
+
+    /** Returns whether the failed reader has restarted. */
+    public boolean hasRestarted() {
+        return markerExists(RESTART_MARKER_SUFFIX);
+    }
+
+    /** Returns whether all post-restart records have been emitted. */
+    public boolean hasRecoveryEmissionCompleted() {
+        return markerExists(RECOVERY_COMPLETE_MARKER_SUFFIX);
     }
 
     @Override
     public Boundedness getBoundedness() {
-        // CONTINUOUS_UNBOUNDED allows the source to idle after emitting records
-        // This is needed for checkpoint tests where we want checkpoints to complete
-        // after all records are emitted but before the job terminates
         return Boundedness.CONTINUOUS_UNBOUNDED;
     }
 
@@ -166,19 +155,14 @@ public class FailingCountingSource
     public SplitEnumerator<FailingCountingSplit, FailingEnumeratorState> createEnumerator(
             SplitEnumeratorContext<FailingCountingSplit> context) {
         return new FailingCountingSplitEnumerator(
-                context, recordsBeforeFailure, recordsAfterFailure, multiKey, false);
+                context, new FailingEnumeratorState(new FailingCountingSplit(0, 0)));
     }
 
     @Override
     public SplitEnumerator<FailingCountingSplit, FailingEnumeratorState> restoreEnumerator(
             SplitEnumeratorContext<FailingCountingSplit> context,
             FailingEnumeratorState checkpoint) {
-        return new FailingCountingSplitEnumerator(
-                context,
-                checkpoint.getRecordsBeforeFailure(),
-                checkpoint.getRecordsAfterFailure(),
-                checkpoint.isMultiKey(),
-                checkpoint.isSplitAssigned());
+        return new FailingCountingSplitEnumerator(context, checkpoint);
     }
 
     @Override
@@ -198,10 +182,12 @@ public class FailingCountingSource
                 sourceId,
                 markerDirPath,
                 key,
-                value,
-                multiKey,
-                recordsBeforeFailure,
-                recordsAfterFailure);
+                committedValue,
+                committedRecords,
+                dirtyValue,
+                dirtyRecords,
+                recoveryValue,
+                recoveryRecords);
     }
 
     @Override
@@ -215,345 +201,242 @@ public class FailingCountingSource
         return InternalTypeInfo.of(rowType);
     }
 
-    // ==================== FailingCountingSplit ====================
+    private boolean markerExists(String suffix) {
+        return new File(markerDirPath, sourceId + suffix).isFile();
+    }
 
-    /**
-     * Split state for FailingCountingSource that tracks failure status.
-     *
-     * <p>This split contains:
-     *
-     * <ul>
-     *   <li>{@code splitId} - unique identifier for the split
-     *   <li>{@code emittedRecords} - number of records emitted so far
-     *   <li>{@code hasFailed} - whether the failure has already been triggered (one-shot flag)
-     * </ul>
-     */
+    private void createMarker(String suffix) throws IOException {
+        createMarker(markerDirPath, sourceId + suffix);
+    }
+
+    private static void createMarker(String markerDirPath, String markerName) throws IOException {
+        File markerDir = new File(markerDirPath);
+        if (!markerDir.isDirectory() && !markerDir.mkdirs() && !markerDir.isDirectory()) {
+            throw new IOException("Failed to create marker directory " + markerDir);
+        }
+        File marker = new File(markerDir, markerName);
+        if (!marker.createNewFile() && !marker.isFile()) {
+            throw new IOException("Failed to create marker " + marker);
+        }
+    }
+
+    /** Checkpointed progress for the source's single split. */
     public static class FailingCountingSplit implements SourceSplit, Serializable {
-        private static final long serialVersionUID = 1L;
+        private static final long serialVersionUID = 2L;
 
         private final int splitId;
         private final int emittedRecords;
-        private final boolean hasFailed;
-        private final int keyIndex;
 
-        public FailingCountingSplit(int splitId, int emittedRecords, boolean hasFailed) {
-            this(splitId, emittedRecords, hasFailed, 0);
-        }
-
-        public FailingCountingSplit(
-                int splitId, int emittedRecords, boolean hasFailed, int keyIndex) {
+        private FailingCountingSplit(int splitId, int emittedRecords) {
             this.splitId = splitId;
             this.emittedRecords = emittedRecords;
-            this.hasFailed = hasFailed;
-            this.keyIndex = keyIndex;
         }
 
         @Override
         public String splitId() {
             return String.valueOf(splitId);
         }
-
-        public int getSplitIdInt() {
-            return splitId;
-        }
-
-        public int getEmittedRecords() {
-            return emittedRecords;
-        }
-
-        public boolean hasFailed() {
-            return hasFailed;
-        }
-
-        public int getKeyIndex() {
-            return keyIndex;
-        }
-
-        @Override
-        public String toString() {
-            return "FailingCountingSplit{"
-                    + "splitId="
-                    + splitId
-                    + ", emittedRecords="
-                    + emittedRecords
-                    + ", hasFailed="
-                    + hasFailed
-                    + ", keyIndex="
-                    + keyIndex
-                    + '}';
-        }
     }
 
-    // ==================== FailingEnumeratorState ====================
-
-    /**
-     * Enumerator state for FailingCountingSource.
-     *
-     * <p>This state contains configuration needed to restore the enumerator:
-     *
-     * <ul>
-     *   <li>{@code recordsBeforeFailure} - records to emit before failure
-     *   <li>{@code recordsAfterFailure} - records to emit after recovery
-     *   <li>{@code multiKey} - whether multi-key mode is enabled
-     *   <li>{@code splitAssigned} - whether a split has been assigned
-     * </ul>
-     */
+    /** Checkpointed assignment for the source's single split. */
     public static class FailingEnumeratorState implements Serializable {
-        private static final long serialVersionUID = 1L;
+        private static final long serialVersionUID = 2L;
 
-        private final int recordsBeforeFailure;
-        private final int recordsAfterFailure;
-        private final boolean multiKey;
-        private final boolean splitAssigned;
+        @Nullable private final FailingCountingSplit pendingSplit;
 
-        public FailingEnumeratorState(
-                int recordsBeforeFailure,
-                int recordsAfterFailure,
-                boolean multiKey,
-                boolean splitAssigned) {
-            this.recordsBeforeFailure = recordsBeforeFailure;
-            this.recordsAfterFailure = recordsAfterFailure;
-            this.multiKey = multiKey;
-            this.splitAssigned = splitAssigned;
-        }
-
-        public int getRecordsBeforeFailure() {
-            return recordsBeforeFailure;
-        }
-
-        public int getRecordsAfterFailure() {
-            return recordsAfterFailure;
-        }
-
-        public boolean isMultiKey() {
-            return multiKey;
-        }
-
-        public boolean isSplitAssigned() {
-            return splitAssigned;
+        private FailingEnumeratorState(@Nullable FailingCountingSplit pendingSplit) {
+            this.pendingSplit = pendingSplit;
         }
     }
 
-    // ==================== FailingCountingSplitEnumerator ====================
-
-    /**
-     * Split enumerator for FailingCountingSource.
-     *
-     * <p>This enumerator assigns a single split to the first reader (subtask 0).
-     */
     private static class FailingCountingSplitEnumerator
             implements SplitEnumerator<FailingCountingSplit, FailingEnumeratorState> {
 
         private final SplitEnumeratorContext<FailingCountingSplit> context;
-        private final int recordsBeforeFailure;
-        private final int recordsAfterFailure;
-        private final boolean multiKey;
-        private boolean splitAssigned;
+        @Nullable private FailingCountingSplit pendingSplit;
 
-        FailingCountingSplitEnumerator(
+        private FailingCountingSplitEnumerator(
                 SplitEnumeratorContext<FailingCountingSplit> context,
-                int recordsBeforeFailure,
-                int recordsAfterFailure,
-                boolean multiKey,
-                boolean splitAssigned) {
+                FailingEnumeratorState checkpoint) {
             this.context = context;
-            this.recordsBeforeFailure = recordsBeforeFailure;
-            this.recordsAfterFailure = recordsAfterFailure;
-            this.multiKey = multiKey;
-            this.splitAssigned = splitAssigned;
+            this.pendingSplit = checkpoint.pendingSplit;
         }
 
         @Override
         public void start() {}
 
         @Override
-        public void handleSplitRequest(int subtaskId, @Nullable String requesterHostname) {
-            // Not used - we assign splits proactively
-        }
+        public void handleSplitRequest(int subtaskId, @Nullable String requesterHostname) {}
 
         @Override
         public void addSplitsBack(List<FailingCountingSplit> splits, int subtaskId) {
-            // Re-assign splits if a reader fails
-            if (!splits.isEmpty()) {
-                splitAssigned = false;
+            if (splits.size() != 1) {
+                throw new IllegalArgumentException(
+                        "Expected one returned split, but got " + splits.size());
             }
+            pendingSplit = splits.get(0);
+            assignPendingSplit(subtaskId);
         }
 
         @Override
         public void addReader(int subtaskId) {
-            if (!splitAssigned && subtaskId == 0) {
-                // Assign a fresh split - failure state is tracked in static map
-                context.assignSplit(new FailingCountingSplit(0, 0, false), subtaskId);
-                splitAssigned = true;
+            assignPendingSplit(subtaskId);
+        }
+
+        private void assignPendingSplit(int subtaskId) {
+            if (subtaskId == 0
+                    && pendingSplit != null
+                    && context.registeredReaders().containsKey(subtaskId)) {
+                context.assignSplit(pendingSplit, subtaskId);
+                pendingSplit = null;
             }
         }
 
         @Override
         public FailingEnumeratorState snapshotState(long checkpointId) {
-            return new FailingEnumeratorState(
-                    recordsBeforeFailure, recordsAfterFailure, multiKey, splitAssigned);
+            return new FailingEnumeratorState(pendingSplit);
         }
 
         @Override
         public void close() {}
     }
 
-    // ==================== FailingCountingReader ====================
-
-    /**
-     * Reader that emits records and triggers failure at the configured point.
-     *
-     * <p>The reader tracks:
-     *
-     * <ul>
-     *   <li>{@code totalEmitted} - total records emitted across all phases
-     *   <li>{@code hasFailed} - whether the failure has been triggered (one-shot)
-     * </ul>
-     *
-     * <p>Uses file-based markers to track failure across ClassLoader restarts.
-     */
     private static class FailingCountingReader
             implements SourceReader<RowData, FailingCountingSplit> {
 
         private final String sourceId;
         private final String markerDirPath;
-        private final long singleKey;
-        private final long value;
-        private final boolean multiKey;
-        private final int recordsBeforeFailure;
-        private final int recordsAfterFailure;
-        private final Queue<FailingCountingSplit> splits = new ArrayDeque<>();
-        private CompletableFuture<Void> availableFuture = new CompletableFuture<>();
+        private final long key;
+        private final long committedValue;
+        private final int committedRecords;
+        private final long dirtyValue;
+        private final int dirtyRecords;
+        private final long recoveryValue;
+        private final int recoveryRecords;
+        private final CompletableFuture<Void> splitAvailability = new CompletableFuture<>();
 
-        // State tracked across checkpoints
-        private int totalEmitted = 0;
-        private boolean hasFailed = false;
-        private int keyIndex = 0;
+        @Nullable private FailingCountingSplit activeSplit;
+        private int emittedRecords;
 
-        FailingCountingReader(
+        private FailingCountingReader(
                 String sourceId,
                 String markerDirPath,
-                long singleKey,
-                long value,
-                boolean multiKey,
-                int recordsBeforeFailure,
-                int recordsAfterFailure) {
+                long key,
+                long committedValue,
+                int committedRecords,
+                long dirtyValue,
+                int dirtyRecords,
+                long recoveryValue,
+                int recoveryRecords) {
             this.sourceId = sourceId;
             this.markerDirPath = markerDirPath;
-            this.singleKey = singleKey;
-            this.value = value;
-            this.multiKey = multiKey;
-            this.recordsBeforeFailure = recordsBeforeFailure;
-            this.recordsAfterFailure = recordsAfterFailure;
-        }
-
-        private boolean hasFailedGlobally() {
-            return new java.io.File(markerDirPath, sourceId).exists();
-        }
-
-        private void markFailedGlobally() {
-            java.io.File markerDir = new java.io.File(markerDirPath);
-            markerDir.mkdirs();
-            try {
-                new java.io.File(markerDir, sourceId).createNewFile();
-            } catch (Exception e) {
-                // Ignore
-            }
+            this.key = key;
+            this.committedValue = committedValue;
+            this.committedRecords = committedRecords;
+            this.dirtyValue = dirtyValue;
+            this.dirtyRecords = dirtyRecords;
+            this.recoveryValue = recoveryValue;
+            this.recoveryRecords = recoveryRecords;
         }
 
         @Override
-        public void start() {}
+        public void start() {
+            if (markerExists(FAILURE_MARKER_SUFFIX)) {
+                createMarker(RESTART_MARKER_SUFFIX);
+            }
+        }
 
         @Override
         public InputStatus pollNext(ReaderOutput<RowData> output) throws Exception {
-            if (splits.isEmpty()) {
+            if (activeSplit == null) {
                 return InputStatus.NOTHING_AVAILABLE;
             }
 
-            // Calculate total records based on mode
-            int totalRecordsBeforeFailure =
-                    multiKey ? recordsBeforeFailure * 3 : recordsBeforeFailure;
-            int totalRecordsAfterFailure = multiKey ? recordsAfterFailure * 3 : recordsAfterFailure;
-            int totalRecords = totalRecordsBeforeFailure + totalRecordsAfterFailure;
-
-            // Check if we should fail (one-shot)
-            // Use file-based marker to track failure across restarts
-            if (!hasFailed && !hasFailedGlobally() && totalEmitted >= totalRecordsBeforeFailure) {
-                hasFailed = true;
-                markFailedGlobally();
+            int dirtyEnd = committedRecords + dirtyRecords;
+            int totalRecords = dirtyEnd + recoveryRecords;
+            long value;
+            if (emittedRecords < committedRecords) {
+                value = committedValue;
+            } else if (emittedRecords < dirtyEnd) {
+                if (!markerExists(DIRTY_RELEASE_MARKER_SUFFIX)) {
+                    return waitForMarker();
+                }
+                value = dirtyValue;
+            } else if (!markerExists(FAILURE_MARKER_SUFFIX)) {
+                if (!markerExists(FAILURE_TRIGGER_MARKER_SUFFIX)) {
+                    return waitForMarker();
+                }
+                createMarker(FAILURE_MARKER_SUFFIX);
                 throw new RuntimeException("Injected failure for testing checkpoint recovery");
-            }
-
-            // Check if we've emitted all records
-            if (totalEmitted >= totalRecords) {
-                // All records emitted, idle (don't return END_OF_INPUT)
-                // This allows checkpoints/savepoints to be taken
-                return InputStatus.NOTHING_AVAILABLE;
-            }
-
-            // Emit a record
-            GenericRowData row = new GenericRowData(2);
-            if (multiKey) {
-                row.setField(0, (long) (keyIndex + 1));
-                keyIndex = (keyIndex + 1) % 3;
+            } else if (emittedRecords < totalRecords) {
+                value = recoveryValue;
             } else {
-                row.setField(0, singleKey);
+                return waitForMarker();
             }
+
+            GenericRowData row = new GenericRowData(2);
+            row.setField(0, key);
             row.setField(1, value);
             output.collect(row);
-            totalEmitted++;
-
-            // Small delay to avoid overwhelming the system
-            Thread.sleep(10);
-
+            emittedRecords++;
+            if (markerExists(FAILURE_MARKER_SUFFIX) && emittedRecords == totalRecords) {
+                createMarker(RECOVERY_COMPLETE_MARKER_SUFFIX);
+            }
             return InputStatus.MORE_AVAILABLE;
+        }
+
+        private InputStatus waitForMarker() throws InterruptedException {
+            Thread.sleep(MARKER_POLL_INTERVAL_MILLIS);
+            return InputStatus.NOTHING_AVAILABLE;
         }
 
         @Override
         public List<FailingCountingSplit> snapshotState(long checkpointId) {
-            // Checkpoint the current state including hasFailed flag and keyIndex
+            if (activeSplit == null) {
+                return Collections.emptyList();
+            }
             return Collections.singletonList(
-                    new FailingCountingSplit(0, totalEmitted, hasFailed, keyIndex));
+                    new FailingCountingSplit(activeSplit.splitId, emittedRecords));
         }
 
         @Override
         public CompletableFuture<Void> isAvailable() {
-            return availableFuture;
+            return activeSplit == null ? splitAvailability : AVAILABLE;
         }
 
         @Override
-        public void addSplits(List<FailingCountingSplit> newSplits) {
-            // Restore state from split (assigned by Enumerator or restored from checkpoint)
-            for (FailingCountingSplit split : newSplits) {
-                this.totalEmitted = split.getEmittedRecords();
-                this.hasFailed = split.hasFailed();
-                this.keyIndex = split.getKeyIndex();
-                splits.add(split);
+        public void addSplits(List<FailingCountingSplit> splits) {
+            if (activeSplit != null || splits.size() != 1) {
+                throw new IllegalArgumentException("Expected exactly one assigned split");
             }
-            availableFuture.complete(null);
-            availableFuture = new CompletableFuture<>();
+            activeSplit = splits.get(0);
+            emittedRecords = activeSplit.emittedRecords;
+            splitAvailability.complete(null);
         }
 
         @Override
-        public void notifyNoMoreSplits() {
-            // No action needed
-        }
+        public void notifyNoMoreSplits() {}
 
         @Override
         public void close() {}
+
+        private boolean markerExists(String suffix) {
+            return new File(markerDirPath, sourceId + suffix).isFile();
+        }
+
+        private void createMarker(String suffix) {
+            try {
+                FailingCountingSource.createMarker(markerDirPath, sourceId + suffix);
+            } catch (IOException e) {
+                throw new RuntimeException("Failed to create source coordination marker", e);
+            }
+        }
     }
 
-    // ==================== Serializers ====================
-
-    /**
-     * Serializer for FailingCountingSplit.
-     *
-     * <p>Serialization format: splitId (4 bytes) + emittedRecords (4 bytes) + hasFailed (1 byte) +
-     * keyIndex (4 bytes)
-     */
     private static class FailingCountingSplitSerializer
             implements SimpleVersionedSerializer<FailingCountingSplit> {
-        private static final int VERSION = 2;
+        private static final int VERSION = 3;
+        private static final int SERIALIZED_LENGTH = 8;
 
         @Override
         public int getVersion() {
@@ -562,34 +445,25 @@ public class FailingCountingSource
 
         @Override
         public byte[] serialize(FailingCountingSplit split) {
-            ByteBuffer buffer = ByteBuffer.allocate(13);
-            buffer.putInt(split.getSplitIdInt());
-            buffer.putInt(split.getEmittedRecords());
-            buffer.put((byte) (split.hasFailed() ? 1 : 0));
-            buffer.putInt(split.getKeyIndex());
+            ByteBuffer buffer = ByteBuffer.allocate(SERIALIZED_LENGTH);
+            buffer.putInt(split.splitId);
+            buffer.putInt(split.emittedRecords);
             return buffer.array();
         }
 
         @Override
-        public FailingCountingSplit deserialize(int version, byte[] serialized) {
+        public FailingCountingSplit deserialize(int version, byte[] serialized) throws IOException {
+            if (version != VERSION || serialized.length != SERIALIZED_LENGTH) {
+                throw new IOException("Unsupported split state");
+            }
             ByteBuffer buffer = ByteBuffer.wrap(serialized);
-            int splitId = buffer.getInt();
-            int emittedRecords = buffer.getInt();
-            boolean hasFailed = buffer.get() == 1;
-            int keyIndex = version >= 2 ? buffer.getInt() : 0;
-            return new FailingCountingSplit(splitId, emittedRecords, hasFailed, keyIndex);
+            return new FailingCountingSplit(buffer.getInt(), buffer.getInt());
         }
     }
 
-    /**
-     * Serializer for FailingEnumeratorState.
-     *
-     * <p>Serialization format: recordsBeforeFailure (4 bytes) + recordsAfterFailure (4 bytes) +
-     * multiKey (1 byte) + splitAssigned (1 byte)
-     */
     private static class FailingEnumeratorStateSerializer
             implements SimpleVersionedSerializer<FailingEnumeratorState> {
-        private static final int VERSION = 1;
+        private static final int VERSION = 2;
 
         @Override
         public int getVersion() {
@@ -598,23 +472,32 @@ public class FailingCountingSource
 
         @Override
         public byte[] serialize(FailingEnumeratorState state) {
-            ByteBuffer buffer = ByteBuffer.allocate(10);
-            buffer.putInt(state.getRecordsBeforeFailure());
-            buffer.putInt(state.getRecordsAfterFailure());
-            buffer.put((byte) (state.isMultiKey() ? 1 : 0));
-            buffer.put((byte) (state.isSplitAssigned() ? 1 : 0));
+            if (state.pendingSplit == null) {
+                return new byte[] {1};
+            }
+            ByteBuffer buffer = ByteBuffer.allocate(9);
+            buffer.put((byte) 0);
+            buffer.putInt(state.pendingSplit.splitId);
+            buffer.putInt(state.pendingSplit.emittedRecords);
             return buffer.array();
         }
 
         @Override
-        public FailingEnumeratorState deserialize(int version, byte[] serialized) {
+        public FailingEnumeratorState deserialize(int version, byte[] serialized)
+                throws IOException {
+            if (version != VERSION || (serialized.length != 1 && serialized.length != 9)) {
+                throw new IOException("Unsupported enumerator state");
+            }
             ByteBuffer buffer = ByteBuffer.wrap(serialized);
-            int recordsBeforeFailure = buffer.getInt();
-            int recordsAfterFailure = buffer.getInt();
-            boolean multiKey = buffer.get() == 1;
-            boolean splitAssigned = buffer.get() == 1;
-            return new FailingEnumeratorState(
-                    recordsBeforeFailure, recordsAfterFailure, multiKey, splitAssigned);
+            byte assigned = buffer.get();
+            if (assigned == 1 && serialized.length == 1) {
+                return new FailingEnumeratorState(null);
+            }
+            if (assigned == 0 && serialized.length == 9) {
+                return new FailingEnumeratorState(
+                        new FailingCountingSplit(buffer.getInt(), buffer.getInt()));
+            }
+            throw new IOException("Invalid enumerator state");
         }
     }
 }

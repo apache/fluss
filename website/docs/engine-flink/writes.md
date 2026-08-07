@@ -87,6 +87,41 @@ INSERT INTO pk_table (shop_id, user_id, num_orders)
 SELECT shop_id, user_id, num_orders FROM source;
 ```
 
+## Failover Recovery for Aggregation Tables
+
+For tables that use the aggregation merge engine, the Flink connector automatically selects the
+failover recovery behavior from the aggregation functions and the records that the sink can emit.
+No additional connector option is required.
+
+The connector skips undo recovery when every column written by the job uses an idempotent
+aggregation function and deletes cannot change the materialized state. Applying the same
+aggregation input again does not change the materialized result for these functions:
+
+- `max` and `min`
+- `first_value` and `first_value_ignore_nulls`
+- `last_value` and `last_value_ignore_nulls`
+- `bool_and` and `bool_or`
+- `rbm32` and `rbm64`
+
+Undo recovery remains enabled for non-idempotent functions such as `sum`, `product`, `listagg`,
+and `string_agg`. It is also retained when the input can contain an effective delete or when the
+connector cannot prove that skipping recovery is safe. For partial updates, only the columns
+written by the job participate in this decision.
+
+When undo recovery is skipped, the connector does not track bucket offsets or apply data undo.
+When `sink.producer-id` is configured, subtask 0 removes stale producer offsets for that ID before
+records are processed; the configured ID must not be shared by concurrently running sinks. The
+default Flink job ID is not used for this cleanup because all sinks in a job share it; a fresh job
+submission naturally receives a new ID. Other subtasks do not connect for recovery.
+
+:::note Checkpoint compatibility
+Markerless checkpoints from older connector versions use the recovery action selected by the
+current job. A checkpoint with undo recovery skipped clears old undo state and cannot later be
+restored by a job revision that requires undo recovery, because it contains no bucket-offset
+baseline. Keep the same recovery-safe write semantics when restoring such a checkpoint, or start
+the changed job without restoring it.
+:::
+
 ## DELETE FROM
 
 Fluss supports deleting data for primary-key tables in batch mode via `DELETE FROM` statement. Currently, only single data deletions based on the primary key are supported.
