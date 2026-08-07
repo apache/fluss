@@ -48,6 +48,7 @@ import org.apache.flink.table.catalog.ResolvedCatalogTable;
 import org.apache.flink.table.catalog.ResolvedSchema;
 import org.apache.flink.table.catalog.TableChange.ModifyRefreshHandler;
 import org.apache.flink.table.catalog.TableChange.ModifyRefreshStatus;
+import org.apache.flink.table.catalog.WatermarkSpec;
 import org.apache.flink.table.catalog.exceptions.CatalogException;
 import org.apache.flink.types.RowKind;
 
@@ -414,7 +415,8 @@ public class FlinkConversions {
     }
 
     public static List<TableChange> toFlussTableChanges(
-            org.apache.flink.table.catalog.TableChange tableChange) {
+            org.apache.flink.table.catalog.TableChange tableChange,
+            Map<String, Integer> oldTableNonPhysicalColumnIndex) {
         if (tableChange instanceof org.apache.flink.table.catalog.TableChange.SetOption) {
             return Collections.singletonList(
                     convertSetOption(
@@ -422,26 +424,35 @@ public class FlinkConversions {
         } else if (tableChange instanceof org.apache.flink.table.catalog.TableChange.AddColumn) {
             org.apache.flink.table.catalog.TableChange.AddColumn addColumn =
                     (org.apache.flink.table.catalog.TableChange.AddColumn) tableChange;
-            Column column = addColumn.getColumn();
-            return Collections.singletonList(
-                    TableChange.addColumn(
-                            column.getName(),
-                            toFlussType(column.getDataType()),
-                            column.getComment().orElse(null),
-                            toFlussColumnPosition(addColumn.getPosition())));
+            if (addColumn.getColumn().isPhysical()) {
+                Column column = addColumn.getColumn();
+                return Collections.singletonList(
+                        TableChange.addColumn(
+                                column.getName(),
+                                toFlussType(column.getDataType()),
+                                column.getComment().orElse(null),
+                                toFlussColumnPosition(addColumn.getPosition())));
+            }
+            return Collections.emptyList();
         } else if (tableChange instanceof org.apache.flink.table.catalog.TableChange.DropColumn) {
-            return Collections.singletonList(
-                    TableChange.dropColumn(
-                            ((org.apache.flink.table.catalog.TableChange.DropColumn) tableChange)
-                                    .getColumnName()));
+            org.apache.flink.table.catalog.TableChange.DropColumn dropColumn =
+                    (org.apache.flink.table.catalog.TableChange.DropColumn) tableChange;
+            if (!oldTableNonPhysicalColumnIndex.containsKey(dropColumn.getColumnName())) {
+                return Collections.singletonList(
+                        TableChange.dropColumn(dropColumn.getColumnName()));
+            }
+            return Collections.emptyList();
         } else if (tableChange
                 instanceof org.apache.flink.table.catalog.TableChange.ModifyColumnName) {
             org.apache.flink.table.catalog.TableChange.ModifyColumnName renameColumn =
                     (org.apache.flink.table.catalog.TableChange.ModifyColumnName) tableChange;
-            return Collections.singletonList(
-                    TableChange.renameColumn(
-                            renameColumn.getOldColumn().getName(),
-                            renameColumn.getNewColumnName()));
+            if (!oldTableNonPhysicalColumnIndex.containsKey(renameColumn.getOldColumnName())) {
+                return Collections.singletonList(
+                        TableChange.renameColumn(
+                                renameColumn.getOldColumn().getName(),
+                                renameColumn.getNewColumnName()));
+            }
+            return Collections.emptyList();
         } else if (tableChange instanceof org.apache.flink.table.catalog.TableChange.ModifyColumn) {
             org.apache.flink.table.catalog.TableChange.ModifyColumn modifyColumn =
                     (org.apache.flink.table.catalog.TableChange.ModifyColumn) tableChange;
@@ -451,6 +462,11 @@ public class FlinkConversions {
                             modifyColumn.getOldColumn().getName()),
                     "Can only modify columns with the same name.");
             Column newColumn = modifyColumn.getNewColumn();
+            // let non-physical column handle by option
+            if (oldTableNonPhysicalColumnIndex.containsKey(modifyColumn.getOldColumn().getName())
+                    && !(newColumn instanceof Column.PhysicalColumn)) {
+                return Collections.emptyList();
+            }
             return Collections.singletonList(
                     TableChange.modifyColumn(
                             newColumn.getName(),
@@ -461,6 +477,16 @@ public class FlinkConversions {
             return Collections.singletonList(
                     convertResetOption(
                             (org.apache.flink.table.catalog.TableChange.ResetOption) tableChange));
+        } else if (tableChange instanceof org.apache.flink.table.catalog.TableChange.AddWatermark) {
+            return convertAddWatermark(
+                    (org.apache.flink.table.catalog.TableChange.AddWatermark) tableChange);
+        } else if (tableChange
+                instanceof org.apache.flink.table.catalog.TableChange.ModifyWatermark) {
+            return convertModifyWatermark(
+                    (org.apache.flink.table.catalog.TableChange.ModifyWatermark) tableChange);
+        } else if (tableChange
+                instanceof org.apache.flink.table.catalog.TableChange.DropWatermark) {
+            return convertDropWatermark();
         } else if (tableChange instanceof ModifyRefreshStatus
                 || tableChange instanceof ModifyRefreshHandler) {
             // MaterializedTableChange may produce multiple fluss TableChange.
@@ -494,6 +520,48 @@ public class FlinkConversions {
     private static TableChange.ResetOption convertResetOption(
             org.apache.flink.table.catalog.TableChange.ResetOption flinkResetOption) {
         return TableChange.reset(flinkResetOption.getKey());
+    }
+
+    private static List<TableChange> convertAddWatermark(
+            org.apache.flink.table.catalog.TableChange.AddWatermark addWatermark) {
+        WatermarkSpec watermarkSpec = addWatermark.getWatermark();
+
+        Map<String, String> watermarkProperties = new HashMap<>();
+        CatalogPropertiesUtils.serializeWatermarkSpecs(
+                watermarkProperties, Collections.singletonList(watermarkSpec));
+
+        List<TableChange> changes = new ArrayList<>();
+        for (Map.Entry<String, String> entry : watermarkProperties.entrySet()) {
+            changes.add(TableChange.set(entry.getKey(), entry.getValue()));
+        }
+
+        return changes;
+    }
+
+    private static List<TableChange> convertModifyWatermark(
+            org.apache.flink.table.catalog.TableChange.ModifyWatermark modifyWatermark) {
+        WatermarkSpec newWatermarkSpec = modifyWatermark.getNewWatermark();
+
+        Map<String, String> watermarkProperties = new HashMap<>();
+        CatalogPropertiesUtils.serializeWatermarkSpecs(
+                watermarkProperties, Collections.singletonList(newWatermarkSpec));
+
+        List<TableChange> changes = new ArrayList<>();
+        for (Map.Entry<String, String> entry : watermarkProperties.entrySet()) {
+            changes.add(TableChange.set(entry.getKey(), entry.getValue()));
+        }
+
+        return changes;
+    }
+
+    private static List<TableChange> convertDropWatermark() {
+        List<TableChange> changes = new ArrayList<>();
+
+        changes.add(TableChange.reset(CatalogPropertiesUtils.getWatermarkRowtimeKey(0)));
+        changes.add(TableChange.reset(CatalogPropertiesUtils.getWatermarkExprKey(0)));
+        changes.add(TableChange.reset(CatalogPropertiesUtils.getWatermarkDataTypeKey(0)));
+
+        return changes;
     }
 
     /** Converts a {@code MaterializedTableChange} to a list of Fluss TableChanges. */
