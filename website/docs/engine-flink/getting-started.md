@@ -6,7 +6,7 @@ sidebar_position: 1
 
 # Getting Started with Flink Engine
 ## Quick Start
-For a quick introduction to running Flink, refer to the [Quick Start](quickstart/flink.md) guide.
+For a quick introduction to running Flink, refer to the [Quick Start](../quickstart/flink.md) guide.
 
 
 ## Dependencies
@@ -59,7 +59,7 @@ For Flink's Table API, Fluss supports the following features:
 | [SQL Show Partitions](ddl.md#show-partitions)                   | ✔️    |                                          |
 | [SQL Add Partition](ddl.md#add-partition)                       | ✔️    |                                          |
 | [SQL Drop Partition](ddl.md#drop-partition)                     | ✔️    |                                          |
-| [Procedures](ddl.md#procedures)                                 | ✔️    | ACL management and cluster configuration |
+| [Procedures](procedures.md)                                 | ✔️    | ACL management and cluster configuration |
 | [SQL Select](reads.md)                                          | ✔️    | Support both streaming and batch mode.   |
 | [SQL Limit](reads.md#limit-read)                                | ✔️    | Only for Log Table                       |
 | [SQL Insert Into](writes.md)                                    | ✔️    | Support both streaming and batch mode.   |
@@ -67,7 +67,7 @@ For Flink's Table API, Fluss supports the following features:
 | [SQL Update](writes.md#update)                                  | ✔️    | Only in batch mode.                      |
 | [SQL Lookup Join](lookups.md)                                   | ✔️    |                                          |
 
-For Flink's DataStream API, you can see [DataStream API](docs/engine-flink/datastream.mdx) for more details.
+For Flink's DataStream API, you can see [DataStream API](datastream.mdx) for more details.
 
 ## Preparation when using Flink SQL Client
 - **Download Flink**
