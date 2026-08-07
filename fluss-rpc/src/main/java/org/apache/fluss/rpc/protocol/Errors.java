@@ -280,7 +280,7 @@ public enum Errors {
             InsufficientKvLeaderReplicaCapacityException::new),
     STORAGE_BACKPRESSURE_EXCEPTION(
             72,
-            "The tablet server has rejected the write because the KV storage engine has reached its write-pressure threshold.",
+            "The tablet server has rejected the write because a KV write-pressure source has reached its defensive threshold.",
             StorageBackpressureException::new),
     HISTORICAL_PARTITION_THROTTLED(
             73,

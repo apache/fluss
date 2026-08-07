@@ -25,6 +25,7 @@ import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.config.cluster.ServerReconfigurable;
 import org.apache.fluss.exception.ConfigException;
+import org.apache.fluss.exception.IllegalConfigurationException;
 import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
@@ -39,6 +40,7 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.TabletManagerBase;
 import org.apache.fluss.server.kv.autoinc.AutoIncrementManager;
 import org.apache.fluss.server.kv.autoinc.ZkSequenceGeneratorFactory;
+import org.apache.fluss.server.kv.prewrite.KvPreWriteBufferMemoryManager;
 import org.apache.fluss.server.kv.rowmerger.RowMerger;
 import org.apache.fluss.server.log.LogManager;
 import org.apache.fluss.server.log.LogTablet;
@@ -118,6 +120,9 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
 
     private final TabletServerMetricGroup serverMetricGroup;
 
+    /** TabletServer-wide memory guard shared by all KV pre-write buffers. */
+    private final KvPreWriteBufferMemoryManager preWriteBufferMemoryManager;
+
     private final ZooKeeperClient zkClient;
 
     private final Map<TableBucket, KvTablet> currentKvs = new ConcurrentHashMap<>();
@@ -165,11 +170,40 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
         this.remoteKvDir = FlussPaths.remoteKvDir(conf);
         this.remoteFileSystem = remoteKvDir.getFileSystem();
         this.serverMetricGroup = tabletServerMetricGroup;
+        this.preWriteBufferMemoryManager = createPreWriteBufferMemoryManager(conf);
+        tabletServerMetricGroup.registerKvPreWriteBufferMemoryManager(preWriteBufferMemoryManager);
         this.sharedRocksDBRateLimiter = createSharedRateLimiter(conf);
         this.currentSharedRateLimitBytesPerSec =
                 conf.get(ConfigOptions.KV_SHARED_RATE_LIMITER_BYTES_PER_SEC).getBytes();
         this.kvFlushScheduler =
                 kvFlushScheduler != null ? kvFlushScheduler : new KvFlushScheduler(conf);
+    }
+
+    private static KvPreWriteBufferMemoryManager createPreWriteBufferMemoryManager(
+            Configuration conf) {
+        Optional<Double> highWatermarkRatio =
+                conf.getOptional(
+                        ConfigOptions.SERVER_KV_PRE_WRITE_BUFFER_MEMORY_HIGH_WATERMARK_RATIO);
+        Optional<Double> lowWatermarkRatio =
+                conf.getOptional(
+                        ConfigOptions.SERVER_KV_PRE_WRITE_BUFFER_MEMORY_LOW_WATERMARK_RATIO);
+        if (!highWatermarkRatio.isPresent() && !lowWatermarkRatio.isPresent()) {
+            return KvPreWriteBufferMemoryManager.disabled();
+        }
+        if (!highWatermarkRatio.isPresent() || !lowWatermarkRatio.isPresent()) {
+            throw new IllegalConfigurationException(
+                    "Configurations %s and %s must be configured together to enable the "
+                            + "defensive KV pre-write-buffer memory guard.",
+                    ConfigOptions.SERVER_KV_PRE_WRITE_BUFFER_MEMORY_HIGH_WATERMARK_RATIO.key(),
+                    ConfigOptions.SERVER_KV_PRE_WRITE_BUFFER_MEMORY_LOW_WATERMARK_RATIO.key());
+        }
+
+        long maxHeapMemory = Runtime.getRuntime().maxMemory();
+        long highWatermarkBytes =
+                new MemorySize(maxHeapMemory).multiply(highWatermarkRatio.get()).getBytes();
+        long lowWatermarkBytes =
+                new MemorySize(maxHeapMemory).multiply(lowWatermarkRatio.get()).getBytes();
+        return new KvPreWriteBufferMemoryManager(highWatermarkBytes, lowWatermarkBytes);
     }
 
     private static RateLimiter createSharedRateLimiter(Configuration conf) {
@@ -320,7 +354,8 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
                                     sharedRocksDBRateLimiter,
                                     kvFlushScheduler,
                                     flushCompleteListener,
-                                    autoIncrementManager);
+                                    autoIncrementManager,
+                                    preWriteBufferMemoryManager);
                     currentKvs.put(tableBucket, tablet);
 
                     LOG.info(
@@ -353,6 +388,11 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
 
     public Optional<KvTablet> getKv(TableBucket tableBucket) {
         return Optional.ofNullable(currentKvs.get(tableBucket));
+    }
+
+    @VisibleForTesting
+    KvPreWriteBufferMemoryManager preWriteBufferMemoryManager() {
+        return preWriteBufferMemoryManager;
     }
 
     public void dropKv(TableBucket tableBucket) {
@@ -442,7 +482,8 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
                         sharedRocksDBRateLimiter,
                         kvFlushScheduler,
                         flushCompleteListener,
-                        autoIncrementManager);
+                        autoIncrementManager,
+                        preWriteBufferMemoryManager);
         if (this.currentKvs.containsKey(tableBucket)) {
             throw new IllegalStateException(
                     String.format(
