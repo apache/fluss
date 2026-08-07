@@ -34,6 +34,7 @@ public class AutoPartitionStrategy {
     private final String timeFormat;
     private final int numPreCreate;
     private final int numToRetain;
+    private final boolean ensureLakeTieredBeforeDrop;
     private final TimeZone timeZone;
 
     private AutoPartitionStrategy(
@@ -43,6 +44,7 @@ public class AutoPartitionStrategy {
             String timeFormat,
             int numPreCreate,
             int numToRetain,
+            boolean ensureLakeTieredBeforeDrop,
             TimeZone timeZone) {
         this.autoPartitionEnabled = autoPartitionEnabled;
         this.key = key;
@@ -50,6 +52,7 @@ public class AutoPartitionStrategy {
         this.timeFormat = timeFormat;
         this.numPreCreate = numPreCreate;
         this.numToRetain = numToRetain;
+        this.ensureLakeTieredBeforeDrop = ensureLakeTieredBeforeDrop;
         this.timeZone = timeZone;
     }
 
@@ -65,6 +68,7 @@ public class AutoPartitionStrategy {
                 conf.getOptional(ConfigOptions.TABLE_AUTO_PARTITION_TIME_FORMAT).orElse(null),
                 conf.getInt(ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE),
                 conf.getInt(ConfigOptions.TABLE_AUTO_PARTITION_NUM_RETENTION),
+                conf.getBoolean(ConfigOptions.TABLE_AUTO_PARTITION_DROP_ENSURE_TIERED),
                 TimeZone.getTimeZone(conf.getString(ConfigOptions.TABLE_AUTO_PARTITION_TIMEZONE)));
     }
 
@@ -90,6 +94,10 @@ public class AutoPartitionStrategy {
 
     public int numToRetain() {
         return numToRetain;
+    }
+
+    public boolean ensureLakeTieredBeforeDrop() {
+        return ensureLakeTieredBeforeDrop;
     }
 
     public TimeZone timeZone() {

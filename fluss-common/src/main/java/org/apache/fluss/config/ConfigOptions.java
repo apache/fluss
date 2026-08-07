@@ -219,6 +219,14 @@ public class ConfigOptions {
                             "The interval of auto partition check. "
                                     + "The default value is 10 minutes.");
 
+    public static final ConfigOption<Duration> AUTO_PARTITION_DROP_FREEZE_TIMEOUT =
+            key("auto-partition.drop.freeze-timeout")
+                    .durationType()
+                    .defaultValue(Duration.ofSeconds(30))
+                    .withDescription(
+                            "The maximum time to wait for all partition bucket leaders to freeze "
+                                    + "writes before retrying in the next auto-partition cycle.");
+
     public static final ConfigOption<Duration> COORDINATOR_LIFECYCLE_THROTTLER_INFLIGHT_TIMEOUT =
             key("coordinator.lifecycle-throttler.inflight-timeout")
                     .durationType()
@@ -1809,6 +1817,15 @@ public class ConfigOptions {
                                     + "configured as 3, then the history partitions 20241108, 20241109, 20241110 will be retained. "
                                     + "The partitions earlier than 20241108 will be deleted. "
                                     + "The default value is 7.");
+
+    public static final ConfigOption<Boolean> TABLE_AUTO_PARTITION_DROP_ENSURE_TIERED =
+            key("table.auto-partition.drop.ensure-tiered")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether an expired auto partition must be fully committed to the data lake before deletion. "
+                                    + "When enabled, writes to the partition are frozen first, and the partition is deleted only after the lake contains all frozen log offsets. "
+                                    + "The default value is false.");
 
     public static final ConfigOption<Duration> TABLE_LOG_TTL =
             key("table.log.ttl")

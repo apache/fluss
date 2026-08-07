@@ -74,6 +74,7 @@ import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.entity.FetchReqInfo;
+import org.apache.fluss.server.entity.FreezePartitionResultForBucket;
 import org.apache.fluss.server.entity.LakeBucketOffset;
 import org.apache.fluss.server.entity.LookupDataForBucket;
 import org.apache.fluss.server.entity.NotifyKvSnapshotOffsetData;
@@ -118,6 +119,7 @@ import org.apache.fluss.server.storage.LocalDiskManager;
 import org.apache.fluss.server.utils.FatalErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
@@ -675,6 +677,35 @@ public class ReplicaManager implements ServerReconfigurable {
         // maybe do delay write operation.
         maybeAddDelayedWrite(
                 timeoutMs, requiredAcks, entriesPerBucket.size(), appendResult, responseCallback);
+    }
+
+    /** Freeze writes to partition bucket leaders and return their stable offsets. */
+    public void freezePartitions(
+            Map<TableBucket, Integer> leaderEpochs,
+            Consumer<List<FreezePartitionResultForBucket>> responseCallback) {
+        List<FreezePartitionResultForBucket> results = new ArrayList<>();
+        inLock(
+                replicaStateChangeLock,
+                () -> {
+                    for (Map.Entry<TableBucket, Integer> entry : leaderEpochs.entrySet()) {
+                        TableBucket tableBucket = entry.getKey();
+                        try {
+                            Replica.FrozenOffsets frozenOffsets =
+                                    getReplicaOrException(tableBucket)
+                                            .freezeWrites(entry.getValue());
+                            results.add(
+                                    new FreezePartitionResultForBucket(
+                                            tableBucket,
+                                            frozenOffsets.getHighWatermark(),
+                                            frozenOffsets.getLogEndOffset()));
+                        } catch (Exception e) {
+                            results.add(
+                                    new FreezePartitionResultForBucket(
+                                            tableBucket, ApiError.fromThrowable(e)));
+                        }
+                    }
+                });
+        responseCallback.accept(results);
     }
 
     /**
@@ -1262,6 +1293,7 @@ public class ReplicaManager implements ServerReconfigurable {
                         .map(NotifyLeaderAndIsrData::getTableBucket)
                         .collect(Collectors.toSet()));
 
+        Map<PhysicalTablePath, Boolean> frozenPartitions = new HashMap<>();
         for (NotifyLeaderAndIsrData data : replicasToBeLeader) {
             TableBucket tb = data.getTableBucket();
             try {
@@ -1269,7 +1301,15 @@ public class ReplicaManager implements ServerReconfigurable {
                 // register replica to remote log manager first.
                 remoteLogManager.registerReplica(replica);
 
-                replica.makeLeader(data);
+                // check the partition frozen status
+                PhysicalTablePath tablePath = data.getPhysicalTablePath();
+                Boolean isFrozen = frozenPartitions.get(tablePath);
+                if (isFrozen == null) {
+                    isFrozen = isPartitionFrozen(tablePath);
+                    frozenPartitions.put(tablePath, isFrozen);
+                }
+
+                replica.makeLeader(data, isFrozen);
                 if (replica.isDataLakeEnabled()) {
                     updateWithLakeTableSnapshot(replica);
                 }
@@ -1283,6 +1323,12 @@ public class ReplicaManager implements ServerReconfigurable {
                         tb, new NotifyLeaderAndIsrResultForBucket(tb, ApiError.fromThrowable(e)));
             }
         }
+    }
+
+    private boolean isPartitionFrozen(PhysicalTablePath tablePath) throws Exception {
+        return zkClient.getPartition(tablePath.getTablePath(), tablePath.getPartitionName())
+                .map(PartitionRegistration::isFrozen)
+                .orElse(false);
     }
 
     // NOTE: This method can be removed when fetchFromLake is deprecated

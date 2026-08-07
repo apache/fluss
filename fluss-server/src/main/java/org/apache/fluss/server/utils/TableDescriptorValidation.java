@@ -524,6 +524,17 @@ public class TableDescriptorValidation {
         boolean hasExplicitTimeFormat =
                 tableConf.contains(ConfigOptions.TABLE_AUTO_PARTITION_TIME_FORMAT);
 
+        if (autoPartition.ensureLakeTieredBeforeDrop()
+                && (!autoPartition.isAutoPartitionEnabled()
+                        || !tableConf.get(ConfigOptions.TABLE_DATALAKE_ENABLED))) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "'%s' requires both '%s' and '%s' to be enabled.",
+                            ConfigOptions.TABLE_AUTO_PARTITION_DROP_ENSURE_TIERED.key(),
+                            ConfigOptions.TABLE_AUTO_PARTITION_ENABLED.key(),
+                            ConfigOptions.TABLE_DATALAKE_ENABLED.key()));
+        }
+
         if (!isPartitioned && autoPartition.isAutoPartitionEnabled()) {
             throw new InvalidConfigException(
                     String.format(

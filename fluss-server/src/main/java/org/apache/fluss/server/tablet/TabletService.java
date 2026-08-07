@@ -40,6 +40,8 @@ import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
+import org.apache.fluss.rpc.messages.FreezePartitionRequest;
+import org.apache.fluss.rpc.messages.FreezePartitionResponse;
 import org.apache.fluss.rpc.messages.GetClusterHealthRequest;
 import org.apache.fluss.rpc.messages.GetClusterHealthResponse;
 import org.apache.fluss.rpc.messages.GetTableStatsRequest;
@@ -129,6 +131,7 @@ import static org.apache.fluss.security.acl.OperationType.WRITE;
 import static org.apache.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
 import static org.apache.fluss.server.log.FetchParams.DEFAULT_MAX_WAIT_MS_WHEN_MIN_BYTES_ENABLE;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getFetchLogData;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getFreezePartitionData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getListOffsetsData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getNotifyLakeTableOffset;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getNotifyLeaderAndIsrRequestData;
@@ -142,6 +145,7 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getTableStatsR
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getTargetColumns;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getUpdateMetadataRequestData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeFetchLogResponse;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeFreezePartitionResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeGetTableStatsResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeInitWriterResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeLimitScanResponse;
@@ -464,6 +468,18 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                                 coordinatorEpoch,
                                 stopReplicaData,
                                 value -> result.complete(makeStopReplicaResponse(value))));
+    }
+
+    @Override
+    public CompletableFuture<FreezePartitionResponse> freezePartition(
+            FreezePartitionRequest request) {
+        CompletableFuture<FreezePartitionResponse> response = new CompletableFuture<>();
+        return submitReplicaStateChange(
+                response,
+                result ->
+                        replicaManager.freezePartitions(
+                                getFreezePartitionData(request),
+                                results -> result.complete(makeFreezePartitionResponse(results))));
     }
 
     @Override

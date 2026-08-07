@@ -94,6 +94,7 @@ public class AutoPartitionManager implements AutoCloseable {
     private final MetadataManager metadataManager;
     private final RemoteDirDynamicLoader remoteDirDynamicLoader;
     private final ReplicaCapacityController replicaCapacityController;
+    private final @Nullable LakeAwarePartitionDropManager lakeAwarePartitionDropManager;
     private final Clock clock;
 
     private final long periodicInterval;
@@ -114,6 +115,7 @@ public class AutoPartitionManager implements AutoCloseable {
 
     private final Lock lock = new ReentrantLock();
 
+    @VisibleForTesting
     public AutoPartitionManager(
             ServerMetadataCache metadataCache,
             MetadataManager metadataManager,
@@ -130,7 +132,29 @@ public class AutoPartitionManager implements AutoCloseable {
                 // TODO: Reuse the CoordinatorServer shared scheduler for this lightweight
                 // coordinator periodic task instead of creating a component-owned scheduler.
                 Executors.newScheduledThreadPool(
-                        1, new ExecutorThreadFactory("periodic-auto-partition-manager")));
+                        1, new ExecutorThreadFactory("periodic-auto-partition-manager")),
+                null);
+    }
+
+    public AutoPartitionManager(
+            ServerMetadataCache metadataCache,
+            MetadataManager metadataManager,
+            RemoteDirDynamicLoader remoteDirDynamicLoader,
+            Configuration conf,
+            ReplicaCapacityController replicaCapacityController,
+            LakeAwarePartitionDropManager lakeAwarePartitionDropManager) {
+        this(
+                metadataCache,
+                metadataManager,
+                remoteDirDynamicLoader,
+                conf,
+                replicaCapacityController,
+                SystemClock.getInstance(),
+                // TODO: Reuse the CoordinatorServer shared scheduler for this lightweight
+                // coordinator periodic task instead of creating a component-owned scheduler.
+                Executors.newScheduledThreadPool(
+                        1, new ExecutorThreadFactory("periodic-auto-partition-manager")),
+                checkNotNull(lakeAwarePartitionDropManager));
     }
 
     @VisibleForTesting
@@ -142,10 +166,32 @@ public class AutoPartitionManager implements AutoCloseable {
             ReplicaCapacityController replicaCapacityController,
             Clock clock,
             ScheduledExecutorService periodicExecutor) {
+        this(
+                metadataCache,
+                metadataManager,
+                remoteDirDynamicLoader,
+                conf,
+                replicaCapacityController,
+                clock,
+                periodicExecutor,
+                null);
+    }
+
+    @VisibleForTesting
+    AutoPartitionManager(
+            ServerMetadataCache metadataCache,
+            MetadataManager metadataManager,
+            RemoteDirDynamicLoader remoteDirDynamicLoader,
+            Configuration conf,
+            ReplicaCapacityController replicaCapacityController,
+            Clock clock,
+            ScheduledExecutorService periodicExecutor,
+            @Nullable LakeAwarePartitionDropManager lakeAwarePartitionDropManager) {
         this.metadataCache = metadataCache;
         this.metadataManager = metadataManager;
         this.remoteDirDynamicLoader = remoteDirDynamicLoader;
         this.replicaCapacityController = replicaCapacityController;
+        this.lakeAwarePartitionDropManager = lakeAwarePartitionDropManager;
         this.clock = clock;
         this.periodicExecutor = periodicExecutor;
         this.periodicInterval = conf.get(ConfigOptions.AUTO_PARTITION_CHECK_INTERVAL).toMillis();
@@ -458,8 +504,7 @@ public class AutoPartitionManager implements AutoCloseable {
             }
 
             dropPartitions(
-                    tablePath,
-                    tableInfo.getPartitionKeys(),
+                    tableInfo,
                     now,
                     tableInfo.getTableConfig().getAutoPartitionStrategy(),
                     currentPartitions);
@@ -573,11 +618,12 @@ public class AutoPartitionManager implements AutoCloseable {
     }
 
     private void dropPartitions(
-            TablePath tablePath,
-            List<String> partitionKeys,
+            TableInfo tableInfo,
             Instant currentInstant,
             AutoPartitionStrategy autoPartitionStrategy,
             NavigableMap<String, Set<String>> currentPartitions) {
+        boolean ensureTiered = autoPartitionStrategy.ensureLakeTieredBeforeDrop();
+
         int numToRetain = autoPartitionStrategy.numToRetain();
         // negative value means not to drop partitions
         if (numToRetain < 0) {
@@ -617,20 +663,32 @@ public class AutoPartitionManager implements AutoCloseable {
             if (HISTORICAL_PARTITION_VALUE.equals(entry.getKey())) {
                 continue;
             }
-            dropPartitions(tablePath, partitionKeys, iterator, entry);
+            dropPartitions(tableInfo, ensureTiered, iterator, entry);
         }
     }
 
     private void dropPartitions(
-            TablePath tablePath,
-            List<String> partitionKeys,
+            TableInfo tableInfo,
+            boolean ensureTiered,
             Iterator<Map.Entry<String, Set<String>>> iterator,
             Map.Entry<String, Set<String>> entry) {
+        TablePath tablePath = tableInfo.getTablePath();
+        List<String> partitionKeys = tableInfo.getPartitionKeys();
         Iterator<String> dropIterator;
         if (entry.getValue() == null) {
             dropIterator = new HashSet<>(Collections.singleton(entry.getKey())).iterator();
         } else {
             dropIterator = entry.getValue().iterator();
+        }
+
+        // if the partition is needed to be tiered into lake, the drop operation should be
+        // delegated to the LakeAwarePartitionDropManager
+        if (ensureTiered) {
+            while (dropIterator.hasNext()) {
+                String partitionName = dropIterator.next();
+                checkNotNull(lakeAwarePartitionDropManager).tryDrop(tableInfo, partitionName);
+            }
+            return;
         }
 
         boolean deletionFailed = false;
@@ -677,6 +735,13 @@ public class AutoPartitionManager implements AutoCloseable {
     public void close() throws Exception {
         if (isClosed.compareAndSet(false, true)) {
             periodicExecutor.shutdownNow();
+            inLock(
+                    lock,
+                    () -> {
+                        if (lakeAwarePartitionDropManager != null) {
+                            lakeAwarePartitionDropManager.close();
+                        }
+                    });
         }
     }
 }
