@@ -635,40 +635,52 @@ public final class LogManager extends TabletManagerBase {
                                 "Table or partition for {} has already been dropped, the residual data will be removed.",
                                 tabletDir,
                                 e);
+
+                        final Tuple2<PhysicalTablePath, TableBucket> pathAndBucket;
+                        try {
+                            pathAndBucket = FlussPaths.parseTabletDir(tabletDir);
+                        } catch (Exception parseException) {
+                            LOG.warn(
+                                    "Failed to parse tablet directory {} while removing residual data, "
+                                            + "skip the cleanup so it can be retried later.",
+                                    tabletDir,
+                                    parseException);
+                            return;
+                        }
+
+                        // Delete the corresponding KV tablet directory first and only drop the log
+                        // (the anchor of an unfinished delete) once the KV directory is confirmed
+                        // gone, so that a KV deletion failure leaves the log in place for retry.
+                        File kvTabletDir =
+                                FlussPaths.kvTabletDir(dataDir, pathAndBucket.f0, pathAndBucket.f1);
+                        if (kvTabletDir.exists()) {
+                            try {
+                                FileUtils.deleteDirectory(kvTabletDir);
+                                LOG.info("Removed residual KV tablet directory: {}", kvTabletDir);
+                            } catch (IOException kvDeleteException) {
+                                LOG.warn(
+                                        "Failed to delete residual KV tablet directory {}, keeping the "
+                                                + "log {} so the cleanup can be retried later.",
+                                        kvTabletDir,
+                                        tabletDir,
+                                        kvDeleteException);
+                                return;
+                            }
+                        }
+
                         FileUtils.deleteDirectoryQuietly(tabletDir);
 
-                        try {
-                            Tuple2<PhysicalTablePath, TableBucket> pathAndBucket =
-                                    FlussPaths.parseTabletDir(tabletDir);
+                        boolean isPartitioned = pathAndBucket.f0.getPartitionName() != null;
+                        File partitionDir = tabletDir.getParentFile();
+                        if (partitionDir != null) {
+                            deleteEmptyDirQuietly(partitionDir);
 
-                            // Also delete corresponding KV tablet directory if it exists
-                            File kvTabletDir =
-                                    FlussPaths.kvTabletDir(
-                                            dataDir, pathAndBucket.f0, pathAndBucket.f1);
-                            if (kvTabletDir.exists()) {
-                                LOG.info(
-                                        "Also removing corresponding KV tablet directory: {}",
-                                        kvTabletDir);
-                                FileUtils.deleteDirectoryQuietly(kvTabletDir);
-                            }
-
-                            boolean isPartitioned = pathAndBucket.f0.getPartitionName() != null;
-                            File partitionDir = tabletDir.getParentFile();
-                            if (partitionDir != null) {
-                                deleteEmptyDirQuietly(partitionDir);
-
-                                if (isPartitioned) {
-                                    File tableDir = partitionDir.getParentFile();
-                                    if (tableDir != null) {
-                                        deleteEmptyDirQuietly(tableDir);
-                                    }
+                            if (isPartitioned) {
+                                File tableDir = partitionDir.getParentFile();
+                                if (tableDir != null) {
+                                    deleteEmptyDirQuietly(tableDir);
                                 }
                             }
-                        } catch (Exception cleanupException) {
-                            LOG.warn(
-                                    "Failed to clean up residual KV/parent directories for {}: {}",
-                                    tabletDir,
-                                    cleanupException.getMessage());
                         }
                         return;
                     }
