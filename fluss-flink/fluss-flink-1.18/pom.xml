@@ -161,6 +161,14 @@
             <scope>test</scope>
             <type>test-jar</type>
         </dependency>
+
+        <!-- Flink 1.18 DataStream batch mode requires flink-scala for Kryo serialization -->
+        <dependency>
+            <groupId>org.apache.flink</groupId>
+            <artifactId>flink-scala_2.12</artifactId>
+            <version>${flink.minor.version}</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
@@ -219,14 +227,11 @@
                                     <include>org.apache.fluss:fluss-client</include>
                                 </includes>
                             </artifactSet>
-                            <filters combine.children="append">
-                                <filter>
-                                    <artifact>org.apache.fluss:fluss-flink-common</artifact>
-                                    <excludes>
-                                        <exclude>org/apache/fluss/flink/action/**</exclude>
-                                    </excludes>
-                                </filter>
-                            </filters>
+                            <transformers combine.children="append">
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                    <mainClass>org.apache.fluss.flink.action.FlussActionEntrypoint</mainClass>
+                                </transformer>
+                            </transformers>
                         </configuration>
                     </execution>
                 </executions>
