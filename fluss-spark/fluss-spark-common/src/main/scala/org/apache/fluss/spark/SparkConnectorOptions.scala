@@ -23,14 +23,14 @@ object SparkConnectorOptions {
 
   val PRIMARY_KEY: ConfigOption[String] =
     ConfigBuilder
-      .key("primary.key")
+      .key("primaryKey")
       .stringType()
       .noDefaultValue()
       .withDescription("The primary keys of a Fluss table.")
 
   val BUCKET_KEY: ConfigOption[String] =
     ConfigBuilder
-      .key("bucket.key")
+      .key("bucketKey")
       .stringType()
       .noDefaultValue()
       .withDescription(
@@ -44,7 +44,7 @@ object SparkConnectorOptions {
 
   val BUCKET_NUMBER: ConfigOption[Integer] =
     ConfigBuilder
-      .key("bucket.num")
+      .key("bucketNum")
       .intType()
       .noDefaultValue()
       .withDescription("The number of buckets of a Fluss table.")

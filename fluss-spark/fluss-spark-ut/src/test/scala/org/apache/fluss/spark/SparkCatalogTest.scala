@@ -129,7 +129,7 @@ class SparkCatalogTest extends FlussSparkTestBase {
     sql(s"""
            |CREATE TABLE $DEFAULT_DATABASE.test_tbl (id int, name string, pt string)
            |PARTITIONED BY (pt)
-           |TBLPROPERTIES("primary.key" = "id,pt")
+           |TBLPROPERTIES("primaryKey" = "id,pt")
            |""".stripMargin)
 
     val tbl1 = admin.getTableInfo(TablePath.of(DEFAULT_DATABASE, "test_tbl")).get()
@@ -142,7 +142,7 @@ class SparkCatalogTest extends FlussSparkTestBase {
       s"""
          |CREATE TABLE $DEFAULT_DATABASE.test_tbl2 (pk1 int, pk2 long, name string, pt1 string, pt2 string)
          |PARTITIONED BY (pt1, pt2)
-         |TBLPROPERTIES("primary.key" = "pk1,pk2,pt1,pt2", "bucket.num" = 3, "bucket.key" = "pk1")
+         |TBLPROPERTIES("primaryKey" = "pk1,pk2,pt1,pt2", "bucketNum" = 3, "bucketKey" = "pk1")
          |""".stripMargin)
 
     val tbl2 = admin.getTableInfo(TablePath.of(DEFAULT_DATABASE, "test_tbl2")).get()
