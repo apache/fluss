@@ -174,9 +174,10 @@ abstract class OrphanFilesCleanITCase extends AbstractTestBase {
                         PhysicalTablePath.of(tablePath),
                         tableBucket);
 
-        // Two active segments registered in manifest
+        // Two active segments and one unreferenced segment are managed by a V2 manifest.
         String activeId1 = UUID.randomUUID().toString();
         String activeId2 = UUID.randomUUID().toString();
+        String unreferencedId = UUID.randomUUID().toString();
         FsPath manifestPath =
                 new FsPath(
                         localPath(remoteLogTabletDir)
@@ -186,27 +187,40 @@ abstract class OrphanFilesCleanITCase extends AbstractTestBase {
         Path manifest = localPath(manifestPath);
         Files.createDirectories(manifest.getParent());
         String manifestContent =
-                "{\"version\":1,"
+                "{\"version\":2,"
+                        + "\"generation\":1,"
+                        + "\"highest_copied_end_offset\":200,"
                         + "\"database\":\"db\","
                         + "\"table\":\"t\","
                         + "\"table_id\":0,"
                         + "\"bucket_id\":0,"
+                        + "\"remote_log_start_offset\":0,"
                         + "\"remote_log_segments\":["
                         + "{\"segment_id\":\""
                         + activeId1
-                        + "\",\"start_offset\":0,\"end_offset\":99,"
+                        + "\",\"start_offset\":0,\"end_offset\":100,"
                         + "\"max_timestamp\":0,\"size_in_bytes\":1},"
                         + "{\"segment_id\":\""
                         + activeId2
-                        + "\",\"start_offset\":100,\"end_offset\":199,"
+                        + "\",\"start_offset\":100,\"end_offset\":200,"
                         + "\"max_timestamp\":0,\"size_in_bytes\":1}"
-                        + "]}";
+                        + "],"
+                        + "\"unreferenced_segments\":[{"
+                        + "\"segment\":{\"segment_id\":\""
+                        + unreferencedId
+                        + "\",\"start_offset\":0,\"end_offset\":150,"
+                        + "\"max_timestamp\":0,\"size_in_bytes\":1},"
+                        + "\"unreferenced_at_ms\":1,\"reason\":\"REPLACED\","
+                        + "\"replacement_segment_id\":\""
+                        + activeId2
+                        + "\"}]}";
         Files.write(manifest, manifestContent.getBytes(StandardCharsets.UTF_8));
         makeOld(manifest);
-        upsertManifest(tableBucket, manifestPath, 199L);
+        upsertManifest(tableBucket, manifestPath, 200L);
 
         Path activeFile1 = writeSegmentFile(remoteLogTabletDir, activeId1, 0L);
         Path activeFile2 = writeSegmentFile(remoteLogTabletDir, activeId2, 100L);
+        Path unreferencedFile = writeSegmentFile(remoteLogTabletDir, unreferencedId, 0L);
 
         // Two orphan segments NOT in manifest
         String orphanId1 = UUID.randomUUID().toString();
@@ -219,6 +233,9 @@ abstract class OrphanFilesCleanITCase extends AbstractTestBase {
         // Active files must survive
         assertThat(Files.exists(activeFile1)).as("active segment 1 must survive cleanup").isTrue();
         assertThat(Files.exists(activeFile2)).as("active segment 2 must survive cleanup").isTrue();
+        assertThat(Files.exists(unreferencedFile))
+                .as("manifest-managed unreferenced segment must survive orphan cleanup")
+                .isTrue();
 
         // Orphan files must be deleted
         assertThat(Files.exists(orphanFile1)).as("orphan segment 1 must be deleted").isFalse();
@@ -299,8 +316,8 @@ abstract class OrphanFilesCleanITCase extends AbstractTestBase {
                                 .toString());
         String activeSegmentId = UUID.randomUUID().toString();
         Path activeSegment =
-                seedManifestAndSegment(remoteLogTabletDir, manifestPath, activeSegmentId, 0L, 0L);
-        upsertManifest(tableBucket, manifestPath, 0L);
+                seedManifestAndSegment(remoteLogTabletDir, manifestPath, activeSegmentId, 0L, 1L);
+        upsertManifest(tableBucket, manifestPath, 1L);
         return activeSegment;
     }
 
@@ -512,8 +529,8 @@ abstract class OrphanFilesCleanITCase extends AbstractTestBase {
                                 .resolve("metadata/p0.manifest")
                                 .toUri()
                                 .toString());
-        Path oldSegment = seedManifestAndSegment(remoteLogTabletDir, manifest0, segmentId, 0L, 0L);
-        upsertManifest(tableBucket, manifest0, 0L);
+        Path oldSegment = seedManifestAndSegment(remoteLogTabletDir, manifest0, segmentId, 0L, 1L);
+        upsertManifest(tableBucket, manifest0, 1L);
 
         runCleanerForDatabase(false, dbName);
 
@@ -526,8 +543,8 @@ abstract class OrphanFilesCleanITCase extends AbstractTestBase {
                                 .toUri()
                                 .toString());
         Path newSegment =
-                seedManifestAndSegment(remoteLogTabletDir, manifest1, segmentId, 100L, 100L);
-        upsertManifest(tableBucket, manifest1, 100L);
+                seedManifestAndSegment(remoteLogTabletDir, manifest1, segmentId, 100L, 101L);
+        upsertManifest(tableBucket, manifest1, 101L);
 
         runCleanerForDatabase(false, dbName);
 

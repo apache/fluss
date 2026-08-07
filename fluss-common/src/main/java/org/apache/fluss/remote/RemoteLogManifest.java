@@ -20,9 +20,12 @@ package org.apache.fluss.remote;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 
+import javax.annotation.Nullable;
+
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
@@ -30,33 +33,260 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
- * A remote log manifest is an immutable list of current {@link RemoteLogSegment} which can
- * represent a snapshot of a remote log tablet.
+ * A remote log manifest is an immutable list of current {@link RemoteLogSegment} which represents a
+ * snapshot of a remote log tablet.
+ *
+ * <p>Every segment uses a half-open physical offset range {@code [startOffset, endOffset)}.
  */
-public class RemoteLogManifest {
+public final class RemoteLogManifest {
+    public static final int VERSION_1 = 1;
+    public static final int VERSION_2 = 2;
+
+    private final int version;
+    private final long generation;
     private final PhysicalTablePath physicalTablePath;
     private final TableBucket tableBucket;
     private final List<RemoteLogSegment> remoteLogSegmentList;
+    private final @Nullable Long persistedRemoteLogStartOffset;
+    private final long highestCopiedEndOffset;
+    private final List<UnreferencedRemoteLogSegment> unreferencedRemoteLogSegments;
+    private final List<RemoteLogSegmentReference> activeReferences;
+    private final long logicalRemoteLogStartOffset;
+    private final long logicalRemoteLogEndOffset;
 
     public RemoteLogManifest(
             PhysicalTablePath physicalTablePath,
             TableBucket tableBucket,
             List<RemoteLogSegment> remoteLogSegmentList) {
+        this(
+                VERSION_1,
+                0L,
+                physicalTablePath,
+                tableBucket,
+                remoteLogSegmentList,
+                null,
+                maxSegmentEndOffset(remoteLogSegmentList),
+                Collections.emptyList());
+    }
+
+    private RemoteLogManifest(
+            int version,
+            long generation,
+            PhysicalTablePath physicalTablePath,
+            TableBucket tableBucket,
+            List<RemoteLogSegment> remoteLogSegmentList,
+            @Nullable Long remoteLogStartOffset,
+            long highestCopiedEndOffset,
+            List<UnreferencedRemoteLogSegment> unreferencedRemoteLogSegments) {
+        this.version = version;
+        this.generation = generation;
         this.physicalTablePath = physicalTablePath;
         this.tableBucket = tableBucket;
-        this.remoteLogSegmentList = Collections.unmodifiableList(remoteLogSegmentList);
+        this.remoteLogSegmentList =
+                Collections.unmodifiableList(new ArrayList<>(remoteLogSegmentList));
+        this.persistedRemoteLogStartOffset = remoteLogStartOffset;
+        this.highestCopiedEndOffset = highestCopiedEndOffset;
+        this.unreferencedRemoteLogSegments =
+                Collections.unmodifiableList(new ArrayList<>(unreferencedRemoteLogSegments));
 
-        // sanity check
+        validateSegmentIdentities();
+        if (version == VERSION_2) {
+            validateV2();
+        }
+        this.activeReferences =
+                Collections.unmodifiableList(buildActiveReferences(remoteLogStartOffset));
+        this.logicalRemoteLogStartOffset = calculateLogicalStartOffset(activeReferences);
+        this.logicalRemoteLogEndOffset = calculateLogicalEndOffset(activeReferences);
+    }
+
+    public static RemoteLogManifest createV2(
+            long generation,
+            PhysicalTablePath physicalTablePath,
+            TableBucket tableBucket,
+            List<RemoteLogSegment> remoteLogSegmentList,
+            @Nullable Long remoteLogStartOffset,
+            long highestCopiedEndOffset,
+            List<UnreferencedRemoteLogSegment> unreferencedRemoteLogSegments) {
+        return new RemoteLogManifest(
+                VERSION_2,
+                generation,
+                physicalTablePath,
+                tableBucket,
+                remoteLogSegmentList,
+                remoteLogStartOffset,
+                highestCopiedEndOffset,
+                unreferencedRemoteLogSegments);
+    }
+
+    private void validateSegmentIdentities() {
         for (RemoteLogSegment remoteLogSegment : remoteLogSegmentList) {
-            if (!remoteLogSegment.physicalTablePath().equals(physicalTablePath)) {
+            validateSegmentIdentity(remoteLogSegment);
+        }
+        for (UnreferencedRemoteLogSegment unreferencedSegment : unreferencedRemoteLogSegments) {
+            validateSegmentIdentity(unreferencedSegment.remoteLogSegment());
+        }
+    }
+
+    private void validateSegmentIdentity(RemoteLogSegment remoteLogSegment) {
+        if (!remoteLogSegment.physicalTablePath().equals(physicalTablePath)) {
+            throw new IllegalArgumentException(
+                    "RemoteLogSegment's tablePath should be the same as the tablePath of RemoteLogManifestSnapshot");
+        }
+        if (!remoteLogSegment.tableBucket().equals(tableBucket)) {
+            throw new IllegalArgumentException(
+                    "RemoteLogSegment's tableBucket should be the same as the tableBucket of RemoteLogManifestSnapshot");
+        }
+    }
+
+    private void validateV2() {
+        if (generation <= 0L) {
+            throw new IllegalArgumentException(
+                    "V2 manifest generation must be greater than 0: " + generation);
+        }
+        if (remoteLogSegmentList.isEmpty()) {
+            if (persistedRemoteLogStartOffset != null) {
                 throw new IllegalArgumentException(
-                        "RemoteLogSegment's tablePath should be the same as the tablePath of RemoteLogManifestSnapshot");
+                        "Empty V2 manifest must not define remote log start offset");
             }
-            if (!remoteLogSegment.tableBucket().equals(tableBucket)) {
+        } else {
+            if (persistedRemoteLogStartOffset == null) {
                 throw new IllegalArgumentException(
-                        "RemoteLogSegment's tableBucket should be the same as the tableBucket of RemoteLogManifestSnapshot");
+                        "Non-empty V2 manifest must define remote log start offset");
+            }
+            RemoteLogSegment firstSegment = remoteLogSegmentList.get(0);
+            long firstLogicalEndOffset =
+                    remoteLogSegmentList.size() == 1
+                            ? firstSegment.remoteLogEndOffset()
+                            : remoteLogSegmentList.get(1).remoteLogStartOffset();
+            if (persistedRemoteLogStartOffset < firstSegment.remoteLogStartOffset()
+                    || persistedRemoteLogStartOffset >= firstLogicalEndOffset) {
+                throw new IllegalArgumentException(
+                        "Remote log start offset "
+                                + persistedRemoteLogStartOffset
+                                + " is outside the first logical range ["
+                                + firstSegment.remoteLogStartOffset()
+                                + ", "
+                                + firstLogicalEndOffset
+                                + ")");
             }
         }
+
+        Set<UUID> activeSegmentIds = new HashSet<>();
+        RemoteLogSegment previousSegment = null;
+        for (RemoteLogSegment segment : remoteLogSegmentList) {
+            if (!activeSegmentIds.add(segment.remoteLogSegmentId())) {
+                throw new IllegalArgumentException(
+                        "Duplicate active remote log segment id: " + segment.remoteLogSegmentId());
+            }
+            if (previousSegment != null) {
+                if (previousSegment.remoteLogStartOffset() >= segment.remoteLogStartOffset()) {
+                    throw new IllegalArgumentException(
+                            "Active segment start offsets must be strictly increasing");
+                }
+                if (previousSegment.remoteLogEndOffset() >= segment.remoteLogEndOffset()) {
+                    throw new IllegalArgumentException(
+                            "Active segment end offsets must be strictly increasing");
+                }
+                if (previousSegment.remoteLogEndOffset() < segment.remoteLogStartOffset()) {
+                    throw new IllegalArgumentException("Active remote log segments contain a gap");
+                }
+            }
+            previousSegment = segment;
+        }
+
+        Set<UUID> unreferencedSegmentIds = new HashSet<>();
+        for (UnreferencedRemoteLogSegment unreferencedSegment : unreferencedRemoteLogSegments) {
+            UUID segmentId = unreferencedSegment.remoteLogSegment().remoteLogSegmentId();
+            if (activeSegmentIds.contains(segmentId)) {
+                throw new IllegalArgumentException(
+                        "Remote log segment is both active and unreferenced: " + segmentId);
+            }
+            if (!unreferencedSegmentIds.add(segmentId)) {
+                throw new IllegalArgumentException(
+                        "Duplicate unreferenced remote log segment id: " + segmentId);
+            }
+        }
+
+        long persistedSegmentEndOffset = maxSegmentEndOffset(remoteLogSegmentList);
+        for (UnreferencedRemoteLogSegment segment : unreferencedRemoteLogSegments) {
+            persistedSegmentEndOffset =
+                    Math.max(
+                            persistedSegmentEndOffset,
+                            segment.remoteLogSegment().remoteLogEndOffset());
+        }
+        if (highestCopiedEndOffset < persistedSegmentEndOffset) {
+            throw new IllegalArgumentException(
+                    "Highest copied end offset "
+                            + highestCopiedEndOffset
+                            + " is before persisted segment end offset "
+                            + persistedSegmentEndOffset);
+        }
+        if (highestCopiedEndOffset < -1L) {
+            throw new IllegalArgumentException(
+                    "Highest copied end offset must be -1 or non-negative: "
+                            + highestCopiedEndOffset);
+        }
+    }
+
+    private static long maxSegmentEndOffset(List<RemoteLogSegment> segments) {
+        long endOffset = -1L;
+        for (RemoteLogSegment segment : segments) {
+            endOffset = Math.max(endOffset, segment.remoteLogEndOffset());
+        }
+        return endOffset;
+    }
+
+    private List<RemoteLogSegmentReference> buildActiveReferences(
+            @Nullable Long remoteLogStartOffset) {
+        if (version == VERSION_1) {
+            return buildV1ActiveReferences();
+        }
+        if (remoteLogSegmentList.isEmpty()) {
+            return Collections.emptyList();
+        }
+        return buildV2ActiveReferences(remoteLogStartOffset);
+    }
+
+    private List<RemoteLogSegmentReference> buildV1ActiveReferences() {
+        List<RemoteLogSegmentReference> references = new ArrayList<>(remoteLogSegmentList.size());
+        for (RemoteLogSegment segment : remoteLogSegmentList) {
+            references.add(
+                    new RemoteLogSegmentReference(
+                            segment, segment.remoteLogStartOffset(), segment.remoteLogEndOffset()));
+        }
+        return references;
+    }
+
+    private List<RemoteLogSegmentReference> buildV2ActiveReferences(long remoteLogStartOffset) {
+        List<RemoteLogSegmentReference> references = new ArrayList<>(remoteLogSegmentList.size());
+        for (int i = 0; i < remoteLogSegmentList.size(); i++) {
+            RemoteLogSegment segment = remoteLogSegmentList.get(i);
+            long logicalStartOffset =
+                    i == 0 ? remoteLogStartOffset : segment.remoteLogStartOffset();
+            long logicalEndOffset =
+                    i + 1 < remoteLogSegmentList.size()
+                            ? remoteLogSegmentList.get(i + 1).remoteLogStartOffset()
+                            : segment.remoteLogEndOffset();
+            references.add(
+                    new RemoteLogSegmentReference(segment, logicalStartOffset, logicalEndOffset));
+        }
+        return references;
+    }
+
+    private static long calculateLogicalStartOffset(List<RemoteLogSegmentReference> references) {
+        long startOffset = Long.MAX_VALUE;
+        for (RemoteLogSegmentReference reference : references) {
+            startOffset = Math.min(startOffset, reference.logicalStartOffset());
+        }
+        return startOffset;
+    }
+
+    private static long calculateLogicalEndOffset(List<RemoteLogSegmentReference> references) {
+        long endOffset = -1L;
+        for (RemoteLogSegmentReference reference : references) {
+            endOffset = Math.max(endOffset, reference.logicalEndOffset());
+        }
+        return endOffset;
     }
 
     public RemoteLogManifest trimAndMerge(
@@ -76,24 +306,19 @@ public class RemoteLogManifest {
         return new RemoteLogManifest(physicalTablePath, tableBucket, newSegments);
     }
 
+    /** Returns the inclusive start offset, or {@link Long#MAX_VALUE} when the manifest is empty. */
     public long getRemoteLogStartOffset() {
-        long startOffset = Long.MAX_VALUE;
-        for (RemoteLogSegment remoteLogSegment : remoteLogSegmentList) {
-            if (remoteLogSegment.remoteLogStartOffset() < startOffset) {
-                startOffset = remoteLogSegment.remoteLogStartOffset();
-            }
-        }
-        return startOffset;
+        return logicalRemoteLogStartOffset;
     }
 
+    /** Returns the exclusive end offset, or {@code -1} when the manifest is empty. */
     public long getRemoteLogEndOffset() {
-        long endOffset = -1;
-        for (RemoteLogSegment remoteLogSegment : remoteLogSegmentList) {
-            if (endOffset == -1 || remoteLogSegment.remoteLogEndOffset() > endOffset) {
-                endOffset = remoteLogSegment.remoteLogEndOffset();
-            }
-        }
-        return endOffset;
+        return logicalRemoteLogEndOffset;
+    }
+
+    /** Returns the highest exclusive end offset successfully copied to remote storage. */
+    public long getHighestCopiedEndOffset() {
+        return highestCopiedEndOffset;
     }
 
     public long getRemoteLogSize() {
@@ -124,6 +349,29 @@ public class RemoteLogManifest {
         return remoteLogSegmentList;
     }
 
+    public int getVersion() {
+        return version;
+    }
+
+    public long getGeneration() {
+        return generation;
+    }
+
+    /** Returns the V2 start field persisted in JSON, or null when it is not present. */
+    @Nullable
+    public Long getPersistedRemoteLogStartOffset() {
+        return persistedRemoteLogStartOffset;
+    }
+
+    public List<UnreferencedRemoteLogSegment> getUnreferencedRemoteLogSegments() {
+        return unreferencedRemoteLogSegments;
+    }
+
+    /** Returns the immutable logical view normalized once during Manifest construction. */
+    public List<RemoteLogSegmentReference> getRemoteLogSegmentReferences() {
+        return activeReferences;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) {
@@ -133,16 +381,45 @@ public class RemoteLogManifest {
             return false;
         }
         RemoteLogManifest that = (RemoteLogManifest) o;
-        return Objects.equals(remoteLogSegmentList, that.remoteLogSegmentList);
+        return version == that.version
+                && generation == that.generation
+                && highestCopiedEndOffset == that.highestCopiedEndOffset
+                && Objects.equals(physicalTablePath, that.physicalTablePath)
+                && Objects.equals(tableBucket, that.tableBucket)
+                && Objects.equals(remoteLogSegmentList, that.remoteLogSegmentList)
+                && Objects.equals(persistedRemoteLogStartOffset, that.persistedRemoteLogStartOffset)
+                && Objects.equals(
+                        unreferencedRemoteLogSegments, that.unreferencedRemoteLogSegments);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(remoteLogSegmentList);
+        return Objects.hash(
+                version,
+                generation,
+                physicalTablePath,
+                tableBucket,
+                remoteLogSegmentList,
+                persistedRemoteLogStartOffset,
+                highestCopiedEndOffset,
+                unreferencedRemoteLogSegments);
     }
 
     @Override
     public String toString() {
-        return "RemoteLogManifestSnapshot{" + "remoteLogSegmentList=" + remoteLogSegmentList + '}';
+        return "RemoteLogManifest{"
+                + "version="
+                + version
+                + ", generation="
+                + generation
+                + ", remoteLogSegmentList="
+                + remoteLogSegmentList
+                + ", persistedRemoteLogStartOffset="
+                + persistedRemoteLogStartOffset
+                + ", highestCopiedEndOffset="
+                + highestCopiedEndOffset
+                + ", unreferencedRemoteLogSegments="
+                + unreferencedRemoteLogSegments
+                + '}';
     }
 }

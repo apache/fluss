@@ -59,6 +59,7 @@ import org.apache.fluss.rpc.messages.PbCommitLakeTableSnapshotRespForTable;
 import org.apache.fluss.rpc.messages.RebalanceResponse;
 import org.apache.fluss.rpc.messages.RemoveServerTagResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.server.config.RemoteManifestV2WriterGate;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.AddServerTagEvent;
 import org.apache.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
@@ -105,6 +106,7 @@ import org.apache.fluss.server.entity.CommitLakeTableSnapshotsData;
 import org.apache.fluss.server.entity.CommitRemoteLogManifestData;
 import org.apache.fluss.server.entity.DeleteReplicaResultForBucket;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
+import org.apache.fluss.server.entity.RemoteLogManifestCommitResult;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotStore;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
@@ -120,6 +122,7 @@ import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
 import org.apache.fluss.server.zk.data.ServerTags;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
+import org.apache.fluss.server.zk.data.VersionedRemoteLogManifestHandle;
 import org.apache.fluss.server.zk.data.ZkData.PartitionIdsZNode;
 import org.apache.fluss.server.zk.data.ZkData.TableIdsZNode;
 import org.apache.fluss.server.zk.data.lake.LakeTableHelper;
@@ -194,6 +197,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
     private final RebalanceManager rebalanceManager;
     private final Scheduler scheduler;
     private final long offlineLeaderRetryDelayMs;
+    private final RemoteManifestV2WriterGate remoteManifestV2WriterGate;
     private final CompletedSnapshotStoreManager completedSnapshotStoreManager;
     private final LakeTableHelper lakeTableHelper;
     private ScheduledFuture<?> offlineLeaderRetryTask;
@@ -212,7 +216,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
             MetadataManager metadataManager,
             KvSnapshotLeaseManager kvSnapshotLeaseManager,
             Scheduler scheduler,
-            Clock clock) {
+            Clock clock,
+            RemoteManifestV2WriterGate remoteManifestV2WriterGate) {
         this.zooKeeperClient = zooKeeperClient;
         this.serverMetadataCache = serverMetadataCache;
         this.coordinatorChannelManager = coordinatorChannelManager;
@@ -275,6 +280,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         this, zooKeeperClient, coordinatorEventManager, SystemClock.getInstance());
         this.offlineLeaderRetryDelayMs =
                 conf.get(ConfigOptions.COORDINATOR_OFFLINE_LEADER_RETRY_DELAY).toMillis();
+        this.remoteManifestV2WriterGate = remoteManifestV2WriterGate;
         if (offlineLeaderRetryDelayMs <= 0) {
             throw new IllegalArgumentException(
                     String.format(
@@ -2143,23 +2149,79 @@ public class CoordinatorEventProcessor implements EventProcessor {
         CommitRemoteLogManifestData manifestData = event.getCommitRemoteLogManifestData();
         CommitRemoteLogManifestResponse response = new CommitRemoteLogManifestResponse();
         TableBucket tb = event.getTableBucket();
-        try {
-            validateFencedEvent(event);
-            // do commit remote log manifest snapshot path to zk.
-            zooKeeperClient.upsertRemoteLogManifestHandle(
-                    tb,
-                    new RemoteLogManifestHandle(
-                            manifestData.getRemoteLogManifestPath(),
-                            manifestData.getRemoteLogEndOffset()));
-        } catch (Exception e) {
-            LOG.error(
-                    "Error when commit remote log manifest, the leader need to revert the commit.",
-                    e);
-            response.setCommitSuccess(false);
-            return response;
-        }
+        if (manifestData.isV2CasCommit()) {
+            if (!remoteManifestV2WriterGate.isEnabled()) {
+                LOG.error(
+                        "Rejected Manifest V2 commit for {} because the writer gate is disabled.",
+                        tb);
+                return response.setCommitSuccess(false)
+                        .setCommitResult(RemoteLogManifestCommitResult.V2_WRITER_DISABLED.code());
+            }
+            try {
+                validateFencedEvent(event);
+            } catch (RuntimeException e) {
+                LOG.warn("Rejected fenced remote log manifest commit for {}.", tb, e);
+                return response.setCommitSuccess(false)
+                        .setCommitResult(RemoteLogManifestCommitResult.FENCED.code());
+            }
 
-        response.setCommitSuccess(true);
+            RemoteLogManifestHandle newHandle =
+                    RemoteLogManifestHandle.v2(
+                            manifestData.getRemoteLogManifestPath(),
+                            manifestData.getNewManifestGeneration(),
+                            manifestData.getRemoteLogStartOffset(),
+                            manifestData.getRemoteLogEndOffset(),
+                            manifestData.getHighestCopiedEndOffset());
+            boolean committed;
+            try {
+                if (manifestData.getExpectedZkVersion() == null) {
+                    committed =
+                            zooKeeperClient.createRemoteLogManifestHandleIfAbsent(tb, newHandle);
+                } else {
+                    committed =
+                            zooKeeperClient.compareAndSetRemoteLogManifestHandle(
+                                    tb, manifestData.getExpectedZkVersion(), newHandle);
+                }
+            } catch (Exception e) {
+                // An I/O/transport failure is UNKNOWN. Complete exceptionally so the writer must
+                // reconcile against the authoritative handle before retrying or cleaning up.
+                throw new RuntimeException(
+                        "Unable to determine remote log manifest CAS result for " + tb, e);
+            }
+            if (!committed) {
+                return response.setCommitSuccess(false)
+                        .setCommitResult(RemoteLogManifestCommitResult.CONFLICT.code());
+            }
+            response.setCommitSuccess(true)
+                    .setCommitResult(RemoteLogManifestCommitResult.COMMITTED.code());
+        } else {
+            try {
+                validateFencedEvent(event);
+                Optional<VersionedRemoteLogManifestHandle> currentHandle =
+                        zooKeeperClient.getVersionedRemoteLogManifestHandle(tb);
+                if (currentHandle.isPresent()
+                        && currentHandle.get().handle().getVersion()
+                                == RemoteLogManifestHandle.VERSION_2) {
+                    LOG.error(
+                            "Rejected legacy remote log writer for {} because Manifest V2 is "
+                                    + "already authoritative.",
+                            tb);
+                    return response.setCommitSuccess(false);
+                }
+                zooKeeperClient.upsertRemoteLogManifestHandle(
+                        tb,
+                        new RemoteLogManifestHandle(
+                                manifestData.getRemoteLogManifestPath(),
+                                manifestData.getRemoteLogEndOffset()));
+            } catch (Exception e) {
+                LOG.error(
+                        "Error when commit remote log manifest, the leader need to revert the commit.",
+                        e);
+                response.setCommitSuccess(false);
+                return response;
+            }
+            response.setCommitSuccess(true);
+        }
         // send notify remote log offsets request to all replicas.
         coordinatorRequestBatch.newBatch();
         coordinatorContext
@@ -2172,7 +2234,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
                                                         tb, leaderAndIsr.leader()),
                                                 tb,
                                                 manifestData.getRemoteLogStartOffset(),
-                                                manifestData.getRemoteLogEndOffset()));
+                                                manifestData.getRemoteLogEndOffset(),
+                                                manifestData.getHighestCopiedEndOffset()));
         coordinatorRequestBatch.sendNotifyRemoteLogOffsetsRequest(
                 coordinatorContext.getCoordinatorEpoch());
         return response;

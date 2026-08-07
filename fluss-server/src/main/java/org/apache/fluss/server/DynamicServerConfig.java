@@ -53,6 +53,7 @@ import static org.apache.fluss.config.ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPL
 import static org.apache.fluss.config.ConfigOptions.REMOTE_DATA_DIRS;
 import static org.apache.fluss.config.ConfigOptions.REMOTE_DATA_DIRS_STRATEGY;
 import static org.apache.fluss.config.ConfigOptions.REMOTE_DATA_DIRS_WEIGHTS;
+import static org.apache.fluss.config.ConfigOptions.REMOTE_LOG_MANIFEST_V2_WRITER_ENABLED;
 import static org.apache.fluss.config.ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO;
 import static org.apache.fluss.config.ConfigOptions.SERVER_DATA_DISK_WRITE_RECOVER_RATIO;
 import static org.apache.fluss.config.ConfigOptions.SERVER_SASL_CREDENTIALS;
@@ -84,6 +85,7 @@ class DynamicServerConfig {
                             REMOTE_DATA_DIRS.key(),
                             REMOTE_DATA_DIRS_STRATEGY.key(),
                             REMOTE_DATA_DIRS_WEIGHTS.key(),
+                            REMOTE_LOG_MANIFEST_V2_WRITER_ENABLED.key(),
                             SERVER_SASL_CREDENTIALS.key()));
     private static final Set<String> ALLOWED_CONFIG_PREFIXES = Collections.singleton("datalake.");
 

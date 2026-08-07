@@ -27,8 +27,10 @@ import java.util.UUID;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /**
- * It describes the metadata about table bucket's remote log segment in the remote storage. This is
- * uniquely represent by remoteLogSegmentId.
+ * Describes the metadata for a table bucket's physical remote log segment.
+ *
+ * <p>The segment contains offsets in the half-open range {@code [remoteLogStartOffset,
+ * remoteLogEndOffset)} and is uniquely identified by {@code remoteLogSegmentId}.
  */
 @Internal
 public class RemoteLogSegment {
@@ -39,10 +41,10 @@ public class RemoteLogSegment {
     /** Universally unique remote log segment id. */
     private final UUID remoteLogSegmentId;
 
-    /** Remote log start offset of this segment. */
+    /** Inclusive physical start offset of this segment. */
     private final long remoteLogStartOffset;
 
-    /** Remote log end offset of this segment. */
+    /** Exclusive physical end offset of this segment. */
     private final long remoteLogEndOffset;
 
     /** Max timestamp of this segment. */
@@ -70,11 +72,13 @@ public class RemoteLogSegment {
         }
         this.remoteLogStartOffset = remoteLogStartOffset;
 
-        if (remoteLogEndOffset < remoteLogStartOffset) {
+        if (remoteLogEndOffset <= remoteLogStartOffset) {
             throw new IllegalArgumentException(
                     "Unexpected remote log end offset: "
                             + remoteLogEndOffset
-                            + ". EndOffset for a remote segment must be greater than remote log start offset");
+                            + ". The exclusive end offset for a remote segment must be greater "
+                            + "than its start offset: "
+                            + remoteLogStartOffset);
         }
         this.remoteLogEndOffset = remoteLogEndOffset;
         this.maxTimestamp = maxTimestamp;
@@ -94,14 +98,14 @@ public class RemoteLogSegment {
     }
 
     /**
-     * @return Remote log start offset of this segment (inclusive).
+     * @return inclusive physical start offset of this segment
      */
     public long remoteLogStartOffset() {
         return remoteLogStartOffset;
     }
 
     /**
-     * @return Remote log end offset of this segment (inclusive).
+     * @return exclusive physical end offset of this segment
      */
     public long remoteLogEndOffset() {
         return remoteLogEndOffset;
@@ -184,13 +188,13 @@ public class RemoteLogSegment {
             return this;
         }
 
-        public Builder remoteLogStartOffset(long startOffset) {
-            this.remoteLogStartOffset = startOffset;
+        public Builder remoteLogStartOffset(long startOffsetInclusive) {
+            this.remoteLogStartOffset = startOffsetInclusive;
             return this;
         }
 
-        public Builder remoteLogEndOffset(long endOffset) {
-            this.remoteLogEndOffset = endOffset;
+        public Builder remoteLogEndOffset(long endOffsetExclusive) {
+            this.remoteLogEndOffset = endOffsetExclusive;
             return this;
         }
 

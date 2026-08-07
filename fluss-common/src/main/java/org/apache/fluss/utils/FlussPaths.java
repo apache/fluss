@@ -77,7 +77,7 @@ public class FlussPaths {
     public static final String REMOTE_LOG_METADATA_DIR_NAME = "metadata";
 
     /** Suffix of a manifest file. */
-    private static final String REMOTE_LOG_MANIFEST_FILE_SUFFIX = ".manifest";
+    public static final String REMOTE_LOG_MANIFEST_FILE_SUFFIX = ".manifest";
 
     /** Suffix for a file that is scheduled to be deleted. */
     public static final String DELETED_FILE_SUFFIX = ".deleted";

@@ -20,6 +20,10 @@ package org.apache.fluss.server.coordinator;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.cluster.AlterConfigOpType;
+import org.apache.fluss.exception.ConfigException;
+import org.apache.fluss.rpc.messages.AlterClusterConfigsRequest;
+import org.apache.fluss.rpc.messages.PbAlterConfig;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
@@ -32,12 +36,15 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.time.Duration;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class CoordinatorServerElectionTest {
     @RegisterExtension
@@ -85,6 +92,31 @@ class CoordinatorServerElectionTest {
         assertThat(firstLeader).isNotNull();
         assertThat(zookeeperClient.getCurrentEpoch().getCoordinatorEpoch())
                 .isEqualTo(CoordinatorContext.INITIAL_COORDINATOR_EPOCH);
+        firstLeader
+                .getCoordinatorService()
+                .alterClusterConfigs(manifestV2WriterConfig("true"))
+                .get(10, TimeUnit.SECONDS);
+        waitUntil(
+                () ->
+                        coordinatorServerList.stream()
+                                .allMatch(
+                                        server ->
+                                                server
+                                                        .getDynamicConfigManager()
+                                                        .describeConfigs()
+                                                        .stream()
+                                                        .anyMatch(
+                                                                entry ->
+                                                                        entry.key()
+                                                                                        .equals(
+                                                                                                ConfigOptions
+                                                                                                        .REMOTE_LOG_MANIFEST_V2_WRITER_ENABLED
+                                                                                                        .key())
+                                                                                && entry.value()
+                                                                                        .equals(
+                                                                                                "true"))),
+                Duration.ofSeconds(10),
+                "Manifest V2 writer config did not reach all coordinators");
         firstLeader.close();
         firstLeader.start();
 
@@ -103,6 +135,16 @@ class CoordinatorServerElectionTest {
                 break;
             }
         }
+        assertThat(secondLeader).isNotNull();
+        CoordinatorServer promotedLeader = secondLeader;
+        assertThatThrownBy(
+                        () ->
+                                promotedLeader
+                                        .getCoordinatorService()
+                                        .alterClusterConfigs(manifestV2WriterConfig("false"))
+                                        .get(10, TimeUnit.SECONDS))
+                .hasCauseInstanceOf(ConfigException.class)
+                .hasMessageContaining("activation is irreversible");
         CoordinatorServer nonLeader = null;
         for (CoordinatorServer coordinatorServer : coordinatorServerList) {
             if (!Objects.equals(coordinatorServer.getServerId(), firstLeaderAddress.getId())
@@ -137,6 +179,16 @@ class CoordinatorServerElectionTest {
         configuration.set(ConfigOptions.REMOTE_DATA_DIR, "/tmp/fluss/remote-data");
 
         return configuration;
+    }
+
+    private static AlterClusterConfigsRequest manifestV2WriterConfig(String value) {
+        PbAlterConfig config =
+                new PbAlterConfig()
+                        .setConfigKey(ConfigOptions.REMOTE_LOG_MANIFEST_V2_WRITER_ENABLED.key())
+                        .setConfigValue(value)
+                        .setOpType(AlterConfigOpType.SET.value());
+        return new AlterClusterConfigsRequest()
+                .addAllAlterConfigs(Collections.singletonList(config));
     }
 
     public void waitUntilCoordinatorServerElected() {

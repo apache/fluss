@@ -127,6 +127,7 @@ public class MetricNames {
     public static final String REMOTE_LOG_COPY_ERROR_RATE = "remoteLogCopyErrorPerSecond";
     public static final String REMOTE_LOG_DELETE_REQUESTS_RATE = "remoteLogDeleteRequestsPerSecond";
     public static final String REMOTE_LOG_DELETE_ERROR_RATE = "remoteLogDeleteErrorPerSecond";
+    public static final String REMOTE_GC_FAILURE_COUNT = "remoteGcFailureCount";
 
     public static final String TOTAL_LOOKUP_REQUESTS_RATE = "totalLookupRequestsPerSecond";
     public static final String FAILED_LOOKUP_REQUESTS_RATE = "failedLookupRequestsPerSecond";

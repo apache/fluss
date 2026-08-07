@@ -177,6 +177,58 @@ class ActiveRefsFetcherTest {
     }
 
     @Test
+    void v2ManifestKeepsActiveAndUnreferencedSegmentsManaged() throws Exception {
+        FsPath p0 = new FsPath("oss://b/log/db/t-7/0/metadata/p0.manifest");
+        String activeSegmentId = "11111111-1111-1111-1111-111111111111";
+        String unreferencedSegmentId = "22222222-2222-2222-2222-222222222222";
+
+        StubAdmin admin = new StubAdmin(new AtomicInteger());
+        admin.queueResponse(p0);
+        StubManifestReader reader = new StubManifestReader();
+        reader.returnBytes(
+                p0,
+                manifestV2Json(activeSegmentId, unreferencedSegmentId)
+                        .getBytes(StandardCharsets.UTF_8));
+
+        ActiveRefsFetcher builder = new ActiveRefsFetcher(admin, reader, /* maxRetries= */ 3);
+        LogActiveRefsFetchResult result = builder.fetchLogActiveRefsByBucket(7L, null);
+
+        assertThat(result.statusFor(0))
+                .isEqualTo(LogActiveRefsFetchResult.ManifestReadStatus.RESOLVED);
+        assertThat(result.activeRefsOf(0).logSegmentRelativePaths())
+                .containsExactlyInAnyOrder(
+                        activeSegmentId + "/" + FlussPaths.filenamePrefixFromOffset(100L) + ".log",
+                        activeSegmentId
+                                + "/"
+                                + FlussPaths.filenamePrefixFromOffset(100L)
+                                + ".index",
+                        activeSegmentId
+                                + "/"
+                                + FlussPaths.filenamePrefixFromOffset(100L)
+                                + ".timeindex",
+                        activeSegmentId
+                                + "/"
+                                + FlussPaths.filenamePrefixFromOffset(200L)
+                                + ".writer_snapshot",
+                        unreferencedSegmentId
+                                + "/"
+                                + FlussPaths.filenamePrefixFromOffset(0L)
+                                + ".log",
+                        unreferencedSegmentId
+                                + "/"
+                                + FlussPaths.filenamePrefixFromOffset(0L)
+                                + ".index",
+                        unreferencedSegmentId
+                                + "/"
+                                + FlussPaths.filenamePrefixFromOffset(0L)
+                                + ".timeindex",
+                        unreferencedSegmentId
+                                + "/"
+                                + FlussPaths.filenamePrefixFromOffset(150L)
+                                + ".writer_snapshot");
+    }
+
+    @Test
     void ioErrorMarksBucketReadFailed() {
         FsPath p0 = new FsPath("oss://b/log/db/t-7/0/metadata/p0.manifest");
         StubAdmin admin = new StubAdmin(new AtomicInteger());
@@ -312,6 +364,31 @@ class ActiveRefsFetcherTest {
                 + ",\"max_timestamp\":0,"
                 + "\"size_in_bytes\":1"
                 + "}]}";
+    }
+
+    private static String manifestV2Json(String activeSegmentId, String unreferencedSegmentId) {
+        return "{\"version\":2,"
+                + "\"generation\":1,"
+                + "\"highest_copied_end_offset\":200,"
+                + "\"database\":\"db\","
+                + "\"table\":\"t\","
+                + "\"table_id\":7,"
+                + "\"bucket_id\":0,"
+                + "\"remote_log_start_offset\":100,"
+                + "\"remote_log_segments\":[{"
+                + "\"segment_id\":\""
+                + activeSegmentId
+                + "\",\"start_offset\":100,\"end_offset\":200,"
+                + "\"max_timestamp\":0,\"size_in_bytes\":1}],"
+                + "\"unreferenced_segments\":[{"
+                + "\"segment\":{\"segment_id\":\""
+                + unreferencedSegmentId
+                + "\",\"start_offset\":0,\"end_offset\":150,"
+                + "\"max_timestamp\":0,\"size_in_bytes\":1},"
+                + "\"unreferenced_at_ms\":1,\"reason\":\"REPLACED\","
+                + "\"replacement_segment_id\":\""
+                + activeSegmentId
+                + "\"}]}";
     }
 
     /** Queues per-call responses for ListRemoteLogManifests / ListKvSnapshots and tracks calls. */

@@ -155,6 +155,10 @@ public class TableMetricGroup extends AbstractMetricGroup {
         return logMetrics.remoteLogDeleteErrors;
     }
 
+    public Counter remoteGcFailures() {
+        return logMetrics.remoteGcFailures;
+    }
+
     public void incKvMessageIn(long n) {
         if (kvMetrics == null) {
             NoOpCounter.INSTANCE.inc(n);
@@ -480,6 +484,7 @@ public class TableMetricGroup extends AbstractMetricGroup {
         private final Counter remoteLogCopyErrors;
         private final Counter remoteLogDeleteRequests;
         private final Counter remoteLogDeleteErrors;
+        private final Counter remoteGcFailures;
 
         private LogMetricGroup(TableMetricGroup tableMetricGroup, TabletType groupType) {
             super(tableMetricGroup, groupType);
@@ -518,6 +523,8 @@ public class TableMetricGroup extends AbstractMetricGroup {
                     new MeterView(remoteLogDeleteRequests));
             remoteLogDeleteErrors = new ThreadSafeSimpleCounter();
             meter(MetricNames.REMOTE_LOG_DELETE_ERROR_RATE, new MeterView(remoteLogDeleteErrors));
+            remoteGcFailures = new ThreadSafeSimpleCounter();
+            counter(MetricNames.REMOTE_GC_FAILURE_COUNT, remoteGcFailures);
         }
 
         @Override

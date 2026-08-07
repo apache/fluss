@@ -25,6 +25,7 @@ import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.config.cluster.ServerReconfigurable;
 import org.apache.fluss.exception.ConfigException;
+import org.apache.fluss.server.config.RemoteManifestV2WriterGate;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.remote.RemoteDirDynamicLoader;
 import org.apache.fluss.server.coordinator.remote.RoundRobinRemoteDirSelector;
@@ -476,6 +477,77 @@ public class DynamicConfigChangeTest {
         Map<String, String> zkConfig = zookeeperClient.fetchEntityConfig();
         assertThat(zkConfig.get(ConfigOptions.KV_SHARED_RATE_LIMITER_BYTES_PER_SEC.key()))
                 .isEqualTo("200MB");
+    }
+
+    @Test
+    void testManifestV2WriterGateCanOnlyBeActivated() throws Exception {
+        Configuration configuration = new Configuration();
+        configuration.setBoolean(ConfigOptions.REMOTE_LOG_MANIFEST_V2_WRITER_ENABLED, false);
+        RemoteManifestV2WriterGate gate = new RemoteManifestV2WriterGate(configuration);
+        DynamicConfigManager dynamicConfigManager = createManager(configuration);
+        dynamicConfigManager.register(gate);
+        dynamicConfigManager.registerValidator(gate);
+        dynamicConfigManager.startup();
+
+        dynamicConfigManager.alterConfigs(
+                Collections.singletonList(
+                        new AlterConfig(
+                                ConfigOptions.REMOTE_LOG_MANIFEST_V2_WRITER_ENABLED.key(),
+                                "true",
+                                AlterConfigOpType.SET)));
+
+        assertThat(gate.isEnabled()).isTrue();
+        assertThat(
+                        zookeeperClient
+                                .fetchEntityConfig()
+                                .get(ConfigOptions.REMOTE_LOG_MANIFEST_V2_WRITER_ENABLED.key()))
+                .isEqualTo("true");
+
+        RemoteManifestV2WriterGate restartedGate = new RemoteManifestV2WriterGate(configuration);
+        DynamicConfigManager restartedManager = createListeningManager(configuration);
+        restartedManager.register(restartedGate);
+        restartedManager.registerValidator(restartedGate);
+        restartedManager.startup();
+        assertThat(restartedGate.isEnabled()).isTrue();
+
+        assertThatThrownBy(
+                        () ->
+                                dynamicConfigManager.alterConfigs(
+                                        Collections.singletonList(
+                                                new AlterConfig(
+                                                        ConfigOptions
+                                                                .REMOTE_LOG_MANIFEST_V2_WRITER_ENABLED
+                                                                .key(),
+                                                        "false",
+                                                        AlterConfigOpType.SET))))
+                .isInstanceOf(ConfigException.class)
+                .hasMessageContaining("activation is irreversible");
+        assertThatThrownBy(
+                        () ->
+                                dynamicConfigManager.alterConfigs(
+                                        Collections.singletonList(
+                                                new AlterConfig(
+                                                        ConfigOptions
+                                                                .REMOTE_LOG_MANIFEST_V2_WRITER_ENABLED
+                                                                .key(),
+                                                        null,
+                                                        AlterConfigOpType.DELETE))))
+                .isInstanceOf(ConfigException.class)
+                .hasMessageContaining("activation is irreversible");
+        assertThat(gate.isEnabled()).isTrue();
+    }
+
+    @Test
+    void testManifestV2WriterGateIgnoresLocalDowngrade() {
+        Configuration configuration = new Configuration();
+        RemoteManifestV2WriterGate gate = new RemoteManifestV2WriterGate(configuration);
+        Configuration enabled = new Configuration();
+        enabled.setBoolean(ConfigOptions.REMOTE_LOG_MANIFEST_V2_WRITER_ENABLED, true);
+        gate.reconfigure(enabled);
+
+        gate.reconfigure(configuration);
+
+        assertThat(gate.isEnabled()).isTrue();
     }
 
     @Test

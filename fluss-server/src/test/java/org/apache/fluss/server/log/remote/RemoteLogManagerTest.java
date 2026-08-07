@@ -22,6 +22,8 @@ import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.remote.RemoteLogFetchInfo;
+import org.apache.fluss.remote.RemoteLogManifest;
+import org.apache.fluss.remote.RemoteLogManifestV2Migration;
 import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.protocol.ApiError;
@@ -37,6 +39,7 @@ import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.replica.ReplicaManager;
 import org.apache.fluss.server.testutils.ServerTestTags;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
@@ -105,6 +108,68 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         assertThat(remoteLogSegmentList.size()).isEqualTo(4);
         assertThat(remoteLogManager.lookupPositionForOffset(remoteLogSegmentList.get(0), 2L))
                 .isGreaterThan(10);
+    }
+
+    @Test
+    void testValidateManifestHandleHints() throws Exception {
+        TableBucket tableBucket = makeTableBucket(false);
+        makeLogTableAsLeader(tableBucket, false);
+        LogTablet logTablet = replicaManager.getReplicaOrException(tableBucket).getLogTablet();
+        addMultiSegmentsToLogTablet(logTablet, 1);
+        RemoteLogSegment segment = createRemoteLogSegmentList(logTablet).get(0);
+        RemoteLogManifest manifest =
+                RemoteLogManifest.createV2(
+                        2L,
+                        logTablet.getPhysicalTablePath(),
+                        tableBucket,
+                        Collections.singletonList(segment),
+                        segment.remoteLogStartOffset(),
+                        segment.remoteLogEndOffset(),
+                        Collections.emptyList());
+        FsPath manifestPath = new FsPath("file:///remote/m2");
+
+        RemoteLogManager.validateManifestHandle(
+                RemoteLogManifestHandle.v2(
+                        manifestPath,
+                        2L,
+                        manifest.getRemoteLogStartOffset(),
+                        manifest.getRemoteLogEndOffset(),
+                        manifest.getHighestCopiedEndOffset()),
+                manifest);
+
+        RemoteLogManifest emptyManifest =
+                RemoteLogManifest.createV2(
+                        3L,
+                        logTablet.getPhysicalTablePath(),
+                        tableBucket,
+                        Collections.emptyList(),
+                        null,
+                        manifest.getHighestCopiedEndOffset(),
+                        Collections.emptyList());
+        RemoteLogManager.validateManifestHandle(
+                RemoteLogManifestHandle.v2Empty(
+                        manifestPath, 3L, manifest.getHighestCopiedEndOffset()),
+                emptyManifest);
+
+        assertThatThrownBy(
+                        () ->
+                                RemoteLogManager.validateManifestHandle(
+                                        RemoteLogManifestHandle.v2(
+                                                manifestPath,
+                                                3L,
+                                                manifest.getRemoteLogStartOffset(),
+                                                manifest.getRemoteLogEndOffset()),
+                                        manifest))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("hints do not match");
+        assertThatThrownBy(
+                        () ->
+                                RemoteLogManager.validateManifestHandle(
+                                        new RemoteLogManifestHandle(
+                                                manifestPath, manifest.getRemoteLogEndOffset()),
+                                        manifest))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("V1 remote log manifest handle");
     }
 
     @ParameterizedTest
@@ -354,6 +419,37 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         RemoteLogFetchInfo remoteLogFetchInfo = resultForBucket.remoteLogFetchInfo();
         assertThat(remoteLogFetchInfo).isNotNull();
         assertThat(remoteLogFetchInfo.remoteLogSegmentList().size()).isEqualTo(4);
+
+        // A V2 manifest with physically adjacent segments preserves the legacy v0 batching
+        // behavior and returns the complete contiguous, non-overlapping tail.
+        RemoteLogTablet remoteLogTablet = remoteLogManager.remoteLogTablet(tb);
+        remoteLogTablet.replaceManifest(
+                RemoteLogManifestV2Migration.migrate(remoteLogTablet.currentManifest(), 1L)
+                        .resultManifest());
+        future = new CompletableFuture<>();
+        replicaManager.fetchLogRecords(
+                new FetchParams(-1, Integer.MAX_VALUE),
+                Collections.singletonMap(tb, new FetchReqInfo(tb.getTableId(), 0L, 1024 * 1024)),
+                null,
+                future::complete);
+        RemoteLogFetchInfo legacyV2FetchInfo = future.get().get(tb).remoteLogFetchInfo();
+        assertThat(legacyV2FetchInfo).isNotNull();
+        assertThat(legacyV2FetchInfo.remoteLogSegmentList()).hasSize(4);
+        assertThat(legacyV2FetchInfo.remoteLogSegmentList().get(0).remoteLogStartOffset())
+                .isEqualTo(0L);
+
+        // A request starting at a later segment returns the remaining contiguous tail.
+        future = new CompletableFuture<>();
+        replicaManager.fetchLogRecords(
+                new FetchParams(-1, Integer.MAX_VALUE),
+                Collections.singletonMap(tb, new FetchReqInfo(tb.getTableId(), 10L, 1024 * 1024)),
+                null,
+                future::complete);
+        legacyV2FetchInfo = future.get().get(tb).remoteLogFetchInfo();
+        assertThat(legacyV2FetchInfo.remoteLogSegmentList()).hasSize(3);
+        assertThat(legacyV2FetchInfo.remoteLogSegmentList().get(0).remoteLogStartOffset())
+                .isEqualTo(10L);
+        assertThat(legacyV2FetchInfo.firstStartPos()).isZero();
 
         // 2. then, fetch records from active segments, result rhe local records in server.
         future = new CompletableFuture<>();

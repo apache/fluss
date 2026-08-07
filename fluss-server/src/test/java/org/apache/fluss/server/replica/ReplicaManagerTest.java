@@ -2443,6 +2443,42 @@ class ReplicaManagerTest extends ReplicaTestBase {
         Map<TableBucket, List<byte[]>> entriesPerBucket = new HashMap<>();
         entriesPerBucket.put(tb, prefixKeyBytes);
 
+        // As with point lookups, an acks = 1 put may complete before the asynchronous KV flush
+        // makes the new values visible to RocksDB prefix scans.
+        waitUntil(
+                () -> {
+                    CompletableFuture<Map<TableBucket, PrefixLookupResultForBucket>> future =
+                            new CompletableFuture<>();
+                    replicaManager.prefixLookups(
+                            entriesPerBucket, PREFIX_LOOKUP_KV_VERSION, future::complete);
+                    PrefixLookupResultForBucket result = future.get().get(tb);
+                    if (result == null || result.failed()) {
+                        return false;
+                    }
+                    List<List<byte[]>> actualValues = result.prefixLookupValues();
+                    if (actualValues.size() != expectedValues.size()) {
+                        return false;
+                    }
+                    for (int i = 0; i < expectedValues.size(); i++) {
+                        List<byte[]> actualValuesForPrefix = actualValues.get(i);
+                        List<byte[]> expectedValuesForPrefix = expectedValues.get(i);
+                        if (actualValuesForPrefix.size() != expectedValuesForPrefix.size()) {
+                            return false;
+                        }
+                        for (int j = 0; j < expectedValuesForPrefix.size(); j++) {
+                            if (!Arrays.equals(
+                                    actualValuesForPrefix.get(j), expectedValuesForPrefix.get(j))) {
+                                return false;
+                            }
+                        }
+                    }
+                    return true;
+                },
+                Duration.ofSeconds(15),
+                "prefix lookup values for bucket "
+                        + tb
+                        + " did not converge to the expected values");
+
         CompletableFuture<Map<TableBucket, PrefixLookupResultForBucket>> future =
                 new CompletableFuture<>();
         replicaManager.prefixLookups(entriesPerBucket, PREFIX_LOOKUP_KV_VERSION, future::complete);

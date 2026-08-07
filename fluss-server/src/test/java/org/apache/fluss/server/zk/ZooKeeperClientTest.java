@@ -38,10 +38,12 @@ import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.RebalanceTask;
+import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
 import org.apache.fluss.server.zk.data.ServerTags;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
+import org.apache.fluss.server.zk.data.VersionedRemoteLogManifestHandle;
 import org.apache.fluss.server.zk.data.ZkData.BucketIdZNode;
 import org.apache.fluss.server.zk.data.lease.KvSnapshotLeaseMetadata;
 import org.apache.fluss.shaded.curator5.org.apache.curator.CuratorZookeeperClient;
@@ -106,6 +108,46 @@ class ZooKeeperClientTest {
     void beforeEach() throws Exception {
         // create epoch node in beforeEach(), because it will always be cleaned up in afterEach()
         zkEpoch = zookeeperClient.fenceBecomeCoordinatorLeader("tmp");
+    }
+
+    @Test
+    void testRemoteLogManifestHandleCas() throws Exception {
+        TableBucket tableBucket = new TableBucket(1001L, 0);
+        FsPath v1Path = new FsPath("file:///remote/v1.manifest");
+        FsPath v2Path = new FsPath("file:///remote/v2.manifest");
+        FsPath v3Path = new FsPath("file:///remote/v3.manifest");
+        RemoteLogManifestHandle v1 = new RemoteLogManifestHandle(v1Path, 10L);
+        RemoteLogManifestHandle v2 = RemoteLogManifestHandle.v2(v2Path, 1L, 0L, 20L);
+        RemoteLogManifestHandle v3 = RemoteLogManifestHandle.v2(v3Path, 2L, 0L, 30L);
+
+        assertThat(zookeeperClient.getVersionedRemoteLogManifestHandle(tableBucket)).isEmpty();
+        assertThat(zookeeperClient.createRemoteLogManifestHandleIfAbsent(tableBucket, v1)).isTrue();
+        assertThat(zookeeperClient.createRemoteLogManifestHandleIfAbsent(tableBucket, v2))
+                .isFalse();
+
+        VersionedRemoteLogManifestHandle initial =
+                zookeeperClient.getVersionedRemoteLogManifestHandle(tableBucket).get();
+        assertThat(initial.handle()).isEqualTo(v1);
+        assertThat(initial.zkVersion()).isZero();
+
+        assertThat(
+                        zookeeperClient.compareAndSetRemoteLogManifestHandle(
+                                tableBucket, initial.zkVersion() + 1, v2))
+                .isFalse();
+        assertThat(
+                        zookeeperClient.compareAndSetRemoteLogManifestHandle(
+                                tableBucket, initial.zkVersion(), v2))
+                .isTrue();
+
+        VersionedRemoteLogManifestHandle migrated =
+                zookeeperClient.getVersionedRemoteLogManifestHandle(tableBucket).get();
+        assertThat(migrated.handle()).isEqualTo(v2);
+        assertThat(migrated.zkVersion()).isEqualTo(1);
+        assertThat(
+                        zookeeperClient.compareAndSetRemoteLogManifestHandle(
+                                tableBucket, migrated.zkVersion(), v3))
+                .isTrue();
+        assertThat(zookeeperClient.getRemoteLogManifestHandle(tableBucket)).contains(v3);
     }
 
     @AfterEach

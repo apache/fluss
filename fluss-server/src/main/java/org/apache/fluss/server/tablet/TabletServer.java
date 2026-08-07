@@ -37,6 +37,7 @@ import org.apache.fluss.server.DynamicConfigManager;
 import org.apache.fluss.server.ServerBase;
 import org.apache.fluss.server.authorizer.Authorizer;
 import org.apache.fluss.server.authorizer.AuthorizerLoader;
+import org.apache.fluss.server.config.RemoteManifestV2WriterGate;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.kv.KvCloseMode;
@@ -173,6 +174,9 @@ public class TabletServer extends ServerBase {
     private DynamicConfigManager dynamicConfigManager;
 
     @GuardedBy("lock")
+    private RemoteManifestV2WriterGate remoteManifestV2WriterGate;
+
+    @GuardedBy("lock")
     private LakeCatalogDynamicLoader lakeCatalogDynamicLoader;
 
     @GuardedBy("lock")
@@ -238,6 +242,7 @@ public class TabletServer extends ServerBase {
             MetadataManager metadataManager =
                     new MetadataManager(zkClient, conf, lakeCatalogDynamicLoader);
             this.dynamicConfigManager = new DynamicConfigManager(zkClient, conf);
+            this.remoteManifestV2WriterGate = new RemoteManifestV2WriterGate(conf);
 
             this.metadataCache = new TabletServerMetadataCache(metadataManager);
 
@@ -303,6 +308,7 @@ public class TabletServer extends ServerBase {
                             clock,
                             ioExecutor,
                             localDiskManager,
+                            remoteManifestV2WriterGate,
                             pluginManager);
             replicaManager.startup();
 
@@ -341,6 +347,8 @@ public class TabletServer extends ServerBase {
             dynamicConfigManager.register(replicaManager);
             // Register localDiskManager for dynamic disk write-limit and recover ratios.
             dynamicConfigManager.register(localDiskManager);
+            dynamicConfigManager.register(remoteManifestV2WriterGate);
+            dynamicConfigManager.registerValidator(remoteManifestV2WriterGate);
             rpcServer.getServerReconfigurables().forEach(dynamicConfigManager::register);
 
             // Start dynamicConfigManager after all reconfigurable components are registered

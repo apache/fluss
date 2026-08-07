@@ -48,6 +48,15 @@ public class TestingRemoteLogStorage extends DefaultRemoteLogStorage {
      */
     public final AtomicInteger copySegmentFailAfterNCopies = new AtomicInteger(-1);
 
+    /**
+     * When set to a non-negative value N, the (N+1)th segment copy is interrupted once after N
+     * successful copies.
+     */
+    public final AtomicInteger copySegmentInterruptAfterNCopies = new AtomicInteger(-1);
+
+    /** Number of upcoming metadata-driven segment deletions that should fail. */
+    public final AtomicInteger deleteSegmentFailFirstN = new AtomicInteger(0);
+
     private final AtomicInteger copySegmentCount = new AtomicInteger(0);
 
     /**
@@ -107,6 +116,13 @@ public class TestingRemoteLogStorage extends DefaultRemoteLogStorage {
     public void copyLogSegmentFiles(
             RemoteLogSegment remoteLogSegment, LogSegmentFiles logSegmentFiles)
             throws RemoteStorageException {
+        int interruptAfter = copySegmentInterruptAfterNCopies.get();
+        if (interruptAfter >= 0
+                && copySegmentCount.get() >= interruptAfter
+                && copySegmentInterruptAfterNCopies.compareAndSet(interruptAfter, -1)) {
+            throw new RemoteStorageException(
+                    "Simulated interrupted segment copy", new InterruptedException("interrupted"));
+        }
         int failAfter = copySegmentFailAfterNCopies.get();
         if (failAfter >= 0 && copySegmentCount.get() >= failAfter) {
             throw new RemoteStorageException(
@@ -116,6 +132,10 @@ public class TestingRemoteLogStorage extends DefaultRemoteLogStorage {
         copySegmentCount.incrementAndGet();
     }
 
+    public int getCopySegmentCount() {
+        return copySegmentCount.get();
+    }
+
     @Override
     public FsPath writeRemoteLogManifestSnapshot(RemoteLogManifest manifest)
             throws RemoteStorageException {
@@ -123,6 +143,15 @@ public class TestingRemoteLogStorage extends DefaultRemoteLogStorage {
             throw new RuntimeException("failed to upload remote log manifest snapshot");
         }
         return super.writeRemoteLogManifestSnapshot(manifest);
+    }
+
+    @Override
+    public void deleteLogSegmentFiles(RemoteLogSegment remoteLogSegment)
+            throws RemoteStorageException {
+        if (deleteSegmentFailFirstN.getAndUpdate(n -> n > 0 ? n - 1 : 0) > 0) {
+            throw new RemoteStorageException("Simulated segment delete failure");
+        }
+        super.deleteLogSegmentFiles(remoteLogSegment);
     }
 
     @Override

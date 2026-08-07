@@ -565,10 +565,21 @@ message CommitRemoteLogManifestRequest {
   required int64 remote_log_end_offset = 6;
   required int32 coordinator_epoch = 7;
   required int32 bucket_leader_epoch = 8;
+  // Manifest V2 CAS fields. All are omitted by the legacy V1 commit path.
+  optional int32 manifest_format_version = 9;
+  // Omitted for create-if-absent; present for a versioned update.
+  optional int32 expected_zk_version = 10;
+  optional int64 new_manifest_generation = 11;
+  // Highest exclusive end offset successfully copied to remote storage.
+  optional int64 highest_copied_end_offset = 12;
 }
 
 message CommitRemoteLogManifestResponse {
   required bool commitSuccess = 1;
+  // 0 = COMMITTED, 1 = CONFLICT, 2 = FENCED, 3 = INVALID_MANIFEST,
+  // 4 = V2_WRITER_DISABLED.
+  // Omitted by legacy coordinators.
+  optional int32 commit_result = 2;
 }
 
 // notify remote log offsets request and response
@@ -579,6 +590,8 @@ message NotifyRemoteLogOffsetsRequest {
   required int32 coordinator_epoch = 4;
   required int64 remote_start_offset = 5;
   required int64 remote_end_offset = 6;
+  // Present for Manifest V2; absent means remote_end_offset for legacy V1 notifications.
+  optional int64 highest_copied_end_offset = 7;
 }
 
 message NotifyRemoteLogOffsetsResponse {

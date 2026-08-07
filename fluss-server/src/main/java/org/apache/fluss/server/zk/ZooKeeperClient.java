@@ -58,6 +58,7 @@ import org.apache.fluss.server.zk.data.ServerTags;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
+import org.apache.fluss.server.zk.data.VersionedRemoteLogManifestHandle;
 import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.server.zk.data.ZkData.AclChangeNotificationNode;
 import org.apache.fluss.server.zk.data.ZkData.BucketIdsZNode;
@@ -1370,6 +1371,51 @@ public class ZooKeeperClient implements AutoCloseable {
             throws Exception {
         String path = BucketRemoteLogsZNode.path(tableBucket);
         return getOrEmpty(path).map(BucketRemoteLogsZNode::decode);
+    }
+
+    /** Returns the authoritative remote log handle together with its ZK data version. */
+    public Optional<VersionedRemoteLogManifestHandle> getVersionedRemoteLogManifestHandle(
+            TableBucket tableBucket) throws Exception {
+        String path = BucketRemoteLogsZNode.path(tableBucket);
+        Stat stat = new Stat();
+        try {
+            byte[] data = zkClient.getData().storingStatIn(stat).forPath(path);
+            return Optional.of(
+                    new VersionedRemoteLogManifestHandle(
+                            BucketRemoteLogsZNode.decode(data), stat.getVersion()));
+        } catch (KeeperException.NoNodeException e) {
+            return Optional.empty();
+        }
+    }
+
+    /** Creates the first V2 remote log handle only if no authoritative handle exists. */
+    public boolean createRemoteLogManifestHandleIfAbsent(
+            TableBucket tableBucket, RemoteLogManifestHandle newHandle) throws Exception {
+        String path = BucketRemoteLogsZNode.path(tableBucket);
+        try {
+            zkClient.create()
+                    .creatingParentsIfNeeded()
+                    .forPath(path, BucketRemoteLogsZNode.encode(newHandle));
+            return true;
+        } catch (KeeperException.NodeExistsException e) {
+            return false;
+        }
+    }
+
+    /** Replaces an existing authoritative handle only when its ZK version matches the base. */
+    public boolean compareAndSetRemoteLogManifestHandle(
+            TableBucket tableBucket, int expectedZkVersion, RemoteLogManifestHandle newHandle)
+            throws Exception {
+        try {
+            zkClient.setData()
+                    .withVersion(expectedZkVersion)
+                    .forPath(
+                            BucketRemoteLogsZNode.path(tableBucket),
+                            BucketRemoteLogsZNode.encode(newHandle));
+            return true;
+        } catch (KeeperException.BadVersionException | KeeperException.NoNodeException e) {
+            return false;
+        }
     }
 
     /**

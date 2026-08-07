@@ -28,6 +28,7 @@ import org.apache.fluss.fs.FSDataInputStream;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.remote.RemoteLogManifest;
 import org.apache.fluss.remote.RemoteLogSegment;
+import org.apache.fluss.remote.UnreferencedRemoteLogSegment;
 import org.apache.fluss.shaded.guava32.com.google.common.util.concurrent.RateLimiter;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.IOUtils;
@@ -305,19 +306,28 @@ public final class ActiveRefsFetcher {
 
         Set<String> relativePaths = new HashSet<>();
         for (RemoteLogSegment segment : manifest.getRemoteLogSegmentList()) {
-            String segmentId = segment.remoteLogSegmentId().toString();
-            long startOffset = segment.remoteLogStartOffset();
-            long endOffset = segment.remoteLogEndOffset();
-            String baseOffset = FlussPaths.filenamePrefixFromOffset(startOffset);
-            String writerOffset = FlussPaths.filenamePrefixFromOffset(endOffset);
-
-            relativePaths.add(segmentId + "/" + baseOffset + FlussPaths.LOG_FILE_SUFFIX);
-            relativePaths.add(segmentId + "/" + baseOffset + FlussPaths.INDEX_FILE_SUFFIX);
-            relativePaths.add(segmentId + "/" + baseOffset + FlussPaths.TIME_INDEX_FILE_SUFFIX);
-            relativePaths.add(
-                    segmentId + "/" + writerOffset + FlussPaths.WRITER_SNAPSHOT_FILE_SUFFIX);
+            addLogSegmentRelativePaths(relativePaths, segment);
+        }
+        // "Active" here means protected from the generic orphan cleaner. V2 unreferenced
+        // segments remain manifest-managed until the V2 GC applies its own grace period and
+        // removes their metadata, so they must be protected as well.
+        for (UnreferencedRemoteLogSegment unreferencedSegment :
+                manifest.getUnreferencedRemoteLogSegments()) {
+            addLogSegmentRelativePaths(relativePaths, unreferencedSegment.remoteLogSegment());
         }
         return relativePaths;
+    }
+
+    private static void addLogSegmentRelativePaths(
+            Set<String> relativePaths, RemoteLogSegment segment) {
+        String segmentId = segment.remoteLogSegmentId().toString();
+        String baseOffset = FlussPaths.filenamePrefixFromOffset(segment.remoteLogStartOffset());
+        String writerOffset = FlussPaths.filenamePrefixFromOffset(segment.remoteLogEndOffset());
+
+        relativePaths.add(segmentId + "/" + baseOffset + FlussPaths.LOG_FILE_SUFFIX);
+        relativePaths.add(segmentId + "/" + baseOffset + FlussPaths.INDEX_FILE_SUFFIX);
+        relativePaths.add(segmentId + "/" + baseOffset + FlussPaths.TIME_INDEX_FILE_SUFFIX);
+        relativePaths.add(segmentId + "/" + writerOffset + FlussPaths.WRITER_SNAPSHOT_FILE_SUFFIX);
     }
 
     /**

@@ -27,6 +27,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.entity.ProduceLogResultForBucket;
 import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
+import org.apache.fluss.server.config.RemoteManifestV2WriterGate;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.coordinator.TestCoordinatorGateway;
@@ -594,6 +595,7 @@ public class ReplicaFetcherThreadTest {
                     clock,
                     ioExecutor,
                     localDiskManager,
+                    new RemoteManifestV2WriterGate(conf),
                     null);
         }
 

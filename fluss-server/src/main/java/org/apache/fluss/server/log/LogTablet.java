@@ -123,6 +123,9 @@ public final class LogTablet {
     private volatile long remoteLogStartOffset = Long.MAX_VALUE;
     // tracking the log end offset in remote storage
     private volatile long remoteLogEndOffset = -1L;
+
+    /** Highest exclusive end offset successfully copied to remote storage. */
+    private volatile long highestCopiedEndOffset = -1L;
     // tracking the log size in remote storage
     private volatile long remoteLogSize = 0;
 
@@ -627,8 +630,13 @@ public final class LogTablet {
     public void updateRemoteLogEndOffset(long remoteLogEndOffset) {
         if (remoteLogEndOffset > this.remoteLogEndOffset) {
             this.remoteLogEndOffset = remoteLogEndOffset;
+        }
+        updateHighestCopiedEndOffset(remoteLogEndOffset);
+    }
 
-            // try to delete these segments already exist in remote storage.
+    public void updateHighestCopiedEndOffset(long highestCopiedEndOffset) {
+        if (highestCopiedEndOffset > this.highestCopiedEndOffset) {
+            this.highestCopiedEndOffset = highestCopiedEndOffset;
             deleteSegmentsAlreadyExistsInRemote();
         }
     }
@@ -737,7 +745,7 @@ public final class LogTablet {
 
     public void deleteSegmentsAlreadyExistsInRemote() {
         deleteSegments(
-                remoteLogEndOffset,
+                highestCopiedEndOffset,
                 SegmentDeletionReason.LOG_MOVE_TO_REMOTE,
                 this::deletableRemoteSegments);
     }
@@ -748,7 +756,8 @@ public final class LogTablet {
         // all remote segments have expired. In both cases, table.log.ttl remains authoritative for
         // local retention, while the high watermark and minRetainOffset still protect data that
         // cannot be deleted yet.
-        long cleanupToOffset = remoteLogEndOffset == -1L ? getHighWatermark() : remoteLogEndOffset;
+        long cleanupToOffset =
+                highestCopiedEndOffset == -1L ? getHighWatermark() : highestCopiedEndOffset;
         deleteSegments(
                 cleanupToOffset,
                 SegmentDeletionReason.LOG_RETENTION,

@@ -360,7 +360,8 @@ public class CoordinatorRequestBatch {
             List<Integer> tabletServers,
             TableBucket tableBucket,
             long remoteLogStartOffset,
-            long remoteLogEndOffset) {
+            long remoteLogEndOffset,
+            long highestCopiedEndOffset) {
         tabletServers.stream()
                 .filter(s -> s >= 0)
                 .forEach(
@@ -370,7 +371,8 @@ public class CoordinatorRequestBatch {
                                         makeNotifyRemoteLogOffsetsRequest(
                                                 tableBucket,
                                                 remoteLogStartOffset,
-                                                remoteLogEndOffset)));
+                                                remoteLogEndOffset,
+                                                highestCopiedEndOffset)));
     }
 
     public void addNotifyKvSnapshotOffsetRequestForTabletServers(

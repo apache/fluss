@@ -166,8 +166,10 @@ import org.apache.fluss.server.coordinator.producer.ProducerOffsetsManager;
 import org.apache.fluss.server.coordinator.rebalance.goal.Goal;
 import org.apache.fluss.server.coordinator.remote.RemoteDirDynamicLoader;
 import org.apache.fluss.server.entity.CommitKvSnapshotData;
+import org.apache.fluss.server.entity.CommitRemoteLogManifestData;
 import org.apache.fluss.server.entity.DatabasePropertyChanges;
 import org.apache.fluss.server.entity.LakeTieringTableInfo;
+import org.apache.fluss.server.entity.RemoteLogManifestCommitResult;
 import org.apache.fluss.server.entity.TablePropertyChanges;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotJsonSerde;
@@ -1149,11 +1151,17 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     public CompletableFuture<CommitRemoteLogManifestResponse> commitRemoteLogManifest(
             CommitRemoteLogManifestRequest request) {
         CompletableFuture<CommitRemoteLogManifestResponse> response = new CompletableFuture<>();
-        eventManagerSupplier
-                .get()
-                .put(
-                        new CommitRemoteLogManifestEvent(
-                                getCommitRemoteLogManifestData(request), response));
+        CommitRemoteLogManifestData commitData;
+        try {
+            commitData = getCommitRemoteLogManifestData(request);
+        } catch (IllegalArgumentException e) {
+            return CompletableFuture.completedFuture(
+                    new CommitRemoteLogManifestResponse()
+                            .setCommitSuccess(false)
+                            .setCommitResult(
+                                    RemoteLogManifestCommitResult.INVALID_MANIFEST.code()));
+        }
+        eventManagerSupplier.get().put(new CommitRemoteLogManifestEvent(commitData, response));
         return response;
     }
 
