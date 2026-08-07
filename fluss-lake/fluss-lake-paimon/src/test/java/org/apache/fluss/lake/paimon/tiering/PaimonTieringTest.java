@@ -213,6 +213,45 @@ class PaimonTieringTest {
     }
 
     @Test
+    void testEmptyCommitCreatesSnapshot() throws Exception {
+        TablePath tablePath = TablePath.of("paimon", "test_empty_commit");
+        createTable(tablePath, false, false, null, Collections.emptyMap());
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                org.apache.fluss.metadata.Schema.newBuilder()
+                                        .column("c1", org.apache.fluss.types.DataTypes.INT())
+                                        .column("c2", org.apache.fluss.types.DataTypes.STRING())
+                                        .column("c3", org.apache.fluss.types.DataTypes.STRING())
+                                        .build())
+                        .distributedBy(1)
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .build();
+        TableInfo tableInfo =
+                TableInfo.of(tablePath, 0, 1, descriptor, DEFAULT_REMOTE_DATA_DIR, 1L, 1L);
+
+        // an empty commit should still create a snapshot to persist tiering progress
+        try (LakeCommitter<PaimonWriteResult, PaimonCommittable> lakeCommitter =
+                createLakeCommitter(tablePath, tableInfo, new Configuration())) {
+            PaimonCommittable committable = lakeCommitter.toCommittable(Collections.emptyList());
+            long snapshotId =
+                    lakeCommitter
+                            .commit(
+                                    committable,
+                                    Collections.singletonMap("fluss-offsets", "offsets-path"))
+                            .getCommittedSnapshotId();
+            assertThat(snapshotId).isEqualTo(1);
+
+            CommittedLakeSnapshot committedLakeSnapshot =
+                    lakeCommitter.getMissingLakeSnapshot(null);
+            assertThat(committedLakeSnapshot).isNotNull();
+            assertThat(committedLakeSnapshot.getLakeSnapshotId()).isOne();
+            assertThat(committedLakeSnapshot.getSnapshotProperties())
+                    .containsEntry("fluss-offsets", "offsets-path");
+        }
+    }
+
+    @Test
     void testMultiPartitionTiering() throws Exception {
         // Test multiple partitions: region + year
         TablePath tablePath = TablePath.of("paimon", "test_multi_partition");

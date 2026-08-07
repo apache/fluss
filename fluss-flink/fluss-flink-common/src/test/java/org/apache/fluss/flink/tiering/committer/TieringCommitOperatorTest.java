@@ -213,7 +213,7 @@ class TieringCommitOperatorTest extends FlinkTestBase {
         long tableId = createTable(tablePath1, DATA1_PARTITIONED_TABLE_DESCRIPTOR);
         int numberOfWriteResults = 3;
 
-        // verify when all are empty
+        // all buckets empty but offsets advanced: an empty lake snapshot is committed
         for (int bucket = 0; bucket < 3; bucket++) {
             TableBucket tableBucket = new TableBucket(tableId, bucket);
             committerOperator.processElement(
@@ -221,9 +221,13 @@ class TieringCommitOperatorTest extends FlinkTestBase {
                             tablePath1, tableBucket, null, 3, 6L, numberOfWriteResults));
         }
 
-        verifyNoLakeSnapshot(tablePath1);
+        Map<TableBucket, Long> expectedLogEndOffsets = new HashMap<>();
+        expectedLogEndOffsets.put(new TableBucket(tableId, 0), 3L);
+        expectedLogEndOffsets.put(new TableBucket(tableId, 1), 3L);
+        expectedLogEndOffsets.put(new TableBucket(tableId, 2), 3L);
+        verifyLakeSnapshot(tablePath1, tableId, 1, expectedLogEndOffsets);
 
-        // verify when one bucket result is empty
+        // one bucket empty with a valid offset: committed together with non-empty buckets
         for (int bucket = 1; bucket < 3; bucket++) {
             TableBucket tableBucket = new TableBucket(tableId, bucket);
             committerOperator.processElement(
@@ -241,14 +245,52 @@ class TieringCommitOperatorTest extends FlinkTestBase {
                         tablePath1,
                         new TableBucket(tableId, 0),
                         null,
-                        3,
+                        4,
                         6L,
                         numberOfWriteResults));
 
-        Map<TableBucket, Long> expectedLogEndOffsets = new HashMap<>();
+        expectedLogEndOffsets = new HashMap<>();
+        expectedLogEndOffsets.put(new TableBucket(tableId, 0), 4L);
         expectedLogEndOffsets.put(new TableBucket(tableId, 1), 1L);
         expectedLogEndOffsets.put(new TableBucket(tableId, 2), 2L);
-        verifyLakeSnapshot(tablePath1, tableId, 1, expectedLogEndOffsets);
+        verifyLakeSnapshot(tablePath1, tableId, 2, expectedLogEndOffsets);
+
+        // one bucket skipped (unknown offset): its previously committed offset is retained
+        for (int bucket = 1; bucket < 3; bucket++) {
+            TableBucket tableBucket = new TableBucket(tableId, bucket);
+            committerOperator.processElement(
+                    createTableBucketWriteResultStreamRecord(
+                            tablePath1,
+                            tableBucket,
+                            bucket,
+                            bucket * 10L,
+                            bucket * 10L,
+                            numberOfWriteResults));
+        }
+        committerOperator.processElement(
+                createTableBucketWriteResultStreamRecord(
+                        tablePath1,
+                        new TableBucket(tableId, 0),
+                        null,
+                        // unknown bucket offset and timestamp
+                        -1,
+                        -1L,
+                        numberOfWriteResults));
+
+        expectedLogEndOffsets = new HashMap<>();
+        expectedLogEndOffsets.put(new TableBucket(tableId, 0), 4L);
+        expectedLogEndOffsets.put(new TableBucket(tableId, 1), 10L);
+        expectedLogEndOffsets.put(new TableBucket(tableId, 2), 20L);
+        verifyLakeSnapshot(tablePath1, tableId, 3, expectedLogEndOffsets);
+
+        // all buckets skipped (unknown offsets): nothing is committed
+        for (int bucket = 0; bucket < 3; bucket++) {
+            TableBucket tableBucket = new TableBucket(tableId, bucket);
+            committerOperator.processElement(
+                    createTableBucketWriteResultStreamRecord(
+                            tablePath1, tableBucket, null, -1, -1L, numberOfWriteResults));
+        }
+        verifyLakeSnapshot(tablePath1, tableId, 3, expectedLogEndOffsets);
     }
 
     @Test
