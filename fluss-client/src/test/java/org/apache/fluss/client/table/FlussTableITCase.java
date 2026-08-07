@@ -34,6 +34,7 @@ import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
+import org.apache.fluss.exception.InvalidTargetColumnException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.TestFileSystem;
 import org.apache.fluss.metadata.DataLakeFormat;
@@ -90,6 +91,7 @@ import static org.apache.fluss.testutils.DataTestUtils.keyRow;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.InternalRowAssert.assertThatRow;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** IT case for {@link FlussTable}. */
@@ -956,6 +958,45 @@ class FlussTableITCase extends ClientToServerITCaseBase {
     }
 
     @Test
+    void testPartialPutWithNotNullTargetColumn() throws Exception {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .column("c", new BigIntType(false))
+                        .primaryKey("a")
+                        .build();
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder().schema(schema).distributedBy(3, "a").build();
+        createTable(DATA1_TABLE_PATH_PK, tableDescriptor, true);
+
+        try (Table table = conn.getTable(DATA1_TABLE_PATH_PK)) {
+            // seed a full row so that column b, outside the target columns, is not null
+            table.newUpsert().createWriter().upsert(row(1, "bbb", 1L)).get();
+
+            UpsertWriter upsertWriter = table.newUpsert().partialUpdate("a", "c").createWriter();
+            upsertWriter.upsert(row(1, null, 100L)).get();
+
+            Lookuper lookuper = table.newLookup().createLookuper();
+            GenericRow rowKey = row(1);
+            assertThat(lookupRow(lookuper, rowKey))
+                    .isEqualTo(compactedRow(schema.getRowType(), new Object[] {1, "bbb", 100L}));
+
+            // updating the same target columns again keeps column b untouched
+            upsertWriter.upsert(row(1, null, 200L)).get();
+            assertThat(lookupRow(lookuper, rowKey))
+                    .isEqualTo(compactedRow(schema.getRowType(), new Object[] {1, "bbb", 200L}));
+
+            // a partial delete would null out the NOT NULL column c, and only the server can
+            // tell, since it depends on the stored row
+            assertThatThrownBy(() -> upsertWriter.delete(row(1, null, 200L)).get())
+                    .cause()
+                    .isInstanceOf(InvalidTargetColumnException.class)
+                    .hasMessageContaining("but target column c is NOT NULL.");
+        }
+    }
+
+    @Test
     void testInvalidPartialUpdate() throws Exception {
         Schema schema =
                 Schema.newBuilder()
@@ -975,13 +1016,15 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                     .hasMessage(
                             "The target write columns [b] must contain the primary key columns [a].");
 
-            // the column not in the primary key is nullable, should throw exception
+            // the column omitted from the target columns is NOT NULL, should throw exception
             assertThatThrownBy(() -> table.newUpsert().partialUpdate("a", "b").createWriter())
                     .hasMessage(
-                            "Partial Update requires all columns except primary key to be nullable, but column c is NOT NULL.");
-            assertThatThrownBy(() -> table.newUpsert().partialUpdate("a", "c").createWriter())
-                    .hasMessage(
-                            "Partial Update requires all columns except primary key to be nullable, but column c is NOT NULL.");
+                            "Partial Update requires all columns omitted from the target columns to be nullable, "
+                                    + "but omitted column c is NOT NULL.");
+            // column c is NOT NULL but listed in the target columns, so it is always provided by
+            // the writer and should be accepted
+            assertThatCode(() -> table.newUpsert().partialUpdate("a", "c").createWriter())
+                    .doesNotThrowAnyException();
             assertThatThrownBy(() -> table.newUpsert().partialUpdate("a", "d").createWriter())
                     .hasMessage(
                             "Can not find target column: d for table test_db_1.test_pk_table_1.");

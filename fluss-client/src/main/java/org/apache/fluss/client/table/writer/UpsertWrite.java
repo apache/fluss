@@ -54,8 +54,10 @@ public class UpsertWrite {
      * row will be removed when all columns except primary key are null after a {@link
      * UpsertWriter#delete(InternalRow)} operation.
      *
-     * <p>Note: The specified columns must be a contains all columns of primary key, and all columns
-     * except primary key should be nullable.
+     * <p>Note: The specified columns must contain all columns of the primary key, and all columns
+     * omitted from the specified columns should be nullable, since they are set to null when the
+     * row doesn't exist. A {@link UpsertWriter#delete(InternalRow)} operation additionally requires
+     * the specified columns except primary key to be nullable, since it sets them to null.
      *
      * @param targetColumns the columns to partial update,
      */
