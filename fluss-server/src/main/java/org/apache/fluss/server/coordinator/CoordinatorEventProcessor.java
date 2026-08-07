@@ -85,7 +85,9 @@ import org.apache.fluss.server.coordinator.event.NotifyKvSnapshotOffsetEvent;
 import org.apache.fluss.server.coordinator.event.NotifyLakeTableOffsetEvent;
 import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrResponseReceivedEvent;
 import org.apache.fluss.server.coordinator.event.RebalanceEvent;
+import org.apache.fluss.server.coordinator.event.RebalanceMaxInflightTasksChangedEvent;
 import org.apache.fluss.server.coordinator.event.RebalanceTaskTimeoutEvent;
+import org.apache.fluss.server.coordinator.event.RecoverRebalanceEvent;
 import org.apache.fluss.server.coordinator.event.RemoveServerTagEvent;
 import org.apache.fluss.server.coordinator.event.ResumeDropEvent;
 import org.apache.fluss.server.coordinator.event.RetryOfflineLeaderEvent;
@@ -272,7 +274,11 @@ public class CoordinatorEventProcessor implements EventProcessor {
         this.internalListenerName = conf.getString(ConfigOptions.INTERNAL_LISTENER_NAME);
         this.rebalanceManager =
                 new RebalanceManager(
-                        this, zooKeeperClient, coordinatorEventManager, SystemClock.getInstance());
+                        this,
+                        zooKeeperClient,
+                        coordinatorEventManager,
+                        SystemClock.getInstance(),
+                        conf);
         this.offlineLeaderRetryDelayMs =
                 conf.get(ConfigOptions.COORDINATOR_OFFLINE_LEADER_RETRY_DELAY).toMillis();
         if (offlineLeaderRetryDelayMs <= 0) {
@@ -743,6 +749,13 @@ public class CoordinatorEventProcessor implements EventProcessor {
             RebalanceEvent rebalanceEvent = (RebalanceEvent) event;
             completeFromCallable(
                     rebalanceEvent.getRespCallback(), () -> processRebalance(rebalanceEvent));
+        } else if (event instanceof RecoverRebalanceEvent) {
+            RecoverRebalanceEvent recoverRebalanceEvent = (RecoverRebalanceEvent) event;
+            RebalanceTask rebalanceTask = recoverRebalanceEvent.getRebalanceTask();
+            rebalanceManager.registerRebalance(
+                    rebalanceTask.getRebalanceId(),
+                    rebalanceTask.getExecutePlan(),
+                    rebalanceTask.getRebalanceStatus());
         } else if (event instanceof CancelRebalanceEvent) {
             CancelRebalanceEvent cancelRebalanceEvent = (CancelRebalanceEvent) event;
             completeFromCallable(
@@ -755,6 +768,11 @@ public class CoordinatorEventProcessor implements EventProcessor {
                     timeoutEvent.getTableBucket());
             rebalanceManager.finishRebalanceTask(
                     timeoutEvent.getTableBucket(), RebalanceStatus.TIMEOUT);
+        } else if (event instanceof RebalanceMaxInflightTasksChangedEvent) {
+            RebalanceMaxInflightTasksChangedEvent configChangedEvent =
+                    (RebalanceMaxInflightTasksChangedEvent) event;
+            rebalanceManager.updateMaxInflightRebalanceTasks(
+                    configChangedEvent.getMaxInflightTasks());
         } else if (event instanceof ResumeDropEvent) {
             // Resume-mode reconciliation queued by TableLifecycleThrottler: dispatch on the event
             // thread so the @NotThreadSafe CoordinatorContext / state machines are only mutated
