@@ -50,9 +50,10 @@ public class PaimonLakeWriter implements LakeWriter<PaimonWriteResult>, Supports
             PaimonCatalogProvider paimonCatalogProvider, WriterInitContext writerInitContext)
             throws IOException {
         this.paimonCatalog = paimonCatalogProvider.get();
+        TablePath lakeTablePath = writerInitContext.tableInfo().getLakeTablePath();
         FileStoreTable fileStoreTable =
                 getTable(
-                        writerInitContext.tablePath(),
+                        lakeTablePath,
                         writerInitContext.tableInfo().getTableConfig().isDataLakeAutoCompaction());
 
         List<String> partitionKeys = fileStoreTable.partitionKeys();

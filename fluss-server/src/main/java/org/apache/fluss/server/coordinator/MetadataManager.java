@@ -39,6 +39,7 @@ import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
 import org.apache.fluss.metadata.DatabaseSummary;
+import org.apache.fluss.metadata.LakeTableUtil;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaInfo;
@@ -495,7 +496,7 @@ public class MetadataManager {
         }
 
         try {
-            lakeCatalog.alterTable(tablePath, schemaChanges, lakeCatalogContext);
+            lakeCatalog.alterTable(tableInfo.getLakeTablePath(), schemaChanges, lakeCatalogContext);
         } catch (TableNotExistException e) {
             throw new FlussRuntimeException(
                     "Lake table doesn't exist for lake-enabled table "
@@ -550,6 +551,8 @@ public class MetadataManager {
                     }
                 }
 
+                validateAlterLakeTablePath(tableInfo, newDescriptor);
+
                 // reuse the same validate logic with the createTable() method
                 validateTableDescriptor(newDescriptor);
 
@@ -584,6 +587,30 @@ public class MetadataManager {
         }
     }
 
+    private void validateAlterLakeTablePath(TableInfo tableInfo, TableDescriptor newDescriptor)
+            throws Exception {
+        TablePath currentLakeTablePath = tableInfo.getLakeTablePath();
+        TablePath newLakeTablePath =
+                LakeTableUtil.resolveLakeTablePath(
+                        tableInfo.getTablePath(),
+                        Configuration.fromMap(newDescriptor.getProperties()));
+        if (currentLakeTablePath.equals(newLakeTablePath)) {
+            return;
+        }
+
+        boolean lakeTablePathChangeForbidden =
+                tableInfo.getTableConfig().isDataLakeEnabled()
+                        || zookeeperClient.getLakeTable(tableInfo.getTableId()).isPresent();
+        if (lakeTablePathChangeForbidden) {
+            throw new InvalidAlterTableException(
+                    String.format(
+                            "The name mapping options '%s' and '%s' cannot be altered when '%s' is true or the table has tiering progress.",
+                            ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key(),
+                            ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key(),
+                            ConfigOptions.TABLE_DATALAKE_ENABLED.key()));
+        }
+    }
+
     private void preAlterTableProperties(
             TablePath tablePath,
             TableDescriptor tableDescriptor,
@@ -607,8 +634,11 @@ public class MetadataManager {
             // to enable lake table
             if (!isDataLakeEnabled(tableDescriptor)) {
                 // before create table in fluss, we may create in lake
+                TablePath lakeTablePath =
+                        LakeTableUtil.resolveLakeTablePath(
+                                tablePath, Configuration.fromMap(newDescriptor.getProperties()));
                 try {
-                    lakeCatalog.createTable(tablePath, newDescriptor, lakeCatalogContext);
+                    lakeCatalog.createTable(lakeTablePath, newDescriptor, lakeCatalogContext);
                 } catch (TableAlreadyExistException e) {
                     throw new LakeTableAlreadyExistException(e.getMessage(), e);
                 }
@@ -624,8 +654,11 @@ public class MetadataManager {
                 && tableDescriptor
                         .getProperties()
                         .containsKey(ConfigOptions.TABLE_DATALAKE_ENABLED.key())) {
+            TablePath lakeTablePath =
+                    LakeTableUtil.resolveLakeTablePath(
+                            tablePath, Configuration.fromMap(newDescriptor.getProperties()));
             try {
-                lakeCatalog.alterTable(tablePath, tableChanges, lakeCatalogContext);
+                lakeCatalog.alterTable(lakeTablePath, tableChanges, lakeCatalogContext);
             } catch (TableNotExistException e) {
                 // only throw TableNotExistException if datalake is enabled
                 if (isDataLakeEnabled(newDescriptor)) {
