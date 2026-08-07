@@ -677,6 +677,41 @@ class AutoPartitionManagerTest {
         assertThat(partitions.keySet()).contains("20250420", "20250421", "20250422");
     }
 
+    @Test
+    void testRemovePartitionFromMultiplePartitionKeysTable() throws Exception {
+        ManuallyTriggeredScheduledExecutorService periodicExecutor =
+                new ManuallyTriggeredScheduledExecutorService();
+        AutoPartitionManager autoPartitionManager =
+                new AutoPartitionManager(
+                        new TestingServerMetadataCache(3),
+                        metadataManager,
+                        remoteDirDynamicLoader,
+                        new Configuration(),
+                        disabledCapacityController(),
+                        new ManualClock(0L),
+                        periodicExecutor);
+
+        TableInfo table = createPartitionedTable(2, 0, AutoPartitionTimeUnit.DAY, true);
+        long tableId = table.getTableId();
+        autoPartitionManager.addAutoPartitionTable(table, false);
+        autoPartitionManager.addPartition(tableId, "20250419$A");
+        autoPartitionManager.addPartition(tableId, "20250419$B");
+
+        assertThat(autoPartitionManager.getPartitionsByTable(tableId))
+                .containsEntry(
+                        "20250419", new HashSet<>(Arrays.asList("20250419$A", "20250419$B")));
+
+        autoPartitionManager.removePartition(tableId, "20250419$A");
+
+        assertThat(autoPartitionManager.getPartitionsByTable(tableId))
+                .containsEntry("20250419", new HashSet<>(Arrays.asList("20250419$B")));
+
+        autoPartitionManager.removePartition(tableId, "20250419$B");
+
+        assertThat(autoPartitionManager.getPartitionsByTable(tableId))
+                .doesNotContainKey("20250419");
+    }
+
     /**
      * Test if AutoPartitionManager.createPartition applies maxBucketLimit per partition while
      * adding new partition automatically.
