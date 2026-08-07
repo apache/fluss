@@ -68,7 +68,7 @@ abstract class FlussMicroBatchStream(
     FlussOffsetInitializers.startOffsetsInitializer(options, flussConfig)
 
   val stoppingOffsetsInitializer: OffsetsInitializer =
-    FlussOffsetInitializers.stoppingOffsetsInitializer(false, options, flussConfig)
+    FlussOffsetInitializers.stoppingOffsetsInitializer(false, options)
 
   protected def projection: Array[Int] =
     FlussScanBuilder.projectionOf(tableInfo, Some(readSchema))

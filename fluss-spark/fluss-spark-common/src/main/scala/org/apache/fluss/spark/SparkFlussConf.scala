@@ -37,12 +37,53 @@ object SparkFlussConf {
     val FULL, EARLIEST, LATEST, TIMESTAMP = Value
   }
 
+  object TimestampOutOfRangeMode extends Enumeration {
+    val ERROR, ADJUST = Value
+  }
+
+  /** Reserved value of [[SCAN_INCREMENTAL_END_TIMESTAMP]] meaning "the latest committed data". */
+  val END_TIMESTAMP_LATEST = "latest"
+
   val SCAN_START_UP_MODE: ConfigOption[String] =
     ConfigBuilder
       .key("scan.startup.mode")
       .stringType()
       .defaultValue(StartUpMode.FULL.toString)
       .withDescription("The start up mode when read Fluss table.")
+
+  val SCAN_INCREMENTAL_START_TIMESTAMP: ConfigOption[String] =
+    ConfigBuilder
+      .key("scan.incremental.start.timestamp")
+      .stringType()
+      .noDefaultValue()
+      .withDescription(
+        "Enables an incremental (time-range) batch read and sets the inclusive lower bound of " +
+          "the window. Accepts either epoch milliseconds (e.g. '1678883047356') or a " +
+          "'yyyy-MM-dd HH:mm:ss' datetime string (e.g. '2023-12-09 23:09:12') interpreted in " +
+          "the Spark session time zone. Batch read only; it has no effect on streaming reads.")
+
+  val SCAN_INCREMENTAL_END_TIMESTAMP: ConfigOption[String] =
+    ConfigBuilder
+      .key("scan.incremental.end.timestamp")
+      .stringType()
+      .defaultValue(END_TIMESTAMP_LATEST)
+      .withDescription(
+        "The exclusive upper bound of an incremental (time-range) batch read, yielding a " +
+          "left-closed right-open '[start, end)' window. 'latest' (default) stops at the " +
+          "latest committed data captured at planning time; otherwise accepts epoch " +
+          "milliseconds or a 'yyyy-MM-dd HH:mm:ss' datetime string interpreted in the Spark " +
+          "session time zone. Only honored when 'scan.incremental.start.timestamp' is set.")
+
+  val SCAN_INCREMENTAL_TIMESTAMP_OUT_OF_RANGE: ConfigOption[String] =
+    ConfigBuilder
+      .key("scan.incremental.timestamp.out-of-range")
+      .stringType()
+      .defaultValue(TimestampOutOfRangeMode.ERROR.toString)
+      .withDescription(
+        "Behavior when 'scan.incremental.start.timestamp' precedes the earliest data still " +
+          "retained by Fluss (bounded by 'table.log.ttl'). 'error' (default): fail fast so a " +
+          "truncated window is never returned silently. 'adjust': clamp the start to the " +
+          "earliest retained offset and read from there.")
 
   val SCAN_POLL_TIMEOUT: ConfigOption[Duration] =
     ConfigBuilder
