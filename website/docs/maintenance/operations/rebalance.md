@@ -107,10 +107,10 @@ Optional<RebalanceProgress> latestProgress = admin.listRebalanceProgress(null).g
 Rebalance statuses:
 - **NOT_STARTED**: The rebalance has been created but not yet started
 - **REBALANCING**: The rebalance is currently in progress
-- **COMPLETED**: The rebalance has successfully completed
+- **COMPLETED**: The rebalance has successfully completed, or its table/partition was deleted while the task was pending or being reconciled
 - **FAILED**: The rebalance has failed
 - **CANCELED**: The rebalance has been canceled
-- **TIMEOUT**: The rebalance task timed out (e.g., ISR could not converge within the timeout period)
+- **TIMEOUT**: The normal execution slot was released after the timeout, but the task remains non-final. The coordinator periodically retries the current migration phase idempotently and reconciles it until it reaches `COMPLETED` or `FAILED`
 
 ### 4. Cancel Rebalance (If Needed)
 

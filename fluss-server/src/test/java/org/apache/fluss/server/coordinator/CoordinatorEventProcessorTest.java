@@ -42,8 +42,6 @@ import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotResponse;
 import org.apache.fluss.rpc.messages.CommitRemoteLogManifestResponse;
 import org.apache.fluss.rpc.messages.NotifyKvSnapshotOffsetRequest;
-import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
-import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsRequest;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.protocol.ApiError;
@@ -54,9 +52,13 @@ import org.apache.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
 import org.apache.fluss.server.coordinator.event.CommitKvSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitRemoteLogManifestEvent;
 import org.apache.fluss.server.coordinator.event.CoordinatorEventManager;
+import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrRequestContext;
 import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrResponseReceivedEvent;
+import org.apache.fluss.server.coordinator.event.RebalanceTaskTimeoutEvent;
+import org.apache.fluss.server.coordinator.event.ReconcileRebalanceTaskEvent;
 import org.apache.fluss.server.coordinator.event.RetryOfflineLeaderEvent;
 import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseManager;
+import org.apache.fluss.server.coordinator.rebalance.RebalanceExecutionKey;
 import org.apache.fluss.server.coordinator.remote.RemoteDirDynamicLoader;
 import org.apache.fluss.server.coordinator.statemachine.BucketState;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaState;
@@ -117,7 +119,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -1832,13 +1833,7 @@ class CoordinatorEventProcessorTest {
 
     @Test
     void testDoBucketReassignment() throws Exception {
-        zookeeperClient.registerTabletServer(
-                3,
-                new TabletServerRegistration(
-                        "rack3",
-                        Collections.singletonList(
-                                new Endpoint("host3", 1001, DEFAULT_LISTENER_NAME)),
-                        System.currentTimeMillis()));
+        registerTabletServer(3);
 
         initCoordinatorChannel();
         TablePath t1 = TablePath.of(defaultDatabase, "test_bucket_reassignment_table");
@@ -1887,6 +1882,240 @@ class CoordinatorEventProcessorTest {
 
         // clean up the tablet server 3
         ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupPath(ZkData.ServerIdZNode.path(3));
+    }
+
+    @Test
+    void testTimedOutReassignmentRetriesPhaseAIdempotently() throws Exception {
+        registerTabletServer(3);
+
+        try {
+            initCoordinatorChannel();
+            ConcurrentLinkedDeque<ControlledNotifyTrigger> pendingTriggers =
+                    new ConcurrentLinkedDeque<>();
+
+            TablePath tablePath =
+                    TablePath.of(defaultDatabase, "test_timed_out_reassignment_retry");
+            Map<Integer, BucketAssignment> bucketAssignments = new HashMap<>();
+            bucketAssignments.put(0, BucketAssignment.of(0, 1, 3));
+            long tableId =
+                    metadataManager.createTable(
+                            tablePath,
+                            remoteDataDir,
+                            TEST_TABLE,
+                            new TableAssignment(bucketAssignments),
+                            false);
+            TableBucket tableBucket = new TableBucket(tableId, 0);
+            verifyIsr(tableBucket, 0, Arrays.asList(0, 1, 3));
+            installBlockingNotifyGateways(pendingTriggers);
+
+            RebalancePlanForBucket plan =
+                    new RebalancePlanForBucket(
+                            tableBucket, 0, 0, Arrays.asList(0, 1, 3), Arrays.asList(0, 1, 2));
+            eventProcessor
+                    .getRebalanceManager()
+                    .registerRebalance(
+                            "timed-out-retry-test",
+                            Collections.singletonMap(tableBucket, plan),
+                            RebalanceStatus.NOT_STARTED);
+            RebalanceExecutionKey executionKey =
+                    eventProcessor.getRebalanceManager().getExecutionKey(tableBucket);
+            retry(Duration.ofMinutes(1), () -> assertThat(pendingTriggers).isNotEmpty());
+            int requestsAfterInitialPhaseA = pendingTriggers.size();
+            int epochAfterInitialPhaseA =
+                    fromCtx(ctx -> ctx.getBucketLeaderAndIsr(tableBucket).get().bucketEpoch());
+
+            eventProcessor
+                    .getCoordinatorEventManager()
+                    .put(new RebalanceTaskTimeoutEvent(executionKey));
+            retry(
+                    Duration.ofMinutes(1),
+                    () ->
+                            assertThat(rebalanceStatus(tableBucket))
+                                    .isEqualTo(RebalanceStatus.TIMEOUT));
+            retry(
+                    Duration.ofMinutes(1),
+                    () ->
+                            assertThat(pendingTriggers.size())
+                                    .isGreaterThan(requestsAfterInitialPhaseA));
+            int requestsAfterFirstRetry = pendingTriggers.size();
+            int epochAfterFirstRetry =
+                    fromCtx(ctx -> ctx.getBucketLeaderAndIsr(tableBucket).get().bucketEpoch());
+            assertThat(epochAfterFirstRetry).isEqualTo(epochAfterInitialPhaseA);
+            List<Integer> assignmentAfterFirstRetry =
+                    fromCtx(ctx -> ctx.getAssignment(tableBucket));
+            assertThat(assignmentAfterFirstRetry).containsExactly(0, 1, 2, 3);
+
+            eventProcessor
+                    .getCoordinatorEventManager()
+                    .put(new ReconcileRebalanceTaskEvent(executionKey));
+            retry(
+                    Duration.ofMinutes(1),
+                    () ->
+                            assertThat(pendingTriggers.size())
+                                    .isGreaterThan(requestsAfterFirstRetry));
+            assertThat(eventProcessor.getRebalanceManager().getExecutionKey(tableBucket))
+                    .isEqualTo(executionKey);
+            int epochAfterDuplicateRetry =
+                    fromCtx(ctx -> ctx.getBucketLeaderAndIsr(tableBucket).get().bucketEpoch());
+            assertThat(epochAfterDuplicateRetry).isEqualTo(epochAfterInitialPhaseA);
+            List<Integer> assignmentAfterDuplicateRetry =
+                    fromCtx(ctx -> ctx.getAssignment(tableBucket));
+            assertThat(assignmentAfterDuplicateRetry).containsExactly(0, 1, 2, 3);
+
+            drainPendingNotifyTriggers(pendingTriggers);
+            fromCtx(ctx -> null);
+            LeaderAndIsr current = fromCtx(ctx -> ctx.getBucketLeaderAndIsr(tableBucket).get());
+            CompletableFuture<AdjustIsrResponse> responseFuture = new CompletableFuture<>();
+            eventProcessor
+                    .getCoordinatorEventManager()
+                    .put(
+                            new AdjustIsrReceivedEvent(
+                                    Collections.singletonMap(
+                                            tableBucket,
+                                            new LeaderAndIsr(
+                                                    current.leader(),
+                                                    current.leaderEpoch(),
+                                                    Arrays.asList(0, 1, 2, 3),
+                                                    Collections.emptyList(),
+                                                    current.coordinatorEpoch(),
+                                                    current.bucketEpoch())),
+                                    responseFuture));
+            responseFuture.get();
+            fromCtx(ctx -> null);
+            assertThat(eventProcessor.getRebalanceManager().hasInProgressRebalance()).isTrue();
+
+            ZOO_KEEPER_EXTENSION_WRAPPER
+                    .getCustomExtension()
+                    .cleanupPath(ZkData.ServerIdZNode.path(2));
+            retryVerifyContext(ctx -> assertThat(ctx.liveTabletServerSet()).doesNotContain(2));
+            drainPendingNotifyTriggers(pendingTriggers);
+            fromCtx(ctx -> null);
+            assertThat(eventProcessor.getRebalanceManager().hasInProgressRebalance()).isTrue();
+            assertThat(pendingTriggers).isEmpty();
+            List<Integer> assignmentWhileTargetOffline =
+                    fromCtx(ctx -> ctx.getAssignment(tableBucket));
+            assertThat(assignmentWhileTargetOffline).containsExactly(0, 1, 2);
+
+            registerTabletServer(2);
+            retryVerifyContext(ctx -> assertThat(ctx.liveTabletServerSet()).contains(2));
+            drainPendingNotifyTriggers(pendingTriggers);
+            fromCtx(ctx -> null);
+            current = fromCtx(ctx -> ctx.getBucketLeaderAndIsr(tableBucket).get());
+            responseFuture = new CompletableFuture<>();
+            eventProcessor
+                    .getCoordinatorEventManager()
+                    .put(
+                            new AdjustIsrReceivedEvent(
+                                    Collections.singletonMap(
+                                            tableBucket,
+                                            new LeaderAndIsr(
+                                                    current.leader(),
+                                                    current.leaderEpoch(),
+                                                    Arrays.asList(0, 1, 2),
+                                                    Collections.emptyList(),
+                                                    current.coordinatorEpoch(),
+                                                    current.bucketEpoch())),
+                                    responseFuture));
+            responseFuture.get();
+            drainPendingNotifyTriggers(pendingTriggers);
+            retry(
+                    Duration.ofMinutes(1),
+                    () ->
+                            assertThat(
+                                            eventProcessor
+                                                    .getRebalanceManager()
+                                                    .hasInProgressRebalance())
+                                    .isFalse());
+            fromCtx(ctx -> null);
+            List<Integer> finalAssignment = fromCtx(ctx -> ctx.getAssignment(tableBucket));
+            assertThat(finalAssignment).containsExactly(0, 1, 2);
+            verifyIsr(tableBucket, 0, Arrays.asList(0, 1, 2));
+        } finally {
+            if (Arrays.stream(zookeeperClient.getSortedTabletServerList())
+                    .noneMatch(id -> id == 2)) {
+                registerTabletServer(2);
+            }
+            ZOO_KEEPER_EXTENSION_WRAPPER
+                    .getCustomExtension()
+                    .cleanupPath(ZkData.ServerIdZNode.path(3));
+        }
+    }
+
+    @Test
+    void testTimedOutRebalanceCompletesWhenTableIsBeingDeleted() throws Exception {
+        registerTabletServer(3);
+        initCoordinatorChannel();
+        TablePath tablePath = TablePath.of(defaultDatabase, "test_rebalance_during_delete");
+        Map<Integer, BucketAssignment> assignments = new HashMap<>();
+        assignments.put(0, BucketAssignment.of(0, 1, 2));
+        long tableId =
+                metadataManager.createTable(
+                        tablePath,
+                        remoteDataDir,
+                        TEST_TABLE,
+                        new TableAssignment(assignments),
+                        false);
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+        ConcurrentLinkedDeque<ControlledNotifyTrigger> pendingTriggers =
+                new ConcurrentLinkedDeque<>();
+        installBlockingNotifyGateways(pendingTriggers);
+        RebalancePlanForBucket plan =
+                new RebalancePlanForBucket(
+                        tableBucket, 0, 0, Arrays.asList(0, 1, 2), Arrays.asList(0, 1, 3));
+        eventProcessor
+                .getRebalanceManager()
+                .registerRebalance(
+                        "delete-during-rebalance",
+                        Collections.singletonMap(tableBucket, plan),
+                        RebalanceStatus.NOT_STARTED);
+        RebalanceExecutionKey executionKey =
+                eventProcessor.getRebalanceManager().getExecutionKey(tableBucket);
+
+        retry(Duration.ofMinutes(1), () -> assertThat(pendingTriggers).isNotEmpty());
+        fromCtx(
+                ctx -> {
+                    ctx.queueTableDeletion(Collections.singleton(tableId));
+                    return null;
+                });
+        eventProcessor
+                .getCoordinatorEventManager()
+                .put(new RebalanceTaskTimeoutEvent(executionKey));
+
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(eventProcessor.getRebalanceManager().hasInProgressRebalance())
+                                .isFalse());
+        assertThat(rebalanceStatus(tableBucket)).isEqualTo(RebalanceStatus.COMPLETED);
+        ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupPath(ZkData.ServerIdZNode.path(3));
+    }
+
+    @Test
+    void testRebalanceCompletesWhenPartitionIsBeingDeleted() throws Exception {
+        TableBucket tableBucket = new TableBucket(123L, 456L, 0);
+        fromCtx(
+                ctx -> {
+                    ctx.updateBucketReplicaAssignment(tableBucket, Arrays.asList(0, 1, 2));
+                    ctx.queuePartitionDeletion(
+                            Collections.singleton(new TablePartition(123L, 456L)));
+                    return null;
+                });
+        RebalancePlanForBucket plan =
+                new RebalancePlanForBucket(
+                        tableBucket, 0, 0, Arrays.asList(0, 1, 2), Arrays.asList(1, 2, 0));
+        eventProcessor
+                .getRebalanceManager()
+                .registerRebalance(
+                        "partition-delete-during-rebalance",
+                        Collections.singletonMap(tableBucket, plan),
+                        RebalanceStatus.NOT_STARTED);
+
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(eventProcessor.getRebalanceManager().hasInProgressRebalance())
+                                .isFalse());
+        assertThat(rebalanceStatus(tableBucket)).isEqualTo(RebalanceStatus.COMPLETED);
     }
 
     @Test
@@ -2023,6 +2252,163 @@ class CoordinatorEventProcessorTest {
                                 .isSuccessfulLeaderOnlyRebalanceResponseFromNewLeader(
                                         failedResult, 1, planForBucket))
                 .isFalse();
+    }
+
+    @Test
+    void testRebalanceRecoveryStateClassification() throws Exception {
+        initCoordinatorChannel();
+        TablePath tablePath = TablePath.of(defaultDatabase, "test_rebalance_recovery_state");
+        Map<Integer, BucketAssignment> bucketAssignments = new HashMap<>();
+        bucketAssignments.put(0, BucketAssignment.of(0, 1, 2));
+        long tableId =
+                metadataManager.createTable(
+                        tablePath,
+                        remoteDataDir,
+                        TEST_TABLE,
+                        new TableAssignment(bucketAssignments),
+                        false);
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+        verifyIsr(tableBucket, 0, Arrays.asList(0, 1, 2));
+
+        RebalancePlanForBucket plan =
+                new RebalancePlanForBucket(
+                        tableBucket, 0, 1, Arrays.asList(0, 1, 2), Arrays.asList(1, 0, 3));
+        assertThat(eventProcessor.isRebalanceTaskComplete(plan)).isFalse();
+        assertThat(eventProcessor.isRebalanceTaskAtOrigin(plan)).isTrue();
+
+        fromCtx(
+                ctx -> {
+                    // Origin assignment with a leftover adding replica in ISR is not clean.
+                    LeaderAndIsr current = ctx.getBucketLeaderAndIsr(tableBucket).get();
+                    ctx.putBucketLeaderAndIsr(
+                            tableBucket, current.newLeaderAndIsr(Arrays.asList(0, 1, 2, 3)));
+                    return null;
+                });
+        assertThat(eventProcessor.isRebalanceTaskComplete(plan)).isFalse();
+        assertThat(eventProcessor.isRebalanceTaskAtOrigin(plan)).isFalse();
+
+        fromCtx(
+                ctx -> {
+                    LeaderAndIsr current = ctx.getBucketLeaderAndIsr(tableBucket).get();
+                    ctx.updateBucketReplicaAssignment(tableBucket, Arrays.asList(1, 0, 3));
+                    ctx.putBucketLeaderAndIsr(
+                            tableBucket,
+                            new LeaderAndIsr(
+                                    0,
+                                    current.leaderEpoch(),
+                                    Arrays.asList(0, 1, 3),
+                                    Collections.emptyList(),
+                                    current.coordinatorEpoch(),
+                                    current.bucketEpoch() + 1));
+                    return null;
+                });
+        // The final tablet-server acknowledgement is not durable, so recovery replays the plan.
+        assertThat(eventProcessor.isRebalanceTaskComplete(plan)).isFalse();
+        assertThat(eventProcessor.isRebalanceTaskAtOrigin(plan)).isFalse();
+
+        RebalancePlanForBucket leaderOnlyPlan =
+                new RebalancePlanForBucket(
+                        tableBucket, 0, 1, Arrays.asList(1, 0, 3), Arrays.asList(1, 0, 3));
+        assertThat(eventProcessor.isRebalanceTaskComplete(leaderOnlyPlan)).isFalse();
+    }
+
+    @Test
+    void testStaleNotifyLeaderAndIsrResponseCannotCompleteRebalance() throws Exception {
+        ConcurrentLinkedDeque<ControlledNotifyTrigger> pendingTriggers =
+                new ConcurrentLinkedDeque<>();
+        int[] servers = zookeeperClient.getSortedTabletServerList();
+        Map<Integer, TabletServerGateway> gateways = new HashMap<>();
+        for (int server : servers) {
+            ControlledNotifyGateway gateway = new ControlledNotifyGateway(server, pendingTriggers);
+            gateways.put(server, gateway);
+        }
+        testCoordinatorChannelManager.setGateways(gateways);
+
+        TablePath tablePath = TablePath.of(defaultDatabase, "test_stale_rebalance_response");
+        Map<Integer, BucketAssignment> bucketAssignments = new HashMap<>();
+        bucketAssignments.put(0, BucketAssignment.of(0, 1, 2));
+        long tableId =
+                metadataManager.createTable(
+                        tablePath,
+                        remoteDataDir,
+                        TEST_TABLE,
+                        new TableAssignment(bucketAssignments),
+                        false);
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+        verifyIsr(tableBucket, 0, Arrays.asList(0, 1, 2));
+
+        for (TabletServerGateway gateway : gateways.values()) {
+            ((ControlledNotifyGateway) gateway).enableControlMode();
+        }
+        pendingTriggers.clear();
+        RebalancePlanForBucket plan =
+                new RebalancePlanForBucket(
+                        tableBucket, 0, 1, Arrays.asList(0, 1, 2), Arrays.asList(1, 0, 2));
+        eventProcessor
+                .getRebalanceManager()
+                .registerRebalance(
+                        "stale-response-test",
+                        Collections.singletonMap(tableBucket, plan),
+                        RebalanceStatus.NOT_STARTED);
+        retry(Duration.ofMinutes(1), () -> assertThat(pendingTriggers).isNotEmpty());
+
+        LeaderAndIsr current = fromCtx(ctx -> ctx.getBucketLeaderAndIsr(tableBucket).get());
+        NotifyLeaderAndIsrResultForBucket success =
+                new NotifyLeaderAndIsrResultForBucket(tableBucket);
+        NotifyLeaderAndIsrRequestContext staleContext =
+                new NotifyLeaderAndIsrRequestContext(
+                        eventProcessor.getCoordinatorEpoch(),
+                        current.leader(),
+                        current.leaderEpoch(),
+                        current.bucketEpoch() - 1,
+                        eventProcessor.getRebalanceManager().getExecutionKey(tableBucket));
+        eventProcessor
+                .getCoordinatorEventManager()
+                .put(
+                        new NotifyLeaderAndIsrResponseReceivedEvent(
+                                Collections.singletonList(success),
+                                current.leader(),
+                                Collections.singletonMap(tableBucket, staleContext)));
+        fromCtx(ctx -> null);
+        assertThat(eventProcessor.getRebalanceManager().hasInProgressRebalance()).isTrue();
+
+        NotifyLeaderAndIsrRequestContext oldAttemptContext =
+                new NotifyLeaderAndIsrRequestContext(
+                        eventProcessor.getCoordinatorEpoch(),
+                        current.leader(),
+                        current.leaderEpoch(),
+                        current.bucketEpoch(),
+                        new RebalanceExecutionKey("old-rebalance", tableBucket, 1));
+        eventProcessor
+                .getCoordinatorEventManager()
+                .put(
+                        new NotifyLeaderAndIsrResponseReceivedEvent(
+                                Collections.singletonList(success),
+                                current.leader(),
+                                Collections.singletonMap(tableBucket, oldAttemptContext)));
+        fromCtx(ctx -> null);
+        assertThat(eventProcessor.getRebalanceManager().hasInProgressRebalance()).isTrue();
+
+        NotifyLeaderAndIsrRequestContext currentContext =
+                new NotifyLeaderAndIsrRequestContext(
+                        eventProcessor.getCoordinatorEpoch(),
+                        current.leader(),
+                        current.leaderEpoch(),
+                        current.bucketEpoch(),
+                        eventProcessor.getRebalanceManager().getExecutionKey(tableBucket));
+        eventProcessor
+                .getCoordinatorEventManager()
+                .put(
+                        new NotifyLeaderAndIsrResponseReceivedEvent(
+                                Collections.singletonList(success),
+                                current.leader(),
+                                Collections.singletonMap(tableBucket, currentContext)));
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(eventProcessor.getRebalanceManager().hasInProgressRebalance())
+                                .isFalse());
+        drainPendingNotifyTriggers(pendingTriggers);
     }
 
     @Test
@@ -2204,6 +2590,36 @@ class CoordinatorEventProcessorTest {
                         .boxed()
                         .collect(Collectors.toSet()),
                 Collections.singleton(failedServer));
+    }
+
+    private void registerTabletServer(int serverId) throws Exception {
+        zookeeperClient.registerTabletServer(
+                serverId,
+                new TabletServerRegistration(
+                        "rack" + serverId,
+                        Collections.singletonList(
+                                new Endpoint("host" + serverId, 1001, DEFAULT_LISTENER_NAME)),
+                        System.currentTimeMillis()));
+    }
+
+    private RebalanceStatus rebalanceStatus(TableBucket tableBucket) {
+        return eventProcessor
+                .getRebalanceManager()
+                .listRebalanceProgress(null)
+                .progressForBucketMap()
+                .get(tableBucket)
+                .status();
+    }
+
+    private void installBlockingNotifyGateways(
+            ConcurrentLinkedDeque<ControlledNotifyTrigger> pendingTriggers) throws Exception {
+        Map<Integer, TabletServerGateway> gateways = new HashMap<>();
+        for (int server : zookeeperClient.getSortedTabletServerList()) {
+            ControlledNotifyGateway gateway = new ControlledNotifyGateway(server, pendingTriggers);
+            gateway.enableControlMode();
+            gateways.put(server, gateway);
+        }
+        testCoordinatorChannelManager.setGateways(gateways);
     }
 
     private Tuple2<PartitionIdName, PartitionIdName> preparePartitionAssignment(
@@ -2577,89 +2993,17 @@ class CoordinatorEventProcessorTest {
     private int countInProgressRebalanceTasks(TableBucket... buckets) {
         int count = 0;
         for (TableBucket tb : buckets) {
-            if (eventProcessor.getRebalanceManager().getRebalancePlanForBucket(tb) != null) {
+            if (!RebalanceStatus.FINAL_STATUSES.contains(
+                    eventProcessor
+                            .getRebalanceManager()
+                            .listRebalanceProgress(null)
+                            .progressForBucketMap()
+                            .get(tb)
+                            .status())) {
                 count++;
             }
         }
         return count;
-    }
-
-    private static class CountingFailingNotifyGateway extends TestTabletServerGateway {
-        private final AtomicInteger notifyLeaderAndIsrCount = new AtomicInteger();
-
-        CountingFailingNotifyGateway() {
-            super(true, Collections.emptySet());
-        }
-
-        int getNotifyLeaderAndIsrCount() {
-            return notifyLeaderAndIsrCount.get();
-        }
-
-        @Override
-        public CompletableFuture<NotifyLeaderAndIsrResponse> notifyLeaderAndIsr(
-                NotifyLeaderAndIsrRequest request) {
-            notifyLeaderAndIsrCount.incrementAndGet();
-            return super.notifyLeaderAndIsr(request);
-        }
-    }
-
-    /**
-     * A gateway that intercepts NotifyLeaderAndIsr calls for verifying sequential execution of
-     * leader migrations. In pass-through mode, it delegates to the parent. In controlled mode, it
-     * captures the response in a CompletableFuture trigger that the test must explicitly complete
-     * before the response is delivered.
-     */
-    private static class ControlledNotifyGateway extends TestTabletServerGateway {
-        private volatile boolean controlMode = false;
-        private final int responseServerId;
-        private final ConcurrentLinkedDeque<ControlledNotifyTrigger> pendingTriggers;
-
-        ControlledNotifyGateway(
-                int responseServerId,
-                ConcurrentLinkedDeque<ControlledNotifyTrigger> pendingTriggers) {
-            super(false, Collections.emptySet());
-            this.responseServerId = responseServerId;
-            this.pendingTriggers = pendingTriggers;
-        }
-
-        void enableControlMode() {
-            controlMode = true;
-        }
-
-        @Override
-        public CompletableFuture<NotifyLeaderAndIsrResponse> notifyLeaderAndIsr(
-                NotifyLeaderAndIsrRequest request) {
-            if (!controlMode) {
-                return super.notifyLeaderAndIsr(request);
-            }
-            // Build the proper success response using parent's logic.
-            NotifyLeaderAndIsrResponse response = super.notifyLeaderAndIsr(request).join();
-            // Return a future that completes only when the test releases the trigger.
-            ControlledNotifyTrigger trigger = new ControlledNotifyTrigger(responseServerId);
-            pendingTriggers.add(trigger);
-            return trigger.getFuture().thenApply(v -> response);
-        }
-    }
-
-    private static class ControlledNotifyTrigger {
-        private final int responseServerId;
-        private final CompletableFuture<Void> future = new CompletableFuture<>();
-
-        ControlledNotifyTrigger(int responseServerId) {
-            this.responseServerId = responseServerId;
-        }
-
-        int getResponseServerId() {
-            return responseServerId;
-        }
-
-        CompletableFuture<Void> getFuture() {
-            return future;
-        }
-
-        void complete(Void value) {
-            future.complete(value);
-        }
     }
 
     private static class PartitionIdName {

@@ -19,12 +19,11 @@ package org.apache.fluss.server.coordinator.event;
 
 import org.apache.fluss.server.coordinator.rebalance.RebalanceExecutionKey;
 
-/** An event fired when a rebalance task exceeds the timeout without completing. */
-public class RebalanceTaskTimeoutEvent implements CoordinatorEvent {
-
+/** An event that reconciles a timed-out rebalance task against coordinator state. */
+public final class ReconcileRebalanceTaskEvent implements CoordinatorEvent {
     private final RebalanceExecutionKey executionKey;
 
-    public RebalanceTaskTimeoutEvent(RebalanceExecutionKey executionKey) {
+    public ReconcileRebalanceTaskEvent(RebalanceExecutionKey executionKey) {
         this.executionKey = executionKey;
     }
 
@@ -34,6 +33,6 @@ public class RebalanceTaskTimeoutEvent implements CoordinatorEvent {
 
     @Override
     public String toString() {
-        return "RebalanceTaskTimeoutEvent{executionKey=" + executionKey + "}";
+        return "ReconcileRebalanceTaskEvent{executionKey=" + executionKey + "}";
     }
 }
