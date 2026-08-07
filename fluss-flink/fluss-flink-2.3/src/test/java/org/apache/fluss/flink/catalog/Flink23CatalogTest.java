@@ -24,13 +24,14 @@ import org.apache.flink.table.catalog.DefaultIndex;
 import org.apache.flink.table.catalog.IntervalFreshness;
 import org.apache.flink.table.catalog.ResolvedCatalogMaterializedTable;
 import org.apache.flink.table.catalog.ResolvedSchema;
+import org.apache.flink.table.catalog.StartMode;
 import org.apache.flink.table.catalog.UniqueConstraint;
 
 import java.util.Arrays;
 import java.util.Collections;
 
 /** Test for {@link FlinkCatalog}. */
-public class Flink22CatalogTest extends FlinkCatalogTest {
+public class Flink23CatalogTest extends FlinkCatalogTest {
 
     protected ResolvedSchema createSchema() {
         return new ResolvedSchema(
@@ -52,6 +53,10 @@ public class Flink22CatalogTest extends FlinkCatalogTest {
             CatalogMaterializedTable.RefreshMode refreshMode,
             IntervalFreshness intervalFreshness) {
         return new ResolvedCatalogMaterializedTable(
-                origin, resolvedSchema, refreshMode, intervalFreshness);
+                origin,
+                resolvedSchema,
+                refreshMode,
+                intervalFreshness,
+                StartMode.of(StartMode.StartModeKind.FROM_BEGINNING));
     }
 }

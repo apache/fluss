@@ -21,7 +21,9 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.config.Password;
+import org.apache.fluss.flink.adapter.CatalogMaterializedTableAdapter;
 import org.apache.fluss.flink.adapter.CatalogTableAdapter;
+import org.apache.fluss.flink.adapter.IntervalFreshnessAdapter;
 import org.apache.fluss.flink.catalog.FlinkCatalogFactory;
 import org.apache.fluss.metadata.AggFunction;
 import org.apache.fluss.metadata.DatabaseDescriptor;
@@ -562,7 +564,7 @@ public class FlinkConversions {
         customProperties.put(MATERIALIZED_TABLE_INTERVAL_FRESHNESS.key(), freshness.getInterval());
         customProperties.put(
                 MATERIALIZED_TABLE_INTERVAL_FRESHNESS_TIME_UNIT.key(),
-                freshness.getTimeUnit().name());
+                IntervalFreshnessAdapter.getTimeUnitName(freshness));
         // Serialize refresh configuration
         customProperties.put(
                 MATERIALIZED_TABLE_LOGICAL_REFRESH_MODE.key(), mt.getLogicalRefreshMode().name());
@@ -624,8 +626,9 @@ public class FlinkConversions {
         checkNotNull(refreshStatusStr, "Materialized table refresh status is required but missing");
 
         // Parse validated values
-        IntervalFreshness.TimeUnit timeUnit = IntervalFreshness.TimeUnit.valueOf(timeUnitStr);
-        IntervalFreshness freshness = IntervalFreshness.of(intervalFreshness, timeUnit);
+        IntervalFreshnessAdapter.TimeUnitAdapter timeUnit =
+                IntervalFreshnessAdapter.timeUnit(timeUnitStr);
+        IntervalFreshness freshness = IntervalFreshnessAdapter.of(intervalFreshness, timeUnit);
         CatalogMaterializedTable.LogicalRefreshMode logicalRefreshMode =
                 CatalogMaterializedTable.LogicalRefreshMode.valueOf(logicalRefreshModeStr);
         CatalogMaterializedTable.RefreshMode refreshMode =
@@ -645,12 +648,14 @@ public class FlinkConversions {
                         ? null
                         : decodeBase64ToBytes(refreshHandlerStringBytes);
 
-        CatalogMaterializedTable.Builder builder = CatalogMaterializedTable.newBuilder();
+        CatalogMaterializedTableAdapter builder = CatalogMaterializedTableAdapter.newAdapter();
         builder.schema(schema)
                 .comment(comment)
                 .partitionKeys(partitionKeys)
                 .options(excludeByPrefix(options, MATERIALIZED_TABLE_PREFIX))
                 .definitionQuery(definitionQuery)
+                .originalQuery(definitionQuery)
+                .expandedQuery(definitionQuery)
                 .freshness(freshness)
                 .logicalRefreshMode(logicalRefreshMode)
                 .refreshMode(refreshMode)
