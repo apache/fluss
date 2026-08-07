@@ -174,6 +174,7 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
                 || aclsAllowAccess(
                         action.getResource(),
                         principal,
+                        session.getAdditionalPrincipals(),
                         action.getOperation(),
                         session.getInetAddress().getHostAddress());
     }
@@ -481,9 +482,28 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
     @VisibleForTesting
     public boolean aclsAllowAccess(
             Resource resource, FlussPrincipal principal, OperationType operation, String host) {
+        return aclsAllowAccess(resource, principal, Collections.emptyList(), operation, host);
+    }
+
+    private boolean aclsAllowAccess(
+            Resource resource,
+            FlussPrincipal principal,
+            Collection<FlussPrincipal> additionalPrincipals,
+            OperationType operation,
+            String host) {
         Set<AccessControlEntry> accessControlEntries = matchingAcls(resource);
         return isEmptyAclAndAuthorized(resource, accessControlEntries)
-                || allowAclExists(resource, principal, operation, host, accessControlEntries);
+                || allowAclExists(resource, principal, operation, host, accessControlEntries)
+                || additionalPrincipals.stream()
+                        .filter(Objects::nonNull)
+                        .anyMatch(
+                                additionalPrincipal ->
+                                        allowAclExists(
+                                                resource,
+                                                additionalPrincipal,
+                                                operation,
+                                                host,
+                                                accessControlEntries));
     }
 
     private boolean isEmptyAclAndAuthorized(Resource resource, Collection acls) {

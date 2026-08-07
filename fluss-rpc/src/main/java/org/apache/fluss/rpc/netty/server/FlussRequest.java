@@ -28,6 +28,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.net.InetAddress;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -45,6 +49,7 @@ public final class FlussRequest implements RpcRequest {
     private final String listenerName;
     private final boolean isInternal;
     private final FlussPrincipal principal;
+    private final List<FlussPrincipal> additionalPrincipals;
     private final InetAddress address;
     private final CompletableFuture<ApiMessage> responseFuture;
 
@@ -66,6 +71,35 @@ public final class FlussRequest implements RpcRequest {
             FlussPrincipal principal,
             InetAddress address,
             CompletableFuture<ApiMessage> responseFuture) {
+        this(
+                apiKey,
+                apiVersion,
+                requestId,
+                apiMethod,
+                message,
+                buffer,
+                listenerName,
+                isInternal,
+                principal,
+                Collections.emptyList(),
+                address,
+                responseFuture);
+    }
+
+    /** Creates a request with the primary and additional authenticated principals. */
+    public FlussRequest(
+            short apiKey,
+            short apiVersion,
+            int requestId,
+            ApiMethod apiMethod,
+            ApiMessage message,
+            ByteBuf buffer,
+            String listenerName,
+            boolean isInternal,
+            FlussPrincipal principal,
+            Collection<FlussPrincipal> additionalPrincipals,
+            InetAddress address,
+            CompletableFuture<ApiMessage> responseFuture) {
         this.apiKey = apiKey;
         this.apiVersion = apiVersion;
         this.requestId = requestId;
@@ -75,6 +109,8 @@ public final class FlussRequest implements RpcRequest {
         this.responseFuture = responseFuture;
         this.isInternal = isInternal;
         this.principal = principal;
+        this.additionalPrincipals =
+                Collections.unmodifiableList(new ArrayList<>(additionalPrincipals));
         this.address = address;
         this.listenerName = listenerName;
         this.startTimeMs = System.currentTimeMillis();
@@ -161,6 +197,10 @@ public final class FlussRequest implements RpcRequest {
 
     public FlussPrincipal getPrincipal() {
         return principal;
+    }
+
+    public Collection<FlussPrincipal> getAdditionalPrincipals() {
+        return additionalPrincipals;
     }
 
     public boolean isInternal() {

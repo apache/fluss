@@ -23,6 +23,8 @@ import org.apache.fluss.security.acl.FlussPrincipal;
 
 import java.io.Closeable;
 import java.io.IOException;
+import java.util.Collection;
+import java.util.Collections;
 
 /**
  * Authenticator for server side.
@@ -95,6 +97,11 @@ public interface ServerAuthenticator extends Closeable {
      * complete).
      */
     FlussPrincipal createPrincipal();
+
+    /** Creates additional principals associated with the authenticated identity. */
+    default Collection<FlussPrincipal> createAdditionalPrincipals() {
+        return Collections.emptyList();
+    }
 
     /** Close the authenticator. */
     default void close() throws IOException {}

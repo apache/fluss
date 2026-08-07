@@ -206,6 +206,48 @@ public class DefaultAuthorizerTest {
     }
 
     @Test
+    void testAuthorizationWithAdditionalPrincipals() throws Exception {
+        Resource resource = Resource.table("database1", "table1");
+        FlussPrincipal matchingGroup = new FlussPrincipal("data-engineers", "GROUP");
+        Session session =
+                createSession(
+                        "USER",
+                        "alice",
+                        "192.168.1.1",
+                        Arrays.asList(
+                                null, new FlussPrincipal("fluss-readers", "GROUP"), matchingGroup));
+
+        authorizer.addAcls(
+                createRootUserSession(),
+                Collections.singletonList(
+                        new AclBinding(
+                                resource,
+                                new AccessControlEntry(
+                                        matchingGroup,
+                                        "192.168.1.1",
+                                        READ,
+                                        PermissionType.ALLOW))));
+
+        assertThat(authorizer.isAuthorized(session, READ, resource)).isTrue();
+    }
+
+    @Test
+    void testAdditionalPrincipalDoesNotGrantSuperUser() throws Exception {
+        Resource resource = Resource.database("database1");
+        Session session =
+                createSession(
+                        "USER",
+                        "alice",
+                        "192.168.1.1",
+                        Collections.singletonList(new FlussPrincipal(ROOT_USER, "USER")));
+        authorizer.addAcls(
+                createRootUserSession(),
+                Collections.singletonList(createAclBinding(resource, "another-user", "*", READ)));
+
+        assertThat(authorizer.isAuthorized(session, READ, resource)).isFalse();
+    }
+
+    @Test
     void testAclModificationRequiresAllPermission() throws Exception {
         Resource resource = Resource.database("database1");
         Session alterSession = createSession("alter-user", "192.168.1.1");
@@ -748,12 +790,22 @@ public class DefaultAuthorizerTest {
     }
 
     private Session createSession(String userType, String username, String host) throws Exception {
+        return createSession(userType, username, host, Collections.emptyList());
+    }
+
+    private Session createSession(
+            String userType,
+            String username,
+            String host,
+            Collection<FlussPrincipal> additionalPrincipals)
+            throws Exception {
         return new Session(
                 (byte) 1,
                 "FLUSS",
                 false,
                 InetAddress.getByName(host),
-                new FlussPrincipal(username, userType));
+                new FlussPrincipal(username, userType),
+                additionalPrincipals);
     }
 
     private AclBinding createAclBinding(
