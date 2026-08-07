@@ -102,6 +102,7 @@ public class ProtobufMessage {
         generateCheckRequiredFields(w);
         generateClear(w);
         generateCopyFrom(w);
+        generateToString(w);
 
         w.println();
         w.println("        @Override");
@@ -328,6 +329,23 @@ public class ProtobufMessage {
         w.format("      throw new IllegalStateException(\"Some required fields are missing\");\n");
         w.format("    }\n");
         w.format("}\n");
+    }
+
+    private void generateToString(PrintWriter w) {
+        w.println();
+        w.format("    @Override\n");
+        w.format("    public String toString() {\n");
+        w.format("        return \"%s{\"\n", message.getName());
+
+        boolean first = true;
+        for (ProtobufField field : fields) {
+            String sep = first ? "" : ", ";
+            first = false;
+
+            field.stringify(w, sep);
+        }
+        w.format("                + '}';\n");
+        w.format("    }\n");
     }
 
     private int bitFieldsCount() {
