@@ -24,6 +24,7 @@ import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
 import org.apache.fluss.lake.lakestorage.LakeStorage;
 import org.apache.fluss.lake.lakestorage.LakeStoragePlugin;
+import org.apache.fluss.lake.lakestorage.LakeTableLookuper;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.LakeSplit;
@@ -35,13 +36,36 @@ import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.predicate.Predicate;
+import org.apache.fluss.row.BinaryRow;
+import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.encode.RowEncoder;
+import org.apache.fluss.row.encode.ValueEncoder;
+
+import javax.annotation.Nullable;
 
 import java.io.IOException;
 import java.util.Collections;
 import java.util.List;
 
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
+
 /** Test-only Paimon lake storage plugin used to construct Flink table sources. */
 public class TestingPaimonLakeStoragePlugin implements LakeStoragePlugin {
+
+    private static final LookupFunction EMPTY_LOOKUP = (key, context) -> null;
+
+    private static volatile LookupFunction lookupFunction = EMPTY_LOOKUP;
+
+    /** Configures the point lookup behavior used by newly-created and existing test lookupers. */
+    public static void setLookupFunction(LookupFunction lookupFunction) {
+        TestingPaimonLakeStoragePlugin.lookupFunction =
+                checkNotNull(lookupFunction, "lookupFunction must not be null.");
+    }
+
+    /** Resets point lookups to return no row. */
+    public static void resetLookupFunction() {
+        lookupFunction = EMPTY_LOOKUP;
+    }
 
     @Override
     public String identifier() {
@@ -68,6 +92,45 @@ public class TestingPaimonLakeStoragePlugin implements LakeStoragePlugin {
         public LakeSource<?> createLakeSource(TablePath tablePath) {
             return new TestingPaimonLakeSource();
         }
+
+        @Override
+        public LakeTableLookuper createLakeTableLookuper(
+                TablePath tablePath, LookuperContext context) {
+            return new TestingLakeTableLookuper(context);
+        }
+    }
+
+    private static class TestingLakeTableLookuper implements LakeTableLookuper {
+
+        private final LakeStorage.LookuperContext lookuperContext;
+
+        private TestingLakeTableLookuper(LakeStorage.LookuperContext lookuperContext) {
+            this.lookuperContext = lookuperContext;
+        }
+
+        @Override
+        public @Nullable byte[] lookup(byte[] key, LookupContext context) throws Exception {
+            InternalRow row = lookupFunction.lookup(key, context);
+            if (row == null) {
+                return null;
+            }
+
+            try (RowEncoder rowEncoder =
+                    RowEncoder.create(
+                            lookuperContext.tableConfig().getKvFormat(), context.valueRowType())) {
+                InternalRow.FieldGetter[] fieldGetters =
+                        InternalRow.createFieldGetters(context.valueRowType());
+                rowEncoder.startNewRow();
+                for (int i = 0; i < fieldGetters.length; i++) {
+                    rowEncoder.encodeField(i, fieldGetters[i].getFieldOrNull(row));
+                }
+                BinaryRow binaryRow = rowEncoder.finishRow();
+                return ValueEncoder.encodeValue(context.schemaId(), binaryRow);
+            }
+        }
+
+        @Override
+        public void close() {}
     }
 
     private static class TestingPaimonLakeCatalog implements LakeCatalog {
@@ -107,5 +170,14 @@ public class TestingPaimonLakeStoragePlugin implements LakeStoragePlugin {
         public SimpleVersionedSerializer<LakeSplit> getSplitSerializer() {
             throw new UnsupportedOperationException("Not implemented.");
         }
+    }
+
+    /** Test callback for a lake point lookup. */
+    @FunctionalInterface
+    public interface LookupFunction {
+
+        /** Returns the row for the encoded key, or null when the key is absent. */
+        @Nullable
+        InternalRow lookup(byte[] key, LakeTableLookuper.LookupContext context) throws Exception;
     }
 }
