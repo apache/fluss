@@ -64,7 +64,6 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -450,13 +449,25 @@ public abstract class FlinkPaimonTieringTestBase {
 
     protected void checkDataInPaimonPrimaryKeyTable(
             TablePath tablePath, List<InternalRow> expectedRows) throws Exception {
-        Iterator<org.apache.paimon.data.InternalRow> paimonRowIterator =
-                getPaimonRowCloseableIterator(tablePath);
-        for (InternalRow expectedRow : expectedRows) {
-            org.apache.paimon.data.InternalRow row = paimonRowIterator.next();
-            assertThat(row.getInt(0)).isEqualTo(expectedRow.getInt(0));
-            assertThat(row.getString(1).toString()).isEqualTo(expectedRow.getString(1).toString());
-        }
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    try (CloseableIterator<org.apache.paimon.data.InternalRow> paimonRowIterator =
+                            getPaimonRowCloseableIterator(tablePath)) {
+                        Map<Integer, String> actualRows = new HashMap<>();
+                        while (paimonRowIterator.hasNext()) {
+                            org.apache.paimon.data.InternalRow row = paimonRowIterator.next();
+                            actualRows.put(row.getInt(0), row.getString(1).toString());
+                        }
+
+                        Map<Integer, String> expectedRowsByKey = new HashMap<>();
+                        for (InternalRow expectedRow : expectedRows) {
+                            expectedRowsByKey.put(
+                                    expectedRow.getInt(0), expectedRow.getString(1).toString());
+                        }
+                        assertThat(actualRows).isEqualTo(expectedRowsByKey);
+                    }
+                });
     }
 
     protected CloseableIterator<org.apache.paimon.data.InternalRow> getPaimonRowCloseableIterator(
@@ -475,24 +486,30 @@ public abstract class FlinkPaimonTieringTestBase {
 
     protected void checkFlussOffsetsInSnapshot(
             TablePath tablePath, Map<TableBucket, Long> expectedOffsets) throws Exception {
-        FileStoreTable table =
-                (FileStoreTable)
-                        getPaimonCatalog()
-                                .getTable(
-                                        Identifier.create(
-                                                tablePath.getDatabaseName(),
-                                                tablePath.getTableName()));
-        Snapshot snapshot = table.snapshotManager().latestSnapshot();
-        assertThat(snapshot).isNotNull();
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    FileStoreTable table =
+                            (FileStoreTable)
+                                    getPaimonCatalog()
+                                            .getTable(
+                                                    Identifier.create(
+                                                            tablePath.getDatabaseName(),
+                                                            tablePath.getTableName()));
+                    Snapshot snapshot = table.snapshotManager().latestSnapshot();
+                    assertThat(snapshot).isNotNull();
 
-        String offsetFile = snapshot.properties().get(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY);
-        Map<TableBucket, Long> recordedOffsets =
-                new LakeTable(
-                                new LakeTable.LakeSnapshotMetadata(
-                                        // don't care about snapshot id
-                                        -1, new FsPath(offsetFile), null))
-                        .getOrReadLatestTableSnapshot()
-                        .getBucketLogEndOffset();
-        assertThat(recordedOffsets).isEqualTo(expectedOffsets);
+                    String offsetFile =
+                            snapshot.properties().get(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY);
+                    assertThat(offsetFile).isNotNull();
+                    Map<TableBucket, Long> recordedOffsets =
+                            new LakeTable(
+                                            new LakeTable.LakeSnapshotMetadata(
+                                                    // don't care about snapshot id
+                                                    -1, new FsPath(offsetFile), null))
+                                    .getOrReadLatestTableSnapshot()
+                                    .getBucketLogEndOffset();
+                    assertThat(recordedOffsets).isEqualTo(expectedOffsets);
+                });
     }
 }
