@@ -355,6 +355,32 @@ abstract class OrphanFilesCleanITCase extends AbstractTestBase {
     }
 
     @Test
+    void optInCleansOrphanTableDirUnderUnknownDatabase() throws Exception {
+        long orphanTableId = allocateDroppedTableId(newDatabaseName("unknowndbseed"), "seed_table");
+        createLogTable(newDatabaseName("unknowndbanchor"), "live_anchor");
+
+        String unknownDbName = newDatabaseName("unknowndb");
+        OrphanTableLayout layout =
+                createOldOrphanTableLayout(
+                        remoteDataRoot(),
+                        unknownDbName,
+                        orphanTableId,
+                        "ghost_table",
+                        "99999999999999999999.log");
+
+        runCleanerForAllDatabases(false, "--allow-clean-orphan-tables");
+
+        assertThat(Files.exists(layout.orphanFile)).isFalse();
+        assertThat(Files.exists(layout.tableDir)).isFalse();
+        assertThat(auditMessages())
+                .anyMatch(
+                        m ->
+                                m.contains("action=deleted")
+                                        && m.contains("rule=log-segment")
+                                        && m.contains(layout.orphanFile.toString()));
+    }
+
+    @Test
     void pkOrphanTableRetainsSharedSstEvenWithOptIn() throws Exception {
         String dbName = newDatabaseName("orphankv");
         long tableId = allocateDroppedPrimaryKeyTableId(dbName, "seed_pk_table");
@@ -785,6 +811,42 @@ abstract class OrphanFilesCleanITCase extends AbstractTestBase {
         assertThat(Files.exists(orphan.partitionDir))
                 .as("orphan partition dir must be removed")
                 .isFalse();
+        assertThat(auditMessages())
+                .anyMatch(
+                        m ->
+                                m.contains("action=deleted")
+                                        && m.contains("rule=log-segment")
+                                        && m.contains(orphan.orphanFile.toString()));
+    }
+
+    @Test
+    void optInCleansOrphanPartitionDirUnderUnknownDatabase() throws Exception {
+        PartitionedTableLayout seed =
+                createPartitionedLogTable(newDatabaseName("orphanpartseed"), "seed_table", "ps");
+        long orphanTableId = seed.tableId;
+        long orphanPartitionId = seed.partitionInfo.getPartitionId();
+        admin.dropTable(seed.tablePath, false).get();
+
+        PartitionedTableLayout anchor =
+                createPartitionedLogTable(newDatabaseName("orphanpartanchor"), "live_anchor", "pa");
+        assertThat(anchor.tableId).isGreaterThanOrEqualTo(orphanTableId);
+        assertThat(anchor.partitionInfo.getPartitionId()).isGreaterThanOrEqualTo(orphanPartitionId);
+
+        String unknownDbName = newDatabaseName("unknownpartdb");
+        TablePath orphanTablePath = TablePath.of(unknownDbName, "ghost_table");
+        OrphanPartitionLayout orphan =
+                createOldOrphanPartitionLayout(
+                        remoteDataRoot(),
+                        orphanTablePath,
+                        orphanTableId,
+                        "ghost",
+                        orphanPartitionId,
+                        "99999999999999999999.log");
+
+        runCleanerForAllDatabases(false, "--allow-clean-orphan-partitions");
+
+        assertThat(Files.exists(orphan.orphanFile)).isFalse();
+        assertThat(Files.exists(orphan.partitionDir)).isFalse();
         assertThat(auditMessages())
                 .anyMatch(
                         m ->
