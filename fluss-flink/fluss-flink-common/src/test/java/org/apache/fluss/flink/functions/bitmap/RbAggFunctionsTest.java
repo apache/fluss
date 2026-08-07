@@ -496,4 +496,184 @@ class RbAggFunctionsTest {
         assertThat(acc.value.isEmpty()).isTrue();
         assertThat(fn.getValue(acc)).isNull();
     }
+
+    // -------------------------------------------------------------------------
+    // RbXorAggFunction serializer and type info coverage
+    // -------------------------------------------------------------------------
+
+    @Test
+    void testXorAggAccumulatorSerializerRoundTrip() throws Exception {
+        RbXorAggFunction.AccumulatorSerializer ser =
+                RbXorAggFunction.AccumulatorSerializer.INSTANCE;
+
+        RbXorAggFunction.Accumulator original = new RbXorAggFunction.Accumulator();
+        original.nonNullCount = 2L;
+        original.value = RoaringBitmap.bitmapOf(10, 20, 30);
+
+        DataOutputSerializer out = new DataOutputSerializer(256);
+        ser.serialize(original, out);
+
+        DataInputDeserializer in = new DataInputDeserializer(out.getCopyOfBuffer());
+        RbXorAggFunction.Accumulator restored = ser.deserialize(in);
+
+        assertThat(restored.nonNullCount).isEqualTo(2L);
+        assertThat(restored.value).isEqualTo(original.value);
+    }
+
+    @Test
+    void testXorAggAccumulatorSerializerZeroCountRoundTrip() throws Exception {
+        RbXorAggFunction.AccumulatorSerializer ser =
+                RbXorAggFunction.AccumulatorSerializer.INSTANCE;
+
+        RbXorAggFunction.Accumulator original = new RbXorAggFunction.Accumulator();
+        // nonNullCount == 0: bitmap is not serialized
+
+        DataOutputSerializer out = new DataOutputSerializer(64);
+        ser.serialize(original, out);
+
+        DataInputDeserializer in = new DataInputDeserializer(out.getCopyOfBuffer());
+        RbXorAggFunction.Accumulator restored = ser.deserialize(in);
+        assertThat(restored.nonNullCount).isEqualTo(0L);
+        assertThat(restored.value.isEmpty()).isTrue();
+    }
+
+    @Test
+    void testXorAggAccumulatorSerializerDeserializeWithReuse() throws Exception {
+        RbXorAggFunction.AccumulatorSerializer ser =
+                RbXorAggFunction.AccumulatorSerializer.INSTANCE;
+
+        RbXorAggFunction.Accumulator original = new RbXorAggFunction.Accumulator();
+        original.nonNullCount = 1L;
+        original.value = RoaringBitmap.bitmapOf(7, 8, 9);
+
+        DataOutputSerializer out = new DataOutputSerializer(256);
+        ser.serialize(original, out);
+
+        DataInputDeserializer in = new DataInputDeserializer(out.getCopyOfBuffer());
+        RbXorAggFunction.Accumulator reuse = new RbXorAggFunction.Accumulator();
+        RbXorAggFunction.Accumulator restored = ser.deserialize(reuse, in);
+
+        assertThat(restored.nonNullCount).isEqualTo(1L);
+        assertThat(restored.value).isEqualTo(original.value);
+    }
+
+    @Test
+    void testXorAggAccumulatorSerializerCopyStream() throws Exception {
+        RbXorAggFunction.AccumulatorSerializer ser =
+                RbXorAggFunction.AccumulatorSerializer.INSTANCE;
+
+        // Test copy stream with nonNullCount > 0
+        RbXorAggFunction.Accumulator original = new RbXorAggFunction.Accumulator();
+        original.nonNullCount = 3L;
+        original.value = RoaringBitmap.bitmapOf(5, 10, 15);
+
+        DataOutputSerializer out = new DataOutputSerializer(256);
+        ser.serialize(original, out);
+        DataInputDeserializer in = new DataInputDeserializer(out.getCopyOfBuffer());
+        DataOutputSerializer copied = new DataOutputSerializer(256);
+        ser.copy(in, copied);
+
+        DataInputDeserializer copiedIn = new DataInputDeserializer(copied.getCopyOfBuffer());
+        RbXorAggFunction.Accumulator restored = ser.deserialize(copiedIn);
+        assertThat(restored.nonNullCount).isEqualTo(3L);
+        assertThat(restored.value).isEqualTo(original.value);
+    }
+
+    @Test
+    void testXorAggAccumulatorSerializerCopyStreamZeroCount() throws Exception {
+        RbXorAggFunction.AccumulatorSerializer ser =
+                RbXorAggFunction.AccumulatorSerializer.INSTANCE;
+
+        // Test copy stream with nonNullCount == 0 (no bitmap written)
+        RbXorAggFunction.Accumulator original = new RbXorAggFunction.Accumulator();
+
+        DataOutputSerializer out = new DataOutputSerializer(64);
+        ser.serialize(original, out);
+        DataInputDeserializer in = new DataInputDeserializer(out.getCopyOfBuffer());
+        DataOutputSerializer copied = new DataOutputSerializer(64);
+        ser.copy(in, copied);
+
+        DataInputDeserializer copiedIn = new DataInputDeserializer(copied.getCopyOfBuffer());
+        RbXorAggFunction.Accumulator restored = ser.deserialize(copiedIn);
+        assertThat(restored.nonNullCount).isEqualTo(0L);
+    }
+
+    @Test
+    void testXorAggAccumulatorTypeInfoProperties() {
+        RbXorAggFunction.AccumulatorTypeInfo info = RbXorAggFunction.AccumulatorTypeInfo.INSTANCE;
+        assertThat(info.getTypeClass()).isEqualTo(RbXorAggFunction.Accumulator.class);
+        assertThat(info.isBasicType()).isFalse();
+        assertThat(info.isTupleType()).isFalse();
+        assertThat(info.getArity()).isEqualTo(1);
+        assertThat(info.getTotalFields()).isEqualTo(1);
+        assertThat(info.isKeyType()).isFalse();
+        assertThat(info.toString()).isEqualTo("RbXorAccumulatorTypeInfo");
+        assertThat(info.hashCode()).isNotZero();
+        assertThat(info.equals(info)).isTrue();
+        assertThat(info.equals("other")).isFalse();
+        assertThat(info.canEqual(info)).isTrue();
+        assertThat(info.canEqual("other")).isFalse();
+    }
+
+    @Test
+    void testXorAggAccumulatorTypeInfoCreateSerializer() {
+        TypeSerializer<RbXorAggFunction.Accumulator> s =
+                RbXorAggFunction.AccumulatorTypeInfo.INSTANCE.createSerializer(
+                        new ExecutionConfig());
+        assertThat(s).isInstanceOf(RbXorAggFunction.AccumulatorSerializer.class);
+    }
+
+    @Test
+    void testXorAggAccumulatorSerializerCreateInstance() {
+        RbXorAggFunction.Accumulator acc =
+                RbXorAggFunction.AccumulatorSerializer.INSTANCE.createInstance();
+        assertThat(acc.nonNullCount).isEqualTo(0L);
+        assertThat(acc.value.isEmpty()).isTrue();
+    }
+
+    @Test
+    void testXorAggAccumulatorSerializerIsNotImmutable() {
+        assertThat(RbXorAggFunction.AccumulatorSerializer.INSTANCE.isImmutableType()).isFalse();
+    }
+
+    @Test
+    void testXorAggAccumulatorSerializerGetLength() {
+        assertThat(RbXorAggFunction.AccumulatorSerializer.INSTANCE.getLength()).isEqualTo(-1);
+    }
+
+    @Test
+    void testXorAggAccumulatorSerializerCopy() {
+        RbXorAggFunction.AccumulatorSerializer ser =
+                RbXorAggFunction.AccumulatorSerializer.INSTANCE;
+        RbXorAggFunction.Accumulator original = new RbXorAggFunction.Accumulator();
+        original.nonNullCount = 1L;
+        original.value = RoaringBitmap.bitmapOf(1, 2, 3);
+
+        RbXorAggFunction.Accumulator copy = ser.copy(original);
+        assertThat(copy.nonNullCount).isEqualTo(1L);
+        assertThat(copy.value).isEqualTo(original.value);
+        // verify deep copy
+        copy.value.add(999);
+        assertThat(original.value.contains(999)).isFalse();
+    }
+
+    @Test
+    void testXorAggAccumulatorSerializerCopyWithReuse() {
+        RbXorAggFunction.AccumulatorSerializer ser =
+                RbXorAggFunction.AccumulatorSerializer.INSTANCE;
+        RbXorAggFunction.Accumulator original = new RbXorAggFunction.Accumulator();
+        original.nonNullCount = 1L;
+        original.value = RoaringBitmap.bitmapOf(10, 20);
+
+        RbXorAggFunction.Accumulator reuse = new RbXorAggFunction.Accumulator();
+        RbXorAggFunction.Accumulator copy = ser.copy(original, reuse);
+        assertThat(copy.nonNullCount).isEqualTo(1L);
+        assertThat(copy.value).isEqualTo(original.value);
+    }
+
+    @Test
+    void testXorAggAccumulatorSerializerSnapshotNotNull() {
+        assertThat(RbXorAggFunction.AccumulatorSerializer.INSTANCE.snapshotConfiguration())
+                .isNotNull();
+    }
 }
