@@ -51,6 +51,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.POLL_TIERING_TABLE_INTERVAL;
+import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.TIERING_FORCE_COMPLETE_FINISH_TIMEOUT;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -190,6 +191,7 @@ class FlinkTieringTestBase {
             StreamExecutionEnvironment execEnv, Configuration lakeTieringConfig) throws Exception {
         Configuration flussConfig = new Configuration(clientConf);
         flussConfig.set(POLL_TIERING_TABLE_INTERVAL, Duration.ofMillis(500L));
+        flussConfig.set(TIERING_FORCE_COMPLETE_FINISH_TIMEOUT, Duration.ZERO);
 
         return LakeTieringJobBuilder.newBuilder(
                         execEnv,
