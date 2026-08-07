@@ -346,6 +346,73 @@ abstract class BinlogVirtualTableITCase {
     }
 
     @Test
+    public void testBinlogTopLevelProjection() throws Exception {
+        // Select only the top-level columns _change_type and after (skip _log_offset,
+        // _commit_timestamp and before). The data scan stays full, so the nested after ROW still
+        // carries all original columns.
+        tEnv.executeSql(
+                "CREATE TABLE binlog_projection_test ("
+                        + "  id INT NOT NULL,"
+                        + "  name STRING,"
+                        + "  amount BIGINT,"
+                        + "  PRIMARY KEY (id) NOT ENFORCED"
+                        + ") WITH ('bucket.num' = '1')");
+
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "binlog_projection_test");
+
+        String query = "SELECT _change_type, after FROM binlog_projection_test$binlog";
+
+        // The top-level projection should be pushed into the source scan (assert the exact
+        // pushed projection rather than just the presence of "project=[").
+        assertThat(tEnv.explainSql(query)).contains("project=[_change_type, after]");
+
+        CloseableIterator<Row> rowIter = tEnv.executeSql(query).collect();
+
+        CLOCK.advanceTime(Duration.ofMillis(1000));
+        writeRows(conn, tablePath, Arrays.asList(row(1, "Alice", 100L)), false);
+
+        List<String> results = collectRowsWithTimeout(rowIter, 1, true);
+        assertThat(results).hasSize(1);
+        // after ROW retains all data columns even though only two top-level columns are projected.
+        assertThat(results.get(0)).isEqualTo("+I[insert, +I[1, Alice, 100]]");
+        rowIter.close();
+    }
+
+    @Test
+    public void testBinlogReorderedTopLevelProjection() throws Exception {
+        // Reordered top-level projection: after before _change_type, i.e. not in the declared
+        // order of the binlog row. This exercises FlinkSource output projection end to end through
+        // the real planner, which no ascending-order projection test covers.
+        tEnv.executeSql(
+                "CREATE TABLE binlog_reordered_projection_test ("
+                        + "  id INT NOT NULL,"
+                        + "  name STRING,"
+                        + "  amount BIGINT,"
+                        + "  PRIMARY KEY (id) NOT ENFORCED"
+                        + ") WITH ('bucket.num' = '1')");
+
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "binlog_reordered_projection_test");
+
+        String query = "SELECT after, _change_type FROM binlog_reordered_projection_test$binlog";
+        // The planner pushes the reordered projection into the scan as-is (no Calc reorder), so
+        // the source receives the out-of-order indices end to end.
+        assertThat(tEnv.explainSql(query)).contains("project=[after, _change_type]");
+
+        CloseableIterator<Row> rowIter = tEnv.executeSql(query).collect();
+
+        CLOCK.advanceTime(Duration.ofMillis(100));
+        writeRows(conn, tablePath, Arrays.asList(row(1, "Alice", 100L)), false);
+        List<String> insertResult = collectRowsWithTimeout(rowIter, 1, false);
+        assertThat(insertResult).containsExactly("+I[+I[1, Alice, 100], insert]");
+
+        // An update exercises the -U/+U merge together with the reordered projection.
+        CLOCK.advanceTime(Duration.ofMillis(100));
+        writeRows(conn, tablePath, Arrays.asList(row(1, "Alice", 250L)), false);
+        List<String> updateResult = collectRowsWithTimeout(rowIter, 1, true);
+        assertThat(updateResult).containsExactly("+I[+I[1, Alice, 250], update]");
+    }
+
+    @Test
     public void testBinlogWithPartitionedTable() throws Exception {
         // Create a partitioned primary key table
         tEnv.executeSql(

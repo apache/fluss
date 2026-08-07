@@ -67,9 +67,12 @@ public class ChangelogDeserializationSchema implements FlussDeserializationSchem
      */
     @Override
     public TypeInformation<RowData> getProducedType(RowType rowSchema) {
-        // Build the output type with metadata columns
-        org.apache.flink.table.types.logical.RowType outputType =
-                ChangelogRowConverter.buildChangelogRowType(toFlinkRowType(rowSchema));
-        return InternalTypeInfo.of(outputType);
+        return InternalTypeInfo.of(
+                ChangelogRowConverter.buildChangelogRowType(toFlinkRowType(rowSchema)));
+    }
+
+    @Override
+    public TypeInformation<RowData> getProducedType(RowType scanRowType, RowType expectRowSchema) {
+        return InternalTypeInfo.of(toFlinkRowType(expectRowSchema));
     }
 }

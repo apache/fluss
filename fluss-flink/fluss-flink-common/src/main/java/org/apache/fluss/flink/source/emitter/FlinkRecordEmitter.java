@@ -30,6 +30,10 @@ import org.apache.flink.connector.base.source.reader.RecordEmitter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
+
+import java.io.Serializable;
+
 /**
  * The {@link RecordEmitter} implementation for {@link FlinkSourceReader}.
  *
@@ -44,10 +48,18 @@ public class FlinkRecordEmitter<OUT> implements RecordEmitter<RecordAndPos, OUT,
     private static final Logger LOG = LoggerFactory.getLogger(FlinkRecordEmitter.class);
 
     private final FlussDeserializationSchema<OUT> deserializationSchema;
+    @Nullable private final OutputProjection<OUT> outputProjection;
     private LakeRecordRecordEmitter<OUT> lakeRecordRecordEmitter;
 
     public FlinkRecordEmitter(FlussDeserializationSchema<OUT> deserializationSchema) {
+        this(deserializationSchema, null);
+    }
+
+    public FlinkRecordEmitter(
+            FlussDeserializationSchema<OUT> deserializationSchema,
+            @Nullable OutputProjection<OUT> outputProjection) {
         this.deserializationSchema = deserializationSchema;
+        this.outputProjection = outputProjection;
     }
 
     @Override
@@ -113,6 +125,10 @@ public class FlinkRecordEmitter<OUT> implements RecordEmitter<RecordAndPos, OUT,
                     e);
         }
 
+        if (record != null && outputProjection != null) {
+            record = outputProjection.project(record);
+        }
+
         if (record != null) {
             long timestamp = scanRecord.timestamp();
             if (timestamp > 0) {
@@ -123,5 +139,18 @@ public class FlinkRecordEmitter<OUT> implements RecordEmitter<RecordAndPos, OUT,
             return true;
         }
         return false;
+    }
+
+    /** Projection applied after deserialization and before the record is emitted. */
+    public interface OutputProjection<OUT> extends Serializable {
+
+        /**
+         * Projects a deserialized record.
+         *
+         * @param record the deserialized record
+         * @return the projected record, or {@code null} to skip emission
+         */
+        @Nullable
+        OUT project(OUT record);
     }
 }

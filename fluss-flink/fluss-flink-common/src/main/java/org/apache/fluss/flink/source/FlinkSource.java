@@ -23,6 +23,7 @@ import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.flink.source.deserializer.DeserializerInitContextImpl;
 import org.apache.fluss.flink.source.deserializer.FlussDeserializationSchema;
 import org.apache.fluss.flink.source.emitter.FlinkRecordEmitter;
+import org.apache.fluss.flink.source.emitter.RowDataProjection;
 import org.apache.fluss.flink.source.enumerator.FlinkSourceEnumerator;
 import org.apache.fluss.flink.source.metrics.FlinkSourceReaderMetrics;
 import org.apache.fluss.flink.source.reader.FlinkSourceReader;
@@ -32,6 +33,7 @@ import org.apache.fluss.flink.source.split.SourceSplitBase;
 import org.apache.fluss.flink.source.split.SourceSplitSerializer;
 import org.apache.fluss.flink.source.state.FlussSourceEnumeratorStateSerializer;
 import org.apache.fluss.flink.source.state.SourceEnumeratorState;
+import org.apache.fluss.flink.utils.FlinkConversions;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.LakeSplit;
 import org.apache.fluss.metadata.TablePath;
@@ -49,6 +51,7 @@ import org.apache.flink.api.java.typeutils.ResultTypeQueryable;
 import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
 import org.apache.flink.connector.base.source.reader.synchronization.FutureCompletingBlockingQueue;
 import org.apache.flink.core.io.SimpleVersionedSerializer;
+import org.apache.flink.table.runtime.typeutils.InternalTypeInfo;
 
 import javax.annotation.Nullable;
 
@@ -67,7 +70,9 @@ public class FlinkSource<OUT>
     private final TablePath tablePath;
     private final boolean hasPrimaryKey;
     private final boolean isPartitioned;
-    private final RowType sourceOutputType;
+    private final RowType scanRowType;
+    @Nullable private final RowType producedRowType;
+    @Nullable private final FlinkRecordEmitter.OutputProjection<OUT> outputProjection;
     @Nullable private final int[] projectedFields;
     protected final OffsetsInitializer offsetsInitializer;
     protected final long scanPartitionDiscoveryIntervalMs;
@@ -85,7 +90,7 @@ public class FlinkSource<OUT>
             TablePath tablePath,
             boolean hasPrimaryKey,
             boolean isPartitioned,
-            RowType sourceOutputType,
+            RowType scanRowType,
             @Nullable int[] projectedFields,
             @Nullable Predicate logRecordBatchFilter,
             OffsetsInitializer offsetsInitializer,
@@ -99,7 +104,7 @@ public class FlinkSource<OUT>
                 tablePath,
                 hasPrimaryKey,
                 isPartitioned,
-                sourceOutputType,
+                scanRowType,
                 projectedFields,
                 logRecordBatchFilter,
                 offsetsInitializer,
@@ -117,7 +122,7 @@ public class FlinkSource<OUT>
             TablePath tablePath,
             boolean hasPrimaryKey,
             boolean isPartitioned,
-            RowType sourceOutputType,
+            RowType scanRowType,
             @Nullable int[] projectedFields,
             @Nullable Predicate logRecordBatchFilter,
             OffsetsInitializer offsetsInitializer,
@@ -132,7 +137,7 @@ public class FlinkSource<OUT>
                 tablePath,
                 hasPrimaryKey,
                 isPartitioned,
-                sourceOutputType,
+                scanRowType,
                 projectedFields,
                 logRecordBatchFilter,
                 offsetsInitializer,
@@ -150,7 +155,7 @@ public class FlinkSource<OUT>
             TablePath tablePath,
             boolean hasPrimaryKey,
             boolean isPartitioned,
-            RowType sourceOutputType,
+            RowType scanRowType,
             @Nullable int[] projectedFields,
             @Nullable Predicate logRecordBatchFilter,
             OffsetsInitializer offsetsInitializer,
@@ -165,7 +170,7 @@ public class FlinkSource<OUT>
                 tablePath,
                 hasPrimaryKey,
                 isPartitioned,
-                sourceOutputType,
+                scanRowType,
                 projectedFields,
                 logRecordBatchFilter,
                 offsetsInitializer,
@@ -183,7 +188,7 @@ public class FlinkSource<OUT>
             TablePath tablePath,
             boolean hasPrimaryKey,
             boolean isPartitioned,
-            RowType sourceOutputType,
+            RowType scanRowType,
             @Nullable int[] projectedFields,
             @Nullable Predicate logRecordBatchFilter,
             OffsetsInitializer offsetsInitializer,
@@ -194,17 +199,90 @@ public class FlinkSource<OUT>
             @Nullable Predicate partitionFilters,
             @Nullable LakeSource<LakeSplit> lakeSource,
             LeaseContext leaseContext) {
+        this(
+                flussConf,
+                tablePath,
+                hasPrimaryKey,
+                isPartitioned,
+                scanRowType,
+                projectedFields,
+                logRecordBatchFilter,
+                offsetsInitializer,
+                scanPartitionDiscoveryIntervalMs,
+                splitPerAssignmentBatchSize,
+                deserializationSchema,
+                null,
+                streaming,
+                partitionFilters,
+                lakeSource,
+                leaseContext);
+    }
+
+    public FlinkSource(
+            Configuration flussConf,
+            TablePath tablePath,
+            boolean hasPrimaryKey,
+            boolean isPartitioned,
+            RowType scanRowType,
+            @Nullable int[] projectedFields,
+            @Nullable Predicate logRecordBatchFilter,
+            OffsetsInitializer offsetsInitializer,
+            long scanPartitionDiscoveryIntervalMs,
+            int splitPerAssignmentBatchSize,
+            FlussDeserializationSchema<OUT> deserializationSchema,
+            @Nullable RowType producedRowType,
+            boolean streaming,
+            @Nullable Predicate partitionFilters,
+            LeaseContext leaseContext) {
+        this(
+                flussConf,
+                tablePath,
+                hasPrimaryKey,
+                isPartitioned,
+                scanRowType,
+                projectedFields,
+                logRecordBatchFilter,
+                offsetsInitializer,
+                scanPartitionDiscoveryIntervalMs,
+                splitPerAssignmentBatchSize,
+                deserializationSchema,
+                producedRowType,
+                streaming,
+                partitionFilters,
+                null,
+                leaseContext);
+    }
+
+    public FlinkSource(
+            Configuration flussConf,
+            TablePath tablePath,
+            boolean hasPrimaryKey,
+            boolean isPartitioned,
+            RowType scanRowType,
+            @Nullable int[] projectedFields,
+            @Nullable Predicate logRecordBatchFilter,
+            OffsetsInitializer offsetsInitializer,
+            long scanPartitionDiscoveryIntervalMs,
+            int splitPerAssignmentBatchSize,
+            FlussDeserializationSchema<OUT> deserializationSchema,
+            @Nullable RowType producedRowType,
+            boolean streaming,
+            @Nullable Predicate partitionFilters,
+            @Nullable LakeSource<LakeSplit> lakeSource,
+            LeaseContext leaseContext) {
         this.flussConf = flussConf;
         this.tablePath = tablePath;
         this.hasPrimaryKey = hasPrimaryKey;
         this.isPartitioned = isPartitioned;
-        this.sourceOutputType = sourceOutputType;
+        this.scanRowType = scanRowType;
         this.projectedFields = projectedFields;
         this.logRecordBatchFilter = logRecordBatchFilter;
         this.offsetsInitializer = offsetsInitializer;
         this.scanPartitionDiscoveryIntervalMs = scanPartitionDiscoveryIntervalMs;
         this.splitPerAssignmentBatchSize = splitPerAssignmentBatchSize;
         this.deserializationSchema = deserializationSchema;
+        this.producedRowType = producedRowType;
+        this.outputProjection = createOutputProjection(producedRowType);
         this.streaming = streaming;
         this.partitionFilters = partitionFilters;
         this.lakeSource = lakeSource;
@@ -296,14 +374,15 @@ public class FlinkSource<OUT>
                 new DeserializerInitContextImpl(
                         context.metricGroup().addGroup("deserializer"),
                         context.getUserCodeClassLoader(),
-                        sourceOutputType));
-        FlinkRecordEmitter<OUT> recordEmitter = new FlinkRecordEmitter<>(deserializationSchema);
+                        scanRowType));
+        FlinkRecordEmitter<OUT> recordEmitter =
+                new FlinkRecordEmitter<>(deserializationSchema, outputProjection);
 
         return new FlinkSourceReader<>(
                 elementsQueue,
                 readerConf,
                 tablePath,
-                sourceOutputType,
+                scanRowType,
                 context,
                 projectedFields,
                 logRecordBatchFilter,
@@ -314,6 +393,61 @@ public class FlinkSource<OUT>
 
     @Override
     public TypeInformation<OUT> getProducedType() {
-        return deserializationSchema.getProducedType(sourceOutputType);
+        if (producedRowType != null) {
+            return deserializationSchema.getProducedType(scanRowType, producedRowType);
+        }
+
+        // if not specified produce type, inferred by scan row type.
+        return deserializationSchema.getProducedType(scanRowType);
+    }
+
+    @SuppressWarnings("unchecked")
+    @Nullable
+    private FlinkRecordEmitter.OutputProjection<OUT> createOutputProjection(
+            @Nullable RowType producedRowType) {
+        if (producedRowType == null) {
+            return null;
+        }
+
+        TypeInformation<OUT> naturalProducedType =
+                deserializationSchema.getProducedType(scanRowType);
+        if (!(naturalProducedType instanceof InternalTypeInfo)) {
+            throw new IllegalArgumentException(
+                    "Produced row type can only be used with RowData deserialization schemas.");
+        }
+        org.apache.flink.table.types.logical.RowType naturalProducedRowType =
+                ((InternalTypeInfo<?>) naturalProducedType).toRowType();
+        org.apache.flink.table.types.logical.RowType flinkProducedRowType =
+                FlinkConversions.toFlinkRowType(producedRowType);
+        int[] projection = createProjection(naturalProducedRowType, flinkProducedRowType);
+        return projection == null
+                ? null
+                : (FlinkRecordEmitter.OutputProjection<OUT>) RowDataProjection.of(projection);
+    }
+
+    @Nullable
+    private int[] createProjection(
+            org.apache.flink.table.types.logical.RowType naturalProducedRowType,
+            org.apache.flink.table.types.logical.RowType producedRowType) {
+        if (naturalProducedRowType.equals(producedRowType)) {
+            return null;
+        }
+
+        int[] projection = new int[producedRowType.getFieldCount()];
+        boolean identityProjection =
+                naturalProducedRowType.getFieldCount() == producedRowType.getFieldCount();
+        for (int i = 0; i < producedRowType.getFieldCount(); i++) {
+            String fieldName = producedRowType.getFieldNames().get(i);
+            int fieldIndex = naturalProducedRowType.getFieldIndex(fieldName);
+            if (fieldIndex < 0) {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Produced field '%s' is missing in natural produced row type %s.",
+                                fieldName, naturalProducedRowType));
+            }
+            projection[i] = fieldIndex;
+            identityProjection &= fieldIndex == i;
+        }
+        return identityProjection ? null : projection;
     }
 }
