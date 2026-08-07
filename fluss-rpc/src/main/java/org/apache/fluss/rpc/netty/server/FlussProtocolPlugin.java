@@ -43,8 +43,15 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
     private static final String PLAIN_CREDENTIALS_CONFIG =
             ConfigOptions.SERVER_SASL_CREDENTIALS.key();
 
-    /** Pattern to match {@code user_<username>="<password>"} entries in JAAS config strings. */
-    private static final Pattern JAAS_USER_PATTERN = Pattern.compile("user_(\\w+)=\"([^\"]*)\"");
+    /**
+     * Pattern matching {@code <prefix><name>="<value>"} option entries in JAAS config strings,
+     * scoped to the {@code user_} and {@code impersonate_} prefixes so only options consumed by the
+     * SASL/PLAIN callback handler are extracted; the login module class and control flag are
+     * ignored. These prefixes must cover PlainServerCallbackHandler.KNOWN_OPTION_PREFIXES, which a
+     * unit test enforces.
+     */
+    private static final Pattern JAAS_OPTION_PATTERN =
+            Pattern.compile("((?:user_|impersonate_)\\w+)=\"([^\"]*)\"");
 
     /**
      * Valid username pattern. Only letters, digits, and underscores are allowed because the
@@ -65,8 +72,13 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
     private final List<String> listeners;
     private final RequestsMetrics requestsMetrics;
     private Configuration conf;
-    /** Initial credentials from `security.sasl.plain.jaas.config`. */
-    private Map<String, String> initialPlainCredentialsFromJaasConfig;
+
+    /**
+     * All recognized JAAS options parsed from the initial {@code security.sasl.plain.jaas.config},
+     * keyed by full option key. Preserved when the JAAS config is regenerated from the credentials
+     * map so non-credential options such as {@code impersonate_*} are not dropped.
+     */
+    private Map<String, String> initialKnownOptionsFromJaasConfig;
 
     /** Current config `security.sasl.plain.credentials`. */
     private Map<String, String> currentPlainCredentials;
@@ -86,7 +98,8 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
     @Override
     public void setup(Configuration conf) {
         this.conf = new Configuration(conf);
-        this.initialPlainCredentialsFromJaasConfig = parseCredentialsFromJaasConfig(conf);
+        String initialJaasConfig = conf.getString(ConfigOptions.SERVER_SASL_PLAIN_JAAS_CONFIG);
+        this.initialKnownOptionsFromJaasConfig = parseKnownOptionsFromJaasConfig(initialJaasConfig);
         enrichWithJaasConfig(conf);
     }
 
@@ -135,7 +148,7 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
         }
 
         // Generate the merged JAAS config value to ensure it is valid.
-        generateMergedJaasConfig(newCredentials);
+        generateMergedJaasConfig(initialKnownOptionsFromJaasConfig, newCredentials);
     }
 
     @Override
@@ -147,7 +160,8 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
      * Enriches the plugin's configuration with a generated JAAS config string by merging:
      *
      * <ol>
-     *   <li>Existing credentials parsed from the current {@code security.sasl.plain.jaas.config}
+     *   <li>All recognized options parsed from the initial {@code security.sasl.plain.jaas.config}
+     *       (including non-credential options such as {@code impersonate_*})
      *   <li>New credentials from the {@code security.sasl.plain.credentials} map in {@code
      *       newConfig}
      * </ol>
@@ -163,7 +177,7 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
 
         conf.setString(
                 ConfigOptions.SERVER_SASL_PLAIN_JAAS_CONFIG,
-                generateMergedJaasConfig(newCredentials));
+                generateMergedJaasConfig(initialKnownOptionsFromJaasConfig, newCredentials));
         currentPlainCredentials = newCredentials;
     }
 
@@ -201,39 +215,42 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
     }
 
     /**
-     * Generates the merged JAAS config string by combining existing credentials from the current
-     * {@code security.sasl.plain.jaas.config} with the given new credentials map. New credentials
-     * take priority on username conflict.
-     *
-     * @param newCredentials map of username to password from SERVER_SASL_CREDENTIALS
-     * @return the generated JAAS config string
+     * Generates the merged JAAS config string from the options parsed out of the initial {@code
+     * security.sasl.plain.jaas.config} and the given credentials map. Credentials take priority on
+     * username conflict; non-credential options such as {@code impersonate_*} are kept unchanged.
      */
-    private String generateMergedJaasConfig(Map<String, String> newCredentials) {
-        Map<String, String> mergedCredentials =
-                new LinkedHashMap<>(initialPlainCredentialsFromJaasConfig);
+    static String generateMergedJaasConfig(
+            Map<String, String> initialKnownOptions, Map<String, String> newCredentials) {
+        Map<String, String> mergedOptions = new LinkedHashMap<>(initialKnownOptions);
         if (newCredentials != null) {
-            mergedCredentials.putAll(newCredentials);
+            for (Map.Entry<String, String> credential : newCredentials.entrySet()) {
+                mergedOptions.put("user_" + credential.getKey(), credential.getValue());
+            }
         }
 
         StringBuilder sb =
                 new StringBuilder(
                         "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required");
-        for (Map.Entry<String, String> entry : mergedCredentials.entrySet()) {
-            sb.append(String.format(" user_%s=\"%s\"", entry.getKey(), entry.getValue()));
+        for (Map.Entry<String, String> entry : mergedOptions.entrySet()) {
+            sb.append(String.format(" %s=\"%s\"", entry.getKey(), entry.getValue()));
         }
         sb.append(";");
         return sb.toString();
     }
 
-    private static Map<String, String> parseCredentialsFromJaasConfig(Configuration configuration) {
-        Map<String, String> credentials = new LinkedHashMap<>();
-        String existingJaas = configuration.getString(ConfigOptions.SERVER_SASL_PLAIN_JAAS_CONFIG);
-        if (existingJaas != null) {
-            Matcher matcher = JAAS_USER_PATTERN.matcher(existingJaas);
-            while (matcher.find()) {
-                credentials.put(matcher.group(1), matcher.group(2));
-            }
+    /**
+     * Parses the {@code user_*} and {@code impersonate_*} options from the given JAAS config
+     * string, keyed by full option key. Only these options are retained across regeneration.
+     */
+    static Map<String, String> parseKnownOptionsFromJaasConfig(String jaasConfig) {
+        Map<String, String> knownOptions = new LinkedHashMap<>();
+        if (jaasConfig == null) {
+            return knownOptions;
         }
-        return credentials;
+        Matcher matcher = JAAS_OPTION_PATTERN.matcher(jaasConfig);
+        while (matcher.find()) {
+            knownOptions.put(matcher.group(1), matcher.group(2));
+        }
+        return knownOptions;
     }
 }
