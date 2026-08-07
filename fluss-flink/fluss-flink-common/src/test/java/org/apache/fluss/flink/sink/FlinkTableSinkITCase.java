@@ -915,6 +915,80 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     }
 
     @Test
+    void testBatchDeleteAndUpdateStmtOnPkTable() throws Exception {
+        String tableName = "pk_table_batch_delete_update_test";
+        tBatchEnv.executeSql(
+                String.format(
+                        "create table %s ("
+                                + " a int not null,"
+                                + " b bigint, "
+                                + " c string,"
+                                + " primary key (a) not enforced"
+                                + ")",
+                        tableName));
+        List<String> insertValues =
+                Arrays.asList(
+                        "(1, 3501, 'Beijing')",
+                        "(2, 3502, 'Shanghai')",
+                        "(3, 3503, 'Berlin')",
+                        "(4, 3504, 'Seattle')",
+                        "(5, 3505, 'Boston')",
+                        "(6, 3506, 'London')");
+        tBatchEnv
+                .executeSql(
+                        String.format(
+                                "INSERT INTO %s(a,b,c) VALUES %s",
+                                tableName, String.join(", ", insertValues)))
+                .await();
+
+        tBatchEnv.executeSql("UPDATE " + tableName + " SET c = 'China' WHERE b <= 3503").await();
+
+        CloseableIterator<Row> rowIter =
+                tBatchEnv.executeSql(String.format("select * from %s", tableName)).collect();
+        List<String> expectedRows =
+                Arrays.asList(
+                        "+I[1, 3501, China]",
+                        "+I[2, 3502, China]",
+                        "+I[3, 3503, China]",
+                        "+I[4, 3504, Seattle]",
+                        "+I[5, 3505, Boston]",
+                        "+I[6, 3506, London]");
+        assertResultsIgnoreOrder(rowIter, expectedRows, true);
+
+        tBatchEnv.executeSql("DELETE FROM " + tableName + " WHERE b >= 3504").await();
+
+        rowIter = tBatchEnv.executeSql(String.format("select * from %s", tableName)).collect();
+        expectedRows =
+                Arrays.asList("+I[1, 3501, China]", "+I[2, 3502, China]", "+I[3, 3503, China]");
+        assertResultsIgnoreOrder(rowIter, expectedRows, true);
+
+        CloseableIterator<Row> changelogIter =
+                tEnv.executeSql(
+                                String.format(
+                                        "select * from %s /*+ OPTIONS('scan.startup.mode' = 'earliest') */",
+                                        tableName))
+                        .collect();
+        expectedRows =
+                Arrays.asList(
+                        "+I[1, 3501, Beijing]",
+                        "+I[2, 3502, Shanghai]",
+                        "+I[3, 3503, Berlin]",
+                        "+I[4, 3504, Seattle]",
+                        "+I[5, 3505, Boston]",
+                        "+I[6, 3506, London]",
+                        "-U[1, 3501, Beijing]",
+                        "+U[1, 3501, China]",
+                        "-U[2, 3502, Shanghai]",
+                        "+U[2, 3502, China]",
+                        "-U[3, 3503, Berlin]",
+                        "+U[3, 3503, China]",
+                        "-D[4, 3504, Seattle]",
+                        "-D[5, 3505, Boston]",
+                        "-D[6, 3506, London]");
+        assertResultsIgnoreOrder(changelogIter, expectedRows, true);
+    }
+
+    @Test
     void testDeleteAndUpdateStmtOnPartitionedPkTable() throws Exception {
         String tableName = "partitioned_pk_table_delete_test";
         tBatchEnv.executeSql(
@@ -1039,7 +1113,7 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     }
 
     @Test
-    void testUnsupportedDeleteAndUpdateStmtOnPartialPK() {
+    void testBatchDeleteAndUpdateStmtOnPartialPK() throws Exception {
         // test primary-key table
         String t1 = "t1";
         tBatchEnv.executeSql(
@@ -1051,11 +1125,15 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                                 + " primary key (a, b) not enforced"
                                 + ")",
                         t1));
-        assertThatThrownBy(() -> tBatchEnv.executeSql("DELETE FROM " + t1 + " WHERE a = 1").await())
-                .isInstanceOf(UnsupportedOperationException.class)
-                .hasMessageContaining(
-                        "Currently, Fluss table only supports DELETE statement with conditions on primary key.");
-
+        tBatchEnv
+                .executeSql(
+                        "INSERT INTO "
+                                + t1
+                                + "(a, b, c) VALUES"
+                                + "(1, 1001, 'Beijing'),"
+                                + "(1, 1002, 'Shanghai'),"
+                                + "(2, 2001, 'Berlin')")
+                .await();
         assertThatThrownBy(
                         () ->
                                 tBatchEnv
@@ -1065,15 +1143,17 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                 .hasMessageContaining(
                         "Updates to primary keys are not supported, primaryKeys ([a, b]), updatedColumns ([b])");
 
-        assertThatThrownBy(
-                        () ->
-                                tBatchEnv
-                                        .executeSql(
-                                                "UPDATE " + t1 + " SET c = 'New York' WHERE a = 1")
-                                        .await())
-                .isInstanceOf(UnsupportedOperationException.class)
-                .hasMessageContaining(
-                        "Currently, Fluss table only supports UPDATE statement with conditions on primary key.");
+        tBatchEnv.executeSql("UPDATE " + t1 + " SET c = 'China' WHERE a = 1").await();
+        CloseableIterator<Row> rowIter =
+                tBatchEnv.executeSql(String.format("select * from %s", t1)).collect();
+        assertResultsIgnoreOrder(
+                rowIter,
+                Arrays.asList("+I[1, 1001, China]", "+I[1, 1002, China]", "+I[2, 2001, Berlin]"),
+                true);
+
+        tBatchEnv.executeSql("DELETE FROM " + t1 + " WHERE a = 1").await();
+        rowIter = tBatchEnv.executeSql(String.format("select * from %s", t1)).collect();
+        assertResultsIgnoreOrder(rowIter, Collections.singletonList("+I[2, 2001, Berlin]"), true);
 
         // test partitioned primary-key table
         String t2 = "t2";
@@ -1088,11 +1168,30 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                                 + " with ('table.auto-partition.enabled' = 'true',"
                                 + " 'table.auto-partition.time-unit' = 'year')",
                         t2));
-        assertThatThrownBy(() -> tBatchEnv.executeSql("DELETE FROM " + t2 + " WHERE a = 1").await())
-                .isInstanceOf(UnsupportedOperationException.class)
-                .hasMessageContaining(
-                        "Currently, Fluss table only supports DELETE statement with conditions on primary key.");
-
+        Collection<String> partitions =
+                waitUntilPartitions(
+                                FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(),
+                                TablePath.of(DEFAULT_DB, t2))
+                        .values();
+        String partition1 = partitions.iterator().next();
+        String partition2 = partition1.equals("2030") ? "2031" : "2030";
+        tBatchEnv.executeSql(
+                String.format("alter table %s add partition (c = '%s')", t2, partition2));
+        tBatchEnv
+                .executeSql(
+                        "INSERT INTO "
+                                + t2
+                                + "(a, b, c) VALUES"
+                                + "(1, 1001, '"
+                                + partition1
+                                + "'),"
+                                + "(1, 1002, '"
+                                + partition2
+                                + "'),"
+                                + "(2, 2001, '"
+                                + partition2
+                                + "')")
+                .await();
         assertThatThrownBy(
                         () ->
                                 tBatchEnv
@@ -1102,14 +1201,20 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                 .hasMessageContaining(
                         "Updates to primary keys are not supported, primaryKeys ([a, c]), updatedColumns ([c])");
 
-        assertThatThrownBy(
-                        () ->
-                                tBatchEnv
-                                        .executeSql("UPDATE " + t2 + " SET b = 4004 WHERE a = 1")
-                                        .await())
-                .isInstanceOf(UnsupportedOperationException.class)
-                .hasMessageContaining(
-                        "Currently, Fluss table only supports UPDATE statement with conditions on primary key.");
+        tBatchEnv.executeSql("UPDATE " + t2 + " SET b = 4004 WHERE a = 1").await();
+        rowIter = tBatchEnv.executeSql(String.format("select * from %s", t2)).collect();
+        assertResultsIgnoreOrder(
+                rowIter,
+                Arrays.asList(
+                        "+I[1, 4004, " + partition1 + "]",
+                        "+I[1, 4004, " + partition2 + "]",
+                        "+I[2, 2001, " + partition2 + "]"),
+                true);
+
+        tBatchEnv.executeSql("DELETE FROM " + t2 + " WHERE a = 1").await();
+        rowIter = tBatchEnv.executeSql(String.format("select * from %s", t2)).collect();
+        assertResultsIgnoreOrder(
+                rowIter, Collections.singletonList("+I[2, 2001, " + partition2 + "]"), true);
     }
 
     @Test
@@ -1507,7 +1612,7 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     }
 
     @Test
-    void testDeleteBehaviorDisabledForDeleteStmt() {
+    void testDeleteBehaviorDisabledForDeleteStmt() throws Exception {
         String tableName = "delete_behavior_disable_table";
         tBatchEnv.executeSql(
                 String.format(
@@ -1530,6 +1635,15 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                         String.format(
                                 "Table %s has delete behavior set to 'disable' which does not support DELETE statements.",
                                 tablePath));
+
+        tBatchEnv
+                .executeSql(String.format("INSERT INTO %s VALUES (1, 1001, 'Beijing')", tableName))
+                .await();
+        tBatchEnv.executeSql("UPDATE " + tableName + " SET c = 'China' WHERE a = 1").await();
+
+        CloseableIterator<Row> rowIter =
+                tBatchEnv.executeSql(String.format("select * from %s", tableName)).collect();
+        assertResultsIgnoreOrder(rowIter, Collections.singletonList("+I[1, 1001, China]"), true);
     }
 
     @ParameterizedTest

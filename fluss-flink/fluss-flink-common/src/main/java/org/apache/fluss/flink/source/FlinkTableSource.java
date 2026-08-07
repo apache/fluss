@@ -160,9 +160,6 @@ public class FlinkTableSource
 
     @Nullable private GenericRowData singleRowFilter;
 
-    // whether the scan is for row-level modification
-    @Nullable private RowLevelModificationType modificationScanType;
-
     // count(*) push down
     private boolean selectRowCount = false;
 
@@ -431,12 +428,6 @@ public class FlinkTableSource
 
                 @Override
                 public Source<RowData, ?, ?> createSource() {
-                    if (modificationScanType != null) {
-                        throw new UnsupportedOperationException(
-                                "Currently, Fluss table only supports "
-                                        + modificationScanType
-                                        + " statement with conditions on primary key.");
-                    }
                     if (hasPrimaryKey()
                             && startupOptions.startupMode
                                     != FlinkConnectorOptions.ScanStartupMode.FULL) {
@@ -533,7 +524,6 @@ public class FlinkTableSource
         source.producedDataType = producedDataType;
         source.projectedFields = projectedFields;
         source.singleRowFilter = singleRowFilter;
-        source.modificationScanType = modificationScanType;
         source.partitionFilters = partitionFilters;
         source.lakeSource = lakeSource;
         source.logRecordBatchFilter = logRecordBatchFilter;
@@ -821,7 +811,6 @@ public class FlinkTableSource
     public RowLevelModificationScanContext applyRowLevelModificationScan(
             RowLevelModificationType rowLevelModificationType,
             @Nullable RowLevelModificationScanContext rowLevelModificationScanContext) {
-        modificationScanType = rowLevelModificationType;
         return null;
     }
 
