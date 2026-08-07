@@ -1085,12 +1085,15 @@ class FlinkCatalogTest {
                         "rb_build_agg",
                         "rb_or_agg",
                         "rb_and_agg",
+                        "rb_xor_agg",
                         "rb_cardinality",
                         "rb_build",
                         "rb_contains",
                         "rb_to_array",
                         "rb_or",
-                        "rb_and");
+                        "rb_and",
+                        "rb_xor",
+                        "rb_andnot");
 
         ObjectPath functionPath = new ObjectPath(DEFAULT_DB, "testFunction");
         assertThat(catalog.functionExists(functionPath)).isFalse();
@@ -1191,7 +1194,7 @@ class FlinkCatalogTest {
         List<String> functions = catalog.listFunctions(DEFAULT_DB);
 
         // aggregate functions
-        assertThat(functions).contains("rb_build_agg", "rb_or_agg", "rb_and_agg");
+        assertThat(functions).contains("rb_build_agg", "rb_or_agg", "rb_and_agg", "rb_xor_agg");
         // scalar functions
         assertThat(functions)
                 .contains(
@@ -1200,7 +1203,9 @@ class FlinkCatalogTest {
                         "rb_contains",
                         "rb_to_array",
                         "rb_or",
-                        "rb_and");
+                        "rb_and",
+                        "rb_xor",
+                        "rb_andnot");
 
         // verify each function exists and resolves to the correct class
         assertThat(catalog.functionExists(new ObjectPath(DEFAULT_DB, "rb_cardinality"))).isTrue();
@@ -1209,6 +1214,9 @@ class FlinkCatalogTest {
         assertThat(catalog.functionExists(new ObjectPath(DEFAULT_DB, "rb_to_array"))).isTrue();
         assertThat(catalog.functionExists(new ObjectPath(DEFAULT_DB, "rb_or"))).isTrue();
         assertThat(catalog.functionExists(new ObjectPath(DEFAULT_DB, "rb_and"))).isTrue();
+        assertThat(catalog.functionExists(new ObjectPath(DEFAULT_DB, "rb_xor_agg"))).isTrue();
+        assertThat(catalog.functionExists(new ObjectPath(DEFAULT_DB, "rb_xor"))).isTrue();
+        assertThat(catalog.functionExists(new ObjectPath(DEFAULT_DB, "rb_andnot"))).isTrue();
 
         // verify unknown still returns false
         assertThat(catalog.functionExists(new ObjectPath(DEFAULT_DB, "unknown_fn"))).isFalse();
