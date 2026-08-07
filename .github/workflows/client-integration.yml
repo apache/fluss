@@ -113,7 +113,7 @@ jobs:
 
       - name: Cache server image
         id: image-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: /tmp/fluss-dev.tar
           key: fluss-dev-image-${{ hashFiles('fluss-server/**', 'fluss-common/**', 'fluss-rpc/**', 'fluss-dist/**', 'docker/fluss/**', 'pom.xml') }}
@@ -375,7 +375,7 @@ jobs:
         with:
           workspaces: fluss-rust
       - name: Cache Mix deps
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: fluss-rust/bindings/elixir/deps
           key: ${{ runner.os }}-mixdeps-otp${{ env.OTP_VERSION }}-elixir${{ env.ELIXIR_VERSION }}-${{ hashFiles('fluss-rust/bindings/elixir/mix.lock') }}
@@ -396,7 +396,7 @@ jobs:
         working-directory: fluss-rust/bindings/elixir
         run: mix credo
       - name: Cache PLT
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: fluss-rust/bindings/elixir/priv/plts/
           key: ${{ runner.os }}-mix-otp${{ env.OTP_VERSION }}-elixir${{ env.ELIXIR_VERSION }}-${{ hashFiles('fluss-rust/bindings/elixir/mix.lock') }}-plt
