@@ -232,7 +232,7 @@ public class TieringCommitOperator<WriteResult, Committable>
 
             Map<TableBucket, Long> logEndOffsets = new HashMap<>();
             Map<TableBucket, Long> logMaxTieredTimestamps = new HashMap<>();
-            for (TableBucketWriteResult<WriteResult> writeResult : nonEmptyResults) {
+            for (TableBucketWriteResult<WriteResult> writeResult : committableWriteResults) {
                 TableBucket tableBucket = writeResult.tableBucket();
                 logEndOffsets.put(tableBucket, writeResult.logEndOffset());
                 logMaxTieredTimestamps.put(tableBucket, writeResult.maxTimestamp());
