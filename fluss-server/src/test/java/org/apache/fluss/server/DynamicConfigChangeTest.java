@@ -26,6 +26,7 @@ import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.config.cluster.ServerReconfigurable;
 import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
+import org.apache.fluss.server.coordinator.OfflineLeaderRecoveryConfig;
 import org.apache.fluss.server.coordinator.remote.RemoteDirDynamicLoader;
 import org.apache.fluss.server.coordinator.remote.RoundRobinRemoteDirSelector;
 import org.apache.fluss.server.coordinator.remote.WeightedRoundRobinRemoteDirSelector;
@@ -189,6 +190,37 @@ public class DynamicConfigChangeTest {
                                     .getDefaultTableLakeOptions())
                     .isNull();
         }
+    }
+
+    @Test
+    void testAlterOfflineLeaderCleanRetryCount() throws Exception {
+        Configuration configuration = new Configuration();
+        OfflineLeaderRecoveryConfig recoveryConfig = new OfflineLeaderRecoveryConfig(configuration);
+        DynamicConfigManager dynamicConfigManager = createManager(configuration);
+        dynamicConfigManager.register(recoveryConfig);
+        dynamicConfigManager.startup();
+
+        dynamicConfigManager.alterConfigs(
+                Collections.singletonList(
+                        new AlterConfig(
+                                ConfigOptions.COORDINATOR_OFFLINE_LEADER_CLEAN_RETRY_COUNT.key(),
+                                "5",
+                                AlterConfigOpType.SET)));
+        assertThat(recoveryConfig.getCleanRetryCount()).isEqualTo(5);
+
+        assertThatThrownBy(
+                        () ->
+                                dynamicConfigManager.alterConfigs(
+                                        Collections.singletonList(
+                                                new AlterConfig(
+                                                        ConfigOptions
+                                                                .COORDINATOR_OFFLINE_LEADER_CLEAN_RETRY_COUNT
+                                                                .key(),
+                                                        "-2",
+                                                        AlterConfigOpType.SET))))
+                .isInstanceOf(ConfigException.class)
+                .hasMessageContaining("must be greater than or equal to -1");
+        assertThat(recoveryConfig.getCleanRetryCount()).isEqualTo(5);
     }
 
     @Test

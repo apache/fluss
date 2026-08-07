@@ -174,6 +174,7 @@ class CoordinatorEventProcessorTest {
     private CompletedSnapshotStoreManager completedSnapshotStoreManager;
     private CoordinatorMetadataCache serverMetadataCache;
     private ReplicaCapacityController replicaCapacityController;
+    private OfflineLeaderRecoveryConfig offlineLeaderRecoveryConfig;
     private KvSnapshotLeaseManager kvSnapshotLeaseManager;
     private Scheduler scheduler;
     private String remoteDataDir;
@@ -218,6 +219,7 @@ class CoordinatorEventProcessorTest {
         remoteDataDir = zookeeperClient.getDefaultRemoteDataDir();
         Configuration conf = new Configuration();
         conf.setString(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
+        offlineLeaderRecoveryConfig = new OfflineLeaderRecoveryConfig(conf);
         replicaCapacityController = new ReplicaCapacityController(conf, serverMetadataCache);
         autoPartitionManager =
                 new AutoPartitionManager(
@@ -1320,6 +1322,52 @@ class CoordinatorEventProcessorTest {
     }
 
     @Test
+    void testFollowerNotifyFailureDoesNotScheduleOfflineLeaderRecovery() throws Exception {
+        initCoordinatorChannel();
+        TablePath tablePath = TablePath.of(defaultDatabase, "follower_notify_failure");
+        TableAssignment tableAssignment =
+                generateAssignment(
+                        1,
+                        3,
+                        new TabletServerInfo[] {
+                            new TabletServerInfo(0, "rack0"),
+                            new TabletServerInfo(1, "rack1"),
+                            new TabletServerInfo(2, "rack2")
+                        });
+        long tableId =
+                metadataManager.createTable(
+                        tablePath, remoteDataDir, TEST_TABLE, tableAssignment, false);
+        verifyTableCreated(tableId, tableAssignment, 1, 3);
+
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+        List<Integer> replicas = tableAssignment.getBucketAssignment(0).getReplicas();
+        int leader = replicas.get(0);
+        int follower = replicas.get(1);
+
+        eventProcessor
+                .getCoordinatorEventManager()
+                .put(
+                        new NotifyLeaderAndIsrResponseReceivedEvent(
+                                Collections.singletonList(
+                                        new NotifyLeaderAndIsrResultForBucket(
+                                                tableBucket,
+                                                new ApiError(
+                                                        Errors.DISK_WRITE_LOCKED,
+                                                        "disk write locked"))),
+                                follower));
+
+        retryVerifyContext(
+                ctx -> {
+                    assertThat(ctx.getReplicaState(new TableBucketReplica(tableBucket, follower)))
+                            .isEqualTo(OfflineReplica);
+                    assertThat(ctx.getBucketLeaderAndIsr(tableBucket).get().leader())
+                            .isEqualTo(leader);
+                    assertThat(ctx.getOfflineLeaderBuckets()).doesNotContain(tableBucket);
+                });
+        assertThat(eventProcessor.hasOfflineLeaderRetryTaskScheduled()).isFalse();
+    }
+
+    @Test
     void testRetryOfflineLeaderEventRetriesOfflineReplicaOnLiveServer() throws Exception {
         assertThat(eventProcessor.hasOfflineLeaderRetryTaskScheduled()).isFalse();
         initCoordinatorChannel();
@@ -1437,6 +1485,94 @@ class CoordinatorEventProcessorTest {
                     assertThat(ctx.isReplicaOnline(leader, tableBucket)).isFalse();
                 });
         assertThat(eventProcessor.hasOfflineLeaderRetryTaskScheduled()).isTrue();
+    }
+
+    @Test
+    void testDynamicCleanRetryLimitEnablesUncleanElectionOnNextRound() throws Exception {
+        initCoordinatorChannel();
+        TablePath tablePath = TablePath.of(defaultDatabase, "dynamic_unclean_leader_election");
+        TableAssignment tableAssignment =
+                generateAssignment(
+                        1,
+                        3,
+                        new TabletServerInfo[] {
+                            new TabletServerInfo(0, "rack0"),
+                            new TabletServerInfo(1, "rack1"),
+                            new TabletServerInfo(2, "rack2")
+                        });
+        long tableId =
+                metadataManager.createTable(
+                        tablePath, remoteDataDir, TEST_TABLE, tableAssignment, false);
+        verifyTableCreated(tableId, tableAssignment, 1, 3);
+
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+        List<Integer> replicas = tableAssignment.getBucketAssignment(0).getReplicas();
+        int originalLeader = replicas.get(0);
+        int expectedUncleanLeader = replicas.get(1);
+        LeaderAndIsr leaderAndIsr = fromCtx(ctx -> ctx.getBucketLeaderAndIsr(tableBucket).get());
+        LeaderAndIsr singleReplicaIsr =
+                leaderAndIsr.newLeaderAndIsr(
+                        originalLeader,
+                        Collections.singletonList(originalLeader),
+                        Collections.emptyList());
+        zookeeperClient.updateLeaderAndIsr(
+                tableBucket,
+                singleReplicaIsr,
+                fromCtx(CoordinatorContext::getCoordinatorZkVersion));
+        fromCtx(
+                ctx -> {
+                    ctx.putBucketLeaderAndIsr(tableBucket, singleReplicaIsr);
+                    return null;
+                });
+
+        // The original ISR leader keeps rejecting activation. The default -1 configuration keeps
+        // this first scheduled retry clean.
+        initCoordinatorChannel(originalLeader);
+        eventProcessor
+                .getCoordinatorEventManager()
+                .put(
+                        new NotifyLeaderAndIsrResponseReceivedEvent(
+                                Collections.singletonList(
+                                        new NotifyLeaderAndIsrResultForBucket(
+                                                tableBucket,
+                                                new ApiError(
+                                                        Errors.DISK_WRITE_LOCKED,
+                                                        "disk write locked"))),
+                                originalLeader));
+        retryVerifyContext(
+                ctx -> {
+                    assertThat(ctx.getBucketLeaderAndIsr(tableBucket).get().leader())
+                            .isEqualTo(LeaderAndIsr.NO_LEADER);
+                    assertThat(ctx.getOfflineLeaderBuckets()).contains(tableBucket);
+                });
+
+        eventProcessor.getCoordinatorEventManager().put(new RetryOfflineLeaderEvent());
+        retryVerifyContext(
+                ctx -> {
+                    assertThat(ctx.getOfflineLeaderCleanRetryCount(tableBucket)).isEqualTo(1);
+                    assertThat(ctx.getBucketLeaderAndIsr(tableBucket).get().leader())
+                            .isEqualTo(LeaderAndIsr.NO_LEADER);
+                });
+
+        // Lowering the dynamic limit does not reset accumulated retries. The next recovery round
+        // therefore elects the first live non-ISR replica.
+        Configuration updatedConfig = new Configuration();
+        updatedConfig.set(ConfigOptions.COORDINATOR_OFFLINE_LEADER_CLEAN_RETRY_COUNT, 1);
+        offlineLeaderRecoveryConfig.validate(updatedConfig);
+        offlineLeaderRecoveryConfig.reconfigure(updatedConfig);
+        initCoordinatorChannel();
+        eventProcessor.getCoordinatorEventManager().put(new RetryOfflineLeaderEvent());
+
+        retryVerifyContext(
+                ctx -> {
+                    LeaderAndIsr recoveredLeaderAndIsr =
+                            ctx.getBucketLeaderAndIsr(tableBucket).get();
+                    assertThat(recoveredLeaderAndIsr.leader()).isEqualTo(expectedUncleanLeader);
+                    assertThat(recoveredLeaderAndIsr.isr()).containsExactly(expectedUncleanLeader);
+                    assertThat(ctx.getOfflineLeaderBuckets()).doesNotContain(tableBucket);
+                    assertThat(ctx.getOfflineLeaderCleanRetryCount(tableBucket)).isZero();
+                });
+        assertThat(eventProcessor.hasOfflineLeaderRetryTaskScheduled()).isFalse();
     }
 
     @Test
@@ -2125,7 +2261,8 @@ class CoordinatorEventProcessorTest {
                 metadataManager,
                 kvSnapshotLeaseManager,
                 scheduler,
-                SystemClock.getInstance());
+                SystemClock.getInstance(),
+                offlineLeaderRecoveryConfig);
     }
 
     private static class RecordingAutoPartitionManager extends AutoPartitionManager {

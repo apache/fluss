@@ -251,6 +251,19 @@ public class ConfigOptions {
                                     + "conditions, such as disk write protection, become electable "
                                     + "again after recovery.");
 
+    public static final ConfigOption<Integer> COORDINATOR_OFFLINE_LEADER_CLEAN_RETRY_COUNT =
+            key("coordinator.offline-leader.clean-retry-count")
+                    .intType()
+                    .defaultValue(-1)
+                    .withDescription(
+                            "The number of clean leader-election retry rounds for an offline "
+                                    + "bucket before the coordinator allows an unclean election. "
+                                    + "A value of -1 retries clean election indefinitely and "
+                                    + "disables automatic unclean election. A value of 0 allows "
+                                    + "unclean election on the first recovery round. Enabling "
+                                    + "unclean election can cause data loss. This option can be "
+                                    + "updated dynamically without restarting the server.");
+
     public static final ConfigOption<Boolean> LOG_TABLE_ALLOW_CREATION =
             key("allow.create.log.tables")
                     .booleanType()

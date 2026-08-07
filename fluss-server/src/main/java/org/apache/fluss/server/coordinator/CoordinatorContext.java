@@ -114,6 +114,19 @@ public class CoordinatorContext {
      */
     private final Set<TableBucket> pendingLeaderActivationBuckets = new HashSet<>();
 
+    /**
+     * Buckets whose leader is known to be unavailable and therefore require recovery. Unlike {@link
+     * #replicasOnOffline}, this is a bucket-level index and is not populated by an ordinary
+     * follower NotifyLeaderAndIsr failure.
+     */
+    private final Set<TableBucket> offlineLeaderBuckets = new HashSet<>();
+
+    /** Number of scheduled clean leader-election retries performed for each offline bucket. */
+    private final Map<TableBucket, Integer> offlineLeaderCleanRetryCounts = new HashMap<>();
+
+    /** Number of unclean election attempts, used to rotate through live assignment replicas. */
+    private final Map<TableBucket, Integer> offlineLeaderUncleanAttemptCounts = new HashMap<>();
+
     /** A mapping from tabletServers to server tag. */
     private final Map<Integer, ServerTag> serverTags = new HashMap<>();
 
@@ -302,6 +315,52 @@ public class CoordinatorContext {
         pendingLeaderActivationBuckets.removeAll(buckets);
     }
 
+    /** Marks a bucket as requiring offline-leader recovery. */
+    public void addOfflineLeaderBucket(TableBucket tableBucket) {
+        offlineLeaderBuckets.add(tableBucket);
+    }
+
+    /**
+     * Removes a bucket from offline-leader recovery and clears all attempt counters after recovery
+     * or deletion.
+     */
+    public void removeOfflineLeaderBucket(TableBucket tableBucket) {
+        offlineLeaderBuckets.remove(tableBucket);
+        offlineLeaderCleanRetryCounts.remove(tableBucket);
+        offlineLeaderUncleanAttemptCounts.remove(tableBucket);
+    }
+
+    /** Returns a snapshot of buckets that require offline-leader recovery. */
+    public Set<TableBucket> getOfflineLeaderBuckets() {
+        return new HashSet<>(offlineLeaderBuckets);
+    }
+
+    /** Returns the completed clean retry rounds for an offline bucket. */
+    public int getOfflineLeaderCleanRetryCount(TableBucket tableBucket) {
+        return offlineLeaderCleanRetryCounts.getOrDefault(tableBucket, 0);
+    }
+
+    /** Records one completed clean retry round and returns the new count. */
+    public int incrementOfflineLeaderCleanRetryCount(TableBucket tableBucket) {
+        int currentCount = getOfflineLeaderCleanRetryCount(tableBucket);
+        int newCount = currentCount == Integer.MAX_VALUE ? currentCount : currentCount + 1;
+        offlineLeaderCleanRetryCounts.put(tableBucket, newCount);
+        return newCount;
+    }
+
+    /** Returns the completed unclean election attempts for an offline bucket. */
+    public int getOfflineLeaderUncleanAttemptCount(TableBucket tableBucket) {
+        return offlineLeaderUncleanAttemptCounts.getOrDefault(tableBucket, 0);
+    }
+
+    /** Records one unclean election attempt and returns the new count. */
+    public int incrementOfflineLeaderUncleanAttemptCount(TableBucket tableBucket) {
+        int currentCount = getOfflineLeaderUncleanAttemptCount(tableBucket);
+        int newCount = currentCount == Integer.MAX_VALUE ? currentCount : currentCount + 1;
+        offlineLeaderUncleanAttemptCounts.put(tableBucket, newCount);
+        return newCount;
+    }
+
     public Map<Long, TablePath> allTables() {
         return tablePathById;
     }
@@ -469,6 +528,8 @@ public class CoordinatorContext {
                             (k) -> new HashMap<>());
         }
         assignments.put(tableBucket.getBucket(), replicaAssignment);
+        offlineLeaderCleanRetryCounts.remove(tableBucket);
+        offlineLeaderUncleanAttemptCounts.remove(tableBucket);
     }
 
     public List<Integer> getAssignment(TableBucket tableBucket) {
@@ -762,6 +823,7 @@ public class CoordinatorContext {
                             bucket -> {
                                 TableBucket tb = new TableBucket(tableId, bucket);
                                 bucketLeaderAndIsr.remove(tb);
+                                removeOfflineLeaderBucket(tb);
                                 removedBuckets.add(tb);
                             });
             removeFromPendingLeaderActivations(removedBuckets);
@@ -789,6 +851,7 @@ public class CoordinatorContext {
                                                 tablePartition.getPartitionId(),
                                                 bucket);
                                 bucketLeaderAndIsr.remove(tb);
+                                removeOfflineLeaderBucket(tb);
                                 removedBuckets.add(tb);
                             });
             removeFromPendingLeaderActivations(removedBuckets);
@@ -827,6 +890,9 @@ public class CoordinatorContext {
         bucketLeaderAndIsr.clear();
         replicasOnOffline.clear();
         pendingLeaderActivationBuckets.clear();
+        offlineLeaderBuckets.clear();
+        offlineLeaderCleanRetryCounts.clear();
+        offlineLeaderUncleanAttemptCounts.clear();
         bucketStates.clear();
         replicaStates.clear();
         tablePathById.clear();

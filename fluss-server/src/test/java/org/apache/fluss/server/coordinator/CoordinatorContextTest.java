@@ -134,6 +134,26 @@ class CoordinatorContextTest {
         assertThat(context.offlineReplicasOnLiveTabletServers()).isEmpty();
     }
 
+    @Test
+    void testOfflineLeaderBucketIndexAndRetryCounters() {
+        CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
+        TableBucket tableBucket = new TableBucket(1L, 0);
+
+        context.addOfflineLeaderBucket(tableBucket);
+        context.incrementOfflineLeaderCleanRetryCount(tableBucket);
+        context.incrementOfflineLeaderCleanRetryCount(tableBucket);
+        context.incrementOfflineLeaderUncleanAttemptCount(tableBucket);
+
+        assertThat(context.getOfflineLeaderBuckets()).containsExactly(tableBucket);
+        assertThat(context.getOfflineLeaderCleanRetryCount(tableBucket)).isEqualTo(2);
+        assertThat(context.getOfflineLeaderUncleanAttemptCount(tableBucket)).isEqualTo(1);
+
+        context.removeOfflineLeaderBucket(tableBucket);
+        assertThat(context.getOfflineLeaderBuckets()).isEmpty();
+        assertThat(context.getOfflineLeaderCleanRetryCount(tableBucket)).isZero();
+        assertThat(context.getOfflineLeaderUncleanAttemptCount(tableBucket)).isZero();
+    }
+
     // ---- Pending Leader Activation Tracking Tests ----
 
     @Test
