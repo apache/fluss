@@ -21,6 +21,7 @@ import org.apache.fluss.client.admin.ClusterHealth;
 import org.apache.fluss.client.admin.ClusterHealthStatus;
 import org.apache.fluss.client.admin.OffsetSpec;
 import org.apache.fluss.client.admin.ProducerOffsetsResult;
+import org.apache.fluss.client.admin.TabletServerDescription;
 import org.apache.fluss.client.lookup.LookupBatch;
 import org.apache.fluss.client.lookup.PrefixLookupBatch;
 import org.apache.fluss.client.metadata.AcquireKvSnapshotLeaseResult;
@@ -35,6 +36,7 @@ import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
 import org.apache.fluss.cluster.rebalance.RebalanceProgress;
 import org.apache.fluss.cluster.rebalance.RebalanceResultForBucket;
 import org.apache.fluss.cluster.rebalance.RebalanceStatus;
+import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.config.cluster.ColumnPositionType;
 import org.apache.fluss.config.cluster.ConfigEntry;
@@ -55,6 +57,7 @@ import org.apache.fluss.rpc.messages.AcquireKvSnapshotLeaseResponse;
 import org.apache.fluss.rpc.messages.AlterDatabaseRequest;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.CreatePartitionRequest;
+import org.apache.fluss.rpc.messages.DescribeTabletServersResponse;
 import org.apache.fluss.rpc.messages.DropPartitionRequest;
 import org.apache.fluss.rpc.messages.GetClusterHealthResponse;
 import org.apache.fluss.rpc.messages.GetFileSystemSecurityTokenResponse;
@@ -901,5 +904,22 @@ public class ClientRpcMessageUtils {
             default:
                 return ClusterHealthStatus.UNKNOWN;
         }
+    }
+
+    public static List<TabletServerDescription> toTabletServerDescriptions(
+            DescribeTabletServersResponse resp) {
+        return resp.getTabletServersList().stream()
+                .map(
+                        load ->
+                                new TabletServerDescription(
+                                        load.getServerId(),
+                                        load.getNumReplicas(),
+                                        load.getInSyncReplicas(),
+                                        load.getNumLeaderReplicas(),
+                                        load.getActiveLeaderReplicas(),
+                                        load.hasServerTag()
+                                                ? ServerTag.valueOf(load.getServerTag())
+                                                : null))
+                .collect(Collectors.toList());
     }
 }
