@@ -56,6 +56,18 @@ class FlinkAggFunctionParserTest {
     }
 
     @Test
+    void testParseHllSketchFunction() {
+        Configuration options = new Configuration();
+        options.setString("fields.user_hll.agg", "hll_sketch");
+
+        Optional<AggFunction> result =
+                FlinkAggFunctionParser.parseAggFunction("user_hll", DataTypes.BYTES(), options);
+
+        assertThat(result).isPresent();
+        assertThat(result.get()).isEqualTo(AggFunctions.HLL_SKETCH());
+    }
+
+    @Test
     void testParseFunctionWithParameters() {
         Configuration options = new Configuration();
         options.setString("fields.tags.agg", "listagg");
@@ -129,6 +141,20 @@ class FlinkAggFunctionParserTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Unknown aggregation function")
                 .hasMessageContaining("invalid_function");
+    }
+
+    @Test
+    void testParseHllSketchFunctionWithInvalidType() {
+        Configuration options = new Configuration();
+        options.setString("fields.user_hll.agg", "hll_sketch");
+
+        assertThatThrownBy(
+                        () ->
+                                FlinkAggFunctionParser.parseAggFunction(
+                                        "user_hll", DataTypes.STRING(), options))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Invalid aggregation function configuration")
+                .hasMessageContaining("hll_sketch");
     }
 
     @Test

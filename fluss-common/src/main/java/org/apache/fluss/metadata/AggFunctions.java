@@ -301,6 +301,22 @@ public final class AggFunctions {
     }
 
     // ===================================================================================
+    // Apache DataSketches Aggregation Functions
+    // ===================================================================================
+
+    /**
+     * Creates a HLL_SKETCH aggregation function that merges serialized Apache DataSketches HLL
+     * sketches.
+     *
+     * <p>Supported data types: BYTES
+     *
+     * @return a HLL_SKETCH aggregation function
+     */
+    public static AggFunction HLL_SKETCH() {
+        return new AggFunction(AggFunctionType.HLL_SKETCH, null);
+    }
+
+    // ===================================================================================
     // Internal Factory Methods
     // ===================================================================================
 

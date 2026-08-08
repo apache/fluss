@@ -384,8 +384,19 @@ class TableDescriptorTest {
                 .hasMessageContaining(
                         Arrays.deepToString(AggFunctionType.MAX.getSupportedDataTypeRoots()));
 
+        assertThatThrownBy(
+                        () ->
+                                AggFunctions.of(AggFunctionType.HLL_SKETCH, params)
+                                        .validateDataType(DataTypes.STRING()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("column must be part of")
+                .hasMessageContaining(
+                        Arrays.deepToString(
+                                AggFunctionType.HLL_SKETCH.getSupportedDataTypeRoots()));
+
         // valid case
         AggFunctions.of(AggFunctionType.LAST_VALUE, params).validateDataType(DataTypes.STRING());
         AggFunctions.of(AggFunctionType.LISTAGG, params).validateDataType(DataTypes.STRING());
+        AggFunctions.of(AggFunctionType.HLL_SKETCH, params).validateDataType(DataTypes.BYTES());
     }
 }

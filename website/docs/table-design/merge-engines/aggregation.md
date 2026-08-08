@@ -970,6 +970,60 @@ TableDescriptor.builder()
 </TabItem>
 </Tabs>
 
+### hll_sketch
+
+Aggregates serialized Apache DataSketches HLL sketch values by union.
+
+- **Supported Data Types**: `BYTES`
+- **Behavior**: Merges incoming HLL sketches with the accumulator and stores compact serialized sketch bytes
+- **Null Handling**: Null values are ignored
+
+**Example:**
+<Tabs>
+<TabItem value="flink-sql" label="Flink SQL" default>
+
+```sql
+CREATE TABLE daily_user_metrics (
+    metric_day STRING,
+    user_hll BYTES,
+    PRIMARY KEY (metric_day) NOT ENFORCED
+) WITH (
+    'table.merge-engine' = 'aggregation',
+    'fields.user_hll.agg' = 'hll_sketch'
+);
+```
+
+:::note
+`hll_sketch` expects values to be serialized Apache DataSketches HLL sketches. It does not build sketches from raw input values by itself. Flink/Spark SQL helper functions for building and estimating sketches can be added separately.
+:::
+
+</TabItem>
+<TabItem value="java-client" label="Java Client">
+
+```java
+Schema schema = Schema.newBuilder()
+    .column("metric_day", DataTypes.STRING())
+    .column("user_hll", DataTypes.BYTES(), AggFunctions.HLL_SKETCH())
+    .primaryKey("metric_day")
+    .build();
+
+TableDescriptor.builder()
+    .schema(schema)
+    .property("table.merge-engine", "aggregation")
+    .build();
+
+// Serialize HLL sketches using the Apache DataSketches library
+// HllSketch sketch1 = new HllSketch(12);
+// sketch1.update(userId1);
+// byte[] bytes1 = sketch1.toCompactByteArray();
+
+// Input: (2026-05-16, hll{user_a,user_b}), (2026-05-16, hll{user_b,user_c})
+// Result: (2026-05-16, hll{user_a,user_b,user_c}) -- union of the two sketches
+```
+
+</TabItem>
+</Tabs>
+
 ### bool_and
 
 Evaluates whether all boolean values in a set are true (logical AND).
