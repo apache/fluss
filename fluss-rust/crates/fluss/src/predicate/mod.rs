@@ -31,6 +31,14 @@
 //! Setting a predicate on a scan is only supported on log scans over tables
 //! with the ARROW log format.
 
+// Everything below is reachable only once `TableScan::filter` threads a
+// predicate into the log fetcher.
+#[allow(dead_code, reason = "consumed by the scan plumbing")]
+mod pb;
+
+#[allow(unused_imports, reason = "consumed by the scan plumbing")]
+pub(crate) use pb::to_pb_predicate;
+
 use crate::row::{Decimal, TimestampLtz, TimestampNtz};
 
 /// Comparison applied by a [`Predicate::Leaf`] to one column.
@@ -51,44 +59,11 @@ pub enum LeafFunction {
     NotIn,
 }
 
-impl LeafFunction {
-    /// Wire code for `PbLeafPredicate.function`.
-    #[allow(dead_code, reason = "consumed by the predicate encoder")]
-    pub(crate) fn code(self) -> i32 {
-        match self {
-            LeafFunction::Equal => 0,
-            LeafFunction::NotEqual => 1,
-            LeafFunction::LessThan => 2,
-            LeafFunction::LessOrEqual => 3,
-            LeafFunction::GreaterThan => 4,
-            LeafFunction::GreaterOrEqual => 5,
-            LeafFunction::IsNull => 6,
-            LeafFunction::IsNotNull => 7,
-            LeafFunction::StartsWith => 8,
-            LeafFunction::Contains => 9,
-            LeafFunction::EndsWith => 10,
-            LeafFunction::In => 11,
-            LeafFunction::NotIn => 12,
-        }
-    }
-}
-
 /// Boolean connective applied by a [`Predicate::Compound`] to its children.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CompoundFunction {
     And,
     Or,
-}
-
-impl CompoundFunction {
-    /// Wire code for `PbCompoundPredicate.function`.
-    #[allow(dead_code, reason = "consumed by the predicate encoder")]
-    pub(crate) fn code(self) -> i32 {
-        match self {
-            CompoundFunction::And => 0,
-            CompoundFunction::Or => 1,
-        }
-    }
 }
 
 /// A constant compared against a column, coerced to the column's declared type
@@ -458,24 +433,5 @@ mod tests {
 
         let folded = Predicate::and_all(vec![col("a").eq(1i32), col("b").eq(2i32)]).unwrap();
         assert_eq!(folded, col("a").eq(1i32).and(col("b").eq(2i32)));
-    }
-
-    #[test]
-    fn wire_codes_match_the_protocol() {
-        assert_eq!(LeafFunction::Equal.code(), 0);
-        assert_eq!(LeafFunction::NotEqual.code(), 1);
-        assert_eq!(LeafFunction::LessThan.code(), 2);
-        assert_eq!(LeafFunction::LessOrEqual.code(), 3);
-        assert_eq!(LeafFunction::GreaterThan.code(), 4);
-        assert_eq!(LeafFunction::GreaterOrEqual.code(), 5);
-        assert_eq!(LeafFunction::IsNull.code(), 6);
-        assert_eq!(LeafFunction::IsNotNull.code(), 7);
-        assert_eq!(LeafFunction::StartsWith.code(), 8);
-        assert_eq!(LeafFunction::Contains.code(), 9);
-        assert_eq!(LeafFunction::EndsWith.code(), 10);
-        assert_eq!(LeafFunction::In.code(), 11);
-        assert_eq!(LeafFunction::NotIn.code(), 12);
-        assert_eq!(CompoundFunction::And.code(), 0);
-        assert_eq!(CompoundFunction::Or.code(), 1);
     }
 }
