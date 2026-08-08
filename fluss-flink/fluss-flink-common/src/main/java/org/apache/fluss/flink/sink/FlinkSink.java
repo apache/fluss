@@ -54,6 +54,7 @@ import java.util.List;
 
 import static org.apache.fluss.flink.sink.FlinkStreamPartitioner.partition;
 import static org.apache.fluss.flink.utils.FlinkConversions.toFlussRowType;
+import static org.apache.fluss.utils.Preconditions.checkState;
 
 /**
  * Flink sink for Fluss.
@@ -78,8 +79,9 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
 
     @Override
     protected SinkWriter<InputT> createWriter(
-            MailboxExecutor mailboxExecutor, SinkWriterMetricGroup metricGroup) {
-        FlinkSinkWriter<InputT> flinkSinkWriter = builder.createWriter(mailboxExecutor);
+            MailboxExecutor mailboxExecutor, SinkWriterMetricGroup metricGroup, int subtaskIndex) {
+        FlinkSinkWriter<InputT> flinkSinkWriter =
+                builder.createWriter(mailboxExecutor, subtaskIndex);
         flinkSinkWriter.initialize(metricGroup);
         return flinkSinkWriter;
     }
@@ -104,7 +106,7 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
 
     @Internal
     interface SinkWriterBuilder<W extends FlinkSinkWriter<InputT>, InputT> extends Serializable {
-        W createWriter(MailboxExecutor mailboxExecutor);
+        W createWriter(MailboxExecutor mailboxExecutor, int subtaskIndex);
 
         DataStream<InputT> addPreWriteTopology(DataStream<InputT> input);
     }
@@ -147,7 +149,8 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
         }
 
         @Override
-        public AppendSinkWriter<InputT> createWriter(MailboxExecutor mailboxExecutor) {
+        public AppendSinkWriter<InputT> createWriter(
+                MailboxExecutor mailboxExecutor, int subtaskIndex) {
             return new AppendSinkWriter<>(
                     tablePath,
                     flussConfig,
@@ -253,16 +256,16 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
         @Nullable private final String producerId;
 
         /**
-         * Optional context for reporting offsets to the upstream UndoRecoveryOperator.
+         * Optional factory for reporting offsets to the upstream UndoRecoveryOperator.
          *
          * <p>This is set internally by {@link #addPreWriteTopology} when UndoRecoveryOperator is
-         * added to the pipeline. The context is then passed to the UpsertSinkWriter during
-         * creation.
+         * added to the pipeline. An independently serialized copy creates a reporter bound to the
+         * runtime Sink Writer subtask.
          *
-         * <p>Note: This field is NOT transient because the ProducerOffsetReporterHolder is
-         * serializable and needs to survive job serialization to be passed to the TaskManager.
+         * <p>The factory keeps its registry namespace private; callers only provide the runtime
+         * subtask index.
          */
-        @Nullable private ProducerOffsetReporter offsetReporter;
+        @Nullable private UndoRecoveryOperatorFactory<InputT> undoRecoveryOperatorFactory;
 
         UpsertSinkWriterBuilder(
                 TablePath tablePath,
@@ -292,7 +295,16 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
         }
 
         @Override
-        public UpsertSinkWriter<InputT> createWriter(MailboxExecutor mailboxExecutor) {
+        public UpsertSinkWriter<InputT> createWriter(
+                MailboxExecutor mailboxExecutor, int subtaskIndex) {
+            checkState(
+                    !enableUndoRecovery || undoRecoveryOperatorFactory != null,
+                    "Undo Recovery operator factory must be initialized before creating an upsert sink writer with Undo Recovery enabled");
+            ProducerOffsetReporter offsetReporter =
+                    undoRecoveryOperatorFactory == null
+                            ? null
+                            : undoRecoveryOperatorFactory.createProducerOffsetReporter(
+                                    subtaskIndex);
             return new UpsertSinkWriter<>(
                     tablePath,
                     flussConfig,
@@ -333,6 +345,9 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
 
             // Add UndoRecoveryOperator for aggregation tables
             if (enableUndoRecovery) {
+                checkState(
+                        undoRecoveryOperatorFactory == null,
+                        "A Fluss sink with Undo Recovery cannot be added to multiple topologies");
                 UndoRecoveryOperatorFactory<InputT> operatorFactory =
                         new UndoRecoveryOperatorFactory<>(
                                 tablePath,
@@ -350,7 +365,7 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
                                         operatorFactory)
                                 .setParallelism(stream.getParallelism());
 
-                offsetReporter = operatorFactory.getProducerOffsetReporter();
+                undoRecoveryOperatorFactory = operatorFactory;
             }
 
             return stream;

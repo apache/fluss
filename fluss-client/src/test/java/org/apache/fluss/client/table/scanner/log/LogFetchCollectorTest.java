@@ -262,6 +262,21 @@ public class LogFetchCollectorTest {
         assertThat(scanRecords.consumedUpToOffset(tb)).isEqualTo(20L);
     }
 
+    @Test
+    void testRecordsWithTrailingFilteredRangeAdvanceToFilteredEndOffset() throws Exception {
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
+        FetchLogResultForBucket recordsWithTrailingFilteredRange =
+                new FetchLogResultForBucket(tb, genMemoryLogRecordsByObject(DATA1), 20L, 20L);
+        logFetchBuffer.add(makeCompletedFetch(tb, recordsWithTrailingFilteredRange, 0L));
+
+        ScanRecords scanRecords = logFetchCollector.collectFetch(logFetchBuffer);
+
+        assertThat(scanRecords.records(tb)).hasSize(10);
+        assertThat(scanRecords.records(tb).get(9).logOffset()).isEqualTo(9L);
+        assertThat(scanRecords.consumedUpToOffset(tb)).isEqualTo(20L);
+        assertThat(logScannerStatus.getBucketOffset(tb)).isEqualTo(20L);
+    }
+
     private DefaultCompletedFetch makeCompletedFetch(
             TableBucket tableBucket, FetchLogResultForBucket resultForBucket, long offset) {
         return new DefaultCompletedFetch(

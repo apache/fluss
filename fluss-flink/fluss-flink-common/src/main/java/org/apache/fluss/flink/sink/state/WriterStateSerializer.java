@@ -35,9 +35,10 @@ import java.util.Map;
  * <p>This serializer extends {@link TypeSerializer} for use with Flink's {@code
  * ListStateDescriptor} in Union List State.
  *
- * <p>Serialization format:
+ * <p>V1 serialization format:
  *
  * <ul>
+ *   <li>int: version (1)
  *   <li>int: number of bucket offsets
  *   <li>For each bucket offset:
  *       <ul>
@@ -49,15 +50,28 @@ import java.util.Map;
  *       </ul>
  * </ul>
  *
- * <p>This serializer uses a stable binary format that supports both partitioned and non-partitioned
- * tables via {@link TableBucket}.
+ * <p>V2 serialization format:
+ *
+ * <ul>
+ *   <li>int: version (2)
+ *   <li>long: table ID
+ *   <li>int: number of bucket offsets
+ *   <li>For each bucket offset:
+ *       <ul>
+ *         <li>boolean: has partition ID
+ *         <li>long: partition ID (if has partition ID is true)
+ *         <li>int: bucket ID
+ *         <li>long: offset
+ *       </ul>
+ * </ul>
  */
 public class WriterStateSerializer extends TypeSerializer<WriterState> {
 
     private static final long serialVersionUID = 1L;
 
-    /** The current version of the serialization format. */
-    private static final int CURRENT_VERSION = 1;
+    private static final int V1_VERSION = 1;
+    private static final int V2_VERSION = 2;
+
     // -------------------------------------------------------------------------
     //  TypeSerializer methods
     // -------------------------------------------------------------------------
@@ -99,39 +113,46 @@ public class WriterStateSerializer extends TypeSerializer<WriterState> {
 
     @Override
     public void serialize(WriterState record, DataOutputView target) throws IOException {
-        target.writeInt(CURRENT_VERSION);
+        if (record.getStateFormat() == WriterState.StateFormat.V1_LEGACY) {
+            serializeV1(record, target);
+        } else if (record.getStateFormat() == WriterState.StateFormat.V2_COMPLETE) {
+            serializeV2(record, target);
+        } else {
+            throw new IOException("Unsupported writer state format: " + record.getStateFormat());
+        }
+    }
+
+    private void serializeV1(WriterState record, DataOutputView target) throws IOException {
+        target.writeInt(V1_VERSION);
         Map<TableBucket, Long> bucketOffsets = record.getBucketOffsets();
         target.writeInt(bucketOffsets.size());
         for (Map.Entry<TableBucket, Long> entry : bucketOffsets.entrySet()) {
             TableBucket bucket = entry.getKey();
             target.writeLong(bucket.getTableId());
-            target.writeBoolean(bucket.getPartitionId() != null);
-            if (bucket.getPartitionId() != null) {
-                target.writeLong(bucket.getPartitionId());
-            }
-            target.writeInt(bucket.getBucket());
-            target.writeLong(entry.getValue());
+            writeBucketOffset(target, bucket, entry.getValue());
+        }
+    }
+
+    private void serializeV2(WriterState record, DataOutputView target) throws IOException {
+        target.writeInt(V2_VERSION);
+        target.writeLong(record.getTableId());
+        Map<TableBucket, Long> bucketOffsets = record.getBucketOffsets();
+        target.writeInt(bucketOffsets.size());
+        for (Map.Entry<TableBucket, Long> entry : bucketOffsets.entrySet()) {
+            writeBucketOffset(target, entry.getKey(), entry.getValue());
         }
     }
 
     @Override
     public WriterState deserialize(DataInputView source) throws IOException {
         int version = source.readInt();
-        if (version != CURRENT_VERSION) {
-            throw new IOException(
-                    "Unsupported version: " + version + ". Expected version: " + CURRENT_VERSION);
+        if (version == V1_VERSION) {
+            return deserializeV1(source);
+        } else if (version == V2_VERSION) {
+            return deserializeV2(source);
+        } else {
+            throw new IOException("Unsupported writer state version: " + version);
         }
-        int size = source.readInt();
-        Map<TableBucket, Long> bucketOffsets = new HashMap<>(size);
-        for (int i = 0; i < size; i++) {
-            long tableId = source.readLong();
-            boolean hasPartitionId = source.readBoolean();
-            Long partitionId = hasPartitionId ? source.readLong() : null;
-            int bucketId = source.readInt();
-            long offset = source.readLong();
-            bucketOffsets.put(new TableBucket(tableId, partitionId, bucketId), offset);
-        }
-        return new WriterState(bucketOffsets);
     }
 
     @Override
@@ -143,28 +164,83 @@ public class WriterStateSerializer extends TypeSerializer<WriterState> {
     @Override
     public void copy(DataInputView source, DataOutputView target) throws IOException {
         int version = source.readInt();
-        if (version != CURRENT_VERSION) {
-            throw new IOException(
-                    "Unsupported version: " + version + ". Expected version: " + CURRENT_VERSION);
+        WriterState state;
+        if (version == V1_VERSION) {
+            state = deserializeV1(source);
+        } else if (version == V2_VERSION) {
+            state = deserializeV2(source);
+        } else {
+            throw new IOException("Unsupported writer state version: " + version);
         }
-        target.writeInt(version);
-        // Copy bucket offsets size
+        serialize(state, target);
+    }
+
+    private WriterState deserializeV1(DataInputView source) throws IOException {
+        int size = readEntryCount(source);
+        Map<TableBucket, Long> bucketOffsets = readBucketOffsets(source, size, null);
+        return new WriterState(bucketOffsets);
+    }
+
+    private WriterState deserializeV2(DataInputView source) throws IOException {
+        long tableId = source.readLong();
+        validateTableId(tableId);
+        int size = readEntryCount(source);
+        Map<TableBucket, Long> bucketOffsets = readBucketOffsets(source, size, tableId);
+        return WriterState.complete(tableId, bucketOffsets);
+    }
+
+    private static int readEntryCount(DataInputView source) throws IOException {
         int size = source.readInt();
-        target.writeInt(size);
-        // Copy each bucket offset entry
+        if (size < 0) {
+            throw new IOException("Invalid writer state entry count: " + size);
+        }
+        return size;
+    }
+
+    private static Map<TableBucket, Long> readBucketOffsets(
+            DataInputView source, int size, Long completeTableId) throws IOException {
+        Map<TableBucket, Long> bucketOffsets = new HashMap<>(size);
         for (int i = 0; i < size; i++) {
-            // Copy table ID
-            target.writeLong(source.readLong());
-            // Copy has partition ID flag and partition ID if present
+            long tableId = completeTableId == null ? source.readLong() : completeTableId;
             boolean hasPartitionId = source.readBoolean();
-            target.writeBoolean(hasPartitionId);
-            if (hasPartitionId) {
-                target.writeLong(source.readLong());
+            Long partitionId = hasPartitionId ? source.readLong() : null;
+            int bucketId = source.readInt();
+            long offset = source.readLong();
+            TableBucket bucket = new TableBucket(tableId, partitionId, bucketId);
+            validateOffset(bucket, offset);
+            Long previous = bucketOffsets.put(bucket, offset);
+            if (previous != null) {
+                throw new IOException(
+                        "Duplicate bucket "
+                                + bucket
+                                + " in writer state with offsets "
+                                + previous
+                                + " and "
+                                + offset);
             }
-            // Copy bucket ID
-            target.writeInt(source.readInt());
-            // Copy offset
-            target.writeLong(source.readLong());
+        }
+        return bucketOffsets;
+    }
+
+    private static void writeBucketOffset(DataOutputView target, TableBucket bucket, long offset)
+            throws IOException {
+        target.writeBoolean(bucket.getPartitionId() != null);
+        if (bucket.getPartitionId() != null) {
+            target.writeLong(bucket.getPartitionId());
+        }
+        target.writeInt(bucket.getBucket());
+        target.writeLong(offset);
+    }
+
+    private static void validateTableId(long tableId) throws IOException {
+        if (tableId < 0) {
+            throw new IOException("Invalid complete writer state table ID: " + tableId);
+        }
+    }
+
+    private static void validateOffset(TableBucket bucket, long offset) throws IOException {
+        if (offset < 0) {
+            throw new IOException("Invalid offset for bucket " + bucket + ": " + offset);
         }
     }
 

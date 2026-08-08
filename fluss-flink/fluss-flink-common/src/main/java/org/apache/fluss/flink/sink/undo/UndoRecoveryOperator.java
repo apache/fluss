@@ -27,6 +27,7 @@ import org.apache.fluss.flink.sink.state.WriterState;
 import org.apache.fluss.flink.sink.state.WriterStateSerializer;
 import org.apache.fluss.flink.sink.undo.UndoRecoveryManager.UndoOffsets;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.types.RowType;
 
@@ -50,6 +51,10 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+
+import static org.apache.fluss.utils.Preconditions.checkArgument;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.utils.Preconditions.checkState;
 
 /**
  * A Flink stream operator that manages undo recovery state using Union List State.
@@ -137,8 +142,9 @@ public class UndoRecoveryOperator<IN> extends AbstractStreamOperator<IN>
     /**
      * The registry ID used to register/remove this operator in the static delegate registry.
      *
-     * <p>This ID is passed from {@link UndoRecoveryOperatorFactory} and used by {@link #close()} to
-     * remove this operator from the registry by ID (O(1)) instead of by reference (O(n)).
+     * <p>This ID combines the registry namespace from {@link UndoRecoveryOperatorFactory} with this
+     * operator's runtime subtask index. It is used by {@link #close()} to remove this operator from
+     * the registry only while this operator still owns the registration.
      */
     private final String offsetReporterRegistryId;
 
@@ -146,6 +152,9 @@ public class UndoRecoveryOperator<IN> extends AbstractStreamOperator<IN>
 
     /** Union List State for storing bucket offsets across checkpoints. */
     private transient ListState<WriterState> undoStateList;
+
+    /** Table ID whose complete baseline is held in {@link #bucketOffsets}. */
+    @Nullable private transient Long resolvedTableId;
 
     /**
      * Map from TableBucket to the latest written offset.
@@ -205,8 +214,7 @@ public class UndoRecoveryOperator<IN> extends AbstractStreamOperator<IN>
      * @param producerId the producer ID for producer offset management (null to use Flink job ID)
      * @param producerOffsetsPollIntervalMs the polling interval for producer offsets
      * @param maxPollTimeoutMs the maximum total time to poll for producer offsets
-     * @param offsetReporterRegistryId the registry ID for registering/removing in the delegate
-     *     registry
+     * @param offsetReporterRegistryNamespace the factory-private registry namespace
      */
     public UndoRecoveryOperator(
             StreamOperatorParameters<IN> parameters,
@@ -219,7 +227,7 @@ public class UndoRecoveryOperator<IN> extends AbstractStreamOperator<IN>
             @Nullable String producerId,
             long producerOffsetsPollIntervalMs,
             long maxPollTimeoutMs,
-            String offsetReporterRegistryId) {
+            String offsetReporterRegistryNamespace) {
         super();
         this.tablePath = tablePath;
         this.flussConfig = flussConfig;
@@ -231,13 +239,15 @@ public class UndoRecoveryOperator<IN> extends AbstractStreamOperator<IN>
                 producerId; // May be null, will be resolved in initializeState()
         this.producerOffsetsPollIntervalMs = producerOffsetsPollIntervalMs;
         this.maxPollTimeoutMs = maxPollTimeoutMs;
-        this.offsetReporterRegistryId = offsetReporterRegistryId;
-
         // Call setup internally - this is allowed because we're inside the operator class
         this.setup(
                 parameters.getContainingTask(),
                 parameters.getStreamConfig(),
                 parameters.getOutput());
+        this.offsetReporterRegistryId =
+                UndoRecoveryOperatorFactory.createOffsetReporterRegistryId(
+                        offsetReporterRegistryNamespace,
+                        RuntimeContextAdapter.getIndexOfThisSubtask(getRuntimeContext()));
     }
 
     // ==================== State Initialization ====================
@@ -253,6 +263,7 @@ public class UndoRecoveryOperator<IN> extends AbstractStreamOperator<IN>
         subtaskIndex = RuntimeContextAdapter.getIndexOfThisSubtask(runtimeContext);
         producerOffsetsDeleted = false;
         restoredFromCheckpoint = context.isRestored();
+        resolvedTableId = null;
 
         // Resolve producerId: use configured value or default to Flink job ID
         resolvedProducerId = configuredProducerId;
@@ -306,6 +317,7 @@ public class UndoRecoveryOperator<IN> extends AbstractStreamOperator<IN>
             table = connection.getTable(tablePath);
         }
 
+        TableInfo tableInfo = table.getTableInfo();
         RecoveryOffsetManager offsetManager =
                 new RecoveryOffsetManager(
                         connection.getAdmin(),
@@ -315,14 +327,21 @@ public class UndoRecoveryOperator<IN> extends AbstractStreamOperator<IN>
                         producerOffsetsPollIntervalMs,
                         maxPollTimeoutMs,
                         tablePath,
-                        table.getTableInfo());
+                        tableInfo);
 
         RecoveryOffsetManager.RecoveryDecision decision =
                 offsetManager.determineRecoveryStrategy(recoveredState);
+        // The recovery decision was built for this table identity and its current live buckets.
+        resolvedTableId = tableInfo.getTableId();
 
         LOG.info("Recovery decision for subtask {}: {}", subtaskIndex, decision);
 
-        // Step 4: Execute undo recovery if needed
+        // Step 4: Retain the complete positive-offset baseline regardless of whether any bucket
+        // currently needs Undo. Missing entries in V2 represent an explicit zero baseline.
+        Map<TableBucket, Long> nextBaseline = new HashMap<>(decision.getBaselineOffsets());
+
+        // Step 5: Execute undo recovery if needed, then move affected baselines past the inverse
+        // writes before state can be checkpointed.
         if (decision.needsUndoRecovery()) {
             Map<TableBucket, UndoOffsets> undoOffsets = decision.getUndoOffsets();
             LOG.info(
@@ -333,19 +352,25 @@ public class UndoRecoveryOperator<IN> extends AbstractStreamOperator<IN>
 
             performUndoRecovery(undoOffsets);
 
-            // Initialize bucket offsets with recovery offsets (checkpoint offsets)
-            Map<TableBucket, Long> recoveryOffsets = decision.getRecoveryOffsets();
-            LOG.info(
-                    "Subtask {} initializing bucketOffsets from recovery: {} buckets",
-                    subtaskIndex,
-                    recoveryOffsets.size());
-            LOG.debug("Subtask {} recovery offsets details: {}", subtaskIndex, recoveryOffsets);
-            initializeBucketOffsets(recoveryOffsets);
+            Map<TableBucket, Long> postUndoOffsets =
+                    offsetManager.fetchLatestOffsets(undoOffsets.keySet());
+            for (Map.Entry<TableBucket, Long> entry : postUndoOffsets.entrySet()) {
+                if (entry.getValue() == 0L) {
+                    nextBaseline.remove(entry.getKey());
+                } else {
+                    nextBaseline.put(entry.getKey(), entry.getValue());
+                }
+            }
         } else {
             LOG.info("No undo recovery needed for subtask {}", subtaskIndex);
-            // Initialize empty bucket offsets
-            initializeBucketOffsets(new HashMap<>());
         }
+
+        LOG.info(
+                "Subtask {} initializing complete baseline with {} positive offsets",
+                subtaskIndex,
+                nextBaseline.size());
+        LOG.debug("Subtask {} complete baseline details: {}", subtaskIndex, nextBaseline);
+        initializeBucketOffsets(nextBaseline);
 
         LOG.info(
                 "UndoRecoveryOperator initialized for subtask {} with {} bucket offsets",
@@ -404,7 +429,7 @@ public class UndoRecoveryOperator<IN> extends AbstractStreamOperator<IN>
      * Snapshots the current state during checkpoint.
      *
      * <p>This method is called by Flink during checkpoint processing. It clears the existing state
-     * list and adds a new {@link WriterState} with the current bucket offsets if the map is not
+     * list and adds exactly one complete V2 {@link WriterState}, including when the baseline map is
      * empty.
      *
      * <p>Note: Producer offset cleanup is NOT done here. It is done in {@link
@@ -419,31 +444,23 @@ public class UndoRecoveryOperator<IN> extends AbstractStreamOperator<IN>
     public void snapshotState(StateSnapshotContext context) throws Exception {
         super.snapshotState(context);
 
-        // Clear existing state
-        undoStateList.clear();
+        checkState(bucketOffsets != null, "bucketOffsets must be initialized before snapshot");
+        checkState(resolvedTableId != null, "table ID must be resolved before snapshot");
 
-        // Add new state if bucket offsets is not empty
-        if (bucketOffsets != null) {
-            if (!bucketOffsets.isEmpty()) {
-                WriterState state = new WriterState(new HashMap<>(bucketOffsets));
-                undoStateList.add(state);
-                LOG.info(
-                        "Subtask {} snapshot state at checkpoint {}: {} buckets",
-                        subtaskIndex,
-                        context.getCheckpointId(),
-                        bucketOffsets.size());
-                LOG.debug(
-                        "Subtask {} checkpoint {} bucketOffsets details: {}",
-                        subtaskIndex,
-                        context.getCheckpointId(),
-                        bucketOffsets);
-            } else {
-                LOG.debug(
-                        "Subtask {} snapshot state at checkpoint {}: bucketOffsets is EMPTY",
-                        subtaskIndex,
-                        context.getCheckpointId());
-            }
-        }
+        undoStateList.clear();
+        undoStateList.add(WriterState.complete(resolvedTableId, new HashMap<>(bucketOffsets)));
+
+        LOG.info(
+                "Subtask {} snapshot complete V2 state at checkpoint {}: tableId={}, {} positive offsets",
+                subtaskIndex,
+                context.getCheckpointId(),
+                resolvedTableId,
+                bucketOffsets.size());
+        LOG.debug(
+                "Subtask {} checkpoint {} complete baseline details: {}",
+                subtaskIndex,
+                context.getCheckpointId(),
+                bucketOffsets);
     }
 
     /**
@@ -565,21 +582,19 @@ public class UndoRecoveryOperator<IN> extends AbstractStreamOperator<IN>
      */
     @Override
     public void reportOffset(TableBucket bucket, long offset) {
-        if (bucketOffsets != null) {
-            bucketOffsets.merge(bucket, offset, Math::max);
-            if (LOG.isTraceEnabled()) {
-                LOG.trace(
-                        "Reported offset {} for bucket {} (current max: {})",
-                        offset,
-                        bucket,
-                        bucketOffsets.get(bucket));
-            }
-        } else {
-            LOG.warn(
-                    "Received offset report for bucket {} before bucketOffsets was initialized, "
-                            + "offset {} will be ignored",
-                    bucket,
-                    offset);
+        TableBucket reportedBucket = checkNotNull(bucket, "Reported bucket must not be null");
+        checkArgument(offset >= 0, "Reported offset must be non-negative, but was %s", offset);
+        checkState(
+                bucketOffsets != null,
+                "bucketOffsets must be initialized before reporting offsets");
+
+        bucketOffsets.merge(reportedBucket, offset, Math::max);
+        if (LOG.isTraceEnabled()) {
+            LOG.trace(
+                    "Reported offset {} for bucket {} (current max: {})",
+                    offset,
+                    reportedBucket,
+                    bucketOffsets.get(reportedBucket));
         }
     }
 
@@ -601,9 +616,9 @@ public class UndoRecoveryOperator<IN> extends AbstractStreamOperator<IN>
     @Override
     public void close() throws Exception {
         // Remove this operator from the static DELEGATE_REGISTRY to prevent memory leaks.
-        // Each job submission registers entries in the registry via ProducerOffsetReporterHolder,
-        // and without this cleanup, entries accumulate indefinitely in long-running clusters.
-        UndoRecoveryOperatorFactory.removeDelegate(offsetReporterRegistryId);
+        // Each runtime subtask registers one entry, and without this cleanup entries accumulate
+        // indefinitely in long-running clusters.
+        UndoRecoveryOperatorFactory.removeDelegate(offsetReporterRegistryId, this);
 
         // Close Table instance first (if created)
         if (table != null) {
@@ -680,6 +695,10 @@ public class UndoRecoveryOperator<IN> extends AbstractStreamOperator<IN>
     @Nullable
     public Map<TableBucket, Long> getBucketOffsets() {
         return bucketOffsets;
+    }
+
+    String getOffsetReporterRegistryId() {
+        return offsetReporterRegistryId;
     }
 
     /**

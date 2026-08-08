@@ -18,6 +18,9 @@
 package org.apache.fluss.client.table.scanner.log;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.metadata.TableBucket;
+
+import javax.annotation.Nullable;
 
 import java.time.Duration;
 
@@ -55,6 +58,18 @@ public interface LogScanner extends AutoCloseable {
      *     read from.
      */
     ScanRecords poll(Duration timeout);
+
+    /**
+     * Returns the next fetch offset for a subscribed bucket.
+     *
+     * <p>The position advances across both user records and empty log batches. It is therefore the
+     * authoritative progress signal for a bounded scan.
+     *
+     * @param tableBucket the subscribed table bucket
+     * @return the next fetch offset, or {@code null} if the bucket is not subscribed
+     */
+    @Nullable
+    Long position(TableBucket tableBucket);
 
     /**
      * Subscribe to the given table bucket in given offset dynamically. If the table bucket is

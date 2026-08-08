@@ -23,10 +23,13 @@ import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.admin.ProducerOffsetsResult;
 import org.apache.fluss.client.lookup.Lookuper;
 import org.apache.fluss.client.table.Table;
+import org.apache.fluss.client.table.writer.UpsertResult;
+import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.flink.sink.serializer.RowDataSerializationSchema;
 import org.apache.fluss.flink.sink.testutils.CountingSource;
 import org.apache.fluss.flink.sink.testutils.FailingCountingSource;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
@@ -62,6 +65,9 @@ import javax.annotation.Nullable;
 
 import java.io.File;
 import java.time.Duration;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
@@ -600,6 +606,83 @@ abstract class UndoRecoveryITCase {
         verifyProducerOffsetsCleanedUp(producerId);
     }
 
+    @Test
+    void testUntouchedHistoricalBucketSurvivesStatelessRestartAndRestore() throws Exception {
+        String tableName = "undo_historical_bucket_" + System.currentTimeMillis();
+        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+        String producerId = "test-producer-historical-bucket-" + System.currentTimeMillis();
+        int numBuckets = 2;
+
+        initTableEnvironment(null, false).executeSql(createAggTableDDL(tableName, numBuckets));
+        long tableId = admin.getTableInfo(tablePath).get().getTableId();
+        FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
+
+        Map<Integer, Long> keyByBucket = new HashMap<>();
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter writer = table.newUpsert().createWriter();
+            for (long key = 1L; key <= 100L && keyByBucket.size() < numBuckets; key++) {
+                CompletableFuture<UpsertResult> future = writer.upsert(row(key, seedValue(key)));
+                writer.flush();
+                UpsertResult result = future.get();
+                TableBucket bucket = result.getBucket();
+                assertThat(bucket).isNotNull();
+                assertThat(bucket.getTableId()).isEqualTo(tableId);
+                keyByBucket.putIfAbsent(bucket.getBucket(), key);
+            }
+        }
+        assertThat(keyByBucket).hasSize(numBuckets);
+
+        Long[] seededKeys = keyByBucket.values().toArray(new Long[0]);
+        long untouchedKey = seededKeys[0];
+        long activeKey = seededKeys[1];
+        long untouchedValue = seedValue(untouchedKey);
+        int recordsWrittenByStatelessJob = 3;
+        long expectedActiveValue =
+                seedValue(activeKey) + recordsWrittenByStatelessJob * VALUE_PER_RECORD;
+
+        JobClient statelessJob =
+                startBoundedJob(
+                        tablePath,
+                        producerId,
+                        null,
+                        recordsWrittenByStatelessJob,
+                        1,
+                        false,
+                        activeKey);
+        retry(
+                DEFAULT_TIMEOUT,
+                () ->
+                        assertThat(lookupSum(tablePath, activeKey))
+                                .as("Active bucket value before savepoint")
+                                .isEqualTo(expectedActiveValue));
+        waitForCheckpoint(statelessJob.getJobID());
+
+        String savepointPath =
+                statelessJob
+                        .stopWithSavepoint(
+                                false,
+                                savepointDir.getAbsolutePath(),
+                                SavepointFormatType.CANONICAL)
+                        .get(60, TimeUnit.SECONDS);
+        waitForJobTermination(statelessJob, DEFAULT_TIMEOUT);
+
+        JobClient restoredJob =
+                startBoundedJob(tablePath, producerId, savepointPath, 0, 1, false, activeKey);
+        try {
+            waitForCheckpoint(restoredJob.getJobID());
+            assertThat(restoredJob.getJobStatus().get().isTerminalState()).isFalse();
+            assertThat(lookupSum(tablePath, untouchedKey))
+                    .as("Untouched historical bucket value after state restore")
+                    .isEqualTo(untouchedValue);
+            assertThat(lookupSum(tablePath, activeKey))
+                    .as("Active bucket value after zero-record restore")
+                    .isEqualTo(expectedActiveValue);
+        } finally {
+            restoredJob.cancel().get();
+            waitForJobTermination(restoredJob, DEFAULT_TIMEOUT);
+        }
+    }
+
     // ==================== Reusable Test Patterns ====================
 
     /**
@@ -798,6 +881,19 @@ abstract class UndoRecoveryITCase {
             int parallelism,
             boolean multiKey)
             throws Exception {
+        return startBoundedJob(
+                tablePath, producerId, savepointPath, maxRecords, parallelism, multiKey, 1L);
+    }
+
+    private JobClient startBoundedJob(
+            TablePath tablePath,
+            @Nullable String producerId,
+            @Nullable String savepointPath,
+            int maxRecords,
+            int parallelism,
+            boolean multiKey,
+            long singleKey)
+            throws Exception {
 
         Configuration conf = new Configuration();
         if (savepointPath != null) {
@@ -811,7 +907,7 @@ abstract class UndoRecoveryITCase {
         CountingSource source =
                 multiKey
                         ? CountingSource.multiKey(VALUE_PER_RECORD, maxRecords)
-                        : CountingSource.singleKey(1L, VALUE_PER_RECORD, maxRecords);
+                        : CountingSource.singleKey(singleKey, VALUE_PER_RECORD, maxRecords);
 
         DataStreamSource<RowData> stream =
                 env.fromSource(source, WatermarkStrategy.noWatermarks(), "counting-source");
@@ -830,6 +926,10 @@ abstract class UndoRecoveryITCase {
 
         String jobName = multiKey ? "Multi-Key Undo Test" : "Undo Test (p=" + parallelism + ")";
         return env.executeAsync(jobName);
+    }
+
+    private static long seedValue(long key) {
+        return 1_000L + key;
     }
 
     /**
