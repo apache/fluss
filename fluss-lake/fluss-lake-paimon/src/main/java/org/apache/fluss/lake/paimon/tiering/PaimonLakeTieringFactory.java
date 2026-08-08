@@ -23,13 +23,16 @@ import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.lake.writer.LakeWriter;
+import org.apache.fluss.lake.writer.PartitionMarkDoneEnabler;
 import org.apache.fluss.lake.writer.WriterInitContext;
+import org.apache.fluss.metadata.TableInfo;
 
 import java.io.IOException;
 
 /** Implementation of {@link LakeTieringFactory} for Paimon . */
 public class PaimonLakeTieringFactory
-        implements LakeTieringFactory<PaimonWriteResult, PaimonCommittable> {
+        implements LakeTieringFactory<PaimonWriteResult, PaimonCommittable>,
+                PartitionMarkDoneEnabler {
 
     private static final long serialVersionUID = 1L;
 
@@ -59,5 +62,10 @@ public class PaimonLakeTieringFactory
     @Override
     public SimpleVersionedSerializer<PaimonCommittable> getCommittableSerializer() {
         return new PaimonCommittableSerializer();
+    }
+
+    @Override
+    public boolean isPartitionMarkDoneEnabled(TableInfo tableInfo) {
+        return PaimonPartitionMarkDone.isEnabled(tableInfo);
     }
 }

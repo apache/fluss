@@ -22,6 +22,7 @@ import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.lake.paimon.testutils.FlinkPaimonTieringTestBase;
 import org.apache.fluss.metadata.PartitionInfo;
+import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
@@ -39,6 +40,7 @@ import org.apache.fluss.utils.types.Tuple2;
 
 import org.apache.flink.core.execution.JobClient;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.paimon.Snapshot;
 import org.apache.paimon.catalog.Catalog;
 import org.apache.paimon.catalog.Identifier;
 import org.apache.paimon.reader.RecordReader;
@@ -67,7 +69,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
 
+import static org.apache.fluss.lake.committer.LakeCommitter.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
+import static org.apache.fluss.lake.paimon.tiering.PaimonPartitionMarkDone.MARK_DONE_STATE_PROPERTY;
 import static org.apache.fluss.testutils.DataTestUtils.row;
+import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** IT case for tiering tables to paimon. */
@@ -621,5 +626,102 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
     @Override
     protected FlussClusterExtension getFlussClusterExtension() {
         return FLUSS_CLUSTER_EXTENSION;
+    }
+
+    @Test
+    void testPartitionMarkDone() throws Exception {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "markDoneTable");
+        Map<String, String> customProperties = new HashMap<>();
+        customProperties.put("paimon.partition.idle-time-to-done", "1 s");
+        customProperties.put("paimon.partition.time-interval", "1 d");
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("a", DataTypes.INT())
+                                        .column("b", DataTypes.STRING())
+                                        .column("c", DataTypes.STRING())
+                                        .build())
+                        .partitionedBy("c")
+                        .distributedBy(1, "a")
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
+                        .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500))
+                        .customProperties(customProperties)
+                        .build();
+        long tableId = createTable(tablePath, descriptor);
+        String partition = "2024-01-01";
+        admin.createPartition(
+                        tablePath,
+                        new PartitionSpec(Collections.singletonMap("c", partition)),
+                        false)
+                .get();
+        long partitionId =
+                waitUntilPartitions(FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(), tablePath, 1)
+                        .keySet()
+                        .iterator()
+                        .next();
+        writeRows(
+                tablePath,
+                Arrays.asList(
+                        row(1, "v1", partition), row(2, "v2", partition), row(3, "v3", partition)),
+                true);
+
+        JobClient jobClient = buildTieringJob(execEnv);
+        try {
+            // the partition data is tiered, then the empty tiering round marks the idle
+            // partition done with a properties-only snapshot writing the _SUCCESS file
+            java.io.File successFile =
+                    new java.io.File(
+                            warehousePath,
+                            String.format(
+                                    "%s.db/%s/c=%s/_SUCCESS",
+                                    DEFAULT_DB, tablePath.getTableName(), partition));
+            retry(Duration.ofMinutes(2), () -> assertThat(successFile).exists());
+
+            FileStoreTable table =
+                    (FileStoreTable)
+                            paimonCatalog.getTable(
+                                    Identifier.create(DEFAULT_DB, tablePath.getTableName()));
+            retry(
+                    Duration.ofMinutes(1),
+                    () -> {
+                        Snapshot snapshot = table.snapshotManager().latestSnapshot();
+                        assertThat(snapshot).isNotNull();
+                        Map<String, String> properties = snapshot.properties();
+                        // the properties-only snapshot carries over the bucket offsets and
+                        // holds the mark-done state: initialized and nothing pending
+                        assertThat(properties)
+                                .containsKey(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY)
+                                .containsKey(MARK_DONE_STATE_PROPERTY);
+                        MarkDoneState state =
+                                MarkDoneStateJsonSerde.fromJson(
+                                        properties.get(MARK_DONE_STATE_PROPERTY));
+                        assertThat(state.isInitialized()).isTrue();
+                        assertThat(state.getPendingPartitions()).isEmpty();
+                        // the properties-only snapshot is committed back to Fluss
+                        assertThat(admin.getLatestLakeSnapshot(tablePath).get().getSnapshotId())
+                                .isEqualTo(snapshot.id());
+                    });
+
+            // late data: tiering still works after the properties-only snapshot, and the
+            // partition is re-tracked then marked done again
+            writeRows(
+                    tablePath,
+                    Arrays.asList(row(4, "v4", partition), row(5, "v5", partition)),
+                    true);
+            assertReplicaStatus(new TableBucket(tableId, partitionId, 0), 5);
+            retry(
+                    Duration.ofMinutes(2),
+                    () -> {
+                        Snapshot snapshot = table.snapshotManager().latestSnapshot();
+                        assertThat(snapshot).isNotNull();
+                        MarkDoneState state =
+                                MarkDoneStateJsonSerde.fromJson(
+                                        snapshot.properties().get(MARK_DONE_STATE_PROPERTY));
+                        assertThat(state.getPendingPartitions()).isEmpty();
+                    });
+        } finally {
+            jobClient.cancel().get();
+        }
     }
 }
