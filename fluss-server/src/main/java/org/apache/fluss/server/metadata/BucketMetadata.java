@@ -19,6 +19,7 @@ package org.apache.fluss.server.metadata;
 
 import javax.annotation.Nullable;
 
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.OptionalInt;
@@ -29,16 +30,27 @@ public class BucketMetadata {
     private final @Nullable Integer leaderId;
     private final @Nullable Integer leaderEpoch;
     private final List<Integer> replicas;
+    private final List<Integer> isr;
 
     public BucketMetadata(
             int bucketId,
             @Nullable Integer leaderId,
             @Nullable Integer leaderEpoch,
             List<Integer> replicas) {
+        this(bucketId, leaderId, leaderEpoch, replicas, Collections.emptyList());
+    }
+
+    public BucketMetadata(
+            int bucketId,
+            @Nullable Integer leaderId,
+            @Nullable Integer leaderEpoch,
+            List<Integer> replicas,
+            List<Integer> isr) {
         this.bucketId = bucketId;
         this.leaderId = leaderId;
         this.leaderEpoch = leaderEpoch;
         this.replicas = replicas;
+        this.isr = isr;
     }
 
     public int getBucketId() {
@@ -57,6 +69,10 @@ public class BucketMetadata {
         return replicas;
     }
 
+    public List<Integer> getIsr() {
+        return isr;
+    }
+
     @Override
     public String toString() {
         return "BucketMetadata{"
@@ -68,6 +84,8 @@ public class BucketMetadata {
                 + leaderEpoch
                 + ", replicas="
                 + replicas
+                + ", isr="
+                + isr
                 + '}';
     }
 
@@ -83,11 +101,12 @@ public class BucketMetadata {
         return bucketId == that.bucketId
                 && Objects.equals(leaderId, that.leaderId)
                 && Objects.equals(leaderEpoch, that.leaderEpoch)
-                && replicas.equals(that.replicas);
+                && replicas.equals(that.replicas)
+                && isr.equals(that.isr);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(bucketId, leaderId, leaderEpoch, replicas);
+        return Objects.hash(bucketId, leaderId, leaderEpoch, replicas, isr);
     }
 }
