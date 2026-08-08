@@ -42,6 +42,7 @@ import org.junit.jupiter.params.provider.MethodSource;
 
 import java.io.File;
 import java.io.IOException;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -199,12 +200,160 @@ final class LogSegmentTest extends LogTestBase {
         reopened.truncateTo(57);
         assertThat(reopened.offsetIndex().isFull()).isFalse();
 
-        RollParams rollParams = new RollParams(Integer.MAX_VALUE, 100L, 1024);
+        RollParams rollParams = new RollParams(Integer.MAX_VALUE, 0L, -1L, 100L, 1024);
         assertThat(reopened.shouldRoll(rollParams)).isFalse();
 
-        // The segment should not be rolled even if maxSegmentMs has been exceeded
-        rollParams = new RollParams(Integer.MAX_VALUE, Integer.MAX_VALUE + 200L, 1024);
+        // The segment should roll if the relative offset range is exceeded.
+        rollParams = new RollParams(Integer.MAX_VALUE, 0L, -1L, Integer.MAX_VALUE + 200L, 1024);
         assertThat(reopened.shouldRoll(rollParams)).isTrue();
+    }
+
+    @Test
+    void testTimeBasedRoll() throws Exception {
+        LogSegment segment = createSegment(0);
+
+        assertThat(segment.shouldRoll(new RollParams(Integer.MAX_VALUE, 10L, 100L, 0L, 0)))
+                .isFalse();
+
+        segment.append(
+                0L,
+                100L,
+                0L,
+                genLogRecordsWithBaseOffsetAndTimestamp(
+                        0L, 100L, Collections.singletonList(new Object[] {1, "hello"})));
+
+        assertThat(segment.shouldRoll(new RollParams(Integer.MAX_VALUE, 0L, 1000L, 1L, 0)))
+                .isFalse();
+        assertThat(segment.shouldRoll(new RollParams(Integer.MAX_VALUE, 10L, 110L, 1L, 0)))
+                .isFalse();
+        assertThat(segment.shouldRoll(new RollParams(Integer.MAX_VALUE, 10L, 111L, 1L, 0)))
+                .isTrue();
+    }
+
+    @Test
+    void testTimeBasedRollWithJitter() throws Exception {
+        conf.set(ConfigOptions.LOG_SEGMENT_MAX_TIME, Duration.ofMillis(10));
+        conf.set(ConfigOptions.LOG_SEGMENT_MAX_TIME_JITTER, Duration.ofMillis(20));
+        List<LogSegment> segments = new ArrayList<>();
+        try {
+            List<Long> jitters = new ArrayList<>();
+            for (int i = 0; i < 20; i++) {
+                LogSegment segment = createSegment(i, false, 0);
+                segments.add(segment);
+                jitters.add(segment.rollTimeJitterMs());
+            }
+            assertThat(jitters).allMatch(jitter -> jitter >= 0 && jitter < 10);
+            assertThat(jitters).anyMatch(jitter -> jitter > 0);
+
+            LogSegment segment =
+                    segments.stream()
+                            .filter(candidate -> candidate.rollTimeJitterMs() > 0)
+                            .findFirst()
+                            .get();
+            long baseOffset = segment.getBaseOffset();
+            segment.append(
+                    baseOffset,
+                    100L,
+                    baseOffset,
+                    genLogRecordsWithBaseOffsetAndTimestamp(
+                            baseOffset,
+                            100L,
+                            Collections.singletonList(new Object[] {1, "hello"})));
+
+            long effectiveMaxTimeMs = 10L - segment.rollTimeJitterMs();
+            assertThat(
+                            segment.shouldRoll(
+                                    new RollParams(
+                                            Integer.MAX_VALUE,
+                                            10L,
+                                            100L + effectiveMaxTimeMs,
+                                            baseOffset,
+                                            0)))
+                    .isFalse();
+            assertThat(
+                            segment.shouldRoll(
+                                    new RollParams(
+                                            Integer.MAX_VALUE,
+                                            10L,
+                                            101L + effectiveMaxTimeMs,
+                                            baseOffset,
+                                            0)))
+                    .isTrue();
+        } finally {
+            for (LogSegment segment : segments) {
+                segment.close();
+            }
+        }
+    }
+
+    @Test
+    void testTimeBasedRollSkipsUnknownFirstBatchTimestamp() throws Exception {
+        LogSegment segment = createSegment(0);
+        segment.append(
+                0L,
+                -1L,
+                -1L,
+                genMemoryLogRecordsWithBaseOffset(
+                        0L, Collections.singletonList(new Object[] {1, "hello"})));
+
+        assertThat(segment.shouldRoll(new RollParams(Integer.MAX_VALUE, 10L, 1000L, 1L, 0)))
+                .isFalse();
+        assertThat(
+                        segment.shouldRoll(
+                                new RollParams(
+                                        Integer.MAX_VALUE, 10L, 1000L, Integer.MAX_VALUE + 1L, 0)))
+                .isTrue();
+    }
+
+    @Test
+    void testTimeBasedRollAfterReload() throws Exception {
+        LogSegment segment = createSegment(0);
+        segment.append(
+                0L,
+                100L,
+                0L,
+                genLogRecordsWithBaseOffsetAndTimestamp(
+                        0L, 100L, Collections.singletonList(new Object[] {1, "hello"})));
+        segment.append(
+                1L,
+                109L,
+                1L,
+                genLogRecordsWithBaseOffsetAndTimestamp(
+                        1L, 109L, Collections.singletonList(new Object[] {2, "world"})));
+
+        segment.close();
+        LogSegment reopened = createSegment(0, true, 0);
+        reopened.resizeIndexes(1024);
+        assertThat(reopened.shouldRoll(new RollParams(Integer.MAX_VALUE, 10L, 110L, 2L, 0)))
+                .isFalse();
+        assertThat(reopened.shouldRoll(new RollParams(Integer.MAX_VALUE, 10L, 111L, 2L, 0)))
+                .isTrue();
+    }
+
+    @Test
+    void testTimeBasedRollAfterTruncateToEmpty() throws Exception {
+        LogSegment segment = createSegment(0);
+        segment.append(
+                0L,
+                100L,
+                0L,
+                genLogRecordsWithBaseOffsetAndTimestamp(
+                        0L, 100L, Collections.singletonList(new Object[] {1, "hello"})));
+
+        segment.truncateTo(0L);
+        assertThat(segment.shouldRoll(new RollParams(Integer.MAX_VALUE, 10L, 1000L, 0L, 0)))
+                .isFalse();
+
+        segment.append(
+                0L,
+                1000L,
+                0L,
+                genLogRecordsWithBaseOffsetAndTimestamp(
+                        0L, 1000L, Collections.singletonList(new Object[] {1, "hello"})));
+        assertThat(segment.shouldRoll(new RollParams(Integer.MAX_VALUE, 10L, 1010L, 1L, 0)))
+                .isFalse();
+        assertThat(segment.shouldRoll(new RollParams(Integer.MAX_VALUE, 10L, 1011L, 1L, 0)))
+                .isTrue();
     }
 
     @Test
