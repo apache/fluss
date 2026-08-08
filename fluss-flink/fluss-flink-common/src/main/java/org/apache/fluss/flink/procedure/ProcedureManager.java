@@ -78,6 +78,7 @@ public class ProcedureManager {
                 "sys.subtract_cluster_configs", SubtractClusterConfigsProcedure.class),
         ADD_SERVER_TAG("sys.add_server_tag", AddServerTagProcedure.class),
         REMOVE_SERVER_TAG("sys.remove_server_tag", RemoveServerTagProcedure.class),
+        LIST_SERVER_TAG("sys.list_server_tag", ListServerTagProcedure.class),
         REBALANCE("sys.rebalance", RebalanceProcedure.class),
         CANCEL_REBALANCE("sys.cancel_rebalance", CancelRebalanceProcedure.class),
         LIST_REBALANCE_PROGRESS("sys.list_rebalance", ListRebalanceProcessProcedure.class),
