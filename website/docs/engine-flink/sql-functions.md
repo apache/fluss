@@ -16,29 +16,101 @@ storage-level `rbm32` / `rbm64` aggregators, which run inside the Fluss TabletSe
 
 ## How to Use
 
-After creating a Fluss catalog and switching to it, all functions are available in Flink SQL without
-any `CREATE TEMPORARY FUNCTION` statement.
+Create a Fluss catalog first. Its built-in functions are available without any
+`CREATE TEMPORARY FUNCTION` statement.
 
 ```sql
--- 1. Create the catalog
 CREATE CATALOG fluss_catalog WITH (
     'type'              = 'fluss',
     'bootstrap.servers' = 'localhost:9123'
 );
+```
 
--- 2. Switch to it
+You can either make the Fluss catalog current or reference its functions by fully qualified name.
+
+<Tabs>
+<TabItem value="current-catalog" label="Current Fluss Catalog" default>
+
+Switch to the Fluss catalog when the session mainly works with Fluss objects. Function names can
+then be used directly.
+
+```sql
 USE CATALOG fluss_catalog;
 
--- 3. Use any bitmap function directly
 SELECT rb_cardinality(rb_build(ARRAY[1, 2, 3, 2]));
 -- Output: 3
 ```
 
+</TabItem>
+<TabItem value="qualified-name" label="Fully Qualified Names">
+
+When working across multiple catalogs, keep the current catalog unchanged and qualify each Fluss
+function as `<catalog>.<database>.<function>`.
+
+```sql
+SELECT fluss_catalog.fluss.rb_cardinality(
+    fluss_catalog.fluss.rb_build(ARRAY[1, 2, 3, 2])
+);
+-- Output: 3
+```
+
+`fluss` is the default database of `FlussCatalog`. You can replace it with another Fluss database
+name, but that database must already exist and the current user must have permission to access it.
+
+</TabItem>
+</Tabs>
+
 All functions operate on `BYTES` columns containing standard 32-bit RoaringBitmap serialized data,
 the same wire format used by the `rbm32` storage-level aggregator.
 
-A typical workflow: use `rb_build_agg` to aggregate integer IDs into a bitmap during ingestion,
-then use `rb_cardinality`, `rb_or_agg`, and the other scalar and aggregate functions at query time.
+## Example: Windowed Bitmap Batches
+
+RoaringBitmap SQL functions and the `rbm32` merge engine complement each other. A common pattern is
+to use `rb_build_agg` to turn each short processing-time window into a bitmap, write those bitmap
+batches to a Fluss primary-key table, and let the `rbm32` merge engine union batches with the same
+key. Downstream queries can use `rb_cardinality` to read the cumulative distinct count.
+
+The following example assumes that the Fluss catalog contains an append-only streaming table named
+`click_events` with columns `page_id BIGINT`, `user_id INT`, and `proc_time AS PROCTIME()`.
+
+The `page_uv` table uses the [Aggregation Merge Engine](/table-design/merge-engines/aggregation.md#rbm32)
+by setting `table.merge-engine=aggregation`. The `fields.uv_bitmap.agg=rbm32` option enables `rbm32`
+aggregation on `uv_bitmap`, which unions the serialized 32-bit RoaringBitmap values written for the
+same primary key.
+
+```sql
+USE CATALOG fluss_catalog;
+
+-- Store one cumulative bitmap per page in Fluss.
+CREATE TABLE page_uv (
+    page_id  BIGINT,
+    uv_bitmap BYTES,
+    PRIMARY KEY (page_id) NOT ENFORCED
+) WITH (
+    'table.merge-engine'      = 'aggregation',
+    'fields.uv_bitmap.agg'    = 'rbm32'
+);
+
+-- Build one bitmap per page every five seconds. Each completed window writes
+-- another bitmap batch, and rbm32 unions it into the existing page bitmap.
+INSERT INTO page_uv
+SELECT page_id,
+       rb_build_agg(user_id) AS uv_bitmap
+FROM TABLE(
+    TUMBLE(
+        TABLE click_events,
+        DESCRIPTOR(proc_time),
+        INTERVAL '5' SECOND
+    )
+)
+GROUP BY page_id, window_start, window_end;
+
+-- Query the UV value on pages
+SELECT page_id,
+       rb_cardinality(uv_bitmap) AS uv
+FROM page_uv
+WHERE page_id = 1;
+```
 
 ---
 
