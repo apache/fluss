@@ -1005,6 +1005,18 @@ abstract class FlinkCatalogITCase {
     }
 
     @Test
+    void testBitmapFunctionFailsForFullyQualifiedNonexistentDatabase() {
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                        "SELECT "
+                                                + CATALOG_NAME
+                                                + ".nonexistent_db.rb_build(ARRAY[1,2])"))
+                .cause()
+                .isInstanceOf(ValidationException.class);
+    }
+
+    @Test
     void testCreateCatalogWithLakeProperties() throws Exception {
         Map<String, String> properties = new HashMap<>();
         properties.put("paimon.jdbc.password", "pass");
