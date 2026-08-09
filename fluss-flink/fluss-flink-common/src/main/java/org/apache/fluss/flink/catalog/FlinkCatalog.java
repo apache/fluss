@@ -811,7 +811,10 @@ public class FlinkCatalog extends AbstractCatalog {
     @Override
     public boolean functionExists(ObjectPath objectPath) throws CatalogException {
         if (!databaseExists(objectPath.getDatabaseName())) {
-            return false;
+            throw new CatalogException(
+                    String.format(
+                            "Database %s does not exist in catalog %s.",
+                            objectPath.getDatabaseName(), getName()));
         }
         return BUILTIN_BITMAP_FUNCTIONS.containsKey(
                 objectPath.getObjectName().toLowerCase(Locale.ROOT));
@@ -821,7 +824,10 @@ public class FlinkCatalog extends AbstractCatalog {
     public CatalogFunction getFunction(ObjectPath functionPath)
             throws FunctionNotExistException, CatalogException {
         if (!databaseExists(functionPath.getDatabaseName())) {
-            throw new FunctionNotExistException(getName(), functionPath);
+            throw new CatalogException(
+                    String.format(
+                            "Database %s does not exist in catalog %s.",
+                            functionPath.getDatabaseName(), getName()));
         }
         String className =
                 BUILTIN_BITMAP_FUNCTIONS.get(functionPath.getObjectName().toLowerCase(Locale.ROOT));
