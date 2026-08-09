@@ -615,7 +615,7 @@ function ArchitectureSection() {
                 <div className={clsx(styles.sectionHeader, styles.sectionHeaderCenter)}>
                     <span className={styles.eyebrow}>Architecture</span>
                     <h2 className={clsx(styles.sectionTitle, styles.archTitle)}>
-                        Unlocking the Streamhouse Architecture
+                        Unlocking the Lakestream Architecture
                     </h2>
                 </div>
                 <div className={styles.archDiagram}>
@@ -660,7 +660,7 @@ function SystemsTaxSection() {
             sub: 'Sub-millisecond key/value serving',
         },
         {
-            label: 'Streamhouse',
+            label: 'Lakestream',
             sub: 'Real-time data layer for Lakehouse architecture',
         },
         {
