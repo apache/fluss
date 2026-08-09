@@ -1007,13 +1007,12 @@ abstract class FlinkCatalogITCase {
     @Test
     void testBitmapFunctionFailsForFullyQualifiedNonexistentDatabase() {
         assertThatThrownBy(
-                        () ->
-                                tEnv.executeSql(
-                                        "SELECT "
-                                                + CATALOG_NAME
-                                                + ".nonexistent_db.rb_build(ARRAY[1,2])"))
-                .cause()
-                .isInstanceOf(ValidationException.class);
+                () ->
+                        tEnv.executeSql(
+                                "SELECT "
+                                        + CATALOG_NAME
+                                        + ".nonexistent_db.rb_build(ARRAY[1,2])"))
+                .hasMessageContaining("No match found for function signature rb_build");
     }
 
     @Test
