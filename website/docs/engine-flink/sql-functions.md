@@ -212,10 +212,10 @@ Unions multiple serialized `RoaringBitmap` values via bitwise OR across rows.
 -- Roll up per-day bitmaps into a weekly unique visitor count
 SELECT rb_cardinality(rb_or_agg(daily_bitmap)) AS weekly_uv
 FROM (
-    SELECT rb_build_agg(user_id) AS daily_bitmap
-    FROM (VALUES (1, 1), (1, 2), (2, 2), (2, 3)) AS t(day, user_id)
-    GROUP BY day
-);
+    VALUES
+        (1, rb_build(ARRAY[1, 2])),
+        (2, rb_build(ARRAY[2, 3]))
+) AS t(day_id, daily_bitmap);
 -- Output: 3  (users {1, 2, 3} across both days)
 ```
 
@@ -232,10 +232,10 @@ Intersects multiple serialized `RoaringBitmap` values via bitwise AND across row
 -- Find users who appeared on every day
 SELECT rb_cardinality(rb_and_agg(daily_bitmap)) AS retained_users
 FROM (
-    SELECT rb_build_agg(user_id) AS daily_bitmap
-    FROM (VALUES (1, 1), (1, 2), (2, 2), (2, 3)) AS t(day, user_id)
-    GROUP BY day
-);
+    VALUES
+        (1, rb_build(ARRAY[1, 2])),
+        (2, rb_build(ARRAY[2, 3]))
+) AS t(day_id, daily_bitmap);
 -- Output: 1  (only user 2 appeared on both days)
 ```
 
@@ -258,10 +258,10 @@ Returns elements that appear in an **odd** number of input bitmaps.
 -- Find users who appeared on an odd number of days
 SELECT rb_cardinality(rb_xor_agg(daily_bitmap)) AS changed_users
 FROM (
-    SELECT rb_build_agg(user_id) AS daily_bitmap
-    FROM (VALUES (1, 1), (1, 2), (2, 2), (2, 3)) AS t(day, user_id)
-    GROUP BY day
-);
+    VALUES
+        (1, rb_build(ARRAY[1, 2])),
+        (2, rb_build(ARRAY[2, 3]))
+) AS t(day_id, daily_bitmap);
 -- Output: 2  (users {1, 3} each appeared on exactly one day)
 ```
 

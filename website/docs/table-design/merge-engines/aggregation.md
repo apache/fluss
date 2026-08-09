@@ -862,11 +862,10 @@ CREATE TABLE user_visits (
     'fields.visit_bitmap.agg'    = 'rbm32'
 );
 
--- Insert using rb_build to construct bitmap values directly in SQL
-INSERT INTO user_visits
-SELECT user_id, rb_build_agg(page_id)
-FROM (VALUES (1, 1), (1, 2), (1, 3)) AS t(user_id, page_id)
-GROUP BY user_id;
+-- Insert two bitmaps for the same user; rbm32 unions them on write
+INSERT INTO user_visits VALUES
+    (1, rb_build(ARRAY[1, 2])),
+    (1, rb_build(ARRAY[2, 3]));
 
 -- Query: read the merged bitmap as a human-readable array
 SELECT user_id, rb_to_array(visit_bitmap) AS visited_pages
