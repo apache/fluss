@@ -27,6 +27,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.testutils.common.MultiVersionTest;
 import org.apache.fluss.utils.clock.ManualClock;
 
 import org.apache.flink.api.common.JobID;
@@ -183,6 +184,7 @@ abstract class BinlogVirtualTableITCase {
     }
 
     @Test
+    @MultiVersionTest
     public void testDescribeBinlogTable() throws Exception {
         // Create a table with various data types to test complex schema
         tEnv.executeSql(

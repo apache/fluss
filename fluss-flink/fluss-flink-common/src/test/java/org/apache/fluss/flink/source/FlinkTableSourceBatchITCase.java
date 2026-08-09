@@ -26,6 +26,7 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericArray;
 import org.apache.fluss.row.GenericMap;
+import org.apache.fluss.testutils.common.MultiVersionTest;
 
 import org.apache.commons.lang3.RandomUtils;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
@@ -96,6 +97,7 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
     }
 
     @Test
+    @MultiVersionTest
     void testScanSingleRowFilter() throws Exception {
         String tableName = prepareSourceTable(new String[] {"name", "id"}, null);
         String query = String.format("SELECT * FROM %s WHERE id = 1 AND name = 'name1'", tableName);

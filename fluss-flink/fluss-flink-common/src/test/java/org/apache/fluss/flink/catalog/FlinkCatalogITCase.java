@@ -33,6 +33,7 @@ import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.testutils.common.MultiVersionTest;
 
 import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.api.EnvironmentSettings;
@@ -159,6 +160,7 @@ abstract class FlinkCatalogITCase {
     }
 
     @Test
+    @MultiVersionTest
     void testCreateTable() throws Exception {
         // create a table will all supported data types
         tEnv.executeSql(

@@ -30,6 +30,7 @@ import org.apache.fluss.flink.sink.testutils.FailingCountingSource;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.testutils.common.MultiVersionTest;
 
 import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
@@ -193,6 +194,7 @@ abstract class UndoRecoveryITCase {
      * checkpoint are undone during recovery)
      */
     @Test
+    @MultiVersionTest
     void testCheckpointFailoverRecovery() throws Exception {
         String tableName = "undo_checkpoint_failover_" + System.currentTimeMillis();
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);

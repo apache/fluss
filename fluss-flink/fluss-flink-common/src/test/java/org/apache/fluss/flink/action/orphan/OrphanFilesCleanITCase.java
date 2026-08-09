@@ -40,6 +40,7 @@ import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
 import org.apache.fluss.server.zk.data.ZkData.BucketSnapshotsZNode;
 import org.apache.fluss.server.zk.data.ZkData.PartitionZNode;
+import org.apache.fluss.testutils.common.MultiVersionTest;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.FlussPaths;
 
@@ -163,6 +164,7 @@ abstract class OrphanFilesCleanITCase extends AbstractTestBase {
     private static final Duration OLD_ENOUGH = Duration.ofDays(2);
 
     @Test
+    @MultiVersionTest
     void mixedOrphanAndActiveFilesInSameBucket() throws Exception {
         String dbName = newDatabaseName("mixed");
         TablePath tablePath = createLogTable(dbName, "mixed_bucket");

@@ -104,6 +104,7 @@
         <scala.binary.version>2.12</scala.binary.version>
         <scala.version>${scala212.version}</scala.version>
         <spark.version>3.5.7</spark.version>
+        <scalatest.version>3.1.0</scalatest.version>
 
         <fluss.hadoop.version>3.4.0</fluss.hadoop.version>
         <frocksdb.version>6.20.3-ververica-2.0</frocksdb.version>

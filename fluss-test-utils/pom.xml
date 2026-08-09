@@ -41,5 +41,13 @@
             <artifactId>assertj-core</artifactId>
             <scope>compile</scope>
         </dependency>
+
+        <!-- Used only to make MultiVersionTest a tag understood by ScalaTest. -->
+        <dependency>
+            <groupId>org.scalatest</groupId>
+            <artifactId>scalatest_${scala.binary.version}</artifactId>
+            <version>${scalatest.version}</version>
+            <scope>provided</scope>
+        </dependency>
     </dependencies>
 </project>

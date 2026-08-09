@@ -34,6 +34,7 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.ServerTags;
+import org.apache.fluss.testutils.common.MultiVersionTest;
 
 import org.apache.flink.table.api.EnvironmentSettings;
 import org.apache.flink.table.api.TableEnvironment;
@@ -129,6 +130,7 @@ public abstract class FlinkProcedureITCase {
     }
 
     @Test
+    @MultiVersionTest
     void testShowProcedures() throws Exception {
         try (CloseableIterator<Row> showProceduresIterator =
                 tEnv.executeSql("show procedures").collect()) {
