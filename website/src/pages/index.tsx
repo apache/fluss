@@ -355,17 +355,15 @@ function HeroDiagram() {
                 </text>
 
                 {[
-                    {x: 312, label: 'Apache Paimon',  highlight: false},
-                    {x: 438, label: 'Apache Iceberg', highlight: true },
-                    {x: 564, label: 'Apache Hudi',    highlight: false},
-                    {x: 690, label: 'Lance',          highlight: false},
+                    {x: 312, label: 'Apache Paimon'},
+                    {x: 438, label: 'Apache Iceberg'},
+                    {x: 564, label: 'Apache Hudi'},
+                    {x: 690, label: 'Lance'},
                 ].map((l, i) => (
                     <g key={i}>
                         <rect x={l.x} y="438" width="118" height="46" rx="8"
-                              fill={l.highlight ? '#194670' : '#0A1745'}
-                              stroke={l.highlight
-                                  ? 'rgba(38,109,149,0.7)'
-                                  : 'rgba(122,175,203,0.4)'}
+                              fill="#0A1745"
+                              stroke="rgba(122,175,203,0.4)"
                               strokeWidth="1" />
                         <text x={l.x + 59} y="466" textAnchor="middle"
                               fill="#E6ECFA" fontSize="12" fontWeight="700">
