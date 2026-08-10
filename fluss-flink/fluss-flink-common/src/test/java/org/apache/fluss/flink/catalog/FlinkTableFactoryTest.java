@@ -22,6 +22,7 @@ import org.apache.fluss.flink.sink.FlinkTableSink;
 import org.apache.fluss.flink.source.FlinkTableSource;
 import org.apache.fluss.flink.source.lookup.FlinkAsyncLookupFunction;
 import org.apache.fluss.flink.source.lookup.FlinkLookupFunction;
+import org.apache.fluss.testutils.common.MultiVersionTest;
 
 import org.apache.flink.api.common.RuntimeExecutionMode;
 import org.apache.flink.configuration.Configuration;
@@ -68,6 +69,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link FlinkTableFactory}. */
+@MultiVersionTest
 abstract class FlinkTableFactoryTest {
 
     public static final ObjectIdentifier OBJECT_IDENTIFIER =

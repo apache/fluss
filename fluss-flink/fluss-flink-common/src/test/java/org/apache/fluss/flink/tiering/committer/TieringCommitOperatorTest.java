@@ -29,6 +29,7 @@ import org.apache.fluss.flink.utils.FlinkTestBase;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.testutils.common.MultiVersionTest;
 
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.runtime.jobgraph.OperatorID;
@@ -62,6 +63,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** UT for {@link TieringCommitOperator}. */
+@MultiVersionTest
 class TieringCommitOperatorTest extends FlinkTestBase {
 
     private TieringCommitOperator<TestingWriteResult, TestingCommittable> committerOperator;

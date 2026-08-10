@@ -17,11 +17,14 @@
 
 package org.apache.fluss.flink.adapter;
 
+import org.apache.fluss.testutils.common.MultiVersionTest;
+
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link MultipleParameterToolAdapter}. */
+@MultiVersionTest
 abstract class FlinkMultipleParameterToolTest {
 
     @Test

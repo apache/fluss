@@ -19,6 +19,7 @@ package org.apache.fluss.flink.catalog;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.flink.FlinkConnectorOptions;
+import org.apache.fluss.testutils.common.MultiVersionTest;
 
 import org.apache.flink.configuration.ConfigOption;
 import org.apache.flink.configuration.Configuration;
@@ -36,6 +37,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link FlinkCatalogFactory}. */
+@MultiVersionTest
 abstract class FlinkCatalogFactoryTest {
 
     static final String CATALOG_NAME = "my_catalog";

@@ -17,16 +17,23 @@
 
 package org.apache.fluss.flink.adapter;
 
+import org.apache.fluss.testutils.common.MultiVersionTest;
+
 import org.apache.flink.table.catalog.CatalogBaseTable;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Test for {@link CatalogTableAdapter} in flink 1.19. */
-public class Flink119CatalogTableTest extends FlinkCatalogTableTest {
+/** Test for {@link CatalogTableAdapter}. */
+@MultiVersionTest
+public class FlinkCatalogTableAdapterTest {
 
     @Test
     public void testIsMaterializedTable() {
+        assertThat(
+                        CatalogTableAdapter.isMaterializedTable(
+                                CatalogBaseTable.TableKind.MATERIALIZED_TABLE))
+                .isEqualTo(true);
         assertThat(CatalogTableAdapter.isMaterializedTable(CatalogBaseTable.TableKind.VIEW))
                 .isEqualTo(false);
         assertThat(CatalogTableAdapter.isMaterializedTable(CatalogBaseTable.TableKind.TABLE))
