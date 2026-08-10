@@ -1237,10 +1237,9 @@ class FlinkCatalogTest {
         ObjectPath qualifiedInNonexistentDb = new ObjectPath(nonexistentDb, "rb_build");
         assertThat(catalog.functionExists(qualifiedInNonexistentDb)).isFalse();
 
-        // getFunction on a nonexistent database throws CatalogException with db-not-found message
+        // getFunction on a nonexistent database throws FunctionNotExistException
         assertThatThrownBy(() -> catalog.getFunction(qualifiedInNonexistentDb))
-                .isInstanceOf(CatalogException.class)
-                .hasMessageContaining("Database " + nonexistentDb + " does not exist");
+                .isInstanceOf(FunctionNotExistException.class);
 
         // built-in functions still resolve from every existing database, not just DEFAULT_DB
         String secondDb = "second_db_for_functions";
