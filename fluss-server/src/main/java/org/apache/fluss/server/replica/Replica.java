@@ -1897,28 +1897,27 @@ public final class Replica {
     }
 
     void maybeShrinkIsr() {
-        IsrState currentIstState = isrState;
         boolean needsIsrUpdate =
-                !currentIstState.isInflight()
-                        && inReadLock(leaderIsrUpdateLock, this::needsShrinkIsr);
+                inReadLock(leaderIsrUpdateLock, () -> !isrState.isInflight() && needsShrinkIsr());
 
         if (needsIsrUpdate) {
             Optional<IsrState.PendingShrinkIsrState> adjustIsrUpdateOpt =
                     inWriteLock(
                             leaderIsrUpdateLock,
                             () -> {
-                                if (isLeader()) {
+                                IsrState currentIsrState = isrState;
+                                if (isLeader()
+                                        && currentIsrState instanceof IsrState.CommittedIsrState) {
                                     List<Integer> outOfSyncFollowerReplicas =
                                             getOutOfSyncFollowerReplicas(replicaMaxLagTime);
-                                    if (currentIstState instanceof IsrState.CommittedIsrState
-                                            && !outOfSyncFollowerReplicas.isEmpty()) {
+                                    if (!outOfSyncFollowerReplicas.isEmpty()) {
                                         List<Integer> newIsr =
-                                                new ArrayList<>(currentIstState.isr());
+                                                new ArrayList<>(currentIsrState.isr());
                                         newIsr.removeAll(outOfSyncFollowerReplicas);
                                         LOG.info(
                                                 "Shrink ISR From {} to {} for bucket {}. Leader: (high watermark: {}, "
                                                         + "end offset: {}, out of sync replicas: {})",
-                                                currentIstState.isr(),
+                                                currentIsrState.isr(),
                                                 newIsr,
                                                 tableBucket,
                                                 logTablet.getHighWatermark(),
@@ -1927,7 +1926,7 @@ public final class Replica {
                                         return Optional.of(
                                                 prepareIsrShrink(
                                                         (IsrState.CommittedIsrState)
-                                                                currentIstState,
+                                                                currentIsrState,
                                                         newIsr,
                                                         outOfSyncFollowerReplicas));
                                     }

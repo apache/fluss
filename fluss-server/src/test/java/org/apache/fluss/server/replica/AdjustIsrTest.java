@@ -30,14 +30,17 @@ import org.apache.fluss.server.zk.data.LeaderAndIsr;
 
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Field;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import static org.apache.fluss.record.TestData.DATA1;
+import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
@@ -124,6 +127,72 @@ public class AdjustIsrTest extends ReplicaTestBase {
                 TimeUnit.MILLISECONDS);
         replica.maybeShrinkIsr();
         assertThat(replica.getIsr()).containsExactlyInAnyOrder(1);
+    }
+
+    @Test
+    void testShrinkIsrUsesLatestStateAfterLeaderChange() throws Exception {
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 1);
+        Replica replica = makeLogReplica(DATA1_PHYSICAL_TABLE_PATH, tb);
+        NotifyLeaderAndIsrData leaderData =
+                new NotifyLeaderAndIsrData(
+                        DATA1_PHYSICAL_TABLE_PATH,
+                        tb,
+                        Arrays.asList(1, 2),
+                        new LeaderAndIsr(1, 0, Arrays.asList(1, 2), Collections.emptyList(), 0, 0));
+
+        Field lockField = Replica.class.getDeclaredField("leaderIsrUpdateLock");
+        lockField.setAccessible(true);
+        ReentrantReadWriteLock leaderIsrUpdateLock =
+                (ReentrantReadWriteLock) lockField.get(replica);
+
+        leaderIsrUpdateLock.writeLock().lock();
+        CompletableFuture<Void> makeLeaderFuture;
+        CompletableFuture<Void> advanceClockFuture;
+        CompletableFuture<Void> shrinkIsrFuture;
+        try {
+            makeLeaderFuture =
+                    CompletableFuture.runAsync(
+                            () -> {
+                                try {
+                                    replica.makeLeader(leaderData);
+                                } catch (Exception e) {
+                                    throw new RuntimeException(e);
+                                }
+                            });
+            retry(
+                    Duration.ofSeconds(10),
+                    () -> assertThat(leaderIsrUpdateLock.getQueueLength()).isEqualTo(1));
+
+            advanceClockFuture =
+                    CompletableFuture.runAsync(
+                            () -> {
+                                leaderIsrUpdateLock.writeLock().lock();
+                                try {
+                                    manualClock.advanceTime(
+                                            conf.get(ConfigOptions.LOG_REPLICA_MAX_LAG_TIME)
+                                                            .toMillis()
+                                                    + 1,
+                                            TimeUnit.MILLISECONDS);
+                                } finally {
+                                    leaderIsrUpdateLock.writeLock().unlock();
+                                }
+                            });
+            retry(
+                    Duration.ofSeconds(10),
+                    () -> assertThat(leaderIsrUpdateLock.getQueueLength()).isEqualTo(2));
+
+            shrinkIsrFuture = CompletableFuture.runAsync(replica::maybeShrinkIsr);
+            retry(
+                    Duration.ofSeconds(10),
+                    () -> assertThat(leaderIsrUpdateLock.getQueueLength()).isEqualTo(3));
+        } finally {
+            leaderIsrUpdateLock.writeLock().unlock();
+        }
+
+        makeLeaderFuture.get(10, TimeUnit.SECONDS);
+        advanceClockFuture.get(10, TimeUnit.SECONDS);
+        shrinkIsrFuture.get(10, TimeUnit.SECONDS);
+        assertThat(replica.getIsr()).containsExactly(1);
     }
 
     @Test

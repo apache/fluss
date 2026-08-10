@@ -1271,6 +1271,41 @@ class CoordinatorEventProcessorTest {
         assertThat(resultForBucketMap.keySet())
                 .containsAnyElementsOf(bucketLeaderAndIsrMap.keySet());
         assertThat(resultForBucketMap.values()).allMatch(AdjustIsrResultForBucket::succeeded);
+
+        Map.Entry<TableBucket, LeaderAndIsr> entry =
+                fromCtx(ctx -> ctx.bucketLeaderAndIsr().entrySet().iterator().next());
+        TableBucket tableBucket = entry.getKey();
+        LeaderAndIsr currentLeaderAndIsr = entry.getValue();
+        List<Integer> isrWithoutLeader =
+                currentLeaderAndIsr.isr().stream()
+                        .filter(replica -> replica != currentLeaderAndIsr.leader())
+                        .collect(Collectors.toList());
+        LeaderAndIsr invalidLeaderAndIsr =
+                new LeaderAndIsr(
+                        currentLeaderAndIsr.leader(),
+                        currentLeaderAndIsr.leaderEpoch(),
+                        isrWithoutLeader,
+                        currentLeaderAndIsr.standbyReplicas(),
+                        currentLeaderAndIsr.coordinatorEpoch(),
+                        currentLeaderAndIsr.bucketEpoch());
+        CompletableFuture<AdjustIsrResponse> invalidResponse = new CompletableFuture<>();
+        eventProcessor
+                .getCoordinatorEventManager()
+                .put(
+                        new AdjustIsrReceivedEvent(
+                                Collections.singletonMap(tableBucket, invalidLeaderAndIsr),
+                                invalidResponse));
+
+        AdjustIsrResultForBucket invalidResult =
+                getAdjustIsrResponseData(invalidResponse.get()).get(tableBucket);
+        assertThat(invalidResult.getError().error()).isEqualTo(Errors.INELIGIBLE_REPLICA_EXCEPTION);
+        assertThat(invalidResult.getErrorMessage())
+                .contains(
+                        String.format(
+                                "leader %s is not in the new ISR", currentLeaderAndIsr.leader()));
+        Optional<LeaderAndIsr> storedLeaderAndIsr =
+                fromCtx(ctx -> ctx.getBucketLeaderAndIsr(tableBucket));
+        assertThat(storedLeaderAndIsr).contains(currentLeaderAndIsr);
     }
 
     @Test
