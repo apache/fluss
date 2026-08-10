@@ -17,6 +17,7 @@
 
 package org.apache.fluss.testutils.common;
 
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.extension.ConditionEvaluationResult;
 import org.junit.jupiter.api.extension.ExecutionCondition;
 import org.junit.jupiter.api.extension.ExtensionContext;
@@ -24,6 +25,8 @@ import org.junit.platform.commons.annotation.Testable;
 import org.junit.platform.commons.support.AnnotationSupport;
 
 import java.lang.reflect.Method;
+import java.util.HashSet;
+import java.util.Set;
 
 /**
  * Filters JUnit tests not marked with {@link MultiVersionTest} in a non-default version module.
@@ -81,17 +84,30 @@ public final class MultiVersionTestCondition implements ExecutionCondition {
                 || AnnotationSupport.isAnnotated(testClass, RunMultiVersionTestsOnly.class);
     }
 
-    private static boolean hasSelectedTests(Class<?> testClass) {
-        if (AnnotationSupport.isAnnotated(testClass, MultiVersionTest.class)) {
-            return true;
-        }
+    static boolean hasSelectedTests(Class<?> testClass) {
+        return hasSelectedTests(testClass, new HashSet<>());
+    }
 
+    private static boolean hasSelectedTests(Class<?> testClass, Set<Class<?>> inspectedClasses) {
         Class<?> currentClass = testClass;
         while (currentClass != null && currentClass != Object.class) {
-            for (Method method : currentClass.getDeclaredMethods()) {
-                if (AnnotationSupport.isAnnotated(method, Testable.class)
-                        && AnnotationSupport.isAnnotated(method, MultiVersionTest.class)) {
+            if (inspectedClasses.add(currentClass)) {
+                if (AnnotationSupport.isAnnotated(currentClass, MultiVersionTest.class)) {
                     return true;
+                }
+
+                for (Method method : currentClass.getDeclaredMethods()) {
+                    if (AnnotationSupport.isAnnotated(method, Testable.class)
+                            && AnnotationSupport.isAnnotated(method, MultiVersionTest.class)) {
+                        return true;
+                    }
+                }
+
+                for (Class<?> nestedClass : currentClass.getDeclaredClasses()) {
+                    if (AnnotationSupport.isAnnotated(nestedClass, Nested.class)
+                            && hasSelectedTests(nestedClass, inspectedClasses)) {
+                        return true;
+                    }
                 }
             }
             currentClass = currentClass.getSuperclass();

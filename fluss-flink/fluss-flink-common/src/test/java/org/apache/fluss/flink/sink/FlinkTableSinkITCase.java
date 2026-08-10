@@ -530,6 +530,7 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     }
 
     @Test
+    @MultiVersionTest
     void testPartialUpsert() throws Exception {
         tEnv.executeSql(
                 "create table sink_test (a int not null primary key not enforced, b bigint, c string) with('bucket.num' = '3')");

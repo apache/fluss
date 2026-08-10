@@ -17,7 +17,11 @@
 
 package org.apache.fluss.testutils.common;
 
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+
+import static org.assertj.core.api.Assertions.assertThat;
 
 /** Tests for {@link MultiVersionTestCondition}. */
 @RunMultiVersionTestsOnly
@@ -28,8 +32,51 @@ class MultiVersionTestConditionTest extends MultiVersionTestConditionTestBase {
     void testMarkedDeclaredMethodRuns() {}
 
     @Test
+    @MultiVersionTest
+    void testSelectedNestedTestsAreDetected() {
+        assertThat(MultiVersionTestCondition.hasSelectedTests(OnlyMarkedNestedMethodTest.class))
+                .isTrue();
+        assertThat(MultiVersionTestCondition.hasSelectedTests(OnlyMarkedNestedClassTest.class))
+                .isTrue();
+        assertThat(MultiVersionTestCondition.hasSelectedTests(OnlyUnmarkedNestedTest.class))
+                .isFalse();
+    }
+
+    @Test
     void testUnmarkedDeclaredMethodDoesNotRun() {
         throw new AssertionError("Unmarked declared test should have been disabled");
+    }
+
+    private static class OnlyMarkedNestedMethodTest {
+
+        @Nested
+        class NestedTests {
+
+            @Test
+            @MultiVersionTest
+            void testMarkedNestedMethod() {}
+        }
+    }
+
+    private static class OnlyMarkedNestedClassTest {
+
+        @Nested
+        @MultiVersionTest
+        class NestedTests {
+
+            @Test
+            void testNestedClassMethod() {}
+        }
+    }
+
+    private static class OnlyUnmarkedNestedTest {
+
+        @Nested
+        class NestedTests {
+
+            @Test
+            void testUnmarkedNestedMethod() {}
+        }
     }
 }
 
@@ -47,7 +94,13 @@ abstract class MultiVersionTestConditionTestBase {
 
 @RunMultiVersionTestsOnly
 class OnlyUnmarkedInheritedMultiVersionTestConditionTest
-        extends OnlyUnmarkedInheritedMultiVersionTestConditionTestBase {}
+        extends OnlyUnmarkedInheritedMultiVersionTestConditionTestBase {
+
+    @BeforeAll
+    static void failIfClassLifecycleStarts() {
+        throw new AssertionError("Class without selected tests should have been disabled");
+    }
+}
 
 abstract class OnlyUnmarkedInheritedMultiVersionTestConditionTestBase {
 

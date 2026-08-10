@@ -174,6 +174,7 @@ public abstract class FlinkProcedureITCase {
                 .hasMessageContaining("No match found for function signature generate_n");
     }
 
+    @MultiVersionTest
     @Test
     void testIndexArgument() throws Exception {
         tEnv.executeSql(
