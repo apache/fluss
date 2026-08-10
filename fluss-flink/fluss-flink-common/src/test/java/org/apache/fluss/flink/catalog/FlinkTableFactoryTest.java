@@ -18,6 +18,7 @@
 package org.apache.fluss.flink.catalog;
 
 import org.apache.fluss.flink.FlinkConnectorOptions;
+import org.apache.fluss.flink.adapter.CatalogTableAdapter;
 import org.apache.fluss.flink.sink.FlinkTableSink;
 import org.apache.fluss.flink.source.BinlogFlinkTableSource;
 import org.apache.fluss.flink.source.ChangelogFlinkTableSource;
@@ -32,7 +33,6 @@ import org.apache.flink.configuration.ExecutionOptions;
 import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.api.Schema;
 import org.apache.flink.table.api.ValidationException;
-import org.apache.flink.table.catalog.CatalogTable;
 import org.apache.flink.table.catalog.Column;
 import org.apache.flink.table.catalog.CommonCatalogOptions;
 import org.apache.flink.table.catalog.ObjectIdentifier;
@@ -340,7 +340,7 @@ abstract class FlinkTableFactoryTest {
                 new FactoryUtil.DefaultDynamicTableContext(
                         objectIdentifier,
                         new ResolvedCatalogTable(
-                                createCatalogTable(
+                                CatalogTableAdapter.toCatalogTable(
                                         Schema.newBuilder().fromResolvedSchema(schema).build(),
                                         "mock source",
                                         schema.getPrimaryKey()
@@ -362,7 +362,7 @@ abstract class FlinkTableFactoryTest {
                 new FactoryUtil.DefaultDynamicTableContext(
                         OBJECT_IDENTIFIER,
                         new ResolvedCatalogTable(
-                                createCatalogTable(
+                                CatalogTableAdapter.toCatalogTable(
                                         Schema.newBuilder().fromResolvedSchema(schema).build(),
                                         "mock sink",
                                         Collections.emptyList(),
@@ -373,15 +373,6 @@ abstract class FlinkTableFactoryTest {
                         Thread.currentThread().getContextClassLoader(),
                         false);
         return tableFactory.createDynamicTableSink(context);
-    }
-
-    /** Creates a catalog table using the API available in the tested Flink version. */
-    protected CatalogTable createCatalogTable(
-            Schema schema,
-            String comment,
-            List<String> partitionKeys,
-            Map<String, String> options) {
-        return CatalogTable.of(schema, comment, partitionKeys, options);
     }
 
     /** Creates a lookup context using the API available in the tested Flink version. */

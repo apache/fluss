@@ -17,31 +17,11 @@
 
 package org.apache.fluss.flink.catalog;
 
-import org.apache.flink.table.api.Schema;
-import org.apache.flink.table.catalog.CatalogTable;
 import org.apache.flink.table.connector.source.LookupTableSource;
 import org.apache.flink.table.runtime.connector.source.LookupRuntimeProviderContext;
 
-import java.util.List;
-import java.util.Map;
-
 /** Test for {@link FlinkTableFactory} in Flink 2.2. */
 public class Flink22TableFactoryTest extends FlinkTableFactoryTest {
-
-    @Override
-    protected CatalogTable createCatalogTable(
-            Schema schema,
-            String comment,
-            List<String> partitionKeys,
-            Map<String, String> options) {
-        return CatalogTable.newBuilder()
-                .schema(schema)
-                .comment(comment)
-                .partitionKeys(partitionKeys)
-                .options(options)
-                .build();
-    }
-
     @Override
     protected LookupTableSource.LookupContext createLookupContext(int[][] lookupKeys) {
         return new LookupRuntimeProviderContext(lookupKeys, false);
