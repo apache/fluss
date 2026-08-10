@@ -50,6 +50,7 @@ import static org.apache.fluss.config.ConfigOptions.KV_LEADER_REPLICA_MEMORY_RES
 import static org.apache.fluss.config.ConfigOptions.KV_SHARED_RATE_LIMITER_BYTES_PER_SEC;
 import static org.apache.fluss.config.ConfigOptions.KV_SNAPSHOT_INTERVAL;
 import static org.apache.fluss.config.ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER;
+import static org.apache.fluss.config.ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED;
 import static org.apache.fluss.config.ConfigOptions.REMOTE_DATA_DIRS;
 import static org.apache.fluss.config.ConfigOptions.REMOTE_DATA_DIRS_STRATEGY;
 import static org.apache.fluss.config.ConfigOptions.REMOTE_DATA_DIRS_WEIGHTS;
@@ -74,6 +75,7 @@ class DynamicServerConfig {
             new HashSet<>(
                     Arrays.asList(
                             DATALAKE_FORMAT.key(),
+                            LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED.key(),
                             LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER.key(),
                             KV_LEADER_REPLICA_MEMORY_RESERVED.key(),
                             KV_SHARED_RATE_LIMITER_BYTES_PER_SEC.key(),

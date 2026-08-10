@@ -333,6 +333,8 @@ public class TabletServer extends ServerBase {
                             requestsMetrics);
 
             dynamicConfigManager.register(lakeCatalogDynamicLoader);
+            // Register logManager for dynamic log retention configuration.
+            dynamicConfigManager.register(logManager);
             // Register kvManager to dynamicConfigManager for dynamic reconfiguration
             dynamicConfigManager.register(kvManager);
             // Register DefaultSnapshotContext for dynamic kv.snapshot.interval

@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.TableConfig;
+import org.apache.fluss.config.cluster.ServerReconfigurable;
 import org.apache.fluss.exception.FlussException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.LogStorageException;
@@ -67,6 +68,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
 
@@ -82,7 +84,7 @@ import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
  * log instances.
  */
 @ThreadSafe
-public final class LogManager extends TabletManagerBase {
+public final class LogManager extends TabletManagerBase implements ServerReconfigurable {
     private static final Logger LOG = LoggerFactory.getLogger(LogManager.class);
 
     @VisibleForTesting
@@ -110,6 +112,7 @@ public final class LogManager extends TabletManagerBase {
     private volatile Map<File, OffsetCheckpointFile> recoveryPointCheckpoints;
     private volatile ScheduledFuture<?> recoveryPointCheckpointTask;
     private volatile ScheduledFuture<?> localLogRetentionTask;
+    private final AtomicBoolean rollExpiredActiveSegmentEnabled;
     private boolean loadLogsCompletedFlag = false;
 
     private LogManager(
@@ -127,6 +130,9 @@ public final class LogManager extends TabletManagerBase {
         this.clock = clock;
         this.serverMetricGroup = serverMetricGroup;
         this.localDiskManager = localDiskManager;
+        this.rollExpiredActiveSegmentEnabled =
+                new AtomicBoolean(
+                        conf.get(ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED));
 
         initializeCheckpointMaps();
     }
@@ -319,6 +325,7 @@ public final class LogManager extends TabletManagerBase {
                                     tablePath,
                                     tabletDir,
                                     conf,
+                                    rollExpiredActiveSegmentEnabled,
                                     serverMetricGroup,
                                     0L,
                                     scheduler,
@@ -464,6 +471,7 @@ public final class LogManager extends TabletManagerBase {
                         physicalTablePath,
                         tabletDir,
                         conf,
+                        rollExpiredActiveSegmentEnabled,
                         serverMetricGroup,
                         logRecoveryPoint,
                         scheduler,
@@ -562,6 +570,34 @@ public final class LogManager extends TabletManagerBase {
                         e);
             }
         }
+    }
+
+    // ============ ServerReconfigurable Implementation ============
+
+    @Override
+    public void validate(Configuration newConfig) {
+        // Type validation is handled by DynamicServerConfig.
+    }
+
+    @Override
+    public void reconfigure(Configuration newConfig) {
+        boolean newRollExpiredActiveSegmentEnabled =
+                newConfig.get(ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED);
+        boolean oldRollExpiredActiveSegmentEnabled =
+                rollExpiredActiveSegmentEnabled.getAndSet(newRollExpiredActiveSegmentEnabled);
+        if (newRollExpiredActiveSegmentEnabled == oldRollExpiredActiveSegmentEnabled) {
+            LOG.debug(
+                    "{} unchanged: {}",
+                    ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED.key(),
+                    newRollExpiredActiveSegmentEnabled);
+            return;
+        }
+
+        LOG.info(
+                "{} reconfigured: {} -> {}",
+                ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED.key(),
+                oldRollExpiredActiveSegmentEnabled,
+                newRollExpiredActiveSegmentEnabled);
     }
 
     private void waitForShutdownLogsInDir(

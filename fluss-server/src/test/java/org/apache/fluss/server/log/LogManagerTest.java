@@ -18,6 +18,7 @@
 package org.apache.fluss.server.log;
 
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
@@ -184,6 +185,26 @@ final class LogManagerTest extends LogTestBase {
     void testGetNonExistentLog() {
         Optional<LogTablet> log = logManager.getLog(new TableBucket(1001, 1));
         assertThat(log.isPresent()).isFalse();
+    }
+
+    @Test
+    void testReconfigureRollExpiredActiveSegment() throws Exception {
+        initTableBuckets(null);
+        LogTablet existingLog = getOrCreateLog(tablePath1, null, tableBucket1);
+        assertThat(existingLog.isRollExpiredActiveSegmentEnabled()).isFalse();
+
+        Configuration newConfig = new Configuration(conf);
+        newConfig.set(ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED, true);
+        logManager.reconfigure(newConfig);
+
+        assertThat(existingLog.isRollExpiredActiveSegmentEnabled()).isTrue();
+        LogTablet newLog = getOrCreateLog(tablePath2, null, tableBucket2);
+        assertThat(newLog.isRollExpiredActiveSegmentEnabled()).isTrue();
+
+        newConfig.set(ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED, false);
+        logManager.reconfigure(newConfig);
+        assertThat(existingLog.isRollExpiredActiveSegmentEnabled()).isFalse();
+        assertThat(newLog.isRollExpiredActiveSegmentEnabled()).isFalse();
     }
 
     @ParameterizedTest

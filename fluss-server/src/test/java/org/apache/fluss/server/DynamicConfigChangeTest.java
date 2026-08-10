@@ -742,6 +742,41 @@ public class DynamicConfigChangeTest {
     }
 
     @Test
+    void testDynamicRollActiveSegmentChange() throws Exception {
+        Configuration configuration = new Configuration();
+        configuration.set(ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED, false);
+
+        DynamicConfigManager dynamicConfigManager = createManager(configuration);
+
+        AtomicReference<Boolean> reconfiguredValue = new AtomicReference<>(false);
+        dynamicConfigManager.register(
+                new ServerReconfigurable() {
+                    @Override
+                    public void validate(Configuration newConfig) throws ConfigException {}
+
+                    @Override
+                    public void reconfigure(Configuration newConfig) {
+                        reconfiguredValue.set(
+                                newConfig.get(
+                                        ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED));
+                    }
+                });
+        dynamicConfigManager.startup();
+
+        dynamicConfigManager.alterConfigs(
+                Collections.singletonList(
+                        new AlterConfig(
+                                ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED.key(),
+                                "true",
+                                AlterConfigOpType.SET)));
+
+        Map<String, String> zkConfig = zookeeperClient.fetchEntityConfig();
+        assertThat(zkConfig.get(ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED.key()))
+                .isEqualTo("true");
+        assertThat(reconfiguredValue.get()).isTrue();
+    }
+
+    @Test
     void testExplicitDataLakeEnabledRequiresDataLakeFormat() throws Exception {
         try (LakeCatalogDynamicLoader lakeCatalogDynamicLoader =
                 new LakeCatalogDynamicLoader(new Configuration(), null, true)) {

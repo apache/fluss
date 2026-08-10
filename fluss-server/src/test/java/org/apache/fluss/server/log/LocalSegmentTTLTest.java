@@ -56,6 +56,7 @@ final class LocalSegmentTTLTest extends ReplicaTestBase {
                         ? new TableBucket(DATA1_TABLE_ID, 0L, 0)
                         : new TableBucket(DATA1_TABLE_ID, 0);
         conf.set(ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED, true);
+        logManager.reconfigure(conf);
         makeLogTableAsLeader(tb, partitionTable);
         LogTablet logTablet = replicaManager.getReplicaOrException(tb).getLogTablet();
 
