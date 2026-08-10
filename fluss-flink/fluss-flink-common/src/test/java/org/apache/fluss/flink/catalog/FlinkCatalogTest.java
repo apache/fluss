@@ -1233,12 +1233,9 @@ class FlinkCatalogTest {
                 .hasMessage(
                         "Database %s does not exist in Catalog %s.", nonexistentDb, CATALOG_NAME);
 
-        // functionExists on a nonexistent database throws CatalogException with db-not-found
-        // message
+        // functionExists on a nonexistent database returns false, not throw
         ObjectPath qualifiedInNonexistentDb = new ObjectPath(nonexistentDb, "rb_build");
-        assertThatThrownBy(() -> catalog.functionExists(qualifiedInNonexistentDb))
-                .isInstanceOf(CatalogException.class)
-                .hasMessageContaining("Database " + nonexistentDb + " does not exist");
+        assertThat(catalog.functionExists(qualifiedInNonexistentDb)).isFalse();
 
         // getFunction on a nonexistent database throws CatalogException with db-not-found message
         assertThatThrownBy(() -> catalog.getFunction(qualifiedInNonexistentDb))
