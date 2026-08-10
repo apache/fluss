@@ -52,7 +52,8 @@ case class FlussAppendInputPartition(tableBucket: TableBucket, startOffset: Long
  * @param tableBucket
  *   the table bucket to read from
  * @param snapshotId
- *   the snapshot ID to read from, -1 if no snapshot
+ *   the snapshot ID to read from, [[org.apache.fluss.metadata.TableBucketSnapshot.NO_SNAPSHOT_ID]]
+ *   if no snapshot
  * @param logStartingOffset
  *   the log offset where incremental reading should start
  * @param logStoppingOffset

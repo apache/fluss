@@ -269,7 +269,7 @@ public class KvSnapshotLeaseManager {
 
                     for (TableBucket bucket : tableBucketsToRelease) {
                         long snapshotId = lease.releaseBucket(bucket);
-                        if (snapshotId != -1L) {
+                        if (snapshotId != TableBucketSnapshot.NO_SNAPSHOT_ID) {
                             leasedBucketCount.decrementAndGet();
                             decrementRefCount(new TableBucketSnapshot(bucket, snapshotId));
                         }

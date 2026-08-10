@@ -25,7 +25,7 @@ import org.apache.fluss.client.table.scanner.log.LogScanner
 import org.apache.fluss.config.Configuration
 import org.apache.fluss.exception.LakeTableSnapshotNotExistException
 import org.apache.fluss.lake.source.{LakeSource, LakeSplit}
-import org.apache.fluss.metadata.{LogFormat, PartitionInfo, ResolvedPartitionSpec, TableBucket, TableInfo, TablePath}
+import org.apache.fluss.metadata.{LogFormat, PartitionInfo, ResolvedPartitionSpec, TableBucket, TableBucketSnapshot, TableInfo, TablePath}
 import org.apache.fluss.predicate.{Predicate => FlussPredicate}
 import org.apache.fluss.spark.SparkFlussConf
 import org.apache.fluss.spark.read.lake.{FlussLakeInputPartition, FlussLakeUpsertInputPartition, FlussLakeUtils}
@@ -650,7 +650,11 @@ class UpsertPlanner(
               logStartingOffsetOpt.getAsLong,
               logEndingOffset)
           } else {
-            FlussUpsertInputPartition(tableBucket, -1L, LogScanner.EARLIEST_OFFSET, logEndingOffset)
+            FlussUpsertInputPartition(
+              tableBucket,
+              TableBucketSnapshot.NO_SNAPSHOT_ID,
+              LogScanner.EARLIEST_OFFSET,
+              logEndingOffset)
           }
       }
       .map(_.asInstanceOf[InputPartition])

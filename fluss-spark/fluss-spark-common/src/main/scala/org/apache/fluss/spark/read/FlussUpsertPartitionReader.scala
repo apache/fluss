@@ -22,7 +22,7 @@ import org.apache.fluss.client.table.scanner.batch.BatchScanner
 import org.apache.fluss.client.table.scanner.log.LogScanner
 import org.apache.fluss.config.Configuration
 import org.apache.fluss.memory.MemorySegment
-import org.apache.fluss.metadata.{TableBucket, TablePath}
+import org.apache.fluss.metadata.{TableBucket, TableBucketSnapshot, TablePath}
 import org.apache.fluss.record.LogRecord
 import org.apache.fluss.row.{encode, InternalRow => FlussInternalRow, KeyValueRow}
 import org.apache.fluss.spark.SparkFlussConf
@@ -197,7 +197,7 @@ class FlussUpsertPartitionReader(
       createLogChangesIterator()
     }
 
-    val snapshotIterators = if (snapshotId == -1) {
+    val snapshotIterators = if (snapshotId == TableBucketSnapshot.NO_SNAPSHOT_ID) {
       null
     } else {
       createSnapshotIterator()

@@ -40,6 +40,7 @@ import java.util.Set;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 
+import static org.apache.fluss.metadata.TableBucketSnapshot.NO_SNAPSHOT_ID;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
 /** Generates bounded Fluss-only splits for batch scans. */
@@ -131,10 +132,7 @@ final class FlussOnlyBatchSplitGenerator {
         for (Integer bucketId : bucketsNeedInitOffset) {
             TableBucket tableBucket = new TableBucket(tableId, partitionId, bucketId);
             OptionalLong snapshotId = snapshots.getSnapshotId(bucketId);
-            long batchSnapshotId =
-                    snapshotId.isPresent()
-                            ? snapshotId.getAsLong()
-                            : HybridSnapshotLogSplit.NO_SNAPSHOT_ID;
+            long batchSnapshotId = snapshotId.isPresent() ? snapshotId.getAsLong() : NO_SNAPSHOT_ID;
             long logStartingOffset;
             if (snapshotId.isPresent()) {
                 OptionalLong logOffset = snapshots.getLogOffset(bucketId);
