@@ -117,7 +117,7 @@ function HeroDiagram() {
     //   01 · SOURCES       (left)   — databases, CDC, event logs, IoT
     //   02 · FLUSS HOT TIER (centre) — Coordinator + Tablet Servers
     //   03 · READ PATTERNS (right)  — streaming, batch, lookup, union
-    //   04 · QUERY ENGINES (bottom) — Flink, Spark, Trino, StarRocks, Doris, DuckDB
+    //   04 · QUERY ENGINES (bottom) — Flink, Spark, Trino, StarRocks, Doris, DuckDB, Ray
     //
     // The hot tier tiers down to a Lakehouse cold tier (Paimon · Iceberg ·
     // Hudi · Lance) via a Tiering Service. ViewBox is 1200 × 640 (15:8) to give the
@@ -140,7 +140,7 @@ function HeroDiagram() {
                 streaming reads, batch reads, lookup joins, and a union
                 read that merges hot and cold. Query engines along the
                 bottom include Apache Flink, Apache Spark, Trino,
-                StarRocks, Apache Doris, and DuckDB.
+                StarRocks, Apache Doris, DuckDB and Ray.
             </desc>
 
             <defs>
