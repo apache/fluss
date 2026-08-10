@@ -1415,15 +1415,21 @@ impl LogFetcher {
             Ok(())
         };
 
-        // TODO: Handle PartitionNotExist error like java side
-        update_result.or_else(|e| {
-            if let Error::RpcError { source, .. } = &e
+        update_result.or_else(|error| {
+            if matches!(error.api_error(), Some(FlussError::PartitionNotExists)) {
+                warn!(
+                    "Received PartitionNotExists while updating scanner metadata; ignoring it: {error}"
+                );
+                Ok(())
+            } else if let Error::RpcError { source, .. } = &error
                 && matches!(source, RpcError::ConnectionError(_) | RpcError::Poisoned(_))
             {
-                warn!("Retrying after encountering error while updating table metadata: {e}");
+                warn!(
+                    "Retrying after encountering error while updating table metadata: {error}"
+                );
                 Ok(())
             } else {
-                Err(e)
+                Err(error)
             }
         })?;
         Ok(())
