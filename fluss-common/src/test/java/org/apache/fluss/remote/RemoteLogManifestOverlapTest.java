@@ -114,6 +114,22 @@ class RemoteLogManifestOverlapTest {
     }
 
     @Test
+    void testMergeOverlappingSegmentTrimsExistingSuffix() {
+        RemoteLogSegment first = segment(0L, 10L);
+        RemoteLogSegment second = segment(10L, 20L);
+        RemoteLogSegment third = segment(20L, 30L);
+        RemoteLogSegment replacement = segment(15L, 40L);
+
+        RemoteLogManifest result =
+                manifest(first, second, third)
+                        .trimAndMerge(
+                                Collections.emptyList(), Collections.singletonList(replacement));
+
+        assertThat(result.getRemoteLogSegmentList())
+                .containsExactly(first, second.withLogicalRange(10L, 15L), replacement);
+    }
+
+    @Test
     void testFullReplacementKeepsOnlyNewPhysicalObject() {
         RemoteLogSegment oldSegment = segment(0L, 10L);
         RemoteLogSegment replacement = segment(0L, 20L);
@@ -137,7 +153,7 @@ class RemoteLogManifestOverlapTest {
 
         assertThat(result.getRemoteLogSegmentList())
                 .containsExactly(replacement.withLogicalRange(10L, 25L));
-        assertThat(result.getRemoteLogStartOffset()).isEqualTo(10L);
+        assertThat(result.getRemoteLogStartOffset()).isEqualTo(5L);
         assertThat(result.getRemoteLogEndOffset()).isEqualTo(25L);
     }
 

@@ -52,10 +52,6 @@ public class RemoteLogTablet {
     private static final long INIT_REMOTE_LOG_START_OFFSET = Long.MAX_VALUE;
     private static final long INIT_REMOTE_LOG_END_OFFSET = -1L;
 
-    private final TableBucket tableBucket;
-
-    private final PhysicalTablePath physicalTablePath;
-
     /**
      * It contains all the segment-id to {@link RemoteLogSegment} mappings which did not delete in
      * remote storage.
@@ -100,8 +96,6 @@ public class RemoteLogTablet {
 
     public RemoteLogTablet(
             PhysicalTablePath physicalTablePath, TableBucket tableBucket, long ttlMs) {
-        this.tableBucket = tableBucket;
-        this.physicalTablePath = physicalTablePath;
         this.ttlMs = ttlMs;
         this.currentManifest =
                 new RemoteLogManifest(physicalTablePath, tableBucket, new ArrayList<>());
@@ -149,7 +143,8 @@ public class RemoteLogTablet {
 
     /** Get all remote log segment metadata. */
     public List<RemoteLogSegment> allRemoteLogSegments() {
-        return inReadLock(lock, () -> currentManifest.getRemoteLogSegmentList());
+        // lock-free, the currentManifest is volatile and the list is immutable.
+        return currentManifest.getRemoteLogSegmentList();
     }
 
     /**
@@ -300,7 +295,8 @@ public class RemoteLogTablet {
 
     /** Returns the highest exclusive offset successfully copied to remote storage. */
     public long getHighestCopiedEndOffset() {
-        return inReadLock(lock, () -> currentManifest.getHighestCopiedEndOffset());
+        // lock-free, the currentManifest is volatile and the offset is immutable.
+        return currentManifest.getHighestCopiedEndOffset();
     }
 
     /**
@@ -308,7 +304,8 @@ public class RemoteLogTablet {
      * remoteLogSegment already committed.
      */
     public RemoteLogManifest currentManifest() {
-        return inReadLock(lock, () -> currentManifest);
+        // lock-free, the currentManifest is volatile
+        return currentManifest;
     }
 
     public void loadRemoteLogManifest(RemoteLogManifest manifestSnapshot) {
@@ -324,86 +321,6 @@ public class RemoteLogTablet {
                     remoteLogStartOffset = manifestSnapshot.getRemoteLogStartOffset();
                     remoteLogEndOffset = manifestSnapshot.getRemoteLogEndOffset();
                     currentManifest = manifestSnapshot;
-                });
-    }
-
-    public void addAndDeleteLogSegments(
-            List<RemoteLogSegment> addedSegments, List<RemoteLogSegment> deletedSegments) {
-        if (deletedSegments.isEmpty() && addedSegments.isEmpty()) {
-            return;
-        }
-        inWriteLock(
-                lock,
-                () -> {
-                    long newSizeInBytes = remoteSizeInBytes;
-                    long newHighestCopiedEndOffset = currentManifest.getHighestCopiedEndOffset();
-
-                    // put new segments into list
-                    for (RemoteLogSegment remoteLogSegment : addedSegments) {
-                        UUID remoteLogSegmentId = remoteLogSegment.remoteLogSegmentId();
-
-                        // TODO maybe need to check the leader epoch.
-
-                        addSegment(remoteLogSegment);
-
-                        // update remote log end offset.
-                        if (remoteLogSegment.remoteLogEndOffset() > remoteLogEndOffset) {
-                            remoteLogEndOffset = remoteLogSegment.remoteLogEndOffset();
-                        }
-                        newHighestCopiedEndOffset =
-                                Math.max(
-                                        newHighestCopiedEndOffset,
-                                        remoteLogSegment.remoteLogEndOffset());
-
-                        newSizeInBytes += remoteLogSegment.segmentSizeInBytes();
-                    }
-
-                    // remove expired segments from list
-                    for (RemoteLogSegment remoteLogSegment : deletedSegments) {
-                        UUID remoteLogSegmentId = remoteLogSegment.remoteLogSegmentId();
-
-                        // TODO maybe need to check the leader epoch.
-
-                        RemoteLogSegment removeSegment =
-                                idToRemoteLogSegment.remove(remoteLogSegmentId);
-                        offsetToRemoteLogSegmentId.remove(
-                                removeSegment == null
-                                        ? remoteLogSegment.logicalStartOffset()
-                                        : removeSegment.logicalStartOffset());
-
-                        // remove k,v mapping if the set is empty.
-                        timestampToRemoteLogSegmentId.compute(
-                                remoteLogSegment.maxTimestamp(),
-                                (k, v) -> {
-                                    if (v != null) {
-                                        v.remove(remoteLogSegmentId);
-                                        if (v.isEmpty()) {
-                                            return null;
-                                        }
-                                    }
-                                    return v;
-                                });
-                        if (removeSegment != null) {
-                            newSizeInBytes -= removeSegment.segmentSizeInBytes();
-                        }
-                    }
-
-                    remoteSizeInBytes = newSizeInBytes;
-                    numRemoteLogSegments = idToRemoteLogSegment.size();
-
-                    if (numRemoteLogSegments == 0) {
-                        // reset to default values if no segments exist after expiration.
-                        reset();
-                    } else {
-                        remoteLogStartOffset = offsetToRemoteLogSegmentId.firstKey();
-                    }
-
-                    currentManifest =
-                            new RemoteLogManifest(
-                                    physicalTablePath,
-                                    tableBucket,
-                                    new ArrayList<>(idToRemoteLogSegment.values()),
-                                    newHighestCopiedEndOffset);
                 });
     }
 

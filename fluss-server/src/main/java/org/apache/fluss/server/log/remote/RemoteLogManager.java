@@ -262,6 +262,9 @@ public class RemoteLogManager implements Closeable {
         RemoteLogIndexCache indexCache = remoteLogIndexCacheForBucket(tableBucket);
         for (RemoteLogSegment segment : remoteLogTablet.findSegmentsByTimestamp(timestamp)) {
             long offset = indexCache.lookupOffsetForTimestamp(segment, timestamp);
+            // The timestamp index covers the complete physical segment, while overlap handling may
+            // expose only a clipped logical range. Clamp a result in the hidden prefix to the
+            // logical start, and skip a result in the hidden suffix in favor of the next candidate.
             if (offset < segment.logicalStartOffset()) {
                 return segment.logicalStartOffset();
             }

@@ -145,8 +145,8 @@ public class RemoteLogManifest {
     public long getRemoteLogStartOffset() {
         long startOffset = Long.MAX_VALUE;
         for (RemoteLogSegment remoteLogSegment : remoteLogSegmentList) {
-            if (remoteLogSegment.logicalStartOffset() < startOffset) {
-                startOffset = remoteLogSegment.logicalStartOffset();
+            if (remoteLogSegment.remoteLogStartOffset() < startOffset) {
+                startOffset = remoteLogSegment.remoteLogStartOffset();
             }
         }
         return startOffset;
@@ -155,8 +155,8 @@ public class RemoteLogManifest {
     public long getRemoteLogEndOffset() {
         long endOffset = -1;
         for (RemoteLogSegment remoteLogSegment : remoteLogSegmentList) {
-            if (endOffset == -1 || remoteLogSegment.logicalEndOffset() > endOffset) {
-                endOffset = remoteLogSegment.logicalEndOffset();
+            if (endOffset == -1 || remoteLogSegment.remoteLogEndOffset() > endOffset) {
+                endOffset = remoteLogSegment.remoteLogEndOffset();
             }
         }
         return endOffset;

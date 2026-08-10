@@ -466,15 +466,15 @@ public class LogTieringTask implements Runnable {
 
     private void maybeUpdateCopiedOffset(LogTablet logTablet) {
         if (copiedOffset == null) {
-            copiedOffset = findRemoteLogEndOffset(logTablet);
+            copiedOffset = findCopiedOffset(logTablet);
             LOG.info(
-                    "Found the copied remote log end offset: {} for bucket {} after becoming leader",
+                    "Found copied offset {} for bucket {} after becoming leader",
                     copiedOffset,
                     tableBucket);
         }
     }
 
-    private long findRemoteLogEndOffset(LogTablet logTablet) {
+    private long findCopiedOffset(LogTablet logTablet) {
         long highestCopiedEndOffset = remoteLog.getHighestCopiedEndOffset();
         if (highestCopiedEndOffset < 0L) {
             return -1L;
