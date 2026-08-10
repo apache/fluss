@@ -277,6 +277,18 @@ class PaimonLakeCatalogTest {
                                         "1",
                                         "id")))
                 .isFalse();
+
+        assertThat(CoreOptions.IMMUTABLE_OPTIONS).contains(CoreOptions.BUCKET_FUNCTION_TYPE.key());
+        org.apache.paimon.schema.Schema schemaWithDifferentImmutableOption =
+                createPaimonSchemaBuilder(
+                                Arrays.asList("id", "pt"),
+                                Collections.singletonList("pt"),
+                                "1",
+                                "id")
+                        .option(PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY, Boolean.FALSE.toString())
+                        .option(CoreOptions.BUCKET_FUNCTION_TYPE.key(), "mod")
+                        .build();
+        assertThat(isPaimonSchemaCompatible(schema, schemaWithDifferentImmutableOption)).isFalse();
     }
 
     @Test

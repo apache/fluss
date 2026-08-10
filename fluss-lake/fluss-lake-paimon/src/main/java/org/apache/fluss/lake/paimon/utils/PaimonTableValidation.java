@@ -29,10 +29,11 @@ import org.apache.paimon.types.RowType;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
+import static org.apache.fluss.lake.paimon.utils.PaimonConversions.PAIMON_UNSETTABLE_OPTIONS;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY;
-import static org.apache.fluss.lake.paimon.utils.PaimonConversions.isPartitionLegacyNameDisabled;
 import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
 
 /** Utils to verify whether the existing Paimon table is compatible with the table to be created. */
@@ -100,16 +101,30 @@ public class PaimonTableValidation {
 
         return Objects.equals(existingSchema.partitionKeys(), newSchema.partitionKeys())
                 && Objects.equals(existingSchema.primaryKeys(), newSchema.primaryKeys())
-                && Objects.equals(
-                        existingSchema.options().get(CoreOptions.BUCKET.key()),
-                        newSchema.options().get(CoreOptions.BUCKET.key()))
-                && Objects.equals(
-                        existingSchema.options().get(CoreOptions.BUCKET_KEY.key()),
-                        newSchema.options().get(CoreOptions.BUCKET_KEY.key()))
-                && isPartitionLegacyNameDisabled(existingSchema.options())
-                && Objects.equals(
-                        existingSchema.options().get(PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY),
-                        newSchema.options().get(PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY));
+                && equalPaimonOptions(existingSchema.options(), newSchema.options());
+    }
+
+    private static boolean equalPaimonOptions(
+            Map<String, String> existingOptions, Map<String, String> newOptions) {
+        if (!Objects.equals(
+                existingOptions.get(PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY),
+                Boolean.FALSE.toString())) {
+            return false;
+        }
+
+        for (String option : PAIMON_UNSETTABLE_OPTIONS) {
+            if (!Objects.equals(existingOptions.get(option), newOptions.get(option))) {
+                return false;
+            }
+        }
+
+        for (String option : CoreOptions.IMMUTABLE_OPTIONS) {
+            if (!Objects.equals(existingOptions.get(option), newOptions.get(option))) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static boolean equalDataFieldIgnoreFieldId(
