@@ -75,7 +75,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Callable;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.BiConsumer;
@@ -104,11 +103,27 @@ public class MetadataManager {
     private final LakeCatalogDynamicLoader lakeCatalogDynamicLoader;
 
     /**
-     * Per-table lock ensuring ALTER bucket.num (write lock) never overlaps partition creation (read
-     * lock) on the same table; fair mode prevents ALTER starvation.
+     * Number of striped locks. Each {@link TablePath} is mapped to a fixed stripe by hash, so the
+     * same path always resolves to the same lock without lifecycle management. 1024 stripes keeps
+     * the collision probability negligible for typical cluster sizes while bounding memory to a
+     * few KB (one-time allocation).
      */
-    private final ConcurrentHashMap<TablePath, ReadWriteLock> bucketRescaleLocks =
-            new ConcurrentHashMap<>();
+    private static final int RESCALE_LOCK_STRIPES = 1024;
+
+    /**
+     * Striped locks ensuring ALTER bucket.num (write lock) never overlaps partition creation (read
+     * lock) on the same table; fair mode prevents ALTER starvation. Unlike a per-table map, striped
+     * locks have stable identity — the same {@link TablePath} always maps to the same lock, even
+     * across table drop/recreate, so mutual exclusion is never lost.
+     */
+    private final ReadWriteLock[] bucketRescaleLocks;
+
+    {
+        bucketRescaleLocks = new ReadWriteLock[RESCALE_LOCK_STRIPES];
+        for (int i = 0; i < RESCALE_LOCK_STRIPES; i++) {
+            bucketRescaleLocks[i] = new ReentrantReadWriteLock(true);
+        }
+    }
 
     public static final Set<String> SENSITIVE_TABLE_OPTIONS = new HashSet<>();
 
@@ -135,13 +150,13 @@ public class MetadataManager {
     }
 
     /**
-     * Returns the per-table read-write lock guarding table-level bucket.num against partition
+     * Returns the striped read-write lock guarding table-level bucket.num against partition
      * creation. Partition-creation callers must take the read lock around the whole "read
      * table-level bucket count -&gt; generate assignment -&gt; register partition" span; ALTER
      * bucket.num takes the write lock (done internally by {@link #alterTableProperties}).
      */
     public ReadWriteLock getBucketRescaleLock(TablePath tablePath) {
-        return bucketRescaleLocks.computeIfAbsent(tablePath, k -> new ReentrantReadWriteLock(true));
+        return bucketRescaleLocks[Math.floorMod(tablePath.hashCode(), RESCALE_LOCK_STRIPES)];
     }
 
     /** Validates the table descriptor. */
@@ -378,9 +393,6 @@ public class MetadataManager {
         // in here, we just delete the table node in zookeeper, which will then trigger
         // the physical deletion in tablet servers and assignments in zk
         uncheck(() -> zookeeperClient.deleteTable(tablePath), "Fail to drop table: " + tablePath);
-
-        // drop the per-table bucket-rescale lock so we don't leak lock objects for dropped tables
-        bucketRescaleLocks.remove(tablePath);
     }
 
     public void completeDeleteTable(long tableId) {

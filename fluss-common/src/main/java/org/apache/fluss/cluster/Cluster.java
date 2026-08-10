@@ -204,7 +204,9 @@ public final class Cluster {
                 coordinatorServer,
                 new HashMap<>(cluster.availableLocationsByPath),
                 new HashMap<>(tableIdByPath),
-                newPartitionsIdByPath);
+                newPartitionsIdByPath,
+                new HashMap<>(cluster.bucketCountByPartition),
+                new HashMap<>(cluster.bucketCountByTable));
     }
 
     @Nullable
