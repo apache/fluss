@@ -62,9 +62,8 @@ Before proceeding, ensure that [Docker](https://docs.docker.com/engine/install/)
    ```
    You should see: `flink-faker-0.5.3.jar` and `fluss-flink-1.20-0.9.1-incubating.jar`.
 
-5. Create the `docker-compose.yml` file using the heredoc command below to avoid indentation issues.
+5. Create a `docker-compose.yml` file with the following content:
    ```shell
-    cat > docker-compose.yml << 'EOF'
     services:
       coordinator-server:
         image: apache/fluss:${FLUSS_DOCKER_VERSION}
@@ -142,7 +141,6 @@ Before proceeding, ensure that [Docker](https://docs.docker.com/engine/install/)
 
     volumes:
       fluss-remote-data:
-    EOF
    ```
 
 6. Start the environment.
@@ -303,4 +301,4 @@ docker compose down -v
 
 ## What's Next?
 
-For the full reference of all RoaringBitmap SQL functions available in FlussCatalog (`rb_or_agg`, `rb_and`, `rb_contains`, `rb_to_array`, and more), see the [SQL Functions](/docs/engine-flink/sql-functions) documentation.
+For the full reference of all RoaringBitmap SQL functions available in FlussCatalog (`rb_or_agg`, `rb_and`, `rb_contains`, `rb_to_array`, and more), see the [SQL Functions](../engine-flink/sql-functions.md) documentation.
