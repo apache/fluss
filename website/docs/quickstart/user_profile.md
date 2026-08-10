@@ -36,7 +36,7 @@ Before proceeding, ensure that [Docker](https://docs.docker.com/engine/install/)
 
 2. Set the version environment variables.
    ```shell
-   export FLUSS_DOCKER_VERSION=0.9.0-incubating
+   export FLUSS_DOCKER_VERSION=0.9.1-incubating
    export FLINK_VERSION="1.20"
    ```
    :::note
@@ -60,84 +60,89 @@ Before proceeding, ensure that [Docker](https://docs.docker.com/engine/install/)
    ```shell
    ls -lh lib/
    ```
-   You should see: `flink-faker-0.5.3.jar` and `fluss-flink-1.20-0.9.0-incubating.jar`.
+   You should see: `flink-faker-0.5.3.jar` and `fluss-flink-1.20-0.9.1-incubating.jar`.
 
 5. Create the `docker-compose.yml` file using the heredoc command below to avoid indentation issues.
    ```shell
-   cat > docker-compose.yml << 'EOF'
-   services:
-     coordinator-server:
-       image: apache/fluss:${FLUSS_DOCKER_VERSION}
-       command: coordinatorServer
-       depends_on:
-         - zookeeper
-       environment:
-         - |
-           FLUSS_PROPERTIES=
-           zookeeper.address: zookeeper:2181
-           bind.listeners: FLUSS://coordinator-server:9123
-           remote.data.dir: /remote-data
-       volumes:
-         - fluss-remote-data:/remote-data
-     tablet-server:
-       image: apache/fluss:${FLUSS_DOCKER_VERSION}
-       command: tabletServer
-       depends_on:
-         - coordinator-server
-       environment:
-         - |
-           FLUSS_PROPERTIES=
-           zookeeper.address: zookeeper:2181
-           bind.listeners: FLUSS://tablet-server:9123
-           data.dir: /tmp/fluss/data
-           remote.data.dir: /remote-data
-       volumes:
-         - fluss-remote-data:/remote-data
-     zookeeper:
-       restart: always
-       image: zookeeper:3.9.2
-     jobmanager:
-       image: flink:${FLINK_VERSION}
-       ports:
-         - "8081:8081"
-       environment:
-         - |
-           FLINK_PROPERTIES=
-           jobmanager.rpc.address: jobmanager
-       entrypoint: ["sh", "-c", "cp -v /tmp/lib/*.jar /opt/flink/lib && exec /docker-entrypoint.sh jobmanager"]
-       volumes:
-         - ./lib:/tmp/lib
-         - fluss-remote-data:/remote-data
-     taskmanager:
-       image: flink:${FLINK_VERSION}
-       depends_on:
-         - jobmanager
-       environment:
-         - |
-           FLINK_PROPERTIES=
-           jobmanager.rpc.address: jobmanager
-           taskmanager.numberOfTaskSlots: 2
-       entrypoint: ["sh", "-c", "cp -v /tmp/lib/*.jar /opt/flink/lib && exec /docker-entrypoint.sh taskmanager"]
-       volumes:
-         - ./lib:/tmp/lib
-         - fluss-remote-data:/remote-data
-     sql-client:
-       image: flink:${FLINK_VERSION}
-       depends_on:
-         - jobmanager
-       environment:
-         - |
-           FLINK_PROPERTIES=
-           jobmanager.rpc.address: jobmanager
-           rest.address: jobmanager
-       entrypoint: ["sh", "-c", "cp -v /tmp/lib/*.jar /opt/flink/lib && exec /docker-entrypoint.sh bin/sql-client.sh"]
-       volumes:
-         - ./lib:/tmp/lib
-         - fluss-remote-data:/remote-data
+    cat > docker-compose.yml << 'EOF'
+    services:
+      coordinator-server:
+        image: apache/fluss:${FLUSS_DOCKER_VERSION}
+        command: coordinatorServer
+        depends_on:
+          - zookeeper
+        environment:
+          - |
+            FLUSS_PROPERTIES=
+            zookeeper.address: zookeeper:2181
+            bind.listeners: FLUSS://coordinator-server:9123
+            remote.data.dir: /remote-data
+        volumes:
+          - fluss-remote-data:/remote-data
 
-   volumes:
-     fluss-remote-data:
-   EOF
+      tablet-server:
+        image: apache/fluss:${FLUSS_DOCKER_VERSION}
+        command: tabletServer
+        depends_on:
+          - coordinator-server
+        environment:
+          - |
+            FLUSS_PROPERTIES=
+            zookeeper.address: zookeeper:2181
+            bind.listeners: FLUSS://tablet-server:9123
+            data.dir: /tmp/fluss/data
+            remote.data.dir: /remote-data
+        volumes:
+          - fluss-remote-data:/remote-data
+
+      zookeeper:
+        restart: always
+        image: zookeeper:3.9.2
+
+      jobmanager:
+        image: flink:${FLINK_VERSION}
+        ports:
+          - "8081:8081"
+        environment:
+          - |
+            FLINK_PROPERTIES=
+            jobmanager.rpc.address: jobmanager
+        entrypoint: ["sh", "-c", "cp -v /tmp/lib/*.jar /opt/flink/lib && exec /docker-entrypoint.sh jobmanager"]
+        volumes:
+          - ./lib:/tmp/lib
+          - fluss-remote-data:/remote-data
+
+      taskmanager:
+        image: flink:${FLINK_VERSION}
+        depends_on:
+          - jobmanager
+        environment:
+          - |
+            FLINK_PROPERTIES=
+            jobmanager.rpc.address: jobmanager
+            taskmanager.numberOfTaskSlots: 2
+        entrypoint: ["sh", "-c", "cp -v /tmp/lib/*.jar /opt/flink/lib && exec /docker-entrypoint.sh taskmanager"]
+        volumes:
+          - ./lib:/tmp/lib
+          - fluss-remote-data:/remote-data
+
+      sql-client:
+        image: flink:${FLINK_VERSION}
+        depends_on:
+          - jobmanager
+        environment:
+          - |
+            FLINK_PROPERTIES=
+            jobmanager.rpc.address: jobmanager
+            rest.address: jobmanager
+        entrypoint: ["sh", "-c", "cp -v /tmp/lib/*.jar /opt/flink/lib && exec /docker-entrypoint.sh bin/sql-client.sh"]
+        volumes:
+          - ./lib:/tmp/lib
+          - fluss-remote-data:/remote-data
+
+    volumes:
+      fluss-remote-data:
+    EOF
    ```
 
 6. Start the environment.
@@ -244,7 +249,7 @@ Open a **second terminal**, re-run the export commands, and launch another SQL C
 
 ```shell
 cd fluss-user-profile
-export FLUSS_DOCKER_VERSION=0.9.0-incubating
+export FLUSS_DOCKER_VERSION=0.9.1-incubating
 export FLINK_VERSION="1.20"
 docker compose run sql-client
 ```
@@ -298,4 +303,4 @@ docker compose down -v
 
 ## What's Next?
 
-This quickstart demonstrates the core mechanics. For a deeper dive into real-time user profiling with bitmap-based unique visitor counting using the `rbm64` aggregator, see the Real-Time Profiles blog post.
+For the full reference of all RoaringBitmap SQL functions available in FlussCatalog (`rb_or_agg`, `rb_and`, `rb_contains`, `rb_to_array`, and more), see the [SQL Functions](/docs/engine-flink/sql-functions) documentation.
