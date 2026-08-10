@@ -117,9 +117,8 @@ public final class CoordinatorEventManager implements EventManager {
         coordinatorMetricGroup.gauge(
                 MetricNames.REPLICAS_TO_DELETE_COUNT, () -> replicasToDeleteCount);
         coordinatorMetricGroup.gauge(
-<<<<<<< HEAD
                 MetricNames.PENDING_LEADER_ACTIVATION_COUNT, () -> pendingLeaderActivationCount);
-=======
+        coordinatorMetricGroup.gauge(
                 MetricNames.TABLES_INELIGIBLE_TO_DELETE_COUNT, () -> tablesIneligibleToDeleteCount);
         coordinatorMetricGroup.gauge(
                 MetricNames.PARTITIONS_INELIGIBLE_TO_DELETE_COUNT,
@@ -127,7 +126,6 @@ public final class CoordinatorEventManager implements EventManager {
         coordinatorMetricGroup.gauge(
                 MetricNames.REPLICAS_INELIGIBLE_TO_DELETE_COUNT,
                 () -> replicasIneligibleToDeleteCount);
->>>>>>> b36345877 (feat: per tablet server sender thread)
     }
 
     /** Not thread safety! this method can only be executed in the CoordinatorEventThread. */
@@ -206,17 +204,13 @@ public final class CoordinatorEventManager implements EventManager {
                                     bucketCount,
                                     partitionCount,
                                     offlineBucketCount,
-<<<<<<< HEAD
                                     replicasToDeletes,
-                                    pendingLeaderActivationCount);
-=======
+                                    pendingLeaderActivationCount,
                                     tablesToDelete,
                                     partitionsToDelete,
-                                    replicasToDeletes,
                                     tablesIneligibleToDelete,
                                     partitionsIneligibleToDelete,
                                     replicasIneligibleToDelete);
->>>>>>> b36345877 (feat: per tablet server sender thread)
                         });
 
         eventProcessor.process(accessContextEvent);
@@ -234,13 +228,10 @@ public final class CoordinatorEventManager implements EventManager {
             this.tablesToDeleteCount = metricsData.tablesToDeleteCount;
             this.partitionsToDeleteCount = metricsData.partitionsToDeleteCount;
             this.replicasToDeleteCount = metricsData.replicasToDeleteCount;
-<<<<<<< HEAD
             this.pendingLeaderActivationCount = metricsData.pendingLeaderActivationCount;
-=======
             this.tablesIneligibleToDeleteCount = metricsData.tablesIneligibleToDeleteCount;
             this.partitionsIneligibleToDeleteCount = metricsData.partitionsIneligibleToDeleteCount;
             this.replicasIneligibleToDeleteCount = metricsData.replicasIneligibleToDeleteCount;
->>>>>>> b36345877 (feat: per tablet server sender thread)
         } catch (Exception e) {
             LOG.warn("Failed to update metrics via AccessContextEvent", e);
         }
@@ -370,13 +361,10 @@ public final class CoordinatorEventManager implements EventManager {
         private final int tablesToDeleteCount;
         private final int partitionsToDeleteCount;
         private final int replicasToDeleteCount;
-<<<<<<< HEAD
         private final int pendingLeaderActivationCount;
-=======
         private final int tablesIneligibleToDeleteCount;
         private final int partitionsIneligibleToDeleteCount;
         private final int replicasIneligibleToDeleteCount;
->>>>>>> b36345877 (feat: per tablet server sender thread)
 
         public MetricsData(
                 int coordinatorServerCount,
@@ -386,17 +374,13 @@ public final class CoordinatorEventManager implements EventManager {
                 int bucketCount,
                 int partitionCount,
                 int offlineBucketCount,
-<<<<<<< HEAD
                 int replicasToDeleteCount,
-                int pendingLeaderActivationCount) {
-=======
+                int pendingLeaderActivationCount,
                 int tablesToDeleteCount,
                 int partitionsToDeleteCount,
-                int replicasToDeleteCount,
                 int tablesIneligibleToDeleteCount,
                 int partitionsIneligibleToDeleteCount,
                 int replicasIneligibleToDeleteCount) {
->>>>>>> b36345877 (feat: per tablet server sender thread)
             this.coordinatorServerCount = coordinatorServerCount;
             this.tabletServerCount = tabletServerCount;
             this.tableCount = tableCount;
@@ -407,13 +391,10 @@ public final class CoordinatorEventManager implements EventManager {
             this.tablesToDeleteCount = tablesToDeleteCount;
             this.partitionsToDeleteCount = partitionsToDeleteCount;
             this.replicasToDeleteCount = replicasToDeleteCount;
-<<<<<<< HEAD
             this.pendingLeaderActivationCount = pendingLeaderActivationCount;
-=======
             this.tablesIneligibleToDeleteCount = tablesIneligibleToDeleteCount;
             this.partitionsIneligibleToDeleteCount = partitionsIneligibleToDeleteCount;
             this.replicasIneligibleToDeleteCount = replicasIneligibleToDeleteCount;
->>>>>>> b36345877 (feat: per tablet server sender thread)
         }
     }
 }

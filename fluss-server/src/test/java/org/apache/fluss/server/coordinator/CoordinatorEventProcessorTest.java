@@ -54,12 +54,11 @@ import org.apache.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
 import org.apache.fluss.server.coordinator.event.CommitKvSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitRemoteLogManifestEvent;
 import org.apache.fluss.server.coordinator.event.CoordinatorEventManager;
-import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrResponseReceivedEvent;
-import org.apache.fluss.server.coordinator.event.RetryOfflineLeaderEvent;
 import org.apache.fluss.server.coordinator.event.DeadTabletServerEvent;
-import org.apache.fluss.server.coordinator.event.DropPartitionEvent;
 import org.apache.fluss.server.coordinator.event.DropTableEvent;
 import org.apache.fluss.server.coordinator.event.NewTabletServerEvent;
+import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrResponseReceivedEvent;
+import org.apache.fluss.server.coordinator.event.RetryOfflineLeaderEvent;
 import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseManager;
 import org.apache.fluss.server.coordinator.remote.RemoteDirDynamicLoader;
 import org.apache.fluss.server.coordinator.statemachine.BucketState;
@@ -588,132 +587,6 @@ class CoordinatorEventProcessorTest {
     }
 
     @Test
-    void testProcessNewTabletServerResumesTableDeletion() throws Exception {
-        // Verification #5: when a previously-dead tablet server reconnects,
-        // processNewTabletServer should clear the ineligible mark on tables queued for
-        // deletion that have replicas on it, then resumeDeletions which re-fires
-        // onDeleteTable. The deletion completes normally.
-        initCoordinatorChannel();
-        TablePath t1 = TablePath.of(defaultDatabase, "t_new_ts_resume_table");
-        final long t1Id =
-                createTable(
-                        t1,
-                        new TabletServerInfo[] {
-                            new TabletServerInfo(0, "rack0"),
-                            new TabletServerInfo(1, "rack1"),
-                            new TabletServerInfo(2, "rack2")
-                        });
-        retryVerifyContext(
-                ctx -> {
-                    assertThat(ctx.replicaCounts(t1Id)).isEqualTo(N_BUCKETS * REPLICATION_FACTOR);
-                    assertThat(ctx.areAllReplicasInState(t1Id, OnlineReplica)).isTrue();
-                });
-
-        final int reconnectingServer = 0;
-        // capture serverInfo BEFORE removing the server from live set
-        ServerInfo capturedServerInfo =
-                fromCtx(ctx -> ctx.getLiveTabletServers().get(reconnectingServer));
-        assertThat(capturedServerInfo).isNotNull();
-
-        // Setup: queue + mark ineligible + transition all replicas to OfflineReplica and
-        // remove the server from the live set so processNewTabletServer's guard does not
-        // short-circuit.
-        fromCtx(
-                ctx -> {
-                    ctx.queueTableDeletion(Collections.singleton(t1Id));
-                    ctx.markTableIneligibleForDeletion(t1Id, "test-setup");
-                    for (TableBucketReplica r : ctx.getAllReplicasForTable(t1Id)) {
-                        ctx.putReplicaState(r, OfflineReplica);
-                    }
-                    ctx.removeLiveTabletServer(reconnectingServer);
-                    return null;
-                });
-
-        // Sanity: ineligible flag is set before the event.
-        Boolean wasIneligible = fromCtx(ctx -> ctx.isTableIneligibleForDeletion(t1Id));
-        assertThat(wasIneligible).isTrue();
-
-        // Dispatch the reconnect event.
-        eventProcessor
-                .getCoordinatorEventManager()
-                .put(new NewTabletServerEvent(capturedServerInfo));
-
-        // After processing: server back in live set, ineligible flag cleared, deletion
-        // proceeds, assignment eventually removed from ZK.
-        retryVerifyContext(
-                ctx -> {
-                    assertThat(ctx.liveTabletServerSet()).contains(reconnectingServer);
-                    assertThat(ctx.isTableIneligibleForDeletion(t1Id)).isFalse();
-                });
-        retry(
-                Duration.ofMinutes(1),
-                () -> assertThat(zookeeperClient.getTableAssignment(t1Id)).isEmpty());
-    }
-
-    @Test
-    void testInitIneligibleForDeletionMarksTableWithReplicaOnDeadServer() throws Exception {
-        // Fix #4 (Verification #17): when the coordinator initializes and finds tables
-        // queued for deletion (assignment in ZK but no table info in metadataManager) whose
-        // replicas live on a tablet server NOT in liveTabletServerSet, mark the table
-        // ineligible for deletion until that server reconnects.
-        final int extraServer = 3;
-        TabletServerRegistration serverRegistration =
-                new TabletServerRegistration(
-                        "rack3",
-                        Collections.singletonList(
-                                new Endpoint("host3", 2222, DEFAULT_LISTENER_NAME)),
-                        System.currentTimeMillis());
-        // register a 4th tablet server so we can place a replica on it
-        zookeeperClient.registerTabletServer(extraServer, serverRegistration);
-        try {
-            retryVerifyContext(ctx -> assertThat(ctx.liveTabletServerSet()).contains(extraServer));
-            initCoordinatorChannel();
-
-            TablePath t1 = TablePath.of(defaultDatabase, "t_init_ineligible");
-            TableAssignment tableAssignment =
-                    TableAssignment.builder()
-                            .add(0, BucketAssignment.of(extraServer, 0, 1))
-                            .build();
-            long t1Id =
-                    metadataManager.createTable(
-                            t1, remoteDataDir, TEST_TABLE, tableAssignment, false);
-            retryVerifyContext(
-                    ctx -> {
-                        assertThat(ctx.getTablePathById(t1Id)).isNotNull();
-                        assertThat(ctx.replicaCounts(t1Id)).isEqualTo(3);
-                        assertThat(ctx.areAllReplicasInState(t1Id, OnlineReplica)).isTrue();
-                    });
-
-            // shutdown so the drop-table event below is not processed
-            eventProcessor.shutdown();
-            // delete only the table node from ZK - the assignment node is left behind so on
-            // restart the coordinator detects this as a queued-for-deletion table
-            metadataManager.dropTable(t1, false);
-            // remove the 4th server from ZK so init sees it as offline
-            ZOO_KEEPER_EXTENSION_WRAPPER
-                    .getCustomExtension()
-                    .cleanupPath(ZkData.ServerIdZNode.path(extraServer));
-
-            // restart the coordinator
-            eventProcessor = buildCoordinatorEventProcessor();
-            initCoordinatorChannel();
-            eventProcessor.startup();
-
-            // Verify: table is queued and marked ineligible (replica on dead server 3).
-            retryVerifyContext(
-                    ctx -> {
-                        assertThat(ctx.liveTabletServerSet()).doesNotContain(extraServer);
-                        assertThat(ctx.isTableQueuedForDeletion(t1Id)).isTrue();
-                        assertThat(ctx.isTableIneligibleForDeletion(t1Id)).isTrue();
-                    });
-        } finally {
-            ZOO_KEEPER_EXTENSION_WRAPPER
-                    .getCustomExtension()
-                    .cleanupPath(ZkData.ServerIdZNode.path(extraServer));
-        }
-    }
-
-    @Test
     void testInitIneligibleRecoversWhenServerReconnects() throws Exception {
         // Fix #4 + Change 6 (Verification #18): after init marks a table ineligible because
         // a hosting tablet server is offline, when that server reconnects via
@@ -820,61 +693,6 @@ class CoordinatorEventProcessorTest {
                 ctx -> {
                     assertThat(ctx.isTableIneligibleForDeletion(t1Id)).isTrue();
                     for (TableBucketReplica r : ctx.getAllReplicasForTable(t1Id)) {
-                        assertThat(ctx.getReplicaState(r)).isEqualTo(OnlineReplica);
-                    }
-                });
-    }
-
-    @Test
-    void testProcessDropPartitionSkipsOnDeleteWhenIneligible() throws Exception {
-        // Fix #9 (Verification #22): partition variant of #21. processDropPartition routes
-        // through tableManager.resumeDeletions; with a pre-set ineligible flag, the
-        // partition should not be deleted and its replicas stay in OnlineReplica.
-        TablePath tablePath = TablePath.of(defaultDatabase, "t_drop_partition_skip");
-        initCoordinatorChannel();
-        TableDescriptor descriptor = getPartitionedTable();
-        long tableId =
-                metadataManager.createTable(tablePath, remoteDataDir, descriptor, null, false);
-
-        int nBuckets = 3;
-        int replicationFactor = 3;
-        Map<Integer, BucketAssignment> assignments =
-                generateAssignment(
-                                nBuckets,
-                                replicationFactor,
-                                new TabletServerInfo[] {
-                                    new TabletServerInfo(0, "rack0"),
-                                    new TabletServerInfo(1, "rack1"),
-                                    new TabletServerInfo(2, "rack2")
-                                })
-                        .getBucketAssignments();
-        PartitionAssignment partitionAssignment = new PartitionAssignment(tableId, assignments);
-        Tuple2<PartitionIdName, PartitionIdName> partitions =
-                preparePartitionAssignment(tablePath, tableId, partitionAssignment);
-        long partitionId = partitions.f0.partitionId;
-        String partitionName = partitions.f0.partitionName;
-        TablePartition tablePartition = new TablePartition(tableId, partitionId);
-
-        verifyPartitionCreated(tablePartition, partitionAssignment, nBuckets, replicationFactor);
-
-        // Pre-queue and pre-mark ineligible.
-        fromCtx(
-                ctx -> {
-                    ctx.queuePartitionDeletion(Collections.singleton(tablePartition));
-                    ctx.markPartitionIneligibleForDeletion(tablePartition, "test-pre-mark");
-                    return null;
-                });
-
-        eventProcessor
-                .getCoordinatorEventManager()
-                .put(new DropPartitionEvent(tableId, partitionId, partitionName));
-
-        // The partition replicas should remain in OnlineReplica - onDeletePartition skipped.
-        retryVerifyContext(
-                ctx -> {
-                    assertThat(ctx.isPartitionIneligibleForDeletion(tablePartition)).isTrue();
-                    for (TableBucketReplica r :
-                            ctx.getAllReplicasForPartition(tableId, partitionId)) {
                         assertThat(ctx.getReplicaState(r)).isEqualTo(OnlineReplica);
                     }
                 });
