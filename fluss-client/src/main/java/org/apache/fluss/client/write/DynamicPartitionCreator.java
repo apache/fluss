@@ -135,7 +135,7 @@ public class DynamicPartitionCreator {
         long deadlineNanos = System.nanoTime() + metadataWaitTimeout.toNanos();
         long backoffMs = 100;
         while (true) {
-            Throwable creationFailure = partitionCreationFailures.remove(physicalTablePath);
+            Throwable creationFailure = partitionCreationFailures.get(physicalTablePath);
             if (creationFailure != null) {
                 throw new FlussRuntimeException(
                         "Failed to dynamically create partition " + physicalTablePath,
@@ -143,6 +143,7 @@ public class DynamicPartitionCreator {
             }
             if (metadataUpdater.getPartitionId(physicalTablePath).isPresent()
                     || forceCheckPartitionExist(physicalTablePath)) {
+                partitionCreationFailures.remove(physicalTablePath);
                 return;
             }
             if (System.nanoTime() >= deadlineNanos) {

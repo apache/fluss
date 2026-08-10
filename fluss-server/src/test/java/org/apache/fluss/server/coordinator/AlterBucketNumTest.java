@@ -363,7 +363,7 @@ class AlterBucketNumTest {
         TableInfo tableInfo = metadataManager.getTable(tablePath);
         long tableId = tableInfo.getTableId();
 
-        // Create two partitions with bucketCount = 3
+        // Create two partitions with bucketCount = originalBucketCount
         PartitionAssignment partitionAssignment =
                 new PartitionAssignment(tableId, tableAssignment.getBucketAssignments());
         metadataManager.createPartition(
@@ -395,7 +395,7 @@ class AlterBucketNumTest {
                         legacyReg.get().getRemoteDataDir());
         zookeeperClient.updatePartitionRegistration(tablePath, "legacy", nullBucketCountReg);
 
-        // Verify: "legacy" has null bucketCount, "new" has 3
+        // Verify: "legacy" has null bucketCount, "new" has originalBucketCount
         Optional<PartitionRegistration> beforeLegacy =
                 zookeeperClient.getPartition(tablePath, "legacy");
         assertThat(beforeLegacy).isPresent();

@@ -1354,7 +1354,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         admin.createTable(tablePath, partitionedPkTable, true).get();
         long tableId = admin.getTableInfo(tablePath).get().getTableId();
 
-        // Old partition created BEFORE the ALTER retains bucket.num.actual = 4.
+        // Old partition created BEFORE the ALTER retains bucket.num.actual = 2.
         admin.createPartition(tablePath, newPartitionSpec("dt", "2024-01"), false).get();
         long oldPartitionId =
                 admin.listPartitionInfos(tablePath).get().stream()
@@ -1374,7 +1374,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
             }
         }
 
-        // ALTER bucket.num 4 -> 8.
+        // ALTER bucket.num 2 -> 4.
         admin.alterTable(
                         tablePath,
                         Collections.singletonList(
@@ -1383,7 +1383,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .get();
         assertThat(admin.getTableInfo(tablePath).get().getNumBuckets()).isEqualTo(newBucketNum);
 
-        // New partition created AFTER the ALTER uses bucket.num.actual = 8.
+        // New partition created AFTER the ALTER uses bucket.num.actual = 4.
         admin.createPartition(tablePath, newPartitionSpec("dt", "2024-02"), false).get();
         long newPartitionId =
                 admin.listPartitionInfos(tablePath).get().stream()

@@ -128,7 +128,17 @@ public class PaimonLakeCatalog implements LakeCatalog {
         for (TableChange tableChange : tableChanges) {
             if (tableChange instanceof TableChange.SetOption
                     && BUCKET_NUM_PROPERTY.equals(((TableChange.SetOption) tableChange).getKey())) {
-                newBucketCount = Integer.parseInt(((TableChange.SetOption) tableChange).getValue());
+                String value = ((TableChange.SetOption) tableChange).getValue();
+                try {
+                    newBucketCount = Integer.parseInt(value);
+                } catch (NumberFormatException e) {
+                    throw new InvalidAlterTableException(
+                            "Invalid value for '" + BUCKET_NUM_PROPERTY + "': " + value, e);
+                }
+                if (newBucketCount <= 0) {
+                    throw new InvalidAlterTableException(
+                            "Invalid value for '" + BUCKET_NUM_PROPERTY + "': " + value);
+                }
             } else {
                 remainingChanges.add(tableChange);
             }

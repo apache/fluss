@@ -428,7 +428,7 @@ public final class TableInfo {
 
     /**
      * Returns the bucket layout epoch of the table. New tables start at 0; every committed
-     * bucket.num change increments it (see {@code TableRegistration#newBucketLayout(int)}).
+     * bucket.num change increments it (see {@code TableRegistration#withBucketCount(int)}).
      */
     public long getBucketLayoutEpoch() {
         return bucketLayoutEpoch;

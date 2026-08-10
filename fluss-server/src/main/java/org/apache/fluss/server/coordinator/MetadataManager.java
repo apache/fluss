@@ -633,7 +633,17 @@ public class MetadataManager {
             int coordinatorEpochZkVersion) {
         String newBucketNumStr =
                 tablePropertyChanges.customPropertiesToSet.remove(BUCKET_NUM_PROPERTY);
-        Integer newBucketNum = newBucketNumStr == null ? null : Integer.parseInt(newBucketNumStr);
+        Integer newBucketNum;
+        if (newBucketNumStr == null) {
+            newBucketNum = null;
+        } else {
+            try {
+                newBucketNum = Integer.parseInt(newBucketNumStr);
+            } catch (NumberFormatException e) {
+                throw new InvalidAlterTableException(
+                        "Invalid value for 'bucket.num': " + newBucketNumStr, e);
+            }
+        }
         boolean bucketNumRescale = newBucketNum != null;
         // bucket.num travels to the lake through the dedicated lake-first propagation below;
         // exclude it from the changes handed to the regular lake sync to avoid a second delivery.
