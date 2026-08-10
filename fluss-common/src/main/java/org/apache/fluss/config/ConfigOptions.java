@@ -959,6 +959,14 @@ public class ConfigOptions {
                                     + "segments are eligible for TTL cleanup. The value must be "
                                     + "greater than 0.");
 
+    public static final ConfigOption<Boolean> LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED =
+            key("log.retention.roll-active-segment.enabled")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether to roll a non-empty active log segment when it has expired "
+                                    + "according to the table log TTL. Disabled by default.");
+
     public static final ConfigOption<Duration> LOG_REPLICA_HIGH_WATERMARK_CHECKPOINT_INTERVAL =
             key("log.replica.high-watermark.checkpoint-interval")
                     .durationType()

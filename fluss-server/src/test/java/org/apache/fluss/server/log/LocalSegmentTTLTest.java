@@ -55,6 +55,7 @@ final class LocalSegmentTTLTest extends ReplicaTestBase {
                 partitionTable
                         ? new TableBucket(DATA1_TABLE_ID, 0L, 0)
                         : new TableBucket(DATA1_TABLE_ID, 0);
+        conf.set(ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED, true);
         makeLogTableAsLeader(tb, partitionTable);
         LogTablet logTablet = replicaManager.getReplicaOrException(tb).getLogTablet();
 
@@ -79,5 +80,24 @@ final class LocalSegmentTTLTest extends ReplicaTestBase {
         assertThat(logTablet.getSegments()).hasSize(1);
         assertThat(logTablet.localLogStartOffset()).isEqualTo(10L);
         assertThat(logTablet.activeLogSegment().getBaseOffset()).isEqualTo(10L);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testExpiredActiveSegmentNotRolledByDefault(boolean partitionTable) throws Exception {
+        TableBucket tb =
+                partitionTable
+                        ? new TableBucket(DATA1_TABLE_ID, 0L, 0)
+                        : new TableBucket(DATA1_TABLE_ID, 0);
+        makeLogTableAsLeader(tb, partitionTable);
+        LogTablet logTablet = replicaManager.getReplicaOrException(tb).getLogTablet();
+
+        addMultiSegmentsToLogTablet(logTablet, 5);
+        manualClock.advanceTime(Duration.ofHours(2));
+        logManager.cleanupExpiredLocalLogSegments();
+
+        assertThat(logTablet.getSegments()).hasSize(1);
+        assertThat(logTablet.localLogStartOffset()).isEqualTo(40L);
+        assertThat(logTablet.activeLogSegment().getBaseOffset()).isEqualTo(40L);
     }
 }
