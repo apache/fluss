@@ -40,9 +40,49 @@ class FlussOffsetInitializersTest extends AnyFunSuite {
   test("incremental read is enabled by the presence of a start timestamp") {
     val startKey = SparkFlussConf.SCAN_INCREMENTAL_START_TIMESTAMP.key()
     assertThat(FlussOffsetInitializers.isIncrementalRead(scanOptions())).isFalse
-    assertThat(FlussOffsetInitializers.isIncrementalRead(scanOptions(startKey -> "  "))).isFalse
     assertThat(
       FlussOffsetInitializers.isIncrementalRead(scanOptions(startKey -> "1767225600000"))).isTrue
+  }
+
+  test("a blank start timestamp fails fast instead of silently reading the full table") {
+    val startKey = SparkFlussConf.SCAN_INCREMENTAL_START_TIMESTAMP.key()
+    val ex = intercept[IllegalArgumentException] {
+      FlussOffsetInitializers.isIncrementalRead(scanOptions(startKey -> "  "))
+    }
+    assertThat(ex.getMessage).contains(startKey)
+    assertThat(ex.getMessage).contains("must not be blank")
+  }
+
+  test("an end timestamp without a start timestamp fails fast") {
+    val startKey = SparkFlussConf.SCAN_INCREMENTAL_START_TIMESTAMP.key()
+    val endKey = SparkFlussConf.SCAN_INCREMENTAL_END_TIMESTAMP.key()
+    val ex = intercept[IllegalArgumentException] {
+      FlussOffsetInitializers.stoppingOffsetsInitializer(
+        true,
+        scanOptions(endKey -> "1767312000000"))
+    }
+    assertThat(ex.getMessage).contains(endKey)
+    assertThat(ex.getMessage).contains(startKey)
+  }
+
+  test("a window whose start is not strictly before its end fails fast") {
+    val startKey = SparkFlussConf.SCAN_INCREMENTAL_START_TIMESTAMP.key()
+    val endKey = SparkFlussConf.SCAN_INCREMENTAL_END_TIMESTAMP.key()
+    // degenerate: start == end
+    intercept[IllegalArgumentException] {
+      FlussOffsetInitializers.requireValidWindow(
+        scanOptions(startKey -> "1767225600000", endKey -> "1767225600000"))
+    }
+    // reversed: start > end
+    val ex = intercept[IllegalArgumentException] {
+      FlussOffsetInitializers.requireValidWindow(
+        scanOptions(startKey -> "1767312000000", endKey -> "1767225600000"))
+    }
+    assertThat(ex.getMessage).contains("strictly before")
+    // 'latest' or absent end is always accepted
+    FlussOffsetInitializers.requireValidWindow(scanOptions(startKey -> "1767225600000"))
+    FlussOffsetInitializers.requireValidWindow(
+      scanOptions(startKey -> "1767225600000", endKey -> "latest"))
   }
 
   test("scan.incremental.timestamp.out-of-range toggles fail-fast (default error)") {

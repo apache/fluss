@@ -28,8 +28,11 @@ import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression, Express
 import org.apache.spark.sql.catalyst.plans.logical.{LeafNode, LogicalPlan}
 import org.apache.spark.sql.connector.catalog.{Identifier, TableCatalog}
 import org.apache.spark.sql.execution.datasources.v2.DataSourceV2Relation
+import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types.{IntegerType, LongType, ShortType, StringType, TimestampNTZType, TimestampType}
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
+
+import java.time.{LocalDateTime, ZoneId, ZoneOffset}
 
 import scala.collection.JavaConverters._
 import scala.util.control.NonFatal
@@ -129,8 +132,11 @@ object FlussTableValuedFunctions {
    *
    * A STRING argument is passed through untouched, so both epoch milliseconds and
    * `yyyy-MM-dd HH:mm:ss` keep being interpreted by the option layer. Integral arguments are epoch
-   * milliseconds. TIMESTAMP arguments are converted from Spark's internal microseconds, otherwise a
-   * `TIMESTAMP '...'` literal would silently be read as epoch milliseconds.
+   * milliseconds. TIMESTAMP (local instant) arguments are converted from Spark's internal
+   * microseconds, otherwise a `TIMESTAMP '...'` literal would silently be read as epoch
+   * milliseconds. TIMESTAMP_NTZ arguments hold wall-clock microseconds and are re-interpreted in
+   * the Spark session time zone, so an NTZ literal resolves to the same window as the same
+   * `yyyy-MM-dd HH:mm:ss` string literal.
    *
    * Any constant expression is accepted, e.g. `CAST(unix_timestamp() * 1000 AS STRING)` or
    * `date_format(now() - INTERVAL 1 HOUR, 'yyyy-MM-dd HH:mm:ss')`.
@@ -159,13 +165,32 @@ object FlussTableValuedFunctions {
     evaluable.dataType match {
       case StringType => value.toString
       case ShortType | IntegerType | LongType => value.toString
-      case TimestampType | TimestampNTZType => (value.asInstanceOf[Long] / 1000L).toString
+      case TimestampType => (value.asInstanceOf[Long] / 1000L).toString
+      case TimestampNTZType => ntzMicrosToEpochMillis(value.asInstanceOf[Long]).toString
       case other =>
         throw new IllegalArgumentException(
           s"Unsupported timestamp argument type $other for $fnName. Use a STRING (epoch " +
             "milliseconds or 'yyyy-MM-dd HH:mm:ss'), an integral epoch milliseconds value, or a " +
             "TIMESTAMP.")
     }
+  }
+
+  private val MICROS_PER_SECOND = 1000000L
+
+  /**
+   * Converts a `TIMESTAMP_NTZ` argument to epoch milliseconds. NTZ values are wall-clock
+   * microseconds encoded as if in UTC; they are re-interpreted in the Spark session time zone — the
+   * same convention the `yyyy-MM-dd HH:mm:ss` string form uses (and the same as the Flink
+   * connector's timestamp options) — so both forms resolve to the same window for the same literal.
+   */
+  private def ntzMicrosToEpochMillis(micros: Long): Long = {
+    val seconds = Math.floorDiv(micros, MICROS_PER_SECOND)
+    val nanos = Math.floorMod(micros, MICROS_PER_SECOND) * 1000L
+    LocalDateTime
+      .ofEpochSecond(seconds, nanos.toInt, ZoneOffset.UTC)
+      .atZone(ZoneId.of(SQLConf.get.sessionLocalTimeZone))
+      .toInstant
+      .toEpochMilli
   }
 }
 

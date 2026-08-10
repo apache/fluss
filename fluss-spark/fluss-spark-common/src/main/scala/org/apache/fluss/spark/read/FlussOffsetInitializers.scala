@@ -40,9 +40,19 @@ object FlussOffsetInitializers {
    * `fluss_incremental_between_timestamp` table-valued function or `DataFrameReader.option` — and
    * deliberately not from session configuration, so a window can never leak into another query.
    * Streaming reads ignore them.
+   *
+   * An explicitly set but blank start timestamp fails fast instead of silently falling back to a
+   * full-table batch read.
    */
   def isIncrementalRead(options: CaseInsensitiveStringMap): Boolean = {
-    incrementalOption(options, SparkFlussConf.SCAN_INCREMENTAL_START_TIMESTAMP).isDefined
+    val startOption = SparkFlussConf.SCAN_INCREMENTAL_START_TIMESTAMP
+    val rawValue = Option(options.get(startOption.key()))
+    if (rawValue.exists(_.trim.isEmpty)) {
+      throw new IllegalArgumentException(
+        s"'${startOption.key()}' must not be blank. Provide epoch milliseconds or a " +
+          s"'yyyy-MM-dd HH:mm:ss' timestamp, or omit the option for a full-table batch read.")
+    }
+    rawValue.isDefined
   }
 
   /**
@@ -131,8 +141,15 @@ object FlussOffsetInitializers {
     if (!isBatch) {
       new NoStoppingOffsetsInitializer()
     } else if (!isIncrementalRead(options)) {
-      // A plain batch read stops at the latest committed data; an end timestamp alone must not
-      // truncate it.
+      val endKey = SparkFlussConf.SCAN_INCREMENTAL_END_TIMESTAMP.key()
+      if (Option(options.get(endKey)).isDefined) {
+        throw new IllegalArgumentException(
+          s"'$endKey' is set but " +
+            s"'${SparkFlussConf.SCAN_INCREMENTAL_START_TIMESTAMP.key()}' is missing. An end " +
+            s"timestamp alone cannot truncate a batch read; set a start timestamp for an " +
+            s"incremental read, or remove the end option.")
+      }
+      // A plain batch read stops at the latest committed data.
       OffsetsInitializer.latest()
     } else {
       val end =
@@ -150,8 +167,33 @@ object FlussOffsetInitializers {
   }
 
   /**
+   * Validates the `[start, end)` window of an incremental read: when the end bound is an explicit
+   * timestamp (not the reserved value `latest`), it must be strictly after the start timestamp. A
+   * reversed or degenerate window fails fast instead of silently returning no rows. Note this only
+   * checks the requested timestamps; a bucket that simply has no data inside a valid window still
+   * yields an empty result.
+   */
+  def requireValidWindow(options: CaseInsensitiveStringMap): Unit = {
+    val end = incrementalOption(options, SparkFlussConf.SCAN_INCREMENTAL_END_TIMESTAMP)
+    if (end.exists(!_.trim.equalsIgnoreCase(SparkFlussConf.END_TIMESTAMP_LATEST))) {
+      val start = incrementalOption(options, SparkFlussConf.SCAN_INCREMENTAL_START_TIMESTAMP).get
+      val startMillis =
+        parseTimestamp(start.trim, SparkFlussConf.SCAN_INCREMENTAL_START_TIMESTAMP.key())
+      val endMillis =
+        parseTimestamp(end.get.trim, SparkFlussConf.SCAN_INCREMENTAL_END_TIMESTAMP.key())
+      if (startMillis >= endMillis) {
+        throw new IllegalArgumentException(
+          s"Invalid time range for an incremental read: the start timestamp '$start' must be " +
+            s"strictly before the end timestamp '${end.get.trim}'. The window is left-closed " +
+            s"right-open '[start, end)'.")
+      }
+    }
+  }
+
+  /**
    * Reads a `scan.incremental.*` option from the scan options, falling back to its default. A blank
-   * value counts as unset, so a whitespace-only start timestamp never enables an incremental read.
+   * value counts as unset for the end and out-of-range options; a blank start timestamp is rejected
+   * by [[isIncrementalRead]] before it can reach here.
    */
   private def incrementalOption(
       options: CaseInsensitiveStringMap,

@@ -307,7 +307,7 @@ SELECT * FROM fluss_incremental_between_timestamp(
   date_format(now(), 'yyyy-MM-dd HH:mm:ss'));
 ```
 
-The table argument is a string and accepts `table`, `database.table` or `catalog.database.table`; unqualified names resolve against the current catalog and database. The start/end arguments accept a string (epoch milliseconds or `yyyy-MM-dd HH:mm:ss`), an integral epoch-milliseconds value, or a `TIMESTAMP`, and may be produced by constant expressions such as the datetime functions above (column references are not allowed). The result is an ordinary relation, so projection, filters and joins work as usual.
+The table argument is a string and accepts `table`, `database.table` or `catalog.database.table`; unqualified names resolve against the current catalog and database. The start/end arguments accept a string (epoch milliseconds or `yyyy-MM-dd HH:mm:ss`), an integral epoch-milliseconds value, or a `TIMESTAMP`/`TIMESTAMP_NTZ` literal (interpreted in the Spark session time zone, same as the `yyyy-MM-dd HH:mm:ss` string form), and may be produced by constant expressions such as the datetime functions above (column references are not allowed). The result is an ordinary relation, so projection, filters and joins work as usual.
 
 :::note
 The function is provided by the Fluss Spark session extension, so `spark.sql.extensions=org.apache.fluss.spark.FlussSparkSessionExtensions` must be configured (see [Getting Started](getting-started.md)). Its options apply to that single query only.
@@ -332,6 +332,10 @@ The `scan.incremental.*` options are per-query read options only. Unlike the opt
 
 :::warning Retention boundary
 A time-range read only sees data still retained by Fluss, which is bounded by `table.log.ttl` (default 7 days). If the start timestamp predates the earliest retained data, the default behavior (`scan.incremental.timestamp.out-of-range=error`) **fails fast** with a clear error instead of silently returning a truncated window — narrow the time range or increase `table.log.ttl`. Set `scan.incremental.timestamp.out-of-range=adjust` to instead clamp the start to the earliest retained data and read from there. An end timestamp in the future is rejected by the server. Reading data older than the Fluss retention (including from tiered lake storage) is not supported by this mode.
+:::
+
+:::note Invalid windows fail fast
+Malformed window specifications are rejected at planning time instead of silently changing semantics: a blank or unparseable start timestamp, an end timestamp set without a start timestamp (it cannot truncate a plain batch read on its own), and a window whose start is not strictly before its end. A bucket that simply has no data inside a valid window still yields an empty result.
 :::
 
 ## All Data Types

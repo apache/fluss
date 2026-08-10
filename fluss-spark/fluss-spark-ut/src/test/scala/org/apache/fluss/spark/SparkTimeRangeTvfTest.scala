@@ -493,6 +493,73 @@ class SparkTimeRangeTvfTest extends FlussSparkTestBase {
     }
   }
 
+  test("TVF: TIMESTAMP_NTZ argument is interpreted in the session time zone") {
+    withTable("t") {
+      createLogTable("t")
+
+      sql(s"""INSERT INTO $DEFAULT_DATABASE.t VALUES (1L, 11L, 101, "a1")""")
+      Thread.sleep(1500)
+      val t1 = secondAligned(System.currentTimeMillis())
+      waitPast(t1)
+
+      sql(s"""INSERT INTO $DEFAULT_DATABASE.t VALUES (2L, 12L, 102, "a2")""")
+      Thread.sleep(1500)
+      val t2 = secondAligned(System.currentTimeMillis())
+      waitPast(t2)
+
+      sql(s"""INSERT INTO $DEFAULT_DATABASE.t VALUES (3L, 13L, 103, "a3")""")
+      Thread.sleep(200)
+
+      val expected = Row(2L, 12L, 102, "a2") :: Nil
+
+      // Under a non-UTC session time zone, an NTZ literal must resolve to the same window as the
+      // identical 'yyyy-MM-dd HH:mm:ss' string (parsed in the session time zone); pinning NTZ to
+      // UTC would shift the window by the zone offset and miss or leak rows.
+      withSQLConf("spark.sql.session.timeZone" -> "Asia/Shanghai") {
+        checkAnswer(
+          sql(s"""SELECT * FROM $TVF('$DEFAULT_DATABASE.t',
+                 |TIMESTAMP_NTZ '${formatTs(t1)}', TIMESTAMP_NTZ '${formatTs(t2)}')""".stripMargin),
+          expected
+        )
+        checkAnswer(
+          sql(s"SELECT * FROM $TVF('$DEFAULT_DATABASE.t', '${formatTs(t1)}', '${formatTs(t2)}')"),
+          expected)
+      }
+    }
+  }
+
+  test("TVF: blank timestamp arguments fail fast") {
+    withTable("t") {
+      createLogTable("t")
+      sql(s"""INSERT INTO $DEFAULT_DATABASE.t VALUES (1L, 11L, 101, "a1")""")
+      Thread.sleep(200)
+
+      // A blank start must fail instead of silently reading the full table.
+      val ex = intercept[Exception] {
+        sql(s"SELECT * FROM $TVF('$DEFAULT_DATABASE.t', ' ')").collect()
+      }
+      assertThat(fullMessage(ex))
+        .contains(SparkFlussConf.SCAN_INCREMENTAL_START_TIMESTAMP.key())
+        .contains("must not be blank")
+    }
+  }
+
+  test("TVF: reversed time range fails fast") {
+    withTable("t") {
+      createLogTable("t")
+      sql(s"""INSERT INTO $DEFAULT_DATABASE.t VALUES (1L, 11L, 101, "a1")""")
+      Thread.sleep(300)
+      val t1 = System.currentTimeMillis()
+      Thread.sleep(50)
+      val t2 = System.currentTimeMillis()
+
+      val ex = intercept[Exception] {
+        sql(s"SELECT * FROM $TVF('$DEFAULT_DATABASE.t', '$t2', '$t1')").collect()
+      }
+      assertThat(fullMessage(ex)).contains("strictly before")
+    }
+  }
+
   test("TVF: Spark expressions as timestamp arguments") {
     withTable("t") {
       createLogTable("t")

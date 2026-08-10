@@ -72,7 +72,8 @@ object SparkFlussConf {
           "left-closed right-open '[start, end)' window. 'latest' (default) stops at the " +
           "latest committed data captured at planning time; otherwise accepts epoch " +
           "milliseconds or a 'yyyy-MM-dd HH:mm:ss' datetime string interpreted in the Spark " +
-          "session time zone. Only honored when 'scan.incremental.start.timestamp' is set.")
+          "session time zone. Setting it without 'scan.incremental.start.timestamp' fails " +
+          "fast, as does a window whose start is not strictly before its end.")
 
   val SCAN_INCREMENTAL_TIMESTAMP_OUT_OF_RANGE: ConfigOption[String] =
     ConfigBuilder
