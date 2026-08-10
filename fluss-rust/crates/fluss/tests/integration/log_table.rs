@@ -56,6 +56,7 @@ mod table_test {
                 Schema::builder()
                     .column("c1", DataTypes::int())
                     .column("c2", DataTypes::string())
+                    .column("c3", DataTypes::bigint().as_non_nullable())
                     .build()
                     .expect("Failed to build schema"),
             )
@@ -76,17 +77,25 @@ mod table_test {
             .create_writer()
             .expect("Failed to create writer");
 
-        let batch1 =
-            record_batch!(("c1", Int32, [1, 2, 3]), ("c2", Utf8, ["a1", "a2", "a3"])).unwrap();
+        let batch1 = record_batch!(
+            ("c1", Int32, [1, 2, 3]),
+            ("c2", Utf8, ["a1", "a2", "a3"]),
+            ("c3", Int64, [10, 20, 30])
+        )
+        .unwrap();
         append_writer
             .append_arrow_batch(batch1)
-            .expect("Failed to append batch");
+            .expect("Failed to append batch with mixed nullability");
 
-        let batch2 =
-            record_batch!(("c1", Int32, [4, 5, 6]), ("c2", Utf8, ["a4", "a5", "a6"])).unwrap();
+        let batch2 = record_batch!(
+            ("c1", Int32, [4, 5, 6]),
+            ("c2", Utf8, ["a4", "a5", "a6"]),
+            ("c3", Int64, [40, 50, 60])
+        )
+        .unwrap();
         append_writer
             .append_arrow_batch(batch2)
-            .expect("Failed to append batch");
+            .expect("Failed to append batch with mixed nullability");
 
         // Flush to ensure all writes are acknowledged
         append_writer.flush().await.expect("Failed to flush");
@@ -124,6 +133,7 @@ mod table_test {
                         (
                             row.get_int(0).unwrap(),
                             row.get_string(1).unwrap().to_string(),
+                            row.get_long(2).unwrap(),
                         )
                     })
                     .collect()
@@ -135,13 +145,13 @@ mod table_test {
 
         // Sort and verify record contents
         collected.sort();
-        let expected: Vec<(i32, String)> = vec![
-            (1, "a1".to_string()),
-            (2, "a2".to_string()),
-            (3, "a3".to_string()),
-            (4, "a4".to_string()),
-            (5, "a5".to_string()),
-            (6, "a6".to_string()),
+        let expected: Vec<(i32, String, i64)> = vec![
+            (1, "a1".to_string(), 10),
+            (2, "a2".to_string(), 20),
+            (3, "a3".to_string(), 30),
+            (4, "a4".to_string(), 40),
+            (5, "a5".to_string(), 50),
+            (6, "a6".to_string(), 60),
         ];
         assert_eq!(collected, expected);
 
@@ -2194,6 +2204,7 @@ mod table_test {
                 Schema::builder()
                     .column("c1", DataTypes::int())
                     .column("c2", DataTypes::string())
+                    .column("c3", DataTypes::bigint().as_non_nullable())
                     .build()
                     .expect("schema"),
             )
@@ -2212,10 +2223,13 @@ mod table_test {
 
         let row_count: i32 = 30;
         for id in 1..=row_count {
-            let mut row = GenericRow::new(2);
+            let mut row = GenericRow::new(3);
             row.set_field(0, id);
             row.set_field(1, "x");
-            writer.append(&row).expect("append row");
+            row.set_field(2, id as i64 * 10);
+            writer
+                .append(&row)
+                .expect("append row with mixed nullability");
         }
         writer.flush().await.expect("flush");
 
