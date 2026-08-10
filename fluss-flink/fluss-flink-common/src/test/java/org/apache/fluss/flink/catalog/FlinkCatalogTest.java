@@ -26,6 +26,7 @@ import org.apache.fluss.flink.adapter.ResolvedCatalogMaterializedTableAdapter;
 import org.apache.fluss.flink.lake.LakeFlinkCatalog;
 import org.apache.fluss.flink.utils.FlinkConversionsTest;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.testutils.common.MultiVersionTest;
 import org.apache.fluss.utils.ExceptionUtils;
 
 import org.apache.flink.table.api.DataTypes;
@@ -225,6 +226,7 @@ class FlinkCatalogTest {
     }
 
     @Test
+    @MultiVersionTest
     void testCreateTable() throws Exception {
         Map<String, String> options = new HashMap<>();
         assertThatThrownBy(() -> catalog.getTable(tableInDefaultDb))
