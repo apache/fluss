@@ -46,6 +46,8 @@ import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.predicate.Predicate;
+import org.apache.fluss.predicate.PredicateBuilder;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
 import org.apache.fluss.server.zk.ZooKeeperClient;
@@ -53,6 +55,7 @@ import org.apache.fluss.server.zk.data.lake.LakeTableHelper;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.shaded.guava32.com.google.common.collect.ImmutableMap;
 import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.types.RowType;
 
 import org.apache.flink.api.connector.source.ReaderInfo;
 import org.apache.flink.api.connector.source.SourceEvent;
@@ -431,6 +434,61 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             split -> {
                                 assertThat(split).isInstanceOf(HybridSnapshotLogSplit.class);
                                 assertThat(split.asHybridSnapshotLogSplit().isBatch()).isTrue();
+                            });
+        }
+    }
+
+    @Test
+    void testBatchPartitionFilterOnlyGeneratesMatchingPartitionSplits() throws Throwable {
+        createTable(DEFAULT_TABLE_PATH, DEFAULT_AUTO_PARTITIONED_LOG_TABLE_DESCRIPTOR);
+        ZooKeeperClient zooKeeperClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
+        Map.Entry<Long, String> targetPartition =
+                waitUntilPartitions(zooKeeperClient, DEFAULT_TABLE_PATH)
+                        .entrySet()
+                        .iterator()
+                        .next();
+        RowType partitionRowType = RowType.builder().field("name", DataTypes.STRING()).build();
+        Object partitionValue =
+                PredicateBuilder.convertJavaObject(
+                        partitionRowType.getTypeAt(0), targetPartition.getValue());
+        Predicate partitionFilter = new PredicateBuilder(partitionRowType).equal(0, partitionValue);
+        int numSubtasks = 3;
+
+        try (MockSplitEnumeratorContext<SourceSplitBase> context =
+                        new MockSplitEnumeratorContext<>(numSubtasks);
+                FlinkSourceEnumerator enumerator =
+                        new FlinkSourceEnumerator(
+                                DEFAULT_TABLE_PATH,
+                                flussConf,
+                                false,
+                                true,
+                                context,
+                                OffsetsInitializer.earliest(),
+                                DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
+                                false,
+                                partitionFilter,
+                                null,
+                                LeaseContext.DEFAULT,
+                                false)) {
+            enumerator.start();
+            for (int i = 0; i < numSubtasks; i++) {
+                registerReader(context, enumerator, i);
+            }
+            context.runNextOneTimeCallable();
+
+            List<SourceSplitBase> assignedSplits =
+                    getReadersAssignments(context).values().stream()
+                            .flatMap(List::stream)
+                            .collect(Collectors.toList());
+            assertThat(assignedSplits).hasSize(DEFAULT_BUCKET_NUM);
+            assertThat(assignedSplits)
+                    .allSatisfy(
+                            split -> {
+                                assertThat(split).isInstanceOf(LogSplit.class);
+                                assertThat(split.getTableBucket().getPartitionId())
+                                        .isEqualTo(targetPartition.getKey());
+                                assertThat(split.getPartitionName())
+                                        .isEqualTo(targetPartition.getValue());
                             });
         }
     }

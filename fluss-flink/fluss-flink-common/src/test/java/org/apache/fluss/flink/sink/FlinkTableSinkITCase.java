@@ -1215,6 +1215,17 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         rowIter = tBatchEnv.executeSql(String.format("select * from %s", t2)).collect();
         assertResultsIgnoreOrder(
                 rowIter, Collections.singletonList("+I[2, 2001, " + partition2 + "]"), true);
+
+        tBatchEnv
+                .executeSql(
+                        "INSERT INTO " + t2 + "(a, b, c) VALUES (3, 3001, '" + partition1 + "')")
+                .await();
+
+        // test delete rows by partition-only filter.
+        tBatchEnv.executeSql("DELETE FROM " + t2 + " WHERE c = '" + partition2 + "'").await();
+        rowIter = tBatchEnv.executeSql(String.format("select * from %s", t2)).collect();
+        assertResultsIgnoreOrder(
+                rowIter, Collections.singletonList("+I[3, 3001, " + partition1 + "]"), true);
     }
 
     @Test
