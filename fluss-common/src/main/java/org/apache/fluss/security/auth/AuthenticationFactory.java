@@ -31,6 +31,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.ServiceLoader;
 import java.util.function.Supplier;
@@ -93,19 +94,27 @@ public class AuthenticationFactory {
             Configuration configuration) {
         PluginManager pluginManager = PluginUtils.createPluginManagerFromRootFolder(configuration);
         Map<String, Supplier<ServerAuthenticator>> serverAuthenticators = new HashMap<>();
+        Map<String, ServerAuthenticationPlugin> authenticatorPlugins = new HashMap<>();
         Map<String, String> protocolMap =
                 configuration.getMap(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP);
         for (Map.Entry<String, String> protocolEntry : protocolMap.entrySet()) {
             String serverAuthenticateProtocol = protocolEntry.getValue();
+            String normalizedProtocol = serverAuthenticateProtocol.toLowerCase(Locale.ROOT);
             ServerAuthenticationPlugin serverAuthenticatorPlugin =
-                    discoverPlugin(
-                            serverAuthenticateProtocol,
-                            ServerAuthenticationPlugin.class,
-                            pluginManager);
+                    authenticatorPlugins.get(normalizedProtocol);
+            if (serverAuthenticatorPlugin == null) {
+                serverAuthenticatorPlugin =
+                        discoverPlugin(
+                                serverAuthenticateProtocol,
+                                ServerAuthenticationPlugin.class,
+                                pluginManager);
+                authenticatorPlugins.put(normalizedProtocol, serverAuthenticatorPlugin);
+            }
 
+            ServerAuthenticationPlugin sharedPlugin = serverAuthenticatorPlugin;
             serverAuthenticators.put(
                     protocolEntry.getKey(),
-                    () -> serverAuthenticatorPlugin.createServerAuthenticator(configuration));
+                    () -> sharedPlugin.createServerAuthenticator(configuration));
         }
         return serverAuthenticators;
     }

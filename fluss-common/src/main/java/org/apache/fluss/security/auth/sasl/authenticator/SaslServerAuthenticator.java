@@ -21,7 +21,6 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.AuthenticationException;
 import org.apache.fluss.security.acl.FlussPrincipal;
 import org.apache.fluss.security.auth.ServerAuthenticator;
-import org.apache.fluss.security.auth.sasl.SaslAuthenticatorFactory;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -37,13 +36,14 @@ import static org.apache.fluss.security.auth.sasl.authenticator.SaslAuthenticati
 public class SaslServerAuthenticator implements ServerAuthenticator {
     private static final Logger LOG = LoggerFactory.getLogger(SaslServerAuthenticator.class);
 
-    private final Configuration configuration;
     private final List<String> enabledMechanisms;
+    private final SaslServerMechanismFactory mechanismFactory;
 
     private ServerAuthenticator delegate;
 
-    public SaslServerAuthenticator(Configuration configuration) {
-        this.configuration = configuration;
+    public SaslServerAuthenticator(
+            Configuration configuration, SaslServerMechanismFactory mechanismFactory) {
+        this.mechanismFactory = mechanismFactory;
         List<String> enabledMechanisms = configuration.get(SERVER_SASL_ENABLED_MECHANISMS_CONFIG);
         if (enabledMechanisms == null || enabledMechanisms.isEmpty()) {
             throw new IllegalArgumentException("No SASL mechanisms are enabled");
@@ -58,7 +58,7 @@ public class SaslServerAuthenticator implements ServerAuthenticator {
     public void initialize(AuthenticateContext context) {
         String mechanism = context.protocol().toUpperCase(Locale.ROOT);
         matchProtocol(mechanism);
-        delegate = SaslAuthenticatorFactory.createServerAuthenticator(mechanism, configuration);
+        delegate = mechanismFactory.createAuthenticator(mechanism);
         delegate.initialize(context);
     }
 
@@ -75,7 +75,7 @@ public class SaslServerAuthenticator implements ServerAuthenticator {
                             "SASL server enables %s while protocol of client is '%s'",
                             enabledMechanisms, protocol));
         }
-        if (!SaslAuthenticatorFactory.supportsServerMechanism(protocol)) {
+        if (!mechanismFactory.supportsMechanism(protocol)) {
             throw new AuthenticationException(
                     "Unable to find a matching SASL mechanism for "
                             + protocol.toUpperCase(Locale.ROOT));
@@ -95,6 +95,11 @@ public class SaslServerAuthenticator implements ServerAuthenticator {
     @Override
     public FlussPrincipal createPrincipal() {
         return delegate.createPrincipal();
+    }
+
+    @Override
+    public void validateSession() throws AuthenticationException {
+        delegate.validateSession();
     }
 
     @Override

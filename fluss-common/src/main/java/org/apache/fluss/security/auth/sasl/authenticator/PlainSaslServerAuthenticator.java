@@ -89,7 +89,7 @@ public final class PlainSaslServerAuthenticator implements ServerAuthenticator {
 
     @Override
     public FlussPrincipal createPrincipal() {
-        return new FlussPrincipal(saslServer.getAuthorizationID(), "User");
+        return new FlussPrincipal(saslServer.getAuthorizationID(), FlussPrincipal.USER_TYPE);
     }
 
     private String findJaasConfig(String listenerName) {

@@ -41,7 +41,10 @@ import java.util.Objects;
  */
 @PublicEvolving
 public class FlussPrincipal implements Principal {
-    public static final FlussPrincipal ANONYMOUS = new FlussPrincipal("ANONYMOUS", "User");
+    /** The principal type used for authenticated users. */
+    public static final String USER_TYPE = "User";
+
+    public static final FlussPrincipal ANONYMOUS = new FlussPrincipal("ANONYMOUS", USER_TYPE);
     /** The wildcard principal, which represents all principals. */
     public static final FlussPrincipal WILD_CARD_PRINCIPAL = new FlussPrincipal("*", "*");
 

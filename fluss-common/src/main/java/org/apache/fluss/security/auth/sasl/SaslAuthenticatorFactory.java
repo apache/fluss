@@ -22,9 +22,8 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.AuthenticationException;
 import org.apache.fluss.security.auth.ClientAuthenticator;
-import org.apache.fluss.security.auth.ServerAuthenticator;
-import org.apache.fluss.security.auth.sasl.authenticator.PlainSaslServerAuthenticator;
 import org.apache.fluss.security.auth.sasl.authenticator.SaslClientAuthenticator;
+import org.apache.fluss.security.auth.sasl.oauthbearer.OAuthBearerClientAuthenticator;
 import org.apache.fluss.security.auth.sasl.plain.PlainSaslServer;
 
 import java.util.Collections;
@@ -36,16 +35,18 @@ import java.util.function.Function;
 /** Factory for creating connection-local SASL authenticators. */
 @Internal
 public final class SaslAuthenticatorFactory {
-    private static final Map<String, AuthenticatorCreators> AUTHENTICATOR_CREATORS;
+    private static final Map<String, Function<Configuration, ClientAuthenticator>>
+            CLIENT_AUTHENTICATOR_CREATORS;
 
     static {
-        Map<String, AuthenticatorCreators> creators = new HashMap<>();
+        Map<String, Function<Configuration, ClientAuthenticator>> creators = new HashMap<>();
         creators.put(
                 PlainSaslServer.PLAIN_MECHANISM,
-                new AuthenticatorCreators(
-                        configuration -> new SaslClientAuthenticator(configuration),
-                        configuration -> new PlainSaslServerAuthenticator(configuration)));
-        AUTHENTICATOR_CREATORS = Collections.unmodifiableMap(creators);
+                configuration -> new SaslClientAuthenticator(configuration));
+        creators.put(
+                OAuthBearerClientAuthenticator.OAUTHBEARER_MECHANISM,
+                configuration -> new OAuthBearerClientAuthenticator(configuration));
+        CLIENT_AUTHENTICATOR_CREATORS = Collections.unmodifiableMap(creators);
     }
 
     private SaslAuthenticatorFactory() {}
@@ -54,40 +55,12 @@ public final class SaslAuthenticatorFactory {
     public static ClientAuthenticator createClientAuthenticator(Configuration configuration) {
         String mechanism = configuration.get(ConfigOptions.CLIENT_SASL_MECHANISM);
         String normalizedMechanism = mechanism.toUpperCase(Locale.ROOT);
-        AuthenticatorCreators creators = AUTHENTICATOR_CREATORS.get(normalizedMechanism);
-        if (creators == null) {
+        Function<Configuration, ClientAuthenticator> creator =
+                CLIENT_AUTHENTICATOR_CREATORS.get(normalizedMechanism);
+        if (creator == null) {
             throw new AuthenticationException(
                     "Unable to find a matching SASL mechanism for " + normalizedMechanism);
         }
-        return creators.clientCreator.apply(configuration);
-    }
-
-    /** Creates a server authenticator for the requested mechanism. */
-    public static ServerAuthenticator createServerAuthenticator(
-            String mechanism, Configuration configuration) {
-        String normalizedMechanism = mechanism.toUpperCase(Locale.ROOT);
-        AuthenticatorCreators creators = AUTHENTICATOR_CREATORS.get(normalizedMechanism);
-        if (creators == null) {
-            throw new AuthenticationException(
-                    "Unable to find a matching SASL mechanism for " + normalizedMechanism);
-        }
-        return creators.serverCreator.apply(configuration);
-    }
-
-    /** Returns whether the server supports the requested mechanism. */
-    public static boolean supportsServerMechanism(String mechanism) {
-        return AUTHENTICATOR_CREATORS.containsKey(mechanism.toUpperCase(Locale.ROOT));
-    }
-
-    private static final class AuthenticatorCreators {
-        private final Function<Configuration, ClientAuthenticator> clientCreator;
-        private final Function<Configuration, ServerAuthenticator> serverCreator;
-
-        private AuthenticatorCreators(
-                Function<Configuration, ClientAuthenticator> clientCreator,
-                Function<Configuration, ServerAuthenticator> serverCreator) {
-            this.clientCreator = clientCreator;
-            this.serverCreator = serverCreator;
-        }
+        return creator.apply(configuration);
     }
 }

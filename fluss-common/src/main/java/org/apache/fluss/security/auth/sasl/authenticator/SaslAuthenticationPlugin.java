@@ -29,6 +29,8 @@ public class SaslAuthenticationPlugin
         implements ClientAuthenticationPlugin, ServerAuthenticationPlugin {
     static final String SASL_AUTH_PROTOCOL = "sasl";
 
+    private volatile SaslServerMechanismFactory mechanismFactory;
+
     @Override
     public ClientAuthenticator createClientAuthenticator(Configuration configuration) {
         return SaslAuthenticatorFactory.createClientAuthenticator(configuration);
@@ -36,7 +38,14 @@ public class SaslAuthenticationPlugin
 
     @Override
     public ServerAuthenticator createServerAuthenticator(Configuration configuration) {
-        return new SaslServerAuthenticator(configuration);
+        if (mechanismFactory == null) {
+            synchronized (this) {
+                if (mechanismFactory == null) {
+                    mechanismFactory = new SaslServerMechanismFactory(configuration);
+                }
+            }
+        }
+        return new SaslServerAuthenticator(configuration, mechanismFactory);
     }
 
     @Override

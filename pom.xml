@@ -111,6 +111,7 @@
         <log4j.version>2.25.4</log4j.version>
         <jaxb.api.version>2.3.1</jaxb.api.version>
         <junit5.version>5.9.1</junit5.version>
+        <jose4j.version>0.9.6</jose4j.version>
         <mockito.version>3.4.6</mockito.version>
         <assertj.version>3.27.7</assertj.version>
 
@@ -427,6 +428,12 @@
                 <groupId>org.apache.commons</groupId>
                 <artifactId>commons-lang3</artifactId>
                 <version>3.18.0</version>
+            </dependency>
+
+            <dependency>
+                <groupId>org.bitbucket.b_c</groupId>
+                <artifactId>jose4j</artifactId>
+                <version>${jose4j.version}</version>
             </dependency>
 
             <dependency>

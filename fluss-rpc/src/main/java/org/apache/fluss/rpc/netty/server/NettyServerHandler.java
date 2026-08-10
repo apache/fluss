@@ -119,6 +119,16 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
                 needRelease = true;
             }
 
+            if (authenticator.isCompleted()) {
+                try {
+                    authenticator.validateSession();
+                } catch (AuthenticationException e) {
+                    needRelease = true;
+                    closeWithAuthenticationError(ctx, requestId, e);
+                    return;
+                }
+            }
+
             FlussRequest request =
                     new FlussRequest(
                             apiKey,
@@ -219,6 +229,15 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
         switchState(ConnectionState.CLOSE);
         IOUtils.closeQuietly(authenticator);
         ctx.close();
+    }
+
+    private void closeWithAuthenticationError(
+            ChannelHandlerContext ctx, int requestId, AuthenticationException exception) {
+        switchState(ConnectionState.CLOSE);
+        IOUtils.closeQuietly(authenticator);
+        ByteBuf response =
+                encodeErrorResponse(ctx.alloc(), requestId, ApiError.fromThrowable(exception));
+        ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE);
     }
 
     private void sendResponse(ChannelHandlerContext ctx, FlussRequest request) {

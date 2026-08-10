@@ -21,7 +21,6 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.AuthenticationException;
 import org.apache.fluss.security.auth.ClientAuthenticator;
-import org.apache.fluss.security.auth.ServerAuthenticator;
 
 import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.Test;
@@ -30,7 +29,7 @@ import org.junit.jupiter.api.Test;
 class SaslAuthenticatorFactoryTest {
 
     @Test
-    void testCreatesIndependentAuthenticators() {
+    void testCreatesIndependentClientAuthenticators() {
         Configuration configuration = new Configuration();
         configuration.set(ConfigOptions.CLIENT_SASL_MECHANISM, "plain");
 
@@ -38,21 +37,12 @@ class SaslAuthenticatorFactoryTest {
                 SaslAuthenticatorFactory.createClientAuthenticator(configuration);
         ClientAuthenticator secondClient =
                 SaslAuthenticatorFactory.createClientAuthenticator(configuration);
-        ServerAuthenticator firstServer =
-                SaslAuthenticatorFactory.createServerAuthenticator("plain", configuration);
-        ServerAuthenticator secondServer =
-                SaslAuthenticatorFactory.createServerAuthenticator("PLAIN", configuration);
 
         Assertions.assertThat(firstClient).isNotSameAs(secondClient);
-        Assertions.assertThat(firstServer).isNotSameAs(secondServer);
-        Assertions.assertThat(firstServer.protocol()).isEqualTo("PLAIN");
-        Assertions.assertThatCode(() -> firstServer.matchProtocol("plain"))
-                .doesNotThrowAnyException();
-        Assertions.assertThat(SaslAuthenticatorFactory.supportsServerMechanism("plain")).isTrue();
     }
 
     @Test
-    void testRejectsUnsupportedMechanisms() {
+    void testRejectsUnsupportedClientMechanism() {
         Configuration configuration = new Configuration();
         configuration.set(ConfigOptions.CLIENT_SASL_MECHANISM, "unknown");
 
@@ -60,13 +50,5 @@ class SaslAuthenticatorFactoryTest {
                         () -> SaslAuthenticatorFactory.createClientAuthenticator(configuration))
                 .isInstanceOf(AuthenticationException.class)
                 .hasMessage("Unable to find a matching SASL mechanism for UNKNOWN");
-        Assertions.assertThatThrownBy(
-                        () ->
-                                SaslAuthenticatorFactory.createServerAuthenticator(
-                                        "unknown", configuration))
-                .isInstanceOf(AuthenticationException.class)
-                .hasMessage("Unable to find a matching SASL mechanism for UNKNOWN");
-        Assertions.assertThat(SaslAuthenticatorFactory.supportsServerMechanism("unknown"))
-                .isFalse();
     }
 }
