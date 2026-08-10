@@ -23,15 +23,12 @@ import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.scanner.SortMergeReader;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
-import org.apache.fluss.client.table.scanner.log.ScanRecords;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
-import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.row.InternalRow;
-import org.apache.fluss.row.KeyValueRow;
 import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableIterator;
@@ -43,10 +40,9 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.time.Duration;
 import java.util.Comparator;
-import java.util.Map;
 import java.util.NoSuchElementException;
-import java.util.TreeMap;
 
+import static org.apache.fluss.client.table.scanner.batch.SortedLogRows.DEFAULT_SPILL_THRESHOLD;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /**
@@ -55,17 +51,14 @@ import static org.apache.fluss.utils.Preconditions.checkArgument;
 @Internal
 public class KvSnapshotAndLogBatchScanner implements BatchScanner {
 
-    private final TableBucket tableBucket;
-    private final long logStoppingOffset;
     private final int[] keyIndexesInScanRow;
     @Nullable private final int[] adjustProjectedFields;
     private final Comparator<InternalRow> primaryKeyComparator;
-    private final Map<InternalRow, KeyValueRow> logRows;
+    @Nullable private final SortedLogRows logRows;
 
     @Nullable private final BatchScanner snapshotScanner;
-    @Nullable private final LogScanner logScanner;
 
-    private boolean logScanFinished;
+    private boolean logRowsLoaded;
     private boolean finished;
     private boolean closed;
 
@@ -79,18 +72,37 @@ public class KvSnapshotAndLogBatchScanner implements BatchScanner {
             long snapshotId,
             long logStartingOffset,
             long logStoppingOffset,
-            @Nullable int[] projectedFields) {
+            @Nullable int[] projectedFields,
+            String scannerTmpDir) {
+        this(
+                table,
+                tableBucket,
+                snapshotId,
+                logStartingOffset,
+                logStoppingOffset,
+                projectedFields,
+                scannerTmpDir,
+                DEFAULT_SPILL_THRESHOLD);
+    }
+
+    @VisibleForTesting
+    KvSnapshotAndLogBatchScanner(
+            Table table,
+            TableBucket tableBucket,
+            long snapshotId,
+            long logStartingOffset,
+            long logStoppingOffset,
+            @Nullable int[] projectedFields,
+            String scannerTmpDir,
+            int spillThreshold) {
         checkArgument(
                 table.getTableInfo().hasPrimaryKey(),
                 "KvSnapshotAndLogBatchScanner only supports primary-key tables.");
-        this.tableBucket = tableBucket;
-        this.logStoppingOffset = logStoppingOffset;
 
         ProjectionPlan projectionPlan = createProjectionPlan(table.getTableInfo(), projectedFields);
         this.keyIndexesInScanRow = projectionPlan.keyIndexesInScanRow;
         this.adjustProjectedFields = projectionPlan.adjustProjectedFields;
         this.primaryKeyComparator = createPrimaryKeyComparator(table.getTableInfo());
-        this.logRows = new TreeMap<>(primaryKeyComparator);
 
         this.snapshotScanner =
                 snapshotId >= 0
@@ -100,18 +112,30 @@ public class KvSnapshotAndLogBatchScanner implements BatchScanner {
                         : null;
 
         boolean emptyLogRange = logStartingOffset >= logStoppingOffset || logStoppingOffset <= 0;
-        this.logScanFinished = emptyLogRange;
+        this.logRowsLoaded = emptyLogRange;
         if (emptyLogRange) {
-            this.logScanner = null;
+            this.logRows = null;
         } else {
-            this.logScanner =
+            LogScanner logScanner =
                     table.newScan().project(projectionPlan.scanProjectedFields).createLogScanner();
             Long partitionId = tableBucket.getPartitionId();
             if (partitionId == null) {
-                this.logScanner.subscribe(tableBucket.getBucket(), logStartingOffset);
+                logScanner.subscribe(tableBucket.getBucket(), logStartingOffset);
             } else {
-                this.logScanner.subscribe(partitionId, tableBucket.getBucket(), logStartingOffset);
+                logScanner.subscribe(partitionId, tableBucket.getBucket(), logStartingOffset);
             }
+            this.logRows =
+                    new SortedLogRows(
+                            table.getTableInfo()
+                                    .getRowType()
+                                    .project(projectionPlan.scanProjectedFields),
+                            keyIndexesInScanRow,
+                            primaryKeyComparator,
+                            logScanner,
+                            tableBucket,
+                            logStoppingOffset,
+                            scannerTmpDir,
+                            spillThreshold);
         }
     }
 
@@ -122,9 +146,9 @@ public class KvSnapshotAndLogBatchScanner implements BatchScanner {
             return null;
         }
 
-        // 1. collect the bounded log range into memory before merging.
-        if (!logScanFinished) {
-            pollLogRecords(timeout);
+        // 1. collect the bounded log range before merging.
+        if (logRows != null && !logRowsLoaded) {
+            logRowsLoaded = logRows.load(timeout);
             return CloseableIterator.emptyIterator();
         }
 
@@ -138,7 +162,9 @@ public class KvSnapshotAndLogBatchScanner implements BatchScanner {
                             keyIndexesInScanRow,
                             snapshotRecords,
                             primaryKeyComparator,
-                            CloseableIterator.wrap(logRows.values().iterator()));
+                            logRows == null
+                                    ? CloseableIterator.emptyIterator()
+                                    : logRows.newIterator());
         }
 
         try {
@@ -154,37 +180,6 @@ public class KvSnapshotAndLogBatchScanner implements BatchScanner {
         return sortMergeIterator;
     }
 
-    private void pollLogRecords(Duration timeout) {
-        ScanRecords scanRecords = logScanner.poll(timeout);
-        for (ScanRecord scanRecord : scanRecords.records(tableBucket)) {
-            long logOffset = scanRecord.logOffset();
-            if (logOffset >= logStoppingOffset) {
-                logScanFinished = true;
-                break;
-            }
-
-            reduceLogRecord(scanRecord);
-            if (logOffset >= logStoppingOffset - 1) {
-                logScanFinished = true;
-                break;
-            }
-        }
-
-        Long consumedUpToOffset = scanRecords.consumedUpToOffset(tableBucket);
-        if (consumedUpToOffset != null && consumedUpToOffset >= logStoppingOffset) {
-            logScanFinished = true;
-        }
-    }
-
-    private void reduceLogRecord(ScanRecord scanRecord) {
-        ChangeType changeType = scanRecord.getChangeType();
-        boolean isDelete =
-                changeType == ChangeType.DELETE || changeType == ChangeType.UPDATE_BEFORE;
-        KeyValueRow keyValueRow =
-                new KeyValueRow(keyIndexesInScanRow, scanRecord.getRow(), isDelete);
-        logRows.put(keyValueRow.keyRow(), keyValueRow);
-    }
-
     private CloseableIterator<LogRecord> createSnapshotRecordIterator(Duration timeout) {
         if (snapshotScanner == null) {
             snapshotRecordIterator = CloseableIterator.emptyIterator();
@@ -192,6 +187,11 @@ public class KvSnapshotAndLogBatchScanner implements BatchScanner {
             snapshotRecordIterator = new SnapshotRecordIterator(snapshotScanner, timeout);
         }
         return snapshotRecordIterator;
+    }
+
+    @VisibleForTesting
+    boolean isLogRowsSpilled() {
+        return logRows != null && logRows.isSpilled();
     }
 
     @Override
@@ -203,7 +203,7 @@ public class KvSnapshotAndLogBatchScanner implements BatchScanner {
         IOUtils.closeQuietly(sortMergeIterator);
         IOUtils.closeQuietly(snapshotRecordIterator);
         IOUtils.closeQuietly(snapshotScanner);
-        IOUtils.closeQuietly(logScanner);
+        IOUtils.closeQuietly(logRows);
     }
 
     private static ProjectionPlan createProjectionPlan(

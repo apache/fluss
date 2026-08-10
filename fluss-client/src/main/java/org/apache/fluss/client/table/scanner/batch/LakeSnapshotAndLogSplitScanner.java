@@ -19,20 +19,19 @@
 package org.apache.fluss.client.table.scanner.batch;
 
 import org.apache.fluss.client.table.Table;
-import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.scanner.SortMergeReader;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
-import org.apache.fluss.client.table.scanner.log.ScanRecords;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.LakeSplit;
 import org.apache.fluss.lake.source.RecordReader;
 import org.apache.fluss.lake.source.SortedRecordReader;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.KeyValueRow;
+import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableIterator;
+import org.apache.fluss.utils.IOUtils;
 
 import javax.annotation.Nullable;
 
@@ -40,15 +39,15 @@ import java.io.IOException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Map;
-import java.util.TreeMap;
+
+import static org.apache.fluss.utils.Preconditions.checkState;
 
 /** A scanner to merge the lakehouse's snapshot and change log. */
 public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
 
+    private final TableBucket tableBucket;
     private final @Nullable List<LakeSplit> lakeSplits;
     private Comparator<InternalRow> rowComparator;
     private List<CloseableIterator<LogRecord>> lakeRecordIterators = new ArrayList<>();
@@ -60,15 +59,17 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
     // the indexes of primary key in emitted row by lake and fluss
     private int[] keyIndexesInRow;
     @Nullable private int[] adjustProjectedFields;
+    private final RowType scanRowType;
+    private final String scannerTmpDir;
 
-    // the sorted logs in memory, mapping from key -> value
-    private Map<InternalRow, KeyValueRow> logRows;
+    private @Nullable SortedLogRows logRows;
+    private @Nullable LogScanner logScanner;
 
-    private final LogScanner logScanner;
     private final long stoppingOffset;
-    private boolean logScanFinished;
+    private boolean logRowsLoaded;
 
     private SortMergeReader currentSortMergeReader;
+    private CloseableIterator<InternalRow> currentSortMergeIterator;
 
     public LakeSnapshotAndLogSplitScanner(
             Table table,
@@ -77,7 +78,9 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
             TableBucket tableBucket,
             long startingOffset,
             long stoppingOffset,
-            @Nullable int[] projectedFields) {
+            @Nullable int[] projectedFields,
+            String scannerTmpDir) {
+        this.tableBucket = tableBucket;
         this.pkIndexes = table.getTableInfo().getSchema().getPrimaryKeyIndexes();
         this.lakeSplits = lakeSplits;
         this.lakeSource = lakeSource;
@@ -90,49 +93,52 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
         this.keyIndexesInRow = projectionPlan.keyIndexesInScanRow;
         this.adjustProjectedFields = projectionPlan.adjustProjectedFields;
         int[] newProjectedFields = projectionPlan.scanProjectedFields;
+        this.scanRowType = table.getTableInfo().getRowType().project(newProjectedFields);
+        this.scannerTmpDir = scannerTmpDir;
 
-        this.logScanner = table.newScan().project(newProjectedFields).createLogScanner();
         this.lakeSource.withProject(
                 Arrays.stream(newProjectedFields)
                         .mapToObj(field -> new int[] {field})
                         .toArray(int[][]::new));
 
-        if (tableBucket.getPartitionId() != null) {
-            this.logScanner.subscribe(
-                    tableBucket.getPartitionId(), tableBucket.getBucket(), startingOffset);
+        this.logRowsLoaded = startingOffset >= stoppingOffset || stoppingOffset <= 0;
+        if (logRowsLoaded) {
+            this.logScanner = null;
         } else {
-            this.logScanner.subscribe(tableBucket.getBucket(), startingOffset);
+            this.logScanner = table.newScan().project(newProjectedFields).createLogScanner();
+            if (tableBucket.getPartitionId() != null) {
+                this.logScanner.subscribe(
+                        tableBucket.getPartitionId(), tableBucket.getBucket(), startingOffset);
+            } else {
+                this.logScanner.subscribe(tableBucket.getBucket(), startingOffset);
+            }
         }
-
-        this.logScanFinished = startingOffset >= stoppingOffset || stoppingOffset <= 0;
     }
 
     @Nullable
     @Override
     public CloseableIterator<InternalRow> pollBatch(Duration timeout) throws IOException {
-        if (logScanFinished) {
+        if (!logRowsLoaded) {
             initializeLakeRecordIterators();
-            if (currentSortMergeReader == null) {
-                currentSortMergeReader =
-                        new SortMergeReader(
-                                adjustProjectedFields,
-                                keyIndexesInRow,
-                                lakeRecordIterators,
-                                rowComparator,
-                                CloseableIterator.wrap(
-                                        logRows == null
-                                                ? Collections.emptyIterator()
-                                                : logRows.values().iterator()));
-            }
-            return currentSortMergeReader.readBatch();
-        } else {
-            initializeLakeRecordIterators();
-            if (logRows == null) {
-                logRows = new TreeMap<>(rowComparator);
-            }
-            pollLogRecords(timeout);
-            return CloseableIterator.wrap(Collections.emptyIterator());
+            initializeLogRows();
+            logRowsLoaded = logRows.load(timeout);
+            return CloseableIterator.emptyIterator();
         }
+
+        initializeLakeRecordIterators();
+        if (currentSortMergeReader == null) {
+            CloseableIterator<KeyValueRow> logRowsIterator =
+                    logRows == null ? CloseableIterator.emptyIterator() : logRows.newIterator();
+            currentSortMergeReader =
+                    new SortMergeReader(
+                            adjustProjectedFields,
+                            keyIndexesInRow,
+                            lakeRecordIterators,
+                            rowComparator,
+                            logRowsIterator);
+        }
+        currentSortMergeIterator = currentSortMergeReader.readBatch();
+        return currentSortMergeIterator;
     }
 
     private void initializeLakeRecordIterators() throws IOException {
@@ -176,38 +182,32 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
         };
     }
 
-    private void pollLogRecords(Duration timeout) {
-        ScanRecords scanRecords = logScanner.poll(timeout);
-        for (ScanRecord scanRecord : scanRecords) {
-            boolean isDelete =
-                    scanRecord.getChangeType() == ChangeType.DELETE
-                            || scanRecord.getChangeType() == ChangeType.UPDATE_BEFORE;
-            KeyValueRow keyValueRow =
-                    new KeyValueRow(keyIndexesInRow, scanRecord.getRow(), isDelete);
-            InternalRow keyRow = keyValueRow.keyRow();
-            // upsert the key value row
-            logRows.put(keyRow, keyValueRow);
-            if (scanRecord.logOffset() >= stoppingOffset - 1) {
-                // has reached to the end
-                logScanFinished = true;
-                break;
-            }
+    private void initializeLogRows() {
+        if (logRows != null) {
+            return;
         }
+        checkState(logScanner != null, "Log scanner must be initialized.");
+        logRows =
+                new SortedLogRows(
+                        scanRowType,
+                        keyIndexesInRow,
+                        rowComparator,
+                        logScanner,
+                        tableBucket,
+                        stoppingOffset,
+                        scannerTmpDir);
+        logScanner = null;
     }
 
     @Override
     public void close() throws IOException {
-        try {
-            if (logScanner != null) {
-                logScanner.close();
+        IOUtils.closeQuietly(currentSortMergeIterator);
+        IOUtils.closeQuietly(logRows);
+        IOUtils.closeQuietly(logScanner);
+        if (lakeRecordIterators != null) {
+            for (CloseableIterator<LogRecord> iterator : lakeRecordIterators) {
+                IOUtils.closeQuietly(iterator);
             }
-            if (lakeRecordIterators != null) {
-                for (CloseableIterator<LogRecord> iterator : lakeRecordIterators) {
-                    iterator.close();
-                }
-            }
-        } catch (Exception e) {
-            throw new IOException("Failed to close resources", e);
         }
     }
 }

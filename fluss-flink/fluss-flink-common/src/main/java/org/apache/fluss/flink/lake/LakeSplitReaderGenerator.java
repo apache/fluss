@@ -41,14 +41,17 @@ public class LakeSplitReaderGenerator {
 
     private final @Nullable int[] projectedFields;
     private final @Nullable LakeSource<LakeSplit> lakeSource;
+    private final String scannerTmpDir;
 
     public LakeSplitReaderGenerator(
             Table table,
             @Nullable int[] projectedFields,
-            @Nullable LakeSource<LakeSplit> lakeSource) {
+            @Nullable LakeSource<LakeSplit> lakeSource,
+            String scannerTmpDir) {
         this.table = table;
         this.projectedFields = projectedFields;
         this.lakeSource = lakeSource;
+        this.scannerTmpDir = scannerTmpDir;
     }
 
     public void addSplit(SourceSplitBase split, Queue<SourceSplitBase> boundedSplits) {
@@ -117,7 +120,8 @@ public class LakeSplitReaderGenerator {
                             lakeSplit.getTableBucket(),
                             lakeSplit.getStartingOffset(),
                             stoppingOffset,
-                            projectedFields);
+                            projectedFields,
+                            scannerTmpDir);
         }
         return lakeBatchScanner;
     }

@@ -18,7 +18,7 @@
 package org.apache.fluss.spark.read.lake
 
 import org.apache.fluss.client.table.scanner.batch.LakeSnapshotAndLogSplitScanner
-import org.apache.fluss.config.Configuration
+import org.apache.fluss.config.{ConfigOptions, Configuration}
 import org.apache.fluss.lake.source.{LakeSource, LakeSplit}
 import org.apache.fluss.metadata.TablePath
 import org.apache.fluss.row.InternalRow
@@ -53,7 +53,9 @@ class FlussLakeUpsertPartitionReader(
     flussPartition.tableBucket,
     flussPartition.logStartingOffset,
     flussPartition.logStoppingOffset,
-    projection)
+    projection,
+    flussConfig.get(ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR)
+  )
   private var mergedIterator: Iterator[InternalRow] = Iterator.empty
   private var scanFinished = false
 
