@@ -53,9 +53,21 @@ class FlussOffsetInitializersTest extends AnyFunSuite {
       FlussOffsetInitializers.failOnTimestampOutOfRange(scanOptions(key -> "error"))).isTrue
     assertThat(
       FlussOffsetInitializers.failOnTimestampOutOfRange(scanOptions(key -> "ERROR"))).isTrue
+    // a blank value counts as unset and falls back to the default (error)
+    assertThat(FlussOffsetInitializers.failOnTimestampOutOfRange(scanOptions(key -> "  "))).isTrue
     // adjust -> clamp instead of failing
     assertThat(
       FlussOffsetInitializers.failOnTimestampOutOfRange(scanOptions(key -> "adjust"))).isFalse
+  }
+
+  test("invalid scan.incremental.timestamp.out-of-range value fails with supported values") {
+    val key = SparkFlussConf.SCAN_INCREMENTAL_TIMESTAMP_OUT_OF_RANGE.key()
+    val ex = intercept[IllegalArgumentException] {
+      FlussOffsetInitializers.failOnTimestampOutOfRange(scanOptions(key -> "warn"))
+    }
+    assertThat(ex.getMessage).contains(key)
+    assertThat(ex.getMessage).contains("WARN")
+    assertThat(ex.getMessage).contains("'error', 'adjust'")
   }
 
   test("retention guard decision (isBeforeRetention)") {

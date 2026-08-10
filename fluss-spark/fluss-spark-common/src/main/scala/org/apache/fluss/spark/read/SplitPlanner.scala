@@ -281,7 +281,8 @@ class AppendPlanner(
     FlussOffsetInitializers.isIncrementalRead(options)
 
   // Whether a start timestamp preceding retained data fails (default) or is clamped to earliest.
-  private val failOnOutOfRange: Boolean =
+  // Lazy on purpose: the option is incremental-only and must not affect plain batch reads.
+  private lazy val failOnOutOfRange: Boolean =
     FlussOffsetInitializers.failOnTimestampOutOfRange(options)
 
   // An incremental read starts at scan.incremental.start.timestamp, a plain batch read at the
@@ -655,7 +656,8 @@ class UpsertPlanner(
     FlussOffsetInitializers.isIncrementalRead(options)
 
   // Whether a start timestamp preceding retained data fails (default) or is clamped to earliest.
-  private val failOnOutOfRange: Boolean =
+  // Lazy on purpose: the option is incremental-only and must not affect plain batch reads.
+  private lazy val failOnOutOfRange: Boolean =
     FlussOffsetInitializers.failOnTimestampOutOfRange(options)
 
   // Start offset of an incremental read, resolved from scan.incremental.start.timestamp. Lazy on
@@ -754,6 +756,13 @@ class UpsertPlanner(
   // ---------------------------------------------------------------------------------------------
 
   private def planIncrementalLogOnly(): Array[InputPartition] = {
+    if (flussConfig.get(SparkFlussConf.READ_OPTIMIZED_OPTION)) {
+      throw new IllegalArgumentException(
+        s"'${SparkFlussConf.READ_OPTIMIZED_OPTION.key()}' must not be enabled for an " +
+          s"incremental (time-range) read: it skips log changes and reads only snapshots, while " +
+          s"an incremental read folds only the changelog, so this combination would silently " +
+          s"return no rows.")
+    }
     val bucketOffsetsRetriever = new BucketOffsetsRetrieverImpl(admin, tablePath, true)
     val buckets = (0 until tableInfo.getNumBuckets).toSeq
 
@@ -797,18 +806,23 @@ class UpsertPlanner(
     }
 
     val tableId = tableInfo.getTableId
-    buckets.map {
+    buckets.flatMap {
       bucketId =>
         val tableBucket = partitionId match {
           case Some(pid) => new TableBucket(tableId, pid, bucketId)
           case None => new TableBucket(tableId, bucketId)
         }
-        FlussUpsertInputPartition(
-          tableBucket,
-          -1L,
-          Long2long(startBucketOffsets.get(Integer.valueOf(bucketId))),
-          Long2long(stoppingBucketOffsets.get(Integer.valueOf(bucketId))))
-          .asInstanceOf[InputPartition]
+        val startOffset = Long2long(startBucketOffsets.get(Integer.valueOf(bucketId)))
+        val stopOffset = Long2long(stoppingBucketOffsets.get(Integer.valueOf(bucketId)))
+        if (startOffset >= stopOffset) {
+          // Empty range (e.g. a time-range window with no data, or an empty bucket): emit no
+          // partition so the upsert reader is not handed an invalid [start, start) range.
+          None
+        } else {
+          Some(
+            FlussUpsertInputPartition(tableBucket, -1L, startOffset, stopOffset)
+              .asInstanceOf[InputPartition])
+        }
     }.toArray
   }
 

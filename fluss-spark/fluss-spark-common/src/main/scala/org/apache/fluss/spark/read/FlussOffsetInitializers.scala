@@ -79,11 +79,20 @@ object FlussOffsetInitializers {
    */
   def failOnTimestampOutOfRange(options: CaseInsensitiveStringMap): Boolean = {
     val mode =
-      incrementalOption(
-        options,
-        SparkFlussConf.SCAN_INCREMENTAL_TIMESTAMP_OUT_OF_RANGE).get.toUpperCase
-    SparkFlussConf.TimestampOutOfRangeMode.withName(mode) ==
-      SparkFlussConf.TimestampOutOfRangeMode.ERROR
+      incrementalOption(options, SparkFlussConf.SCAN_INCREMENTAL_TIMESTAMP_OUT_OF_RANGE)
+        .getOrElse(SparkFlussConf.SCAN_INCREMENTAL_TIMESTAMP_OUT_OF_RANGE.defaultValue())
+        .trim
+        .toUpperCase
+    SparkFlussConf.TimestampOutOfRangeMode.values.find(_.toString == mode) match {
+      case Some(resolved) => resolved == SparkFlussConf.TimestampOutOfRangeMode.ERROR
+      case None =>
+        throw new IllegalArgumentException(
+          s"Unsupported value for " +
+            s"'${SparkFlussConf.SCAN_INCREMENTAL_TIMESTAMP_OUT_OF_RANGE.key()}': '$mode'. " +
+            s"Supported values are " +
+            s"'${SparkFlussConf.TimestampOutOfRangeMode.values.toList.map(_.toString.toLowerCase).mkString("', '")}'" +
+            s".")
+    }
   }
 
   /**

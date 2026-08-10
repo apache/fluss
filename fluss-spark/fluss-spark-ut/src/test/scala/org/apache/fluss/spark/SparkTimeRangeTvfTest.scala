@@ -415,6 +415,48 @@ class SparkTimeRangeTvfTest extends FlussSparkTestBase {
     }
   }
 
+  test("TVF: empty window on a primary key table returns no rows") {
+    withTable("t") {
+      createPkTable("t")
+
+      val writer = loadFlussTable(createTablePath("t")).newUpsert().createWriter()
+      writer.upsert(row(1L, 11L, 101, "a1")).get()
+      writer.flush()
+      Thread.sleep(400)
+      val ta = System.currentTimeMillis()
+      Thread.sleep(300)
+      val tb = System.currentTimeMillis()
+      Thread.sleep(300)
+      // written after the [ta, tb) gap, so the window contains no data
+      writer.upsert(row(2L, 12L, 102, "a2")).get()
+      writer.flush()
+      Thread.sleep(200)
+
+      checkAnswer(sql(s"SELECT * FROM $TVF('$DEFAULT_DATABASE.t', '$ta', '$tb')"), Nil)
+    }
+  }
+
+  test("TVF: incremental read fails fast when read.optimized is enabled") {
+    withTable("t") {
+      createPkTable("t")
+
+      val writer = loadFlussTable(createTablePath("t")).newUpsert().createWriter()
+      writer.upsert(row(1L, 11L, 101, "a1")).get()
+      writer.flush()
+      Thread.sleep(200)
+      val t1 = System.currentTimeMillis()
+
+      withSQLConf(
+        s"${SparkFlussConf.SPARK_FLUSS_CONF_PREFIX}${SparkFlussConf.READ_OPTIMIZED_OPTION.key()}" ->
+          "true") {
+        val ex = intercept[Exception] {
+          sql(s"SELECT * FROM $TVF('$DEFAULT_DATABASE.t', '$t1')").collect()
+        }
+        assertThat(fullMessage(ex)).contains(SparkFlussConf.READ_OPTIMIZED_OPTION.key())
+      }
+    }
+  }
+
   test("TVF: epoch millis, datetime string and TIMESTAMP literal yield the same window") {
     withTable("t") {
       createLogTable("t")
