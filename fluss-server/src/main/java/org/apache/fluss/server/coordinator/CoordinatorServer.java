@@ -168,6 +168,9 @@ public class CoordinatorServer extends ServerBase {
     @GuardedBy("lock")
     private ReplicaCapacityController replicaCapacityController;
 
+    @GuardedBy("lock")
+    private OfflineLeaderRecoveryConfig offlineLeaderRecoveryConfig;
+
     public CoordinatorServer(Configuration conf) {
         this(conf, SystemClock.getInstance());
     }
@@ -246,6 +249,7 @@ public class CoordinatorServer extends ServerBase {
             this.metadataCache = new CoordinatorMetadataCache();
             this.replicaCapacityController =
                     new ReplicaCapacityController(conf, metadataCache, serverMetricGroup);
+            this.offlineLeaderRecoveryConfig = new OfflineLeaderRecoveryConfig(conf);
 
             this.dynamicConfigManager = new DynamicConfigManager(zkClient, conf);
 
@@ -305,6 +309,7 @@ public class CoordinatorServer extends ServerBase {
             dynamicConfigManager.register(lakeCatalogDynamicLoader);
             dynamicConfigManager.register(remoteDirDynamicLoader);
             dynamicConfigManager.register(replicaCapacityController);
+            dynamicConfigManager.register(offlineLeaderRecoveryConfig);
             // Register stateless validators for coordinator-side upfront validation
             dynamicConfigManager.register(new DiskWriteLimitConfigValidator());
             rpcServer.getServerReconfigurables().forEach(dynamicConfigManager::register);
@@ -358,7 +363,8 @@ public class CoordinatorServer extends ServerBase {
                             metadataManager,
                             kvSnapshotLeaseManager,
                             scheduler,
-                            clock);
+                            clock,
+                            offlineLeaderRecoveryConfig);
             coordinatorEventProcessor.startup();
 
             // As the active leader, this server is the sole writer of dynamic configs and holds the
