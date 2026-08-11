@@ -25,7 +25,7 @@ use crate::record::{ChangeType, ScanRecord};
 use crate::row::column_vector::TypedBatch;
 use crate::row::column_writer::{ColumnWriter, round_up_to_8};
 use crate::row::{ColumnarRow, InternalRow};
-use arrow::array::{ArrayBuilder, ArrayRef, new_null_array};
+use arrow::array::{Array, ArrayBuilder, ArrayRef, new_null_array};
 use arrow::{
     array::RecordBatch,
     buffer::Buffer,
@@ -207,10 +207,20 @@ pub trait ArrowRecordBatchInnerBuilder: Send {
     fn estimated_size_in_bytes(&self) -> usize;
 }
 
-#[derive(Default)]
-pub struct PrebuiltRecordBatchBuilder {
+pub(crate) struct PrebuiltRecordBatchBuilder {
+    row_type: RowType,
     arrow_record_batch: Option<Arc<RecordBatch>>,
     records_count: i32,
+}
+
+impl PrebuiltRecordBatchBuilder {
+    fn new(row_type: RowType) -> Self {
+        Self {
+            row_type,
+            arrow_record_batch: None,
+            records_count: 0,
+        }
+    }
 }
 
 impl ArrowRecordBatchInnerBuilder for PrebuiltRecordBatchBuilder {
@@ -227,6 +237,7 @@ impl ArrowRecordBatchInnerBuilder for PrebuiltRecordBatchBuilder {
         if self.arrow_record_batch.is_some() {
             return Ok(false);
         }
+        validate_append_record_batch(record_batch.as_ref(), &self.row_type)?;
         self.records_count = record_batch.num_rows() as i32;
         self.arrow_record_batch = Some(record_batch);
         Ok(true)
@@ -373,7 +384,7 @@ impl MemoryLogRecordsArrowBuilder {
     ) -> Result<Self> {
         let arrow_batch_builder: Box<dyn ArrowRecordBatchInnerBuilder> = {
             if to_append_record_batch {
-                Box::new(PrebuiltRecordBatchBuilder::default())
+                Box::new(PrebuiltRecordBatchBuilder::new(row_type.clone()))
             } else {
                 Box::new(RowAppendRecordBatchBuilder::new(row_type)?)
             }
@@ -1179,6 +1190,28 @@ fn parse_ipc_message(
     Ok((batch_metadata, body_buffer, message.version()))
 }
 
+/// Validates a caller-supplied Arrow [`RecordBatch`] against the table's
+/// [`RowType`] before the prebuilt append path serializes it.
+pub(crate) fn validate_append_record_batch(batch: &RecordBatch, row_type: &RowType) -> Result<()> {
+    TypedBatch::build(batch, row_type)?;
+
+    for (i, field) in row_type.fields().iter().enumerate() {
+        if field.data_type().is_nullable() {
+            continue;
+        }
+        let column = batch.column(i);
+        if column.null_count() > 0 {
+            return Err(IllegalArgument {
+                message: format!(
+                    "Column '{}' is declared as non-nullable but contains null values",
+                    field.name()
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
 pub fn to_arrow_schema(fluss_schema: &RowType) -> Result<SchemaRef> {
     let fields: Result<Vec<Field>> = fluss_schema
         .fields()
@@ -1977,6 +2010,102 @@ mod tests {
                 .expect("build should succeed for NOT NULL column");
             assert!(!bytes.is_empty());
         }
+    }
+
+    #[test]
+    fn validate_append_record_batch_rejects_nulls_in_not_null_column() {
+        let row_type = RowType::new(vec![DataField::new(
+            "id",
+            DataTypes::bigint().as_non_nullable(),
+            None,
+        )]);
+
+        // Caller marks the Arrow field nullable (common from pyarrow) and includes a null.
+        let batch_schema = Arc::new(arrow_schema::Schema::new(vec![Field::new(
+            "id",
+            arrow_schema::DataType::Int64,
+            true,
+        )]));
+        let poison = RecordBatch::try_new(
+            batch_schema.clone(),
+            vec![Arc::new(arrow::array::Int64Array::from(vec![
+                Some(1_i64),
+                None,
+                Some(3_i64),
+            ])) as arrow::array::ArrayRef],
+        )
+        .expect("nullable arrow batch with nulls");
+
+        let err = validate_append_record_batch(&poison, &row_type)
+            .expect_err("null in NOT NULL column must be rejected");
+        assert!(
+            err.to_string()
+                .contains("declared as non-nullable but contains null values"),
+            "unexpected error: {err}"
+        );
+
+        // Same nullable Arrow metadata but no null values is accepted.
+        let ok_batch = RecordBatch::try_new(
+            batch_schema,
+            vec![Arc::new(arrow::array::Int64Array::from(vec![1_i64, 2_i64]))
+                as arrow::array::ArrayRef],
+        )
+        .expect("nullable arrow batch without nulls");
+        validate_append_record_batch(&ok_batch, &row_type)
+            .expect("nullable metadata alone must not reject a null-free batch");
+    }
+
+    #[test]
+    fn prebuilt_builder_rejects_nulls_in_not_null_column() {
+        let row_type = RowType::new(vec![DataField::new(
+            "id",
+            DataTypes::bigint().as_non_nullable(),
+            None,
+        )]);
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = Arc::new(build_table_info(table_path.clone(), 1, 1));
+        let physical_table_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path)));
+
+        let mut builder = MemoryLogRecordsArrowBuilder::new(
+            1,
+            &row_type,
+            true,
+            ArrowCompressionInfo {
+                compression_type: ArrowCompressionType::None,
+                compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
+            },
+            usize::MAX,
+            Arc::new(ArrowCompressionRatioEstimator::default()),
+        )
+        .expect("NOT NULL prebuilt builder should construct");
+
+        let batch_schema = Arc::new(arrow_schema::Schema::new(vec![Field::new(
+            "id",
+            arrow_schema::DataType::Int64,
+            true,
+        )]));
+        let poison = RecordBatch::try_new(
+            batch_schema,
+            vec![
+                Arc::new(arrow::array::Int64Array::from(vec![Some(1_i64), None]))
+                    as arrow::array::ArrayRef,
+            ],
+        )
+        .expect("poison batch");
+        let record = WriteRecord::for_append_record_batch(
+            Arc::clone(&table_info),
+            physical_table_path,
+            1,
+            poison,
+        );
+        let err = builder
+            .append(&record)
+            .expect_err("prebuilt append must reject null in NOT NULL");
+        assert!(
+            err.to_string()
+                .contains("declared as non-nullable but contains null values"),
+            "unexpected error: {err}"
+        );
     }
 
     fn single_int_read_context() -> (ReadContext, SchemaRef) {

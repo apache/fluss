@@ -77,6 +77,47 @@ mod table_test {
             .create_writer()
             .expect("Failed to create writer");
 
+        // A null in the NOT NULL column c3 must be rejected client-side, before the
+        // bucket split enqueues part of the batch. The exact record count asserted
+        // below proves the rejected batch never partially reached any bucket.
+        {
+            use arrow::array::{Int32Array, Int64Array, StringArray};
+            use arrow::datatypes::{DataType as ArrowDataType, Field, Schema as ArrowSchema};
+            use std::sync::Arc;
+
+            // Arrow metadata marks c3 nullable (as pyarrow often does) and carries a
+            // null; distinct c1 values hash across multiple buckets.
+            let poison_schema = Arc::new(ArrowSchema::new(vec![
+                Field::new("c1", ArrowDataType::Int32, true),
+                Field::new("c2", ArrowDataType::Utf8, true),
+                Field::new("c3", ArrowDataType::Int64, true),
+            ]));
+            let poison = arrow::array::RecordBatch::try_new(
+                poison_schema,
+                vec![
+                    Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6])),
+                    Arc::new(StringArray::from(vec!["a", "b", "c", "d", "e", "f"])),
+                    Arc::new(Int64Array::from(vec![
+                        Some(10),
+                        Some(20),
+                        None,
+                        Some(40),
+                        Some(50),
+                        Some(60),
+                    ])),
+                ],
+            )
+            .expect("poison batch");
+            let err = append_writer
+                .append_arrow_batch(poison)
+                .expect_err("null in NOT NULL column must be rejected before the bucket split");
+            assert!(
+                err.to_string()
+                    .contains("declared as non-nullable but contains null values"),
+                "unexpected error: {err}"
+            );
+        }
+
         let batch1 = record_batch!(
             ("c1", Int32, [1, 2, 3]),
             ("c2", Utf8, ["a1", "a2", "a3"]),
@@ -87,15 +128,25 @@ mod table_test {
             .append_arrow_batch(batch1)
             .expect("Failed to append batch with mixed nullability");
 
-        let batch2 = record_batch!(
-            ("c1", Int32, [4, 5, 6]),
-            ("c2", Utf8, ["a4", "a5", "a6"]),
-            ("c3", Int64, [40, 50, 60])
+        // Arrow schema metadata marks all fields nullable (pyarrow-style), but
+        // null-free values for NOT NULL c3 should still be accepted.
+        let batch2_schema = std::sync::Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("c1", arrow::datatypes::DataType::Int32, true),
+            arrow::datatypes::Field::new("c2", arrow::datatypes::DataType::Utf8, true),
+            arrow::datatypes::Field::new("c3", arrow::datatypes::DataType::Int64, true),
+        ]));
+        let batch2 = arrow::array::RecordBatch::try_new(
+            batch2_schema,
+            vec![
+                std::sync::Arc::new(arrow::array::Int32Array::from(vec![4, 5, 6])),
+                std::sync::Arc::new(arrow::array::StringArray::from(vec!["a4", "a5", "a6"])),
+                std::sync::Arc::new(arrow::array::Int64Array::from(vec![40_i64, 50_i64, 60_i64])),
+            ],
         )
-        .unwrap();
+        .expect("nullable-metadata batch without nulls");
         append_writer
             .append_arrow_batch(batch2)
-            .expect("Failed to append batch with mixed nullability");
+            .expect("Failed to append nullable-metadata batch without null values");
 
         // Flush to ensure all writes are acknowledged
         append_writer.flush().await.expect("Failed to flush");
