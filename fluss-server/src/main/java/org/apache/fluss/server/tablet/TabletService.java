@@ -222,16 +222,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         for (PbProduceLogReqForBucket pbBucket : request.getBucketsReqsList()) {
             Long partitionId = pbBucket.hasPartitionId() ? pbBucket.getPartitionId() : null;
             int bucketCount = pbBucket.hasBucketCount() ? pbBucket.getBucketCount() : 0;
-            Errors error =
-                    metadataCache.validateBucketCount(
-                            request.getTableId(), partitionId, bucketCount);
-            if (error != Errors.NONE) {
-                throw new StaleMetadataException(
-                        "Bucket count mismatch for table "
-                                + request.getTableId()
-                                + ", partition "
-                                + partitionId);
-            }
+            validateBucketCountOrThrow(request.getTableId(), partitionId, bucketCount);
         }
         CompletableFuture<ProduceLogResponse> response = new CompletableFuture<>();
         Map<TableBucket, MemoryLogRecords> produceLogData = getProduceLogData(request);
@@ -249,7 +240,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         Errors error = metadataCache.validateBucketCount(tableId, partitionId, requestBucketCount);
         if (error != Errors.NONE) {
             throw new StaleMetadataException(
-                    "Bucket count mismatch for table " + tableId + ", partition " + partitionId);
+                    error.name() + " for table " + tableId + ", partition " + partitionId);
         }
     }
 

@@ -67,7 +67,7 @@ public class ServerMetadataSnapshot {
     private final Map<TablePartition, Integer> partitionBucketCounts;
 
     // tableId -> bucketLayoutEpoch; a TabletServer keeps the latest value and ignores a lower
-    // epoch to prevent an older UpdateMetadata from overwriting newer state
+    // epoch to prevent an older bucket layout (ALTER bucket.num) from replacing a newer one.
     private final Map<Long, Long> bucketLayoutEpochByTableId;
 
     public ServerMetadataSnapshot(
@@ -202,9 +202,9 @@ public class ServerMetadataSnapshot {
 
     /**
      * Validates the bucket count in a client request against the actual count in this snapshot.
-     * Returns {@link Errors#NONE} if the request should proceed; returns {@link
-     * Errors#STALE_METADATA} if the count is stale or a legacy request is rejected.
      *
+     * @return {@link Errors#NONE} if validation passes; {@link Errors#STALE_METADATA} if the count
+     *     is stale or a legacy request is rejected.
      * @param tableId the table id from the request
      * @param partitionId the partition id from the request, or null for non-partitioned tables
      * @param requestBucketCount the bucket count the client used to calculate bucketId; <= 0 means
@@ -214,10 +214,8 @@ public class ServerMetadataSnapshot {
             long tableId, @Nullable Long partitionId, int requestBucketCount) {
         long epoch = getBucketLayoutEpoch(tableId).orElse(0L);
         if (requestBucketCount <= 0) {
-            // missing bucket count (optional field not set by an old client)
             return epoch == 0 ? Errors.NONE : Errors.STALE_METADATA;
         }
-        // request carries bucket count; compare against actual
         if (partitionId != null) {
             Integer actual = getPartitionBucketCount(new TablePartition(tableId, partitionId));
             if (actual != null && requestBucketCount != actual) {

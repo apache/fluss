@@ -104,9 +104,7 @@ public class MetadataManager {
 
     /**
      * Number of striped locks. Each {@link TablePath} is mapped to a fixed stripe by hash, so the
-     * same path always resolves to the same lock without lifecycle management. 1024 stripes keeps
-     * the collision probability negligible for typical cluster sizes while bounding memory to a
-     * few KB (one-time allocation).
+     * same path always resolves to the same lock without lifecycle management.
      */
     private static final int RESCALE_LOCK_STRIPES = 1024;
 
@@ -670,6 +668,16 @@ public class MetadataManager {
                                                             ((TableChange.SetOption) change)
                                                                     .getKey())))
                             .collect(Collectors.toList());
+            // Reject mixed ALTERs (bucket.num + other property changes) before any lake-side
+            // mutation. A mixed ALTER could leave Fluss and the lake permanently diverged if the
+            // non-bucket.num changes fail after the bucket count has already been propagated.
+            if (!remainingTableChanges.isEmpty()) {
+                throw new InvalidAlterTableException(
+                        "Cannot alter 'bucket.num' together with other property changes "
+                                + "on table "
+                                + tablePath
+                                + "; please issue separate ALTER TABLE statements.");
+            }
         }
         ReadWriteLock rescaleLock = getBucketRescaleLock(tablePath);
         if (bucketNumRescale) {

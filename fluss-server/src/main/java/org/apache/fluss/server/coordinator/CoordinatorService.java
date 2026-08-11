@@ -611,13 +611,17 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     private void beforeTablePropertiesUpdate(TableInfo currentTable, TableDescriptor updatedTable) {
         if (!currentTable.getTableConfig().isHistoricalPartitionEnabled()
                 && isHistoricalPartitionEnabled(updatedTable)) {
+            TablePath tablePath = currentTable.getTablePath();
+            Lock readLock = metadataManager.getBucketRescaleLock(tablePath).readLock();
+            readLock.lock();
             try {
                 replicaCapacityController.checkCanCreateKvLeaderReplicas(
                         getBucketCount(updatedTable));
-                createHistoricalPartition(
-                        currentTable.getTablePath(), currentTable.getTableId(), updatedTable);
+                createHistoricalPartition(tablePath, currentTable.getTableId(), updatedTable);
             } catch (Exception e) {
-                throw historicalPartitionEnableException(currentTable.getTablePath(), e);
+                throw historicalPartitionEnableException(tablePath, e);
+            } finally {
+                readLock.unlock();
             }
         }
     }
@@ -629,11 +633,15 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             return;
         }
 
+        TablePath tablePath = currentTable.getTablePath();
+        Lock readLock = metadataManager.getBucketRescaleLock(tablePath).readLock();
+        readLock.lock();
         try {
-            metadataManager.dropPartition(
-                    currentTable.getTablePath(), historicalPartitionSpec(updatedTable), true);
+            metadataManager.dropPartition(tablePath, historicalPartitionSpec(updatedTable), true);
         } catch (Exception e) {
-            throw historicalPartitionDisableException(currentTable.getTablePath(), e);
+            throw historicalPartitionDisableException(tablePath, e);
+        } finally {
+            readLock.unlock();
         }
     }
 

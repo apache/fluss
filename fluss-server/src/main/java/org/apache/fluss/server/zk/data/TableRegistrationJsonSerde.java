@@ -50,7 +50,7 @@ public class TableRegistrationJsonSerde
     static final String MODIFIED_TIME = "modified_time";
     static final String BUCKET_LAYOUT_EPOCH = "bucket_layout_epoch";
     private static final String VERSION_KEY = "version";
-    private static final int VERSION = 1;
+    private static final int VERSION = 2;
 
     @Override
     public void serialize(TableRegistration tableReg, JsonGenerator generator) throws IOException {

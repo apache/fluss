@@ -1008,8 +1008,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
             // change. Refresh the cached TableInfo so that newly auto-created partitions use
             // the updated table-level bucket count as their bucket.num.actual.
             LOG.info(
-                    "Table {} bucket.num changed from {} to {}, refreshing auto partition table.",
-                    oldTableInfo.getTableId(),
+                    "Updating auto-partition metadata for table {} (tableId={}) after "
+                            + "bucket.num changed from {} to {}.",
+                    newTableInfo.getTablePath(),
+                    newTableInfo.getTableId(),
                     oldTableInfo.getNumBuckets(),
                     newTableInfo.getNumBuckets());
             autoPartitionManager.updateAutoPartitionTables(newTableInfo);

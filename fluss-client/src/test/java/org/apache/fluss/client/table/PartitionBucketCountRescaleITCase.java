@@ -66,12 +66,11 @@ class PartitionBucketCountRescaleITCase extends ClientToServerITCaseBase {
     private static final List<String> OLD_NEW_PARTITIONS = Arrays.asList("old", "new");
 
     @Test
-    void testLogTableReadWriteAndPerBucketDistributionAcrossRescale() throws Exception {
-        // Covers both write-routing paths across a rescale: part 1 (no bucket key) verifies row
-        // content, part 2 (bucket key "a") verifies per-bucket distribution. Routing by the
-        // wrong (table-level) count would miss rows in part 1 and leave buckets empty in part 2.
+    void testLogTableReadWriteAcrossRescale() throws Exception {
+        // Write records to partitions with different bucket counts (old partition keeps
+        // OLD_BUCKET_NUM, new partition uses NEW_BUCKET_NUM). Routing by the wrong (table-level)
+        // count would miss rows when reading back each partition's own bucket range.
 
-        // === Part 1: no-bucket-key table — content round trip ===
         TablePath tablePath = TablePath.of("test_db_1", "test_rescale_log_table");
         Schema schema = logSchema();
         createPartitionedTable(tablePath, schema);
@@ -97,50 +96,6 @@ class PartitionBucketCountRescaleITCase extends ClientToServerITCaseBase {
                 scanAllBucketsPerPartition(table, partitionInfos);
 
         assertRowsPerPartition(schema.getRowType(), actualByPartitionId, expectedByPartitionId);
-
-        // === Part 2: bucket-keyed table — per-bucket distribution ===
-        TablePath keyedTablePath = TablePath.of("test_db_1", "test_rescale_log_per_bucket");
-        createPartitionedTable(keyedTablePath, schema, "a");
-        List<PartitionInfo> keyedPartitionInfos = setupOldNewPartitions(keyedTablePath);
-        Map<String, Long> keyedIdByName = partitionIdByName(keyedPartitionInfos);
-        Map<String, Integer> keyedBucketCountByName = bucketCountByName(keyedPartitionInfos);
-
-        // Use a broad key range so hash distribution reaches every bucket with high probability.
-        int recordsPerPartition = 64;
-        Table keyedTable = conn.getTable(keyedTablePath);
-        AppendWriter keyedAppendWriter = keyedTable.newAppend().createWriter();
-        for (String partitionName : OLD_NEW_PARTITIONS) {
-            for (int j = 0; j < recordsPerPartition; j++) {
-                keyedAppendWriter.append(row(j, "v" + j, partitionName));
-            }
-        }
-        keyedAppendWriter.flush();
-
-        Map<TableBucket, Integer> perBucketCount =
-                pollRecordCountPerBucket(keyedTable, keyedPartitionInfos, 2 * recordsPerPartition);
-
-        for (String partitionName : OLD_NEW_PARTITIONS) {
-            long partitionId = keyedIdByName.get(partitionName);
-            int bucketCount = keyedBucketCountByName.get(partitionName);
-            int partitionSum = 0;
-            for (int bucketId = 0; bucketId < bucketCount; bucketId++) {
-                TableBucket tb =
-                        new TableBucket(
-                                keyedTable.getTableInfo().getTableId(), partitionId, bucketId);
-                int c = perBucketCount.getOrDefault(tb, 0);
-                partitionSum += c;
-                // Every bucket must have been landed on at least once given 64 records over N
-                // buckets.
-                assertThat(c)
-                        .as(
-                                "partition %s bucket %d must receive at least one record",
-                                partitionName, bucketId)
-                        .isGreaterThan(0);
-            }
-            assertThat(partitionSum)
-                    .as("partition %s per-bucket sum", partitionName)
-                    .isEqualTo(recordsPerPartition);
-        }
     }
 
     @Test

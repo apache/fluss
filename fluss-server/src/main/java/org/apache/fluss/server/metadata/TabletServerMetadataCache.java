@@ -20,6 +20,7 @@ package org.apache.fluss.server.metadata;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.TabletServerInfo;
+import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
@@ -162,8 +163,9 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
     public Errors validateBucketCount(
             long tableId, @Nullable Long partitionId, int requestBucketCount) {
         if (!initialMetadataApplied) {
-            // Metadata not loaded yet; reject instead of validating against an empty snapshot.
-            return Errors.STALE_METADATA;
+            throw new LeaderNotAvailableException(
+                    "Metadata cache is not initialized; cannot validate bucket count for table "
+                            + tableId);
         }
         return serverMetadataSnapshot.validateBucketCount(tableId, partitionId, requestBucketCount);
     }
@@ -253,8 +255,8 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                             deletedTableIds.add(tableId);
                             bucketLayoutEpochByTableId.remove(tableId);
                         } else {
-                            // Ignore an older UpdateMetadata for this table to prevent it from
-                            // overwriting newer state when messages arrive out of order.
+                            // Ignore an older UpdateMetadata to prevent an older bucket
+                            // layout (ALTER bucket.num) from replacing a newer one.
                             long newEpoch = tableInfo.getBucketLayoutEpoch();
                             long currentEpoch =
                                     bucketLayoutEpochByTableId.getOrDefault(tableId, 0L);

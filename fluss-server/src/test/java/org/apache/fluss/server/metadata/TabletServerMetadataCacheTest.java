@@ -21,6 +21,7 @@ import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.cluster.TabletServerInfo;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
@@ -56,6 +57,7 @@ import static org.apache.fluss.server.metadata.PartitionMetadata.DELETED_PARTITI
 import static org.apache.fluss.server.metadata.TableMetadata.DELETED_TABLE_ID;
 import static org.apache.fluss.server.zk.data.LeaderAndIsr.NO_LEADER;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link TabletServerMetadataCache}. */
 public class TabletServerMetadataCacheTest {
@@ -756,10 +758,12 @@ public class TabletServerMetadataCacheTest {
     @Test
     void testValidateBucketCountBeforeInitialMetadataApplied() {
         // no updateClusterMetadata called yet → initialMetadataApplied=false
-        assertThat(serverMetadataCache.validateBucketCount(DATA1_TABLE_ID, null, 3))
-                .isEqualTo(Errors.STALE_METADATA);
-        assertThat(serverMetadataCache.validateBucketCount(DATA1_TABLE_ID, null, 0))
-                .isEqualTo(Errors.STALE_METADATA);
+        assertThatThrownBy(() -> serverMetadataCache.validateBucketCount(DATA1_TABLE_ID, null, 3))
+                .isInstanceOf(LeaderNotAvailableException.class)
+                .hasMessageContaining("Metadata cache is not initialized");
+        assertThatThrownBy(() -> serverMetadataCache.validateBucketCount(DATA1_TABLE_ID, null, 0))
+                .isInstanceOf(LeaderNotAvailableException.class)
+                .hasMessageContaining("Metadata cache is not initialized");
     }
 
     private static final class TestingMetadataManager extends MetadataManager {

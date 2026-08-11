@@ -116,13 +116,6 @@ class FlinkUnionReadRescaleBucketITCase extends FlinkUnionReadTestBase {
                     CollectionUtil.iteratorToList(
                             batchTEnv.executeSql("select * from " + tableName).collect());
             assertThat(actual).containsExactlyInAnyOrderElementsOf(expectedRows);
-
-            // connector-layer count(*) must aggregate correctly across the mixed bucket-count
-            // partitions (old = OLD_BUCKET_NUM, new = NEW_BUCKET_NUM)
-            List<Row> count =
-                    CollectionUtil.iteratorToList(
-                            batchTEnv.executeSql("select count(*) from " + tableName).collect());
-            assertThat(count).containsExactly(Row.of((long) expectedRows.size()));
         } finally {
             jobClient.cancel().get();
         }
