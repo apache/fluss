@@ -26,10 +26,11 @@ mod table_test {
         wait_for_partitions_ready, wait_for_table_buckets_ready, wait_for_table_ready,
     };
     use arrow::array::record_batch;
-    use fluss::client::{EARLIEST_OFFSET, FlussTable, TableScan};
+    use fluss::client::{EARLIEST_OFFSET, FlussAdmin, FlussTable, TableScan};
+    use fluss::error::FlussError;
     use fluss::metadata::{
-        AddColumn, AlterTableChanges, ColumnPositionType, DataField, DataTypes, JsonSerde, Schema,
-        TableDescriptor, TablePath,
+        AddColumn, AlterTableChanges, ColumnPositionType, DataField, DataTypes, JsonSerde,
+        PartitionSpec, Schema, TableDescriptor, TablePath,
     };
     use fluss::record::ScanRecord;
     use fluss::row::binary_array::FlussArrayWriter;
@@ -585,18 +586,8 @@ mod table_test {
         assert_eq!(proj_batches[0].batch().num_columns(), 1);
     }
 
-    /// Integration test covering produce and scan operations for all supported datatypes
-    /// in log tables.
-    #[tokio::test]
-    async fn partitioned_table_append_scan() {
-        let cluster = get_shared_cluster();
-        let connection = cluster.get_fluss_connection().await;
 
-        let admin = connection.get_admin().expect("Failed to get admin");
-
-        let table_path = TablePath::new("fluss", "test_partitioned_log_append");
-
-        // Create a partitioned log table
+        async fn create_region_partitioned_log_table(admin: &FlussAdmin, table_path: &TablePath) {
         let table_descriptor = TableDescriptor::builder()
             .schema(
                 Schema::builder()
@@ -610,13 +601,23 @@ mod table_test {
             .build()
             .expect("Failed to build table");
 
-        create_table(&admin, &table_path, &table_descriptor).await;
+        create_table(admin, table_path, &table_descriptor).await;
+        create_partitions(admin, table_path, "region", &["US", "EU"]).await;
+        wait_for_partitions_ready(admin, table_path, &["US", "EU"]).await;
+    }
 
-        // Create partitions
-        create_partitions(&admin, &table_path, "region", &["US", "EU"]).await;
+    /// Integration test covering produce and scan operations for all supported datatypes
+    /// in log tables.
+    #[tokio::test]
+    async fn partitioned_table_append_scan() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
 
-        // Wait for partition bucket leaders to be available.
-        wait_for_partitions_ready(&admin, &table_path, &["US", "EU"]).await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss", "test_partitioned_log_append");
+
+        create_region_partitioned_log_table(&admin, &table_path).await;
 
         let table = connection
             .get_table(&table_path)
@@ -711,11 +712,20 @@ mod table_test {
             .new_scan()
             .create_log_scanner()
             .expect("Failed to create log scanner");
-        let partition_info = admin
+        let partition_infos = admin
             .list_partition_infos(&table_path)
             .await
             .expect("Failed to list partition infos");
-        for partition_info in partition_info {
+        let nonexistent_partition_id = i64::MAX;
+        assert_eq!(
+            log_scanner
+                .subscribe_partition(nonexistent_partition_id, 0, 0)
+                .await
+                .expect_err("Subscribing to a nonexistent partition should fail")
+                .api_error(),
+            Some(FlussError::PartitionNotExists)
+        );
+        for partition_info in &partition_infos {
             log_scanner
                 .subscribe_partition(partition_info.get_partition_id(), 0, 0)
                 .await
@@ -846,6 +856,18 @@ mod table_test {
             .list_partition_infos(&table_path)
             .await
             .expect("Failed to list partition infos");
+        let invalid_partition_bucket_offsets = HashMap::from([
+            ((partition_infos[0].get_partition_id(), 0), 0),
+            ((nonexistent_partition_id, 0), 0),
+        ]);
+        assert_eq!(
+            log_scanner_batch
+                .subscribe_partition_buckets(&invalid_partition_bucket_offsets)
+                .await
+                .expect_err("Batch subscription containing a nonexistent partition should fail")
+                .api_error(),
+            Some(FlussError::PartitionNotExists)
+        );
         let partition_bucket_offsets: HashMap<(i64, i32), i64> = partition_infos
             .iter()
             .map(|p| ((p.get_partition_id(), 0), 0i64))
@@ -888,6 +910,90 @@ mod table_test {
         assert_eq!(
             batch_collected, expected_records,
             "subscribe_partition_buckets should receive the same records as subscribe_partition loop"
+        );
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
+    }
+
+    #[tokio::test]
+    async fn partitioned_scanner_continues_after_partition_drop() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+        let table_path = TablePath::new("fluss", "test_scanner_after_partition_drop");
+        create_region_partitioned_log_table(&admin, &table_path).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+        let append_writer = table
+            .new_append()
+            .expect("Failed to create append")
+            .create_writer()
+            .expect("Failed to create writer");
+        let mut row = GenericRow::new(3);
+        row.set_field(0, 1);
+        row.set_field(1, "US");
+        row.set_field(2, 100_i64);
+        append_writer.append(&row).expect("Failed to append row");
+        append_writer.flush().await.expect("Failed to flush");
+
+        let partition_infos = admin
+            .list_partition_infos(&table_path)
+            .await
+            .expect("Failed to list partition infos");
+        let partition_bucket_offsets: HashMap<(i64, i32), i64> = partition_infos
+            .iter()
+            .map(|partition| ((partition.get_partition_id(), 0), 0))
+            .collect();
+        let scanner = table
+            .new_scan()
+            .create_log_scanner()
+            .expect("Failed to create log scanner");
+        scanner
+            .subscribe_partition_buckets(&partition_bucket_offsets)
+            .await
+            .expect("Failed to subscribe to partitions");
+
+        admin
+            .drop_partition(
+                &table_path,
+                &PartitionSpec::new(HashMap::from([("region", "EU")])),
+                false,
+            )
+            .await
+            .expect("Failed to drop EU partition");
+
+        let ids = poll_until_count(
+            1,
+            DEFAULT_POLL_TIMEOUT,
+            Duration::from_millis(500),
+            async |timeout| {
+                scanner
+                    .poll(timeout)
+                    .await
+                    .expect("Failed to poll surviving partition")
+                    .into_iter()
+                    .filter_map(|record| {
+                        let row = record.row();
+                        if row.get_string(1).unwrap() == "US" {
+                            Some(row.get_int(0).unwrap())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            },
+        )
+        .await;
+        assert_eq!(
+            ids,
+            vec![1],
+            "The surviving partition should remain readable"
         );
 
         admin

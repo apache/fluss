@@ -829,7 +829,7 @@ impl LogScannerInner {
         let table_bucket =
             TableBucket::new_with_partition(self.table_id, Some(partition_id), bucket);
         self.metadata
-            .check_and_update_table_metadata(from_ref(&self.table_path))
+            .check_and_update_partition_metadata_by_ids(&self.table_path, &[partition_id])
             .await?;
         self.log_scanner_status
             .assign_scan_bucket(table_bucket, offset);
@@ -866,9 +866,19 @@ impl LogScannerInner {
             });
         }
 
-        self.metadata
-            .check_and_update_table_metadata(from_ref(&self.table_path))
-            .await?;
+        if self.is_partitioned_table {
+            let partition_ids: Vec<PartitionId> = bucket_offsets
+                .keys()
+                .filter_map(TableBucket::partition_id)
+                .collect();
+            self.metadata
+                .check_and_update_partition_metadata_by_ids(&self.table_path, &partition_ids)
+                .await?;
+        } else {
+            self.metadata
+                .check_and_update_table_metadata(from_ref(&self.table_path))
+                .await?;
+        }
 
         self.log_scanner_status.assign_scan_buckets(bucket_offsets);
         Ok(())
