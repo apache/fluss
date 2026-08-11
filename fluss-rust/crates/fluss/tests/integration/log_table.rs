@@ -586,8 +586,7 @@ mod table_test {
         assert_eq!(proj_batches[0].batch().num_columns(), 1);
     }
 
-
-        async fn create_region_partitioned_log_table(admin: &FlussAdmin, table_path: &TablePath) {
+    async fn create_region_partitioned_log_table(admin: &FlussAdmin, table_path: &TablePath) {
         let table_descriptor = TableDescriptor::builder()
             .schema(
                 Schema::builder()
