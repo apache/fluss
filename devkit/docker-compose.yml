@@ -51,6 +51,15 @@ x-tablet-common: &tablet-common
     start_period: 10s
 
 services:
+  # Flink runs as the flink user while Fluss creates this shared volume as root.
+  shared-data-init:
+    image: ${FLUSS_DEVKIT_IMAGE:-eclipse-temurin:17-jre-noble}
+    restart: "no"
+    volumes:
+      - shared-data:/tmp/fluss
+    entrypoint: ["/bin/bash", "-c"]
+    command: ["chmod 0777 /tmp/fluss"]
+
   zookeeper:
     image: zookeeper:3.9.2
     restart: unless-stopped
@@ -68,6 +77,8 @@ services:
     <<: *fluss-common
     entrypoint: ["/opt/fluss/bin/coordinator-server.sh", "start-foreground"]
     depends_on:
+      shared-data-init:
+        condition: service_completed_successfully
       zookeeper:
         condition: service_healthy
     command:
