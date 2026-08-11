@@ -18,6 +18,7 @@
 package org.apache.fluss.lake.paimon;
 
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.TableAlreadyExistException;
@@ -175,22 +176,24 @@ public class PaimonLakeCatalog implements LakeCatalog {
             Path currentLocation, List<TableChange> tableChanges) {
         List<TableChange> changesToApply = new ArrayList<>(tableChanges.size());
 
-        // `paimon.path` is create-time-only because changing it does not migrate existing data.
-        // It may be repeated after table creation when enabling lake in the same ALTER. Treat an
-        // equivalent path as a no-op, but reject any actual path change.
+        // Paimon path and name mapping options are create-time-only.
         for (TableChange tableChange : tableChanges) {
             if (tableChange instanceof TableChange.SetOption) {
                 TableChange.SetOption setOption = (TableChange.SetOption) tableChange;
-                if (PAIMON_PATH_KEY.equals(setOption.getKey())) {
+                String optionKey = setOption.getKey();
+                if (isNameMappingOption(optionKey)) {
+                    throw invalidCreateTimeOnlyOptionChangeException(optionKey);
+                } else if (PAIMON_PATH_KEY.equals(optionKey)) {
                     if (currentLocation.equals(new Path(setOption.getValue()))) {
                         continue;
                     }
-                    throw invalidPaimonPathChangeException();
+                    throw invalidCreateTimeOnlyOptionChangeException(optionKey);
                 }
             } else if (tableChange instanceof TableChange.ResetOption) {
                 TableChange.ResetOption resetOption = (TableChange.ResetOption) tableChange;
-                if (PAIMON_PATH_KEY.equals(resetOption.getKey())) {
-                    throw invalidPaimonPathChangeException();
+                String optionKey = resetOption.getKey();
+                if (isNameMappingOption(optionKey) || PAIMON_PATH_KEY.equals(optionKey)) {
+                    throw invalidCreateTimeOnlyOptionChangeException(optionKey);
                 }
             }
             changesToApply.add(tableChange);
@@ -199,11 +202,16 @@ public class PaimonLakeCatalog implements LakeCatalog {
         return changesToApply;
     }
 
-    private static InvalidAlterTableException invalidPaimonPathChangeException() {
+    private static boolean isNameMappingOption(String optionKey) {
+        return ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key().equals(optionKey)
+                || ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key().equals(optionKey);
+    }
+
+    private static InvalidAlterTableException invalidCreateTimeOnlyOptionChangeException(
+            String optionKey) {
         return new InvalidAlterTableException(
                 String.format(
-                        "'%s' can only be altered before the Paimon table is created.",
-                        PAIMON_PATH_KEY));
+                        "'%s' can only be altered before the Paimon table is created.", optionKey));
     }
 
     private void createTable(TablePath tablePath, Schema schema, boolean isCreatingFlussTable)

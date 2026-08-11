@@ -551,8 +551,6 @@ public class MetadataManager {
                     }
                 }
 
-                validateAlterLakeTablePath(tableInfo, newDescriptor);
-
                 // reuse the same validate logic with the createTable() method
                 validateTableDescriptor(newDescriptor);
 
@@ -587,30 +585,6 @@ public class MetadataManager {
         }
     }
 
-    private void validateAlterLakeTablePath(TableInfo tableInfo, TableDescriptor newDescriptor)
-            throws Exception {
-        TablePath currentLakeTablePath = tableInfo.getLakeTablePath();
-        TablePath newLakeTablePath =
-                LakeTableUtil.resolveLakeTablePath(
-                        tableInfo.getTablePath(),
-                        Configuration.fromMap(newDescriptor.getProperties()));
-        if (currentLakeTablePath.equals(newLakeTablePath)) {
-            return;
-        }
-
-        boolean lakeTablePathChangeForbidden =
-                tableInfo.getTableConfig().isDataLakeEnabled()
-                        || zookeeperClient.getLakeTable(tableInfo.getTableId()).isPresent();
-        if (lakeTablePathChangeForbidden) {
-            throw new InvalidAlterTableException(
-                    String.format(
-                            "The name mapping options '%s' and '%s' cannot be altered when '%s' is true or the table has tiering progress.",
-                            ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key(),
-                            ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key(),
-                            ConfigOptions.TABLE_DATALAKE_ENABLED.key()));
-        }
-    }
-
     private void preAlterTableProperties(
             TablePath tablePath,
             TableDescriptor tableDescriptor,
@@ -642,6 +616,10 @@ public class MetadataManager {
                 } catch (TableAlreadyExistException e) {
                     throw new LakeTableAlreadyExistException(e.getMessage(), e);
                 }
+
+                // The lake table was created or verified against the complete new descriptor, so
+                // applying the same changes again is unnecessary.
+                return;
             }
         }
 
@@ -662,7 +640,7 @@ public class MetadataManager {
                                 .containsKey(ConfigOptions.TABLE_DATALAKE_ENABLED.key()))) {
             TablePath lakeTablePath =
                     LakeTableUtil.resolveLakeTablePath(
-                            tablePath, Configuration.fromMap(newDescriptor.getProperties()));
+                            tablePath, Configuration.fromMap(tableDescriptor.getProperties()));
             try {
                 lakeCatalog.alterTable(lakeTablePath, tableChanges, lakeCatalogContext);
             } catch (TableNotExistException e) {
