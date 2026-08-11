@@ -66,7 +66,8 @@ public class KvSnapshotLeaseHandler {
      * @param tableBucket table bucket
      * @param snapshotId snapshot id
      * @param maxBucketNum the max bucket num
-     * @return the original registered snapshotId. if -1 means the bucket is new registered
+     * @return the original registered snapshotId. if {@code NO_SNAPSHOT_ID} means the bucket is new
+     *     registered
      */
     public long acquireBucket(TableBucket tableBucket, long snapshotId, int maxBucketNum) {
         Long[] bucketSnapshot;
@@ -80,7 +81,7 @@ public class KvSnapshotLeaseHandler {
                             tableId,
                             k -> {
                                 Long[] array = new Long[maxBucketNum];
-                                Arrays.fill(array, -1L);
+                                Arrays.fill(array, NO_SNAPSHOT_ID);
                                 return new KvSnapshotTableLease(tableId, array);
                             });
             bucketSnapshot = tableLease.getBucketSnapshots();
@@ -104,7 +105,7 @@ public class KvSnapshotLeaseHandler {
                             partitionId,
                             k -> {
                                 Long[] array = new Long[maxBucketNum];
-                                Arrays.fill(array, -1L);
+                                Arrays.fill(array, NO_SNAPSHOT_ID);
                                 return array;
                             });
             // Dynamically expand the array if the maxBucketNum exceeds the current array size.
