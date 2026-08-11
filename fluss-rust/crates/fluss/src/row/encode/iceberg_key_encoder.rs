@@ -83,7 +83,8 @@ impl KeyEncoder for IcebergKeyEncoder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::metadata::{DataType, DataTypes};
+    use crate::bucketing::BucketingFunction;
+    use crate::metadata::{DataLakeFormat, DataType, DataTypes};
     use crate::row::{Date, Decimal, GenericRow, Time, TimestampNtz};
 
     fn encode(data_type: DataType, datum: Datum<'static>) -> Bytes {
@@ -92,6 +93,15 @@ mod tests {
         encoder
             .encode_key(&GenericRow::from_data(vec![datum]))
             .unwrap()
+    }
+
+    fn assert_iceberg_hash(data_type: DataType, datum: Datum<'static>, expected_hash: i32) {
+        let encoded = encode(data_type, datum);
+        let bucketing = <dyn BucketingFunction>::of(Some(&DataLakeFormat::Iceberg));
+        // With i32::MAX buckets, the bucket id is the raw hash with its sign bit cleared.
+        let actual = bucketing.bucketing(&encoded, i32::MAX).unwrap();
+
+        assert_eq!(actual, expected_hash & i32::MAX);
     }
 
     #[test]
@@ -125,52 +135,49 @@ mod tests {
     }
 
     #[test]
-    fn encodes_values_with_iceberg_binary_layout() {
-        assert_eq!(
-            encode(DataTypes::int(), Datum::from(42_i32)).as_ref(),
-            42_i64.to_le_bytes()
+    fn hashes_iceberg_appendix_b_vectors() {
+        // https://iceberg.apache.org/spec/#appendix-b-32-bit-hash-requirements
+        assert_iceberg_hash(DataTypes::int(), Datum::from(34_i32), 2_017_239_379);
+        assert_iceberg_hash(DataTypes::bigint(), Datum::from(34_i64), 2_017_239_379);
+        assert_iceberg_hash(
+            DataTypes::decimal(4, 2),
+            Datum::Decimal(Decimal::from_unscaled_long(1_420, 4, 2).unwrap()),
+            -500_754_589,
         );
-        assert_eq!(
-            encode(
-                DataTypes::bigint(),
-                Datum::from(1_234_567_890_123_456_789_i64),
-            )
-            .as_ref(),
-            1_234_567_890_123_456_789_i64.to_le_bytes()
+        assert_iceberg_hash(
+            DataTypes::date(),
+            // 2017-11-16, as days from the Unix epoch.
+            Datum::Date(Date::new(17_486)),
+            -653_330_422,
         );
-        assert_eq!(
-            encode(DataTypes::string(), Datum::from("Hello Iceberg")).as_ref(),
-            b"Hello Iceberg"
+        assert_iceberg_hash(
+            DataTypes::time(),
+            // 22:31:08, as milliseconds from midnight.
+            Datum::Time(Time::new(81_068_000)),
+            -662_762_989,
         );
-        assert_eq!(
-            encode(DataTypes::date(), Datum::Date(Date::new(19_655))).as_ref(),
-            19_655_i64.to_le_bytes()
+        assert_iceberg_hash(
+            DataTypes::timestamp_with_precision(6),
+            // 2017-11-16T22:31:08.
+            Datum::TimestampNtz(TimestampNtz::new(1_510_871_468_000)),
+            -2_047_944_441,
         );
-        assert_eq!(
-            encode(DataTypes::time(), Datum::Time(Time::new(34_200_000))).as_ref(),
-            34_200_000_000_i64.to_le_bytes()
+        assert_iceberg_hash(
+            DataTypes::timestamp_with_precision(6),
+            // 2017-11-16T22:31:08.000001.
+            Datum::TimestampNtz(TimestampNtz::from_millis_nanos(1_510_871_468_000, 1_000).unwrap()),
+            -1_207_196_810,
         );
-        assert_eq!(
-            encode(
-                DataTypes::timestamp_with_precision(6),
-                Datum::TimestampNtz(
-                    TimestampNtz::from_millis_nanos(1_698_235_273_182, 123_456).unwrap(),
-                ),
-            )
-            .as_ref(),
-            1_698_235_273_182_123_i64.to_le_bytes()
+        assert_iceberg_hash(DataTypes::string(), Datum::from("iceberg"), 1_210_000_089);
+        assert_iceberg_hash(
+            DataTypes::binary(4),
+            Datum::from(vec![0_u8, 1, 2, 3]),
+            -188_683_207,
         );
-        assert_eq!(
-            encode(
-                DataTypes::decimal(10, 2),
-                Datum::Decimal(Decimal::from_unscaled_long(12_345, 10, 2).unwrap()),
-            )
-            .as_ref(),
-            [0x30, 0x39]
-        );
-        assert_eq!(
-            encode(DataTypes::bytes(), Datum::from(&b"binary data"[..])).as_ref(),
-            b"binary data"
+        assert_iceberg_hash(
+            DataTypes::bytes(),
+            Datum::from(vec![0_u8, 1, 2, 3]),
+            -188_683_207,
         );
     }
 
