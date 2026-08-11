@@ -424,6 +424,12 @@ class TableChangeWatcherTest {
         // verify TableRegistrationChangeEvent is generated
         expectedEvents.add(new TableRegistrationChangeEvent(tablePath, updatedTableRegistration));
 
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(eventManager.getEvents())
+                                .containsExactlyInAnyOrderElementsOf(expectedEvents));
+
         metadataManager.dropTable(tablePath, false);
         expectedEvents.add(new DropTableEvent(tableId, false, false));
 
