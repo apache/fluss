@@ -30,7 +30,6 @@ import org.apache.fluss.server.zk.data.LeaderAndIsr;
 
 import org.junit.jupiter.api.Test;
 
-import java.lang.reflect.Field;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
@@ -143,10 +142,7 @@ public class AdjustIsrTest extends ReplicaTestBase {
                         Arrays.asList(1, 2),
                         new LeaderAndIsr(1, 0, Arrays.asList(1, 2), Collections.emptyList(), 0, 0));
 
-        Field lockField = Replica.class.getDeclaredField("leaderIsrUpdateLock");
-        lockField.setAccessible(true);
-        ReentrantReadWriteLock leaderIsrUpdateLock =
-                (ReentrantReadWriteLock) lockField.get(replica);
+        ReentrantReadWriteLock leaderIsrUpdateLock = replica.getLeaderIsrUpdateLock();
 
         ExecutorService executor = Executors.newFixedThreadPool(3);
         try {

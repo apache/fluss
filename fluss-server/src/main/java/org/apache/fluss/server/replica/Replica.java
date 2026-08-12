@@ -135,7 +135,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.IntSupplier;
 import java.util.function.Supplier;
@@ -191,7 +190,7 @@ public final class Replica {
     private final LogFormat logFormat;
     private final ArrowCompressionInfo arrowCompressionInfo;
     private final AtomicReference<Integer> leaderReplicaIdOpt = new AtomicReference<>();
-    private final ReadWriteLock leaderIsrUpdateLock = new ReentrantReadWriteLock();
+    private final ReentrantReadWriteLock leaderIsrUpdateLock = new ReentrantReadWriteLock();
     private final Clock clock;
     private final RemoteLogManager remoteLogManager;
 
@@ -2362,6 +2361,11 @@ public final class Replica {
     @VisibleForTesting
     public int getBucketEpoch() {
         return bucketEpoch;
+    }
+
+    @VisibleForTesting
+    ReentrantReadWriteLock getLeaderIsrUpdateLock() {
+        return leaderIsrUpdateLock;
     }
 
     @VisibleForTesting
