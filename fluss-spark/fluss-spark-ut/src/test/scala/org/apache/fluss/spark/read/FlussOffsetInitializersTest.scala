@@ -65,70 +65,20 @@ class FlussOffsetInitializersTest extends AnyFunSuite {
     assertThat(ex.getMessage).contains(startKey)
   }
 
-  test("a window whose start is not strictly before its end fails fast") {
+  test("the time range carried to the reader mirrors the requested window") {
     val startKey = SparkFlussConf.SCAN_INCREMENTAL_START_TIMESTAMP.key()
     val endKey = SparkFlussConf.SCAN_INCREMENTAL_END_TIMESTAMP.key()
-    // degenerate: start == end
-    intercept[IllegalArgumentException] {
-      FlussOffsetInitializers.requireValidWindow(
-        scanOptions(startKey -> "1767225600000", endKey -> "1767225600000"))
-    }
-    // reversed: start > end
-    val ex = intercept[IllegalArgumentException] {
-      FlussOffsetInitializers.requireValidWindow(
-        scanOptions(startKey -> "1767312000000", endKey -> "1767225600000"))
-    }
-    assertThat(ex.getMessage).contains("strictly before")
-    // 'latest' or absent end is always accepted
-    FlussOffsetInitializers.requireValidWindow(scanOptions(startKey -> "1767225600000"))
-    FlussOffsetInitializers.requireValidWindow(
-      scanOptions(startKey -> "1767225600000", endKey -> "latest"))
-  }
-
-  test("scan.incremental.timestamp.out-of-range toggles fail-fast (default error)") {
-    val key = SparkFlussConf.SCAN_INCREMENTAL_TIMESTAMP_OUT_OF_RANGE.key()
-    // default (unset) is error -> fail fast
-    assertThat(FlussOffsetInitializers.failOnTimestampOutOfRange(scanOptions())).isTrue
+    // a plain batch read has no window to apply
+    assertThat(FlussOffsetInitializers.incrementalTimeRange(scanOptions()).isDefined).isFalse
     assertThat(
-      FlussOffsetInitializers.failOnTimestampOutOfRange(scanOptions(key -> "error"))).isTrue
+      FlussOffsetInitializers
+        .incrementalTimeRange(scanOptions(startKey -> "1767225600000", endKey -> "1767312000000"))
+        .get)
+      .isEqualTo(FlussTimeRange(1767225600000L, 1767312000000L))
+    // an unset end leaves the upper bound open
     assertThat(
-      FlussOffsetInitializers.failOnTimestampOutOfRange(scanOptions(key -> "ERROR"))).isTrue
-    // a blank value counts as unset and falls back to the default (error)
-    assertThat(FlussOffsetInitializers.failOnTimestampOutOfRange(scanOptions(key -> "  "))).isTrue
-    // adjust -> clamp instead of failing
-    assertThat(
-      FlussOffsetInitializers.failOnTimestampOutOfRange(scanOptions(key -> "adjust"))).isFalse
-  }
-
-  test("invalid scan.incremental.timestamp.out-of-range value fails with supported values") {
-    val key = SparkFlussConf.SCAN_INCREMENTAL_TIMESTAMP_OUT_OF_RANGE.key()
-    val ex = intercept[IllegalArgumentException] {
-      FlussOffsetInitializers.failOnTimestampOutOfRange(scanOptions(key -> "warn"))
-    }
-    assertThat(ex.getMessage).contains(key)
-    assertThat(ex.getMessage).contains("WARN")
-    assertThat(ex.getMessage).contains("'error', 'adjust'")
-  }
-
-  test("retention guard decision (isBeforeRetention)") {
-    // brand-new bucket (earliest == 0) is never flagged, even for a very old start offset
-    assertThat(FlussOffsetInitializers.isBeforeRetention(0L, 0L)).isFalse
-    assertThat(FlussOffsetInitializers.isBeforeRetention(5L, 0L)).isFalse
-    // a trimmed bucket (earliest > 0) is flagged when the start lands at or before earliest
-    assertThat(FlussOffsetInitializers.isBeforeRetention(10L, 10L)).isTrue
-    assertThat(FlussOffsetInitializers.isBeforeRetention(3L, 10L)).isTrue
-    // a start strictly after earliest is within retention
-    assertThat(FlussOffsetInitializers.isBeforeRetention(11L, 10L)).isFalse
-  }
-
-  test("TTL-exceeded start fails fast with a table.log.ttl hint") {
-    // start at/before a trimmed earliest (earliest > 0): fail fast with a clear TTL message
-    val ex = intercept[IllegalArgumentException] {
-      FlussOffsetInitializers.requireStartWithinRetention("fluss.t", "dt=2026", 2, 5L, 10L)
-    }
-    assertThat(ex.getMessage).contains("table.log.ttl")
-    assertThat(ex.getMessage).contains("bucket 2")
-    assertThat(ex.getMessage).contains("partition 'dt=2026'")
+      FlussOffsetInitializers.incrementalTimeRange(scanOptions(startKey -> "1767225600000")).get)
+      .isEqualTo(FlussTimeRange(1767225600000L, Long.MaxValue))
   }
 
   test("invalid start timestamp format fails with the option name") {

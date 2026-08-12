@@ -44,6 +44,8 @@ trait FlussScan extends Scan {
 
   def limit: Option[Int] = None
 
+  def timeRange: Option[FlussTimeRange] = None
+
   protected def scanType: String
 
   override def readSchema(): StructType = {
@@ -59,9 +61,15 @@ trait FlussScan extends Scan {
       case Some(p) => s"$withPushed [PartitionFilter: $p]"
       case None => withPushed
     }
-    limit match {
-      case Some(l) => s"$withPartition [Limit: $l]"
+    val withTimeRange = timeRange match {
+      case Some(r) if r.endMs == Long.MaxValue =>
+        s"$withPartition [TimeRange: [${r.startMs}, latest)]"
+      case Some(r) => s"$withPartition [TimeRange: [${r.startMs}, ${r.endMs})]"
       case None => withPartition
+    }
+    limit match {
+      case Some(l) => s"$withTimeRange [Limit: $l]"
+      case None => withTimeRange
     }
   }
 
@@ -89,6 +97,8 @@ case class FlussAppendScan(
 
   override protected lazy val scanType: String =
     if (planner.hasLakeSnapshot) "LakeAppend" else "Append"
+
+  override def timeRange: Option[FlussTimeRange] = planner.timeRange
 
   override def toBatch: Batch = {
     new FlussAppendBatch(
@@ -133,6 +143,8 @@ case class FlussUpsertScan(
 
   override protected lazy val scanType: String =
     if (planner.hasLakeSnapshot) "LakeUpsert" else "Upsert"
+
+  override def timeRange: Option[FlussTimeRange] = planner.timeRange
 
   override def toBatch: Batch = {
     new FlussUpsertBatch(

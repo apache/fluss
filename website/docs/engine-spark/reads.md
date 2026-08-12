@@ -270,7 +270,7 @@ The timestamp value is either epoch milliseconds or a `yyyy-MM-dd HH:mm:ss` date
 
 ### Using the table-valued function (recommended for SQL)
 
-`fluss_incremental_between_timestamp(table, start[, end])` reads a time window in a single statement. Omit `end` to read up to the latest committed data at planning time.
+`fluss_incremental_between_timestamp(table, start[, end])` reads a time window in a single statement. Omit `end` to read up to the moment the statement is analyzed.
 
 ```sql title="Spark SQL"
 -- Read the past hour on a log table (epoch-millis form)
@@ -287,7 +287,7 @@ ORDER BY order_id;
 ```
 
 ```sql title="Spark SQL"
--- Omit the end to read from a start timestamp up to the latest data
+-- Omit the end to read from a start timestamp up to the analysis time
 SELECT * FROM fluss_incremental_between_timestamp('log_table', '2026-01-01 00:00:00');
 ```
 
@@ -307,7 +307,7 @@ SELECT * FROM fluss_incremental_between_timestamp(
   date_format(now(), 'yyyy-MM-dd HH:mm:ss'));
 ```
 
-The table argument is a string and accepts `table`, `database.table` or `catalog.database.table`; unqualified names resolve against the current catalog and database. The start/end arguments accept a string (epoch milliseconds or `yyyy-MM-dd HH:mm:ss`), an integral epoch-milliseconds value, or a `TIMESTAMP`/`TIMESTAMP_NTZ` literal (interpreted in the Spark session time zone, same as the `yyyy-MM-dd HH:mm:ss` string form), and may be produced by constant expressions such as the datetime functions above (column references are not allowed). The result is an ordinary relation, so projection, filters and joins work as usual.
+The table argument is a string and accepts `table`, `database.table` or `catalog.database.table`; unqualified names resolve against the current catalog and database. The start/end arguments accept a string (epoch milliseconds or `yyyy-MM-dd HH:mm:ss`), an integral epoch-milliseconds value, a `DATE` (the start of that day), or a `TIMESTAMP`/`TIMESTAMP_NTZ` literal — all interpreted in the Spark session time zone — and may be produced by constant expressions such as the datetime functions above (column references are not allowed). The result is an ordinary relation, so projection, filters and joins work as usual.
 
 :::note
 The function is provided by the Fluss Spark session extension, so `spark.sql.extensions=org.apache.fluss.spark.FlussSparkSessionExtensions` must be configured (see [Getting Started](getting-started.md)). Its options apply to that single query only.
@@ -317,7 +317,7 @@ Fluss uses `[start, end)` (start inclusive, end exclusive). This differs from Pa
 
 ### Using the DataFrame API
 
-The same window can be expressed with scan options, which is how it is configured from the DataFrame API. Setting `scan.incremental.start.timestamp` is what turns a batch read into an incremental one; `scan.incremental.end.timestamp` defaults to the reserved value `latest`:
+The same window can be expressed with scan options, which is how it is configured from the DataFrame API. Setting `scan.incremental.start.timestamp` is what turns a batch read into an incremental one; `scan.incremental.end.timestamp` is optional and the read runs up to the latest committed data when it is left unset:
 
 ```scala title="Spark Scala"
 spark.read
@@ -331,11 +331,13 @@ The `scan.incremental.*` options are per-query read options only. Unlike the opt
 :::
 
 :::warning Retention boundary
-A time-range read only sees data still retained by Fluss, which is bounded by `table.log.ttl` (default 7 days). If the start timestamp predates the earliest retained data, the default behavior (`scan.incremental.timestamp.out-of-range=error`) **fails fast** with a clear error instead of silently returning a truncated window — narrow the time range or increase `table.log.ttl`. Set `scan.incremental.timestamp.out-of-range=adjust` to instead clamp the start to the earliest retained data and read from there. An end timestamp in the future is rejected by the server. Reading data older than the Fluss retention (including from tiered lake storage) is not supported by this mode.
+A time-range read returns the data Fluss still retains, which is bounded by `table.log.ttl` (default 7 days). A window reaching further back is **not** an error: the part that has already been dropped simply yields fewer rows, or none at all, so the result is always a subset of the requested window. Increase `table.log.ttl` if you need to read further back. Data available only in tiered lake storage is not read by this mode.
+
+The start timestamp positions the scan through the server's timestamp-to-offset lookup, and both bounds are then applied on each record's commit timestamp, so the window stays exact even for data already tiered to remote storage.
 :::
 
 :::note Invalid windows fail fast
-Malformed window specifications are rejected at planning time instead of silently changing semantics: a blank or unparseable start timestamp, an end timestamp set without a start timestamp (it cannot truncate a plain batch read on its own), and a window whose start is not strictly before its end. A bucket that simply has no data inside a valid window still yields an empty result.
+Malformed window specifications are rejected instead of silently changing semantics: a blank or unparseable start timestamp, and an end timestamp set without a start timestamp (it cannot truncate a plain batch read on its own). The table-valued function additionally rejects a window whose start is not strictly before its end while the statement is analyzed; the same window given through DataFrame options simply returns no rows. A bucket that has no data inside a valid window also yields an empty result.
 :::
 
 ## All Data Types

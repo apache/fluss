@@ -37,13 +37,6 @@ object SparkFlussConf {
     val FULL, EARLIEST, LATEST, TIMESTAMP = Value
   }
 
-  object TimestampOutOfRangeMode extends Enumeration {
-    val ERROR, ADJUST = Value
-  }
-
-  /** Reserved value of [[SCAN_INCREMENTAL_END_TIMESTAMP]] meaning "the latest committed data". */
-  val END_TIMESTAMP_LATEST = "latest"
-
   val SCAN_START_UP_MODE: ConfigOption[String] =
     ConfigBuilder
       .key("scan.startup.mode")
@@ -66,25 +59,14 @@ object SparkFlussConf {
     ConfigBuilder
       .key("scan.incremental.end.timestamp")
       .stringType()
-      .defaultValue(END_TIMESTAMP_LATEST)
+      .noDefaultValue()
       .withDescription(
         "The exclusive upper bound of an incremental (time-range) batch read, yielding a " +
-          "left-closed right-open '[start, end)' window. 'latest' (default) stops at the " +
-          "latest committed data captured at planning time; otherwise accepts epoch " +
-          "milliseconds or a 'yyyy-MM-dd HH:mm:ss' datetime string interpreted in the Spark " +
-          "session time zone. Setting it without 'scan.incremental.start.timestamp' fails " +
-          "fast, as does a window whose start is not strictly before its end.")
-
-  val SCAN_INCREMENTAL_TIMESTAMP_OUT_OF_RANGE: ConfigOption[String] =
-    ConfigBuilder
-      .key("scan.incremental.timestamp.out-of-range")
-      .stringType()
-      .defaultValue(TimestampOutOfRangeMode.ERROR.toString)
-      .withDescription(
-        "Behavior when 'scan.incremental.start.timestamp' precedes the earliest data still " +
-          "retained by Fluss (bounded by 'table.log.ttl'). 'error' (default): fail fast so a " +
-          "truncated window is never returned silently. 'adjust': clamp the start to the " +
-          "earliest retained offset and read from there.")
+          "left-closed right-open '[start, end)' window. Accepts epoch milliseconds or a " +
+          "'yyyy-MM-dd HH:mm:ss' datetime string interpreted in the Spark session time zone; " +
+          "when unset the read runs up to the latest committed data. Setting it without " +
+          "'scan.incremental.start.timestamp' fails fast, as does a window whose start is not " +
+          "strictly before its end.")
 
   val SCAN_POLL_TIMEOUT: ConfigOption[Duration] =
     ConfigBuilder

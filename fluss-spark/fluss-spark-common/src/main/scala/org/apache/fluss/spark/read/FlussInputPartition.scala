@@ -31,17 +31,38 @@ trait FlussInputPartition extends InputPartition {
 }
 
 /**
+ * The `[startMs, endMs)` window a time-range batch read was asked for, on the record commit
+ * timestamp. The reader applies it because offsets resolved from timestamps are only as accurate as
+ * the server-side time index. Timestamps are non-decreasing within a bucket, so the first record at
+ * or after `endMs` also ends the partition.
+ */
+case class FlussTimeRange(startMs: Long, endMs: Long) {
+
+  def contains(timestampMs: Long): Boolean = timestampMs >= startMs && timestampMs < endMs
+
+  def isAfter(timestampMs: Long): Boolean = timestampMs >= endMs
+
+  override def toString: String = s"TimeRange[$startMs - $endMs]"
+}
+
+/**
  * Represents an input partition for reading data from a Fluss table bucket.
  *
  * @param tableBucket
  *   the table bucket to read from
+ * @param timeRange
+ *   the requested time window, set for a time-range batch read only
  */
-case class FlussAppendInputPartition(tableBucket: TableBucket, startOffset: Long, stopOffset: Long)
+case class FlussAppendInputPartition(
+    tableBucket: TableBucket,
+    startOffset: Long,
+    stopOffset: Long,
+    timeRange: Option[FlussTimeRange] = None)
   extends FlussInputPartition {
   override def toString: String = {
     s"FlussAppendInputPartition{tableId=${tableBucket.getTableId}, bucketId=${tableBucket.getBucket}," +
       s" partitionId=${tableBucket.getPartitionId}" +
-      s" logStartOffset=$startOffset, logStopOffset=$stopOffset"
+      s" logStartOffset=$startOffset, logStopOffset=$stopOffset, timeRange=$timeRange"
   }
 }
 
@@ -58,16 +79,20 @@ case class FlussAppendInputPartition(tableBucket: TableBucket, startOffset: Long
  *   the log offset where incremental reading should start
  * @param logStoppingOffset
  *   the log offset where incremental reading should end
+ * @param timeRange
+ *   the requested time window, set for a time-range batch read only
  */
 case class FlussUpsertInputPartition(
     tableBucket: TableBucket,
     snapshotId: Long,
     logStartingOffset: Long,
-    logStoppingOffset: Long)
+    logStoppingOffset: Long,
+    timeRange: Option[FlussTimeRange] = None)
   extends FlussInputPartition {
   override def toString: String = {
     s"FlussUpsertInputPartition{tableId=${tableBucket.getTableId}, bucketId=${tableBucket.getBucket}," +
       s" partitionId=${tableBucket.getPartitionId}, snapshotId=$snapshotId," +
-      s" logStartOffset=$logStartingOffset, logStopOffset=$logStoppingOffset}"
+      s" logStartOffset=$logStartingOffset, logStopOffset=$logStoppingOffset," +
+      s" timeRange=$timeRange}"
   }
 }

@@ -59,6 +59,7 @@ class FlussUpsertPartitionReader(
   private val snapshotId: Long = flussPartition.snapshotId
   private val logStartingOffset: Long = flussPartition.logStartingOffset
   private val logStoppingOffset: Long = flussPartition.logStoppingOffset
+  private val timeRange: Option[FlussTimeRange] = flussPartition.timeRange
   private val logScanFinished = logStartingOffset >= logStoppingOffset || logStoppingOffset <= 0
 
   private val (projectionWithPks, pkProjection) = {
@@ -140,14 +141,20 @@ class FlussUpsertPartitionReader(
         if (!records.isEmpty) {
           val flatRecords = records.asScala
           for (scanRecord <- flatRecords) {
-            // Maybe data with logStoppingOffset doesn't exist.
-            if (scanRecord.logOffset() < logStoppingOffset - 1) {
-              allLogRecords += scanRecord
-            } else if (scanRecord.logOffset() == logStoppingOffset - 1) {
-              allLogRecords += scanRecord
+            if (timeRange.exists(_.isAfter(scanRecord.timestamp()))) {
+              // Past the end of the requested window, and commit timestamps only grow from here.
               continue = false
             } else {
-              continue = false // Stop if we reach the stopping offset
+              // Maybe data with logStoppingOffset doesn't exist.
+              if (
+                scanRecord.logOffset() <= logStoppingOffset - 1 &&
+                timeRange.forall(_.contains(scanRecord.timestamp()))
+              ) {
+                allLogRecords += scanRecord
+              }
+              if (scanRecord.logOffset() >= logStoppingOffset - 1) {
+                continue = false // Stop if we reach the stopping offset
+              }
             }
           }
         }

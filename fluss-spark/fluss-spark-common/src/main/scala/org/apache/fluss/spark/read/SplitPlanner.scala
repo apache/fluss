@@ -83,6 +83,12 @@ sealed trait SplitPlanner extends AutoCloseable {
    * snapshots.
    */
   def logTailPredicate: Option[FlussPredicate]
+
+  /**
+   * The requested window of an incremental read, empty otherwise. The scan positions itself with
+   * offsets, the reader cuts the window by record commit timestamp.
+   */
+  def timeRange: Option[FlussTimeRange]
 }
 
 /** Marker: planner yields partitions consumable by an append (log-table) reader factory. */
@@ -199,32 +205,6 @@ abstract class AbstractSplitPlanner(
   }
 
   /**
-   * Fail-fast guard for an incremental batch read: rejects a start offset that predates the data
-   * Fluss still retains (bounded by `table.log.ttl`) instead of silently returning a truncated
-   * window. Requires a retriever created with `fetchEarliestOffset = true`; otherwise
-   * `earliestOffsets` returns the EARLIEST_OFFSET sentinel (-2) and the guard is a no-op.
-   */
-  protected def checkTimeRangeWithinRetention(
-      partitionName: String,
-      buckets: Seq[Int],
-      startOffsets: scala.collection.Map[Integer, java.lang.Long],
-      bucketOffsetsRetriever: BucketOffsetsRetrieverImpl): Unit = {
-    val earliestOffsets = bucketOffsetsRetriever
-      .earliestOffsets(partitionName, buckets.map(Integer.valueOf).asJava)
-      .asScala
-    buckets.foreach {
-      bucketId =>
-        val bucket = Integer.valueOf(bucketId)
-        FlussOffsetInitializers.requireStartWithinRetention(
-          tablePath.toString,
-          partitionName,
-          bucketId,
-          Long2long(startOffsets(bucket)),
-          Long2long(earliestOffsets(bucket)))
-    }
-  }
-
-  /**
    * Releases the Fluss client connection. Idempotent and null-safe; it never forces the lazily
    * opened connection into existence, so it is a no-op when no metadata access ever occurred.
    */
@@ -280,10 +260,8 @@ class AppendPlanner(
   private val incrementalMode: Boolean =
     FlussOffsetInitializers.isIncrementalRead(options)
 
-  // Whether a start timestamp preceding retained data fails (default) or is clamped to earliest.
-  // Lazy on purpose: the option is incremental-only and must not affect plain batch reads.
-  private lazy val failOnOutOfRange: Boolean =
-    FlussOffsetInitializers.failOnTimestampOutOfRange(options)
+  override val timeRange: Option[FlussTimeRange] =
+    FlussOffsetInitializers.incrementalTimeRange(options)
 
   // An incremental read starts at scan.incremental.start.timestamp, a plain batch read at the
   // beginning of the table (see class scaladoc).
@@ -306,9 +284,6 @@ class AppendPlanner(
 
   override def plan(): Array[InputPartition] =
     try {
-      if (incrementalMode) {
-        FlussOffsetInitializers.requireValidWindow(options)
-      }
       readableLakeSnapshot match {
         // An incremental read never unions a lake snapshot; it reads only Fluss.
         case Some(snap) if !incrementalMode => planLakeUnion(snap)
@@ -328,13 +303,10 @@ class AppendPlanner(
       if (value > 0) Some(value) else None
     }
 
-    // Both the retention guard and the max-records splitter need concrete earliest offsets;
-    // otherwise the earliest sentinel (-2) is enough.
+    // Only the max-records splitter needs concrete earliest offsets; otherwise the earliest
+    // sentinel (-2) is enough.
     val bucketOffsetsRetrieverImpl =
-      new BucketOffsetsRetrieverImpl(
-        admin,
-        tablePath,
-        maxRecordsPerPartition.isDefined || incrementalMode)
+      new BucketOffsetsRetrieverImpl(admin, tablePath, maxRecordsPerPartition.isDefined)
     val buckets = (0 until tableInfo.getNumBuckets).toSeq
 
     def splitOffsetRange(
@@ -345,7 +317,7 @@ class AppendPlanner(
       if (
         startOffset < 0 || stopOffset <= startOffset || stopOffset <= (startOffset + maxRecords)
       ) {
-        return Seq(FlussAppendInputPartition(tableBucket, startOffset, stopOffset))
+        return Seq(FlussAppendInputPartition(tableBucket, startOffset, stopOffset, timeRange))
       }
       val rangeSize = stopOffset - startOffset
       val numSplits = ((rangeSize + maxRecords - 1) / maxRecords).toInt
@@ -356,7 +328,12 @@ class AppendPlanner(
         .take(numSplits)
         .map(i => startOffset + i * step)
         .map {
-          from => FlussAppendInputPartition(tableBucket, from, math.min(from + step, stopOffset))
+          from =>
+            FlussAppendInputPartition(
+              tableBucket,
+              from,
+              math.min(from + step, stopOffset),
+              timeRange)
         }
         .toSeq
     }
@@ -380,7 +357,8 @@ class AppendPlanner(
             }
             maxRecordsPerPartition match {
               case Some(maxRecs) => splitOffsetRange(tableBucket, startOffset, stopOffset, maxRecs)
-              case _ => Seq(FlussAppendInputPartition(tableBucket, startOffset, stopOffset))
+              case _ =>
+                Seq(FlussAppendInputPartition(tableBucket, startOffset, stopOffset, timeRange))
             }
           }
       }.toArray
@@ -403,13 +381,6 @@ class AppendPlanner(
               partitionName,
               buckets.map(Integer.valueOf).asJava,
               bucketOffsetsRetrieverImpl)
-            if (incrementalMode && failOnOutOfRange) {
-              checkTimeRangeWithinRetention(
-                partitionName,
-                buckets,
-                startBucketOffsets.asScala,
-                bucketOffsetsRetrieverImpl)
-            }
             (
               partitionInfo.getPartitionId,
               startBucketOffsets.asScala.map(e => (e._1, Long2long(e._2))),
@@ -432,13 +403,6 @@ class AppendPlanner(
         null,
         buckets.map(Integer.valueOf).asJava,
         bucketOffsetsRetrieverImpl)
-      if (incrementalMode && failOnOutOfRange) {
-        checkTimeRangeWithinRetention(
-          null,
-          buckets,
-          startBucketOffsets.asScala,
-          bucketOffsetsRetrieverImpl)
-      }
       createPartitions(
         None,
         startBucketOffsets.asScala.map(e => (e._1, Long2long(e._2))).toMap,
@@ -658,10 +622,8 @@ class UpsertPlanner(
   private val incrementalMode: Boolean =
     FlussOffsetInitializers.isIncrementalRead(options)
 
-  // Whether a start timestamp preceding retained data fails (default) or is clamped to earliest.
-  // Lazy on purpose: the option is incremental-only and must not affect plain batch reads.
-  private lazy val failOnOutOfRange: Boolean =
-    FlussOffsetInitializers.failOnTimestampOutOfRange(options)
+  override val timeRange: Option[FlussTimeRange] =
+    FlussOffsetInitializers.incrementalTimeRange(options)
 
   // Start offset of an incremental read, resolved from scan.incremental.start.timestamp. Lazy on
   // purpose: resolving it requires that option, while a plain batch scan derives its start from kv
@@ -678,9 +640,6 @@ class UpsertPlanner(
 
   override def plan(): Array[InputPartition] =
     try {
-      if (incrementalMode) {
-        FlussOffsetInitializers.requireValidWindow(options)
-      }
       readableLakeSnapshot match {
         // An incremental read reads neither the lake nor the kv snapshot; it folds only the Fluss
         // changelog within [start, end).
@@ -769,7 +728,7 @@ class UpsertPlanner(
           s"an incremental read folds only the changelog, so this combination would silently " +
           s"return no rows.")
     }
-    val bucketOffsetsRetriever = new BucketOffsetsRetrieverImpl(admin, tablePath, true)
+    val bucketOffsetsRetriever = new BucketOffsetsRetrieverImpl(admin, tablePath)
     val buckets = (0 until tableInfo.getNumBuckets).toSeq
 
     if (tableInfo.isPartitioned) {
@@ -803,13 +762,6 @@ class UpsertPlanner(
         bucketOffsetsRetriever)
     val stoppingBucketOffsets =
       stoppingOffsetsInitializer.getBucketOffsets(partitionName, jBuckets, bucketOffsetsRetriever)
-    if (failOnOutOfRange) {
-      checkTimeRangeWithinRetention(
-        partitionName,
-        buckets,
-        startBucketOffsets.asScala,
-        bucketOffsetsRetriever)
-    }
 
     val tableId = tableInfo.getTableId
     buckets.flatMap {
@@ -826,7 +778,7 @@ class UpsertPlanner(
           None
         } else {
           Some(
-            FlussUpsertInputPartition(tableBucket, -1L, startOffset, stopOffset)
+            FlussUpsertInputPartition(tableBucket, -1L, startOffset, stopOffset, timeRange)
               .asInstanceOf[InputPartition])
         }
     }.toArray

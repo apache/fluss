@@ -19,31 +19,29 @@ package org.apache.fluss.spark.catalyst.plans.logical
 
 import org.apache.fluss.spark.{SparkFlussConf, SparkTable}
 import org.apache.fluss.spark.catalyst.plans.logical.FlussTableValuedFunctions._
+import org.apache.fluss.spark.read.FlussOffsetInitializers
 
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.FunctionIdentifier
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistryBase
 import org.apache.spark.sql.catalyst.analysis.TableFunctionRegistry.TableFunctionBuilder
-import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression, ExpressionInfo, RuntimeReplaceable}
+import org.apache.spark.sql.catalyst.expressions.{Attribute, CurrentTimestamp, Expression, ExpressionInfo, RuntimeReplaceable}
 import org.apache.spark.sql.catalyst.plans.logical.{LeafNode, LogicalPlan}
 import org.apache.spark.sql.connector.catalog.{Identifier, TableCatalog}
 import org.apache.spark.sql.execution.datasources.v2.DataSourceV2Relation
 import org.apache.spark.sql.internal.SQLConf
-import org.apache.spark.sql.types.{IntegerType, LongType, ShortType, StringType, TimestampNTZType, TimestampType}
+import org.apache.spark.sql.types.{DateType, IntegerType, LongType, ShortType, StringType, TimestampNTZType, TimestampType}
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
 
-import java.time.{LocalDateTime, ZoneId, ZoneOffset}
+import java.time.{LocalDate, LocalDateTime, ZoneId, ZoneOffset}
 
 import scala.collection.JavaConverters._
 import scala.util.control.NonFatal
 
 /**
- * Fluss table-valued functions (TVFs), usable from pure SQL.
- *
- * A TVF is only sugar over per-relation scan options: the function arguments are translated into
- * the same `scan.*` options the DataFrame API accepts, and the call is then resolved into a plain
- * [[DataSourceV2Relation]]. Consequently projection, filter push down and metrics keep working, and
- * the options are scoped to the single query instead of leaking through session configuration.
+ * Fluss table-valued functions (TVFs), usable from pure SQL. A call is translated into the `scan.*`
+ * options the DataFrame API accepts and resolved into a plain [[DataSourceV2Relation]], so it is
+ * scoped to the single query and keeps projection, filter push down and metrics working.
  */
 object FlussTableValuedFunctions {
 
@@ -65,10 +63,7 @@ object FlussTableValuedFunctions {
     (FunctionIdentifier(fnName), info, builder)
   }
 
-  /**
-   * Resolves a Fluss TVF call into a [[DataSourceV2Relation]] over the referenced Fluss table, with
-   * the function arguments translated into scan options.
-   */
+  /** Resolves a TVF call into a relation over the referenced Fluss table. */
   def resolveFlussTableValuedFunction(
       spark: SparkSession,
       tvf: FlussTableValueFunction): LogicalPlan = {
@@ -81,8 +76,7 @@ object FlussTableValuedFunctions {
         s"${tvf.fnName} requires a table identifier as its first argument.")
     }
 
-    // Parse the remaining arguments first so that an argument error is reported without depending
-    // on the referenced table being resolvable.
+    // Parse the arguments first, so an argument error does not depend on the table being resolvable.
     val options = tvf.parseArgs(args.tail)
 
     val tableArg = args.head.eval()
@@ -95,14 +89,15 @@ object FlussTableValuedFunctions {
     val (catalogName, namespace, tableName) =
       sessionState.sqlParser.parseMultipartIdentifier(tableIdentifier) match {
         case Seq(table) =>
-          (catalogManager.currentCatalog.name(), catalogManager.currentNamespace.head, table)
-        case Seq(db, table) => (catalogManager.currentCatalog.name(), db, table)
-        case Seq(catalog, db, table) => (catalog, db, table)
+          (catalogManager.currentCatalog.name(), catalogManager.currentNamespace, table)
+        case Seq(db, table) => (catalogManager.currentCatalog.name(), Array(db), table)
+        case Seq(catalog, db, table) => (catalog, Array(db), table)
         case _ =>
           throw new IllegalArgumentException(
             s"Invalid table identifier '$tableIdentifier' for ${tvf.fnName}. Expected " +
               "'table', 'database.table' or 'catalog.database.table'.")
       }
+    val fullTableIdentifier = (catalogName +: namespace :+ tableName).mkString(".")
 
     val catalogPlugin = catalogManager.catalog(catalogName)
     if (!catalogPlugin.isInstanceOf[TableCatalog]) {
@@ -111,11 +106,11 @@ object FlussTableValuedFunctions {
           s"${catalogPlugin.getClass.getName}.")
     }
     val tableCatalog = catalogPlugin.asInstanceOf[TableCatalog]
-    val ident = Identifier.of(Array(namespace), tableName)
+    val ident = Identifier.of(namespace, tableName)
     val table = tableCatalog.loadTable(ident)
     if (!table.isInstanceOf[SparkTable]) {
       throw new IllegalArgumentException(
-        s"${tvf.fnName} only supports Fluss tables, but '$catalogName.$namespace.$tableName' is " +
+        s"${tvf.fnName} only supports Fluss tables, but '$fullTableIdentifier' is " +
           s"backed by ${table.getClass.getName}.")
     }
 
@@ -127,24 +122,15 @@ object FlussTableValuedFunctions {
   }
 
   /**
-   * Normalizes a timestamp argument to the string form accepted by the `scan.incremental.*`
-   * timestamp options.
-   *
-   * A STRING argument is passed through untouched, so both epoch milliseconds and
-   * `yyyy-MM-dd HH:mm:ss` keep being interpreted by the option layer. Integral arguments are epoch
-   * milliseconds. TIMESTAMP (local instant) arguments are converted from Spark's internal
-   * microseconds, otherwise a `TIMESTAMP '...'` literal would silently be read as epoch
-   * milliseconds. TIMESTAMP_NTZ arguments hold wall-clock microseconds and are re-interpreted in
-   * the Spark session time zone, so an NTZ literal resolves to the same window as the same
-   * `yyyy-MM-dd HH:mm:ss` string literal.
-   *
-   * Any constant expression is accepted, e.g. `CAST(unix_timestamp() * 1000 AS STRING)` or
-   * `date_format(now() - INTERVAL 1 HOUR, 'yyyy-MM-dd HH:mm:ss')`.
+   * Normalizes a timestamp argument, which may be any constant expression, to the string form the
+   * `scan.incremental.*` options accept: a STRING is passed through (the option layer reads both
+   * epoch millis and `yyyy-MM-dd HH:mm:ss`), an integral value is epoch millis, a DATE becomes the
+   * start of that day, and TIMESTAMP / TIMESTAMP_NTZ are converted from Spark's internal
+   * microseconds.
    */
   private[logical] def toTimestampOptionValue(fnName: String, expr: Expression): String = {
-    // `RuntimeReplaceable` expressions (such as the `-` in `now() - INTERVAL 1 HOUR`) only become
-    // evaluable once the optimizer's ReplaceExpressions rule rewrites them, which has not happened
-    // yet while the analyzer resolves this function. Apply the same rewrite bottom-up here.
+    // RuntimeReplaceable expressions (e.g. the `-` in `now() - INTERVAL 1 HOUR`) only become
+    // evaluable once the optimizer rewrites them, which has not happened yet during analysis.
     val evaluable = expr.transformUp { case r: RuntimeReplaceable => r.replacement }
 
     val value =
@@ -162,26 +148,43 @@ object FlussTableValuedFunctions {
     if (value == null) {
       throw new IllegalArgumentException(s"Timestamp arguments of $fnName must not be null.")
     }
-    evaluable.dataType match {
+    val normalized = evaluable.dataType match {
       case StringType => value.toString
       case ShortType | IntegerType | LongType => value.toString
+      case DateType => dateDaysToEpochMillis(value.asInstanceOf[Int]).toString
       case TimestampType => (value.asInstanceOf[Long] / 1000L).toString
       case TimestampNTZType => ntzMicrosToEpochMillis(value.asInstanceOf[Long]).toString
       case other =>
         throw new IllegalArgumentException(
           s"Unsupported timestamp argument type $other for $fnName. Use a STRING (epoch " +
-            "milliseconds or 'yyyy-MM-dd HH:mm:ss'), an integral epoch milliseconds value, or a " +
-            "TIMESTAMP.")
+            "milliseconds or 'yyyy-MM-dd HH:mm:ss'), an integral epoch milliseconds value, a " +
+            "DATE or a TIMESTAMP.")
     }
+    if (normalized.trim.isEmpty) {
+      throw new IllegalArgumentException(
+        s"Timestamp arguments of $fnName must not be blank. Provide epoch milliseconds or a " +
+          "'yyyy-MM-dd HH:mm:ss' timestamp.")
+    }
+    normalized
   }
 
   private val MICROS_PER_SECOND = 1000000L
 
   /**
-   * Converts a `TIMESTAMP_NTZ` argument to epoch milliseconds. NTZ values are wall-clock
-   * microseconds encoded as if in UTC; they are re-interpreted in the Spark session time zone — the
-   * same convention the `yyyy-MM-dd HH:mm:ss` string form uses (and the same as the Flink
-   * connector's timestamp options) — so both forms resolve to the same window for the same literal.
+   * Converts a `DATE` argument to epoch milliseconds, at the start of that day in the Spark session
+   * time zone.
+   */
+  private def dateDaysToEpochMillis(days: Int): Long =
+    LocalDate
+      .ofEpochDay(days.toLong)
+      .atStartOfDay(ZoneId.of(SQLConf.get.sessionLocalTimeZone))
+      .toInstant
+      .toEpochMilli
+
+  /**
+   * Converts a `TIMESTAMP_NTZ` argument to epoch milliseconds. Its wall-clock microseconds are
+   * re-interpreted in the Spark session time zone, the same convention the `yyyy-MM-dd HH:mm:ss`
+   * string form uses, so both forms resolve to the same instant.
    */
   private def ntzMicrosToEpochMillis(micros: Long): Long = {
     val seconds = Math.floorDiv(micros, MICROS_PER_SECOND)
@@ -213,13 +216,10 @@ abstract class FlussTableValueFunction(val fnName: String) extends LeafNode {
 }
 
 /**
- * Plan for [[FlussTableValuedFunctions.INCREMENTAL_BETWEEN_TIMESTAMP]].
+ * Plan for `fluss_incremental_between_timestamp(table, startTimestamp[, endTimestamp])`.
  *
- * Usage:
- *   - `fluss_incremental_between_timestamp(table, startTimestamp, endTimestamp)`
- *   - `fluss_incremental_between_timestamp(table, startTimestamp)` reads up to the latest data
- *
- * The window is left-closed and right-open, `[start, end)`, on the record commit timestamp.
+ * The window is left-closed and right-open, `[start, end)`, on the record commit timestamp, and
+ * covers the data Fluss still retains inside it. An omitted end timestamp means "up to now".
  */
 case class IncrementalBetweenTimestamp(override val args: Seq[Expression])
   extends FlussTableValueFunction(INCREMENTAL_BETWEEN_TIMESTAMP) {
@@ -234,17 +234,30 @@ case class IncrementalBetweenTimestamp(override val args: Seq[Expression])
     }
 
     val start = toTimestampOptionValue(INCREMENTAL_BETWEEN_TIMESTAMP, argsWithoutTable.head)
-    val startOptions =
-      Map(SparkFlussConf.SCAN_INCREMENTAL_START_TIMESTAMP.key() -> start)
+    // Resolving the end here pins the window at analysis time, so rows committed while the query is
+    // planned stay out of it and re-executing the same relation reads the same window.
+    val endArg = if (argsWithoutTable.size == 2) argsWithoutTable.last else CurrentTimestamp()
+    val end = toTimestampOptionValue(INCREMENTAL_BETWEEN_TIMESTAMP, endArg)
+    requireValidWindow(start, end)
 
-    // The end bound is always written explicitly so the call stays self-contained: options take
-    // precedence over session configuration, which may still hold a stale end timestamp.
-    if (argsWithoutTable.size == 2) {
-      val end = toTimestampOptionValue(INCREMENTAL_BETWEEN_TIMESTAMP, argsWithoutTable.last)
-      startOptions + (SparkFlussConf.SCAN_INCREMENTAL_END_TIMESTAMP.key() -> end)
-    } else {
-      startOptions +
-        (SparkFlussConf.SCAN_INCREMENTAL_END_TIMESTAMP.key() -> SparkFlussConf.END_TIMESTAMP_LATEST)
+    Map(
+      SparkFlussConf.SCAN_INCREMENTAL_START_TIMESTAMP.key() -> start,
+      SparkFlussConf.SCAN_INCREMENTAL_END_TIMESTAMP.key() -> end)
+  }
+
+  /** A reversed or degenerate window fails fast instead of silently returning no rows. */
+  private def requireValidWindow(start: String, end: String): Unit = {
+    val startMs = FlussOffsetInitializers.parseTimestamp(
+      start,
+      SparkFlussConf.SCAN_INCREMENTAL_START_TIMESTAMP.key())
+    val endMs = FlussOffsetInitializers.parseTimestamp(
+      end,
+      SparkFlussConf.SCAN_INCREMENTAL_END_TIMESTAMP.key())
+    if (startMs >= endMs) {
+      throw new IllegalArgumentException(
+        s"Invalid time range for $INCREMENTAL_BETWEEN_TIMESTAMP: the start timestamp '$start' " +
+          s"must be strictly before the end timestamp '$end'. The window is left-closed " +
+          s"right-open '[start, end)'.")
     }
   }
 }
