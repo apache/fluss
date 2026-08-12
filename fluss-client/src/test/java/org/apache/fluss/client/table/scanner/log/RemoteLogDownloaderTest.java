@@ -93,13 +93,26 @@ class RemoteLogDownloaderTest {
     @Test
     void testPrefetchNum() throws Exception {
         RemoteFileDownloader remoteFileDownloader = new RemoteFileDownloader(1);
+        CountDownLatch fetchLoopBlocked = new CountDownLatch(1);
+        CountDownLatch continueFetchLoop = new CountDownLatch(1);
         RemoteLogDownloader remoteLogDownloader =
                 new RemoteLogDownloader(
                         DATA1_TABLE_PATH.toString(),
                         conf,
                         remoteFileDownloader,
                         scannerMetricGroup,
-                        10L);
+                        10L) {
+                    @Override
+                    void fetchOnce() throws Exception {
+                        // Pause after all requests are scheduled so the loop cannot acquire a
+                        // recycled permit before it is asserted below.
+                        if (scannerMetricGroup.remoteFetchRequestCount().getCount() >= 5) {
+                            fetchLoopBlocked.countDown();
+                            continueFetchLoop.await();
+                        }
+                        super.fetchOnce();
+                    }
+                };
         try {
             // trigger auto download.
             remoteLogDownloader.start();
@@ -139,9 +152,11 @@ class RemoteLogDownloaderTest {
                             remoteLogSegmentFilesLength(remoteLogSegments, remoteLogTabletDir, 5));
             assertThat(remoteLogDownloader.getPrefetchSemaphore().availablePermits()).isEqualTo(0);
 
+            assertThat(fetchLoopBlocked.await(30, TimeUnit.SECONDS)).isTrue();
             futures.get(1).getRecycleCallback().run();
             futures.get(2).getRecycleCallback().run();
             assertThat(remoteLogDownloader.getPrefetchSemaphore().availablePermits()).isEqualTo(2);
+            continueFetchLoop.countDown();
             // the removal of log files are async, so we need to wait for the removal.
             retry(
                     Duration.ofMinutes(1),
@@ -151,6 +166,7 @@ class RemoteLogDownloaderTest {
             remoteLogDownloader.close();
             assertThat(localLogDir.toFile().exists()).isFalse();
         } finally {
+            continueFetchLoop.countDown();
             IOUtils.closeQuietly(remoteLogDownloader);
             IOUtils.closeQuietly(remoteFileDownloader);
         }
