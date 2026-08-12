@@ -7,9 +7,9 @@ sidebar_position: 8
 
 [JuiceFS](https://juicefs.com) is a distributed POSIX-compatible file system built on top of object storage and a separate metadata engine (Redis, TiKV, MySQL, PostgreSQL, etc.). It ships with a Hadoop-compatible Java SDK, which Fluss uses to store snapshots for Primary-Key Tables and tiered log segments for Log Tables on a JuiceFS volume.
 
-## Install JuiceFS Plugin Manually
+## Install JuiceFS Plugin on Server Nodes
 
-JuiceFS support is not included in the default Fluss distribution. To enable JuiceFS support, you need to manually install the filesystem plugin into Fluss.
+JuiceFS support is not included in the default Fluss distribution. To enable JuiceFS support on the server side (CoordinatorServer and every TabletServer), you need to manually install the filesystem plugin into Fluss.
 
 1. **Prepare the plugin JAR**:
 
@@ -22,6 +22,10 @@ JuiceFS support is not included in the default Fluss distribution. To enable Jui
    ```
 
 3. Restart Fluss if the cluster is already running to ensure the new plugin is loaded.
+
+:::note
+The `${FLUSS_HOME}/plugins/` directory is only consulted by the Fluss server's plugin manager. Fluss clients (Flink connector, Spark connector, standalone applications, ...) do not load plugins from this directory — see [Client-side Setup](#client-side-setup) for how to enable JuiceFS on the client.
+:::
 
 ## Prerequisite: Create a JuiceFS Volume
 
@@ -79,7 +83,62 @@ Unlike the OSS / S3 / COS plugins, Fluss does **not** perform any STS or delegat
 The Fluss server returns an empty placeholder security token to clients when they request access to the remote storage. This means every process that needs to read remote data (CoordinatorServer, TabletServer, and every client) must:
 
 1. Have direct network access to the JuiceFS metadata engine and object storage.
-2. Have the JuiceFS plugin installed and the same `juicefs.*` configuration available.
+2. Have the JuiceFS plugin available in its own runtime. Servers load the plugin from `${FLUSS_HOME}/plugins/juicefs/` — see [Install JuiceFS Plugin on Server Nodes](#install-juicefs-plugin-on-server-nodes). Clients use a different mechanism — see [Client-side Setup](#client-side-setup).
+
+## Client-side Setup
+
+Any application that reads Fluss remote data through the Fluss client will fetch tiered log segments and Primary-Key Table snapshots from JuiceFS via a `FileSystem` instance created inside the client process. Enabling JuiceFS on the client therefore requires two independent steps: making the plugin visible to the client's classloader, and forwarding the JuiceFS configuration through `client.fs.*` keys.
+
+### 1. Add the JuiceFS plugin JAR to the application classpath
+
+Client process needs to bundle `fluss-fs-juicefs-$FLUSS_VERSION$.jar` on its own application classpath. The plugin JAR already shades `io.juicefs.JuiceFileSystem` and the required JuiceFS Hadoop SDK classes, so no additional JuiceFS dependency is needed.
+
+Connector-specific placement:
+
+- **Flink connector**: add `fluss-fs-juicefs-$FLUSS_VERSION$.jar` into Flink's `lib/` directory on every JobManager and TaskManager.
+- **Spark connector**: add `--jars /path/to/fluss-fs-juicefs-$FLUSS_VERSION$.jar` to `spark-submit` / `spark-sql`, or install it into Spark's `jars/` directory on every driver and executor node.
+
+### 2. Configure JuiceFS via `client.fs.*` keys
+
+`FlussConnection` only forwards Fluss configuration entries whose keys start with `client.fs.`, and the `client.fs.` prefix is stripped before the map is handed to `FileSystem.initialize`. The JuiceFS plugin in turn only picks up keys starting with `fs.jfs.` or `juicefs.`. In practice this means every JuiceFS knob you want to expose on the client must be written as:
+
+```
+client.fs.<juicefs-or-fs.jfs-key> = <value>
+```
+
+For example, `client.fs.juicefs.access-key=xxxx` is forwarded to the JuiceFS plugin as `juicefs.access-key=xxxx`.
+
+Raw `juicefs.*` or `fs.jfs.*` keys that are **not** prefixed with `client.fs.` are silently dropped by `FlussConnection` and never reach the JuiceFS plugin. This is the most common client-side misconfiguration.
+
+Because Fluss does not perform any credential delegation for JuiceFS (see [Authentication](#authentication)), each client host must also have valid credentials to the object storage backing the volume. For example, `client.fs.juicefs.access-key` / `client.fs.juicefs.secret-key`.
+
+### Connector examples
+
+**Flink SQL / Table API.** Connector options declared in `WITH (...)` are propagated into the underlying client `Configuration`, so JuiceFS options can be set per-table:
+
+```sql
+CREATE TABLE fluss_table (
+  ...
+) WITH (
+  'connector' = 'fluss',
+  'bootstrap.servers' = '<coordinator-host>:<port>',
+  'client.fs.juicefs.meta' = 'redis://<host>:<port>/<db>',
+  'client.fs.juicefs.cache-dir' = '/data*/jfscache',
+  'client.fs.juicefs.cache-size' = '1024'
+);
+```
+
+Alternatively, set them globally in `flink-conf.yaml` / at cluster level so they apply to every Fluss table.
+
+**Spark.** Pass them as Fluss catalog options, either on the command line or in `spark-defaults.conf`:
+
+```bash
+spark-sql \
+  --jars /path/to/fluss-fs-juicefs-$FLUSS_VERSION$.jar \
+  --conf spark.sql.catalog.fluss_catalog=org.apache.fluss.spark.catalog.FlussCatalog \
+  --conf spark.sql.catalog.fluss_catalog.bootstrap.servers=<coordinator-host>:<port> \
+  --conf spark.sql.catalog.fluss_catalog.client.fs.juicefs.meta=redis://<host>:<port>/<db>
+```
 
 ## Advanced Configurations
 

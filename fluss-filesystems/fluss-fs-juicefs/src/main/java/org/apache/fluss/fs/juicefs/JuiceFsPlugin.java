@@ -72,10 +72,6 @@ public class JuiceFsPlugin implements FileSystemPlugin {
      */
     private static final String[] FLUSS_CONFIG_PREFIXES = {"fs.jfs.", "juicefs."};
 
-    // the keys whose values should be hidden
-    private static final String[] SENSITIVE_KEYS = new String[] {"password", "secret"};
-    private static final String HIDDEN_CONTENT = "******";
-
     @Override
     public String getScheme() {
         return SCHEME;
@@ -141,32 +137,11 @@ public class JuiceFsPlugin implements FileSystemPlugin {
                             flussConfig.getString(
                                     ConfigBuilder.key(key).stringType().noDefaultValue(), null);
                     conf.set(key, value);
-                    LOG.debug(
-                            "Adding Fluss config entry for {} as {} to Hadoop config",
-                            key,
-                            isSensitive(key) ? HIDDEN_CONTENT : conf.get(key));
+                    LOG.debug("Adding Fluss config entry {} to Hadoop config", key);
                     break;
                 }
             }
         }
         return conf;
-    }
-
-    /**
-     * Check whether the key is a hidden key.
-     *
-     * @param key the config key
-     */
-    private boolean isSensitive(String key) {
-        if (key == null) {
-            return false;
-        }
-        final String keyInLower = key.toLowerCase();
-        for (String hideKey : SENSITIVE_KEYS) {
-            if (keyInLower.length() >= hideKey.length() && keyInLower.contains(hideKey)) {
-                return true;
-            }
-        }
-        return false;
     }
 }
