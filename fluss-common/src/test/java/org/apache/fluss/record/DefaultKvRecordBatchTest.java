@@ -27,7 +27,9 @@ import org.junit.jupiter.api.Test;
 import java.util.ArrayList;
 import java.util.List;
 
+import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
+import static org.apache.fluss.testutils.DataTestUtils.compactedRow;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link DefaultKvRecordBatch}. */
@@ -75,5 +77,40 @@ class DefaultKvRecordBatchTest extends KvTestBase {
         }
 
         builder.close();
+    }
+
+    @Test
+    void testEqualsAndHashCode() throws Exception {
+        DefaultKvRecordBatch batch1 = buildBatch();
+        DefaultKvRecordBatch batch2 = buildBatch();
+
+        assertThat(batch1).isEqualTo(batch2);
+        assertThat(batch1).hasSameHashCodeAs(batch2);
+    }
+
+    @Test
+    void testHashCodeDiffersForDifferentContents() throws Exception {
+        DefaultKvRecordBatch batch1 = buildBatch();
+        DefaultKvRecordBatch batch2 = buildBatch(new byte[] {(byte) 9, (byte) 9});
+
+        assertThat(batch1).isNotEqualTo(batch2);
+        assertThat(batch1.hashCode()).isNotEqualTo(batch2.hashCode());
+    }
+
+    private DefaultKvRecordBatch buildBatch() throws Exception {
+        return buildBatch(new byte[] {(byte) 1, (byte) 1});
+    }
+
+    private DefaultKvRecordBatch buildBatch(byte[] key) throws Exception {
+        KvRecordBatchBuilder builder =
+                KvRecordBatchBuilder.builder(
+                        schemaId,
+                        Integer.MAX_VALUE,
+                        new UnmanagedPagedOutputView(100),
+                        KvFormat.COMPACTED);
+        builder.append(key, compactedRow(DATA1_ROW_TYPE, new Object[] {1, "a1"}));
+        DefaultKvRecordBatch batch = DefaultKvRecordBatch.pointToBytesView(builder.build());
+        builder.close();
+        return batch;
     }
 }
