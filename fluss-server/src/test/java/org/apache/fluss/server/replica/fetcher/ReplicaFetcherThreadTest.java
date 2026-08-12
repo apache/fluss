@@ -439,6 +439,16 @@ public class ReplicaFetcherThreadTest {
             // then the delayed responses arrive after 3s
             timeoutFetcher.start();
 
+            retry(
+                    Duration.ofSeconds(10),
+                    () ->
+                            assertThat(
+                                            followerRM
+                                                    .getServerMetricGroup()
+                                                    .replicaFetchTimeoutCount()
+                                                    .getCount())
+                                    .isGreaterThan(0));
+
             // Wait until at least one delayed response has been allocated
             retry(
                     Duration.ofSeconds(10),
