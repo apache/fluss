@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::client::connection::FlussConnection;
+use crate::client::admin::FlussAdmin;
 use crate::client::table::{AppendWriter, TableAppend, TableUpsert, UpsertWriter};
 use crate::client::{WriteResultFuture, WriterClient};
 use crate::error::{Error, Result};
@@ -98,16 +98,16 @@ impl<'a, R: InternalRow> MultiTableWriteRecord<'a, R> {
 ///
 /// The writer is not thread-safe. It lazily resolves table metadata and caches an existing
 /// [`AppendWriter`] or [`UpsertWriter`] for each `(table path, schema id)` pair.
-pub struct MultiTableWriter<'a> {
-    connection: &'a FlussConnection,
+pub struct MultiTableWriter {
+    admin: Arc<FlussAdmin>,
     writer_client: Arc<WriterClient>,
     states: HashMap<(TablePath, i32), TableWriteState>,
 }
 
-impl<'a> MultiTableWriter<'a> {
-    pub(crate) fn new(connection: &'a FlussConnection, writer_client: Arc<WriterClient>) -> Self {
+impl MultiTableWriter {
+    pub(crate) fn new(admin: Arc<FlussAdmin>, writer_client: Arc<WriterClient>) -> Self {
         Self {
-            connection,
+            admin,
             writer_client,
             states: HashMap::new(),
         }
@@ -161,12 +161,7 @@ impl<'a> MultiTableWriter<'a> {
         table_path: &TablePath,
         schema_id: i32,
     ) -> Result<TableInfo> {
-        let latest = self
-            .connection
-            .get_table(table_path)
-            .await?
-            .get_table_info()
-            .clone();
+        let latest = self.admin.get_table_info(table_path).await?;
 
         if schema_id > latest.get_schema_id() {
             return Err(Error::IllegalArgument {
@@ -181,8 +176,7 @@ impl<'a> MultiTableWriter<'a> {
         }
 
         let schema_info = self
-            .connection
-            .get_admin()?
+            .admin
             .get_table_schema(table_path, Some(schema_id))
             .await?;
         if schema_info.schema_id() != schema_id {

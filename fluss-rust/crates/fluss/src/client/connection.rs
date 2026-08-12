@@ -148,9 +148,9 @@ impl FlussConnection {
     }
 
     /// Creates a writer that can route append, upsert, and delete records to multiple tables.
-    pub fn new_multi_table_writer(&self) -> Result<MultiTableWriter<'_>> {
+    pub fn new_multi_table_writer(&self) -> Result<MultiTableWriter> {
         Ok(MultiTableWriter::new(
-            self,
+            self.get_admin()?,
             self.get_or_create_writer_client()?,
         ))
     }

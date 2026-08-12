@@ -39,7 +39,7 @@ Complete API reference for the Fluss Rust client.
 | `async fn new(config: Config) -> Result<Self>`                                | Create a new connection to a Fluss cluster     |
 | `fn get_admin(&self) -> Result<Arc<FlussAdmin>>`                              | Get the admin interface for cluster management |
 | `async fn get_table(&self, table_path: &TablePath) -> Result<FlussTable<'_>>` | Get a table for read/write operations          |
-| `fn new_multi_table_writer(&self) -> Result<MultiTableWriter<'_>>`            | Create a writer for multi-table CDC records    |
+| `fn new_multi_table_writer(&self) -> Result<MultiTableWriter>`                | Create a writer for multi-table CDC records    |
 | `fn config(&self) -> &Config`                                                 | Get a reference to the connection config       |
 
 ## `FlussAdmin`
