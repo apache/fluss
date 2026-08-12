@@ -22,7 +22,7 @@ use crate::client::metadata::Metadata;
 use crate::client::table::batch_scanner::LimitBatchScanner;
 use crate::client::table::log_fetch_buffer::{
     CompletedFetch, DefaultCompletedFetch, FetchErrorAction, FetchErrorContext, FetchErrorLogLevel,
-    FetchResult, LogFetchBuffer, RemotePendingFetch,
+    FetchResult, LogFetchBuffer, NO_FILTERED_END_OFFSET, RemotePendingFetch,
 };
 use crate::client::table::read_context_resolver::ReadContextResolver;
 use crate::client::table::remote_log::{RemoteLogDownloader, RemoteLogFetchInfo};
@@ -33,8 +33,10 @@ use crate::metadata::{
     LogFormat, PhysicalTablePath, RowType, SchemaInfo, TableBucket, TableInfo, TablePath,
 };
 use crate::metrics::ScannerMetrics;
+use crate::predicate::{Predicate, to_pb_predicate};
 use crate::proto::{
-    ErrorResponse, FetchLogRequest, FetchLogResponse, PbFetchLogReqForBucket, PbFetchLogReqForTable,
+    ErrorResponse, FetchLogRequest, FetchLogResponse, PbFetchLogReqForBucket,
+    PbFetchLogReqForTable, PbPredicate,
 };
 use crate::record::{
     LogRecordsBatches, ReadContext, ScanBatch, ScanRecord, ScanRecords, to_arrow_schema,
@@ -69,6 +71,9 @@ pub struct TableScan<'a> {
     fixed_schema: bool,
     /// Optional row limit. When set, callers may construct a [`BatchScanner`] for a one-shot bounded scan.
     limit: Option<i32>,
+    /// Filter pushed down to the server, encoded eagerly so that an unresolvable
+    /// column is reported by [`Self::filter`] rather than at scanner creation.
+    filter: Option<PbPredicate>,
 }
 
 impl<'a> TableScan<'a> {
@@ -80,6 +85,7 @@ impl<'a> TableScan<'a> {
             projected_fields: None,
             fixed_schema: true,
             limit: None,
+            filter: None,
         }
     }
 
@@ -111,6 +117,36 @@ impl<'a> TableScan<'a> {
         Ok(self)
     }
 
+    /// Pushes `predicate` down to the log scanners, which skip whole record
+    /// batches whose statistics cannot match.
+    ///
+    /// This only reduces what is fetched, so a scan still returns a superset of
+    /// the matching rows and callers needing exact results must filter again.
+    ///
+    /// # Errors
+    /// Returns an error if a column is missing from the table, has no schema
+    /// field id, or holds a literal its declared type cannot represent exactly.
+    pub fn filter(mut self, predicate: Predicate) -> Result<Self> {
+        // Resolve against the full row type: the server evaluates the filter
+        // before projection, so projected indices would name the wrong columns.
+        self.filter = Some(to_pb_predicate(&predicate, self.table_info.get_row_type())?);
+        Ok(self)
+    }
+
+    /// Batch scanners have no predicate field in their request; reject a
+    /// configured filter rather than silently ignoring it.
+    fn reject_filter(&self, scanner: &str) -> Result<()> {
+        if self.filter.is_some() {
+            return Err(Error::UnsupportedOperation {
+                message: format!(
+                    "{scanner} doesn't support filter pushdown. Table: {}",
+                    self.table_info.table_path
+                ),
+            });
+        }
+        Ok(())
+    }
+
     /// Log scanners don't support limit pushdown; reject a configured limit
     /// rather than silently ignoring it.
     fn reject_limit(&self, scanner: &str) -> Result<()> {
@@ -134,6 +170,7 @@ impl<'a> TableScan<'a> {
         self,
         table_bucket: TableBucket,
     ) -> Result<LimitBatchScanner> {
+        self.reject_filter("BatchScanner")?;
         let limit = self.limit.ok_or_else(|| Error::IllegalArgument {
             message: "create_bucket_batch_scanner requires a limit configured via .limit(n)"
                 .to_string(),
@@ -352,6 +389,7 @@ impl<'a> TableScan<'a> {
             self.conn.config(),
             self.projected_fields,
             self.fixed_schema,
+            self.filter,
             admin,
         )?;
         Ok(LogScanner {
@@ -376,6 +414,7 @@ impl<'a> TableScan<'a> {
             self.conn.config(),
             self.projected_fields,
             self.fixed_schema,
+            self.filter,
             admin,
         )?;
         Ok(RecordBatchLogScanner {
@@ -555,6 +594,7 @@ impl Drop for LogScannerInner {
 }
 
 impl LogScannerInner {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         table_info: &TableInfo,
         metadata: Arc<Metadata>,
@@ -562,6 +602,7 @@ impl LogScannerInner {
         config: &Config,
         projected_fields: Option<Vec<usize>>,
         fixed_schema: bool,
+        filter: Option<PbPredicate>,
         admin: Arc<crate::client::admin::FlussAdmin>,
     ) -> Result<Self> {
         let log_scanner_status = Arc::new(LogScannerStatus::new());
@@ -608,6 +649,7 @@ impl LogScannerInner {
                 config,
                 projected_fields,
                 fixed_schema,
+                filter,
                 Arc::clone(&metrics),
                 schema_getter,
             )?,
@@ -1170,6 +1212,9 @@ struct LogFetcher {
     /// Per-table scanner metric handles shared with the owning
     /// `LogScannerInner` and `RemoteLogDownloader`.
     metrics: Arc<ScannerMetrics>,
+    /// Encoded filter sent on every fetch request, paired with the schema id it
+    /// was compiled against so the server can resolve its field ids.
+    filter: Option<(PbPredicate, i32)>,
     max_poll_records: usize,
     fetch_max_bytes: i32,
     fetch_min_bytes: i32,
@@ -1200,6 +1245,7 @@ impl LogFetcher {
         config: &Config,
         projected_fields: Option<Vec<usize>>,
         fixed_schema: bool,
+        filter: Option<PbPredicate>,
         metrics: Arc<ScannerMetrics>,
         schema_getter: Arc<ClientSchemaGetter>,
     ) -> Result<Self> {
@@ -1280,6 +1326,7 @@ impl LogFetcher {
             log_fetch_buffer,
             nodes_with_pending_fetch_requests: Arc::new(Mutex::new(HashSet::new())),
             metrics,
+            filter: filter.map(|predicate| (predicate, table_info.get_schema_id())),
             max_poll_records: config.scanner_log_max_poll_records,
             fetch_max_bytes: config.scanner_log_fetch_max_bytes,
             fetch_min_bytes: config.scanner_log_fetch_min_bytes,
@@ -1638,9 +1685,19 @@ impl LogFetcher {
                         fetch_offset,
                         high_watermark,
                     );
-                } else if fetch_log_for_bucket.records.is_some() {
-                    // Handle regular in-memory records - create completed fetch directly
+                } else if fetch_log_for_bucket.records.is_some()
+                    || fetch_log_for_bucket.filtered_end_offset.is_some()
+                {
+                    // Handle regular in-memory records - create completed fetch directly.
+                    // A filtered response may arrive empty, or carry records with a
+                    // pruned tail; either way the end offset is how far the server
+                    // scanned, so the client skips that range instead of re-fetching it.
                     let high_watermark = fetch_log_for_bucket.high_watermark.unwrap_or(-1);
+                    let filtered_end_offset = Self::validate_filtered_end_offset(
+                        fetch_log_for_bucket.filtered_end_offset,
+                        fetch_offset,
+                        &table_bucket,
+                    );
                     let records = fetch_log_for_bucket.records.unwrap_or(vec![]);
                     let size_in_bytes = records.len();
 
@@ -1653,10 +1710,30 @@ impl LogFetcher {
                         false, // is_remote
                         fetch_offset,
                         high_watermark,
-                    );
+                    )
+                    .with_filtered_end_offset(filtered_end_offset);
                     log_fetch_buffer.add(Box::new(completed_fetch));
                 }
             }
+        }
+    }
+
+    /// Drops a filtered end offset that would move the bucket backwards, since
+    /// the server is only ever meant to report a range it has already scanned.
+    fn validate_filtered_end_offset(
+        filtered_end_offset: Option<i64>,
+        fetch_offset: i64,
+        table_bucket: &TableBucket,
+    ) -> i64 {
+        match filtered_end_offset {
+            Some(end) if end >= fetch_offset => end,
+            Some(end) => {
+                warn!(
+                    "Ignoring filtered end offset {end} for bucket {table_bucket} because it precedes the fetch offset {fetch_offset}"
+                );
+                NO_FILTERED_END_OFFSET
+            }
+            None => NO_FILTERED_END_OFFSET,
         }
     }
 
@@ -2176,8 +2253,9 @@ impl LogFetcher {
                         projection_pushdown_enabled: projection_enabled,
                         projected_fields: projected_fields.clone(),
                         buckets_req: feq_for_buckets,
-                        filter_predicate: None,
-                        filter_schema_id: None,
+                        // The proto requires both filter fields to be set together.
+                        filter_predicate: self.filter.as_ref().map(|(p, _)| p.clone()),
+                        filter_schema_id: self.filter.as_ref().map(|&(_, id)| id),
                     };
 
                     let fetch_log_request = FetchLogRequest {
@@ -2478,6 +2556,7 @@ mod tests {
             &Config::default(),
             None,
             false,
+            None,
             test_scanner_metrics(&table_path),
             test_schema_getter(&table_info, &metadata),
         )?;
@@ -2520,6 +2599,7 @@ mod tests {
             &Config::default(),
             None,
             false,
+            None,
             test_scanner_metrics(&table_path),
             test_schema_getter(&table_info, &metadata),
         )?;
@@ -2560,6 +2640,7 @@ mod tests {
             &Config::default(),
             None,
             false,
+            None,
             test_scanner_metrics(&table_path),
             test_schema_getter(&table_info, &metadata),
         )?;
@@ -2569,6 +2650,220 @@ mod tests {
         let requests = fetcher.prepare_fetch_log_requests().await;
         assert!(requests.is_empty());
         Ok(())
+    }
+
+    /// Builds the fetcher used by the filter tests, encoding `predicate` the way
+    /// `TableScan::filter` does.
+    fn filtering_fetcher(
+        table_info: &TableInfo,
+        metadata: &Arc<Metadata>,
+        status: Arc<LogScannerStatus>,
+        predicate: Option<Predicate>,
+    ) -> Result<LogFetcher> {
+        let filter = predicate
+            .map(|p| to_pb_predicate(&p, table_info.get_row_type()))
+            .transpose()?;
+        LogFetcher::new(
+            table_info.clone(),
+            Arc::new(RpcClient::new()),
+            metadata.clone(),
+            status,
+            &Config::default(),
+            None,
+            false,
+            filter,
+            test_scanner_metrics(&table_info.table_path),
+            test_schema_getter(table_info, metadata),
+        )
+    }
+
+    #[tokio::test]
+    async fn prepare_fetch_log_requests_carries_the_filter() -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+        let status = Arc::new(LogScannerStatus::new());
+        status.assign_scan_bucket(TableBucket::new(1, 0), 0);
+        let fetcher = filtering_fetcher(
+            &table_info,
+            &metadata,
+            status,
+            Some(crate::predicate::col("id").gt(5i32)),
+        )?;
+
+        let requests = fetcher.prepare_fetch_log_requests().await;
+        let table_req = &requests.get(&1).expect("request for leader").tables_req[0];
+        let predicate = table_req
+            .filter_predicate
+            .as_ref()
+            .expect("filter predicate");
+        assert_eq!(predicate.r#type, 0);
+        assert_eq!(predicate.leaf.as_ref().expect("leaf").field_id, 0);
+        // Both fields must travel together, and the id pins the field ids.
+        assert_eq!(table_req.filter_schema_id, Some(table_info.get_schema_id()));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn prepare_fetch_log_requests_omits_an_absent_filter() -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+        let status = Arc::new(LogScannerStatus::new());
+        status.assign_scan_bucket(TableBucket::new(1, 0), 0);
+        let fetcher = filtering_fetcher(&table_info, &metadata, status, None)?;
+
+        let requests = fetcher.prepare_fetch_log_requests().await;
+        let table_req = &requests.get(&1).expect("request for leader").tables_req[0];
+        assert!(table_req.filter_predicate.is_none());
+        assert!(table_req.filter_schema_id.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn unresolvable_filter_column_is_rejected() {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+        let result = filtering_fetcher(
+            &table_info,
+            &metadata,
+            Arc::new(LogScannerStatus::new()),
+            Some(crate::predicate::col("nope").gt(5i32)),
+        );
+        assert!(matches!(result.err(), Some(Error::IllegalArgument { .. })));
+    }
+
+    /// Without this the bucket offset never advances and the scanner re-requests
+    /// the same range forever whenever a filter prunes a whole fetch.
+    #[tokio::test]
+    async fn handle_fetch_response_advances_past_a_fully_filtered_range() -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+        let status = Arc::new(LogScannerStatus::new());
+        let bucket = TableBucket::new(1, 0);
+        status.assign_scan_bucket(bucket.clone(), 2);
+        let fetcher = filtering_fetcher(
+            &table_info,
+            &metadata,
+            status.clone(),
+            Some(crate::predicate::col("id").gt(5i32)),
+        )?;
+
+        LogFetcher::handle_fetch_response(
+            filtered_response(Some(11), Some(9)),
+            test_response_context(&fetcher, &metadata),
+        )
+        .await;
+
+        let fetched = fetcher.collect_fetches().await?;
+        assert!(fetched.is_empty());
+        assert_eq!(status.get_bucket_offset(&bucket), Some(11));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn handle_fetch_response_ignores_a_filtered_range_behind_the_fetch_offset() -> Result<()>
+    {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+        let status = Arc::new(LogScannerStatus::new());
+        let bucket = TableBucket::new(1, 0);
+        status.assign_scan_bucket(bucket.clone(), 5);
+        let fetcher = filtering_fetcher(
+            &table_info,
+            &metadata,
+            status.clone(),
+            Some(crate::predicate::col("id").gt(5i32)),
+        )?;
+
+        LogFetcher::handle_fetch_response(
+            filtered_response(Some(3), None),
+            test_response_context(&fetcher, &metadata),
+        )
+        .await;
+
+        let fetched = fetcher.collect_fetches().await?;
+        assert!(fetched.is_empty());
+        assert_eq!(status.get_bucket_offset(&bucket), Some(5));
+        Ok(())
+    }
+
+    /// The server reports a filtered range alongside records when it prunes only
+    /// the tail of what it scanned, so the offset must clear the whole range.
+    #[tokio::test]
+    async fn handle_fetch_response_skips_a_pruned_tail_after_its_records() -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+        let status = Arc::new(LogScannerStatus::new());
+        let bucket = TableBucket::new(1, 0);
+        status.assign_scan_bucket(bucket.clone(), 0);
+        let fetcher = filtering_fetcher(
+            &table_info,
+            &metadata,
+            status.clone(),
+            Some(crate::predicate::col("id").gt(5i32)),
+        )?;
+
+        let mut response = filtered_response(Some(8), Some(9));
+        response.tables_resp[0].buckets_resp[0].records =
+            Some(build_records(&table_info, Arc::new(table_path))?);
+        LogFetcher::handle_fetch_response(response, test_response_context(&fetcher, &metadata))
+            .await;
+
+        let fetched = fetcher.collect_fetches().await?;
+        assert_eq!(fetched.get(&bucket).expect("records").len(), 1);
+        // The single record ends at offset 1, but the server scanned through 8.
+        assert_eq!(status.get_bucket_offset(&bucket), Some(8));
+        Ok(())
+    }
+
+    /// A response for bucket 0 of table 1 that carries no records, standing in
+    /// for a fetch whose batches the server pruned entirely.
+    fn filtered_response(
+        filtered_end_offset: Option<i64>,
+        high_watermark: Option<i64>,
+    ) -> FetchLogResponse {
+        FetchLogResponse {
+            tables_resp: vec![PbFetchLogRespForTable {
+                table_id: 1,
+                buckets_resp: vec![PbFetchLogRespForBucket {
+                    partition_id: None,
+                    bucket_id: 0,
+                    error_code: None,
+                    error_message: None,
+                    high_watermark,
+                    log_start_offset: None,
+                    remote_log_fetch_info: None,
+                    records: None,
+                    filtered_end_offset,
+                }],
+            }],
+        }
+    }
+
+    fn test_response_context(
+        fetcher: &LogFetcher,
+        metadata: &Arc<Metadata>,
+    ) -> FetchResponseContext {
+        FetchResponseContext {
+            metadata: metadata.clone(),
+            log_fetch_buffer: fetcher.log_fetch_buffer.clone(),
+            log_scanner_status: fetcher.log_scanner_status.clone(),
+            resolver: Arc::clone(&fetcher.resolver),
+            remote_log_downloader: fetcher.remote_log_downloader.clone(),
+            metrics: Arc::clone(&fetcher.metrics),
+            request_start_time: Instant::now(),
+        }
     }
 
     #[tokio::test]
@@ -2587,6 +2882,7 @@ mod tests {
             &Config::default(),
             None,
             false,
+            None,
             test_scanner_metrics(&table_path),
             test_schema_getter(&table_info, &metadata),
         )?;
@@ -2642,6 +2938,7 @@ mod tests {
             &Config::default(),
             None,
             false,
+            None,
             test_scanner_metrics(&table_path),
             test_schema_getter(&table_info, &metadata),
         )?;
@@ -2776,6 +3073,7 @@ mod tests {
             &config,
             None,
             false,
+            None,
             test_scanner_metrics(&table_path),
             test_schema_getter(&table_info, &metadata),
         )?;
@@ -2823,6 +3121,7 @@ mod tests {
                 &Config::default(),
                 None,
                 false,
+                None,
                 admin,
             )
             .expect("build LogScannerInner");
@@ -2990,6 +3289,7 @@ mod tests {
                     &Config::default(),
                     None,
                     false,
+                    None,
                     test_scanner_metrics(&table_path),
                     test_schema_getter(&table_info, &metadata),
                 )
@@ -3339,6 +3639,7 @@ mod tests {
                 &Config::default(),
                 None,
                 false,
+                None,
                 admin,
             )
             .expect("build LogScannerInner");
