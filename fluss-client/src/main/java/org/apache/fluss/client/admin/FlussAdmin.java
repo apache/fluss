@@ -35,6 +35,7 @@ import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.exception.StaleMetadataException;
+import org.apache.fluss.exception.TabletMetadataNotReadyException;
 import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
@@ -119,9 +120,15 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
 
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeAlterDatabaseRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeAlterTableRequest;
@@ -157,6 +164,20 @@ public class FlussAdmin implements Admin {
     private final ExecutorService refreshExecutor =
             Executors.newFixedThreadPool(
                     1, new ExecutorThreadFactory("fluss-admin-metadata-refresh"));
+
+    /**
+     * Backoff scheduler for retrying read requests that hit {@link
+     * TabletMetadataNotReadyException}. A not-ready result means the target TabletServer has not
+     * yet applied the coordinator's metadata, so the client only waits for the server to catch up;
+     * it does not refresh its own (already-correct) metadata.
+     */
+    private final ScheduledExecutorService notReadyRetryScheduler =
+            Executors.newSingleThreadScheduledExecutor(
+                    new ExecutorThreadFactory("fluss-admin-not-ready-retry"));
+
+    private static final long NOT_READY_RETRY_INITIAL_BACKOFF_MS = 50L;
+    private static final long NOT_READY_RETRY_MAX_BACKOFF_MS = 1_000L;
+    private static final long NOT_READY_RETRY_TIMEOUT_MS = 30_000L;
 
     public FlussAdmin(RpcClient client, MetadataUpdater metadataUpdater) {
         // TODO: AdminGateway includes non-idempotent write operations (createTable, dropTable,
@@ -603,31 +624,41 @@ public class FlussAdmin implements Admin {
             } else {
                 partitionInfos = Collections.singletonList(null);
             }
-            // create all TableBuckets for each partition and bucket combination
-            Map<TableBucket, CompletableFuture<Long>> bucketToRowCountMap = new HashMap<>();
+            // The set of table buckets to query is stable across retries (client metadata is not
+            // refreshed on a not-ready result), so compute it once.
+            List<TableBucket> tableBuckets = new ArrayList<>();
             for (PartitionInfo partitionInfo : partitionInfos) {
                 int bucketCount =
                         PartitionInfo.bucketCountOrDefault(partitionInfo, tableBucketCount);
                 for (int bucket = 0; bucket < bucketCount; bucket++) {
-                    TableBucket tb =
+                    tableBuckets.add(
                             new TableBucket(
                                     tableInfo.getTableId(),
                                     partitionInfo == null ? null : partitionInfo.getPartitionId(),
-                                    bucket);
-                    bucketToRowCountMap.put(tb, new CompletableFuture<>());
+                                    bucket));
                 }
             }
-            Map<Integer, GetTableStatsRequest> requestMap =
-                    prepareTableStatsRequests(
-                            metadataUpdater, bucketToRowCountMap.keySet(), tablePath);
-            sendTableStatsRequest(
-                    metadataUpdater, tableInfo.getTableId(), requestMap, bucketToRowCountMap);
-            return FutureUtils.combineAll(bucketToRowCountMap.values())
-                    .thenApply(
-                            counts -> {
-                                long totalRowCount = counts.stream().reduce(0L, Long::sum);
-                                return new TableStats(totalRowCount);
-                            });
+            long tableId = tableInfo.getTableId();
+            return retryOnTabletMetadataNotReady(
+                    () -> {
+                        Map<TableBucket, CompletableFuture<Long>> bucketToRowCountMap =
+                                new HashMap<>();
+                        for (TableBucket tb : tableBuckets) {
+                            bucketToRowCountMap.put(tb, new CompletableFuture<>());
+                        }
+                        Map<Integer, GetTableStatsRequest> requestMap =
+                                prepareTableStatsRequests(
+                                        metadataUpdater, bucketToRowCountMap.keySet(), tablePath);
+                        sendTableStatsRequest(
+                                metadataUpdater, tableId, requestMap, bucketToRowCountMap);
+                        return FutureUtils.combineAll(bucketToRowCountMap.values())
+                                .thenApply(
+                                        counts -> {
+                                            long totalRowCount =
+                                                    counts.stream().reduce(0L, Long::sum);
+                                            return new TableStats(totalRowCount);
+                                        });
+                    });
         } catch (Exception e) {
             throw new FlussRuntimeException(
                     String.format("Failed to get row count for the table '%s'.", tablePath), e);
@@ -655,13 +686,105 @@ public class FlussAdmin implements Admin {
                         buckets,
                         offsetSpec,
                         tableInfo.getTablePath());
-        Map<Integer, CompletableFuture<Long>> bucketToOffsetMap = new ConcurrentHashMap<>();
-        for (int bucket : buckets) {
-            bucketToOffsetMap.put(bucket, new CompletableFuture<>());
-        }
 
-        sendListOffsetsRequest(metadataUpdater, requestMap, bucketToOffsetMap);
-        return new ListOffsetsResult(bucketToOffsetMap);
+        // Stable per-bucket futures handed to the caller; each retry attempt uses its own temporary
+        // futures and, on success, propagates results into these.
+        Map<Integer, CompletableFuture<Long>> resultMap = new ConcurrentHashMap<>();
+        for (int bucket : buckets) {
+            resultMap.put(bucket, new CompletableFuture<>());
+        }
+        retryOnTabletMetadataNotReady(
+                        () -> {
+                            Map<Integer, CompletableFuture<Long>> attemptMap =
+                                    new ConcurrentHashMap<>();
+                            for (int bucket : buckets) {
+                                attemptMap.put(bucket, new CompletableFuture<>());
+                            }
+                            sendListOffsetsRequest(metadataUpdater, requestMap, attemptMap);
+                            return FutureUtils.combineAll(attemptMap.values())
+                                    .thenApply(ignored -> attemptMap);
+                        })
+                .whenComplete(
+                        (attemptMap, throwable) -> {
+                            if (throwable != null) {
+                                Throwable cause = unwrapAsyncError(throwable);
+                                resultMap.values().forEach(f -> f.completeExceptionally(cause));
+                            } else {
+                                attemptMap.forEach(
+                                        (bucket, f) -> resultMap.get(bucket).complete(f.join()));
+                            }
+                        });
+        return new ListOffsetsResult(resultMap);
+    }
+
+    /**
+     * Runs {@code attempt} and, when it fails with {@link TabletMetadataNotReadyException}, retries
+     * it with exponential backoff until the retry timeout elapses. This covers the window right
+     * after a table/partition is created or a leader moves, during which the target TabletServer
+     * may not have applied the coordinator's metadata yet. The client's metadata is left untouched
+     * because it is already correct; only the server needs to catch up.
+     */
+    private <T> CompletableFuture<T> retryOnTabletMetadataNotReady(
+            Supplier<CompletableFuture<T>> attempt) {
+        CompletableFuture<T> result = new CompletableFuture<>();
+        long deadlineNanos =
+                System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(NOT_READY_RETRY_TIMEOUT_MS);
+        runWithMetadataNotReadyRetry(
+                attempt, NOT_READY_RETRY_INITIAL_BACKOFF_MS, deadlineNanos, result);
+        return result;
+    }
+
+    private <T> void runWithMetadataNotReadyRetry(
+            Supplier<CompletableFuture<T>> attempt,
+            long backoffMs,
+            long deadlineNanos,
+            CompletableFuture<T> result) {
+        attempt.get()
+                .whenComplete(
+                        (value, throwable) -> {
+                            if (throwable == null) {
+                                result.complete(value);
+                                return;
+                            }
+                            Throwable cause = unwrapAsyncError(throwable);
+                            long remainingNanos = deadlineNanos - System.nanoTime();
+                            if (!(cause instanceof TabletMetadataNotReadyException)
+                                    || remainingNanos <= 0) {
+                                result.completeExceptionally(cause);
+                                return;
+                            }
+                            long delayMs =
+                                    Math.min(
+                                            backoffMs,
+                                            TimeUnit.NANOSECONDS.toMillis(remainingNanos) + 1);
+                            long nextBackoffMs =
+                                    Math.min(backoffMs * 2, NOT_READY_RETRY_MAX_BACKOFF_MS);
+                            try {
+                                notReadyRetryScheduler.schedule(
+                                        () ->
+                                                runWithMetadataNotReadyRetry(
+                                                        attempt,
+                                                        nextBackoffMs,
+                                                        deadlineNanos,
+                                                        result),
+                                        delayMs,
+                                        TimeUnit.MILLISECONDS);
+                            } catch (RejectedExecutionException e) {
+                                // The admin is closing; surface the original not-ready error.
+                                result.completeExceptionally(cause);
+                            }
+                        });
+    }
+
+    /** Unwraps {@link CompletionException}/{@link ExecutionException} layers to the real cause. */
+    private static Throwable unwrapAsyncError(Throwable throwable) {
+        Throwable cause = throwable;
+        while ((cause instanceof CompletionException || cause instanceof ExecutionException)
+                && cause.getCause() != null
+                && cause.getCause() != cause) {
+            cause = cause.getCause();
+        }
+        return cause;
     }
 
     @Override
@@ -855,6 +978,7 @@ public class FlussAdmin implements Admin {
         // Stop the metadata-refresh executor; any in-flight refresh will be interrupted, which
         // refreshClusterUntilAvailable handles by surfacing the InterruptedException upward.
         refreshExecutor.shutdownNow();
+        notReadyRetryScheduler.shutdownNow();
     }
 
     private static Map<Integer, GetTableStatsRequest> prepareTableStatsRequests(

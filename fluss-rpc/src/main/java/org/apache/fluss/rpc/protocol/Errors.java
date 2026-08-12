@@ -84,6 +84,7 @@ import org.apache.fluss.exception.StorageException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.exception.TableNotPartitionedException;
+import org.apache.fluss.exception.TabletMetadataNotReadyException;
 import org.apache.fluss.exception.TimeoutException;
 import org.apache.fluss.exception.TooManyBucketsException;
 import org.apache.fluss.exception.TooManyPartitionsException;
@@ -291,7 +292,11 @@ public enum Errors {
             74,
             "The bucket count in the request does not match the server's actual bucket count. The "
                     + "client should refresh metadata and retry.",
-            StaleMetadataException::new);
+            StaleMetadataException::new),
+    TABLET_METADATA_NOT_READY(
+            75,
+            "The TabletServer has not yet received metadata for the requested table or partition.",
+            TabletMetadataNotReadyException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 

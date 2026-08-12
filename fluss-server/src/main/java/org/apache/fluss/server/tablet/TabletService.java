@@ -239,20 +239,33 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
             long tableId, Long partitionId, int requestBucketCount) {
         Errors error = metadataCache.validateBucketCount(tableId, partitionId, requestBucketCount);
         if (error != Errors.NONE) {
-            throw new StaleMetadataException(
+            throw error.exception(
                     error.name() + " for table " + tableId + ", partition " + partitionId);
         }
     }
 
+    /**
+     * Bucket-count validation applies to client requests only ({@code followerServerId < 0}).
+     * Server-internal replication traffic (follower fetch and follower listOffsets) never carries a
+     * bucket count, and a follower's bucket ids come from {@code NotifyLeaderAndIsr}, which is
+     * authoritative. Validating them against the leader's metadata cache would stall replication
+     * whenever that cache lags behind or the table has been rescaled.
+     */
+    private static boolean isFromClient(int followerServerId) {
+        return followerServerId < 0;
+    }
+
     @Override
     public CompletableFuture<FetchLogResponse> fetchLog(FetchLogRequest request) {
-        for (PbFetchLogReqForTable pbTable : request.getTablesReqsList()) {
-            long tableId = pbTable.getTableId();
-            for (PbFetchLogReqForBucket pbBucket : pbTable.getBucketsReqsList()) {
-                validateBucketCountOrThrow(
-                        tableId,
-                        pbBucket.hasPartitionId() ? pbBucket.getPartitionId() : null,
-                        pbBucket.hasBucketCount() ? pbBucket.getBucketCount() : 0);
+        if (isFromClient(request.getFollowerServerId())) {
+            for (PbFetchLogReqForTable pbTable : request.getTablesReqsList()) {
+                long tableId = pbTable.getTableId();
+                for (PbFetchLogReqForBucket pbBucket : pbTable.getBucketsReqsList()) {
+                    validateBucketCountOrThrow(
+                            tableId,
+                            pbBucket.hasPartitionId() ? pbBucket.getPartitionId() : null,
+                            pbBucket.hasBucketCount() ? pbBucket.getBucketCount() : 0);
+                }
             }
         }
         Map<TableBucket, FetchReqInfo> fetchLogData = getFetchLogData(request);
@@ -515,10 +528,12 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     @Override
     public CompletableFuture<ListOffsetsResponse> listOffsets(ListOffsetsRequest request) {
         authorizeTable(DESCRIBE, request.getTableId());
-        validateBucketCountOrThrow(
-                request.getTableId(),
-                request.hasPartitionId() ? request.getPartitionId() : null,
-                request.hasBucketCount() ? request.getBucketCount() : 0);
+        if (isFromClient(request.getFollowerServerId())) {
+            validateBucketCountOrThrow(
+                    request.getTableId(),
+                    request.hasPartitionId() ? request.getPartitionId() : null,
+                    request.hasBucketCount() ? request.getBucketCount() : 0);
+        }
         CompletableFuture<ListOffsetsResponse> response = new CompletableFuture<>();
         Set<TableBucket> tableBuckets = getListOffsetsData(request);
         replicaManager.listOffsets(

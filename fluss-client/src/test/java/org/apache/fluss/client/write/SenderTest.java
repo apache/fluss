@@ -1025,6 +1025,7 @@ final class SenderTest {
         assertThat(staleSender.numOfInFlightBatches(tb1)).isEqualTo(1);
 
         // Server rejects with STALE_METADATA — the bucketId was computed with a stale count.
+        Cluster clusterBeforeError = metadataUpdater.getCluster();
         finishRequest(tb1, 0, createProduceLogResponse(tb1, Errors.STALE_METADATA));
 
         // The batch is failed (not re-enqueued for retry — the bucketId is stale and must not be
@@ -1035,9 +1036,61 @@ final class SenderTest {
         // the refreshed bucket count.
         assertThat(invalidatedBucket.get()).isEqualTo(tb1);
 
+        // The table's bucket metadata was invalidated so the next send requests it again.
+        assertThat(metadataUpdater.getCluster()).isNotSameAs(clusterBeforeError);
+
         // The write callback receives the StaleMetadataException.
         Exception exception = future.get();
         assertThat(exception).isInstanceOf(StaleMetadataException.class);
+    }
+
+    @Test
+    void testTabletMetadataNotReadyRetriesBatchWithoutInvalidatingMetadata() throws Exception {
+        // Recreate sender with a tracking bucketAssignerInvalidator.
+        IdempotenceManager idempotenceManager = createIdempotenceManager(false);
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE, new MemorySize(TOTAL_MEMORY_SIZE));
+        conf.set(ConfigOptions.CLIENT_WRITER_BATCH_SIZE, new MemorySize(BATCH_SIZE));
+        conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_PAGE_SIZE, new MemorySize(PAGE_SIZE));
+        conf.set(ConfigOptions.CLIENT_WRITER_BATCH_TIMEOUT, Duration.ofMillis(0));
+        accumulator =
+                new RecordAccumulator(
+                        conf, idempotenceManager, writerMetricGroup, SystemClock.getInstance());
+        AtomicReference<TableBucket> invalidatedBucket = new AtomicReference<>();
+        Sender notReadySender =
+                new Sender(
+                        accumulator,
+                        REQUEST_TIMEOUT,
+                        MAX_REQUEST_SIZE,
+                        ACKS_ALL,
+                        Integer.MAX_VALUE,
+                        metadataUpdater,
+                        idempotenceManager,
+                        writerMetricGroup,
+                        invalidatedBucket::set);
+
+        // Append one record and send it.
+        CompletableFuture<Exception> future = new CompletableFuture<>();
+        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future.complete(e));
+        notReadySender.runOnce();
+        assertThat(notReadySender.numOfInFlightBatches(tb1)).isEqualTo(1);
+
+        // The server hasn't received the metadata of this table yet. Unlike STALE_METADATA, this
+        // says nothing about the client's bucket count, so the batch must survive.
+        Cluster clusterBeforeError = metadataUpdater.getCluster();
+        finishRequest(tb1, 0, createProduceLogResponse(tb1, Errors.TABLET_METADATA_NOT_READY));
+
+        // The batch is neither failed nor completed, and the same bucketId is reused: no metadata
+        // was invalidated and the BucketAssigner was not rebuilt.
+        assertThat(future.isDone()).isFalse();
+        assertThat(invalidatedBucket.get()).isNull();
+        assertThat(metadataUpdater.getCluster()).isSameAs(clusterBeforeError);
+
+        // The batch is re-enqueued and succeeds once the server has caught up.
+        notReadySender.runOnce();
+        assertThat(notReadySender.numOfInFlightBatches(tb1)).isEqualTo(1);
+        finishRequest(tb1, 0, createProduceLogResponse(tb1, 0L, 1L));
+        assertThat(future.get()).isNull();
     }
 
     private TestingMetadataUpdater initializeMetadataUpdater() {
