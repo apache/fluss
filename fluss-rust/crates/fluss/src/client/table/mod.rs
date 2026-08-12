@@ -27,6 +27,7 @@ pub const EARLIEST_OFFSET: i64 = -2;
 mod append;
 mod batch_scanner;
 mod lookup;
+mod multi_table;
 
 mod log_fetch_buffer;
 mod partition_getter;
@@ -39,6 +40,7 @@ mod upsert;
 pub use append::{AppendWriter, TableAppend};
 pub use batch_scanner::LimitBatchScanner;
 pub use lookup::{LookupResult, Lookuper, PrefixKeyLookuper, TableLookup, TablePrefixLookup};
+pub use multi_table::{MultiTableWriteOperation, MultiTableWriteRecord, MultiTableWriter};
 pub use reader::{RecordBatchLogReader, SyncRecordBatchLogReader};
 pub use remote_log::{
     DEFAULT_REMOTE_FILE_DOWNLOAD_THREAD_NUM, DEFAULT_SCANNER_REMOTE_LOG_PREFETCH_NUM,

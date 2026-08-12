@@ -19,7 +19,7 @@ use crate::client::WriterClient;
 use crate::client::admin::FlussAdmin;
 use crate::client::lookup::LookupClient;
 use crate::client::metadata::Metadata;
-use crate::client::table::FlussTable;
+use crate::client::table::{FlussTable, MultiTableWriter};
 use crate::config::Config;
 use crate::error::{Error, FlussError, Result};
 use crate::metadata::TablePath;
@@ -145,6 +145,14 @@ impl FlussConnection {
         // 5. Store and return the newly created client.
         *writer_guard = Some(new_client.clone());
         Ok(new_client)
+    }
+
+    /// Creates a writer that can route append, upsert, and delete records to multiple tables.
+    pub fn new_multi_table_writer(&self) -> Result<MultiTableWriter<'_>> {
+        Ok(MultiTableWriter::new(
+            self,
+            self.get_or_create_writer_client()?,
+        ))
     }
 
     #[cfg(feature = "integration_tests")]
