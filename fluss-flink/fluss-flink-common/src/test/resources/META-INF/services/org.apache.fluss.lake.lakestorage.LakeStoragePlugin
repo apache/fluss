@@ -17,3 +17,4 @@
 #
 
 org.apache.fluss.lake.values.TestingValuesLakeStoragePlugin
+org.apache.fluss.lake.values.TestingPaimonLakeStoragePlugin
