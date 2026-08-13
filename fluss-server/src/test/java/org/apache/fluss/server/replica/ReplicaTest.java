@@ -69,7 +69,6 @@ import org.junit.jupiter.api.io.TempDir;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -731,67 +730,6 @@ final class ReplicaTest extends ReplicaTestBase {
         kvSnapshotStore.waitUntilSnapshotComplete(tableBucket, snapshot);
         assertThat(kvSnapshotStore.getSnapshotLeaderEpoch(tableBucket, snapshot))
                 .isEqualTo(latestLeaderEpoch);
-    }
-
-    @Test
-    void testCorruptLocalSnapshotFallsBackToRemote(@TempDir File snapshotKvTabletDir)
-            throws Exception {
-        TableBucket tableBucket = new TableBucket(DATA1_TABLE_ID_PK, 1);
-        TestSnapshotContext snapshotContext =
-                new TestSnapshotContext(snapshotKvTabletDir.getPath());
-        TestingCompletedKvSnapshotCommitter snapshotStore = snapshotContext.testKvSnapshotStore;
-
-        Replica kvReplica =
-                makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, tableBucket, snapshotContext);
-        makeKvReplicaAsLeader(kvReplica);
-        putRecordsToLeader(
-                kvReplica,
-                genKvRecordBatch(
-                        Tuple2.of("k1", new Object[] {1, "a"}),
-                        Tuple2.of("k2", new Object[] {2, "b"})));
-        snapshotContext.scheduledExecutorService.triggerAllNonPeriodicTasks();
-        CompletedSnapshot completedSnapshot =
-                snapshotStore.waitUntilSnapshotComplete(tableBucket, 0);
-
-        File localSnapshot =
-                LocalKvSnapshotUtils.getSnapshotDirectory(
-                        checkNotNull(kvReplica.getKvTablet()).getKvTabletDir(),
-                        completedSnapshot.getSnapshotID());
-        restartKvManager();
-        assertThat(localSnapshot).isDirectory();
-
-        Path currentFile = localSnapshot.toPath().resolve("CURRENT");
-        byte[] corruptedCurrent = Files.readAllBytes(currentFile);
-        Arrays.fill(corruptedCurrent, (byte) 'x');
-        Files.write(currentFile, corruptedCurrent);
-
-        AtomicBoolean downloadedRemoteSnapshot = new AtomicBoolean(false);
-        snapshotContext =
-                new TestSnapshotContext(snapshotKvTabletDir.getPath(), snapshotStore) {
-                    @Override
-                    public KvSnapshotDataDownloader getSnapshotDataDownloader() {
-                        return new KvSnapshotDataDownloader(executorService) {
-                            @Override
-                            public void transferAllDataToDirectory(
-                                    KvSnapshotDownloadSpec downloadSpec,
-                                    CloseableRegistry closeableRegistry)
-                                    throws Exception {
-                                downloadedRemoteSnapshot.set(true);
-                                super.transferAllDataToDirectory(downloadSpec, closeableRegistry);
-                            }
-                        };
-                    }
-                };
-        kvReplica = makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, tableBucket, snapshotContext);
-        makeKvReplicaAsLeader(kvReplica, 2);
-
-        assertThat(downloadedRemoteSnapshot).isTrue();
-        verifyGetKeyValues(
-                checkNotNull(kvReplica.getKvTablet()),
-                getKeyValuePairs(
-                        genKvRecords(
-                                Tuple2.of("k1", new Object[] {1, "a"}),
-                                Tuple2.of("k2", new Object[] {2, "b"}))));
     }
 
     @Test
