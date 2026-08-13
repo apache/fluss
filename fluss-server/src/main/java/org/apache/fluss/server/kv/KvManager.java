@@ -39,6 +39,8 @@ import org.apache.fluss.server.TabletManagerBase;
 import org.apache.fluss.server.kv.autoinc.AutoIncrementManager;
 import org.apache.fluss.server.kv.autoinc.ZkSequenceGeneratorFactory;
 import org.apache.fluss.server.kv.rowmerger.RowMerger;
+import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
+import org.apache.fluss.server.kv.snapshot.LocalKvSnapshotUtils;
 import org.apache.fluss.server.log.LogManager;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
@@ -370,18 +372,20 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
     }
 
     /**
-     * Starts the manager by deleting local KV directories left by a previous TabletServer process.
+     * Starts the manager. Local recovery retains KV directories so assigned replicas can validate
+     * their checkpoints against committed snapshots. Unassigned directories remain on disk.
      *
-     * <p>This must run before the TabletServer accepts replica assignments. Leaders rebuild KV
-     * state from snapshots and logs, while followers never open these directories. Scan the disk
-     * rather than registered tablets so that KV directories without logs or table metadata are also
-     * removed. Symbolic links below a data directory are skipped, and cleanup I/O failures are
-     * logged without preventing startup or cleanup of other tablets and data directories.
-     * Directories are atomically renamed before deletion so that partially deleted state cannot be
+     * <p>When local recovery is disabled, delete directories left by a previous TabletServer
+     * process before accepting assignments. Scan the disk rather than registered tablets so that
+     * directories without logs or table metadata are also removed. Symbolic links below a data
+     * directory are skipped, and cleanup I/O failures are logged without preventing startup.
+     * Directories are atomically renamed before deletion so partially deleted state cannot be
      * reopened as a live KV tablet.
      */
     public void startup() {
-        cleanupStaleKvDirectories();
+        if (!conf.get(ConfigOptions.KV_SNAPSHOT_LOCAL_RECOVERY_ENABLED)) {
+            cleanupStaleKvDirectories();
+        }
     }
 
     private void cleanupStaleKvDirectories() {
@@ -611,7 +615,7 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
      * @param tableBucket the table bucket
      * @return the tablet directory
      */
-    public File createTabletDir(
+    public File deleteAndCreateTabletDir(
             File dataDir, PhysicalTablePath tablePath, TableBucket tableBucket) {
         File tabletDir = getTabletDir(dataDir, tablePath, tableBucket);
 
@@ -619,6 +623,34 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
         FileUtils.deleteDirectoryQuietly(tabletDir);
         createTabletDirectory(tabletDir);
         return tabletDir;
+    }
+
+    /**
+     * Attempts to rebuild a tablet directory from the matching retained local snapshot.
+     *
+     * @return the rebuilt tablet directory, or empty when the local snapshot is unavailable or
+     *     invalid
+     */
+    public Optional<File> restoreKvFromLocalSnapshot(
+            File dataDir,
+            PhysicalTablePath tablePath,
+            TableBucket tableBucket,
+            CompletedSnapshot completedSnapshot) {
+        if (!tableBucket.equals(completedSnapshot.getTableBucket())) {
+            return Optional.empty();
+        }
+
+        File tabletDir = getTabletDir(dataDir, tablePath, tableBucket);
+        if (!tabletDir.isDirectory()) {
+            LOG.debug(
+                    "Skip retained local snapshot recovery because KV tablet directory {} "
+                            + "does not exist or is not a directory.",
+                    tabletDir);
+            return Optional.empty();
+        }
+        return LocalKvSnapshotUtils.restore(tabletDir, completedSnapshot)
+                ? Optional.of(tabletDir)
+                : Optional.empty();
     }
 
     public Optional<KvTablet> getKv(TableBucket tableBucket) {
