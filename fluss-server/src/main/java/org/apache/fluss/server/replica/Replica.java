@@ -817,24 +817,10 @@ public final class Replica {
         long startTime = clock.milliseconds();
         LOG.info("Start to init kv tablet for {} of table {}.", tableBucket, physicalPath);
 
-        // todo: we may need to handle the following cases:
-        // case1: no kv files in local, restore from remote snapshot; and apply
-        // the log;
-        // case2: kv files in local
-        //       - if no remote snapshot, restore from local and apply the log known to the local
-        // files.
-        //       - have snapshot, if the known offset to the local files is much less than(maybe
-        // some value configured)
-        //         the remote snapshot; restore from remote snapshot;
-
-        // currently for simplicity, we'll always download the snapshot files and restore from
-        // the snapshots as kv files won't exist in our current implementation for
-        // when replica become follower, we'll always delete the kv files.
-
-        // get the offset from which, we should restore from. default is 0
+        // Prefer a retained local checkpoint only when it exactly matches the latest committed
+        // snapshot metadata. Historical partitions use the lake snapshot as their durable base
+        // and recover from the WAL instead of restoring a normal KV snapshot.
         long restoreStartOffset = isHistoricalPartition() ? historicalRecoveryStartOffset() : 0;
-        // The lake snapshot is the durable base for a historical overlay. Historical replicas
-        // therefore never restore a normal KV snapshot, even if one exists from older code.
         Optional<CompletedSnapshot> optCompletedSnapshot =
                 isHistoricalPartition() ? Optional.empty() : getLatestSnapshot(tableBucket);
         try {
@@ -847,12 +833,29 @@ public final class Replica {
                         tableBucket,
                         physicalPath);
                 CompletedSnapshot completedSnapshot = optCompletedSnapshot.get();
-                // always create a new dir for the kv tablet
-                File tabletDir =
-                        kvManager.createTabletDir(
-                                logTablet.getDataDir(), physicalPath, tableBucket);
-                // down the snapshot to target tablet dir
-                downloadKvSnapshots(completedSnapshot, tabletDir.toPath());
+
+                File tabletDir;
+                long start = System.currentTimeMillis();
+                Optional<File> optionalTabletDir =
+                        kvManager.restoreKvFromLocalSnapshot(
+                                logTablet.getDataDir(),
+                                physicalPath,
+                                tableBucket,
+                                completedSnapshot);
+                if (optionalTabletDir.isPresent()) {
+                    tabletDir = optionalTabletDir.get();
+                    LOG.info(
+                            "Rebuilt kv tablet for {} of table {} from retained local snapshot {} that costs {} ms.",
+                            tableBucket,
+                            physicalPath,
+                            completedSnapshot.getSnapshotID(),
+                            System.currentTimeMillis() - start);
+                } else {
+                    tabletDir =
+                            kvManager.deleteAndCreateTabletDir(
+                                    logTablet.getDataDir(), physicalPath, tableBucket);
+                    downloadKvSnapshots(completedSnapshot, tabletDir.toPath());
+                }
 
                 // as we have downloaded kv files into the tablet dir, now, we can load it
                 kvTablet = kvManager.loadKv(tabletDir, schemaGetter, this::onKvFlushComplete);
