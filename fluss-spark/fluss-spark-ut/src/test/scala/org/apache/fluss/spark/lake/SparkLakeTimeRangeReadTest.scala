@@ -18,7 +18,7 @@
 package org.apache.fluss.spark.lake
 
 import org.apache.fluss.config.{ConfigOptions, Configuration}
-import org.apache.fluss.metadata.DataLakeFormat
+import org.apache.fluss.metadata.{DataLakeFormat, TableBucketSnapshot}
 import org.apache.fluss.spark.SparkConnectorOptions.{BUCKET_NUMBER, PRIMARY_KEY}
 import org.apache.fluss.spark.read.{FlussAppendInputPartition, FlussUpsertInputPartition}
 
@@ -114,11 +114,12 @@ abstract class SparkLakeTimeRangeReadTest extends SparkLakeTableReadTestBase {
       assert(partitions.nonEmpty, "expected at least one Fluss changelog partition")
       assert(
         partitions.forall {
-          case p: FlussUpsertInputPartition => p.snapshotId == -1
+          case p: FlussUpsertInputPartition =>
+            p.snapshotId == TableBucketSnapshot.NO_SNAPSHOT_ID
           case _ => false
         },
-        s"time-range read must be log-only with no kv/lake snapshot (snapshotId == -1), " +
-          s"got: ${partitions.mkString(", ")}"
+        s"time-range read must be log-only with no kv/lake snapshot " +
+          s"(snapshotId == NO_SNAPSHOT_ID), got: ${partitions.mkString(", ")}"
       )
       // Only keys inserted/updated within [t1, t2): id=2 (updated), id=4 (inserted).
       checkAnswer(df, Row(2, "bob_updated", 100) :: Row(4, "david", 88) :: Nil)

@@ -715,7 +715,7 @@ class UpsertPlanner(
 
   // ---------------------------------------------------------------------------------------------
   // Incremental branch: fold the Fluss changelog within [start, end) per bucket, with no kv
-  // snapshot and no lake. Emitting snapshotId = -1 makes FlussUpsertPartitionReader skip the
+  // snapshot and no lake. Emitting NO_SNAPSHOT_ID makes FlussUpsertPartitionReader skip the
   // snapshot and fold only the log range; SortMergeReader drops delete rows, so the output is the
   // surviving +I/+U rows (keys inserted or updated in the window; deleted keys excluded).
   // ---------------------------------------------------------------------------------------------
@@ -779,7 +779,12 @@ class UpsertPlanner(
           None
         } else {
           Some(
-            FlussUpsertInputPartition(tableBucket, -1L, startOffset, stopOffset, timeRange)
+            FlussUpsertInputPartition(
+              tableBucket,
+              TableBucketSnapshot.NO_SNAPSHOT_ID,
+              startOffset,
+              stopOffset,
+              timeRange)
               .asInstanceOf[InputPartition])
         }
     }.toArray
