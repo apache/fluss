@@ -32,6 +32,7 @@ import org.apache.fluss.client.metadata.RemoteLogManifestInfo;
 import org.apache.fluss.client.write.KvWriteBatch;
 import org.apache.fluss.client.write.ReadyWriteBatch;
 import org.apache.fluss.cluster.Cluster;
+import org.apache.fluss.cluster.rebalance.RebalanceInfo;
 import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
 import org.apache.fluss.cluster.rebalance.RebalanceProgress;
 import org.apache.fluss.cluster.rebalance.RebalanceResultForBucket;
@@ -70,6 +71,7 @@ import org.apache.fluss.rpc.messages.ListKvSnapshotsResponse;
 import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.messages.ListPartitionInfosResponse;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressResponse;
+import org.apache.fluss.rpc.messages.ListRebalancesResponse;
 import org.apache.fluss.rpc.messages.ListRemoteLogManifestsResponse;
 import org.apache.fluss.rpc.messages.LookupRequest;
 import org.apache.fluss.rpc.messages.MetadataRequest;
@@ -92,6 +94,7 @@ import org.apache.fluss.rpc.messages.PbPrefixLookupReqForBucket;
 import org.apache.fluss.rpc.messages.PbProduceLogReqForBucket;
 import org.apache.fluss.rpc.messages.PbProducerTableOffsets;
 import org.apache.fluss.rpc.messages.PbPutKvReqForBucket;
+import org.apache.fluss.rpc.messages.PbRebalanceInfo;
 import org.apache.fluss.rpc.messages.PbRebalancePlanForBucket;
 import org.apache.fluss.rpc.messages.PbRebalanceProgressForBucket;
 import org.apache.fluss.rpc.messages.PbRebalanceProgressForTable;
@@ -656,6 +659,23 @@ public class ClientRpcMessageUtils {
                         totalRebalanceStatus,
                         progress,
                         rebalanceProgress));
+    }
+
+    public static List<RebalanceInfo> toRebalanceInfos(ListRebalancesResponse response) {
+        List<RebalanceInfo> rebalanceInfos = new ArrayList<>();
+        for (PbRebalanceInfo pbRebalanceInfo : response.getRebalanceInfosList()) {
+            rebalanceInfos.add(
+                    new RebalanceInfo(
+                            pbRebalanceInfo.getRebalanceId(),
+                            RebalanceStatus.of(pbRebalanceInfo.getRebalanceStatus()),
+                            pbRebalanceInfo.hasStartedAtMs()
+                                    ? pbRebalanceInfo.getStartedAtMs()
+                                    : -1,
+                            pbRebalanceInfo.hasCompletedAtMs()
+                                    ? pbRebalanceInfo.getCompletedAtMs()
+                                    : -1));
+        }
+        return rebalanceInfos;
     }
 
     private static RebalancePlanForBucket toRebalancePlanForBucket(
