@@ -132,11 +132,11 @@ public class COSSecurityTokenProvider {
      * Builds a default STS policy that grants {@code name/cos:*} only on the bucket (and optional
      * key prefix) referenced by the given fsUri.
      *
-     * <p>COS resource format used here: {@code qcs::cos:<region>:uid/*:<bucket>/<prefix>*}. The
-     * wildcard owner uid keeps the policy independent of the account uin while still restricting
-     * access to a specific bucket.
+     * <p>COS resource format used here: {@code
+     * qcs::cos:<region>:uid/<appid>:<bucket>/<prefix>*}. The APPID is the numeric suffix of a COS
+     * bucket name.
      */
-    private static String buildBucketScopedPolicy(URI fsUri, String region) {
+    static String buildBucketScopedPolicy(URI fsUri, String region) {
         String bucket = fsUri.getAuthority();
         if (bucket == null || bucket.isEmpty()) {
             // Fall back to all-resources policy if we cannot derive the bucket from fsUri.
@@ -156,6 +156,17 @@ public class COSSecurityTokenProvider {
                     + "}";
         }
 
+        int appIdSeparator = bucket.lastIndexOf('-');
+        String appId = appIdSeparator < 0 ? "" : bucket.substring(appIdSeparator + 1);
+        if (appId.isEmpty() || !appId.chars().allMatch(Character::isDigit)) {
+            throw new IllegalArgumentException(
+                    "Unable to derive COS APPID from bucket "
+                            + bucket
+                            + ". Expected a bucket name ending in '-<APPID>'; configure "
+                            + SECURITY_TOKEN_POLICY
+                            + " explicitly if a custom resource policy is required.");
+        }
+
         String path = fsUri.getPath();
         String prefix;
         if (path == null || path.isEmpty() || "/".equals(path)) {
@@ -168,7 +179,16 @@ public class COSSecurityTokenProvider {
             }
         }
 
-        String resource = "qcs::cos:" + region + ":uid/*:" + bucket + "/" + prefix + "*";
+        String resource =
+                "qcs::cos:"
+                        + region
+                        + ":uid/"
+                        + appId
+                        + ":"
+                        + bucket
+                        + "/"
+                        + prefix
+                        + "*";
         LOG.info("Using bucket-scoped STS policy with resource: {}", resource);
         return "{"
                 + "\"version\": \"2.0\","
