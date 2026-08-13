@@ -353,10 +353,17 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     @Override
     public CompletableFuture<LookupResponse> lookup(LookupRequest request) {
         for (PbLookupReqForBucket pbBucket : request.getBucketsReqsList()) {
-            validateBucketCountOrThrow(
-                    request.getTableId(),
-                    pbBucket.hasPartitionId() ? pbBucket.getPartitionId() : null,
-                    pbBucket.hasBucketCount() ? pbBucket.getBucketCount() : 0);
+            // Only throw on confirmed STALE_METADATA. Skip TABLET_METADATA_NOT_READY so the
+            // replica manager can return UnknownTableOrBucketException for dropped partitions,
+            // which triggers client-side metadata refresh and historical-partition fallback.
+            long tableId = request.getTableId();
+            Long partitionId = pbBucket.hasPartitionId() ? pbBucket.getPartitionId() : null;
+            int bucketCount = pbBucket.hasBucketCount() ? pbBucket.getBucketCount() : 0;
+            Errors error = metadataCache.validateBucketCount(tableId, partitionId, bucketCount);
+            if (error == Errors.STALE_METADATA) {
+                throw error.exception(
+                        error.name() + " for table " + tableId + ", partition " + partitionId);
+            }
         }
         Map<TableBucket, LookupResultForBucket> errorResponseMap = new HashMap<>();
         CompletableFuture<LookupResponse> response = new CompletableFuture<>();
