@@ -123,7 +123,7 @@ class FlussUpsertPartitionReader(
       }
     }
 
-    def createLogChangesIterator(): LogChangesIterator = {
+    def createLogChangesIterator(): CloseableIterator[KeyValueRow] = {
       // Initialize the log scanner
       logScanner = table.newScan().project(projectionWithPks).createLogScanner()
       if (tableBucket.getPartitionId == null) {
@@ -160,7 +160,14 @@ class FlussUpsertPartitionReader(
         }
       }
 
-      LogChangesIterator(allLogRecords.toArray, pkProjection, comparator)
+      // An incremental read scans up to the latest offset and applies its end bound above, so a
+      // non-empty offset range can still leave nothing behind. LogChangesIterator seeds its cursor
+      // from the first record, so it must not be handed an empty batch.
+      if (allLogRecords.isEmpty) {
+        CloseableIterator.emptyIterator[KeyValueRow]()
+      } else {
+        LogChangesIterator(allLogRecords.toArray, pkProjection, comparator)
+      }
     }
 
     def createSnapshotIterator(): CloseableIterator[LogRecord] = {

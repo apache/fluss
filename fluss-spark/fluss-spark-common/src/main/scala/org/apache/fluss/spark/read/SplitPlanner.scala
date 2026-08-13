@@ -773,8 +773,9 @@ class UpsertPlanner(
         val startOffset = Long2long(startBucketOffsets.get(Integer.valueOf(bucketId)))
         val stopOffset = Long2long(stoppingBucketOffsets.get(Integer.valueOf(bucketId)))
         if (startOffset >= stopOffset) {
-          // Empty range (e.g. a time-range window with no data, or an empty bucket): emit no
-          // partition so the upsert reader is not handed an invalid [start, start) range.
+          // The start timestamp resolved past the end of the log, so there is nothing to read.
+          // A window that is empty only in time still yields start < stop, because the stop offset
+          // is the latest offset and the end bound is applied by the reader.
           None
         } else {
           Some(
