@@ -19,11 +19,15 @@ package org.apache.fluss.client.utils;
 
 import org.apache.fluss.client.write.KvWriteBatch;
 import org.apache.fluss.client.write.ReadyWriteBatch;
+import org.apache.fluss.cluster.rebalance.RebalanceInfo;
+import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.memory.PreAllocatedPagedOutputView;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.rpc.messages.ListRebalancesResponse;
+import org.apache.fluss.rpc.messages.PbRebalanceInfo;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.protocol.MergeMode;
 
@@ -124,6 +128,39 @@ class ClientRpcMessageUtilsTest {
                 ClientRpcMessageUtils.makePutKvRequest(TABLE_ID, ACKS, TIMEOUT_MS, readyBatches);
 
         assertThat(request.getAggMode()).isEqualTo(MergeMode.OVERWRITE.getProtoValue());
+    }
+
+    @Test
+    void testToRebalanceInfosWithUnsetTimestampsMapToMinusOne() {
+        ListRebalancesResponse response = new ListRebalancesResponse();
+        PbRebalanceInfo pbRebalanceInfo = response.addRebalanceInfo();
+        pbRebalanceInfo
+                .setRebalanceId("rebalance-1")
+                .setRebalanceStatus(RebalanceStatus.COMPLETED.getCode());
+
+        List<RebalanceInfo> rebalanceInfos = ClientRpcMessageUtils.toRebalanceInfos(response);
+
+        assertThat(rebalanceInfos)
+                .containsExactly(
+                        new RebalanceInfo("rebalance-1", RebalanceStatus.COMPLETED, -1, -1));
+    }
+
+    @Test
+    void testToRebalanceInfosWithSetTimestampsPassThrough() {
+        ListRebalancesResponse response = new ListRebalancesResponse();
+        PbRebalanceInfo pbRebalanceInfo = response.addRebalanceInfo();
+        pbRebalanceInfo
+                .setRebalanceId("rebalance-1")
+                .setRebalanceStatus(RebalanceStatus.COMPLETED.getCode())
+                .setStartedAtMs(1_000L)
+                .setCompletedAtMs(2_000L);
+
+        List<RebalanceInfo> rebalanceInfos = ClientRpcMessageUtils.toRebalanceInfos(response);
+
+        assertThat(rebalanceInfos)
+                .containsExactly(
+                        new RebalanceInfo(
+                                "rebalance-1", RebalanceStatus.COMPLETED, 1_000L, 2_000L));
     }
 
     private KvWriteBatch createKvWriteBatch(int bucketId, MergeMode mergeMode) throws Exception {
