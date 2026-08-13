@@ -18,6 +18,7 @@
 package org.apache.fluss.lake.paimon.tiering.append;
 
 import org.apache.fluss.lake.paimon.tiering.RecordWriter;
+import org.apache.fluss.lake.paimon.utils.PaimonSystemColumns.LakeLayout;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.ArrowBatchData;
 import org.apache.fluss.record.LogRecord;
@@ -46,12 +47,15 @@ public class AppendOnlyWriter extends RecordWriter<InternalRow> {
      */
     @Nullable private AutoCloseable arrowBatchHelper;
 
+    private final LakeLayout lakeLayout;
+
     public AppendOnlyWriter(
             FileStoreTable fileStoreTable,
             TableBucket tableBucket,
             @Nullable String partition,
             List<String> partitionKeys,
-            RowType flussRowType) {
+            RowType flussRowType,
+            LakeLayout lakeLayout) {
         //noinspection unchecked
         super(
                 (TableWriteImpl<InternalRow>)
@@ -61,8 +65,10 @@ public class AppendOnlyWriter extends RecordWriter<InternalRow> {
                 tableBucket,
                 partition,
                 partitionKeys,
-                flussRowType);
+                flussRowType,
+                lakeLayout);
         this.fileStoreTable = fileStoreTable;
+        this.lakeLayout = lakeLayout;
     }
 
     @Override
@@ -90,7 +96,7 @@ public class AppendOnlyWriter extends RecordWriter<InternalRow> {
         if (arrowBatchHelper == null) {
             helper =
                     new AppendOnlyArrowBatchHelper(
-                            fileStoreTable, tableWrite, tableRowType, bucket);
+                            fileStoreTable, tableWrite, tableRowType, bucket, lakeLayout);
             arrowBatchHelper = helper;
         } else {
             helper = (AppendOnlyArrowBatchHelper) arrowBatchHelper;

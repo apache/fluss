@@ -17,6 +17,7 @@
 
 package org.apache.fluss.lake.paimon.tiering.append;
 
+import org.apache.fluss.lake.paimon.utils.PaimonSystemColumns.LakeLayout;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.record.ArrowBatchData;
 
@@ -57,6 +58,7 @@ class AppendOnlyArrowBatchHelper implements AutoCloseable {
     private final TableWriteImpl<InternalRow> tableWrite;
     private final RowType tableRowType;
     private final int bucket;
+    private final LakeLayout lakeLayout;
 
     private static final Field BUCKET_FIELD =
             new Field(
@@ -88,11 +90,13 @@ class AppendOnlyArrowBatchHelper implements AutoCloseable {
             FileStoreTable fileStoreTable,
             TableWriteImpl<InternalRow> tableWrite,
             RowType tableRowType,
-            int bucket) {
+            int bucket,
+            LakeLayout lakeLayout) {
         this.fileStoreTable = fileStoreTable;
         this.tableWrite = tableWrite;
         this.tableRowType = tableRowType;
         this.bucket = bucket;
+        this.lakeLayout = lakeLayout;
     }
 
     /**
@@ -107,6 +111,16 @@ class AppendOnlyArrowBatchHelper implements AutoCloseable {
         }
 
         VectorSchemaRoot originalRoot = arrowBatchData.getVectorSchemaRoot();
+
+        if (lakeLayout == LakeLayout.CLEAN) {
+            // Clean tables contain only user columns, so the incoming Arrow batch already matches
+            // the Paimon table schema. Write it directly without enriching system columns.
+            ArrowBundleRecords cleanRecords =
+                    new ArrowBundleRecords(originalRoot, tableRowType, false);
+            tableWrite.writeBundle(partition, writtenBucket, cleanRecords);
+            return;
+        }
+
         long baseOffset = arrowBatchData.getBaseLogOffset();
         long timestamp = arrowBatchData.getTimestamp();
         int rowCount = originalRoot.getRowCount();

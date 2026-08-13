@@ -18,6 +18,7 @@
 package org.apache.fluss.lake.paimon.tiering.mergetree;
 
 import org.apache.fluss.lake.paimon.tiering.RecordWriter;
+import org.apache.fluss.lake.paimon.utils.PaimonSystemColumns.LakeLayout;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.types.RowType;
@@ -49,8 +50,16 @@ public class MergeTreeWriter extends RecordWriter<KeyValue> {
             TableBucket tableBucket,
             @Nullable String partition,
             List<String> partitionKeys,
-            RowType flussRowType) {
-        this(fileStoreTable, tableBucket, partition, partitionKeys, flussRowType, (String[]) null);
+            RowType flussRowType,
+            LakeLayout lakeLayout) {
+        this(
+                fileStoreTable,
+                tableBucket,
+                partition,
+                partitionKeys,
+                flussRowType,
+                (String[]) null,
+                lakeLayout);
     }
 
     public MergeTreeWriter(
@@ -59,14 +68,16 @@ public class MergeTreeWriter extends RecordWriter<KeyValue> {
             @Nullable String partition,
             List<String> partitionKeys,
             RowType flussRowType,
-            @Nullable String[] ioTmpDirs) {
+            @Nullable String[] ioTmpDirs,
+            LakeLayout lakeLayout) {
         this(
                 fileStoreTable,
                 createIOManager(ioTmpDirs),
                 tableBucket,
                 partition,
                 partitionKeys,
-                flussRowType);
+                flussRowType,
+                lakeLayout);
     }
 
     MergeTreeWriter(
@@ -75,14 +86,16 @@ public class MergeTreeWriter extends RecordWriter<KeyValue> {
             TableBucket tableBucket,
             @Nullable String partition,
             List<String> partitionKeys,
-            RowType flussRowType) {
+            RowType flussRowType,
+            LakeLayout lakeLayout) {
         super(
                 createTableWrite(fileStoreTable, ioManager),
                 fileStoreTable.rowType(),
                 tableBucket,
                 partition,
                 partitionKeys,
-                flussRowType);
+                flussRowType,
+                lakeLayout);
         this.rowKeyExtractor = fileStoreTable.createRowKeyExtractor();
         this.ioManager = ioManager;
     }

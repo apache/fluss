@@ -51,6 +51,7 @@ import java.util.Set;
 import java.util.function.Function;
 
 import static org.apache.fluss.lake.paimon.PaimonLakeCatalog.SYSTEM_COLUMNS;
+import static org.apache.fluss.lake.paimon.utils.PaimonSystemColumns.LakeLayout;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
 /** Utils for conversion between Paimon and Fluss. */
@@ -172,7 +173,8 @@ public class PaimonConversions {
         return partitionExtractor.apply(new FlussRowAsPaimonRow(partitionRow, paimonRowType));
     }
 
-    public static List<SchemaChange> toPaimonSchemaChanges(List<TableChange> tableChanges) {
+    public static List<SchemaChange> toPaimonSchemaChanges(
+            List<TableChange> tableChanges, LakeLayout lakeLayout) {
         List<SchemaChange> schemaChanges = new ArrayList<>(tableChanges.size());
 
         for (TableChange tableChange : tableChanges) {
@@ -203,14 +205,27 @@ public class PaimonConversions {
                 org.apache.paimon.types.DataType paimonDataType =
                         flussDataType.accept(FlussDataTypeToPaimonDataType.INSTANCE);
 
-                String firstSystemColumnName = SYSTEM_COLUMNS.keySet().iterator().next();
-                schemaChanges.add(
-                        SchemaChange.addColumn(
-                                addColumn.getName(),
-                                paimonDataType,
-                                addColumn.getComment(),
-                                SchemaChange.Move.before(
-                                        addColumn.getName(), firstSystemColumnName)));
+                if (lakeLayout == LakeLayout.LEGACY) {
+                    // Legacy tables keep the three system columns as the last physical columns, so
+                    // a new business column must be inserted right before the first system column.
+                    String firstSystemColumnName = SYSTEM_COLUMNS.keySet().iterator().next();
+                    schemaChanges.add(
+                            SchemaChange.addColumn(
+                                    addColumn.getName(),
+                                    paimonDataType,
+                                    addColumn.getComment(),
+                                    SchemaChange.Move.before(
+                                            addColumn.getName(), firstSystemColumnName)));
+                } else {
+                    // Clean tables have no trailing system columns, so a new business column is
+                    // simply appended at the end.
+                    schemaChanges.add(
+                            SchemaChange.addColumn(
+                                    addColumn.getName(),
+                                    paimonDataType,
+                                    addColumn.getComment(),
+                                    null));
+                }
             } else {
                 throw new UnsupportedOperationException(
                         "Unsupported table change: " + tableChange.getClass());
@@ -264,10 +279,10 @@ public class PaimonConversions {
                     column.getComment().orElse(null));
         }
 
-        // add system metadata columns to schema
-        for (Map.Entry<String, DataType> systemColumn : SYSTEM_COLUMNS.entrySet()) {
-            schemaBuilder.column(systemColumn.getKey(), systemColumn.getValue());
-        }
+        // FIP-27: newly created lake tables use a clean physical schema containing only
+        // user-defined columns. The three Fluss system columns (__bucket, __offset, __timestamp)
+        // are no longer added. Existing legacy tables that still carry these columns remain
+        // readable and writable, see PaimonSystemColumns#detectLayout.
 
         // set pk
         if (tableDescriptor.hasPrimaryKey()) {

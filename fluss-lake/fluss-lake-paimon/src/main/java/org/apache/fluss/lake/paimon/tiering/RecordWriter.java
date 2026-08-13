@@ -17,6 +17,7 @@
 
 package org.apache.fluss.lake.paimon.tiering;
 
+import org.apache.fluss.lake.paimon.utils.PaimonSystemColumns.LakeLayout;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.LogRecord;
@@ -49,7 +50,8 @@ public abstract class RecordWriter<T> implements AutoCloseable {
             TableBucket tableBucket,
             @Nullable String partition,
             List<String> partitionKeys,
-            org.apache.fluss.types.RowType flussRowType) {
+            org.apache.fluss.types.RowType flussRowType,
+            LakeLayout lakeLayout) {
         this.tableWrite = tableWrite;
         this.tableRowType = tableRowType;
         this.bucket = tableBucket.getBucket();
@@ -62,7 +64,7 @@ public abstract class RecordWriter<T> implements AutoCloseable {
             this.partition = resolvePartition(partition, partitionKeys, flussRowType);
         }
         this.flussRecordAsPaimonRow =
-                new FlussRecordAsPaimonRow(tableBucket.getBucket(), tableRowType);
+                new FlussRecordAsPaimonRow(tableBucket.getBucket(), tableRowType, lakeLayout);
     }
 
     public abstract void write(LogRecord record) throws Exception;

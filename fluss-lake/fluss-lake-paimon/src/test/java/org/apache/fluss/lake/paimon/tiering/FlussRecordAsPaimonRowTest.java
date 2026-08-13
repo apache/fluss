@@ -17,6 +17,7 @@
 
 package org.apache.fluss.lake.paimon.tiering;
 
+import org.apache.fluss.lake.paimon.utils.PaimonSystemColumns.LakeLayout;
 import org.apache.fluss.record.GenericRecord;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.row.BinaryString;
@@ -75,7 +76,7 @@ class FlussRecordAsPaimonRowTest {
                         new org.apache.paimon.types.LocalZonedTimestampType(3));
 
         FlussRecordAsPaimonRow flussRecordAsPaimonRow =
-                new FlussRecordAsPaimonRow(tableBucket, tableRowType);
+                new FlussRecordAsPaimonRow(tableBucket, tableRowType, LakeLayout.LEGACY);
         long logOffset = 0;
         long timeStamp = System.currentTimeMillis();
         GenericRow genericRow = new GenericRow(14);
@@ -143,7 +144,7 @@ class FlussRecordAsPaimonRowTest {
                         new org.apache.paimon.types.BigIntType(),
                         new org.apache.paimon.types.LocalZonedTimestampType(3));
         FlussRecordAsPaimonRow flussRecordAsPaimonRow =
-                new FlussRecordAsPaimonRow(tableBucket, tableRowType);
+                new FlussRecordAsPaimonRow(tableBucket, tableRowType, LakeLayout.LEGACY);
         long logOffset = 0;
         long timeStamp = System.currentTimeMillis();
         GenericRow genericRow = new GenericRow(1);
@@ -185,7 +186,7 @@ class FlussRecordAsPaimonRowTest {
                         new org.apache.paimon.types.LocalZonedTimestampType(3));
 
         FlussRecordAsPaimonRow flussRecordAsPaimonRow =
-                new FlussRecordAsPaimonRow(tableBucket, tableRowType);
+                new FlussRecordAsPaimonRow(tableBucket, tableRowType, LakeLayout.LEGACY);
         long logOffset = 10;
         long timeStamp = System.currentTimeMillis();
         GenericRow genericRow = new GenericRow(2);
@@ -224,7 +225,7 @@ class FlussRecordAsPaimonRowTest {
                         new org.apache.paimon.types.LocalZonedTimestampType(3));
 
         FlussRecordAsPaimonRow flussRecordAsPaimonRow =
-                new FlussRecordAsPaimonRow(tableBucket, tableRowType);
+                new FlussRecordAsPaimonRow(tableBucket, tableRowType, LakeLayout.LEGACY);
         long logOffset = 5;
         long timeStamp = System.currentTimeMillis();
         GenericRow genericRow = new GenericRow(1);
@@ -259,7 +260,7 @@ class FlussRecordAsPaimonRowTest {
                         new org.apache.paimon.types.LocalZonedTimestampType(3));
 
         FlussRecordAsPaimonRow flussRecordAsPaimonRow =
-                new FlussRecordAsPaimonRow(tableBucket, tableRowType);
+                new FlussRecordAsPaimonRow(tableBucket, tableRowType, LakeLayout.LEGACY);
         long logOffset = 0;
         long timeStamp = System.currentTimeMillis();
         GenericRow genericRow = new GenericRow(1);
@@ -313,7 +314,7 @@ class FlussRecordAsPaimonRowTest {
                         new org.apache.paimon.types.LocalZonedTimestampType(3));
 
         FlussRecordAsPaimonRow flussRecordAsPaimonRow =
-                new FlussRecordAsPaimonRow(tableBucket, tableRowType);
+                new FlussRecordAsPaimonRow(tableBucket, tableRowType, LakeLayout.LEGACY);
         long logOffset = 0;
         long timeStamp = System.currentTimeMillis();
         GenericRow genericRow = new GenericRow(7);
@@ -386,7 +387,7 @@ class FlussRecordAsPaimonRowTest {
                         new org.apache.paimon.types.LocalZonedTimestampType(3));
 
         FlussRecordAsPaimonRow flussRecordAsPaimonRow =
-                new FlussRecordAsPaimonRow(tableBucket, tableRowType);
+                new FlussRecordAsPaimonRow(tableBucket, tableRowType, LakeLayout.LEGACY);
         long logOffset = 0;
         long timeStamp = System.currentTimeMillis();
         GenericRow genericRow = new GenericRow(1);
@@ -420,7 +421,7 @@ class FlussRecordAsPaimonRowTest {
                         new org.apache.paimon.types.LocalZonedTimestampType(3));
 
         FlussRecordAsPaimonRow flussRecordAsPaimonRow =
-                new FlussRecordAsPaimonRow(tableBucket, tableRowType);
+                new FlussRecordAsPaimonRow(tableBucket, tableRowType, LakeLayout.LEGACY);
         long logOffset = 0;
         long timeStamp = System.currentTimeMillis();
         GenericRow genericRow = new GenericRow(1);
@@ -454,7 +455,7 @@ class FlussRecordAsPaimonRowTest {
                         new org.apache.paimon.types.LocalZonedTimestampType(3));
 
         FlussRecordAsPaimonRow flussRecordAsPaimonRow =
-                new FlussRecordAsPaimonRow(tableBucket, tableRowType);
+                new FlussRecordAsPaimonRow(tableBucket, tableRowType, LakeLayout.LEGACY);
         long logOffset = 0;
         long timeStamp = System.currentTimeMillis();
         GenericRow genericRow = new GenericRow(1);
@@ -483,7 +484,7 @@ class FlussRecordAsPaimonRowTest {
                         new org.apache.paimon.types.LocalZonedTimestampType(3));
 
         FlussRecordAsPaimonRow flussRecordAsPaimonRow =
-                new FlussRecordAsPaimonRow(tableBucket, tableRowType);
+                new FlussRecordAsPaimonRow(tableBucket, tableRowType, LakeLayout.LEGACY);
         long logOffset = 0;
         long timeStamp = System.currentTimeMillis();
         GenericRow genericRow = new GenericRow(1);
@@ -508,7 +509,7 @@ class FlussRecordAsPaimonRowTest {
                         new org.apache.paimon.types.LocalZonedTimestampType(3));
 
         FlussRecordAsPaimonRow flussRecordAsPaimonRow =
-                new FlussRecordAsPaimonRow(tableBucket, tableRowType);
+                new FlussRecordAsPaimonRow(tableBucket, tableRowType, LakeLayout.LEGACY);
         long logOffset = 0;
         long timeStamp = System.currentTimeMillis();
         GenericRow genericRow = new GenericRow(1);
@@ -537,7 +538,7 @@ class FlussRecordAsPaimonRowTest {
                         new org.apache.paimon.types.LocalZonedTimestampType(3));
 
         FlussRecordAsPaimonRow flussRecordAsPaimonRow =
-                new FlussRecordAsPaimonRow(tableBucket, tableRowType);
+                new FlussRecordAsPaimonRow(tableBucket, tableRowType, LakeLayout.LEGACY);
         long logOffset = 0;
         long timeStamp = System.currentTimeMillis();
         GenericRow genericRow = new GenericRow(1);
@@ -564,7 +565,7 @@ class FlussRecordAsPaimonRowTest {
                         new org.apache.paimon.types.LocalZonedTimestampType(3));
 
         FlussRecordAsPaimonRow flussRecordAsPaimonRow =
-                new FlussRecordAsPaimonRow(tableBucket, tableRowType);
+                new FlussRecordAsPaimonRow(tableBucket, tableRowType, LakeLayout.LEGACY);
 
         long logOffset = 7L;
         long timeStamp = System.currentTimeMillis();
@@ -595,7 +596,7 @@ class FlussRecordAsPaimonRowTest {
                         new org.apache.paimon.types.LocalZonedTimestampType(3));
 
         FlussRecordAsPaimonRow flussRecordAsPaimonRow =
-                new FlussRecordAsPaimonRow(tableBucket, tableRowType);
+                new FlussRecordAsPaimonRow(tableBucket, tableRowType, LakeLayout.LEGACY);
 
         long logOffset = 7L;
         long timeStamp = System.currentTimeMillis();
@@ -690,7 +691,7 @@ class FlussRecordAsPaimonRowTest {
                         new org.apache.paimon.types.LocalZonedTimestampType(3));
 
         FlussRecordAsPaimonRow flussRecordAsPaimonRow =
-                new FlussRecordAsPaimonRow(tableBucket, tableRowType);
+                new FlussRecordAsPaimonRow(tableBucket, tableRowType, LakeLayout.LEGACY);
         long logOffset = 0;
         long timeStamp = System.currentTimeMillis();
         GenericRow genericRow = new GenericRow(8);
@@ -918,7 +919,7 @@ class FlussRecordAsPaimonRowTest {
                         new org.apache.paimon.types.LocalZonedTimestampType(3));
 
         FlussRecordAsPaimonRow flussRecordAsPaimonRow =
-                new FlussRecordAsPaimonRow(tableBucket, nestedMapRowType);
+                new FlussRecordAsPaimonRow(tableBucket, nestedMapRowType, LakeLayout.LEGACY);
         long logOffset = 0;
         long timeStamp = System.currentTimeMillis();
         GenericRow nestedMapGenericRow = new GenericRow(1);
@@ -971,7 +972,7 @@ class FlussRecordAsPaimonRowTest {
                         new org.apache.paimon.types.BigIntType(),
                         new org.apache.paimon.types.LocalZonedTimestampType(3));
 
-        FlussRecordAsPaimonRow flussRow = new FlussRecordAsPaimonRow(tableBucket, rowType);
+        FlussRecordAsPaimonRow flussRow = new FlussRecordAsPaimonRow(tableBucket, rowType, LakeLayout.LEGACY);
         GenericRow genericRow = new GenericRow(1);
         genericRow.setField(0, new GenericMap(mapData));
         LogRecord logRecord = new GenericRecord(logOffset, timeStamp, APPEND_ONLY, genericRow);
@@ -997,7 +998,7 @@ class FlussRecordAsPaimonRowTest {
                         new org.apache.paimon.types.LocalZonedTimestampType(3));
 
         FlussRecordAsPaimonRow flussRecordAsPaimonRow =
-                new FlussRecordAsPaimonRow(tableBucket, tableRowType);
+                new FlussRecordAsPaimonRow(tableBucket, tableRowType, LakeLayout.LEGACY);
         long logOffset = 0;
         long timeStamp = System.currentTimeMillis();
         GenericRow genericRow = new GenericRow(1);
@@ -1023,7 +1024,7 @@ class FlussRecordAsPaimonRowTest {
                         new org.apache.paimon.types.LocalZonedTimestampType(3));
 
         FlussRecordAsPaimonRow flussRecordAsPaimonRow =
-                new FlussRecordAsPaimonRow(tableBucket, tableRowType);
+                new FlussRecordAsPaimonRow(tableBucket, tableRowType, LakeLayout.LEGACY);
         long logOffset = 0;
         long timeStamp = System.currentTimeMillis();
         GenericRow genericRow = new GenericRow(1);
@@ -1058,7 +1059,7 @@ class FlussRecordAsPaimonRowTest {
                         new org.apache.paimon.types.LocalZonedTimestampType(3));
 
         FlussRecordAsPaimonRow flussRecordAsPaimonRow =
-                new FlussRecordAsPaimonRow(tableBucket, tableRowType);
+                new FlussRecordAsPaimonRow(tableBucket, tableRowType, LakeLayout.LEGACY);
         long logOffset = 0;
         long timeStamp = System.currentTimeMillis();
         GenericRow genericRow = new GenericRow(1);
@@ -1082,7 +1083,7 @@ class FlussRecordAsPaimonRowTest {
                         new org.apache.paimon.types.IntType(),
                         new org.apache.paimon.types.BigIntType(),
                         new org.apache.paimon.types.LocalZonedTimestampType(3));
-        FlussRecordAsPaimonRow row = new FlussRecordAsPaimonRow(0, rowType);
+        FlussRecordAsPaimonRow row = new FlussRecordAsPaimonRow(0, rowType, LakeLayout.LEGACY);
         assertThatThrownBy(row::getRowKind)
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining(expectedMsg);

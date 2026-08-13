@@ -18,6 +18,7 @@
 package org.apache.fluss.lake.paimon.tiering;
 
 import org.apache.fluss.lake.paimon.source.FlussRowAsPaimonRow;
+import org.apache.fluss.lake.paimon.utils.PaimonSystemColumns.LakeLayout;
 import org.apache.fluss.record.LogRecord;
 
 import org.apache.paimon.data.InternalRow;
@@ -34,6 +35,7 @@ import static org.apache.fluss.utils.Preconditions.checkState;
 public class FlussRecordAsPaimonRow extends FlussRowAsPaimonRow {
 
     private final int bucket;
+    private final LakeLayout lakeLayout;
     private LogRecord logRecord;
     private int originRowFieldCount;
     private final int businessFieldCount;
@@ -41,13 +43,23 @@ public class FlussRecordAsPaimonRow extends FlussRowAsPaimonRow {
     private final int offsetFieldIndex;
     private final int timestampFieldIndex;
 
-    public FlussRecordAsPaimonRow(int bucket, RowType tableTowType) {
+    public FlussRecordAsPaimonRow(int bucket, RowType tableTowType, LakeLayout lakeLayout) {
         super(tableTowType);
         this.bucket = bucket;
-        this.businessFieldCount = tableRowType.getFieldCount() - SYSTEM_COLUMNS.size();
-        this.bucketFieldIndex = businessFieldCount;
-        this.offsetFieldIndex = businessFieldCount + 1;
-        this.timestampFieldIndex = businessFieldCount + 2;
+        this.lakeLayout = lakeLayout;
+        if (lakeLayout == LakeLayout.LEGACY) {
+            // Legacy tables append the three system columns after the business columns.
+            this.businessFieldCount = tableRowType.getFieldCount() - SYSTEM_COLUMNS.size();
+            this.bucketFieldIndex = businessFieldCount;
+            this.offsetFieldIndex = businessFieldCount + 1;
+            this.timestampFieldIndex = businessFieldCount + 2;
+        } else {
+            // Clean tables contain only business columns; there are no system fields to emit.
+            this.businessFieldCount = tableRowType.getFieldCount();
+            this.bucketFieldIndex = -1;
+            this.offsetFieldIndex = -1;
+            this.timestampFieldIndex = -1;
+        }
     }
 
     public void setFlussRecord(LogRecord logRecord) {

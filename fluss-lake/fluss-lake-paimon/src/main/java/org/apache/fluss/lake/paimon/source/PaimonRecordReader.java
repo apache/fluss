@@ -19,6 +19,8 @@
 package org.apache.fluss.lake.paimon.source;
 
 import org.apache.fluss.lake.paimon.utils.PaimonRowAsFlussRow;
+import org.apache.fluss.lake.paimon.utils.PaimonSystemColumns;
+import org.apache.fluss.lake.paimon.utils.PaimonSystemColumns.LakeLayout;
 import org.apache.fluss.lake.source.RecordReader;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.GenericRecord;
@@ -46,6 +48,14 @@ import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
 /** Record reader for paimon table. */
 public class PaimonRecordReader implements RecordReader {
 
+    /**
+     * Sentinel log offset / timestamp emitted for rows read from a clean lake table, which does not
+     * store the {@code __offset} / {@code __timestamp} system columns. A negative offset is
+     * interpreted downstream as "no valid offset" (snapshot phase), see {@code
+     * LakeRecordRecordEmitter}.
+     */
+    private static final long NO_SYSTEM_COLUMN_VALUE = -1L;
+
     protected PaimonRowAsFlussRecordIterator iterator;
     protected @Nullable int[][] project;
     protected RowType paimonRowType;
@@ -56,10 +66,12 @@ public class PaimonRecordReader implements RecordReader {
             @Nullable int[][] project,
             @Nullable Predicate predicate)
             throws IOException {
+        LakeLayout lakeLayout =
+                PaimonSystemColumns.detectLayout(fileStoreTable.schema().logicalRowType());
         ReadBuilder readBuilder = fileStoreTable.newReadBuilder();
         RowType paimonFullRowType = fileStoreTable.rowType();
         if (project != null) {
-            readBuilder = applyProject(readBuilder, project, paimonFullRowType);
+            readBuilder = applyProject(readBuilder, project, paimonFullRowType, lakeLayout);
         }
 
         if (predicate != null) {
@@ -71,13 +83,15 @@ public class PaimonRecordReader implements RecordReader {
         if (split == null) {
             iterator =
                     new PaimonRecordReader.PaimonRowAsFlussRecordIterator(
-                            org.apache.paimon.utils.CloseableIterator.empty(), paimonRowType);
+                            org.apache.paimon.utils.CloseableIterator.empty(),
+                            paimonRowType,
+                            lakeLayout);
         } else {
             org.apache.paimon.reader.RecordReader<InternalRow> recordReader =
                     tableRead.createReader(split.dataSplit());
             iterator =
                     new PaimonRecordReader.PaimonRowAsFlussRecordIterator(
-                            recordReader.toCloseableIterator(), paimonRowType);
+                            recordReader.toCloseableIterator(), paimonRowType, lakeLayout);
         }
     }
 
@@ -87,9 +101,19 @@ public class PaimonRecordReader implements RecordReader {
     }
 
     private ReadBuilder applyProject(
-            ReadBuilder readBuilder, int[][] projects, RowType paimonFullRowType) {
+            ReadBuilder readBuilder,
+            int[][] projects,
+            RowType paimonFullRowType,
+            LakeLayout lakeLayout) {
         int[] projectIds = Arrays.stream(projects).mapToInt(project -> project[0]).toArray();
 
+        if (lakeLayout == LakeLayout.CLEAN) {
+            // Clean tables have no system columns to read, so project the business columns only.
+            return readBuilder.withProjection(projectIds);
+        }
+
+        // Legacy tables carry __offset/__timestamp, which the iterator needs to recover the log
+        // offset and timestamp of each record; append them to the projection.
         int offsetFieldPos = paimonFullRowType.getFieldIndex(OFFSET_COLUMN_NAME);
         int timestampFieldPos = paimonFullRowType.getFieldIndex(TIMESTAMP_COLUMN_NAME);
 
@@ -115,13 +139,28 @@ public class PaimonRecordReader implements RecordReader {
 
         public PaimonRowAsFlussRecordIterator(
                 org.apache.paimon.utils.CloseableIterator<InternalRow> paimonRowIterator,
-                RowType paimonRowType) {
+                RowType paimonRowType,
+                LakeLayout lakeLayout) {
             this.paimonRowIterator = paimonRowIterator;
-            this.logOffsetColIndex = paimonRowType.getFieldIndex(OFFSET_COLUMN_NAME);
-            this.timestampColIndex = paimonRowType.getFieldIndex(TIMESTAMP_COLUMN_NAME);
 
-            int[] project = IntStream.range(0, paimonRowType.getFieldCount() - 2).toArray();
-            projectedRow = ProjectedRow.from(project);
+            int fieldCount = paimonRowType.getFieldCount();
+            if (lakeLayout == LakeLayout.CLEAN) {
+                // No system columns are read; all projected fields are business fields, and the
+                // log offset / timestamp are not available from the lake table.
+                this.logOffsetColIndex = -1;
+                this.timestampColIndex = -1;
+                projectedRow = ProjectedRow.from(IntStream.range(0, fieldCount).toArray());
+            } else {
+                // Legacy layout: applyProject appended exactly __offset and __timestamp (not
+                // __bucket) as the last two projected fields, so the business fields are all fields
+                // except those trailing two.
+                this.logOffsetColIndex = paimonRowType.getFieldIndex(OFFSET_COLUMN_NAME);
+                this.timestampColIndex = paimonRowType.getFieldIndex(TIMESTAMP_COLUMN_NAME);
+                int[] project = IntStream.range(0, fieldCount - 2).toArray();
+                projectedRow = ProjectedRow.from(project);
+            }
+            // The wrapped row is only ever accessed by index through projectedRow, which already
+            // drops the system columns, so no trailing-system-column trimming is needed here.
             paimonRowAsFlussRow = new PaimonRowAsFlussRow();
         }
 
@@ -143,8 +182,14 @@ public class PaimonRecordReader implements RecordReader {
         public LogRecord next() {
             InternalRow paimonRow = paimonRowIterator.next();
             ChangeType changeType = toChangeType(paimonRow.getRowKind());
-            long offset = paimonRow.getLong(logOffsetColIndex);
-            long timestamp = paimonRow.getTimestamp(timestampColIndex, 6).getMillisecond();
+            long offset =
+                    logOffsetColIndex < 0
+                            ? NO_SYSTEM_COLUMN_VALUE
+                            : paimonRow.getLong(logOffsetColIndex);
+            long timestamp =
+                    timestampColIndex < 0
+                            ? NO_SYSTEM_COLUMN_VALUE
+                            : paimonRow.getTimestamp(timestampColIndex, 6).getMillisecond();
 
             return new GenericRecord(
                     offset,

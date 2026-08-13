@@ -21,6 +21,8 @@ import org.apache.fluss.lake.batch.ArrowRecordBatch;
 import org.apache.fluss.lake.batch.RecordBatch;
 import org.apache.fluss.lake.paimon.tiering.append.AppendOnlyWriter;
 import org.apache.fluss.lake.paimon.tiering.mergetree.MergeTreeWriter;
+import org.apache.fluss.lake.paimon.utils.PaimonSystemColumns;
+import org.apache.fluss.lake.paimon.utils.PaimonSystemColumns.LakeLayout;
 import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.lake.writer.SupportsRecordBatchWrite;
 import org.apache.fluss.lake.writer.WriterInitContext;
@@ -58,6 +60,12 @@ public class PaimonLakeWriter implements LakeWriter<PaimonWriteResult>, Supports
         List<String> partitionKeys = fileStoreTable.partitionKeys();
         RowType flussRowType = writerInitContext.tableInfo().getRowType();
 
+        // FIP-27: detect whether the target Paimon table is a clean table (only user columns) or a
+        // legacy table (carrying the three Fluss system columns). Writers emit system columns only
+        // for legacy tables.
+        LakeLayout lakeLayout =
+                PaimonSystemColumns.detectLayout(fileStoreTable.schema().logicalRowType());
+
         this.recordWriter =
                 fileStoreTable.primaryKeys().isEmpty()
                         ? new AppendOnlyWriter(
@@ -65,14 +73,16 @@ public class PaimonLakeWriter implements LakeWriter<PaimonWriteResult>, Supports
                                 writerInitContext.tableBucket(),
                                 writerInitContext.partition(),
                                 partitionKeys,
-                                flussRowType)
+                                flussRowType,
+                                lakeLayout)
                         : new MergeTreeWriter(
                                 fileStoreTable,
                                 writerInitContext.tableBucket(),
                                 writerInitContext.partition(),
                                 partitionKeys,
                                 flussRowType,
-                                writerInitContext.ioTmpDirs());
+                                writerInitContext.ioTmpDirs(),
+                                lakeLayout);
     }
 
     @Override
