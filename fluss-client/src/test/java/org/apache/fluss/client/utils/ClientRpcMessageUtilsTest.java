@@ -19,6 +19,8 @@ package org.apache.fluss.client.utils;
 
 import org.apache.fluss.client.write.KvWriteBatch;
 import org.apache.fluss.client.write.ReadyWriteBatch;
+import org.apache.fluss.cluster.rebalance.RebalanceInfo;
+import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.memory.PreAllocatedPagedOutputView;
 import org.apache.fluss.metadata.BucketInfo;
@@ -31,10 +33,12 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.DescribeBucketsResponse;
 import org.apache.fluss.rpc.messages.ListPartitionInfosResponse;
+import org.apache.fluss.rpc.messages.ListRebalancesResponse;
 import org.apache.fluss.rpc.messages.PbBucketInfo;
 import org.apache.fluss.rpc.messages.PbKeyValue;
 import org.apache.fluss.rpc.messages.PbPartitionInfo;
 import org.apache.fluss.rpc.messages.PbPartitionSpec;
+import org.apache.fluss.rpc.messages.PbRebalanceInfo;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.protocol.MergeMode;
 
@@ -180,6 +184,39 @@ class ClientRpcMessageUtilsTest {
         assertThat(withoutBucketCount.getPartitionName()).isEqualTo("20240102");
         assertThat(withoutBucketCount.getRemoteDataDir()).isNull();
         assertThat(withoutBucketCount.getBucketCount()).isEqualTo(4);
+    }
+
+    @Test
+    void testToRebalanceInfosWithUnsetTimestampsMapToMinusOne() {
+        ListRebalancesResponse response = new ListRebalancesResponse();
+        PbRebalanceInfo pbRebalanceInfo = response.addRebalanceInfo();
+        pbRebalanceInfo
+                .setRebalanceId("rebalance-1")
+                .setRebalanceStatus(RebalanceStatus.COMPLETED.getCode());
+
+        List<RebalanceInfo> rebalanceInfos = ClientRpcMessageUtils.toRebalanceInfos(response);
+
+        assertThat(rebalanceInfos)
+                .containsExactly(
+                        new RebalanceInfo("rebalance-1", RebalanceStatus.COMPLETED, -1, -1));
+    }
+
+    @Test
+    void testToRebalanceInfosWithSetTimestampsPassThrough() {
+        ListRebalancesResponse response = new ListRebalancesResponse();
+        PbRebalanceInfo pbRebalanceInfo = response.addRebalanceInfo();
+        pbRebalanceInfo
+                .setRebalanceId("rebalance-1")
+                .setRebalanceStatus(RebalanceStatus.COMPLETED.getCode())
+                .setStartedAtMs(1_000L)
+                .setCompletedAtMs(2_000L);
+
+        List<RebalanceInfo> rebalanceInfos = ClientRpcMessageUtils.toRebalanceInfos(response);
+
+        assertThat(rebalanceInfos)
+                .containsExactly(
+                        new RebalanceInfo(
+                                "rebalance-1", RebalanceStatus.COMPLETED, 1_000L, 2_000L));
     }
 
     private static PbPartitionInfo makePbPartitionInfo(
