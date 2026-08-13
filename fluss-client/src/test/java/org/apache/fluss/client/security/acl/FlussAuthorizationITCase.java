@@ -1020,6 +1020,34 @@ public class FlussAuthorizationITCase {
     }
 
     @Test
+    void testListRebalances() throws Exception {
+        // test listRebalances without DESCRIBE permission on cluster resource
+        assertThatThrownBy(() -> guestAdmin.listRebalances().get())
+                .rootCause()
+                .hasMessageContaining(
+                        String.format(
+                                "Principal %s have no authorization to operate DESCRIBE on resource Resource{type=CLUSTER, name='fluss-cluster'}",
+                                guestPrincipal));
+
+        // add DESCRIBE permission to guest user on cluster resource
+        rootAdmin
+                .createAcls(
+                        Collections.singletonList(
+                                new AclBinding(
+                                        Resource.cluster(),
+                                        new AccessControlEntry(
+                                                guestPrincipal,
+                                                "*",
+                                                OperationType.DESCRIBE,
+                                                PermissionType.ALLOW))))
+                .all()
+                .get();
+
+        // test listRebalances with DESCRIBE permission should succeed
+        guestAdmin.listRebalances().get();
+    }
+
+    @Test
     void testCancelRebalance() throws Exception {
         // test cancelRebalance without WRITE permission on cluster resource
         assertThatThrownBy(() -> guestAdmin.cancelRebalance(null).get())
