@@ -5,163 +5,141 @@ sidebar_position: 4
 
 # Real-Time User Profile
 
-This tutorial demonstrates how to build a real-time user profiling system using two core Apache Fluss features: the **Auto-Increment Column** and the **Aggregation Merge Engine**. You will learn how to automatically map high-cardinality string identifiers (like emails) to compact integer UIDs, and accumulate user click metrics directly in the storage layer keeping the Flink job entirely stateless.
+This tutorial demonstrates how to build a real-time user profiling system using three core Apache Fluss features: the **Auto-Increment Column**, the **Aggregation Merge Engine**, and the built-in **RoaringBitmap SQL functions**. You will learn how to automatically map high-cardinality email identifiers to compact integer UIDs, accumulate click metrics, and count unique visitors — all directly in the storage layer, keeping the Flink job entirely stateless.
 
 ## How the System Works
 
 ### Core Concepts
 
-- **Identity Mapping**: Incoming email strings are automatically mapped to compact `INT` UIDs using Fluss's auto-increment column, no manual ID management required.
-- **Storage-Level Aggregation**: Click counts are accumulated directly in the Fluss TabletServers via the Aggregation Merge Engine. The Flink job remains stateless and lightweight.
+- **Identity Mapping**: Incoming email strings are automatically mapped to compact `INT` UIDs using Fluss's auto-increment column — no manual ID management required.
+- **Storage-Level Aggregation**: Click counts are summed and unique visitor bitmaps are OR-ed directly inside the Fluss TabletServers via the Aggregation Merge Engine.
+- **Built-in Bitmap Functions**: `rb_build_agg` and `rb_cardinality` are registered natively in FlussCatalog — no external JAR or `CREATE TEMPORARY FUNCTION` required.
 
 ### Data Flow
 
 1. **Ingestion**: Raw click events arrive with an email address and a click count.
 2. **Mapping**: A Flink lookup join against `user_dict` resolves the email to a UID. If the email is new, the `insert-if-not-exists` hint instructs Fluss to generate a new UID automatically.
-3. **Aggregation**: The resolved UID becomes the primary key in `user_profiles`. Each event's click count is summed at the storage layer via the Aggregation Merge Engine, no windowing or state in Flink required.
+3. **Aggregation**: The resolved UID is written to `user_profiles`. The Aggregation Merge Engine sums `total_clicks` and OR-s the `unique_visitors` bitmap at the storage layer — no windowing or Flink state required.
+
+## Prerequisites
+
+Before proceeding, ensure that [Docker](https://docs.docker.com/engine/install/) and the [Docker Compose plugin](https://docs.docker.com/compose/install/linux/) are installed on your machine.
 
 ## Environment Setup
 
-### Prerequisites
-
-Before proceeding, ensure that [Docker](https://docs.docker.com/engine/install/) and the [Docker Compose plugin](https://docs.docker.com/compose/install/linux/) are installed.
-
-### Starting the Playground
-
-1. Create a working directory.
+1. Create a working directory and navigate into it.
    ```shell
    mkdir fluss-user-profile
    cd fluss-user-profile
    ```
 
-2. Set the version environment variables.
-   ```shell
-   export FLUSS_DOCKER_VERSION=0.9.1-incubating
-   export FLINK_VERSION="1.20"
-   ```
-   :::note
-   If you open a new terminal window, remember to re-run these export commands.
-   :::
+2. Create a `docker-compose.yml` file with the following content:
+   ```yaml
+   services:
+     coordinator-server:
+       image: apache/fluss:$FLUSS_DOCKER_VERSION$
+       command: coordinatorServer
+       depends_on:
+         - zookeeper
+       environment:
+         - |
+           FLUSS_PROPERTIES=
+           zookeeper.address: zookeeper:2181
+           bind.listeners: FLUSS://coordinator-server:9123
+           remote.data.dir: /tmp/fluss/remote
+       volumes:
+         - fluss-remote-data:/tmp/fluss/remote
+     tablet-server:
+       image: apache/fluss:$FLUSS_DOCKER_VERSION$
+       command: tabletServer
+       depends_on:
+         - coordinator-server
+       environment:
+         - |
+           FLUSS_PROPERTIES=
+           zookeeper.address: zookeeper:2181
+           bind.listeners: FLUSS://tablet-server:9123
+           data.dir: /tmp/fluss/data
+           remote.data.dir: /tmp/fluss/remote
+       volumes:
+         - fluss-remote-data:/tmp/fluss/remote
+     zookeeper:
+       restart: always
+       image: zookeeper:3.9.2
+     jobmanager:
+       image: apache/fluss-quickstart-flink:$FLUSS_QUICKSTART_FLINK_DOCKER_VERSION$
+       ports:
+         - "8083:8081"
+       command: jobmanager
+       environment:
+         - |
+           FLINK_PROPERTIES=
+           jobmanager.rpc.address: jobmanager
+           rest.address: jobmanager
+           rest.port: 8081
+       volumes:
+         - fluss-remote-data:/tmp/fluss/remote
+     taskmanager:
+       image: apache/fluss-quickstart-flink:$FLUSS_QUICKSTART_FLINK_DOCKER_VERSION$
+       depends_on:
+         - jobmanager
+       command: taskmanager
+       environment:
+         - |
+           FLINK_PROPERTIES=
+           jobmanager.rpc.address: jobmanager
+           taskmanager.numberOfTaskSlots: 2
+       volumes:
+         - fluss-remote-data:/tmp/fluss/remote
+     sql-client:
+       image: apache/fluss-quickstart-flink:$FLUSS_QUICKSTART_FLINK_DOCKER_VERSION$
+       command: ["/opt/sql-client/sql-client"]
+       depends_on:
+         - jobmanager
+       environment:
+         - |
+           FLINK_PROPERTIES=
+           jobmanager.rpc.address: jobmanager
+           rest.address: jobmanager
+           rest.port: 8081
+       volumes:
+         - fluss-remote-data:/tmp/fluss/remote
 
-3. Create a `lib` directory and download the required JARs.
-   ```shell
-   mkdir lib
-
-   # Download Flink Faker for data generation
-   curl -fL -o lib/flink-faker-0.5.3.jar \
-     https://github.com/knaufk/flink-faker/releases/download/v0.5.3/flink-faker-0.5.3.jar
-
-   # Download Fluss Connector
-   curl -fL -o "lib/fluss-flink-${FLINK_VERSION}-${FLUSS_DOCKER_VERSION}.jar" \
-     "https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-${FLINK_VERSION}/${FLUSS_DOCKER_VERSION}/fluss-flink-${FLINK_VERSION}-${FLUSS_DOCKER_VERSION}.jar"
-   ```
-
-4. Verify both JARs downloaded correctly.
-   ```shell
-   ls -lh lib/
-   ```
-   You should see: `flink-faker-0.5.3.jar` and `fluss-flink-1.20-0.9.1-incubating.jar`.
-
-5. Create a `docker-compose.yml` file with the following content:
-   ```shell
-    services:
-      coordinator-server:
-        image: apache/fluss:${FLUSS_DOCKER_VERSION}
-        command: coordinatorServer
-        depends_on:
-          - zookeeper
-        environment:
-          - |
-            FLUSS_PROPERTIES=
-            zookeeper.address: zookeeper:2181
-            bind.listeners: FLUSS://coordinator-server:9123
-            remote.data.dir: /remote-data
-        volumes:
-          - fluss-remote-data:/remote-data
-
-      tablet-server:
-        image: apache/fluss:${FLUSS_DOCKER_VERSION}
-        command: tabletServer
-        depends_on:
-          - coordinator-server
-        environment:
-          - |
-            FLUSS_PROPERTIES=
-            zookeeper.address: zookeeper:2181
-            bind.listeners: FLUSS://tablet-server:9123
-            data.dir: /tmp/fluss/data
-            remote.data.dir: /remote-data
-        volumes:
-          - fluss-remote-data:/remote-data
-
-      zookeeper:
-        restart: always
-        image: zookeeper:3.9.2
-
-      jobmanager:
-        image: flink:${FLINK_VERSION}
-        ports:
-          - "8081:8081"
-        environment:
-          - |
-            FLINK_PROPERTIES=
-            jobmanager.rpc.address: jobmanager
-        entrypoint: ["sh", "-c", "cp -v /tmp/lib/*.jar /opt/flink/lib && exec /docker-entrypoint.sh jobmanager"]
-        volumes:
-          - ./lib:/tmp/lib
-          - fluss-remote-data:/remote-data
-
-      taskmanager:
-        image: flink:${FLINK_VERSION}
-        depends_on:
-          - jobmanager
-        environment:
-          - |
-            FLINK_PROPERTIES=
-            jobmanager.rpc.address: jobmanager
-            taskmanager.numberOfTaskSlots: 2
-        entrypoint: ["sh", "-c", "cp -v /tmp/lib/*.jar /opt/flink/lib && exec /docker-entrypoint.sh taskmanager"]
-        volumes:
-          - ./lib:/tmp/lib
-          - fluss-remote-data:/remote-data
-
-      sql-client:
-        image: flink:${FLINK_VERSION}
-        depends_on:
-          - jobmanager
-        environment:
-          - |
-            FLINK_PROPERTIES=
-            jobmanager.rpc.address: jobmanager
-            rest.address: jobmanager
-        entrypoint: ["sh", "-c", "cp -v /tmp/lib/*.jar /opt/flink/lib && exec /docker-entrypoint.sh bin/sql-client.sh"]
-        volumes:
-          - ./lib:/tmp/lib
-          - fluss-remote-data:/remote-data
-
-    volumes:
-      fluss-remote-data:
+   volumes:
+     fluss-remote-data:
    ```
 
-6. Start the environment.
+3. Start all services.
    ```shell
    docker compose up -d
    ```
 
-7. Confirm all containers are running.
+4. Confirm all containers are running.
    ```shell
    docker compose ps
    ```
-   You should see `coordinator-server`, `tablet-server`, `zookeeper`, `jobmanager`, and `taskmanager` all in the `running` state.
+   You should see `coordinator-server`, `tablet-server`, `zookeeper`, `jobmanager`, `taskmanager`, and `sql-client` all in the `running` state.
 
-8. Launch the Flink SQL Client.
-   ```shell
-   docker compose run sql-client
-   ```
+:::note
+All the following commands involving `docker compose` should be executed in the working directory that contains the `docker-compose.yml` file.
+:::
+
+## Enter the SQL Client
+
+Use the following command to enter the Flink SQL Client:
+
+```shell
+docker compose run --entrypoint bash sql-client -c "
+\${FLINK_HOME}/bin/sql-client.sh \
+  -Drest.address=jobmanager \
+  -Drest.port=8081 \
+  -i /opt/sql-client/sql/sql-client.sql
+"
+```
 
 ## Step 1: Create the Fluss Catalog
 
-In the SQL Client, run these statements one by one.
+Run these statements one by one in the SQL Client.
 
 :::tip
 Run SQL statements one by one to avoid errors.
@@ -177,6 +155,10 @@ CREATE CATALOG fluss_catalog WITH (
 ```sql
 USE CATALOG fluss_catalog;
 ```
+
+:::note
+Once you switch to the Fluss catalog, all RoaringBitmap SQL functions (`rb_build_agg`, `rb_cardinality`, `rb_or_agg`, and others) are available immediately — no `CREATE TEMPORARY FUNCTION` statement is needed.
+:::
 
 ## Step 2: Create the User Dictionary Table
 
@@ -194,16 +176,18 @@ CREATE TABLE user_dict (
 
 ## Step 3: Create the Aggregated Profile Table
 
-Create the `user_profiles` table using the **Aggregation Merge Engine**. Each user's UID is the primary key, and `total_clicks` accumulates their click activity directly at the storage layer via the `sum` aggregator.
+Create the `user_profiles` table using the **Aggregation Merge Engine**. Each user's UID is the primary key. `total_clicks` is summed and `unique_visitors` accumulates a [RoaringBitmap](https://roaringbitmap.org/) of all UIDs seen — both computed directly at the storage layer.
 
 ```sql
 CREATE TABLE user_profiles (
-    uid          INT,
-    total_clicks BIGINT,
+    uid             INT,
+    total_clicks    BIGINT,
+    unique_visitors BYTES,
     PRIMARY KEY (uid) NOT ENFORCED
 ) WITH (
-    'table.merge-engine'      = 'aggregation',
-    'fields.total_clicks.agg' = 'sum'
+    'table.merge-engine'             = 'aggregation',
+    'fields.total_clicks.agg'        = 'sum',
+    'fields.unique_visitors.agg'     = 'rbm32'
 );
 ```
 
@@ -212,7 +196,7 @@ CREATE TABLE user_profiles (
 Create a temporary source table to simulate raw click events using the Faker connector.
 
 :::note
-Java Faker's `numberBetween(min, max)` treats `max` as exclusive. The expressions below are set to produce click counts of 1–10 and a pool of 100 distinct simulated email users.
+Java Faker's `numberBetween(min, max)` treats `max` as exclusive. The expression below produces click counts of 1–10.
 :::
 
 ```sql
@@ -228,56 +212,57 @@ CREATE TEMPORARY TABLE raw_events (
 );
 ```
 
-Now run the pipeline. The `lookup.insert-if-not-exists` hint ensures that if an email is not found in `user_dict`, Fluss generates a new `uid` for it automatically. The resolved `uid` becomes the primary key of `user_profiles`, making the dictionary mapping the central link between the two tables.
+Now run the pipeline. The `lookup.insert-if-not-exists` hint ensures that if an email is not found in `user_dict`, Fluss generates a new `uid` automatically. `rb_build_agg(d.uid)` builds a one-element RoaringBitmap from each UID — the Aggregation Merge Engine OR-s it into the stored bitmap, giving an exact unique visitor count per user over time.
 
 ```sql
 INSERT INTO user_profiles
 SELECT
     d.uid,
-    CAST(e.click_count AS BIGINT)
+    CAST(e.click_count AS BIGINT),
+    rb_build_agg(d.uid)
 FROM raw_events AS e
 JOIN user_dict /*+ OPTIONS('lookup.insert-if-not-exists' = 'true') */
 FOR SYSTEM_TIME AS OF e.proctime AS d
-ON e.email = d.email;
+ON e.email = d.email
+GROUP BY d.uid, e.click_count;
 ```
 
 ## Step 5: Verify Results
 
-Open a **second terminal**, re-run the export commands, and launch another SQL Client session to query results while the pipeline runs.
+Open a **second terminal**, navigate to the working directory, and launch another SQL Client session to query results while the pipeline runs.
 
 ```shell
-cd fluss-user-profile
-export FLUSS_DOCKER_VERSION=0.9.1-incubating
-export FLINK_VERSION="1.20"
-docker compose run sql-client
+docker compose run --entrypoint bash sql-client -c "
+\${FLINK_HOME}/bin/sql-client.sh \
+  -Drest.address=jobmanager \
+  -Drest.port=8081
+"
 ```
 
-Set up the catalog in the new session:
+Set up the catalog:
 
 ```sql
 CREATE CATALOG fluss_catalog WITH (
     'type' = 'fluss',
     'bootstrap.servers' = 'coordinator-server:9123'
 );
-```
-
-```sql
 USE CATALOG fluss_catalog;
-```
-
-Query the aggregated profile table:
-
-```sql
 SET 'sql-client.execution.result-mode' = 'tableau';
 ```
 
+Query the aggregated profile table. `rb_cardinality` converts the stored bitmap into a human-readable unique visitor count:
+
 ```sql
-SELECT uid, total_clicks FROM user_profiles;
+SELECT
+    uid,
+    total_clicks,
+    rb_cardinality(unique_visitors) AS unique_visitor_count
+FROM user_profiles;
 ```
 
-You should see rows appearing for each new user, with `total_clicks` accumulating in real time as more events arrive for the same email.
+You should see rows appearing for each new user, with `total_clicks` and `unique_visitor_count` growing in real time.
 
-To verify that email-to-UID mapping is working correctly:
+To verify the email-to-UID dictionary mapping:
 
 ```sql
 SELECT * FROM user_dict LIMIT 10;
@@ -287,7 +272,7 @@ Each email should have a unique compact `INT` uid automatically assigned by Flus
 
 ## Clean Up
 
-Exit the SQL Client by typing `exit;`, then stop the Docker containers.
+Exit the SQL Client by typing `exit;`, then stop all services.
 
 ```shell
 docker compose down -v
@@ -295,10 +280,11 @@ docker compose down -v
 
 ## Architectural Benefits
 
-- **Stateless Flink Jobs:** Offloading both the identity dictionary and the click aggregation to Fluss makes the Flink job lightweight, with fast checkpoints and minimal recovery time.
+- **Stateless Flink Jobs:** Offloading identity mapping, click aggregation, and bitmap union to Fluss makes the Flink job lightweight, with fast checkpoints and minimal recovery time.
 - **Compact Storage:** Using auto-incremented `INT` UIDs instead of raw email strings reduces memory and storage footprint significantly.
-- **Exactly-Once Accuracy:** The **Undo Recovery** mechanism in the Fluss Flink connector ensures that replayed data during failovers does not result in double-counting.
+- **Exact Unique Counting:** RoaringBitmap provides exact distinct counts — no approximations like HyperLogLog.
+- **Exactly-Once Accuracy:** The Undo Recovery mechanism in the Fluss Flink connector ensures replayed data during failovers does not result in double-counting.
 
 ## What's Next?
 
-For the full reference of all RoaringBitmap SQL functions available in FlussCatalog (`rb_or_agg`, `rb_and`, `rb_contains`, `rb_to_array`, and more), see the [SQL Functions](../engine-flink/sql-functions.md) documentation.
+For the full reference of all RoaringBitmap SQL functions available in FlussCatalog (`rb_or_agg`, `rb_and`, `rb_contains`, `rb_to_array`, and more), see the [SQL Functions](../../engine-flink/sql-functions/) documentation.
