@@ -113,12 +113,16 @@ public class RocksIncrementalSnapshot implements AutoCloseable {
             uploadedSstFiles.keySet().removeIf(snapshotId -> snapshotId < completedSnapshotId);
             lastCompletedSnapshotId = completedSnapshotId;
         }
+        // The local checkpoint is useful after an in-place restart. Keep the committed snapshot and
+        // remove older or uncommitted checkpoints only after the remote commit succeeds.
+        LocalKvSnapshotUtils.retainOnly(instanceBasePath, completedSnapshotId);
     }
 
     public void notifySnapshotAbort(long abortedSnapshotId) {
         synchronized (uploadedSstFiles) {
             uploadedSstFiles.remove(abortedSnapshotId);
         }
+        LocalKvSnapshotUtils.discard(instanceBasePath, abortedSnapshotId);
     }
 
     @Override
@@ -138,7 +142,7 @@ public class RocksIncrementalSnapshot implements AutoCloseable {
     }
 
     private File prepareLocalSnapshotDirectory(long snapshotId) {
-        return new File(instanceBasePath, "snap-" + snapshotId);
+        return LocalKvSnapshotUtils.getSnapshotDirectory(instanceBasePath, snapshotId);
     }
 
     private PreviousSnapshot getPreviousSnapshot(long snapshotId) {
@@ -323,16 +327,9 @@ public class RocksIncrementalSnapshot implements AutoCloseable {
 
         @Override
         public void release() {
-            try {
-                if (snapshotDirectory.exists()) {
-                    LOG.trace(
-                            "Running cleanup for local RocksDB backup directory {}.",
-                            snapshotDirectory);
-                    FileUtils.deleteDirectory(snapshotDirectory);
-                }
-            } catch (IOException e) {
-                LOG.warn("Could not properly cleanup local RocksDB backup directory.", e);
-            }
+            // Do not delete the checkpoint when the asynchronous upload finishes. Its lifecycle is
+            // decided only after the snapshot commit result is known: notifySnapshotComplete keeps
+            // the latest committed checkpoint and notifySnapshotAbort removes a failed candidate.
         }
     }
 
