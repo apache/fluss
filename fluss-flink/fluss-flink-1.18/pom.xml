@@ -88,6 +88,12 @@
         </dependency>
 
         <dependency>
+            <groupId>org.roaringbitmap</groupId>
+            <artifactId>RoaringBitmap</artifactId>
+            <version>${roaringbitmap.version}</version>
+        </dependency>
+
+        <dependency>
             <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-server</artifactId>
             <version>${project.version}</version>
@@ -217,6 +223,7 @@
                                 <includes combine.children="append">
                                     <include>org.apache.fluss:fluss-flink-common</include>
                                     <include>org.apache.fluss:fluss-client</include>
+                                    <include>org.roaringbitmap:RoaringBitmap</include>
                                 </includes>
                             </artifactSet>
                             <filters combine.children="append">
