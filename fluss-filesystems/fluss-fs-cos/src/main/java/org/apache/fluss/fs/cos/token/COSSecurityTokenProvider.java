@@ -132,9 +132,8 @@ public class COSSecurityTokenProvider {
      * Builds a default STS policy that grants {@code name/cos:*} only on the bucket (and optional
      * key prefix) referenced by the given fsUri.
      *
-     * <p>COS resource format used here: {@code
-     * qcs::cos:<region>:uid/<appid>:<bucket>/<prefix>*}. The APPID is the numeric suffix of a COS
-     * bucket name.
+     * <p>COS resource format used here: {@code qcs::cos:<region>:uid/<appid>:<bucket>/<prefix>*}.
+     * The APPID is the numeric suffix of a COS bucket name.
      */
     static String buildBucketScopedPolicy(URI fsUri, String region) {
         String bucket = fsUri.getAuthority();
@@ -180,15 +179,7 @@ public class COSSecurityTokenProvider {
         }
 
         String resource =
-                "qcs::cos:"
-                        + region
-                        + ":uid/"
-                        + appId
-                        + ":"
-                        + bucket
-                        + "/"
-                        + prefix
-                        + "*";
+                "qcs::cos:" + region + ":uid/" + appId + ":" + bucket + "/" + prefix + "*";
         LOG.info("Using bucket-scoped STS policy with resource: {}", resource);
         return "{"
                 + "\"version\": \"2.0\","
