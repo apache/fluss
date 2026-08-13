@@ -1599,14 +1599,33 @@ impl LogFetcher {
 
                     let error = FlussError::for_code(error_code);
                     if Self::should_invalidate_table_meta(error) {
-                        // TODO: Consider triggering table meta invalidation from sender/lookup paths.
                         let table_id = table_bucket.table_id();
                         let cluster = metadata.get_cluster();
                         if let Some(table_path) = cluster.get_table_path_by_id(table_id) {
-                            let physical_tables = HashSet::from([PhysicalTablePath::of(Arc::new(
-                                table_path.clone(),
-                            ))]);
-                            metadata.invalidate_physical_table_meta(&physical_tables);
+                            let physical_table_path = match table_bucket.partition_id() {
+                                Some(partition_id) => {
+                                    match cluster.get_partition_name(partition_id) {
+                                        Some(partition_name) => {
+                                            Some(PhysicalTablePath::of_partitioned(
+                                                Arc::new(table_path.clone()),
+                                                Some(partition_name.clone()),
+                                            ))
+                                        }
+                                        None => {
+                                            warn!(
+                                                "Partition id {partition_id} is missing from partition_name_by_id while invalidating metadata for table {table_path}"
+                                            );
+                                            None
+                                        }
+                                    }
+                                }
+                                None => Some(PhysicalTablePath::of(Arc::new(table_path.clone()))),
+                            };
+                            if let Some(physical_table_path) = physical_table_path {
+                                metadata.invalidate_physical_table_meta(&HashSet::from([
+                                    physical_table_path,
+                                ]));
+                            }
                         } else {
                             warn!(
                                 "Table id {table_id} is missing from table_path_by_id while invalidating table metadata"

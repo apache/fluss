@@ -108,12 +108,8 @@ impl Cluster {
         &self,
         physical_tables_to_invalid: &HashSet<PhysicalTablePath>,
     ) -> Self {
-        let table_paths: HashSet<&TablePath> = physical_tables_to_invalid
-            .iter()
-            .map(|path| path.get_table_path())
-            .collect();
         let (available_locations_by_path, available_locations_by_bucket) =
-            self.filter_bucket_locations_by_path(&table_paths);
+            self.filter_bucket_locations_by_physical_path(physical_tables_to_invalid);
 
         Cluster::new(
             self.coordinator_server.clone(),
@@ -170,6 +166,32 @@ impl Cluster {
             .iter()
             .filter(|&(_bucket, location)| {
                 !table_paths.contains(&location.physical_table_path.get_table_path())
+            })
+            .map(|(bucket, location)| (bucket.clone(), location.clone()))
+            .collect();
+
+        (available_locations_by_path, available_locations_by_bucket)
+    }
+
+    fn filter_bucket_locations_by_physical_path(
+        &self,
+        physical_table_paths: &HashSet<PhysicalTablePath>,
+    ) -> (
+        HashMap<Arc<PhysicalTablePath>, Vec<BucketLocation>>,
+        HashMap<TableBucket, BucketLocation>,
+    ) {
+        let available_locations_by_path = self
+            .available_locations_by_path
+            .iter()
+            .filter(|&(path, _)| !physical_table_paths.contains(path.as_ref()))
+            .map(|(path, locations)| (path.clone(), locations.clone()))
+            .collect();
+
+        let available_locations_by_bucket = self
+            .available_locations_by_bucket
+            .iter()
+            .filter(|&(_bucket, location)| {
+                !physical_table_paths.contains(location.physical_table_path.as_ref())
             })
             .map(|(bucket, location)| (bucket.clone(), location.clone()))
             .collect();
@@ -537,6 +559,67 @@ mod tests {
             nodes
                 .iter()
                 .all(|n| *n.server_type() == ServerType::TabletServer)
+        );
+    }
+
+    #[test]
+    fn test_invalidate_physical_table_meta_only_invalidates_exact_partition() {
+        let table_path = Arc::new(TablePath::new("db", "table"));
+        let partition_1 = Arc::new(PhysicalTablePath::of_partitioned(
+            Arc::clone(&table_path),
+            Some("p1".to_string()),
+        ));
+        let partition_2 = Arc::new(PhysicalTablePath::of_partitioned(
+            Arc::clone(&table_path),
+            Some("p2".to_string()),
+        ));
+        let bucket_1 = TableBucket::new_with_partition(1, Some(10), 0);
+        let bucket_2 = TableBucket::new_with_partition(1, Some(20), 0);
+        let leader = ServerNode::new(1, "ts1-host".to_string(), 9124, ServerType::TabletServer);
+        let location_1 = BucketLocation::new(
+            bucket_1.clone(),
+            Some(leader.clone()),
+            Arc::clone(&partition_1),
+        );
+        let location_2 = BucketLocation::new(
+            bucket_2.clone(),
+            Some(leader.clone()),
+            Arc::clone(&partition_2),
+        );
+        let cluster = Cluster::new(
+            None,
+            HashMap::from([(leader.id(), leader)]),
+            HashMap::from([
+                (Arc::clone(&partition_1), vec![location_1.clone()]),
+                (Arc::clone(&partition_2), vec![location_2.clone()]),
+            ]),
+            HashMap::from([
+                (bucket_1.clone(), location_1),
+                (bucket_2.clone(), location_2),
+            ]),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::from([
+                (Arc::clone(&partition_1), 10),
+                (Arc::clone(&partition_2), 20),
+            ]),
+        );
+
+        let updated_cluster =
+            cluster.invalidate_physical_table_meta(&HashSet::from([partition_1.as_ref().clone()]));
+
+        assert!(updated_cluster.leader_for(&bucket_1).is_none());
+        assert!(updated_cluster.leader_for(&bucket_2).is_some());
+        assert!(
+            updated_cluster
+                .get_available_buckets_for_table_path(partition_1.as_ref())
+                .is_empty()
+        );
+        assert_eq!(
+            updated_cluster
+                .get_available_buckets_for_table_path(partition_2.as_ref())
+                .len(),
+            1
         );
     }
 

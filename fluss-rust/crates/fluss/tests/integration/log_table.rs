@@ -995,6 +995,41 @@ mod table_test {
             "The surviving partition should remain readable"
         );
 
+        let mut row = GenericRow::new(3);
+        row.set_field(0, 2);
+        row.set_field(1, "US");
+        row.set_field(2, 200_i64);
+        append_writer.append(&row).expect("Failed to append row");
+        append_writer.flush().await.expect("Failed to flush");
+
+        let ids = poll_until_count(
+            1,
+            DEFAULT_POLL_TIMEOUT,
+            Duration::from_millis(500),
+            async |timeout| {
+                scanner
+                    .poll(timeout)
+                    .await
+                    .expect("Failed to poll surviving partition")
+                    .into_iter()
+                    .filter_map(|record| {
+                        let row = record.row();
+                        if row.get_string(1).unwrap() == "US" {
+                            Some(row.get_int(0).unwrap())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            },
+        )
+        .await;
+        assert_eq!(
+            ids,
+            vec![2],
+            "The surviving partition should keep making progress after another partition is dropped"
+        );
+
         admin
             .drop_table(&table_path, false)
             .await
