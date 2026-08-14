@@ -334,6 +334,8 @@ The `scan.incremental.*` options are per-query read options only. Unlike the opt
 A time-range read returns the data Fluss still retains, which is bounded by `table.log.ttl` (default 7 days). A window reaching further back is **not** an error: the part that has already been dropped simply yields fewer rows, or none at all, so the result is always a subset of the requested window. Increase `table.log.ttl` if you need to read further back. Data available only in tiered lake storage is not read by this mode.
 
 The start timestamp positions the scan through the server's timestamp-to-offset lookup, and both bounds are then applied on each record's commit timestamp, so the window stays exact even for data already tiered to remote storage.
+
+When the window starts before the table is guaranteed to retain, planning logs a `WARN` on the driver. This is a conservative hint derived from the table's current `table.log.ttl`, not an exact statement about what was deleted: it may over-report (expired segments are deleted lazily, so the data may still be readable) and may under-report (it cannot know that a window predates the table's creation, or that whole partitions were dropped by `table.auto-partition.num-retention`), and it reflects only the current value of `table.log.ttl`, not past changes to it.
 :::
 
 :::note Invalid windows fail fast

@@ -284,6 +284,9 @@ class AppendPlanner(
 
   override def plan(): Array[InputPartition] =
     try {
+      timeRange.foreach(
+        FlussOffsetInitializers
+          .warnIfWindowPredatesRetention(tablePath, _, tableInfo.getTableConfig.getLogTTLMs))
       readableLakeSnapshot match {
         // An incremental read never unions a lake snapshot; it reads only Fluss.
         case Some(snap) if !incrementalMode => planLakeUnion(snap)
@@ -640,6 +643,9 @@ class UpsertPlanner(
 
   override def plan(): Array[InputPartition] =
     try {
+      timeRange.foreach(
+        FlussOffsetInitializers
+          .warnIfWindowPredatesRetention(tablePath, _, tableInfo.getTableConfig.getLogTTLMs))
       readableLakeSnapshot match {
         // An incremental read reads neither the lake nor the kv snapshot; it folds only the Fluss
         // changelog within [start, end).

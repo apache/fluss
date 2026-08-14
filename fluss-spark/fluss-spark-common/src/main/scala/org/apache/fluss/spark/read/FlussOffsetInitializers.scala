@@ -19,15 +19,17 @@ package org.apache.fluss.spark.read
 
 import org.apache.fluss.client.initializer.{NoStoppingOffsetsInitializer, OffsetsInitializer}
 import org.apache.fluss.config.{ConfigOption, Configuration}
+import org.apache.fluss.metadata.TablePath
 import org.apache.fluss.spark.SparkFlussConf
 
+import org.apache.spark.internal.Logging
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
 
-import java.time.{LocalDateTime, ZoneId}
+import java.time.{Duration, LocalDateTime, ZoneId}
 import java.time.format.DateTimeFormatter
 
-object FlussOffsetInitializers {
+object FlussOffsetInitializers extends Logging {
 
   private val DATE_TIME_FORMATTER: DateTimeFormatter =
     DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
@@ -137,6 +139,30 @@ object FlussOffsetInitializers {
           s"the end timestamp '$end'. The window is left-closed right-open '[start, end)'.")
     }
   }
+
+  /**
+   * Warns when the requested window starts before what the table is still guaranteed to retain: the
+   * log below `table.log.ttl` has been dropped, so the read can only return a subset of the window.
+   *
+   * Stays a warning rather than an error: TTL is a lower bound — expired segments are deleted
+   * lazily — so the data may in fact still be there, and a partial window is the documented
+   * behavior of this read mode.
+   */
+  def warnIfWindowPredatesRetention(
+      tablePath: TablePath,
+      range: FlussTimeRange,
+      logTtlMs: Long): Unit = {
+    if (predatesRetention(range.startMs, logTtlMs, System.currentTimeMillis())) {
+      logWarning(
+        s"Incremental read of $tablePath starts at ${range.startMs}, which is earlier than the " +
+          s"table is guaranteed to retain (table.log.ttl = ${Duration.ofMillis(logTtlMs)}). " +
+          s"Records that already expired cannot be returned, so the result may be a subset of " +
+          s"the requested window. Increase table.log.ttl or move the window forward.")
+    }
+  }
+
+  private[spark] def predatesRetention(startMs: Long, logTtlMs: Long, nowMs: Long): Boolean =
+    startMs < nowMs - logTtlMs
 
   /**
    * Reads a `scan.incremental.*` option from the scan options, falling back to its default. A blank

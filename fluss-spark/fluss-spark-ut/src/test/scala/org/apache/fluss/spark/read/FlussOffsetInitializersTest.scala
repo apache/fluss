@@ -94,6 +94,19 @@ class FlussOffsetInitializersTest extends AnyFunSuite {
     }
   }
 
+  test("predatesRetention compares the window start against now minus table.log.ttl") {
+    val nowMs = 1767225600000L
+    val ttlMs = 7L * 24 * 60 * 60 * 1000
+    // a start well before the retention horizon predates it
+    assertThat(FlussOffsetInitializers.predatesRetention(nowMs - ttlMs - 1, ttlMs, nowMs)).isTrue
+    // a start inside the retention horizon does not
+    assertThat(FlussOffsetInitializers.predatesRetention(nowMs - ttlMs + 1, ttlMs, nowMs)).isFalse
+    // a start exactly at the horizon is not warned about
+    assertThat(FlussOffsetInitializers.predatesRetention(nowMs - ttlMs, ttlMs, nowMs)).isFalse
+    // a ttl larger than the elapsed time retains everything since epoch 0
+    assertThat(FlussOffsetInitializers.predatesRetention(0L, nowMs + 1, nowMs)).isFalse
+  }
+
   test("invalid start timestamp format fails with the option name") {
     val startKey = SparkFlussConf.SCAN_INCREMENTAL_START_TIMESTAMP.key()
     val ex = intercept[IllegalArgumentException] {
