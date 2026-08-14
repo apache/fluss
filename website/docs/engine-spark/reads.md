@@ -337,7 +337,7 @@ The start timestamp positions the scan through the server's timestamp-to-offset 
 :::
 
 :::note Invalid windows fail fast
-Malformed window specifications are rejected instead of silently changing semantics: a blank or unparseable start timestamp, and an end timestamp set without a start timestamp (it cannot truncate a plain batch read on its own). The table-valued function additionally rejects a window whose start is not strictly before its end while the statement is analyzed; the same window given through DataFrame options simply returns no rows. A bucket that has no data inside a valid window also yields an empty result.
+Malformed window specifications are rejected instead of silently changing semantics: a blank or unparseable start timestamp, an end timestamp set without a start timestamp (it cannot truncate a plain batch read on its own), and a window whose start is not strictly before its end — whether given through the table-valued function (rejected while the statement is analyzed) or through DataFrame options. A bucket that has no data inside a valid window yields an empty result.
 :::
 
 ## All Data Types

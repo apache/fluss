@@ -81,6 +81,19 @@ class FlussOffsetInitializersTest extends AnyFunSuite {
       .isEqualTo(FlussTimeRange(1767225600000L, Long.MaxValue))
   }
 
+  test("a window whose start is not strictly before its end fails fast") {
+    val startKey = SparkFlussConf.SCAN_INCREMENTAL_START_TIMESTAMP.key()
+    val endKey = SparkFlussConf.SCAN_INCREMENTAL_END_TIMESTAMP.key()
+    for (end <- Seq("1767225600000", "1767139200000")) {
+      val ex = intercept[IllegalArgumentException] {
+        FlussOffsetInitializers.incrementalTimeRange(
+          scanOptions(startKey -> "1767225600000", endKey -> end))
+      }
+      assertThat(ex.getMessage).contains("must be strictly before")
+      assertThat(ex.getMessage).contains("1767225600000")
+    }
+  }
+
   test("invalid start timestamp format fails with the option name") {
     val startKey = SparkFlussConf.SCAN_INCREMENTAL_START_TIMESTAMP.key()
     val ex = intercept[IllegalArgumentException] {

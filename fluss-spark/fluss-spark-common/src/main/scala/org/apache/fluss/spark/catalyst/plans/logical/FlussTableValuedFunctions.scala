@@ -253,11 +253,6 @@ case class IncrementalBetweenTimestamp(override val args: Seq[Expression])
     val endMs = FlussOffsetInitializers.parseTimestamp(
       end,
       SparkFlussConf.SCAN_INCREMENTAL_END_TIMESTAMP.key())
-    if (startMs >= endMs) {
-      throw new IllegalArgumentException(
-        s"Invalid time range for $INCREMENTAL_BETWEEN_TIMESTAMP: the start timestamp '$start' " +
-          s"must be strictly before the end timestamp '$end'. The window is left-closed " +
-          s"right-open '[start, end)'.")
-    }
+    FlussOffsetInitializers.requireValidWindow(start, end, startMs, endMs)
   }
 }

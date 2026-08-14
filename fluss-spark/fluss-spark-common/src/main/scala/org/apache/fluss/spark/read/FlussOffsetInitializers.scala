@@ -59,9 +59,11 @@ object FlussOffsetInitializers {
    * Start offsets of an incremental batch read, resolved from `scan.incremental.start.timestamp`.
    * Requires that option to be set.
    */
-  def incrementalStartOffsetsInitializer(options: CaseInsensitiveStringMap): OffsetsInitializer =
+  def incrementalStartOffsetsInitializer(options: CaseInsensitiveStringMap): OffsetsInitializer = {
+    val start = requiredTimestamp(options, SparkFlussConf.SCAN_INCREMENTAL_START_TIMESTAMP)
     OffsetsInitializer.timestamp(
-      requiredTimestamp(options, SparkFlussConf.SCAN_INCREMENTAL_START_TIMESTAMP))
+      parseTimestamp(start, SparkFlussConf.SCAN_INCREMENTAL_START_TIMESTAMP.key()))
+  }
 
   /**
    * Start offsets of a streaming read, driven by `scan.startup.mode`. Batch reads ignore this
@@ -112,11 +114,28 @@ object FlussOffsetInitializers {
     if (!isIncrementalRead(options)) {
       return None
     }
-    val startMs = requiredTimestamp(options, SparkFlussConf.SCAN_INCREMENTAL_START_TIMESTAMP)
-    val endMs = incrementalOption(options, SparkFlussConf.SCAN_INCREMENTAL_END_TIMESTAMP)
-      .map(end => parseTimestamp(end.trim, SparkFlussConf.SCAN_INCREMENTAL_END_TIMESTAMP.key()))
+    val start = requiredTimestamp(options, SparkFlussConf.SCAN_INCREMENTAL_START_TIMESTAMP)
+    val startMs = parseTimestamp(start, SparkFlussConf.SCAN_INCREMENTAL_START_TIMESTAMP.key())
+    val end = incrementalOption(options, SparkFlussConf.SCAN_INCREMENTAL_END_TIMESTAMP)
+      .map(_.trim)
+    val endMs = end
+      .map(parseTimestamp(_, SparkFlussConf.SCAN_INCREMENTAL_END_TIMESTAMP.key()))
       .getOrElse(Long.MaxValue)
+    end.foreach(requireValidWindow(start, _, startMs, endMs))
     Some(FlussTimeRange(startMs, endMs))
+  }
+
+  /** Rejects a reversed or degenerate window instead of silently reading nothing. */
+  private[spark] def requireValidWindow(
+      start: String,
+      end: String,
+      startMs: Long,
+      endMs: Long): Unit = {
+    if (startMs >= endMs) {
+      throw new IllegalArgumentException(
+        s"Invalid incremental time range: the start timestamp '$start' must be strictly before " +
+          s"the end timestamp '$end'. The window is left-closed right-open '[start, end)'.")
+    }
   }
 
   /**
@@ -138,14 +157,14 @@ object FlussOffsetInitializers {
 
   private def requiredTimestamp(
       options: CaseInsensitiveStringMap,
-      option: ConfigOption[String]): Long = {
+      option: ConfigOption[String]): String = {
     val value = incrementalOption(options, option)
     if (value.getOrElse("").isEmpty) {
       throw new IllegalArgumentException(
         s"'${option.key()}' must not be empty. Provide epoch milliseconds or a " +
           s"'yyyy-MM-dd HH:mm:ss' timestamp.")
     }
-    parseTimestamp(value.get.trim, option.key())
+    value.get.trim
   }
 
   /**
