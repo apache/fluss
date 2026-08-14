@@ -51,8 +51,6 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.locks.Lock;
-import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
@@ -79,8 +77,6 @@ public abstract class TabletManagerBase {
     protected final List<File> dataDirs;
 
     protected final Configuration conf;
-
-    protected final Lock tabletCreationOrDeletionLock = new ReentrantLock();
 
     // TODO make this parameter configurable.
     private final int recoveryThreads;

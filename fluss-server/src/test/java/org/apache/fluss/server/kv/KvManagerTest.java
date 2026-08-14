@@ -68,6 +68,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -358,6 +359,27 @@ final class KvManagerTest {
     }
 
     @Test
+    void testKvRunConcurrentlyForDifferentBuckets() throws Exception {
+        initTableBuckets(null);
+        BlockingSchemaGetter blockingSchemaGetter = new BlockingSchemaGetter();
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        Future<KvTablet> blockedCreation =
+                executor.submit(
+                        () -> getOrCreateKv(tablePath1, null, tableBucket1, blockingSchemaGetter));
+        try {
+            blockingSchemaGetter.awaitBlocked();
+
+            Future<KvTablet> otherBucketCreation =
+                    executor.submit(() -> getOrCreateKv(tablePath2, null, tableBucket2));
+            assertThat(otherBucketCreation.get(10, TimeUnit.SECONDS)).isNotNull();
+        } finally {
+            blockingSchemaGetter.unblock();
+            blockedCreation.get(10, TimeUnit.SECONDS);
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
     void testGetNonExistentKv() {
         initTableBuckets(null);
         Optional<KvTablet> kv = kvManager.getKv(tableBucket1);
@@ -554,5 +576,36 @@ final class KvManagerTest {
             values.add(slice == null ? null : slice.toByteArray());
         }
         return values;
+    }
+
+    private static final class BlockingSchemaGetter extends TestingSchemaGetter {
+        private final CountDownLatch blocked = new CountDownLatch(1);
+        private final CountDownLatch unblock = new CountDownLatch(1);
+
+        private BlockingSchemaGetter() {
+            super(new SchemaInfo(DATA1_SCHEMA_PK, 1));
+        }
+
+        @Override
+        public SchemaInfo getLatestSchemaInfo() {
+            blocked.countDown();
+            try {
+                if (!unblock.await(30, TimeUnit.SECONDS)) {
+                    throw new FlussRuntimeException("Timed out waiting to unblock schema lookup.");
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new FlussRuntimeException("Interrupted while blocking schema lookup.", e);
+            }
+            return super.getLatestSchemaInfo();
+        }
+
+        private void awaitBlocked() throws InterruptedException {
+            assertThat(blocked.await(10, TimeUnit.SECONDS)).isTrue();
+        }
+
+        private void unblock() {
+            unblock.countDown();
+        }
     }
 }
