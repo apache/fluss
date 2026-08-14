@@ -226,6 +226,12 @@
                                     <include>org.roaringbitmap:RoaringBitmap</include>
                                 </includes>
                             </artifactSet>
+                            <relocations combine.children="append">
+                                <relocation>
+                                    <pattern>org.roaringbitmap</pattern>
+                                    <shadedPattern>org.apache.fluss.shaded.org.roaringbitmap</shadedPattern>
+                                </relocation>
+                            </relocations>
                             <filters combine.children="append">
                                 <filter>
                                     <artifact>org.apache.fluss:fluss-flink-common</artifact>
