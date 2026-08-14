@@ -123,7 +123,9 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
                 CollectionUtil.iteratorToList(tableResult.collect()).stream()
                         .map(
                                 row -> {
-                                    int userColumnCount = row.getArity() - 3;
+                                    // FIP-27: a clean lake table exposes only user columns via
+                                    // $lake, so there are no trailing system columns to strip.
+                                    int userColumnCount = row.getArity();
                                     Object[] fields = new Object[userColumnCount];
                                     for (int i = 0; i < userColumnCount; i++) {
                                         fields[i] = row.getField(i);
@@ -277,7 +279,9 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
                         .stream()
                         .map(
                                 row -> {
-                                    int columnCount = row.getArity() - 3;
+                                    // FIP-27: a clean lake table exposes only user columns via
+                                    // $lake, so there are no trailing system columns to strip.
+                                    int columnCount = row.getArity();
                                     Object[] fields = new Object[columnCount];
                                     for (int i = 0; i < columnCount; i++) {
                                         fields[i] = row.getField(i);

@@ -504,9 +504,9 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
             InternalRow flussRow = flussRowIterator.next();
             assertThat(row.getInt(0)).isEqualTo(flussRow.getInt(0));
             assertThat(row.getString(1).toString()).isEqualTo(flussRow.getString(1).toString());
-            // system columns are always the last three: __bucket, __offset, __timestamp
-            int offsetIndex = row.getFieldCount() - 2;
-            assertThat(row.getLong(offsetIndex)).isEqualTo(startingOffset++);
+            // FIP-27: a clean lake table only stores user columns, so there are no trailing
+            // __bucket/__offset/__timestamp columns to verify here.
+            assertThat(row.getFieldCount()).isEqualTo(2);
         }
         assertThat(flussRowIterator.hasNext()).isFalse();
     }
@@ -526,8 +526,9 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
             assertThat(row.getInt(0)).isEqualTo(flussRow.getInt(0));
             assertThat(row.getString(1).toString()).isEqualTo(flussRow.getString(1).toString());
             assertThat(row.getString(2).toString()).isEqualTo(flussRow.getString(2).toString());
-            // the idx 3 is __bucket, so use 4
-            assertThat(row.getLong(4)).isEqualTo(startingOffset++);
+            // FIP-27: a clean lake table only stores user columns, so there are no trailing
+            // __bucket/__offset/__timestamp columns to verify here.
+            assertThat(row.getFieldCount()).isEqualTo(3);
         }
         assertThat(flussRowIterator.hasNext()).isFalse();
     }
@@ -594,9 +595,8 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
             FileStoreTable paimonTable = (FileStoreTable) paimonCatalog.getTable(tableIdentifier);
             List<String> fieldNames = paimonTable.rowType().getFieldNames();
 
-            // Should have exact fields in order: a, b, c3, __bucket, __offset, __timestamp
-            assertThat(fieldNames)
-                    .containsExactly("a", "b", "c3", "__bucket", "__offset", "__timestamp");
+            // FIP-27: a clean lake table only stores user columns, in order: a, b, c3.
+            assertThat(fieldNames).containsExactly("a", "b", "c3");
 
             // 9. Verify both schema evolution and data correctness
             // For initial rows (before ADD COLUMN), c3 should be NULL
