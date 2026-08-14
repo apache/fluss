@@ -123,9 +123,11 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.utils.ByteArraySlice;
+import org.apache.fluss.utils.ExecutorUtils;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.clock.Clock;
+import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 import org.apache.fluss.utils.concurrent.Scheduler;
 
 import org.slf4j.Logger;
@@ -152,6 +154,8 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.Lock;
@@ -196,6 +200,7 @@ public class ReplicaManager implements ServerReconfigurable {
 
     private final TabletServerMetadataCache metadataCache;
     private final ExecutorService ioExecutor;
+    private final ExecutorService replicaTransitionExecutor;
     private final ProjectionPushdownCache projectionsCache = new ProjectionPushdownCache();
     private final Lock replicaStateChangeLock = new ReentrantLock();
 
@@ -361,6 +366,10 @@ public class ReplicaManager implements ServerReconfigurable {
         this.userMetrics = userMetrics;
         this.clock = clock;
         this.ioExecutor = ioExecutor;
+        this.replicaTransitionExecutor =
+                Executors.newFixedThreadPool(
+                        conf.get(ConfigOptions.TABLET_SERVER_REPLICA_TRANSITION_THREAD_NUM),
+                        new ExecutorThreadFactory("tablet-server-replica-transition-" + serverId));
         this.minInSyncReplicas = conf.get(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER);
         this.scannerManager = checkNotNull(scannerManager, "scannerManager");
         // Historical lookup cache capacity currently uses only the first data volume.
@@ -1389,29 +1398,49 @@ public class ReplicaManager implements ServerReconfigurable {
                         .map(NotifyLeaderAndIsrData::getTableBucket)
                         .collect(Collectors.toSet()));
 
+        List<CompletableFuture<NotifyLeaderAndIsrResultForBucket>> makeLeaderFutures =
+                new ArrayList<>(replicasToBeLeader.size());
         for (NotifyLeaderAndIsrData data : replicasToBeLeader) {
             TableBucket tb = data.getTableBucket();
             try {
                 Replica replica = getReplicaOrException(tb);
-                // register replica to remote log manager first.
-                remoteLogManager.registerReplica(replica);
-
-                // Load the latest lake progress before leader activation. Historical KV recovery
-                // requires its lake log end offset, while failures remain best effort for normal
-                // replicas.
-                if (replica.isDataLakeEnabled()) {
-                    updateWithLakeTableSnapshot(replica);
-                }
-                replica.makeLeader(data);
-
-                // start the remote log tiering tasks for leaders
-                remoteLogManager.startLogTiering(replica);
-                result.put(tb, new NotifyLeaderAndIsrResultForBucket(tb));
+                makeLeaderFutures.add(
+                        CompletableFuture.supplyAsync(
+                                () -> makeLeader(replica, data), replicaTransitionExecutor));
             } catch (Exception e) {
                 LOG.error("Error make replica {} to leader", tb, e);
                 result.put(
                         tb, new NotifyLeaderAndIsrResultForBucket(tb, ApiError.fromThrowable(e)));
             }
+        }
+
+        for (CompletableFuture<NotifyLeaderAndIsrResultForBucket> future : makeLeaderFutures) {
+            NotifyLeaderAndIsrResultForBucket leaderResult = future.join();
+            result.put(leaderResult.getTableBucket(), leaderResult);
+        }
+    }
+
+    @VisibleForTesting
+    NotifyLeaderAndIsrResultForBucket makeLeader(Replica replica, NotifyLeaderAndIsrData data) {
+        TableBucket tb = data.getTableBucket();
+        try {
+            // register replica to remote log manager first.
+            remoteLogManager.registerReplica(replica);
+
+            // Load the latest lake progress before leader activation. Historical KV recovery
+            // requires its lake log end offset, while failures remain best effort for normal
+            // replicas.
+            if (replica.isDataLakeEnabled()) {
+                updateWithLakeTableSnapshot(replica);
+            }
+            replica.makeLeader(data);
+
+            // start the remote log tiering tasks for leaders
+            remoteLogManager.startLogTiering(replica);
+            return new NotifyLeaderAndIsrResultForBucket(tb);
+        } catch (Exception e) {
+            LOG.error("Error make replica {} to leader", tb, e);
+            return new NotifyLeaderAndIsrResultForBucket(tb, ApiError.fromThrowable(e));
         }
     }
 
@@ -2549,6 +2578,7 @@ public class ReplicaManager implements ServerReconfigurable {
     public static final class OfflineReplica implements HostedReplica {}
 
     public void shutdown() throws InterruptedException {
+        ExecutorUtils.gracefulShutdown(5, TimeUnit.SECONDS, replicaTransitionExecutor);
         // Close the resources for snapshot kv
         kvSnapshotResource.close();
         historicalPartitionManager.close();

@@ -134,6 +134,7 @@ public class FlussConfigUtils {
                             "Configuration %s must be set.", ConfigOptions.TABLET_SERVER_ID.key()));
         }
         validMinValue(ConfigOptions.TABLET_SERVER_ID, serverId.get(), 0);
+        validMinValue(conf, ConfigOptions.TABLET_SERVER_REPLICA_TRANSITION_THREAD_NUM, 1);
     }
 
     public static void validateRemoteDataDirs(Configuration conf) {

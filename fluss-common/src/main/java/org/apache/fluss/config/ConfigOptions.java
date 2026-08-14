@@ -649,6 +649,14 @@ public class ConfigOptions {
                             "The rack for the tabletServer. This will be used in rack aware bucket assignment "
                                     + "for fault tolerance. Examples: `RACK1`, `cn-hangzhou-server10`");
 
+    public static final ConfigOption<Integer> TABLET_SERVER_REPLICA_TRANSITION_THREAD_NUM =
+            key("tablet-server.replica-transition-thread-num")
+                    .intType()
+                    .defaultValue(10)
+                    .withDescription(
+                            "The maximum number of replica role transitions that can run "
+                                    + "concurrently in a TabletServer.");
+
     public static final ConfigOption<Double> TABLET_SERVER_ADVERTISED_RESOURCE_CPU_CORES =
             key("tablet-server.advertised-resource.cpu-cores")
                     .doubleType()
