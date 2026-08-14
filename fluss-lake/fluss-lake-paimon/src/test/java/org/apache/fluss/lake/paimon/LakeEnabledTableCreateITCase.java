@@ -320,22 +320,9 @@ class LakeEnabledTableCreateITCase {
                             org.apache.paimon.types.DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE()
                         },
                         new String[] {
-                            "log_c1",
-                            "log_c2",
-                            "log_c3",
-                            "log_c4",
-                            "log_c5",
-                            "log_c6",
-                            "log_c7",
-                            "log_c8",
-                            "log_c9",
-                            "log_c10",
-                            "log_c11",
-                            "log_c12",
-                            "log_c13",
-                            "log_c14",
-                            "log_c15",
-                            "log_c16"
+                            "log_c1", "log_c2", "log_c3", "log_c4", "log_c5", "log_c6", "log_c7",
+                            "log_c8", "log_c9", "log_c10", "log_c11", "log_c12", "log_c13",
+                            "log_c14", "log_c15", "log_c16"
                         }),
                 null,
                 BUCKET_NUM);
@@ -552,8 +539,7 @@ class LakeEnabledTableCreateITCase {
                 .hasMessageContaining(
                         "Existing schema: UpdateSchema{fields=[`c1` STRING, `c2` INT]")
                 .hasMessageContaining("options={bucket=-1")
-                .hasMessageContaining(
-                        "new schema: UpdateSchema{fields=[`c1` STRING, `c2` INT]")
+                .hasMessageContaining("new schema: UpdateSchema{fields=[`c1` STRING, `c2` INT]")
                 .hasMessageContaining("options={bucket=3")
                 .hasMessageContaining("bucket-key=c1,c2")
                 .hasMessageEndingWith(
@@ -1056,7 +1042,8 @@ class LakeEnabledTableCreateITCase {
                                 OFFSET_COLUMN_NAME, org.apache.paimon.types.DataTypes.BIGINT()),
                         SchemaChange.addColumn(
                                 TIMESTAMP_COLUMN_NAME,
-                                org.apache.paimon.types.DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE())),
+                                org.apache.paimon.types.DataTypes
+                                        .TIMESTAMP_WITH_LOCAL_TIME_ZONE())),
                 false);
 
         // disable data lake
