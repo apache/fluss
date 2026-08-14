@@ -688,14 +688,14 @@ abstract class SparkLakeLogTableReadTest extends SparkLakeTableReadTestBase {
       tierToLake("t_earliest")
 
       try {
-        spark.conf.set("spark.sql.fluss.scan.startup.mode", "earliest")
+        spark.conf.set("spark.sql.fluss.scanStartupMode", "earliest")
 
         checkAnswer(
           sql(s"SELECT * FROM $DEFAULT_DATABASE.t_earliest ORDER BY id"),
           Row(1, "alpha") :: Row(2, "beta") :: Row(3, "gamma") :: Nil
         )
       } finally {
-        spark.conf.set("spark.sql.fluss.scan.startup.mode", "full")
+        spark.conf.set("spark.sql.fluss.scanStartupMode", "full")
       }
     }
   }
