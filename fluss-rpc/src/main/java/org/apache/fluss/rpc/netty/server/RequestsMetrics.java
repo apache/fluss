@@ -59,6 +59,9 @@ public class RequestsMetrics {
             if (apiKey == ApiKeys.LOOKUP) {
                 addMetrics(serverMetricsGroup, toRequestName(apiKey, false, true));
             }
+            if (apiKey == ApiKeys.PUT_KV) {
+                addMetrics(serverMetricsGroup, toRequestName(apiKey, false, true));
+            }
         }
         this.requestMetricGroup = serverMetricsGroup.addGroup("request");
     }
@@ -103,7 +106,7 @@ public class RequestsMetrics {
             case PRODUCE_LOG:
                 return "produceLog";
             case PUT_KV:
-                return "putKv";
+                return isHistorical ? "historicalPutKv" : "putKv";
             case LOOKUP:
                 return isHistorical ? "historicalLookup" : "lookup";
             case PREFIX_LOOKUP:

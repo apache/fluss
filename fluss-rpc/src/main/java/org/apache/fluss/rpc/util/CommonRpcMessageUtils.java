@@ -34,6 +34,7 @@ import org.apache.fluss.rpc.messages.PbKeyValue;
 import org.apache.fluss.rpc.messages.PbPartitionSpec;
 import org.apache.fluss.rpc.messages.PbRemoteLogFetchInfo;
 import org.apache.fluss.rpc.messages.PbRemoteLogSegment;
+import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.security.acl.AccessControlEntry;
 import org.apache.fluss.security.acl.AccessControlEntryFilter;
@@ -69,6 +70,17 @@ public class CommonRpcMessageUtils {
     public static boolean hasHistoricalLookup(LookupRequest lookupRequest) {
         return lookupRequest.getBucketsReqsCount() > 0
                 && lookupRequest.getBucketsReqAt(0).hasOriginalPartitionName();
+    }
+
+    /**
+     * Returns whether the put-KV request is for historical partition writes.
+     *
+     * <p>Normal and historical write buckets cannot be mixed in the same request, so the first
+     * bucket determines the request type.
+     */
+    public static boolean hasHistoricalPut(PutKvRequest putKvRequest) {
+        return putKvRequest.getBucketsReqsCount() > 0
+                && putKvRequest.getBucketsReqAt(0).hasOriginalPartitionName();
     }
 
     public static List<PbAclInfo> toPbAclInfos(Collection<AclBinding> aclBindings) {
