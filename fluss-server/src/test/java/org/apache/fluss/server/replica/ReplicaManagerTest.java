@@ -164,6 +164,9 @@ import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.spy;
 
 /** Test for {@link ReplicaManager}. */
 class ReplicaManagerTest extends ReplicaTestBase {
@@ -1727,6 +1730,63 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                                 + "TableBucket{tableId=150001, bucket=1}")));
         assertReplicaEpochEquals(
                 replicaManager.getReplicaOrException(tb), true, 1, INITIAL_BUCKET_EPOCH);
+    }
+
+    @Test
+    void testMakeLeadersInParallel() throws Exception {
+        ReplicaManager spyingReplicaManager = spy(replicaManager);
+        replicaManager = spyingReplicaManager;
+
+        CountDownLatch leadersStarted = new CountDownLatch(2);
+        doAnswer(
+                        invocation -> {
+                            leadersStarted.countDown();
+                            if (!leadersStarted.await(10, TimeUnit.SECONDS)) {
+                                throw new AssertionError(
+                                        "Leader transitions did not run in parallel");
+                            }
+                            return invocation.callRealMethod();
+                        })
+                .when(spyingReplicaManager)
+                .makeLeader(any(Replica.class), any(NotifyLeaderAndIsrData.class));
+
+        TableBucket firstBucket = new TableBucket(DATA1_TABLE_ID, 1);
+        TableBucket secondBucket = new TableBucket(DATA1_TABLE_ID, 2);
+        CompletableFuture<List<NotifyLeaderAndIsrResultForBucket>> future =
+                new CompletableFuture<>();
+        spyingReplicaManager.becomeLeaderOrFollower(
+                INITIAL_COORDINATOR_EPOCH,
+                Arrays.asList(
+                        new NotifyLeaderAndIsrData(
+                                PhysicalTablePath.of(DATA1_TABLE_PATH),
+                                firstBucket,
+                                Arrays.asList(1, 2, 3),
+                                new LeaderAndIsr(
+                                        TABLET_SERVER_ID,
+                                        INITIAL_LEADER_EPOCH,
+                                        Arrays.asList(1, 2, 3),
+                                        Collections.emptyList(),
+                                        INITIAL_COORDINATOR_EPOCH,
+                                        INITIAL_BUCKET_EPOCH)),
+                        new NotifyLeaderAndIsrData(
+                                PhysicalTablePath.of(DATA1_TABLE_PATH),
+                                secondBucket,
+                                Arrays.asList(1, 2, 3),
+                                new LeaderAndIsr(
+                                        TABLET_SERVER_ID,
+                                        INITIAL_LEADER_EPOCH,
+                                        Arrays.asList(1, 2, 3),
+                                        Collections.emptyList(),
+                                        INITIAL_COORDINATOR_EPOCH,
+                                        INITIAL_BUCKET_EPOCH))),
+                future::complete);
+
+        assertThat(future.get())
+                .containsExactlyInAnyOrder(
+                        new NotifyLeaderAndIsrResultForBucket(firstBucket),
+                        new NotifyLeaderAndIsrResultForBucket(secondBucket));
+        assertThat(spyingReplicaManager.getReplicaOrException(firstBucket).isLeader()).isTrue();
+        assertThat(spyingReplicaManager.getReplicaOrException(secondBucket).isLeader()).isTrue();
     }
 
     @Test
