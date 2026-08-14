@@ -148,8 +148,18 @@ public class PaimonSystemColumns {
     }
 
     private static boolean isSystemTimestampType(DataType actualType) {
-        return actualType.equalsIgnoreFieldId(DataTypes.TIMESTAMP_LTZ_MILLIS())
-                || actualType.equalsIgnoreFieldId(DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE());
+        // Legacy tables carry __timestamp with varying timestamp types depending on the cluster
+        // that created them: with or without local time zone, and precision 3 (new clusters) or 6
+        // (old clusters). Accept the whole timestamp family and let the reader handle the
+        // precision, mirroring the relaxed check in
+        // PaimonTableValidation#equalIgnoreSystemColumnTimestampPrecision.
+        switch (actualType.getTypeRoot()) {
+            case TIMESTAMP_WITHOUT_TIME_ZONE:
+            case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
+                return true;
+            default:
+                return false;
+        }
     }
 
     private static InvalidTableException partialLayoutException(RowType paimonRowType) {

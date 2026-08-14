@@ -160,15 +160,7 @@ class PaimonLakeCatalogTest {
 
         Table table = flussPaimonCatalog.getPaimonCatalog().getTable(identifier);
         assertThat(table.rowType().getFieldNames())
-                .containsSequence(
-                        "id",
-                        "name",
-                        "amount",
-                        "address",
-                        "new_col",
-                        "__bucket",
-                        "__offset",
-                        "__timestamp");
+                .containsSequence("id", "name", "amount", "address", "new_col");
     }
 
     @Test
@@ -205,15 +197,7 @@ class PaimonLakeCatalogTest {
         assertThat(((FileStoreTable) table).schema().toSchema().comment()).isEqualTo("");
         assertThat(table.options().get("fluss.key")).isEqualTo("value");
         assertThat(table.rowType().getFieldNames())
-                .containsSequence(
-                        "id",
-                        "name",
-                        "amount",
-                        "address",
-                        "is_direct_play",
-                        "__bucket",
-                        "__offset",
-                        "__timestamp");
+                .containsSequence("id", "name", "amount", "address", "is_direct_play");
     }
 
     @Test
