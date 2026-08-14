@@ -972,7 +972,8 @@ class FlussRecordAsPaimonRowTest {
                         new org.apache.paimon.types.BigIntType(),
                         new org.apache.paimon.types.LocalZonedTimestampType(3));
 
-        FlussRecordAsPaimonRow flussRow = new FlussRecordAsPaimonRow(tableBucket, rowType, LakeLayout.LEGACY);
+        FlussRecordAsPaimonRow flussRow =
+                new FlussRecordAsPaimonRow(tableBucket, rowType, LakeLayout.LEGACY);
         GenericRow genericRow = new GenericRow(1);
         genericRow.setField(0, new GenericMap(mapData));
         LogRecord logRecord = new GenericRecord(logOffset, timeStamp, APPEND_ONLY, genericRow);

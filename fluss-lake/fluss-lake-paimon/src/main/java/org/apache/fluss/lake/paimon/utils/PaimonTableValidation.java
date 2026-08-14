@@ -77,8 +77,7 @@ public class PaimonTableValidation {
         for (Map.Entry<String, org.apache.paimon.types.DataType> systemColumn :
                 PaimonSystemColumns.SYSTEM_COLUMNS.entrySet()) {
             fields.add(
-                    new DataField(
-                            nextFieldId++, systemColumn.getKey(), systemColumn.getValue()));
+                    new DataField(nextFieldId++, systemColumn.getKey(), systemColumn.getValue()));
         }
         return new Schema(
                 fields,

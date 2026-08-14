@@ -37,8 +37,8 @@ import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
  * single place that detects which layout a given Paimon table uses.
  *
  * <ul>
- *   <li>{@link LakeLayout#CLEAN} - the table only contains user-defined columns. This is the
- *       layout of every newly created lake table.
+ *   <li>{@link LakeLayout#CLEAN} - the table only contains user-defined columns. This is the layout
+ *       of every newly created lake table.
  *   <li>{@link LakeLayout#LEGACY} - the table was created before FIP-27 and carries the three
  *       mandatory Fluss system columns {@code __bucket}, {@code __offset}, {@code __timestamp} as
  *       its last three physical columns.
@@ -92,8 +92,8 @@ public class PaimonSystemColumns {
      * Detects whether a Paimon table with the given physical row type uses the clean or the legacy
      * layout.
      *
-     * <p>The detection tolerates the {@code __timestamp} precision difference between old (precision
-     * 6) and new (precision 3) clusters, mirroring {@link
+     * <p>The detection tolerates the {@code __timestamp} precision difference between old
+     * (precision 6) and new (precision 3) clusters, mirroring {@link
      * PaimonTableValidation#equalIgnoreSystemColumnTimestampPrecision}.
      *
      * @throws InvalidTableException if the table carries only some of the system columns, carries
