@@ -42,7 +42,7 @@ impl LimitScanRequest {
             partition_id,
             bucket_id,
             limit,
-            bucket_count: None,
+            bucket_count_actual: None,
         };
 
         Self {

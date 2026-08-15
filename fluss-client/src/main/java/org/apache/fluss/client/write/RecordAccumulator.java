@@ -204,7 +204,7 @@ public final class RecordAccumulator {
             WriteCallback callback,
             Cluster cluster,
             int bucketId,
-            int bucketCount,
+            int bucketCountActual,
             boolean abortIfBatchFull)
             throws Exception {
         PhysicalTablePath physicalTablePath = writeRecord.getPhysicalTablePath();
@@ -248,7 +248,7 @@ public final class RecordAccumulator {
                                 writeRecord,
                                 callback,
                                 bucketId,
-                                bucketCount,
+                                bucketCountActual,
                                 tableInfo,
                                 dq,
                                 memorySegments);
@@ -629,7 +629,7 @@ public final class RecordAccumulator {
             WriteRecord writeRecord,
             WriteCallback callback,
             int bucketId,
-            int bucketCount,
+            int bucketCountActual,
             TableInfo tableInfo,
             Deque<WriteBatch> deque,
             List<MemorySegment> segments)
@@ -655,7 +655,7 @@ public final class RecordAccumulator {
                         outputView,
                         schemaId);
 
-        batch.setBucketCount(bucketCount);
+        batch.setBucketCountActual(bucketCountActual);
         batch.tryAppend(writeRecord, callback);
         deque.addLast(batch);
         incomplete.add(batch);

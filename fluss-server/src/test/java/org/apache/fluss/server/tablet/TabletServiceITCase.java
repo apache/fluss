@@ -759,7 +759,7 @@ public class TabletServiceITCase {
     }
 
     @Test
-    void testBucketCountValidationAppliesToClientRequestsOnly() throws Exception {
+    void testBucketCountActualValidationAppliesToClientRequestsOnly() throws Exception {
         long tableId =
                 createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR);
         TableBucket tb = new TableBucket(tableId, 0);
@@ -776,7 +776,7 @@ public class TabletServiceITCase {
                         () ->
                                 leaderGateWay
                                         .listOffsets(
-                                                newListOffsetsRequestWithBucketCount(
+                                                newListOffsetsRequestWithBucketCountActual(
                                                         -1,
                                                         ListOffsetsParam.LATEST_OFFSET_TYPE,
                                                         tableId,
@@ -791,7 +791,7 @@ public class TabletServiceITCase {
         assertListOffsetsResponse(
                 leaderGateWay
                         .listOffsets(
-                                newListOffsetsRequestWithBucketCount(
+                                newListOffsetsRequestWithBucketCountActual(
                                         1, ListOffsetsParam.LATEST_OFFSET_TYPE, tableId, 0, 999))
                         .get(),
                 0L,
@@ -804,7 +804,7 @@ public class TabletServiceITCase {
                         () ->
                                 leaderGateWay
                                         .listOffsets(
-                                                newListOffsetsRequestWithBucketCount(
+                                                newListOffsetsRequestWithBucketCountActual(
                                                         -1,
                                                         ListOffsetsParam.LATEST_OFFSET_TYPE,
                                                         10005L,
@@ -815,10 +815,14 @@ public class TabletServiceITCase {
                 .isInstanceOf(TabletMetadataNotReadyException.class);
     }
 
-    private static ListOffsetsRequest newListOffsetsRequestWithBucketCount(
-            int followerServerId, int offsetType, long tableId, int bucketId, int bucketCount) {
+    private static ListOffsetsRequest newListOffsetsRequestWithBucketCountActual(
+            int followerServerId,
+            int offsetType,
+            long tableId,
+            int bucketId,
+            int bucketCountActual) {
         return newListOffsetsRequest(followerServerId, offsetType, tableId, bucketId)
-                .setBucketCount(bucketCount);
+                .setBucketCountActual(bucketCountActual);
     }
 
     @Test

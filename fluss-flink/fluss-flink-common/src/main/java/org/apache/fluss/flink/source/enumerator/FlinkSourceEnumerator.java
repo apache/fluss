@@ -779,7 +779,7 @@ public class FlinkSourceEnumerator
                                         new Partition(
                                                 p.getPartitionId(),
                                                 p.getPartitionName(),
-                                                p.getBucketCount()))
+                                                p.getBucketCountActual()))
                         .collect(Collectors.toSet());
         final Set<Partition> removedPartitions = new HashSet<>();
 
@@ -871,7 +871,7 @@ public class FlinkSourceEnumerator
                             partition.getPartitionId(),
                             partition.getPartitionName(),
                             effectiveOffsetsInitializer,
-                            partition.getBucketCount()));
+                            partition.getBucketCountActual()));
         }
         return splits;
     }
@@ -1633,20 +1633,20 @@ public class FlinkSourceEnumerator
         final String partitionName;
 
         /**
-         * The actual bucket count of this partition (i.e. bucket.num.actual), already resolved by
-         * {@link PartitionInfo}. It is {@link #NO_BUCKET_COUNT} only for instances created for diff
-         * comparison or removal handling, which never generate splits.
+         * The actual bucket count of this partition, already resolved by {@link PartitionInfo}. It
+         * is {@link #NO_BUCKET_COUNT} only for instances created for diff comparison or removal
+         * handling, which never generate splits.
          */
-        final int bucketCount;
+        final int bucketCountActual;
 
         Partition(long partitionId, String partitionName) {
             this(partitionId, partitionName, NO_BUCKET_COUNT);
         }
 
-        Partition(long partitionId, String partitionName, int bucketCount) {
+        Partition(long partitionId, String partitionName, int bucketCountActual) {
             this.partitionId = partitionId;
             this.partitionName = partitionName;
-            this.bucketCount = bucketCount;
+            this.bucketCountActual = bucketCountActual;
         }
 
         public long getPartitionId() {
@@ -1657,14 +1657,14 @@ public class FlinkSourceEnumerator
             return partitionName;
         }
 
-        public int getBucketCount() {
+        public int getBucketCountActual() {
             checkState(
-                    bucketCount != NO_BUCKET_COUNT,
+                    bucketCountActual != NO_BUCKET_COUNT,
                     "Partition %s (id %s) does not carry a bucket count; comparison-only "
                             + "instances must not be used to generate splits.",
                     partitionName,
                     partitionId);
-            return bucketCount;
+            return bucketCountActual;
         }
 
         @Override

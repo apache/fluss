@@ -753,7 +753,7 @@ class AutoPartitionManagerTest {
      * refresh path for bucket.num-only changes.
      */
     @Test
-    void testAutoCreatedPartitionUsesUpdatedBucketCount() throws Exception {
+    void testAutoCreatedPartitionUsesUpdatedBucketCountActual() throws Exception {
         ZonedDateTime startTime =
                 LocalDateTime.parse("2024-09-10T00:00:00").atZone(ZoneId.systemDefault());
         long startMs = startTime.toInstant().toEpochMilli();
@@ -784,7 +784,7 @@ class AutoPartitionManagerTest {
                 .containsExactlyInAnyOrder("20240910", "20240911", "20240912", "20240913");
         // all pre-created partitions carry the original bucket count 4
         for (PartitionRegistration reg : partitions.values()) {
-            assertThat(reg.getBucketCount()).isEqualTo(4);
+            assertThat(reg.getBucketCountActual()).isEqualTo(4);
         }
 
         // simulate ALTER bucket.num 4 -> 8: a real ALTER first persists the new table-level bucket
@@ -805,8 +805,8 @@ class AutoPartitionManagerTest {
         partitions = zookeeperClient.getPartitionRegistrations(tablePath);
         assertThat(partitions.keySet()).contains("20240914");
         // old partition keeps its original bucket count, new partition uses the updated one
-        assertThat(partitions.get("20240910").getBucketCount()).isEqualTo(4);
-        assertThat(partitions.get("20240914").getBucketCount()).isEqualTo(8);
+        assertThat(partitions.get("20240910").getBucketCountActual()).isEqualTo(4);
+        assertThat(partitions.get("20240914").getBucketCountActual()).isEqualTo(8);
     }
 
     /**

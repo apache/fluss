@@ -42,7 +42,7 @@ public class PartitionMetadata {
     private final String partitionName;
     private final long partitionId;
     private final List<BucketMetadata> bucketMetadataList;
-    @Nullable private final Integer bucketCount;
+    @Nullable private final Integer bucketCountActual;
 
     public PartitionMetadata(
             long tableId,
@@ -57,12 +57,12 @@ public class PartitionMetadata {
             String partitionName,
             long partitionId,
             List<BucketMetadata> bucketMetadataList,
-            @Nullable Integer bucketCount) {
+            @Nullable Integer bucketCountActual) {
         this.tableId = tableId;
         this.partitionName = partitionName;
         this.partitionId = partitionId;
         this.bucketMetadataList = bucketMetadataList;
-        this.bucketCount = bucketCount;
+        this.bucketCountActual = bucketCountActual;
     }
 
     public long getTableId() {
@@ -83,7 +83,7 @@ public class PartitionMetadata {
 
     /** Returns the actual bucket count for this partition, or null if not set (old data). */
     @Nullable
-    public Integer getBucketCount() {
-        return bucketCount;
+    public Integer getBucketCountActual() {
+        return bucketCountActual;
     }
 }

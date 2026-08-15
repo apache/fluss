@@ -772,7 +772,7 @@ public class MetadataManager {
         // lake options to the table properties, which may cause the validation failure
         TableInfo tableInfo = tableReg.toTableInfo(tablePath, schemaInfo);
 
-        // Old-partition bucket.num.actual backfill to be committed atomically with the
+        // Old-partition bucket count backfill to be committed atomically with the
         // table-level bucket.num update; stays empty unless bucket.num is being changed.
         Map<String, ZooKeeperClient.VersionedData<PartitionRegistration>>
                 partitionBucketCountBackfills = Collections.emptyMap();
@@ -875,7 +875,7 @@ public class MetadataManager {
      * lacking one. Nothing is written here: the caller commits the returned registrations together
      * with the table-level bucket.num update in a single ZK transaction, CAS-guarded by the
      * versions captured here, so old partitions never observe the new table-level value without
-     * their own bucket.num.actual.
+     * their own bucket count.
      *
      * <p>Idempotent: partitions that already have a persisted bucket count are skipped.
      */
@@ -901,7 +901,7 @@ public class MetadataManager {
                 }
                 PartitionRegistration reg = optReg.get().data();
                 int partitionZkVersion = optReg.get().zkVersion();
-                if (reg.getBucketCount() != null) {
+                if (reg.getBucketCountActual() != null) {
                     // Already has bucket count persisted, skip. Idempotent so retries are safe.
                     continue;
                 }
@@ -919,13 +919,13 @@ public class MetadataManager {
                                             + "ALTER.",
                                     tablePath, partitionName, partitionId));
                 }
-                int actualBucketCount = optAssignment.get().getBucketAssignments().size();
+                int bucketCountActual = optAssignment.get().getBucketAssignments().size();
                 PartitionRegistration updatedReg =
                         new PartitionRegistration(
                                 reg.getTableId(),
                                 reg.getPartitionId(),
                                 reg.getRemoteDataDir(),
-                                actualBucketCount);
+                                bucketCountActual);
                 backfills.put(
                         partitionName,
                         new ZooKeeperClient.VersionedData<>(updatedReg, partitionZkVersion));
@@ -1196,7 +1196,7 @@ public class MetadataManager {
             PartitionAssignment partitionAssignment,
             ResolvedPartitionSpec partition,
             boolean ignoreIfExists,
-            int bucketCount) {
+            int bucketCountActual) {
         String partitionName = partition.getPartitionName();
         Optional<PartitionRegistration> optionalPartitionRegistration =
                 getOptionalPartitionRegistration(tablePath, partitionName);
@@ -1249,7 +1249,7 @@ public class MetadataManager {
                     remoteDataDir,
                     tablePath,
                     tableId,
-                    bucketCount);
+                    bucketCountActual);
             LOG.info(
                     "Register partition {} to zookeeper for table [{}].", partitionName, tablePath);
         } catch (KeeperException.NodeExistsException nodeExistsException) {

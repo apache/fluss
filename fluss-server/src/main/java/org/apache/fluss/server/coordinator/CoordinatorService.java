@@ -1085,9 +1085,9 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 new AccessContextEvent<>(
                         ctx -> {
                             if (partitionId != null) {
-                                // for partitions, the table-level bucket count may differ from
-                                // the partition's actual bucket count (bucket.num.actual) after
-                                // ALTER bucket.num; use the partition assignment size instead
+                                // for partitions, the table-level bucket count may differ from the
+                                // partition's actual bucket count after ALTER bucket.num; use the
+                                // partition assignment size instead
                                 Map<Integer, List<Integer>> partitionAssignment =
                                         ctx.getPartitionAssignment(
                                                 new TablePartition(tableId, partitionId));

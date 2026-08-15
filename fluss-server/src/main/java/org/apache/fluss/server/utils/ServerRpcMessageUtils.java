@@ -626,15 +626,15 @@ public class ServerRpcMessageUtils {
                         .setPartitionName(partitionMetadata.getPartitionName());
         pbPartitionMetadata.addAllBucketMetadatas(
                 toPbBucketMetadata(partitionMetadata.getBucketMetadataList()));
-        Integer bucketCount = partitionMetadata.getBucketCount();
+        Integer bucketCountActual = partitionMetadata.getBucketCountActual();
         int effectiveBucketCount =
-                bucketCount != null
-                        ? bucketCount
+                bucketCountActual != null
+                        ? bucketCountActual
                         : partitionMetadata.getBucketMetadataList().size();
         // 0 means the partition assignment is not known yet, not a zero-bucket layout;
         // omitting the field keeps the client on its table-level fallback instead of 0.
         if (effectiveBucketCount > 0) {
-            pbPartitionMetadata.setBucketCount(effectiveBucketCount);
+            pbPartitionMetadata.setBucketCountActual(effectiveBucketCount);
         }
         return pbPartitionMetadata;
     }
@@ -715,7 +715,9 @@ public class ServerRpcMessageUtils {
                 pbPartitionMetadata.getBucketMetadatasList().stream()
                         .map(ServerRpcMessageUtils::toBucketMetadata)
                         .collect(Collectors.toList()),
-                pbPartitionMetadata.hasBucketCount() ? pbPartitionMetadata.getBucketCount() : null);
+                pbPartitionMetadata.hasBucketCountActual()
+                        ? pbPartitionMetadata.getBucketCountActual()
+                        : null);
     }
 
     public static NotifyLeaderAndIsrRequest makeNotifyLeaderAndIsrRequest(
@@ -1808,8 +1810,9 @@ public class ServerRpcMessageUtils {
                     .setPartitionId(partition.getPartitionId())
                     .setPartitionSpec(makePbPartitionSpec(spec))
                     .setRemoteDataDir(partition.getRemoteDataDir())
-                    .setBucketCount(
-                            partition.getBucketCountOrDefault(tableBucketCount, bucketLayoutEpoch));
+                    .setBucketCountActual(
+                            partition.getBucketCountActualOrDefault(
+                                    tableBucketCount, bucketLayoutEpoch));
         }
         return listPartitionsResponse;
     }

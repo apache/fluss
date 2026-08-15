@@ -33,8 +33,8 @@ public class PrefixLookupQuery extends AbstractLookupQuery<List<byte[]>> {
     private final CompletableFuture<List<byte[]>> future;
 
     PrefixLookupQuery(
-            TablePath tablePath, TableBucket tableBucket, byte[] prefixKey, int bucketCount) {
-        super(tablePath, tableBucket, prefixKey, null, bucketCount);
+            TablePath tablePath, TableBucket tableBucket, byte[] prefixKey, int bucketCountActual) {
+        super(tablePath, tableBucket, prefixKey, null, bucketCountActual);
         this.future = new CompletableFuture<>();
     }
 

@@ -59,12 +59,12 @@ class LakeSplitGeneratorTest {
 
     /**
      * Builds a {@link LakeSplitGenerator} for a partitioned primary-key table (schema: a INT, b
-     * STRING, c STRING; PK a+c) whose single partition "p" has {@code partitionBucketCount}
+     * STRING, c STRING; PK a+c) whose single partition "p" has {@code partitionBucketCountActual}
      * enumerated buckets and a single lake split landing in {@code lakeSplitBucket}.
      */
     @SuppressWarnings("unchecked")
-    private static LakeSplitGenerator createGenerator(int partitionBucketCount, int lakeSplitBucket)
-            throws Exception {
+    private static LakeSplitGenerator createGenerator(
+            int partitionBucketCountActual, int lakeSplitBucket) throws Exception {
         TablePath tablePath = TablePath.of("db", "pk_table");
         TableDescriptor descriptor =
                 TableDescriptor.builder()
@@ -75,7 +75,7 @@ class LakeSplitGeneratorTest {
                                         .column("c", DataTypes.STRING())
                                         .primaryKey("a", "c")
                                         .build())
-                        .distributedBy(partitionBucketCount, "a")
+                        .distributedBy(partitionBucketCountActual, "a")
                         .partitionedBy("c")
                         .build();
         TableInfo tableInfo = TableInfo.of(tablePath, 1L, 1, descriptor, null, 1L, 1L);
@@ -98,20 +98,20 @@ class LakeSplitGeneratorTest {
                 mock(OffsetsInitializer.BucketOffsetsRetriever.class);
         OffsetsInitializer stoppingOffsetInitializer = mock(OffsetsInitializer.class);
         Map<Integer, Long> stoppingOffsets = new HashMap<>();
-        for (int bucket = 0; bucket < partitionBucketCount; bucket++) {
+        for (int bucket = 0; bucket < partitionBucketCountActual; bucket++) {
             stoppingOffsets.put(bucket, 0L);
         }
         when(stoppingOffsetInitializer.getBucketOffsets(eq("p"), anyList(), any()))
                 .thenReturn(stoppingOffsets);
 
         // the partition "p" carries its own bucket count (so an out-of-range lake bucket can be
-        // detected against the enumerated range [0, partitionBucketCount))
+        // detected against the enumerated range [0, partitionBucketCountActual))
         PartitionInfo partitionInfo =
                 new PartitionInfo(
                         7L,
                         ResolvedPartitionSpec.fromPartitionName(tableInfo.getPartitionKeys(), "p"),
                         null,
-                        partitionBucketCount);
+                        partitionBucketCountActual);
 
         return new LakeSplitGenerator(
                 tableInfo,
@@ -119,7 +119,7 @@ class LakeSplitGeneratorTest {
                 lakeSource,
                 retriever,
                 stoppingOffsetInitializer,
-                partitionBucketCount,
+                partitionBucketCountActual,
                 () -> Collections.singleton(partitionInfo));
     }
 
@@ -136,14 +136,14 @@ class LakeSplitGeneratorTest {
     @Test
     void testPrimaryKeyInRangeLakeBucketSucceeds() throws Exception {
         // lake split lands in bucket 1, which is within [0, 4)
-        int partitionBucketCount = 4;
-        LakeSplitGenerator generator = createGenerator(partitionBucketCount, 1);
+        int partitionBucketCountActual = 4;
+        LakeSplitGenerator generator = createGenerator(partitionBucketCountActual, 1);
 
         // no out-of-range bucket: generation succeeds and produces one hybrid lake+log split per
-        // bucket of the partition's enumerated range [0, partitionBucketCount)
+        // bucket of the partition's enumerated range [0, partitionBucketCountActual)
         List<SourceSplitBase> splits = generator.generateHybridLakeFlussSplits();
-        assertThat(splits).isNotNull().hasSize(partitionBucketCount);
-        for (int bucket = 0; bucket < partitionBucketCount; bucket++) {
+        assertThat(splits).isNotNull().hasSize(partitionBucketCountActual);
+        for (int bucket = 0; bucket < partitionBucketCountActual; bucket++) {
             SourceSplitBase split = splits.get(bucket);
             assertThat(split).isInstanceOf(LakeSnapshotAndFlussLogSplit.class);
             assertThat(split.getPartitionName()).isEqualTo("p");

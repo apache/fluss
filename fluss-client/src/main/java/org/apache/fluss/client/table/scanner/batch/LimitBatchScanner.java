@@ -108,14 +108,14 @@ public class LimitBatchScanner implements BatchScanner {
 
         if (tableBucket.getPartitionId() != null) {
             limitScanRequest.setPartitionId(tableBucket.getPartitionId());
-            cluster.getBucketCount(
+            cluster.getBucketCountActual(
                             new TablePartition(
                                     tableBucket.getTableId(), tableBucket.getPartitionId()))
-                    .ifPresent(limitScanRequest::setBucketCount);
+                    .ifPresent(limitScanRequest::setBucketCountActual);
             metadataUpdater.checkAndUpdateMetadata(tableInfo.getTablePath(), tableBucket);
         } else {
             cluster.getBucketCountForTable(tableBucket.getTableId())
-                    .ifPresent(limitScanRequest::setBucketCount);
+                    .ifPresent(limitScanRequest::setBucketCountActual);
         }
 
         // because that rocksdb is not suitable to projection, thus do it in client.

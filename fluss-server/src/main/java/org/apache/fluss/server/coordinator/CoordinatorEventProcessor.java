@@ -1006,7 +1006,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 && oldTableInfo.getNumBuckets() != newTableInfo.getNumBuckets()) {
             // bucket.num changed (e.g. via ALTER TABLE) without any auto-partition strategy
             // change. Refresh the cached TableInfo so that newly auto-created partitions use
-            // the updated table-level bucket count as their bucket.num.actual.
+            // the updated table-level bucket count as their per-partition bucket count.
             LOG.info(
                     "Updating auto-partition metadata for table {} (tableId={}) after "
                             + "bucket.num changed from {} to {}.",

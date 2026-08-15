@@ -134,8 +134,8 @@ class ClientRpcMessageUtilsTest {
     }
 
     @Test
-    void testToPartitionInfosParsesBucketCount() {
-        // one partition with bucket_count set, one without (simulating an old cluster / old
+    void testToPartitionInfosParsesBucketCountActual() {
+        // one partition with bucket_count_actual set, one without (simulating an old cluster / old
         // partition that did not persist per-partition bucket count)
         ListPartitionInfosResponse response =
                 new ListPartitionInfosResponse()
@@ -148,26 +148,26 @@ class ClientRpcMessageUtilsTest {
 
         assertThat(partitionInfos).hasSize(2);
 
-        PartitionInfo withBucketCount = partitionInfos.get(0);
-        assertThat(withBucketCount.getPartitionId()).isEqualTo(1L);
-        assertThat(withBucketCount.getPartitionName()).isEqualTo("20240101");
-        assertThat(withBucketCount.getRemoteDataDir()).isEqualTo("file://dir1");
-        assertThat(withBucketCount.getBucketCount()).isEqualTo(8);
+        PartitionInfo withBucketCountActual = partitionInfos.get(0);
+        assertThat(withBucketCountActual.getPartitionId()).isEqualTo(1L);
+        assertThat(withBucketCountActual.getPartitionName()).isEqualTo("20240101");
+        assertThat(withBucketCountActual.getRemoteDataDir()).isEqualTo("file://dir1");
+        assertThat(withBucketCountActual.getBucketCountActual()).isEqualTo(8);
 
-        // backward compatibility: missing bucket_count must resolve to the given table-level
+        // backward compatibility: missing bucket_count_actual must resolve to the given table-level
         // default, not the proto default 0
-        PartitionInfo withoutBucketCount = partitionInfos.get(1);
-        assertThat(withoutBucketCount.getPartitionId()).isEqualTo(2L);
-        assertThat(withoutBucketCount.getPartitionName()).isEqualTo("20240102");
-        assertThat(withoutBucketCount.getRemoteDataDir()).isNull();
-        assertThat(withoutBucketCount.getBucketCount()).isEqualTo(4);
+        PartitionInfo withoutBucketCountActual = partitionInfos.get(1);
+        assertThat(withoutBucketCountActual.getPartitionId()).isEqualTo(2L);
+        assertThat(withoutBucketCountActual.getPartitionName()).isEqualTo("20240102");
+        assertThat(withoutBucketCountActual.getRemoteDataDir()).isNull();
+        assertThat(withoutBucketCountActual.getBucketCountActual()).isEqualTo(4);
     }
 
     private static PbPartitionInfo makePbPartitionInfo(
             long partitionId,
             String partitionValue,
             @Nullable String remoteDataDir,
-            @Nullable Integer bucketCount) {
+            @Nullable Integer bucketCountActual) {
         PbPartitionSpec partitionSpec = new PbPartitionSpec();
         PbKeyValue keyValue = new PbKeyValue().setKey("dt").setValue(partitionValue);
         partitionSpec.addAllPartitionKeyValues(Collections.singletonList(keyValue));
@@ -177,8 +177,8 @@ class ClientRpcMessageUtilsTest {
         if (remoteDataDir != null) {
             pbPartitionInfo.setRemoteDataDir(remoteDataDir);
         }
-        if (bucketCount != null) {
-            pbPartitionInfo.setBucketCount(bucketCount);
+        if (bucketCountActual != null) {
+            pbPartitionInfo.setBucketCountActual(bucketCountActual);
         }
         return pbPartitionInfo;
     }

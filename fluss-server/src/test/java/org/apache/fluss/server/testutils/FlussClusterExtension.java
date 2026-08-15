@@ -739,10 +739,10 @@ public final class FlussClusterExtension
                     zooKeeperClient.getPartitionRegistrations(tablePath);
             for (PartitionRegistration partition : partitions.values()) {
                 // partitions diverge from the table-level count after ALTER bucket.num
-                int partitionBucketCount =
-                        partition.getBucketCountOrDefault(
+                int partitionBucketCountActual =
+                        partition.getBucketCountActualOrDefault(
                                 bucketCount, tableRegistration.bucketLayoutEpoch);
-                for (int bucketId = 0; bucketId < partitionBucketCount; bucketId++) {
+                for (int bucketId = 0; bucketId < partitionBucketCountActual; bucketId++) {
                     tableBuckets.add(
                             new TableBucket(tableId, partition.getPartitionId(), bucketId));
                 }

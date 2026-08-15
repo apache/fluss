@@ -62,9 +62,9 @@ public class ServerMetadataSnapshot {
     // bucketMetadata>
     private final Map<Long, Map<Integer, BucketMetadata>> bucketMetadataMapForPartitions;
 
-    // TablePartition -> bucket count (bucket.num.actual); absent only when a legacy Coordinator
-    // omits it; a new Coordinator always sends the field.
-    private final Map<TablePartition, Integer> partitionBucketCounts;
+    // TablePartition -> bucket count; absent only when a legacy Coordinator omits it; a new
+    // Coordinator always sends the field.
+    private final Map<TablePartition, Integer> partitionBucketCountActuals;
 
     // tableId -> table-level bucket count; absent when metadata has not arrived.
     private final Map<Long, Integer> tableBucketCounts;
@@ -81,7 +81,7 @@ public class ServerMetadataSnapshot {
             Map<PhysicalTablePath, Long> partitionIdByPath,
             Map<Long, Map<Integer, BucketMetadata>> bucketMetadataMapForTables,
             Map<Long, Map<Integer, BucketMetadata>> bucketMetadataMapForPartitions,
-            Map<TablePartition, Integer> partitionBucketCounts,
+            Map<TablePartition, Integer> partitionBucketCountActuals,
             Map<Long, Integer> tableBucketCounts,
             Map<Long, Long> bucketLayoutEpochByTableId) {
         this.coordinatorServer = coordinatorServer;
@@ -100,7 +100,7 @@ public class ServerMetadataSnapshot {
         this.bucketMetadataMapForTables = Collections.unmodifiableMap(bucketMetadataMapForTables);
         this.bucketMetadataMapForPartitions =
                 Collections.unmodifiableMap(bucketMetadataMapForPartitions);
-        this.partitionBucketCounts = Collections.unmodifiableMap(partitionBucketCounts);
+        this.partitionBucketCountActuals = Collections.unmodifiableMap(partitionBucketCountActuals);
         this.tableBucketCounts = Collections.unmodifiableMap(tableBucketCounts);
         this.bucketLayoutEpochByTableId = Collections.unmodifiableMap(bucketLayoutEpochByTableId);
     }
@@ -182,15 +182,15 @@ public class ServerMetadataSnapshot {
     }
 
     /**
-     * Returns the actual bucket count (bucket.num.actual) for the given table partition, or null
-     * when the coordinator didn't send an explicit bucket count for it.
+     * Returns the actual bucket count for the given table partition, or null when the coordinator
+     * didn't send an explicit bucket count for it.
      */
-    public @Nullable Integer getPartitionBucketCount(TablePartition tablePartition) {
-        return partitionBucketCounts.get(tablePartition);
+    public @Nullable Integer getPartitionBucketCountActual(TablePartition tablePartition) {
+        return partitionBucketCountActuals.get(tablePartition);
     }
 
-    public Map<TablePartition, Integer> getPartitionBucketCounts() {
-        return partitionBucketCounts;
+    public Map<TablePartition, Integer> getPartitionBucketCountActuals() {
+        return partitionBucketCountActuals;
     }
 
     /**
@@ -229,7 +229,7 @@ public class ServerMetadataSnapshot {
      *     is stale; {@link Errors#TABLET_METADATA_NOT_READY} if the target metadata has not yet
      *     arrived.
      */
-    public Errors validateBucketCount(
+    public Errors validateBucketCountActual(
             long tableId, @Nullable Long partitionId, int requestBucketCount) {
         Long epoch = bucketLayoutEpochByTableId.get(tableId);
 
@@ -253,7 +253,7 @@ public class ServerMetadataSnapshot {
 
         Integer actual =
                 partitionId != null
-                        ? resolvePartitionBucketCount(tableId, partitionId, epoch)
+                        ? resolvePartitionBucketCountActual(tableId, partitionId, epoch)
                         : getTableBucketCount(tableId);
         if (actual == null) {
             return Errors.TABLET_METADATA_NOT_READY;
@@ -267,19 +267,20 @@ public class ServerMetadataSnapshot {
     /**
      * Resolves the actual bucket count of the given partition, or null when it is not known yet.
      *
-     * <p>An older Coordinator does not send the per-partition {@code bucket_count} field. Without
-     * the fallback below, every known partition would permanently return null here, causing {@code
-     * TABLET_METADATA_NOT_READY} for all requests that carry a bucket count — which means infinite
-     * retries until the Coordinator is also upgraded.
+     * <p>An older Coordinator does not send the per-partition {@code bucket_count_actual} field.
+     * Without the fallback below, every known partition would permanently return null here, causing
+     * {@code TABLET_METADATA_NOT_READY} for all requests that carry a bucket count — which means
+     * infinite retries until the Coordinator is also upgraded.
      *
      * <p>At {@code bucketLayoutEpoch == 0} nothing has been rescaled, so a known partition's actual
      * count is guaranteed to equal the table-level one. At a higher epoch the per-partition count
      * must be explicit (the Coordinator that performed the rescale always sends it), so a missing
      * count means the metadata genuinely hasn't arrived yet.
      */
-    private @Nullable Integer resolvePartitionBucketCount(
+    private @Nullable Integer resolvePartitionBucketCountActual(
             long tableId, long partitionId, long bucketLayoutEpoch) {
-        Integer explicitCount = partitionBucketCounts.get(new TablePartition(tableId, partitionId));
+        Integer explicitCount =
+                partitionBucketCountActuals.get(new TablePartition(tableId, partitionId));
         if (explicitCount != null) {
             return explicitCount;
         }

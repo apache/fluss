@@ -313,7 +313,7 @@ class LanceTieringTest {
                     }
 
                     @Override
-                    public int bucketCount() {
+                    public int bucketCountActual() {
                         return tableInfo.getNumBuckets();
                     }
                 });

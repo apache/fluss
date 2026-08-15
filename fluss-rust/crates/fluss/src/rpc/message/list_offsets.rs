@@ -86,7 +86,7 @@ impl ListOffsetsRequest {
                 partition_id,
                 bucket_id: bucket_ids,
                 start_timestamp: offset_spec.start_timestamp(),
-                bucket_count: None,
+                bucket_count_actual: None,
             },
         }
     }

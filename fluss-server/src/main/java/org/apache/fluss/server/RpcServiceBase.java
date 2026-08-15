@@ -394,7 +394,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                         getPartition(tablePath, request.getPartitionName());
                 partitionId = partition.getPartitionId();
                 numBuckets =
-                        partition.getBucketCountOrDefault(
+                        partition.getBucketCountActualOrDefault(
                                 numBuckets, tableInfo.getBucketLayoutEpoch());
             }
             Map<Integer, Optional<BucketSnapshot>> snapshots;
@@ -487,7 +487,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         authorizeTable(OperationType.DESCRIBE, tablePath);
 
         // Read table metadata before reading partitions. This prevents a read spanning ALTER from
-        // combining a pre-ALTER PartitionRegistration (without bucketCount) with a post-ALTER
+        // combining a pre-ALTER PartitionRegistration (without bucketCountActual) with a post-ALTER
         // TableInfo.
         TableInfo tableInfo = metadataManager.getTable(tablePath);
         List<String> partitionKeys = tableInfo.getPartitionKeys();

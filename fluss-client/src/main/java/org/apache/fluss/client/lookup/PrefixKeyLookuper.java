@@ -168,7 +168,7 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
                         : bucketKeyEncoder.encodeKey(prefixKey);
 
         Long partitionId = null;
-        int effectiveNumBuckets = numBuckets;
+        int bucketCountActual = numBuckets;
         if (partitionGetter != null) {
             try {
                 partitionId =
@@ -177,25 +177,23 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
                                 partitionGetter,
                                 tableInfo.getTablePath(),
                                 metadataUpdater);
-                if (partitionId != null) {
-                    effectiveNumBuckets =
-                            resolvePartitionBucketCount(
-                                    new TablePartition(tableInfo.getTableId(), partitionId),
-                                    numBuckets);
-                }
+                bucketCountActual =
+                        resolvePartitionBucketCountActual(
+                                new TablePartition(tableInfo.getTableId(), partitionId),
+                                numBuckets);
             } catch (PartitionNotExistException e) {
                 return CompletableFuture.completedFuture(new LookupResult(Collections.emptyList()));
             }
         }
 
         // Compute bucket ID after partition resolution — needs per-partition bucket count
-        int bucketId = bucketingFunction.bucketing(bucketKeyBytes, effectiveNumBuckets);
+        int bucketId = bucketingFunction.bucketing(bucketKeyBytes, bucketCountActual);
 
         CompletableFuture<LookupResult> lookupFuture = new CompletableFuture<>();
         TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), partitionId, bucketId);
         lookupClient
                 .prefixLookup(
-                        tableInfo.getTablePath(), tableBucket, prefixKeyBytes, effectiveNumBuckets)
+                        tableInfo.getTablePath(), tableBucket, prefixKeyBytes, bucketCountActual)
                 .whenComplete(
                         (result, error) -> {
                             if (error != null) {

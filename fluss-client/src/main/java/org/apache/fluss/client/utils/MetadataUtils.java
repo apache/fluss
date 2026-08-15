@@ -122,7 +122,7 @@ public class MetadataUtils {
                             Map<TablePath, Long> newTablePathToTableId;
                             Map<PhysicalTablePath, List<BucketLocation>> newBucketLocations;
                             Map<PhysicalTablePath, Long> newPartitionIdByPath;
-                            Map<TablePartition, Integer> newBucketCountByPartition;
+                            Map<TablePartition, Integer> newBucketCountActualByPartition;
                             Map<Long, Integer> newBucketCountByTable;
 
                             NewTableMetadata newTableMetadata =
@@ -137,16 +137,17 @@ public class MetadataUtils {
                                         new HashMap<>(originCluster.getBucketLocationsByPath());
                                 newPartitionIdByPath =
                                         new HashMap<>(originCluster.getPartitionIdByPath());
-                                newBucketCountByPartition =
-                                        new HashMap<>(originCluster.getBucketCountByPartition());
+                                newBucketCountActualByPartition =
+                                        new HashMap<>(
+                                                originCluster.getBucketCountActualByPartition());
                                 newBucketCountByTable =
                                         new HashMap<>(originCluster.getBucketCountByTable());
 
                                 newTablePathToTableId.putAll(newTableMetadata.tablePathToTableId);
                                 newBucketLocations.putAll(newTableMetadata.bucketLocations);
                                 newPartitionIdByPath.putAll(newTableMetadata.partitionIdByPath);
-                                newBucketCountByPartition.putAll(
-                                        newTableMetadata.bucketCountByPartition);
+                                newBucketCountActualByPartition.putAll(
+                                        newTableMetadata.bucketCountActualByPartition);
                                 newBucketCountByTable.putAll(newTableMetadata.bucketCountByTable);
 
                             } else {
@@ -155,7 +156,8 @@ public class MetadataUtils {
                                 newTablePathToTableId = newTableMetadata.tablePathToTableId;
                                 newBucketLocations = newTableMetadata.bucketLocations;
                                 newPartitionIdByPath = newTableMetadata.partitionIdByPath;
-                                newBucketCountByPartition = newTableMetadata.bucketCountByPartition;
+                                newBucketCountActualByPartition =
+                                        newTableMetadata.bucketCountActualByPartition;
                                 newBucketCountByTable = newTableMetadata.bucketCountByTable;
                             }
 
@@ -165,7 +167,7 @@ public class MetadataUtils {
                                     newBucketLocations,
                                     newTablePathToTableId,
                                     newPartitionIdByPath,
-                                    newBucketCountByPartition,
+                                    newBucketCountActualByPartition,
                                     newBucketCountByTable);
                         })
                 .get(30, TimeUnit.SECONDS); // TODO currently, we don't have timeout logic in
@@ -178,7 +180,7 @@ public class MetadataUtils {
         Map<TablePath, Long> newTablePathToTableId = new HashMap<>();
         Map<PhysicalTablePath, List<BucketLocation>> newBucketLocations = new HashMap<>();
         Map<PhysicalTablePath, Long> newPartitionIdByPath = new HashMap<>();
-        Map<TablePartition, Integer> newBucketCountByPartition = new HashMap<>();
+        Map<TablePartition, Integer> newBucketCountActualByPartition = new HashMap<>();
         Map<Long, Integer> newBucketCountByTable = new HashMap<>();
 
         // iterate all table metadata
@@ -232,11 +234,11 @@ public class MetadataUtils {
                     // a non-positive count is not a valid bucket layout (an old server omits the
                     // field, a new one may still report 0 before the assignment exists), so keep
                     // the entry out and let callers fall back to the table-level count
-                    if (pbPartitionMetadata.hasBucketCount()
-                            && pbPartitionMetadata.getBucketCount() > 0) {
-                        newBucketCountByPartition.put(
+                    if (pbPartitionMetadata.hasBucketCountActual()
+                            && pbPartitionMetadata.getBucketCountActual() > 0) {
+                        newBucketCountActualByPartition.put(
                                 new TablePartition(tableId, pbPartitionMetadata.getPartitionId()),
-                                pbPartitionMetadata.getBucketCount());
+                                pbPartitionMetadata.getBucketCountActual());
                     }
                 });
 
@@ -244,7 +246,7 @@ public class MetadataUtils {
                 newTablePathToTableId,
                 newBucketLocations,
                 newPartitionIdByPath,
-                newBucketCountByPartition,
+                newBucketCountActualByPartition,
                 newBucketCountByTable);
     }
 
@@ -252,19 +254,19 @@ public class MetadataUtils {
         private final Map<TablePath, Long> tablePathToTableId;
         private final Map<PhysicalTablePath, List<BucketLocation>> bucketLocations;
         private final Map<PhysicalTablePath, Long> partitionIdByPath;
-        private final Map<TablePartition, Integer> bucketCountByPartition;
+        private final Map<TablePartition, Integer> bucketCountActualByPartition;
         private final Map<Long, Integer> bucketCountByTable;
 
         public NewTableMetadata(
                 Map<TablePath, Long> tablePathToTableId,
                 Map<PhysicalTablePath, List<BucketLocation>> bucketLocations,
                 Map<PhysicalTablePath, Long> partitionIdByPath,
-                Map<TablePartition, Integer> bucketCountByPartition,
+                Map<TablePartition, Integer> bucketCountActualByPartition,
                 Map<Long, Integer> bucketCountByTable) {
             this.tablePathToTableId = tablePathToTableId;
             this.bucketLocations = bucketLocations;
             this.partitionIdByPath = partitionIdByPath;
-            this.bucketCountByPartition = bucketCountByPartition;
+            this.bucketCountActualByPartition = bucketCountActualByPartition;
             this.bucketCountByTable = bucketCountByTable;
         }
     }

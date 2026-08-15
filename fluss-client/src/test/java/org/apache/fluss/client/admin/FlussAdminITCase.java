@@ -1331,7 +1331,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
     }
 
     @Test
-    void testGetKvSnapshotsPerPartitionBucketCount() throws Exception {
+    void testGetKvSnapshotsPerPartitionBucketCountActual() throws Exception {
         // End-to-end: after ALTER bucket.num on a partitioned PK table, getLatestKvSnapshots
         // returns each partition's own recorded bucket count, not the current table-level
         // value. Old partition keeps 2, new partition uses 4.
@@ -1354,7 +1354,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         admin.createTable(tablePath, partitionedPkTable, true).get();
         long tableId = admin.getTableInfo(tablePath).get().getTableId();
 
-        // Old partition created BEFORE the ALTER retains bucket.num.actual = 2.
+        // Old partition created BEFORE the ALTER retains its original bucket count = 2.
         admin.createPartition(tablePath, newPartitionSpec("dt", "2024-01"), false).get();
         long oldPartitionId =
                 admin.listPartitionInfos(tablePath).get().stream()
@@ -1383,7 +1383,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .get();
         assertThat(admin.getTableInfo(tablePath).get().getNumBuckets()).isEqualTo(newBucketNum);
 
-        // New partition created AFTER the ALTER uses bucket.num.actual = 4.
+        // New partition created AFTER the ALTER uses the new bucket count = 4.
         admin.createPartition(tablePath, newPartitionSpec("dt", "2024-02"), false).get();
         long newPartitionId =
                 admin.listPartitionInfos(tablePath).get().stream()

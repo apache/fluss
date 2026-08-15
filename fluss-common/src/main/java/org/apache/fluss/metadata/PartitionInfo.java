@@ -36,21 +36,21 @@ public class PartitionInfo {
     private final @Nullable String remoteDataDir;
 
     /**
-     * The bucket count of this partition (i.e. bucket.num.actual). Always resolved: for partitions
-     * created by older versions that did not persist a per-partition bucket count, the table-level
-     * bucket count is filled in at construction time.
+     * The bucket count of this partition. Always resolved: for partitions created by older versions
+     * that did not persist a per-partition bucket count, the table-level bucket count is filled in
+     * at construction time.
      */
-    private final int bucketCount;
+    private final int bucketCountActual;
 
     public PartitionInfo(
             long partitionId,
             ResolvedPartitionSpec partitionSpec,
             @Nullable String remoteDataDir,
-            int bucketCount) {
+            int bucketCountActual) {
         this.partitionId = partitionId;
         this.partitionSpec = partitionSpec;
         this.remoteDataDir = remoteDataDir;
-        this.bucketCount = bucketCount;
+        this.bucketCountActual = bucketCountActual;
     }
 
     /** Get the partition id. The id is globally unique in the Fluss cluster. */
@@ -80,12 +80,11 @@ public class PartitionInfo {
     }
 
     /**
-     * Get the bucket count of this partition (bucket.num.actual). For partitions created by older
-     * versions without a persisted per-partition bucket count, this is the table-level bucket
-     * count.
+     * Get the bucket count of this partition. For partitions created by older versions without a
+     * persisted per-partition bucket count, this is the table-level bucket count.
      */
-    public int getBucketCount() {
-        return bucketCount;
+    public int getBucketCountActual() {
+        return bucketCountActual;
     }
 
     /**
@@ -94,9 +93,9 @@ public class PartitionInfo {
      * bucket count. The null case represents a non-partitioned table or a partition whose
      * PartitionInfo is not available.
      */
-    public static int bucketCountOrDefault(
+    public static int bucketCountActualOrDefault(
             @Nullable PartitionInfo partitionInfo, int tableBucketCount) {
-        return partitionInfo != null ? partitionInfo.getBucketCount() : tableBucketCount;
+        return partitionInfo != null ? partitionInfo.getBucketCountActual() : tableBucketCount;
     }
 
     @Override
@@ -111,12 +110,12 @@ public class PartitionInfo {
         return partitionId == that.partitionId
                 && Objects.equals(partitionSpec, that.partitionSpec)
                 && Objects.equals(remoteDataDir, that.remoteDataDir)
-                && bucketCount == that.bucketCount;
+                && bucketCountActual == that.bucketCountActual;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(partitionId, partitionSpec, remoteDataDir, bucketCount);
+        return Objects.hash(partitionId, partitionSpec, remoteDataDir, bucketCountActual);
     }
 
     @Override
@@ -128,8 +127,8 @@ public class PartitionInfo {
                 + partitionId
                 + ", remoteDataDir="
                 + remoteDataDir
-                + ", bucketCount="
-                + bucketCount
+                + ", bucketCountActual="
+                + bucketCountActual
                 + '}';
     }
 }

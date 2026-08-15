@@ -414,7 +414,7 @@ public class RecoveryOffsetManager {
         Set<TableBucket> buckets = new HashSet<>();
         if (isPartitioned) {
             for (PartitionInfo partition : getPartitionInfos()) {
-                int partitionBucketCount = partition.getBucketCount();
+                int partitionBucketCount = partition.getBucketCountActual();
                 for (int bucketId = 0; bucketId < partitionBucketCount; bucketId++) {
                     buckets.add(new TableBucket(tableId, partition.getPartitionId(), bucketId));
                 }
@@ -564,7 +564,7 @@ public class RecoveryOffsetManager {
                 fetchPartitionOffsets(
                         partition.getPartitionName(),
                         partition.getPartitionId(),
-                        partition.getBucketCount(),
+                        partition.getBucketCountActual(),
                         offsets);
             }
         } else {

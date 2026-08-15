@@ -47,11 +47,11 @@ public class PartitionRegistration {
     private final @Nullable String remoteDataDir;
 
     /**
-     * The bucket count of this partition (i.e. bucket.num.actual). It is null when deserialized
-     * from an older version that does not persist per-partition bucket count. In that case, callers
-     * should fall back to the table-level bucket count.
+     * The bucket count of this partition. It is null when deserialized from an older version that
+     * does not persist per-partition bucket count. In that case, callers should fall back to the
+     * table-level bucket count.
      */
-    private final @Nullable Integer bucketCount;
+    private final @Nullable Integer bucketCountActual;
 
     public PartitionRegistration(long tableId, long partitionId, @Nullable String remoteDataDir) {
         this(tableId, partitionId, remoteDataDir, null);
@@ -61,11 +61,11 @@ public class PartitionRegistration {
             long tableId,
             long partitionId,
             @Nullable String remoteDataDir,
-            @Nullable Integer bucketCount) {
+            @Nullable Integer bucketCountActual) {
         this.tableId = tableId;
         this.partitionId = partitionId;
         this.remoteDataDir = remoteDataDir;
-        this.bucketCount = bucketCount;
+        this.bucketCountActual = bucketCountActual;
     }
 
     public long getTableId() {
@@ -83,23 +83,23 @@ public class PartitionRegistration {
 
     /** Returns the bucket count of this partition, or null if not persisted (old data). */
     @Nullable
-    public Integer getBucketCount() {
-        return bucketCount;
+    public Integer getBucketCountActual() {
+        return bucketCountActual;
     }
 
     /**
-     * Returns the bucket count of this partition (bucket.num.actual), falling back to the given
-     * table-level bucket count when this partition was persisted by an older version that does not
-     * store the per-partition count.
+     * Returns the bucket count of this partition, falling back to the given table-level bucket
+     * count when this partition was persisted by an older version that does not store the
+     * per-partition count.
      *
      * <p>The fallback is only valid at {@code bucketLayoutEpoch == 0} (legacy table or old server).
      * At {@code bucketLayoutEpoch > 0}, the first ALTER must have backfilled the per-partition
      * count; a missing count indicates an incomplete backfill and throws {@link
      * StaleMetadataException} so the caller can refresh metadata and retry.
      */
-    public int getBucketCountOrDefault(int tableBucketCount, long bucketLayoutEpoch) {
-        if (bucketCount != null) {
-            return bucketCount;
+    public int getBucketCountActualOrDefault(int tableBucketCount, long bucketLayoutEpoch) {
+        if (bucketCountActual != null) {
+            return bucketCountActual;
         }
         if (bucketLayoutEpoch == 0) {
             return tableBucketCount;
@@ -124,7 +124,7 @@ public class PartitionRegistration {
      * @return a new registration with the given remote data directory
      */
     public PartitionRegistration newRemoteDataDir(String remoteDataDir) {
-        return new PartitionRegistration(tableId, partitionId, remoteDataDir, bucketCount);
+        return new PartitionRegistration(tableId, partitionId, remoteDataDir, bucketCountActual);
     }
 
     @Override
@@ -136,12 +136,12 @@ public class PartitionRegistration {
         return tableId == that.tableId
                 && partitionId == that.partitionId
                 && Objects.equals(remoteDataDir, that.remoteDataDir)
-                && Objects.equals(bucketCount, that.bucketCount);
+                && Objects.equals(bucketCountActual, that.bucketCountActual);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(tableId, partitionId, remoteDataDir, bucketCount);
+        return Objects.hash(tableId, partitionId, remoteDataDir, bucketCountActual);
     }
 
     @Override
@@ -154,8 +154,8 @@ public class PartitionRegistration {
                 + ", remoteDataDir='"
                 + remoteDataDir
                 + '\''
-                + ", bucketCount="
-                + bucketCount
+                + ", bucketCountActual="
+                + bucketCountActual
                 + '}';
     }
 }

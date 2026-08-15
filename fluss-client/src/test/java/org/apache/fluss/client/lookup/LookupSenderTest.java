@@ -600,9 +600,9 @@ public class LookupSenderTest {
     }
 
     @Test
-    void testLookupRequestCarriesPinnedBucketCount() throws Exception {
-        // TOCTOU: the bucketCount pinned at T1 (lookup time) must be carried to T2 (send time)
-        // in the RPC request, not re-read from cluster metadata at T2.
+    void testLookupRequestCarriesPinnedBucketCountActual() throws Exception {
+        // TOCTOU: the bucketCountActual pinned at T1 (lookup time) must be carried to T2 (send
+        // time) in the RPC request, not re-read from cluster metadata at T2.
         List<LookupRequest> receivedRequests = Collections.synchronizedList(new ArrayList<>());
         gateway.setLookupHandler(
                 request -> {
@@ -610,23 +610,24 @@ public class LookupSenderTest {
                     return createSuccessResponse(request, "value".getBytes());
                 });
 
-        // T1: create query with bucketCount=4 (simulating effectiveNumBuckets=4 at lookup time)
+        // T1: create query with bucketCountActual=4 (simulating bucketCountActual=4 at lookup
+        // time)
         LookupQuery query =
                 new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("key"), false, null, 4);
         // The pinned value is visible on the query object
-        assertThat(query.bucketCount()).isEqualTo(4);
+        assertThat(query.bucketCountActual()).isEqualTo(4);
 
         lookupSender.sendLookups(1, LookupType.LOOKUP, Collections.singletonList(query));
 
-        // T2: the request must carry the T1-pinned bucketCount=4
+        // T2: the request must carry the T1-pinned bucketCountActual=4
         assertThat(receivedRequests).hasSize(1);
         LookupRequest request = receivedRequests.get(0);
-        assertThat(request.getBucketsReqAt(0).hasBucketCount()).isTrue();
-        assertThat(request.getBucketsReqAt(0).getBucketCount()).isEqualTo(4);
+        assertThat(request.getBucketsReqAt(0).hasBucketCountActual()).isTrue();
+        assertThat(request.getBucketsReqAt(0).getBucketCountActual()).isEqualTo(4);
     }
 
     @Test
-    void testPrefixLookupRequestCarriesPinnedBucketCount() throws Exception {
+    void testPrefixLookupRequestCarriesPinnedBucketCountActual() throws Exception {
         // TOCTOU: same anchoring for prefix lookup path.
         List<PrefixLookupRequest> receivedRequests =
                 Collections.synchronizedList(new ArrayList<>());
@@ -636,23 +637,23 @@ public class LookupSenderTest {
                     return createSuccessPrefixLookupResponse(request);
                 });
 
-        // T1: create prefix query with bucketCount=4
+        // T1: create prefix query with bucketCountActual=4
         PrefixLookupQuery query =
                 new PrefixLookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("prefix"), 4);
-        assertThat(query.bucketCount()).isEqualTo(4);
+        assertThat(query.bucketCountActual()).isEqualTo(4);
 
         lookupSender.sendLookups(1, LookupType.PREFIX_LOOKUP, Collections.singletonList(query));
 
-        // T2: the request must carry the T1-pinned bucketCount=4
+        // T2: the request must carry the T1-pinned bucketCountActual=4
         assertThat(receivedRequests).hasSize(1);
         PrefixLookupRequest request = receivedRequests.get(0);
-        assertThat(request.getBucketsReqAt(0).hasBucketCount()).isTrue();
-        assertThat(request.getBucketsReqAt(0).getBucketCount()).isEqualTo(4);
+        assertThat(request.getBucketsReqAt(0).hasBucketCountActual()).isTrue();
+        assertThat(request.getBucketsReqAt(0).getBucketCountActual()).isEqualTo(4);
     }
 
     @Test
-    void testLookupRequestOmitsBucketCountWhenLegacy() throws Exception {
-        // Legacy query (bucketCount=0) must not set the field, letting the server's epoch
+    void testLookupRequestOmitsBucketCountActualWhenLegacy() throws Exception {
+        // Legacy query (bucketCountActual=0) must not set the field, letting the server's epoch
         // check decide.
         List<LookupRequest> receivedRequests = Collections.synchronizedList(new ArrayList<>());
         gateway.setLookupHandler(
@@ -662,13 +663,13 @@ public class LookupSenderTest {
                 });
 
         LookupQuery query = new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("key"));
-        assertThat(query.bucketCount()).isEqualTo(0);
+        assertThat(query.bucketCountActual()).isEqualTo(0);
 
         lookupSender.sendLookups(1, LookupType.LOOKUP, Collections.singletonList(query));
 
         assertThat(receivedRequests).hasSize(1);
         LookupRequest request = receivedRequests.get(0);
-        assertThat(request.getBucketsReqAt(0).hasBucketCount()).isFalse();
+        assertThat(request.getBucketsReqAt(0).hasBucketCountActual()).isFalse();
     }
 
     // Helper methods

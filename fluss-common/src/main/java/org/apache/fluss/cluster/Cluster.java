@@ -54,7 +54,7 @@ public final class Cluster {
     private final Map<Long, TablePath> pathByTableId;
     private final Map<PhysicalTablePath, Long> partitionsIdByPath;
     private final Map<Long, String> partitionNameById;
-    private final Map<TablePartition, Integer> bucketCountByPartition;
+    private final Map<TablePartition, Integer> bucketCountActualByPartition;
     private final Map<Long, Integer> bucketCountByTable;
 
     public Cluster(
@@ -79,7 +79,7 @@ public final class Cluster {
             Map<PhysicalTablePath, List<BucketLocation>> bucketLocationsByPath,
             Map<TablePath, Long> tableIdByPath,
             Map<PhysicalTablePath, Long> partitionsIdByPath,
-            Map<TablePartition, Integer> bucketCountByPartition,
+            Map<TablePartition, Integer> bucketCountActualByPartition,
             Map<Long, Integer> bucketCountByTable) {
         this.coordinatorServer = coordinatorServer;
         this.aliveTabletServersById = Collections.unmodifiableMap(aliveTabletServersById);
@@ -87,7 +87,8 @@ public final class Cluster {
                 Collections.unmodifiableList(new ArrayList<>(aliveTabletServersById.values()));
         this.tableIdByPath = Collections.unmodifiableMap(tableIdByPath);
         this.partitionsIdByPath = Collections.unmodifiableMap(partitionsIdByPath);
-        this.bucketCountByPartition = Collections.unmodifiableMap(bucketCountByPartition);
+        this.bucketCountActualByPartition =
+                Collections.unmodifiableMap(bucketCountActualByPartition);
         this.bucketCountByTable = Collections.unmodifiableMap(bucketCountByTable);
 
         // Index the bucket locations by table path, and index bucket location by bucket.
@@ -159,10 +160,10 @@ public final class Cluster {
                 invalidPartitionIds.add(pid);
             }
         }
-        Map<TablePartition, Integer> newBucketCountByPartition = new HashMap<>();
-        for (Map.Entry<TablePartition, Integer> entry : bucketCountByPartition.entrySet()) {
+        Map<TablePartition, Integer> newBucketCountActualByPartition = new HashMap<>();
+        for (Map.Entry<TablePartition, Integer> entry : bucketCountActualByPartition.entrySet()) {
             if (!invalidPartitionIds.contains(entry.getKey().getPartitionId())) {
-                newBucketCountByPartition.put(entry.getKey(), entry.getValue());
+                newBucketCountActualByPartition.put(entry.getKey(), entry.getValue());
             }
         }
         // filter bucketCountByTable for non-partitioned tables whose path is in the invalid set
@@ -187,7 +188,7 @@ public final class Cluster {
                 newBucketLocationsByPath,
                 new HashMap<>(tableIdByPath),
                 new HashMap<>(partitionsIdByPath),
-                newBucketCountByPartition,
+                newBucketCountActualByPartition,
                 newBucketCountByTable);
     }
 
@@ -205,7 +206,7 @@ public final class Cluster {
                 new HashMap<>(cluster.availableLocationsByPath),
                 new HashMap<>(tableIdByPath),
                 newPartitionsIdByPath,
-                new HashMap<>(cluster.bucketCountByPartition),
+                new HashMap<>(cluster.bucketCountActualByPartition),
                 new HashMap<>(cluster.bucketCountByTable));
     }
 
@@ -287,7 +288,7 @@ public final class Cluster {
     /**
      * Resolve a {@link PhysicalTablePath} to its current {@link TablePartition} (tableId +
      * partitionId) from this snapshot. Retained for name resolution; the actual bucket-count lookup
-     * uses {@link #getBucketCount(TablePartition)}. Resolving both ids from the same snapshot
+     * uses {@link #getBucketCountActual(TablePartition)}. Resolving both ids from the same snapshot
      * avoids combining a stale tableId/partitionId with a newer one after a replacement.
      */
     public Optional<TablePartition> getTablePartition(PhysicalTablePath physicalTablePath) {
@@ -354,13 +355,13 @@ public final class Cluster {
      * Get the actual bucket count for the given table partition. Returns empty if the bucket count
      * is not known (old metadata without bucket count).
      */
-    public Optional<Integer> getBucketCount(TablePartition tablePartition) {
-        return Optional.ofNullable(bucketCountByPartition.get(tablePartition));
+    public Optional<Integer> getBucketCountActual(TablePartition tablePartition) {
+        return Optional.ofNullable(bucketCountActualByPartition.get(tablePartition));
     }
 
     /** Get the table partition to bucket count map. */
-    public Map<TablePartition, Integer> getBucketCountByPartition() {
-        return bucketCountByPartition;
+    public Map<TablePartition, Integer> getBucketCountActualByPartition() {
+        return bucketCountActualByPartition;
     }
 
     /**

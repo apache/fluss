@@ -421,7 +421,7 @@ public class FlussAdmin implements Admin {
                         response -> {
                             boolean allHaveBucketCount =
                                     response.getPartitionsInfosList().stream()
-                                            .allMatch(PbPartitionInfo::hasBucketCount);
+                                            .allMatch(PbPartitionInfo::hasBucketCountActual);
                             if (allHaveBucketCount) {
                                 // Every partition already carries its own bucket count, so skip
                                 // the extra getTableInfo RPC (the -1 default is never used).
@@ -434,7 +434,7 @@ public class FlussAdmin implements Admin {
                             //   3) a fully old cluster omits the partition count, while the
                             //      table-level count is still safe (bucketLayoutEpoch == 0);
                             //   4) after every server is upgraded, ListPartitionInfosResponse
-                            //      must return an explicit partitionId and bucketCount;
+                            //      must return an explicit partitionId and bucketCountActual;
                             //   5) if a new server still returns a missing count, fail loud
                             //      instead of calling getTableInfo to guess it.
                             // TODO: a future FIP should enforce server-side rejection of
@@ -628,9 +628,9 @@ public class FlussAdmin implements Admin {
             // refreshed on a not-ready result), so compute it once.
             List<TableBucket> tableBuckets = new ArrayList<>();
             for (PartitionInfo partitionInfo : partitionInfos) {
-                int bucketCount =
-                        PartitionInfo.bucketCountOrDefault(partitionInfo, tableBucketCount);
-                for (int bucket = 0; bucket < bucketCount; bucket++) {
+                int bucketCountActual =
+                        PartitionInfo.bucketCountActualOrDefault(partitionInfo, tableBucketCount);
+                for (int bucket = 0; bucket < bucketCountActual; bucket++) {
                     tableBuckets.add(
                             new TableBucket(
                                     tableInfo.getTableId(),

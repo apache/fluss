@@ -57,7 +57,7 @@ public class PaimonLakeWriter implements LakeWriter<PaimonWriteResult>, Supports
         // The context always resolves the actual bucket count.
         Integer bucketOverride =
                 !writerInitContext.tableInfo().getBucketKeys().isEmpty()
-                        ? writerInitContext.bucketCount()
+                        ? writerInitContext.bucketCountActual()
                         : null;
         FileStoreTable fileStoreTable =
                 getTable(

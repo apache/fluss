@@ -107,10 +107,10 @@ public interface WriterInitContext {
     }
 
     /**
-     * Returns the actual bucket count (bucket.num.actual) of the target partition, or the
-     * table-level count for non-partitioned tables. After an ALTER bucket.num old partitions keep
-     * their original count, so lake writers must stamp bucket layouts with this value instead of
-     * the lake table's current schema-level bucket setting.
+     * Returns the actual bucket count of the target partition, or the table-level count for
+     * non-partitioned tables. After an ALTER bucket.num old partitions keep their original count,
+     * so lake writers must stamp bucket layouts with this value instead of the lake table's current
+     * schema-level bucket setting.
      */
-    int bucketCount();
+    int bucketCountActual();
 }

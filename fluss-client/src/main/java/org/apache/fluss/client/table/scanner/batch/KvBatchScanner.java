@@ -186,11 +186,12 @@ public final class KvBatchScanner implements BatchScanner {
                         .setBucketId(bucket.getBucket());
         if (bucket.getPartitionId() != null) {
             bucketReq.setPartitionId(bucket.getPartitionId());
-            cluster.getBucketCount(new TablePartition(bucket.getTableId(), bucket.getPartitionId()))
-                    .ifPresent(bucketReq::setBucketCount);
+            cluster.getBucketCountActual(
+                            new TablePartition(bucket.getTableId(), bucket.getPartitionId()))
+                    .ifPresent(bucketReq::setBucketCountActual);
         } else {
             cluster.getBucketCountForTable(bucket.getTableId())
-                    .ifPresent(bucketReq::setBucketCount);
+                    .ifPresent(bucketReq::setBucketCountActual);
         }
 
         ScanKvRequest request =

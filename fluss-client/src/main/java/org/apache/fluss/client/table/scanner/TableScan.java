@@ -254,7 +254,7 @@ public class TableScan implements Scan {
                     partitionInfos.stream()
                             .flatMap(
                                     partitionInfo ->
-                                            IntStream.range(0, partitionInfo.getBucketCount())
+                                            IntStream.range(0, partitionInfo.getBucketCountActual())
                                                     .mapToObj(
                                                             bucketId ->
                                                                     new TableBucket(

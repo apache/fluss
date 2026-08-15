@@ -675,12 +675,12 @@ public class CoordinatorRequestBatch {
                                 coordinatorContext.isPartitionQueuedForDeletion(
                                         new TablePartition(tableId, partitionId));
                         String partitionName = coordinatorContext.getPartitionName(partitionId);
-                        // the partition assignment size is the partition's actual bucket count
-                        // (bucket.num.actual); null when the assignment is not in context
+                        // the partition assignment size is the partition's actual bucket count;
+                        // null when the assignment is not in context
                         Map<Integer, List<Integer>> partitionAssignment =
                                 coordinatorContext.getPartitionAssignment(
                                         new TablePartition(tableId, partitionId));
-                        Integer bucketCount =
+                        Integer bucketCountActual =
                                 partitionAssignment.isEmpty() ? null : partitionAssignment.size();
                         PartitionMetadata partitionMetadata;
                         if (partitionName == null) {
@@ -691,7 +691,7 @@ public class CoordinatorRequestBatch {
                                                 DELETED_PARTITION_NAME,
                                                 partitionId,
                                                 kvEntry.getValue(),
-                                                bucketCount);
+                                                bucketCountActual);
                             } else {
                                 throw new IllegalStateException(
                                         "Partition name is null for partition " + partitionId);
@@ -705,7 +705,7 @@ public class CoordinatorRequestBatch {
                                                     ? DELETED_PARTITION_ID
                                                     : partitionId,
                                             kvEntry.getValue(),
-                                            bucketCount);
+                                            bucketCountActual);
                         }
                         // table
                         partitionMetadataList.add(partitionMetadata);

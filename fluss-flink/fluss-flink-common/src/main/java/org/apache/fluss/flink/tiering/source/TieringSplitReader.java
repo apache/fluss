@@ -119,7 +119,7 @@ public class TieringSplitReader<WriteResult>
     private final Map<TableBucket, TieringSplit> currentTableSplitsByBucket;
     private final Map<TableBucket, Long> currentTableStoppingOffsets;
 
-    // partition id -> actual bucket count (bucket.num.actual) for the current table's partitions
+    // partition id -> actual bucket count for the current table's partitions
     private final Map<Long, Integer> currentTablePartitionBucketCounts = new HashMap<>();
 
     private final Map<TableBucket, LogOffsetAndTimestamp> currentTableTieredOffsetAndTimestamp;
@@ -340,15 +340,16 @@ public class TieringSplitReader<WriteResult>
                     currentTableInfo.getTableId(),
                     tablePath,
                     split.getTableBucket().getTableId());
-            // Snapshot each partition's actual bucket count (bucket.num.actual) so lake writers
-            // can stamp per-partition bucket layouts correctly after an ALTER bucket.num.
+            // Snapshot each partition's actual bucket count so lake writers can stamp per-partition
+            // bucket layouts correctly after an ALTER bucket.num.
             if (currentTableInfo.isPartitioned()) {
                 try {
                     // the admin is a shared per-connection instance, so it must not be closed here
                     Admin admin = connection.getAdmin();
                     for (PartitionInfo partitionInfo : admin.listPartitionInfos(tablePath).get()) {
                         currentTablePartitionBucketCounts.put(
-                                partitionInfo.getPartitionId(), partitionInfo.getBucketCount());
+                                partitionInfo.getPartitionId(),
+                                partitionInfo.getBucketCountActual());
                     }
                 } catch (Exception e) {
                     throw new FlussRuntimeException(

@@ -1188,7 +1188,7 @@ public class ZooKeeperClient implements AutoCloseable {
             String remoteDataDir,
             TablePath tablePath,
             long tableId,
-            int bucketCount)
+            int bucketCountActual)
             throws Exception {
         // Merge "registerPartitionAssignment()" and "registerPartition()"
         // into one transaction. This is to avoid the case that the partition assignment is
@@ -1234,7 +1234,10 @@ public class ZooKeeperClient implements AutoCloseable {
                                 metadataPath,
                                 PartitionZNode.encode(
                                         new PartitionRegistration(
-                                                tableId, partitionId, remoteDataDir, bucketCount)));
+                                                tableId,
+                                                partitionId,
+                                                remoteDataDir,
+                                                bucketCountActual)));
 
         ops.add(tabletServerPartitionNode);
         ops.add(metadataPartitionNode);

@@ -106,7 +106,7 @@ public class TieringSplitGenerator {
         for (PartitionInfo partitionInfo : partitionInfos) {
             long partitionId = partitionInfo.getPartitionId();
             String partitionName = partitionInfo.getPartitionName();
-            int partitionBucketCount = partitionInfo.getBucketCount();
+            int partitionBucketCount = partitionInfo.getBucketCountActual();
             Map<Integer, Long> latestBucketsOffset =
                     bucketOffsetsRetriever.latestOffsets(
                             partitionName,

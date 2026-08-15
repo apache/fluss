@@ -210,7 +210,7 @@ public class WriterClient {
             Cluster cluster = metadataUpdater.getCluster();
             long tableId = tableInfo.getTableId();
             BucketAssigner bucketAssigner;
-            int bucketNumber;
+            int bucketCountActual;
             if (tableInfo.isPartitioned()) {
                 TablePartition tablePartition =
                         cluster.getTablePartition(physicalTablePath)
@@ -219,23 +219,30 @@ public class WriterClient {
                                                 new FlussRuntimeException(
                                                         "Partition metadata not available for "
                                                                 + physicalTablePath));
-                bucketNumber =
-                        cluster.getBucketCount(tablePartition).orElse(tableInfo.getNumBuckets());
+                bucketCountActual =
+                        cluster.getBucketCountActual(tablePartition)
+                                .orElse(tableInfo.getNumBuckets());
                 bucketAssigner =
                         partitionBucketAssigners.computeIfAbsent(
                                 tablePartition,
                                 k ->
                                         createBucketAssigner(
-                                                tableInfo, physicalTablePath, bucketNumber, conf));
+                                                tableInfo,
+                                                physicalTablePath,
+                                                bucketCountActual,
+                                                conf));
             } else {
-                bucketNumber =
+                bucketCountActual =
                         cluster.getBucketCountForTable(tableId).orElse(tableInfo.getNumBuckets());
                 bucketAssigner =
                         tableBucketAssigners.computeIfAbsent(
                                 tableId,
                                 k ->
                                         createBucketAssigner(
-                                                tableInfo, physicalTablePath, bucketNumber, conf));
+                                                tableInfo,
+                                                physicalTablePath,
+                                                bucketCountActual,
+                                                conf));
             }
 
             // Append the record to the accumulator.
@@ -247,7 +254,7 @@ public class WriterClient {
                             callback,
                             cluster,
                             bucketId,
-                            bucketNumber,
+                            bucketCountActual,
                             bucketAssigner.abortIfBatchFull());
 
             if (result.abortRecordForNewBatch) {
@@ -261,7 +268,7 @@ public class WriterClient {
                         prevBucketId);
                 result =
                         accumulator.append(
-                                record, callback, cluster, bucketId, bucketNumber, false);
+                                record, callback, cluster, bucketId, bucketCountActual, false);
             }
 
             if (result.batchIsFull || result.newBatchCreated) {
@@ -435,21 +442,21 @@ public class WriterClient {
     private BucketAssigner createBucketAssigner(
             TableInfo tableInfo,
             PhysicalTablePath physicalTablePath,
-            int bucketNumber,
+            int bucketCountActual,
             Configuration conf) {
         List<String> bucketKeys = tableInfo.getBucketKeys();
         if (!bucketKeys.isEmpty()) {
             BucketingFunction function =
                     BucketingFunction.of(
                             tableInfo.getTableConfig().getDataLakeFormat().orElse(null));
-            return new HashBucketAssigner(bucketNumber, function);
+            return new HashBucketAssigner(bucketCountActual, function);
         } else {
             ConfigOptions.NoKeyAssigner noKeyAssigner =
                     conf.get(ConfigOptions.CLIENT_WRITER_BUCKET_NO_KEY_ASSIGNER);
             if (noKeyAssigner == ROUND_ROBIN) {
-                return new RoundRobinBucketAssigner(physicalTablePath, bucketNumber);
+                return new RoundRobinBucketAssigner(physicalTablePath, bucketCountActual);
             } else if (noKeyAssigner == STICKY) {
-                return new StickyBucketAssigner(physicalTablePath, bucketNumber);
+                return new StickyBucketAssigner(physicalTablePath, bucketCountActual);
             } else {
                 throw new IllegalArgumentException(
                         "Unsupported append only row bucket assigner: " + noKeyAssigner);

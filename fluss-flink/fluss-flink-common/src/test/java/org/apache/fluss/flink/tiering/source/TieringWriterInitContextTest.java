@@ -58,15 +58,15 @@ class TieringWriterInitContextTest {
     void testNonPartitionedFallsBackToTableLevelCount() {
         // A non-partitioned bucket carries no per-partition count; the table-level count applies.
         TieringWriterInitContext context = newContext(new TableBucket(TABLE_ID, 0), null, null);
-        assertThat(context.bucketCount()).isEqualTo(TABLE_BUCKET_COUNT);
+        assertThat(context.bucketCountActual()).isEqualTo(TABLE_BUCKET_COUNT);
     }
 
     @Test
     void testPartitionedUsesPerPartitionCount() {
-        // A partitioned bucket must use its own actual bucket count (bucket.num.actual).
+        // A partitioned bucket must use its own actual bucket count.
         TieringWriterInitContext context =
                 newContext(new TableBucket(TABLE_ID, 1L, 0), "2024-01", 4);
-        assertThat(context.bucketCount()).isEqualTo(4);
+        assertThat(context.bucketCountActual()).isEqualTo(4);
     }
 
     @Test

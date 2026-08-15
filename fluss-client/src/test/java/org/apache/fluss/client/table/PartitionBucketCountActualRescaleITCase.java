@@ -53,12 +53,12 @@ import static org.apache.fluss.testutils.InternalRowAssert.assertThatRow;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * End-to-end IT case verifying that reads and writes route by the per-partition bucket count
- * (bucket.num.actual) after an ALTER TABLE ... SET ('bucket.num' = N): old partitions keep their
- * original bucket count while partitions created after the ALTER use the new count, and data
- * written to each partition is read back correctly through its own bucket range.
+ * End-to-end IT case verifying that reads and writes route by the per-partition bucket count after
+ * an ALTER TABLE ... SET ('bucket.num' = N): old partitions keep their original bucket count while
+ * partitions created after the ALTER use the new count, and data written to each partition is read
+ * back correctly through its own bucket range.
  */
-class PartitionBucketCountRescaleITCase extends ClientToServerITCaseBase {
+class PartitionBucketCountActualRescaleITCase extends ClientToServerITCaseBase {
 
     private static final int OLD_BUCKET_NUM = 2;
     private static final int NEW_BUCKET_NUM = 4;
@@ -91,7 +91,7 @@ class PartitionBucketCountRescaleITCase extends ClientToServerITCaseBase {
         }
         appendWriter.flush();
 
-        // read back by subscribing EACH partition's own bucket range [0, bucketCount)
+        // read back by subscribing EACH partition's own bucket range [0, bucketCountActual)
         Map<Long, List<InternalRow>> actualByPartitionId =
                 scanAllBucketsPerPartition(table, partitionInfos);
 
@@ -105,7 +105,7 @@ class PartitionBucketCountRescaleITCase extends ClientToServerITCaseBase {
         createPartitionedTable(tablePath, schema);
         List<PartitionInfo> partitionInfos = setupOldNewPartitions(tablePath);
         Map<String, Long> idByName = partitionIdByName(partitionInfos);
-        Map<String, Integer> bucketCountByName = bucketCountByName(partitionInfos);
+        Map<String, Integer> bucketCountActualByName = bucketCountActualByName(partitionInfos);
 
         Table table = conn.getTable(tablePath);
         long tableId = table.getTableInfo().getTableId();
@@ -140,9 +140,9 @@ class PartitionBucketCountRescaleITCase extends ClientToServerITCaseBase {
         // per (partition, bucket) with BatchScanner using the partition's own bucket count.
         for (String partitionName : OLD_NEW_PARTITIONS) {
             long partitionId = idByName.get(partitionName);
-            int bucketCount = bucketCountByName.get(partitionName);
+            int bucketCountActual = bucketCountActualByName.get(partitionName);
             int partitionSum = 0;
-            for (int bucketId = 0; bucketId < bucketCount; bucketId++) {
+            for (int bucketId = 0; bucketId < bucketCountActual; bucketId++) {
                 TableBucket tb = new TableBucket(tableId, partitionId, bucketId);
                 long snapshotId =
                         FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tb).getSnapshotID();
@@ -177,7 +177,7 @@ class PartitionBucketCountRescaleITCase extends ClientToServerITCaseBase {
     }
 
     @Test
-    void testDynamicallyCreatedPartitionUsesPostAlterBucketCount() throws Exception {
+    void testDynamicallyCreatedPartitionUsesPostAlterBucketCountActual() throws Exception {
         // A partition created dynamically by the WRITER after an ALTER must use the new bucket
         // count and be readable through that range.
         clientConf.set(ConfigOptions.CLIENT_WRITER_DYNAMIC_CREATE_PARTITION_ENABLED, true);
@@ -209,7 +209,7 @@ class PartitionBucketCountRescaleITCase extends ClientToServerITCaseBase {
                         .filter(p -> "auto".equals(p.getPartitionName()))
                         .findFirst()
                         .orElseThrow(() -> new AssertionError("dynamic partition was not created"));
-        assertThat(autoPartition.getBucketCount()).isEqualTo(NEW_BUCKET_NUM);
+        assertThat(autoPartition.getBucketCountActual()).isEqualTo(NEW_BUCKET_NUM);
         expectedByPartitionId.put(autoPartition.getPartitionId(), expectedRows);
 
         // all rows are readable through the partition's own bucket range
@@ -244,7 +244,7 @@ class PartitionBucketCountRescaleITCase extends ClientToServerITCaseBase {
 
         // the dynamically created partition carries the post-ALTER bucket count
         List<PartitionInfo> partitionInfos = admin.listPartitionInfos(tablePath).get();
-        assertThat(bucketCountByName(partitionInfos)).containsEntry("auto", NEW_BUCKET_NUM);
+        assertThat(bucketCountActualByName(partitionInfos)).containsEntry("auto", NEW_BUCKET_NUM);
 
         // every key must be found: write routing and lookup routing must agree on the
         // partition's actual bucket count
@@ -257,7 +257,7 @@ class PartitionBucketCountRescaleITCase extends ClientToServerITCaseBase {
     }
 
     @Test
-    void testPrefixLookupAcrossPartitionsWithDifferentBucketCounts() throws Exception {
+    void testPrefixLookupAcrossPartitionsWithDifferentBucketCountActuals() throws Exception {
         // Prefix lookup must resolve the bucket with the correct per-partition count; a mismatch
         // would query the wrong bucket and miss rows.
         TablePath tablePath = TablePath.of("test_db_1", "test_rescale_prefix_lookup");
@@ -335,7 +335,7 @@ class PartitionBucketCountRescaleITCase extends ClientToServerITCaseBase {
         admin.createPartition(tablePath, newPartitionSpec("c", "new"), false).get();
 
         List<PartitionInfo> partitionInfos = admin.listPartitionInfos(tablePath).get();
-        assertThat(bucketCountByName(partitionInfos))
+        assertThat(bucketCountActualByName(partitionInfos))
                 .containsEntry("old", OLD_BUCKET_NUM)
                 .containsEntry("new", NEW_BUCKET_NUM);
         return partitionInfos;
@@ -361,10 +361,11 @@ class PartitionBucketCountRescaleITCase extends ClientToServerITCaseBase {
                 .get();
     }
 
-    private static Map<String, Integer> bucketCountByName(List<PartitionInfo> partitionInfos) {
+    private static Map<String, Integer> bucketCountActualByName(
+            List<PartitionInfo> partitionInfos) {
         Map<String, Integer> map = new HashMap<>();
         for (PartitionInfo p : partitionInfos) {
-            map.put(p.getPartitionName(), p.getBucketCount());
+            map.put(p.getPartitionName(), p.getBucketCountActual());
         }
         return map;
     }
@@ -380,7 +381,7 @@ class PartitionBucketCountRescaleITCase extends ClientToServerITCaseBase {
     private static void subscribeAllBuckets(
             LogScanner logScanner, List<PartitionInfo> partitionInfos) {
         for (PartitionInfo partitionInfo : partitionInfos) {
-            for (int bucketId = 0; bucketId < partitionInfo.getBucketCount(); bucketId++) {
+            for (int bucketId = 0; bucketId < partitionInfo.getBucketCountActual(); bucketId++) {
                 logScanner.subscribeFromBeginning(partitionInfo.getPartitionId(), bucketId);
             }
         }

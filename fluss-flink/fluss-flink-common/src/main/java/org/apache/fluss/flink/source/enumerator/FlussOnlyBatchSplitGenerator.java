@@ -109,7 +109,7 @@ final class FlussOnlyBatchSplitGenerator {
                     getLogSplits(
                             partition.getPartitionId(),
                             partition.getPartitionName(),
-                            partition.getBucketCount()));
+                            partition.getBucketCountActual()));
         }
         return splits;
     }

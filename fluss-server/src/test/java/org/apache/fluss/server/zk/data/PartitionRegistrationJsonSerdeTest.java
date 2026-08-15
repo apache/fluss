@@ -40,7 +40,7 @@ class PartitionRegistrationJsonSerdeTest extends JsonSerdeTestBase<PartitionRegi
 
         partitionRegistrations[0] = new PartitionRegistration(1234L, 5678L, "file://local/remote");
         partitionRegistrations[1] = new PartitionRegistration(246L, 135L, null);
-        // a partition with a per-partition bucket count (bucket.num.actual)
+        // a partition with a per-partition bucket count
         partitionRegistrations[2] =
                 new PartitionRegistration(1234L, 5678L, "file://local/remote", 8);
 
@@ -52,7 +52,7 @@ class PartitionRegistrationJsonSerdeTest extends JsonSerdeTestBase<PartitionRegi
         return new String[] {
             "{\"version\":2,\"table_id\":1234,\"partition_id\":5678,\"remote_data_dir\":\"file://local/remote\"}",
             "{\"version\":2,\"table_id\":246,\"partition_id\":135}",
-            "{\"version\":2,\"table_id\":1234,\"partition_id\":5678,\"remote_data_dir\":\"file://local/remote\",\"bucket_count\":8}"
+            "{\"version\":2,\"table_id\":1234,\"partition_id\":5678,\"remote_data_dir\":\"file://local/remote\",\"bucket_count_actual\":8}"
         };
     }
 
@@ -71,10 +71,10 @@ class PartitionRegistrationJsonSerdeTest extends JsonSerdeTestBase<PartitionRegi
     }
 
     @Test
-    void testBucketCountBackwardCompatibility() throws IOException {
+    void testBucketCountActualBackwardCompatibility() throws IOException {
         // A v1 registration (written before per-partition bucket count existed) has no
-        // bucket_count field. It must deserialize with a null bucketCount so that callers
-        // fall back to the table-level bucket count.
+        // bucket_count_actual field. It must deserialize with a null bucketCountActual so that
+        // callers fall back to the table-level bucket count.
         String v1Json =
                 "{\"version\":1,\"table_id\":1234,\"partition_id\":5678,\"remote_data_dir\":\"file://local/remote\"}";
         PartitionRegistration actual =
@@ -82,7 +82,7 @@ class PartitionRegistrationJsonSerdeTest extends JsonSerdeTestBase<PartitionRegi
                         v1Json.getBytes(StandardCharsets.UTF_8),
                         PartitionRegistrationJsonSerde.INSTANCE);
 
-        assertThat(actual.getBucketCount()).isNull();
+        assertThat(actual.getBucketCountActual()).isNull();
         assertThat(actual)
                 .isEqualTo(new PartitionRegistration(1234L, 5678L, "file://local/remote"));
     }
