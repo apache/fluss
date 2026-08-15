@@ -17,7 +17,7 @@
 
 package org.apache.fluss.client.table.scanner.log;
 
-import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.ArrowBatchData;
 import org.apache.fluss.utils.AbstractIterator;
@@ -38,7 +38,7 @@ import java.util.Set;
  * <p>Each {@link ArrowBatchData} holds off-heap Arrow memory. Callers should use try-with-resources
  * on this container to ensure all batches are released if processing fails mid-iteration.
  */
-@Internal
+@PublicEvolving
 public class ArrowScanRecords implements Iterable<ArrowBatchData>, AutoCloseable {
     public static final ArrowScanRecords EMPTY = new ArrowScanRecords(Collections.emptyMap());
 
