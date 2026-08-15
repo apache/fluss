@@ -36,15 +36,9 @@ import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.row.serializer.ArraySerializer;
 import org.apache.fluss.row.serializer.MapSerializer;
 import org.apache.fluss.row.serializer.RowSerializer;
-import org.apache.fluss.types.ArrayType;
-import org.apache.fluss.types.DataType;
-import org.apache.fluss.types.FloatType;
-import org.apache.fluss.types.MapType;
-import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.UnsafeUtils;
 
 import java.io.IOException;
-import java.io.Serializable;
 import java.util.Arrays;
 
 /**
@@ -383,139 +377,5 @@ public class CompactedRowWriter implements SequentialBinaryWriter {
             row.getSegment().get(row.getOffset(), bytes, 0, sizeInBytes);
             target.write(bytes, 0, sizeInBytes);
         }
-    }
-
-    // ------------------------------------------------------------------------------------------
-
-    /**
-     * Creates an accessor for writing elements to a {@link CompactedRowWriter} during runtime.
-     *
-     * <p>This mirrors {@link
-     * org.apache.fluss.row.compacted.CompactedRowReader#createFieldReader(DataType)} for the write
-     * side.
-     *
-     * @param fieldType the element type of the row
-     */
-    public static FieldWriter createFieldWriter(DataType fieldType) {
-        final FieldWriter fieldWriter;
-        // ordered by type root definition
-        switch (fieldType.getTypeRoot()) {
-            case CHAR:
-                // TODO: use writeChar(length) in the future, for now encode same as STRING
-            case STRING:
-                fieldWriter = (writer, value) -> writer.writeString((BinaryString) value);
-                break;
-            case BOOLEAN:
-                fieldWriter = (writer, value) -> writer.writeBoolean((boolean) value);
-                break;
-            case BINARY:
-                // TODO: use writeBinary(length) in the future, for now encode same as BYTES
-            case BYTES:
-                fieldWriter = (writer, value) -> writer.writeBytes((byte[]) value);
-                break;
-            case DECIMAL:
-                final int decimalPrecision =
-                        org.apache.fluss.types.DataTypeChecks.getPrecision(fieldType);
-                fieldWriter =
-                        (writer, value) -> writer.writeDecimal((Decimal) value, decimalPrecision);
-                break;
-            case TINYINT:
-                fieldWriter = (writer, value) -> writer.writeByte((byte) value);
-                break;
-            case SMALLINT:
-                fieldWriter = (writer, value) -> writer.writeShort((short) value);
-                break;
-            case INTEGER:
-            case DATE:
-            case TIME_WITHOUT_TIME_ZONE:
-                fieldWriter = (writer, value) -> writer.writeInt((int) value);
-                break;
-            case BIGINT:
-                fieldWriter = (writer, value) -> writer.writeLong((long) value);
-                break;
-            case FLOAT:
-                fieldWriter = (writer, value) -> writer.writeFloat((float) value);
-                break;
-            case DOUBLE:
-                fieldWriter = (writer, value) -> writer.writeDouble((double) value);
-                break;
-            case TIMESTAMP_WITHOUT_TIME_ZONE:
-                final int timestampNtzPrecision =
-                        org.apache.fluss.types.DataTypeChecks.getPrecision(fieldType);
-                fieldWriter =
-                        (writer, value) ->
-                                writer.writeTimestampNtz(
-                                        (TimestampNtz) value, timestampNtzPrecision);
-                break;
-            case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
-                final int timestampLtzPrecision =
-                        org.apache.fluss.types.DataTypeChecks.getPrecision(fieldType);
-                fieldWriter =
-                        (writer, value) ->
-                                writer.writeTimestampLtz(
-                                        (TimestampLtz) value, timestampLtzPrecision);
-                break;
-            case ARRAY:
-                final ArraySerializer arraySerializer =
-                        new ArraySerializer(
-                                ((ArrayType) fieldType).getElementType(),
-                                BinaryRow.BinaryRowFormat.COMPACTED);
-                fieldWriter =
-                        (writer, value) ->
-                                writer.writeArray((InternalArray) value, arraySerializer);
-                break;
-            case MAP:
-                final MapType mapType = (MapType) fieldType;
-                final MapSerializer mapSerializer =
-                        new MapSerializer(
-                                mapType.getKeyType(),
-                                mapType.getValueType(),
-                                BinaryRow.BinaryRowFormat.COMPACTED);
-                fieldWriter =
-                        (writer, value) -> writer.writeMap((InternalMap) value, mapSerializer);
-                break;
-            case ROW:
-                final RowType rowType = (RowType) fieldType;
-                final RowSerializer rowSerializer =
-                        new RowSerializer(
-                                rowType.getFieldTypes().toArray(new DataType[0]),
-                                BinaryRow.BinaryRowFormat.COMPACTED);
-                fieldWriter =
-                        (writer, value) -> writer.writeRow((InternalRow) value, rowSerializer);
-                break;
-            case VECTOR:
-                // VECTOR is serialized as an array of non-nullable FLOAT32 elements,
-                // matching the read path in CompactedRowReader.createFieldReader() which
-                // calls reader.readArray(new FloatType(false)).
-                final ArraySerializer vectorSerializer =
-                        new ArraySerializer(
-                                new FloatType(false), BinaryRow.BinaryRowFormat.COMPACTED);
-                fieldWriter =
-                        (writer, value) ->
-                                writer.writeArray((InternalArray) value, vectorSerializer);
-                break;
-            default:
-                throw new IllegalArgumentException(
-                        "Unsupported type for CompactedRow: " + fieldType);
-        }
-        if (!fieldType.isNullable()) {
-            return fieldWriter;
-        }
-        return (writer, value) -> {
-            if (value == null) {
-                // null is written as setNullAt which is handled by the caller
-            } else {
-                fieldWriter.writeField(writer, value);
-            }
-        };
-    }
-
-    /**
-     * Accessor for writing the field of a row during runtime.
-     *
-     * @see #createFieldWriter(DataType)
-     */
-    public interface FieldWriter extends Serializable {
-        void writeField(CompactedRowWriter writer, Object value);
     }
 }
