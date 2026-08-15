@@ -268,6 +268,9 @@ public class ArrowWriter implements AutoCloseable {
 
         // update row count only when we try to write records to the output.
         root.setRowCount(recordsCount);
+        for (ArrowFieldWriter fieldWriter : fieldWriters) {
+            fieldWriter.finish(recordsCount);
+        }
 
         // update the uncompressed body size.
         int uncompressedBodySizeInBytes = getBodyLength();

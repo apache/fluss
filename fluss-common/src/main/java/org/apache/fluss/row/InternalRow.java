@@ -308,6 +308,13 @@ public interface InternalRow extends DataGetters {
                             return genericRow;
                         };
                 break;
+            case VECTOR:
+                fieldGetter =
+                        row -> {
+                            InternalArray array = row.getArray(fieldPos);
+                            return new GenericArray(array.toFloatArray());
+                        };
+                break;
             default:
                 // for primitive types, use the normal field getter
                 fieldGetter = createFieldGetter(fieldType, fieldPos);

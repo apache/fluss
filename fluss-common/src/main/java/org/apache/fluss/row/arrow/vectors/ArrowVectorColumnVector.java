@@ -73,6 +73,9 @@ public class ArrowVectorColumnVector implements ArrayColumnVector {
      */
     @Override
     public InternalArray getArray(int i) {
+        if (vector.getDataVector().getValueCount() == 0 && vector.getValueCount() > 0) {
+            vector.getDataVector().setValueCount(vector.getValueCount() * dimension);
+        }
         int start = i * dimension;
         return new ColumnarArray(elementVector, start, dimension);
     }

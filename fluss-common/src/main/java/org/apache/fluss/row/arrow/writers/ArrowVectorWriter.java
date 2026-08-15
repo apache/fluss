@@ -101,6 +101,11 @@ public class ArrowVectorWriter extends ArrowFieldWriter {
         }
     }
 
+    @Override
+    public void finish(int recordsCount) {
+        ((FixedSizeListVector) fieldVector).getDataVector().setValueCount(offset);
+    }
+
     /**
      * Resets the writer state for reuse (e.g. after batch serialization). The child element writer
      * and offset counter are both reset to their initial state.

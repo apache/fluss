@@ -66,6 +66,9 @@ public class ShadedArrowBatchWriter implements AutoCloseable {
 
     public void finish() {
         shadedRoot.setRowCount(recordsCount);
+        for (ArrowFieldWriter fieldWriter : fieldWriters) {
+            fieldWriter.finish(recordsCount);
+        }
     }
 
     public void reset() {

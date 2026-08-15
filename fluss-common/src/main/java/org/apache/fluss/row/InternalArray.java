@@ -228,9 +228,17 @@ public interface InternalArray extends DataGetters {
                             return genericRow;
                         };
                 break;
+            case VECTOR:
+                elementGetter =
+                        (array, pos) -> {
+                            InternalArray inner = array.getArray(pos);
+                            return new GenericArray(inner.toFloatArray());
+                        };
+                break;
             default:
                 // for primitive types, we can directly return the element getter
                 elementGetter = createElementGetter(fieldType);
+                break;
         }
         if (!fieldType.isNullable()) {
             return elementGetter;
