@@ -39,6 +39,7 @@ use crate::rpc::RpcClient;
 use crate::rpc::message::LimitScanRequest;
 use arrow::array::RecordBatch;
 use arrow::compute::concat_batches;
+use arrow_schema::SchemaRef;
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::Bytes;
 use futures::Stream;
@@ -160,9 +161,19 @@ async fn run_limit_scan(pending: &PendingScan, bucket: &TableBucket) -> Result<S
     // Choose the payload format from table metadata, not the response's advisory
     // `is_log_table` flag.
     let (batch, base_offset) = if !pending.table_info.has_primary_key() {
-        let resolver = create_log_read_context_resolver(&pending.table_info)?
-            .with_schema_getter(Arc::clone(&pending.schema_getter));
-        decode_log_batch(&pending.table_info, &resolver, projected, raw, limit).await?
+        let full_schema = to_arrow_schema(pending.table_info.get_row_type())?;
+        let resolver =
+            create_log_read_context_resolver(&pending.table_info, Arc::clone(&full_schema))?
+                .with_schema_getter(Arc::clone(&pending.schema_getter));
+        decode_log_batch(
+            &pending.table_info,
+            &resolver,
+            full_schema,
+            projected,
+            raw,
+            limit,
+        )
+        .await?
     } else {
         // KV (primary-key) limit scan: no log offset, so base_offset is 0.
         let batch = decode_kv_batch(
@@ -186,12 +197,11 @@ async fn run_limit_scan(pending: &PendingScan, bucket: &TableBucket) -> Result<S
 async fn decode_log_batch(
     table_info: &TableInfo,
     resolver: &ReadContextResolver,
+    full_schema: SchemaRef,
     projected_fields: Option<&[usize]>,
     raw: Vec<u8>,
     limit: usize,
 ) -> Result<(RecordBatch, i64)> {
-    let full_schema = to_arrow_schema(table_info.get_row_type())?;
-
     if raw.is_empty() {
         let empty = RecordBatch::new_empty(full_schema);
         return Ok((
@@ -243,9 +253,11 @@ async fn decode_log_batch(
     ))
 }
 
-fn create_log_read_context_resolver(table_info: &TableInfo) -> Result<ReadContextResolver> {
+fn create_log_read_context_resolver(
+    table_info: &TableInfo,
+    arrow_schema: SchemaRef,
+) -> Result<ReadContextResolver> {
     let row_type = Arc::new(table_info.get_row_type().clone());
-    let arrow_schema = to_arrow_schema(table_info.get_row_type())?;
     let local_context = Arc::new(
         ArrowReadContext::new(arrow_schema.clone(), Arc::clone(&row_type), false)
             .with_fluss_row_type(Arc::clone(&row_type)),
@@ -474,6 +486,13 @@ mod tests {
         )
     }
 
+    fn create_test_log_decoder(table_info: &TableInfo) -> (ReadContextResolver, SchemaRef) {
+        let full_schema = to_arrow_schema(table_info.get_row_type()).expect("arrow schema");
+        let resolver = create_log_read_context_resolver(table_info, Arc::clone(&full_schema))
+            .expect("resolver");
+        (resolver, full_schema)
+    }
+
     fn build_table_info_at_schema(
         table_path: TablePath,
         table_id: i64,
@@ -550,11 +569,17 @@ mod tests {
     #[tokio::test]
     async fn decode_log_batch_empty_returns_empty_record_batch() {
         let table_info = build_two_col_table_info();
-        let resolver = create_log_read_context_resolver(&table_info).expect("resolver");
-        let (batch, base_offset) =
-            decode_log_batch(&table_info, &resolver, None, Vec::new(), usize::MAX)
-                .await
-                .expect("decode empty");
+        let (resolver, full_schema) = create_test_log_decoder(&table_info);
+        let (batch, base_offset) = decode_log_batch(
+            &table_info,
+            &resolver,
+            full_schema,
+            None,
+            Vec::new(),
+            usize::MAX,
+        )
+        .await
+        .expect("decode empty");
         assert_eq!(batch.num_rows(), 0);
         assert_eq!(batch.num_columns(), 2);
         assert_eq!(base_offset, 0);
@@ -563,10 +588,11 @@ mod tests {
     #[tokio::test]
     async fn decode_log_batch_empty_with_projection() {
         let table_info = build_two_col_table_info();
-        let resolver = create_log_read_context_resolver(&table_info).expect("resolver");
+        let (resolver, full_schema) = create_test_log_decoder(&table_info);
         let (batch, base_offset) = decode_log_batch(
             &table_info,
             &resolver,
+            full_schema,
             Some(&[1usize]),
             Vec::new(),
             usize::MAX,
@@ -582,12 +608,13 @@ mod tests {
     #[tokio::test]
     async fn decode_log_batch_extracts_base_offset_and_rows() {
         let table_info = build_two_col_table_info();
-        let resolver = create_log_read_context_resolver(&table_info).expect("resolver");
+        let (resolver, full_schema) = create_test_log_decoder(&table_info);
         let raw = build_log_records(&table_info, 17, &[(1, "alice"), (2, "bob"), (3, "carol")]);
 
-        let (batch, base_offset) = decode_log_batch(&table_info, &resolver, None, raw, usize::MAX)
-            .await
-            .expect("decode populated");
+        let (batch, base_offset) =
+            decode_log_batch(&table_info, &resolver, full_schema, None, raw, usize::MAX)
+                .await
+                .expect("decode populated");
         assert_eq!(batch.num_rows(), 3);
         assert_eq!(batch.num_columns(), 2);
         assert_eq!(base_offset, 17);
@@ -596,12 +623,19 @@ mod tests {
     #[tokio::test]
     async fn decode_log_batch_projection_keeps_requested_columns() {
         let table_info = build_two_col_table_info();
-        let resolver = create_log_read_context_resolver(&table_info).expect("resolver");
+        let (resolver, full_schema) = create_test_log_decoder(&table_info);
         let raw = build_log_records(&table_info, 0, &[(7, "x"), (8, "y")]);
 
-        let (batch, _) = decode_log_batch(&table_info, &resolver, Some(&[0usize]), raw, usize::MAX)
-            .await
-            .expect("decode projected");
+        let (batch, _) = decode_log_batch(
+            &table_info,
+            &resolver,
+            full_schema,
+            Some(&[0usize]),
+            raw,
+            usize::MAX,
+        )
+        .await
+        .expect("decode projected");
         assert_eq!(batch.num_rows(), 2);
         assert_eq!(batch.num_columns(), 1);
         assert_eq!(batch.schema().field(0).name(), "id");
@@ -632,11 +666,12 @@ mod tests {
             })
             .collect();
         let raw = build_log_batch(&table_info, &rows);
-        let resolver = create_log_read_context_resolver(&table_info).expect("resolver");
+        let (resolver, full_schema) = create_test_log_decoder(&table_info);
 
         let (batch, _) = decode_log_batch(
             &table_info,
             &resolver,
+            full_schema,
             Some(&[0usize, 2usize]),
             raw,
             usize::MAX,
@@ -664,13 +699,14 @@ mod tests {
     #[tokio::test]
     async fn decode_log_batch_non_prefix_projection_reorders_columns() {
         let table_info = build_two_col_table_info();
-        let resolver = create_log_read_context_resolver(&table_info).expect("resolver");
+        let (resolver, full_schema) = create_test_log_decoder(&table_info);
         let raw = build_log_records(&table_info, 0, &[(1, "alice"), (2, "bob")]);
 
         // `[name, id]`: reversed, so neither a leading prefix nor in source order.
         let (batch, _) = decode_log_batch(
             &table_info,
             &resolver,
+            full_schema,
             Some(&[1usize, 0usize]),
             raw,
             usize::MAX,
@@ -702,13 +738,14 @@ mod tests {
     #[tokio::test]
     async fn decode_log_batch_truncates_to_last_limit_rows() {
         let table_info = build_two_col_table_info();
-        let resolver = create_log_read_context_resolver(&table_info).expect("resolver");
+        let (resolver, full_schema) = create_test_log_decoder(&table_info);
         // Server returned 4 rows starting at offset 100, but limit is 2.
         let raw = build_log_records(&table_info, 100, &[(1, "a"), (2, "b"), (3, "c"), (4, "d")]);
 
-        let (batch, base_offset) = decode_log_batch(&table_info, &resolver, None, raw, 2)
-            .await
-            .expect("decode");
+        let (batch, base_offset) =
+            decode_log_batch(&table_info, &resolver, full_schema, None, raw, 2)
+                .await
+                .expect("decode");
         assert_eq!(batch.num_rows(), 2);
         // The last two rows are kept, so the base offset advances by 2.
         assert_eq!(base_offset, 102);
@@ -752,14 +789,21 @@ mod tests {
         current_row.set_field(1, "bob");
         current_row.set_field(2, 30_i64);
         raw.extend(build_log_batch(&target_table_info, &[current_row]));
-        let resolver = create_log_read_context_resolver(&target_table_info).expect("resolver");
+        let (resolver, full_schema) = create_test_log_decoder(&target_table_info);
         resolver
             .register_schema(1, source_table_info.get_schema())
             .expect("register source schema");
 
-        let (batch, _) = decode_log_batch(&target_table_info, &resolver, None, raw, usize::MAX)
-            .await
-            .expect("decode old-schema batch with current schema");
+        let (batch, _) = decode_log_batch(
+            &target_table_info,
+            &resolver,
+            full_schema,
+            None,
+            raw,
+            usize::MAX,
+        )
+        .await
+        .expect("decode old-schema batch with current schema");
 
         assert_eq!(batch.num_rows(), 2);
         assert_eq!(batch.num_columns(), 3);
