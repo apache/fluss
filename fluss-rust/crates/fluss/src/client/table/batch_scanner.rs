@@ -544,6 +544,51 @@ mod tests {
         data
     }
 
+    fn build_schema_evolution_log_fixture() -> (TableInfo, ReadContextResolver, SchemaRef, Vec<u8>)
+    {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let source_table_info = build_table_info_with_columns(
+            table_path.clone(),
+            42,
+            1,
+            vec![
+                DataField::new("id", DataTypes::int(), None),
+                DataField::new("name", DataTypes::string(), None),
+            ],
+        );
+        let target_table_info = build_table_info_with_columns(
+            table_path,
+            42,
+            1,
+            vec![
+                DataField::new("id", DataTypes::int(), None),
+                DataField::new("name", DataTypes::string(), None),
+                DataField::new("age", DataTypes::bigint(), None),
+            ],
+        );
+        let old_rows: Vec<GenericRow> = [(1, "alice"), (2, "bob")]
+            .iter()
+            .map(|(id, name)| {
+                let mut row = GenericRow::new(2);
+                row.set_field(0, *id);
+                row.set_field(1, *name);
+                row
+            })
+            .collect();
+        let mut raw = build_log_batch(&source_table_info, 0, &old_rows);
+        let mut current_row = GenericRow::new(3);
+        current_row.set_field(0, 3_i32);
+        current_row.set_field(1, "carol");
+        current_row.set_field(2, 30_i64);
+        raw.extend(build_log_batch(&target_table_info, 1, &[current_row]));
+
+        let (resolver, full_schema) = create_test_log_decoder(&target_table_info);
+        resolver
+            .register_schema(0, source_table_info.get_schema())
+            .expect("register source schema");
+        (target_table_info, resolver, full_schema, raw)
+    }
+
     // ---- log path ----------------------------------------------------------
 
     #[tokio::test]
@@ -739,40 +784,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn decode_log_batch_projects_old_schema_after_add_column() {
-        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
-        let source_table_info = build_table_info_with_columns(
-            table_path.clone(),
-            42,
-            1,
-            vec![
-                DataField::new("id", DataTypes::int(), None),
-                DataField::new("name", DataTypes::string(), None),
-            ],
-        );
-        let target_table_info = build_table_info_with_columns(
-            table_path,
-            42,
-            1,
-            vec![
-                DataField::new("id", DataTypes::int(), None),
-                DataField::new("name", DataTypes::string(), None),
-                DataField::new("age", DataTypes::bigint(), None),
-            ],
-        );
-        let mut row = GenericRow::new(2);
-        row.set_field(0, 1_i32);
-        row.set_field(1, "alice");
-        let mut raw = build_log_batch(&source_table_info, 0, &[row]);
-        let mut current_row = GenericRow::new(3);
-        current_row.set_field(0, 2_i32);
-        current_row.set_field(1, "bob");
-        current_row.set_field(2, 30_i64);
-        raw.extend(build_log_batch(&target_table_info, 1, &[current_row]));
-        let (resolver, full_schema) = create_test_log_decoder(&target_table_info);
-        resolver
-            .register_schema(0, source_table_info.get_schema())
-            .expect("register source schema");
+    async fn decode_log_batch_aligns_old_schema_after_add_column() {
+        let (target_table_info, resolver, full_schema, raw) = build_schema_evolution_log_fixture();
 
         let (batch, _) = decode_log_batch(
             &target_table_info,
@@ -785,9 +798,9 @@ mod tests {
         .await
         .expect("decode old-schema batch with current schema");
 
-        assert_eq!(batch.num_rows(), 2);
+        assert_eq!(batch.num_rows(), 3);
         assert_eq!(batch.num_columns(), 3);
-        assert_eq!(batch.column(2).null_count(), 1);
+        assert_eq!(batch.column(2).null_count(), 2);
         let ids = batch
             .column(0)
             .as_any()
@@ -803,9 +816,73 @@ mod tests {
             .as_any()
             .downcast_ref::<Int64Array>()
             .expect("age column");
-        assert_eq!(ids.values(), &[1, 2]);
+        assert_eq!(ids.values(), &[1, 2, 3]);
         assert_eq!(names.value(0), "alice");
         assert_eq!(names.value(1), "bob");
+        assert_eq!(names.value(2), "carol");
+        assert!(ages.is_null(0));
+        assert!(ages.is_null(1));
+        assert_eq!(ages.value(2), 30);
+    }
+
+    #[tokio::test]
+    async fn decode_log_batch_projects_added_column_after_schema_evolution() {
+        let (target_table_info, resolver, full_schema, raw) = build_schema_evolution_log_fixture();
+
+        let (batch, base_offset) = decode_log_batch(
+            &target_table_info,
+            &resolver,
+            full_schema,
+            Some(&[2]),
+            raw,
+            usize::MAX,
+        )
+        .await
+        .expect("project added column");
+
+        assert_eq!(base_offset, 0);
+        assert_eq!(batch.num_rows(), 3);
+        assert_eq!(batch.num_columns(), 1);
+        assert_eq!(batch.schema().field(0).name(), "age");
+        let ages = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .expect("age column");
+        assert!(ages.is_null(0));
+        assert!(ages.is_null(1));
+        assert_eq!(ages.value(2), 30);
+    }
+
+    #[tokio::test]
+    async fn decode_log_batch_limits_rows_across_schema_evolution() {
+        let (target_table_info, resolver, full_schema, raw) = build_schema_evolution_log_fixture();
+
+        let (batch, base_offset) =
+            decode_log_batch(&target_table_info, &resolver, full_schema, None, raw, 2)
+                .await
+                .expect("limit across schema versions");
+
+        assert_eq!(base_offset, 1);
+        assert_eq!(batch.num_rows(), 2);
+        let ids = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("id column");
+        let names = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("name column");
+        let ages = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .expect("age column");
+        assert_eq!(ids.values(), &[2, 3]);
+        assert_eq!(names.value(0), "bob");
+        assert_eq!(names.value(1), "carol");
         assert!(ages.is_null(0));
         assert_eq!(ages.value(1), 30);
     }
