@@ -464,8 +464,7 @@ mod tests {
         DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
     };
     use crate::metadata::{
-        Column, DataField, DataType, DataTypes, PhysicalTablePath, Schema, TableDescriptor,
-        TableInfo, TablePath,
+        Column, DataField, DataType, DataTypes, PhysicalTablePath, Schema, TableInfo, TablePath,
     };
     use crate::record::MemoryLogRecordsArrowBuilder;
     use crate::row::GenericRow;
@@ -493,33 +492,14 @@ mod tests {
         (resolver, full_schema)
     }
 
-    fn build_table_info_at_schema(
-        table_path: TablePath,
-        table_id: i64,
-        schema_id: i32,
-        fields: Vec<DataField>,
-    ) -> TableInfo {
-        let row_type = DataTypes::row(fields);
-        let schema = Schema::builder()
-            .with_row_type(&row_type)
-            .build()
-            .expect("schema");
-        let descriptor = TableDescriptor::builder()
-            .schema(schema)
-            .distributed_by(Some(1), vec![])
-            .build()
-            .expect("descriptor");
-        TableInfo::of(table_path, table_id, schema_id, descriptor, 0, 0)
-    }
-
     /// Encode `rows` (built against `table_info`'s row type) as one Arrow log batch.
-    fn build_log_batch(table_info: &TableInfo, rows: &[GenericRow]) -> Vec<u8> {
+    fn build_log_batch(table_info: &TableInfo, schema_id: i32, rows: &[GenericRow]) -> Vec<u8> {
         let table_info_arc = Arc::new(table_info.clone());
         let physical = Arc::new(PhysicalTablePath::of(Arc::new(
             table_info.table_path.clone(),
         )));
         let mut builder = MemoryLogRecordsArrowBuilder::new(
-            table_info.get_schema_id(),
+            schema_id,
             table_info.get_row_type(),
             false,
             ArrowCompressionInfo {
@@ -556,7 +536,7 @@ mod tests {
                 row
             })
             .collect();
-        let mut data = build_log_batch(table_info, &rows);
+        let mut data = build_log_batch(table_info, table_info.get_schema_id(), &rows);
         // Builder always writes base_log_offset=0; patch it so tests can verify
         // BatchScanner faithfully propagates whatever offset the server returned.
         let bytes = base_offset.to_le_bytes();
@@ -665,7 +645,7 @@ mod tests {
                 row
             })
             .collect();
-        let raw = build_log_batch(&table_info, &rows);
+        let raw = build_log_batch(&table_info, table_info.get_schema_id(), &rows);
         let (resolver, full_schema) = create_test_log_decoder(&table_info);
 
         let (batch, _) = decode_log_batch(
@@ -761,7 +741,7 @@ mod tests {
     #[tokio::test]
     async fn decode_log_batch_projects_old_schema_after_add_column() {
         let table_path = TablePath::new("db".to_string(), "tbl".to_string());
-        let source_table_info = build_table_info_at_schema(
+        let source_table_info = build_table_info_with_columns(
             table_path.clone(),
             42,
             1,
@@ -770,10 +750,10 @@ mod tests {
                 DataField::new("name", DataTypes::string(), None),
             ],
         );
-        let target_table_info = build_table_info_at_schema(
+        let target_table_info = build_table_info_with_columns(
             table_path,
             42,
-            2,
+            1,
             vec![
                 DataField::new("id", DataTypes::int(), None),
                 DataField::new("name", DataTypes::string(), None),
@@ -783,15 +763,15 @@ mod tests {
         let mut row = GenericRow::new(2);
         row.set_field(0, 1_i32);
         row.set_field(1, "alice");
-        let mut raw = build_log_batch(&source_table_info, &[row]);
+        let mut raw = build_log_batch(&source_table_info, 0, &[row]);
         let mut current_row = GenericRow::new(3);
         current_row.set_field(0, 2_i32);
         current_row.set_field(1, "bob");
         current_row.set_field(2, 30_i64);
-        raw.extend(build_log_batch(&target_table_info, &[current_row]));
+        raw.extend(build_log_batch(&target_table_info, 1, &[current_row]));
         let (resolver, full_schema) = create_test_log_decoder(&target_table_info);
         resolver
-            .register_schema(1, source_table_info.get_schema())
+            .register_schema(0, source_table_info.get_schema())
             .expect("register source schema");
 
         let (batch, _) = decode_log_batch(
