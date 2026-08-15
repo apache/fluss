@@ -610,8 +610,7 @@ public class LookupSenderTest {
                     return createSuccessResponse(request, "value".getBytes());
                 });
 
-        // T1: create query with bucketCountActual=4 (simulating bucketCountActual=4 at lookup
-        // time)
+        // T1: create query with bucketCountActual=4 (simulating bucketCountActual=4 at lookup time)
         LookupQuery query =
                 new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("key"), false, null, 4);
         // The pinned value is visible on the query object
