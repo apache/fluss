@@ -19,8 +19,6 @@
 package org.apache.fluss.lake.paimon.source;
 
 import org.apache.fluss.lake.paimon.utils.PaimonRowAsFlussRow;
-import org.apache.fluss.lake.paimon.utils.PaimonSystemColumns;
-import org.apache.fluss.lake.paimon.utils.PaimonSystemColumns.LakeLayout;
 import org.apache.fluss.lake.source.RecordReader;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.GenericRecord;
@@ -66,12 +64,10 @@ public class PaimonRecordReader implements RecordReader {
             @Nullable int[][] project,
             @Nullable Predicate predicate)
             throws IOException {
-        LakeLayout lakeLayout =
-                PaimonSystemColumns.detectLayout(fileStoreTable.schema().logicalRowType());
         ReadBuilder readBuilder = fileStoreTable.newReadBuilder();
         RowType paimonFullRowType = fileStoreTable.rowType();
         if (project != null) {
-            readBuilder = applyProject(readBuilder, project, paimonFullRowType, lakeLayout);
+            readBuilder = applyProject(readBuilder, project, paimonFullRowType);
         }
 
         if (predicate != null) {
@@ -83,15 +79,13 @@ public class PaimonRecordReader implements RecordReader {
         if (split == null) {
             iterator =
                     new PaimonRecordReader.PaimonRowAsFlussRecordIterator(
-                            org.apache.paimon.utils.CloseableIterator.empty(),
-                            paimonRowType,
-                            lakeLayout);
+                            org.apache.paimon.utils.CloseableIterator.empty(), paimonRowType);
         } else {
             org.apache.paimon.reader.RecordReader<InternalRow> recordReader =
                     tableRead.createReader(split.dataSplit());
             iterator =
                     new PaimonRecordReader.PaimonRowAsFlussRecordIterator(
-                            recordReader.toCloseableIterator(), paimonRowType, lakeLayout);
+                            recordReader.toCloseableIterator(), paimonRowType);
         }
     }
 
@@ -101,13 +95,10 @@ public class PaimonRecordReader implements RecordReader {
     }
 
     private ReadBuilder applyProject(
-            ReadBuilder readBuilder,
-            int[][] projects,
-            RowType paimonFullRowType,
-            LakeLayout lakeLayout) {
+            ReadBuilder readBuilder, int[][] projects, RowType paimonFullRowType) {
         int[] projectIds = Arrays.stream(projects).mapToInt(project -> project[0]).toArray();
 
-        if (lakeLayout == LakeLayout.CLEAN) {
+        if (!hasSystemColumn(paimonFullRowType)) {
             // Clean tables have no system columns to read, so project the business columns only.
             return readBuilder.withProjection(projectIds);
         }
@@ -126,6 +117,15 @@ public class PaimonRecordReader implements RecordReader {
         return readBuilder.withProjection(paimonProject);
     }
 
+    /** A legacy table carries the three system columns, ending with {@code __timestamp}. */
+    private static boolean hasSystemColumn(RowType paimonRowType) {
+        return paimonRowType
+                .getFields()
+                .get(paimonRowType.getFieldCount() - 1)
+                .name()
+                .equals(TIMESTAMP_COLUMN_NAME);
+    }
+
     /** Iterator for paimon row as fluss record. */
     public static class PaimonRowAsFlussRecordIterator implements CloseableIterator<LogRecord> {
 
@@ -139,12 +139,11 @@ public class PaimonRecordReader implements RecordReader {
 
         public PaimonRowAsFlussRecordIterator(
                 org.apache.paimon.utils.CloseableIterator<InternalRow> paimonRowIterator,
-                RowType paimonRowType,
-                LakeLayout lakeLayout) {
+                RowType paimonRowType) {
             this.paimonRowIterator = paimonRowIterator;
 
             int fieldCount = paimonRowType.getFieldCount();
-            if (lakeLayout == LakeLayout.CLEAN) {
+            if (!hasSystemColumn(paimonRowType)) {
                 // No system columns are read; all projected fields are business fields, and the
                 // log offset / timestamp are not available from the lake table.
                 this.logOffsetColIndex = -1;

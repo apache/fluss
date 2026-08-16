@@ -73,6 +73,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Stream;
 
+import static org.apache.fluss.lake.paimon.testutils.PaimonTestUtils.adjustToLegacyV1Table;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.PAIMON_UNSETTABLE_OPTIONS;
 import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
@@ -1067,6 +1068,49 @@ class LakeEnabledTableCreateITCase {
                 .get();
         assertThat(admin.getTableInfo(tablePath).get().getTableConfig().isDataLakeEnabled())
                 .isTrue();
+    }
+
+    @Test
+    void testAddColumnForLegacyTableWithSystemColumns() throws Exception {
+        TablePath tablePath = TablePath.of(DATABASE, "legacy_add_column_table");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("c1", DataTypes.INT())
+                                        .column("c2", DataTypes.STRING())
+                                        .build())
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .build();
+        admin.createTable(tablePath, tableDescriptor, false).get();
+
+        // turn the freshly created clean table into a legacy table carrying the three system
+        // columns
+        adjustToLegacyV1Table(tablePath, paimonCatalog);
+
+        // adding a business column to a legacy table must still work, and the new column must be
+        // inserted before the trailing system columns so the legacy physical layout is preserved.
+        admin.alterTable(
+                        tablePath,
+                        Collections.singletonList(
+                                TableChange.addColumn(
+                                        "c3",
+                                        DataTypes.INT(),
+                                        "c3 comment",
+                                        TableChange.ColumnPosition.last())),
+                        false)
+                .get();
+
+        Identifier identifier = Identifier.create(DATABASE, tablePath.getTableName());
+        RowType rowType = paimonCatalog.getTable(identifier).rowType();
+        assertThat(rowType.getFieldNames())
+                .containsExactly(
+                        "c1",
+                        "c2",
+                        "c3",
+                        BUCKET_COLUMN_NAME,
+                        OFFSET_COLUMN_NAME,
+                        TIMESTAMP_COLUMN_NAME);
     }
 
     @Test

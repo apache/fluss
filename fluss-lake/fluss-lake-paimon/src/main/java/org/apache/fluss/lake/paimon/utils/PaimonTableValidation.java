@@ -32,9 +32,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
+import static org.apache.fluss.lake.paimon.PaimonLakeCatalog.SYSTEM_COLUMNS;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.PAIMON_UNSETTABLE_OPTIONS;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY;
-import static org.apache.fluss.lake.paimon.utils.PaimonSystemColumns.LakeLayout;
 import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
 
 /** Utils to verify whether the existing Paimon table is compatible with the table to be created. */
@@ -42,12 +42,11 @@ public class PaimonTableValidation {
 
     public static boolean isPaimonSchemaCompatible(Schema existingSchema, Schema newSchema) {
         // FIP-27: newly generated schemas are always clean (no system columns). When the existing
-        // table is a legacy table that still carries the three system columns, re-enabling lake
-        // tiering must keep that physical layout. Enrich the clean new schema with the trailing
-        // system columns before comparison, so an existing legacy table is recognised as
-        // compatible and its layout is preserved. Detection also rejects a partial/type-mismatched
-        // legacy layout with a clear error.
-        if (PaimonSystemColumns.detectLayout(existingSchema.rowType()) == LakeLayout.LEGACY) {
+        // table is a legacy table that still carries the three system columns (recognisable by the
+        // presence of the __timestamp column), re-enabling lake tiering must keep that physical
+        // layout. Enrich the clean new schema with the trailing system columns before comparison,
+        // so an existing legacy table is recognised as compatible and its layout is preserved.
+        if (existingSchema.rowType().getFieldIndex(TIMESTAMP_COLUMN_NAME) >= 0) {
             newSchema = appendSystemColumns(newSchema);
         }
 
@@ -75,7 +74,7 @@ public class PaimonTableValidation {
             nextFieldId = Math.max(nextFieldId, field.id() + 1);
         }
         for (Map.Entry<String, org.apache.paimon.types.DataType> systemColumn :
-                PaimonSystemColumns.SYSTEM_COLUMNS.entrySet()) {
+                SYSTEM_COLUMNS.entrySet()) {
             fields.add(
                     new DataField(nextFieldId++, systemColumn.getKey(), systemColumn.getValue()));
         }
@@ -104,9 +103,14 @@ public class PaimonTableValidation {
     public static boolean equalIgnoreSystemColumnTimestampPrecision(
             Schema existingSchema, Schema newSchema) {
         List<DataField> existingFields = new ArrayList<>(existingSchema.fields());
-        // Only legacy tables carry a trailing __timestamp system column. Clean tables have no
-        // system columns, so there is no precision to relax and we compare them directly.
-        if (existingFields.isEmpty()) {
+        // The precision relaxation only applies to a legacy table's trailing __timestamp system
+        // column. A clean table (or any table whose last column is not __timestamp) has no such
+        // column, so there is nothing to relax and we compare the schemas directly.
+        if (existingFields.isEmpty()
+                || !existingFields
+                        .get(existingFields.size() - 1)
+                        .name()
+                        .equals(TIMESTAMP_COLUMN_NAME)) {
             return equalPhysicalSchema(existingSchema, newSchema);
         }
         DataField systemTimestampField = existingFields.get(existingFields.size() - 1);

@@ -18,7 +18,6 @@
 package org.apache.fluss.lake.paimon.tiering.append;
 
 import org.apache.fluss.lake.paimon.tiering.RecordWriter;
-import org.apache.fluss.lake.paimon.utils.PaimonSystemColumns.LakeLayout;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.ArrowBatchData;
 import org.apache.fluss.record.LogRecord;
@@ -47,7 +46,7 @@ public class AppendOnlyWriter extends RecordWriter<InternalRow> {
      */
     @Nullable private AutoCloseable arrowBatchHelper;
 
-    private final LakeLayout lakeLayout;
+    private final boolean paimonIncludingSystemColumns;
 
     public AppendOnlyWriter(
             FileStoreTable fileStoreTable,
@@ -55,7 +54,7 @@ public class AppendOnlyWriter extends RecordWriter<InternalRow> {
             @Nullable String partition,
             List<String> partitionKeys,
             RowType flussRowType,
-            LakeLayout lakeLayout) {
+            boolean paimonIncludingSystemColumns) {
         //noinspection unchecked
         super(
                 (TableWriteImpl<InternalRow>)
@@ -66,9 +65,9 @@ public class AppendOnlyWriter extends RecordWriter<InternalRow> {
                 partition,
                 partitionKeys,
                 flussRowType,
-                lakeLayout);
+                paimonIncludingSystemColumns);
         this.fileStoreTable = fileStoreTable;
-        this.lakeLayout = lakeLayout;
+        this.paimonIncludingSystemColumns = paimonIncludingSystemColumns;
     }
 
     @Override
@@ -96,7 +95,11 @@ public class AppendOnlyWriter extends RecordWriter<InternalRow> {
         if (arrowBatchHelper == null) {
             helper =
                     new AppendOnlyArrowBatchHelper(
-                            fileStoreTable, tableWrite, tableRowType, bucket, lakeLayout);
+                            fileStoreTable,
+                            tableWrite,
+                            tableRowType,
+                            bucket,
+                            paimonIncludingSystemColumns);
             arrowBatchHelper = helper;
         } else {
             helper = (AppendOnlyArrowBatchHelper) arrowBatchHelper;

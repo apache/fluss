@@ -17,7 +17,6 @@
 
 package org.apache.fluss.lake.paimon.utils;
 
-import org.apache.fluss.lake.paimon.utils.PaimonSystemColumns.LakeLayout;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.InternalArray;
@@ -33,23 +32,10 @@ public class PaimonRowAsFlussRow implements InternalRow {
 
     private org.apache.paimon.data.InternalRow paimonRow;
 
-    // Number of trailing Fluss system columns carried by the wrapped Paimon row that must be
-    // excluded from the exposed field count. This is only non-zero for a legacy table's top-level
-    // physical row; clean tables and nested/projected rows carry no system columns.
-    private final int trailingSystemColumns;
-
-    public PaimonRowAsFlussRow() {
-        this.trailingSystemColumns = 0;
-    }
-
-    public PaimonRowAsFlussRow(LakeLayout lakeLayout) {
-        this.trailingSystemColumns =
-                lakeLayout == LakeLayout.LEGACY ? PaimonSystemColumns.systemColumnCount() : 0;
-    }
+    public PaimonRowAsFlussRow() {}
 
     public PaimonRowAsFlussRow(org.apache.paimon.data.InternalRow paimonRow) {
         this.paimonRow = paimonRow;
-        this.trailingSystemColumns = 0;
     }
 
     public PaimonRowAsFlussRow replaceRow(org.apache.paimon.data.InternalRow paimonRow) {
@@ -59,7 +45,7 @@ public class PaimonRowAsFlussRow implements InternalRow {
 
     @Override
     public int getFieldCount() {
-        return paimonRow.getFieldCount() - trailingSystemColumns;
+        return paimonRow.getFieldCount();
     }
 
     @Override

@@ -23,7 +23,6 @@ import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
-import org.apache.fluss.lake.paimon.utils.PaimonSystemColumns;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
@@ -40,6 +39,7 @@ import org.apache.paimon.schema.SchemaChange;
 import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.table.Table;
 import org.apache.paimon.types.DataType;
+import org.apache.paimon.types.DataTypes;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -53,21 +53,28 @@ import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimonSchem
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimonSchemaChanges;
 import static org.apache.fluss.lake.paimon.utils.PaimonTableValidation.checkTableIsEmpty;
 import static org.apache.fluss.lake.paimon.utils.PaimonTableValidation.isPaimonSchemaCompatible;
+import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
+import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
+import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
 
 /** A Paimon implementation of {@link LakeCatalog}. */
 public class PaimonLakeCatalog implements LakeCatalog {
 
     private static final Logger LOG = LoggerFactory.getLogger(PaimonLakeCatalog.class);
     private static final String PAIMON_PATH_KEY = "paimon.path";
+    public static final LinkedHashMap<String, DataType> SYSTEM_COLUMNS = new LinkedHashMap<>();
 
-    /**
-     * The three Fluss system columns and their Paimon types, kept for readers, writers and the
-     * lookuper to recognise legacy tables by column name. Retained as an alias of {@link
-     * PaimonSystemColumns#SYSTEM_COLUMNS}; under FIP-27 these columns are no longer added to newly
-     * created (clean) tables.
-     */
-    public static final LinkedHashMap<String, DataType> SYSTEM_COLUMNS =
-            PaimonSystemColumns.SYSTEM_COLUMNS;
+    static {
+        // We need __bucket system column to filter out the given bucket
+        // for paimon bucket-unaware append only table.
+        // It's not required for paimon bucket-aware table like primary key table
+        // and bucket-aware append only table, but legacy tables always carry the system column
+        // for consistent behavior. Under FIP-27 these columns are no longer added to newly created
+        // (clean) tables; they only remain on legacy tables created before FIP-27.
+        SYSTEM_COLUMNS.put(BUCKET_COLUMN_NAME, DataTypes.INT());
+        SYSTEM_COLUMNS.put(OFFSET_COLUMN_NAME, DataTypes.BIGINT());
+        SYSTEM_COLUMNS.put(TIMESTAMP_COLUMN_NAME, DataTypes.TIMESTAMP_LTZ_MILLIS());
+    }
 
     private final Catalog paimonCatalog;
 
@@ -121,27 +128,25 @@ public class PaimonLakeCatalog implements LakeCatalog {
             }
 
             Schema currentPaimonSchema = fileStoreTable.schema().toSchema();
-            PaimonSystemColumns.LakeLayout lakeLayout =
-                    PaimonSystemColumns.detectLayout(fileStoreTable.schema().logicalRowType());
 
             List<SchemaChange> paimonSchemaChanges;
             if (isPaimonSchemaCompatible(
                     currentPaimonSchema, toPaimonSchema(context.getCurrentTable()))) {
                 // if the paimon schema is same as current fluss schema, directly apply all the
                 // changes.
-                paimonSchemaChanges = toPaimonSchemaChanges(changesToApply, lakeLayout);
+                paimonSchemaChanges = toPaimonSchemaChanges(table, changesToApply);
             } else if (isPaimonSchemaCompatible(
                     currentPaimonSchema, toPaimonSchema(context.getExpectedTable()))) {
                 // if the schema is same as applied fluss schema , skip adding columns.
                 paimonSchemaChanges =
                         toPaimonSchemaChanges(
+                                table,
                                 changesToApply.stream()
                                         .filter(
                                                 tableChange ->
                                                         !(tableChange
                                                                 instanceof TableChange.AddColumn))
-                                        .collect(Collectors.toList()),
-                                lakeLayout);
+                                        .collect(Collectors.toList()));
             } else {
                 throw new InvalidAlterTableException(
                         String.format(

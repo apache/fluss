@@ -18,7 +18,6 @@
 package org.apache.fluss.lake.paimon.tiering.mergetree;
 
 import org.apache.fluss.lake.paimon.tiering.RecordWriter;
-import org.apache.fluss.lake.paimon.utils.PaimonSystemColumns.LakeLayout;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.types.RowType;
@@ -51,7 +50,7 @@ public class MergeTreeWriter extends RecordWriter<KeyValue> {
             @Nullable String partition,
             List<String> partitionKeys,
             RowType flussRowType,
-            LakeLayout lakeLayout) {
+            boolean paimonIncludingSystemColumns) {
         this(
                 fileStoreTable,
                 tableBucket,
@@ -59,7 +58,7 @@ public class MergeTreeWriter extends RecordWriter<KeyValue> {
                 partitionKeys,
                 flussRowType,
                 (String[]) null,
-                lakeLayout);
+                paimonIncludingSystemColumns);
     }
 
     public MergeTreeWriter(
@@ -69,7 +68,7 @@ public class MergeTreeWriter extends RecordWriter<KeyValue> {
             List<String> partitionKeys,
             RowType flussRowType,
             @Nullable String[] ioTmpDirs,
-            LakeLayout lakeLayout) {
+            boolean paimonIncludingSystemColumns) {
         this(
                 fileStoreTable,
                 createIOManager(ioTmpDirs),
@@ -77,7 +76,7 @@ public class MergeTreeWriter extends RecordWriter<KeyValue> {
                 partition,
                 partitionKeys,
                 flussRowType,
-                lakeLayout);
+                paimonIncludingSystemColumns);
     }
 
     MergeTreeWriter(
@@ -87,7 +86,7 @@ public class MergeTreeWriter extends RecordWriter<KeyValue> {
             @Nullable String partition,
             List<String> partitionKeys,
             RowType flussRowType,
-            LakeLayout lakeLayout) {
+            boolean paimonIncludingSystemColumns) {
         super(
                 createTableWrite(fileStoreTable, ioManager),
                 fileStoreTable.rowType(),
@@ -95,7 +94,7 @@ public class MergeTreeWriter extends RecordWriter<KeyValue> {
                 partition,
                 partitionKeys,
                 flussRowType,
-                lakeLayout);
+                paimonIncludingSystemColumns);
         this.rowKeyExtractor = fileStoreTable.createRowKeyExtractor();
         this.ioManager = ioManager;
     }
