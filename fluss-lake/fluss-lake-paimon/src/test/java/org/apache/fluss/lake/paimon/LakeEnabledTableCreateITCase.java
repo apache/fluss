@@ -1194,6 +1194,36 @@ class LakeEnabledTableCreateITCase {
                 .isInstanceOf(InvalidAlterTableException.class)
                 .hasMessageContaining(ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key())
                 .hasMessageContaining("can only be altered before the Paimon table is created");
+
+        // Disabling the lake table must not allow the immutable mapping to be changed while it is
+        // re-enabled.
+        admin.alterTable(
+                        tablePath,
+                        Collections.singletonList(
+                                TableChange.set(
+                                        ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "false")),
+                        false)
+                .get();
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                tablePath,
+                                                Arrays.asList(
+                                                        TableChange.set(
+                                                                ConfigOptions
+                                                                        .TABLE_DATALAKE_TABLE_NAME
+                                                                        .key(),
+                                                                "another_lake_table"),
+                                                        TableChange.set(
+                                                                ConfigOptions.TABLE_DATALAKE_ENABLED
+                                                                        .key(),
+                                                                "true")),
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining(
+                        "The Paimon table path can only be altered before the Paimon table is created");
     }
 
     @Test

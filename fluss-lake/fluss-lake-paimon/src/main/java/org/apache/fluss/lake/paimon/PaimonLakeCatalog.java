@@ -94,6 +94,7 @@ public class PaimonLakeCatalog implements LakeCatalog {
     @Override
     public void createTable(TablePath tablePath, TableDescriptor tableDescriptor, Context context)
             throws TableAlreadyExistException {
+        validateLakeTablePath(tablePath, context);
         // then, create the table
         Schema paimonSchema = toPaimonSchema(tableDescriptor);
         try {
@@ -205,6 +206,37 @@ public class PaimonLakeCatalog implements LakeCatalog {
     private static boolean isNameMappingOption(String optionKey) {
         return ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key().equals(optionKey)
                 || ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key().equals(optionKey);
+    }
+
+    /**
+     * Prevents an existing Paimon table from being rebound to a different physical path.
+     *
+     * <p>For a disabled Fluss table, the current path may only be a candidate resolved from its
+     * options. When the requested path differs, the current Paimon table must exist before the
+     * mapping is treated as immutable. This still allows a custom path to be configured when lake
+     * storage is enabled for the first time.
+     */
+    private void validateLakeTablePath(TablePath targetLakeTablePath, Context context) {
+        TablePath currentLakeTablePath = context.getCurrentLakeTablePath();
+        if (context.isCreatingFlussTable() || currentLakeTablePath == null) {
+            return;
+        }
+        if (currentLakeTablePath.equals(targetLakeTablePath)) {
+            // Re-enable the existing mapping without querying Paimon.
+            return;
+        }
+
+        try {
+            // An existing table at the current path proves that the mapping has already been used.
+            paimonCatalog.getTable(toPaimon(currentLakeTablePath));
+            throw new InvalidAlterTableException(
+                    String.format(
+                            "The Paimon table path can only be altered before the Paimon table "
+                                    + "is created. Current path: %s, target path: %s.",
+                            currentLakeTablePath, targetLakeTablePath));
+        } catch (Catalog.TableNotExistException e) {
+            // The Paimon table has not been created, so the mapping can still be configured.
+        }
     }
 
     private static InvalidAlterTableException invalidCreateTimeOnlyOptionChangeException(

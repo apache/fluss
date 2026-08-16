@@ -539,6 +539,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                                 tableDescriptor,
                                 new DefaultLakeCatalogContext(
                                         true,
+                                        null,
                                         currentSession().getPrincipal(),
                                         null,
                                         tableDescriptor));
@@ -1732,16 +1733,19 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     static class DefaultLakeCatalogContext implements LakeCatalog.Context {
 
         private final boolean isCreatingFlussTable;
+        @Nullable private final TablePath currentLakeTablePath;
         private final FlussPrincipal flussPrincipal;
         @Nullable private final TableDescriptor currentTable;
         private final TableDescriptor expectedTable;
 
         public DefaultLakeCatalogContext(
                 boolean isCreatingFlussTable,
+                @Nullable TablePath currentLakeTablePath,
                 FlussPrincipal flussPrincipal,
                 @Nullable TableDescriptor currentTable,
                 TableDescriptor expectedTable) {
             this.isCreatingFlussTable = isCreatingFlussTable;
+            this.currentLakeTablePath = currentLakeTablePath;
             this.flussPrincipal = flussPrincipal;
             if (!isCreatingFlussTable) {
                 checkNotNull(
@@ -1765,6 +1769,12 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         @Override
         public TableDescriptor getCurrentTable() {
             return currentTable;
+        }
+
+        @Nullable
+        @Override
+        public TablePath getCurrentLakeTablePath() {
+            return currentLakeTablePath;
         }
 
         @Override

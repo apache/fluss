@@ -447,6 +447,7 @@ public class MetadataManager {
                 LakeCatalog.Context lakeCatalogContext =
                         new CoordinatorService.DefaultLakeCatalogContext(
                                 false,
+                                table.getLakeTablePath(),
                                 flussPrincipal,
                                 tableDescriptor,
                                 TableDescriptor.builder(tableDescriptor).schema(newSchema).build());
@@ -591,9 +592,16 @@ public class MetadataManager {
             TableDescriptor newDescriptor,
             List<TableChange> tableChanges,
             FlussPrincipal flussPrincipal) {
+        TablePath currentLakeTablePath =
+                LakeTableUtil.resolveLakeTablePath(
+                        tablePath, Configuration.fromMap(tableDescriptor.getProperties()));
         LakeCatalog.Context lakeCatalogContext =
                 new CoordinatorService.DefaultLakeCatalogContext(
-                        false, flussPrincipal, tableDescriptor, newDescriptor);
+                        false,
+                        currentLakeTablePath,
+                        flussPrincipal,
+                        tableDescriptor,
+                        newDescriptor);
         LakeCatalog lakeCatalog =
                 lakeCatalogDynamicLoader.getLakeCatalogContainer().getLakeCatalog();
 
