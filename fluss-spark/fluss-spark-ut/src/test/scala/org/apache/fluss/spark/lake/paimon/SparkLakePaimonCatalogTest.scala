@@ -217,10 +217,7 @@ class SparkLakePaimonCatalogTest extends SparkCatalogTest {
               org.apache.paimon.types.DataTypes.STRING,
               org.apache.paimon.types.DataTypes.STRING.notNull()
             ),
-            Array.apply(
-              "id",
-              "name",
-              "pk1")
+            Array.apply("id", "name", "pk1")
           ),
         "id",
         2
@@ -254,11 +251,7 @@ class SparkLakePaimonCatalogTest extends SparkCatalogTest {
               org.apache.paimon.types.DataTypes.STRING.notNull(),
               org.apache.paimon.types.DataTypes.STRING.notNull()
             ),
-            Array.apply(
-              "id",
-              "name",
-              "pk1",
-              "pt1")
+            Array.apply("id", "name", "pk1", "pt1")
           ),
         "id",
         2
