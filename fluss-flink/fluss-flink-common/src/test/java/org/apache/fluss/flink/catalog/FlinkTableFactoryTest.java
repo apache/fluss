@@ -17,6 +17,7 @@
 
 package org.apache.fluss.flink.catalog;
 
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.flink.adapter.CatalogTableAdapter;
 import org.apache.fluss.flink.sink.FlinkTableSink;
@@ -82,6 +83,42 @@ abstract class FlinkTableFactoryTest {
 
     public static final ObjectIdentifier BINLOG_TABLE_IDENTIFIER =
             ObjectIdentifier.of("default", "default", "t1" + FlinkCatalog.BINLOG_TABLE_SUFFIX);
+
+    @Test
+    void testResolveToLakeObjectName() {
+        assertThat(FlinkCatalog.resolveToLakeObjectName(null, "fluss_table$lake"))
+                .isEqualTo("fluss_table");
+        assertThat(FlinkCatalog.resolveToLakeObjectName(null, "fluss_table$lake$snapshots"))
+                .isEqualTo("fluss_table$snapshots");
+        assertThat(FlinkCatalog.resolveToLakeObjectName("custom_lake_table", "fluss_table$lake"))
+                .isEqualTo("custom_lake_table");
+        assertThat(
+                        FlinkCatalog.resolveToLakeObjectName(
+                                "custom_lake_table", "fluss_table$lake$snapshots"))
+                .isEqualTo("custom_lake_table$snapshots");
+        assertThat(FlinkCatalog.resolveToLakeObjectName("custom_lake_table", "fluss_table"))
+                .isEqualTo("fluss_table");
+    }
+
+    @Test
+    void testResolveToLakeIdentifier() {
+        Map<String, String> lakeTableOptions = new HashMap<>();
+        lakeTableOptions.put(
+                "fluss." + ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key(), "custom_lake_db");
+        lakeTableOptions.put(
+                "fluss." + ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key(), "custom_lake_table");
+
+        ObjectIdentifier flinkIdentifier =
+                ObjectIdentifier.of("catalog", "fluss_db", "fluss_table$lake$snapshots");
+        assertThat(
+                        FlinkTableFactory.resolveToLakeIdentifier(
+                                flinkIdentifier, Collections.emptyMap()))
+                .isEqualTo(ObjectIdentifier.of("catalog", "fluss_db", "fluss_table$snapshots"));
+        assertThat(FlinkTableFactory.resolveToLakeIdentifier(flinkIdentifier, lakeTableOptions))
+                .isEqualTo(
+                        ObjectIdentifier.of(
+                                "catalog", "custom_lake_db", "custom_lake_table$snapshots"));
+    }
 
     @Test
     void testTableSourceOptions() {

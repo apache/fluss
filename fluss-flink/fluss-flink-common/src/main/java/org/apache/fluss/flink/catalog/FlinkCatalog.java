@@ -43,7 +43,6 @@ import org.apache.fluss.flink.utils.CatalogExceptionUtils;
 import org.apache.fluss.flink.utils.FlinkConversions;
 import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseDescriptor;
-import org.apache.fluss.metadata.LakeTableUtil;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.TableChange;
@@ -92,6 +91,8 @@ import org.apache.flink.table.expressions.Expression;
 import org.apache.flink.table.factories.Factory;
 import org.apache.flink.table.procedures.Procedure;
 import org.apache.flink.table.types.AbstractDataType;
+
+import javax.annotation.Nullable;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -427,8 +428,7 @@ public class FlinkCatalog extends AbstractCatalog {
                 }
                 TablePath lakeTablePath = tableInfo.getLakeTablePath();
                 String lakeObjectName =
-                        LakeTableUtil.getLakeTableName(
-                                lakeTablePath.getTableName(), tableName, LAKE_TABLE_SPLITTER);
+                        resolveToLakeObjectName(lakeTablePath.getTableName(), tableName);
 
                 return getLakeTable(
                         lakeTablePath.getDatabaseName(),
@@ -479,17 +479,39 @@ public class FlinkCatalog extends AbstractCatalog {
         }
     }
 
+    /**
+     * Resolves the physical lake object name from a Flink {@code $lake} table name. When no mapped
+     * lake table name is provided, the Fluss table name before {@code $lake} is used.
+     */
+    static String resolveToLakeObjectName(
+            @Nullable String mappedLakeTableName, String flinkObjectName) {
+        int splitterIndex = flinkObjectName.indexOf(LAKE_TABLE_SPLITTER);
+        if (splitterIndex < 0) {
+            // Already a physical lake object name, such as "orders" or "orders$snapshots".
+            return flinkObjectName;
+        }
+
+        // "orders$lake" uses "orders" by default, or the configured lake table name when mapped.
+        String resolvedLakeTableName =
+                mappedLakeTableName == null
+                        ? flinkObjectName.substring(0, splitterIndex)
+                        : mappedLakeTableName;
+
+        // Keep everything after "$lake": "orders$lake$snapshots" becomes "orders$snapshots".
+        String suffixAfterLakeSplitter =
+                flinkObjectName.substring(splitterIndex + LAKE_TABLE_SPLITTER.length());
+        return resolvedLakeTableName + suffixAfterLakeSplitter;
+    }
+
     protected CatalogBaseTable getLakeTable(
             String lakeDatabaseName,
             String lakeObjectName,
             Configuration properties,
             Map<String, String> lakeCatalogProperties)
             throws TableNotExistException, CatalogException {
-        CatalogBaseTable lakeTable =
-                lakeFlinkCatalog
-                        .getLakeCatalog(properties, lakeCatalogProperties)
-                        .getTable(new ObjectPath(lakeDatabaseName, lakeObjectName));
-        return lakeTable;
+        return lakeFlinkCatalog
+                .getLakeCatalog(properties, lakeCatalogProperties)
+                .getTable(new ObjectPath(lakeDatabaseName, lakeObjectName));
     }
 
     @Override

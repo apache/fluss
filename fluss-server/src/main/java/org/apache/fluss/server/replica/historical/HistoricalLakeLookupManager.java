@@ -360,7 +360,7 @@ class HistoricalLakeLookupManager implements AutoCloseable {
             ResolvedPartitionSpec originalPartitionSpec,
             LakeTableLookuper.LookupMetricRecorder lookupMetricRecorder) {
         TableBucket tableBucket = lookupData.tableBucket();
-        TablePath tablePath = tableInfo.getTablePath();
+        TablePath tablePath = tableInfo.getLakeTablePath();
         LakeTableLookuper.LookupContext lookupContext =
                 new LakeTableLookuper.LookupContext(
                         originalPartitionSpec,

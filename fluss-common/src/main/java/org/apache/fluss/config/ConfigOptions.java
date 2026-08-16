@@ -1950,14 +1950,16 @@ public class ConfigOptions {
                     .stringType()
                     .noDefaultValue()
                     .withDescription(
-                            "The database name of the datalake table. If not set, it will be the same as the Fluss database.");
+                            "Specifies the database name of the datalake table. This option is currently supported only for Paimon. "
+                                    + "If not set, the Fluss database name is used. The option may be configured before the Paimon table is created and cannot be changed after creation.");
 
     public static final ConfigOption<String> TABLE_DATALAKE_TABLE_NAME =
             key("table.datalake.table-name")
                     .stringType()
                     .noDefaultValue()
                     .withDescription(
-                            "The table name of the datalake table. If not set, it will be the same as the Fluss table.");
+                            "Specifies the table name of the datalake table. This option is currently supported only for Paimon. "
+                                    + "If not set, the Fluss table name is used. The option may be configured before the Paimon table is created and cannot be changed after creation.");
 
     public static final ConfigOption<Duration> TABLE_DATALAKE_FRESHNESS =
             key("table.datalake.freshness")

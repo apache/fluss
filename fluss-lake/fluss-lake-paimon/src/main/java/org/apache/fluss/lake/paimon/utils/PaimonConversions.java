@@ -425,6 +425,8 @@ public class PaimonConversions {
         if (key.startsWith(PAIMON_CONF_PREFIX)) {
             options.set(key.substring(PAIMON_CONF_PREFIX.length()), value);
         } else if (!key.startsWith(TABLE_DATALAKE_PAIMON_PREFIX)) {
+            // This persisted prefix is an integration contract: the Flink lake table factory uses
+            // the custom lake database and table-name options to resolve the physical identifier.
             options.set(FLUSS_CONF_PREFIX + key, value);
         }
     }

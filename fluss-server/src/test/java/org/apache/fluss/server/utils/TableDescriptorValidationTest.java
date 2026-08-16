@@ -230,35 +230,29 @@ class TableDescriptorValidationTest {
     }
 
     @Test
-    void testRejectInvalidLakeDatabaseName() {
-        TableDescriptor tableDescriptor =
-                tableDescriptorWithLakeName(
-                        ConfigOptions.TABLE_DATALAKE_DATABASE_NAME, "../lake_db");
-
+    void testCustomLakePathValidation() {
+        // invalid database and table names
         assertThatThrownBy(
                         () ->
-                                TableDescriptorValidation.validateTableDescriptor(
-                                        tableDescriptor, 100, DataLakeFormat.PAIMON))
+                                validate(
+                                        tableDescriptorWithLakeName(
+                                                ConfigOptions.TABLE_DATALAKE_DATABASE_NAME,
+                                                "../lake_db"),
+                                        DataLakeFormat.PAIMON))
                 .isInstanceOf(InvalidDatabaseException.class)
                 .hasMessageContaining("../lake_db");
-    }
-
-    @Test
-    void testRejectInvalidLakeTableName() {
-        TableDescriptor tableDescriptor =
-                tableDescriptorWithLakeName(
-                        ConfigOptions.TABLE_DATALAKE_TABLE_NAME, "/tmp/lake_table");
 
         assertThatThrownBy(
                         () ->
-                                TableDescriptorValidation.validateTableDescriptor(
-                                        tableDescriptor, 100, DataLakeFormat.PAIMON))
+                                validate(
+                                        tableDescriptorWithLakeName(
+                                                ConfigOptions.TABLE_DATALAKE_TABLE_NAME,
+                                                "/tmp/lake_table"),
+                                        DataLakeFormat.PAIMON))
                 .isInstanceOf(InvalidTableException.class)
                 .hasMessageContaining("/tmp/lake_table");
-    }
 
-    @Test
-    void testAcceptValidLakeDatabaseAndTableNames() {
+        // valid database and table names
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder()
                         .schema(Schema.newBuilder().column("id", DataTypes.INT()).build())
@@ -268,22 +262,17 @@ class TableDescriptorValidationTest {
                         .property(ConfigOptions.TABLE_DATALAKE_TABLE_NAME, "lake_table-1")
                         .build();
 
-        assertThatCode(
-                        () ->
-                                TableDescriptorValidation.validateTableDescriptor(
-                                        tableDescriptor, 100, DataLakeFormat.PAIMON))
+        assertThatCode(() -> validate(tableDescriptor, DataLakeFormat.PAIMON))
                 .doesNotThrowAnyException();
-    }
 
-    @Test
-    void testRejectCustomLakePathForIceberg() {
-        TableDescriptor tableDescriptor =
-                tableDescriptorWithLakeName(ConfigOptions.TABLE_DATALAKE_TABLE_NAME, "lake_table");
-
+        // custom lake paths are not supported for Iceberg
         assertThatThrownBy(
                         () ->
-                                TableDescriptorValidation.validateTableDescriptor(
-                                        tableDescriptor, 100, DataLakeFormat.ICEBERG))
+                                validate(
+                                        tableDescriptorWithLakeName(
+                                                ConfigOptions.TABLE_DATALAKE_TABLE_NAME,
+                                                "lake_table"),
+                                        DataLakeFormat.ICEBERG))
                 .isInstanceOf(InvalidConfigException.class)
                 .hasMessageContaining("Custom lake table path is only supported for Paimon");
     }
@@ -308,6 +297,10 @@ class TableDescriptorValidationTest {
                 Arguments.of(KvValueLayout.TAGGED.version(), true, true),
                 Arguments.of(KvValueLayout.TAGGED.version(), false, false),
                 Arguments.of(999, true, false));
+    }
+
+    private static void validate(TableDescriptor tableDescriptor, DataLakeFormat dataLakeFormat) {
+        TableDescriptorValidation.validateTableDescriptor(tableDescriptor, 100, dataLakeFormat);
     }
 
     private static TableDescriptor tableDescriptorWithLakeName(

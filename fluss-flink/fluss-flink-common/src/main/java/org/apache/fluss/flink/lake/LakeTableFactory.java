@@ -17,9 +17,7 @@
 
 package org.apache.fluss.flink.lake;
 
-import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.metadata.LakeTableUtil;
 
 import org.apache.flink.table.catalog.ObjectIdentifier;
 import org.apache.flink.table.connector.source.DynamicTableSource;
@@ -28,16 +26,9 @@ import org.apache.flink.table.factories.DynamicTableSourceFactory;
 import org.apache.flink.table.factories.FactoryUtil;
 
 import java.util.Collections;
-import java.util.Map;
 
 /** A factory to create {@link DynamicTableSource} for lake table. */
 public class LakeTableFactory {
-
-    private static final String FLUSS_CONF_PREFIX = "fluss.";
-    private static final String FLUSS_TABLE_DATALAKE_DATABASE_NAME =
-            FLUSS_CONF_PREFIX + ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key();
-    private static final String FLUSS_TABLE_DATALAKE_TABLE_NAME =
-            FLUSS_CONF_PREFIX + ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key();
 
     private final LakeFlinkCatalog lakeFlinkCatalog;
 
@@ -46,13 +37,7 @@ public class LakeTableFactory {
     }
 
     public DynamicTableSource createDynamicTableSource(
-            DynamicTableFactory.Context context, String requestedTableName) {
-        ObjectIdentifier lakeIdentifier =
-                toLakeIdentifier(
-                        context.getObjectIdentifier(),
-                        context.getCatalogTable().getOptions(),
-                        requestedTableName);
-
+            DynamicTableFactory.Context context, ObjectIdentifier lakeIdentifier) {
         // For Iceberg and Paimon, pass the table name as-is to their factory.
         // Metadata tables will be handled internally by their respective factories.
         DynamicTableFactory.Context newContext =
@@ -67,22 +52,6 @@ public class LakeTableFactory {
         // Get the appropriate factory based on connector type
         DynamicTableSourceFactory factory = getLakeTableFactory();
         return factory.createDynamicTableSource(newContext);
-    }
-
-    static ObjectIdentifier toLakeIdentifier(
-            ObjectIdentifier originIdentifier,
-            Map<String, String> lakeTableOptions,
-            String requestedTableName) {
-        String lakeDatabaseName =
-                lakeTableOptions.getOrDefault(
-                        FLUSS_TABLE_DATALAKE_DATABASE_NAME, originIdentifier.getDatabaseName());
-        String lakeObjectName =
-                LakeTableUtil.getLakeTableName(
-                        lakeTableOptions.getOrDefault(
-                                FLUSS_TABLE_DATALAKE_TABLE_NAME, requestedTableName),
-                        requestedTableName);
-        return ObjectIdentifier.of(
-                originIdentifier.getCatalogName(), lakeDatabaseName, lakeObjectName);
     }
 
     private DynamicTableSourceFactory getLakeTableFactory() {

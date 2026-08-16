@@ -40,39 +40,4 @@ public final class LakeTableUtil {
                         .orElse(flussTablePath.getTableName());
         return TablePath.of(lakeDatabaseName, lakeTableName);
     }
-
-    /** Returns the lake table name with the metadata table suffix from the requested table name. */
-    public static String getLakeTableName(String lakeTableName, String requestedTableName) {
-        if (lakeTableName == null) {
-            return requestedTableName;
-        }
-
-        int metadataTableIndex = requestedTableName.indexOf('$');
-        if (metadataTableIndex < 0) {
-            return lakeTableName;
-        }
-
-        String metadataTableSuffix = requestedTableName.substring(metadataTableIndex);
-        if (lakeTableName.endsWith(metadataTableSuffix)) {
-            return lakeTableName;
-        }
-        return lakeTableName + metadataTableSuffix;
-    }
-
-    /**
-     * Returns the lake table name with the metadata table suffix from a table name containing the
-     * given lake table splitter.
-     */
-    public static String getLakeTableName(
-            String lakeTableName, String requestedTableName, String lakeTableSplitter) {
-        int splitterIndex = requestedTableName.indexOf(lakeTableSplitter);
-        if (splitterIndex < 0) {
-            return requestedTableName;
-        }
-
-        String requestedLakeTableName =
-                requestedTableName.substring(0, splitterIndex)
-                        + requestedTableName.substring(splitterIndex + lakeTableSplitter.length());
-        return getLakeTableName(lakeTableName, requestedLakeTableName);
-    }
 }
