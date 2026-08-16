@@ -68,7 +68,7 @@ import java.util.List;
 import java.util.Set;
 
 import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_2;
-import static org.apache.fluss.lake.paimon.PaimonLakeCatalog.SYSTEM_COLUMNS;
+import static org.apache.fluss.lake.paimon.PaimonLakeCatalog.LEGACY_SYSTEM_COLUMNS;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimonPartition;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
@@ -280,7 +280,7 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
         List<DataField> fields = fileStoreTable.schema().logicalRowType().getFields();
         List<Integer> projectedFields = new ArrayList<>();
         for (int i = 0; i < fields.size(); i++) {
-            if (!SYSTEM_COLUMNS.containsKey(fields.get(i).name())) {
+            if (!LEGACY_SYSTEM_COLUMNS.containsKey(fields.get(i).name())) {
                 projectedFields.add(i);
             }
         }

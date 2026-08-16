@@ -32,7 +32,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
-import static org.apache.fluss.lake.paimon.PaimonLakeCatalog.SYSTEM_COLUMNS;
+import static org.apache.fluss.lake.paimon.PaimonLakeCatalog.LEGACY_SYSTEM_COLUMNS;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.PAIMON_UNSETTABLE_OPTIONS;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY;
 import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
@@ -46,7 +46,7 @@ public class PaimonTableValidation {
         // presence of the __timestamp column), re-enabling lake tiering must keep that physical
         // layout. Enrich the clean new schema with the trailing system columns before comparison,
         // so an existing legacy table is recognised as compatible and its layout is preserved.
-        if (existingSchema.rowType().getFieldIndex(TIMESTAMP_COLUMN_NAME) >= 0) {
+        if (PaimonUtils.isLegacyTable(existingSchema.rowType())) {
             newSchema = appendSystemColumns(newSchema);
         }
 
@@ -74,7 +74,7 @@ public class PaimonTableValidation {
             nextFieldId = Math.max(nextFieldId, field.id() + 1);
         }
         for (Map.Entry<String, org.apache.paimon.types.DataType> systemColumn :
-                SYSTEM_COLUMNS.entrySet()) {
+                LEGACY_SYSTEM_COLUMNS.entrySet()) {
             fields.add(
                     new DataField(nextFieldId++, systemColumn.getKey(), systemColumn.getValue()));
         }

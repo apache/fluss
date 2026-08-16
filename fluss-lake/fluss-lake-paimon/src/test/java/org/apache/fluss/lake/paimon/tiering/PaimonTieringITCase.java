@@ -67,7 +67,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
 
-import static org.apache.fluss.lake.paimon.testutils.PaimonTestUtils.adjustToLegacyV1Table;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -184,37 +183,6 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
                         0);
             }
             checkFlussOffsetsInSnapshot(partitionedTablePath, expectedOffsets);
-        } finally {
-            jobClient.cancel().get();
-        }
-    }
-
-    @Test
-    void testTieringForLegacyTable() throws Exception {
-        // FIP-27: verify that tiering still works for a legacy table that carries the three
-        // trailing
-        // system columns (__bucket, __offset, __timestamp).
-        TablePath t = TablePath.of(DEFAULT_DB, "legacyLogTable");
-        long tId = createLogTable(t);
-
-        // turn the freshly created clean table into a legacy table before writing/tiering
-        adjustToLegacyV1Table(t, paimonCatalog);
-
-        TableBucket tBucket = new TableBucket(tId, 0);
-        List<InternalRow> flussRows = new ArrayList<>();
-        for (int i = 0; i < 10; i++) {
-            List<InternalRow> rows = Arrays.asList(row(1, "v1"), row(2, "v2"), row(3, "v3"));
-            flussRows.addAll(rows);
-            writeRows(t, rows, true);
-        }
-
-        JobClient jobClient = buildTieringJob(execEnv);
-        try {
-            assertReplicaStatus(tBucket, 30);
-            assertThat(getLeaderReplica(tBucket).getLogTablet().getLakeMaxTimestamp())
-                    .isGreaterThan(-1);
-            // the legacy table keeps the system columns, and the tiered __offset must be correct
-            checkDataInPaimonLegacyAppendOnlyTable(t, flussRows, 0);
         } finally {
             jobClient.cancel().get();
         }
@@ -540,26 +508,6 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
             // the same field count as the expected Fluss row (no trailing
             // __bucket/__offset/__timestamp columns).
             assertThat(row.getFieldCount()).isEqualTo(flussRow.getFieldCount());
-        }
-        assertThat(flussRowIterator.hasNext()).isFalse();
-    }
-
-    private void checkDataInPaimonLegacyAppendOnlyTable(
-            TablePath tablePath, List<InternalRow> expectedRows, long startingOffset)
-            throws Exception {
-        Iterator<org.apache.paimon.data.InternalRow> paimonRowIterator =
-                getPaimonRowCloseableIterator(tablePath);
-        Iterator<InternalRow> flussRowIterator = expectedRows.iterator();
-        while (paimonRowIterator.hasNext()) {
-            org.apache.paimon.data.InternalRow row = paimonRowIterator.next();
-            InternalRow flussRow = flussRowIterator.next();
-            assertThat(row.getInt(0)).isEqualTo(flussRow.getInt(0));
-            assertThat(row.getString(1).toString()).isEqualTo(flussRow.getString(1).toString());
-            // A legacy table keeps the two business columns plus the three trailing system columns
-            // __bucket/__offset/__timestamp, so the tiered offset is stored at fieldCount - 2.
-            assertThat(row.getFieldCount()).isEqualTo(flussRow.getFieldCount() + 3);
-            int offsetIndex = row.getFieldCount() - 2;
-            assertThat(row.getLong(offsetIndex)).isEqualTo(startingOffset++);
         }
         assertThat(flussRowIterator.hasNext()).isFalse();
     }

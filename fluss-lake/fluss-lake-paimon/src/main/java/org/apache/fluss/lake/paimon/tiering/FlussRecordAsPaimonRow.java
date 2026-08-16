@@ -25,7 +25,7 @@ import org.apache.paimon.data.Timestamp;
 import org.apache.paimon.types.RowKind;
 import org.apache.paimon.types.RowType;
 
-import static org.apache.fluss.lake.paimon.PaimonLakeCatalog.SYSTEM_COLUMNS;
+import static org.apache.fluss.lake.paimon.PaimonLakeCatalog.LEGACY_SYSTEM_COLUMNS;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toRowKind;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
@@ -53,7 +53,7 @@ public class FlussRecordAsPaimonRow extends FlussRowAsPaimonRow {
         this.paimonIncludingSystemColumns = paimonIncludingSystemColumns;
         this.businessFieldCount =
                 tableRowType.getFieldCount()
-                        - (paimonIncludingSystemColumns ? SYSTEM_COLUMNS.size() : 0);
+                        - (paimonIncludingSystemColumns ? LEGACY_SYSTEM_COLUMNS.size() : 0);
         // only valid when paimon includes the system columns
         this.bucketFieldIndex = businessFieldCount;
         this.offsetFieldIndex = businessFieldCount + 1;

@@ -62,7 +62,8 @@ public class PaimonLakeCatalog implements LakeCatalog {
 
     private static final Logger LOG = LoggerFactory.getLogger(PaimonLakeCatalog.class);
     private static final String PAIMON_PATH_KEY = "paimon.path";
-    public static final LinkedHashMap<String, DataType> SYSTEM_COLUMNS = new LinkedHashMap<>();
+    public static final LinkedHashMap<String, DataType> LEGACY_SYSTEM_COLUMNS =
+            new LinkedHashMap<>();
 
     static {
         // We need __bucket system column to filter out the given bucket
@@ -71,9 +72,9 @@ public class PaimonLakeCatalog implements LakeCatalog {
         // and bucket-aware append only table, but legacy tables always carry the system column
         // for consistent behavior. Under FIP-27 these columns are no longer added to newly created
         // (clean) tables; they only remain on legacy tables created before FIP-27.
-        SYSTEM_COLUMNS.put(BUCKET_COLUMN_NAME, DataTypes.INT());
-        SYSTEM_COLUMNS.put(OFFSET_COLUMN_NAME, DataTypes.BIGINT());
-        SYSTEM_COLUMNS.put(TIMESTAMP_COLUMN_NAME, DataTypes.TIMESTAMP_LTZ_MILLIS());
+        LEGACY_SYSTEM_COLUMNS.put(BUCKET_COLUMN_NAME, DataTypes.INT());
+        LEGACY_SYSTEM_COLUMNS.put(OFFSET_COLUMN_NAME, DataTypes.BIGINT());
+        LEGACY_SYSTEM_COLUMNS.put(TIMESTAMP_COLUMN_NAME, DataTypes.TIMESTAMP_LTZ_MILLIS());
     }
 
     private final Catalog paimonCatalog;

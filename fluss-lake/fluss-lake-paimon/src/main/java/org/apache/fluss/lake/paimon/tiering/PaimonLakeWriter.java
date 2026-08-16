@@ -21,6 +21,7 @@ import org.apache.fluss.lake.batch.ArrowRecordBatch;
 import org.apache.fluss.lake.batch.RecordBatch;
 import org.apache.fluss.lake.paimon.tiering.append.AppendOnlyWriter;
 import org.apache.fluss.lake.paimon.tiering.mergetree.MergeTreeWriter;
+import org.apache.fluss.lake.paimon.utils.PaimonUtils;
 import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.lake.writer.SupportsRecordBatchWrite;
 import org.apache.fluss.lake.writer.WriterInitContext;
@@ -39,7 +40,6 @@ import java.util.List;
 import java.util.Map;
 
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
-import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
 
 /** Implementation of {@link LakeWriter} for Paimon. */
 public class PaimonLakeWriter implements LakeWriter<PaimonWriteResult>, SupportsRecordBatchWrite {
@@ -60,11 +60,9 @@ public class PaimonLakeWriter implements LakeWriter<PaimonWriteResult>, Supports
         RowType flussRowType = writerInitContext.tableInfo().getRowType();
 
         // FIP-27: detect whether the target Paimon table is a clean table (only user columns) or a
-        // legacy table (carrying the three Fluss system columns). A legacy table is recognisable by
-        // the presence of the __timestamp system column. Writers emit system columns only for
-        // legacy tables.
-        boolean paimonIncludingSystemColumns =
-                fileStoreTable.rowType().getFieldIndex(TIMESTAMP_COLUMN_NAME) >= 0;
+        // legacy table (carrying the three Fluss system columns). Writers emit system columns only
+        // for legacy tables.
+        boolean paimonIncludingSystemColumns = PaimonUtils.isLegacyTable(fileStoreTable.rowType());
 
         this.recordWriter =
                 fileStoreTable.primaryKeys().isEmpty()
