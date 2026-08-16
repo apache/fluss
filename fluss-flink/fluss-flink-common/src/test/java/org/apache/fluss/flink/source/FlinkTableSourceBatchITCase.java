@@ -379,6 +379,26 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
     }
 
     @Test
+    void testBatchLogTableScanWithEmptyBucket() throws Exception {
+        tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
+        String tableName = String.format("test_empty_bucket_log_table_%s", RandomUtils.nextInt());
+        tEnv.executeSql(
+                String.format(
+                        "create table %s (id int, name varchar) with ('bucket.num' = '2')",
+                        tableName));
+
+        try (Table table = conn.getTable(TablePath.of(databaseName, tableName))) {
+            AppendWriter appendWriter = table.newAppend().createWriter();
+            appendWriter.append(row(1, "alpha"));
+            appendWriter.flush();
+        }
+
+        CloseableIterator<Row> collected =
+                tEnv.executeSql(String.format("SELECT * FROM %s", tableName)).collect();
+        assertThat(collectRowsUntilEndWithTimeout(collected)).containsExactly("+I[1, alpha]");
+    }
+
+    @Test
     void testLakeTableQueryOnLakeDisabledTable() throws Exception {
         String tableName = prepareSourceTable(new String[] {"id", "name"}, null);
         assertThatThrownBy(() -> tEnv.executeSql(String.format("SELECT * FROM %s$lake", tableName)))

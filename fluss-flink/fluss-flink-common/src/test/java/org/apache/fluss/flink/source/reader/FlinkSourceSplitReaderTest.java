@@ -340,10 +340,10 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
                         tablePath,
                         TableDescriptor.builder().schema(schema).distributedBy(3).build());
 
-        // create two empty splits with log start offset equal to end offset
+        // create empty splits, including a split starting from EARLIEST_OFFSET
         LogSplit split1 = new LogSplit(new TableBucket(tableId, 0), null, 0, 0);
         LogSplit split2 = new LogSplit(new TableBucket(tableId, 1), null, 0, 0);
-        LogSplit split3 = new LogSplit(new TableBucket(tableId, 2), null, EARLIEST_OFFSET);
+        LogSplit split3 = new LogSplit(new TableBucket(tableId, 2), null, EARLIEST_OFFSET, 0);
         List<SourceSplitBase> subscribeSplits = Arrays.asList(split1, split2, split3);
 
         try (FlinkSourceSplitReader splitReader =
@@ -352,9 +352,10 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
 
             // fetch records
             RecordsWithSplitIds<RecordAndPos> records = splitReader.fetch();
-            // finished splits should be split1,split2
+            // all empty splits should finish without subscribing to the log
             assertThat(records.finishedSplits())
-                    .containsExactlyInAnyOrder(split1.splitId(), split2.splitId());
+                    .containsExactlyInAnyOrder(
+                            split1.splitId(), split2.splitId(), split3.splitId());
         }
     }
 

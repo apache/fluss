@@ -178,7 +178,9 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
                     return FlinkRecordsWithSplitIds.emptyRecords();
                 }
                 ScanRecords scanRecords = logScanner.poll(POLL_TIMEOUT);
-                return forLogRecords(scanRecords);
+                FlinkRecordsWithSplitIds records = forLogRecords(scanRecords);
+                removeFinishedSplits(records.finishedSplits());
+                return records;
             }
         }
     }
@@ -258,7 +260,7 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
             Optional<Long> stoppingOffsetOpt = logSplit.getStoppingOffset();
             if (stoppingOffsetOpt.isPresent()) {
                 Long stoppingOffset = stoppingOffsetOpt.get();
-                if (startingOffset >= stoppingOffset) {
+                if (startingOffset >= stoppingOffset || stoppingOffset == 0) {
                     // is empty log splits as no log record can be fetched
                     emptyLogSplits.add(split.splitId());
                     isEmptyLogSplit = true;
@@ -517,6 +519,28 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
                         splitRecords, splitIterator, tableScanBuckets.iterator(), finishedSplits);
         stoppingOffsets.forEach(recordsWithSplitIds::setTableBucketStoppingOffset);
         return recordsWithSplitIds;
+    }
+
+    /**
+     * Retire log buckets after building the corresponding finished result.
+     *
+     * @param finishedSplitIds split IDs that were reported as finished
+     */
+    private void removeFinishedSplits(Set<String> finishedSplitIds) {
+        Iterator<Map.Entry<TableBucket, String>> iterator = subscribedBuckets.entrySet().iterator();
+        while (iterator.hasNext()) {
+            Map.Entry<TableBucket, String> entry = iterator.next();
+            if (finishedSplitIds.contains(entry.getValue())) {
+                TableBucket tableBucket = entry.getKey();
+                if (tableBucket.getPartitionId() == null) {
+                    logScanner.unsubscribe(tableBucket.getBucket());
+                } else {
+                    logScanner.unsubscribe(tableBucket.getPartitionId(), tableBucket.getBucket());
+                }
+                stoppingOffsets.remove(tableBucket);
+                iterator.remove();
+            }
+        }
     }
 
     private CloseableIterator<RecordAndPos> toRecordAndPos(
