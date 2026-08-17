@@ -56,6 +56,10 @@ for f in LICENSE NOTICE; do
     echo "Error: ${f} is missing from the root of ${TARBALL}"
     exit 1
   fi
+  if [ -z "$(tar -xzOf "${DIST_DIR}/${TARBALL}" "${PREFIX}/${f}")" ]; then
+    echo "Error: ${f} is empty in ${TARBALL}"
+    exit 1
+  fi
 done
 
 echo "Generating SHA-512 checksum: ${TARBALL}.sha512"

@@ -199,3 +199,28 @@
    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
    See the License for the specific language governing permissions and
    limitations under the License.
+
+------------------------------------------------------------------------------------
+This product bundles various third-party components under the same license.
+This section summarizes those components.
+
+
+Apache License 2.0
+--------------------------------------
+
+Apache Flink
+./crates/fluss/src/metadata/datatype.rs
+./crates/fluss/src/row/decimal.rs
+./crates/fluss/src/util/murmur_hash.rs
+
+Apache Kafka
+./crates/fluss/src/client/table/log_fetch_buffer.rs
+./crates/fluss/src/client/table/scanner.rs
+./crates/fluss/src/client/write/accumulator.rs
+./crates/fluss/src/client/write/idempotence.rs
+./crates/fluss/src/client/write/sender.rs
+
+Apache Paimon
+./crates/fluss/src/predicate/mod.rs
+./crates/fluss/src/predicate/pb.rs
+./crates/fluss/src/row/paimon/paimon_binary_row_writer.rs
