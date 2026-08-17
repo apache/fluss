@@ -48,6 +48,7 @@ import org.apache.flink.table.catalog.ResolvedCatalogTable;
 import org.apache.flink.table.catalog.ResolvedSchema;
 import org.apache.flink.table.catalog.TableChange.ModifyRefreshHandler;
 import org.apache.flink.table.catalog.TableChange.ModifyRefreshStatus;
+import org.apache.flink.table.catalog.WatermarkSpec;
 import org.apache.flink.table.catalog.exceptions.CatalogException;
 import org.apache.flink.types.RowKind;
 
@@ -461,6 +462,16 @@ public class FlinkConversions {
             return Collections.singletonList(
                     convertResetOption(
                             (org.apache.flink.table.catalog.TableChange.ResetOption) tableChange));
+        } else if (tableChange instanceof org.apache.flink.table.catalog.TableChange.AddWatermark) {
+            return convertAddWatermark(
+                    (org.apache.flink.table.catalog.TableChange.AddWatermark) tableChange);
+        } else if (tableChange
+                instanceof org.apache.flink.table.catalog.TableChange.ModifyWatermark) {
+            return convertModifyWatermark(
+                    (org.apache.flink.table.catalog.TableChange.ModifyWatermark) tableChange);
+        } else if (tableChange
+                instanceof org.apache.flink.table.catalog.TableChange.DropWatermark) {
+            return convertDropWatermark();
         } else if (tableChange instanceof ModifyRefreshStatus
                 || tableChange instanceof ModifyRefreshHandler) {
             // MaterializedTableChange may produce multiple fluss TableChange.
@@ -494,6 +505,33 @@ public class FlinkConversions {
     private static TableChange.ResetOption convertResetOption(
             org.apache.flink.table.catalog.TableChange.ResetOption flinkResetOption) {
         return TableChange.reset(flinkResetOption.getKey());
+    }
+
+    private static List<TableChange> convertAddWatermark(
+            org.apache.flink.table.catalog.TableChange.AddWatermark addWatermark) {
+        return convertWatermark(addWatermark.getWatermark());
+    }
+
+    private static List<TableChange> convertModifyWatermark(
+            org.apache.flink.table.catalog.TableChange.ModifyWatermark modifyWatermark) {
+        return convertWatermark(modifyWatermark.getNewWatermark());
+    }
+
+    private static List<TableChange> convertWatermark(WatermarkSpec watermarkSpec) {
+        Map<String, String> watermarkProperties = new HashMap<>();
+        CatalogPropertiesUtils.serializeWatermarkSpecs(
+                watermarkProperties, Collections.singletonList(watermarkSpec));
+
+        return watermarkProperties.entrySet().stream()
+                .map(entry -> TableChange.set(entry.getKey(), entry.getValue()))
+                .collect(Collectors.toList());
+    }
+
+    private static List<TableChange> convertDropWatermark() {
+        return Arrays.asList(
+                TableChange.reset(CatalogPropertiesUtils.getWatermarkRowtimeKey(0)),
+                TableChange.reset(CatalogPropertiesUtils.getWatermarkExprKey(0)),
+                TableChange.reset(CatalogPropertiesUtils.getWatermarkDataTypeKey(0)));
     }
 
     /** Converts a {@code MaterializedTableChange} to a list of Fluss TableChanges. */

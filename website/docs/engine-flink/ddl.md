@@ -255,6 +255,29 @@ ALTER TABLE MyTable ADD (
 );
 ```
 
+### Add watermark
+
+Assuming that `my_table` already contains a timestamp column named `ts`, the following SQL adds a watermark with strategy `ts - INTERVAL '10' SECOND`. The `ts` column is then used as the event-time attribute of the table.
+
+```sql title="Flink SQL"
+ALTER TABLE my_table ADD WATERMARK FOR ts AS ts - INTERVAL '10' SECOND;
+```
+
+### Drop watermark
+
+The following SQL drops the watermark of table `my_table`.
+
+```sql title="Flink SQL"
+ALTER TABLE my_table DROP WATERMARK;
+```
+
+### Modify watermark
+
+The following SQL modifies the watermark strategy to `ts - INTERVAL '20' SECOND`.
+
+```sql title="Flink SQL"
+ALTER TABLE my_table MODIFY WATERMARK FOR ts AS ts - INTERVAL '20' SECOND;
+```
 
 ### SET properties
 The SET statement allows users to configure one or more connector options including the [Storage Options](engine-flink/options.md#storage-options) for a specified table. If a particular option is already configured on the table, it will be overridden with the new value.
