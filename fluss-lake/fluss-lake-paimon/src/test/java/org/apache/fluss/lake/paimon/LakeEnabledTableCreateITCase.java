@@ -1105,18 +1105,9 @@ class LakeEnabledTableCreateITCase {
                 RowType.of(
                         new DataType[] {
                             org.apache.paimon.types.DataTypes.INT(),
-                            org.apache.paimon.types.DataTypes.STRING(),
-                            org.apache.paimon.types.DataTypes.INT(),
-                            org.apache.paimon.types.DataTypes.BIGINT(),
-                            org.apache.paimon.types.DataTypes.TIMESTAMP_LTZ_MILLIS()
+                            org.apache.paimon.types.DataTypes.STRING()
                         },
-                        new String[] {
-                            "c1",
-                            "c2",
-                            BUCKET_COLUMN_NAME,
-                            OFFSET_COLUMN_NAME,
-                            TIMESTAMP_COLUMN_NAME
-                        }),
+                        new String[] {"c1", "c2"}),
                 "c1,c2",
                 BUCKET_NUM);
 
