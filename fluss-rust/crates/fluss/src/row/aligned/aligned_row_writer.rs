@@ -270,9 +270,16 @@ impl BinaryWriter for AlignedRowWriter {
     }
 
     fn write_decimal(&mut self, value: &Decimal, precision: u32) {
+        assert_eq!(
+            value.precision(),
+            precision,
+            "decimal was built at a different precision than the column's"
+        );
         let pos = self.current_pos;
         if Decimal::is_compact_precision(precision) {
-            let unscaled = value.to_unscaled_long().unwrap_or(0);
+            let unscaled = value
+                .to_unscaled_long()
+                .expect("a compact precision guarantees the unscaled value fits in i64");
             let off = self.field_offset(pos);
             self.put_long_le(off, unscaled);
         } else {
@@ -338,6 +345,8 @@ impl BinaryWriter for AlignedRowWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bigdecimal::BigDecimal;
+    use std::str::FromStr;
 
     #[test]
     fn fixed_part_matches_java_sizing() {
@@ -467,9 +476,6 @@ mod tests {
 
     #[test]
     fn spills_a_non_compact_decimal_into_sixteen_tail_bytes() {
-        use bigdecimal::BigDecimal;
-        use std::str::FromStr;
-
         let precision = 25;
         let decimal =
             Decimal::from_big_decimal(BigDecimal::from_str("5.55").unwrap(), precision, 5)
@@ -491,6 +497,15 @@ mod tests {
             &bytes[16 + unscaled.len()..32],
             &vec![0u8; 16 - unscaled.len()][..]
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "assertion")]
+    fn rejects_a_decimal_built_at_another_precision() {
+        let decimal = Decimal::from_big_decimal(BigDecimal::from_str("5.55").unwrap(), 25, 5)
+            .expect("decimal");
+        let mut writer = AlignedRowWriter::new(1);
+        writer.write_decimal(&decimal, 10);
     }
 
     #[test]

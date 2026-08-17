@@ -1399,8 +1399,8 @@ impl TableInfo {
     ///
     /// Empty when the table has not enabled statistics. `*` keeps only the
     /// columns whose type supports statistics, while an explicit list is taken
-    /// as given so that naming an unsupported column fails at write time as it
-    /// does in Java.
+    /// as given: the server already rejects an unsupported type when the table
+    /// is created or altered, so the client trusts it as Java's does.
     ///
     /// # Errors
     /// Returns an error if a named column is absent from the table schema.

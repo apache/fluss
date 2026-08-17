@@ -115,6 +115,26 @@ pub(crate) fn serialize_statistics(
         return Ok(None);
     }
 
+    // Indexing the batch and the row type below would panic rather than error,
+    // so make both bounds explicit. Column types are checked lazily by
+    // `column_bounds` as each one is read.
+    let field_count = row_type.fields().len();
+    if batch.num_columns() != field_count {
+        return Err(Error::IllegalArgument {
+            message: format!(
+                "Statistics need a batch matching the table schema, got {} columns for {field_count} fields",
+                batch.num_columns()
+            ),
+        });
+    }
+    if let Some(&index) = mapping.iter().find(|&&index| index >= field_count) {
+        return Err(Error::IllegalArgument {
+            message: format!(
+                "Statistics column index {index} is out of range for {field_count} fields"
+            ),
+        });
+    }
+
     let mut null_counts = Vec::with_capacity(mapping.len());
     let mut bounds = Vec::with_capacity(mapping.len());
     for &column_index in mapping {
@@ -537,6 +557,38 @@ mod tests {
                 .expect("serialize")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn rejects_a_batch_that_does_not_match_the_schema() {
+        // Two Arrow columns against a three field row type: indexing the batch
+        // by a mapping built from the schema would otherwise panic.
+        let schema = Schema::new(vec![
+            Field::new("id", ArrowType::Int32, true),
+            Field::new("name", ArrowType::Utf8, true),
+        ]);
+        let narrow = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![
+                Arc::new(Int32Array::from(vec![Some(1)])) as arrow::array::ArrayRef,
+                Arc::new(StringArray::from(vec![Some("a")])),
+            ],
+        )
+        .expect("batch");
+
+        assert!(matches!(
+            serialize_statistics(&narrow, &row_type(), &[0, 1, 2]),
+            Err(Error::IllegalArgument { .. })
+        ));
+    }
+
+    #[test]
+    fn rejects_a_mapping_beyond_the_row_type() {
+        let batch = batch(vec![Some(1)], vec![Some("a")], vec![Some(1)]);
+        assert!(matches!(
+            serialize_statistics(&batch, &row_type(), &[3]),
+            Err(Error::IllegalArgument { .. })
+        ));
     }
 
     #[test]
