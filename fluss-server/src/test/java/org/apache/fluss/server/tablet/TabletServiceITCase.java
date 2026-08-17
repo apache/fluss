@@ -20,6 +20,8 @@ package org.apache.fluss.server.tablet;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidRequiredAcksException;
+import org.apache.fluss.exception.StaleMetadataException;
+import org.apache.fluss.exception.TabletMetadataNotReadyException;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -38,6 +40,7 @@ import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
 import org.apache.fluss.rpc.messages.InitWriterRequest;
 import org.apache.fluss.rpc.messages.InitWriterResponse;
+import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.messages.ListOffsetsResponse;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
@@ -753,6 +756,73 @@ public class TabletServiceITCase {
                 DATA1_ROW_TYPE,
                 TEST_SCHEMA_GETTER,
                 expected2);
+    }
+
+    @Test
+    void testBucketCountActualValidationAppliesToClientRequestsOnly() throws Exception {
+        long tableId =
+                createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR);
+        TableBucket tb = new TableBucket(tableId, 0);
+
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
+
+        int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
+        TabletServerGateway leaderGateWay =
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
+
+        // a client whose bucket count doesn't match the actual one computed its bucketId from a
+        // count the server has confirmed to be stale.
+        assertThatThrownBy(
+                        () ->
+                                leaderGateWay
+                                        .listOffsets(
+                                                newListOffsetsRequestWithBucketCountActual(
+                                                        -1,
+                                                        ListOffsetsParam.LATEST_OFFSET_TYPE,
+                                                        tableId,
+                                                        0,
+                                                        999))
+                                        .get())
+                .cause()
+                .isInstanceOf(StaleMetadataException.class);
+
+        // the very same count coming from a follower is not validated: a follower's bucket ids come
+        // from NotifyLeaderAndIsr, so replication must not depend on the leader's metadata cache.
+        assertListOffsetsResponse(
+                leaderGateWay
+                        .listOffsets(
+                                newListOffsetsRequestWithBucketCountActual(
+                                        1, ListOffsetsParam.LATEST_OFFSET_TYPE, tableId, 0, 999))
+                        .get(),
+                0L,
+                Errors.NONE.code(),
+                null);
+
+        // a client request for a table this server has no metadata for can neither be confirmed nor
+        // refuted: it must be retriable rather than reported as stale metadata.
+        assertThatThrownBy(
+                        () ->
+                                leaderGateWay
+                                        .listOffsets(
+                                                newListOffsetsRequestWithBucketCountActual(
+                                                        -1,
+                                                        ListOffsetsParam.LATEST_OFFSET_TYPE,
+                                                        10005L,
+                                                        0,
+                                                        3))
+                                        .get())
+                .cause()
+                .isInstanceOf(TabletMetadataNotReadyException.class);
+    }
+
+    private static ListOffsetsRequest newListOffsetsRequestWithBucketCountActual(
+            int followerServerId,
+            int offsetType,
+            long tableId,
+            int bucketId,
+            int bucketCountActual) {
+        return newListOffsetsRequest(followerServerId, offsetType, tableId, bucketId)
+                .setBucketCountActual(bucketCountActual);
     }
 
     @Test

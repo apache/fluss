@@ -23,7 +23,9 @@ import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.TabletServerInfo;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.rpc.protocol.Errors;
 
 import javax.annotation.Nullable;
 
@@ -60,6 +62,17 @@ public class ServerMetadataSnapshot {
     // bucketMetadata>
     private final Map<Long, Map<Integer, BucketMetadata>> bucketMetadataMapForPartitions;
 
+    // TablePartition -> bucket count; absent only when a legacy Coordinator omits it; a new
+    // Coordinator always sends the field.
+    private final Map<TablePartition, Integer> partitionBucketCountActuals;
+
+    // tableId -> table-level bucket count; absent when metadata has not arrived.
+    private final Map<Long, Integer> tableBucketCounts;
+
+    // tableId -> bucketLayoutEpoch; a TabletServer keeps the latest value and ignores a lower
+    // epoch to prevent an older bucket layout (ALTER bucket.num) from replacing a newer one.
+    private final Map<Long, Long> bucketLayoutEpochByTableId;
+
     public ServerMetadataSnapshot(
             @Nullable ServerInfo coordinatorServer,
             Map<Integer, ServerInfo> aliveTabletServers,
@@ -67,7 +80,10 @@ public class ServerMetadataSnapshot {
             Map<Long, TablePath> pathByTableId,
             Map<PhysicalTablePath, Long> partitionIdByPath,
             Map<Long, Map<Integer, BucketMetadata>> bucketMetadataMapForTables,
-            Map<Long, Map<Integer, BucketMetadata>> bucketMetadataMapForPartitions) {
+            Map<Long, Map<Integer, BucketMetadata>> bucketMetadataMapForPartitions,
+            Map<TablePartition, Integer> partitionBucketCountActuals,
+            Map<Long, Integer> tableBucketCounts,
+            Map<Long, Long> bucketLayoutEpochByTableId) {
         this.coordinatorServer = coordinatorServer;
         this.aliveTabletServers = Collections.unmodifiableMap(aliveTabletServers);
 
@@ -84,12 +100,18 @@ public class ServerMetadataSnapshot {
         this.bucketMetadataMapForTables = Collections.unmodifiableMap(bucketMetadataMapForTables);
         this.bucketMetadataMapForPartitions =
                 Collections.unmodifiableMap(bucketMetadataMapForPartitions);
+        this.partitionBucketCountActuals = Collections.unmodifiableMap(partitionBucketCountActuals);
+        this.tableBucketCounts = Collections.unmodifiableMap(tableBucketCounts);
+        this.bucketLayoutEpochByTableId = Collections.unmodifiableMap(bucketLayoutEpochByTableId);
     }
 
     /** Create an empty cluster instance with no nodes and no table-buckets. */
     public static ServerMetadataSnapshot empty() {
         return new ServerMetadataSnapshot(
                 null,
+                Collections.emptyMap(),
+                Collections.emptyMap(),
+                Collections.emptyMap(),
                 Collections.emptyMap(),
                 Collections.emptyMap(),
                 Collections.emptyMap(),
@@ -157,6 +179,115 @@ public class ServerMetadataSnapshot {
 
     public Map<Integer, BucketMetadata> getBucketMetadataForPartition(long partitionId) {
         return bucketMetadataMapForPartitions.getOrDefault(partitionId, Collections.emptyMap());
+    }
+
+    /**
+     * Returns the actual bucket count for the given table partition, or null when the coordinator
+     * didn't send an explicit bucket count for it.
+     */
+    public @Nullable Integer getPartitionBucketCountActual(TablePartition tablePartition) {
+        return partitionBucketCountActuals.get(tablePartition);
+    }
+
+    public Map<TablePartition, Integer> getPartitionBucketCountActuals() {
+        return partitionBucketCountActuals;
+    }
+
+    /**
+     * Returns the table-level bucket count for the given tableId, or null when metadata has not
+     * arrived.
+     */
+    public @Nullable Integer getTableBucketCount(long tableId) {
+        return tableBucketCounts.get(tableId);
+    }
+
+    public Map<Long, Integer> getTableBucketCounts() {
+        return tableBucketCounts;
+    }
+
+    /**
+     * Returns the bucket layout epoch for the given tableId, or empty if not known (legacy table
+     * without the field, read as 0).
+     */
+    public OptionalLong getBucketLayoutEpoch(long tableId) {
+        Long epoch = bucketLayoutEpochByTableId.get(tableId);
+        return epoch == null ? OptionalLong.empty() : OptionalLong.of(epoch);
+    }
+
+    public Map<Long, Long> getBucketLayoutEpochByTableId() {
+        return bucketLayoutEpochByTableId;
+    }
+
+    /**
+     * Validates the bucket count in a client request against the actual count in this snapshot.
+     *
+     * @param tableId the table id from the request
+     * @param partitionId the partition id from the request, or null for non-partitioned tables
+     * @param requestBucketCount the bucket count the client used to calculate bucketId; <= 0 means
+     *     the optional field was not set (legacy client)
+     * @return {@link Errors#NONE} if validation passes; {@link Errors#STALE_METADATA} if the count
+     *     is stale; {@link Errors#TABLET_METADATA_NOT_READY} if the target metadata has not yet
+     *     arrived.
+     */
+    public Errors validateBucketCountActual(
+            long tableId, @Nullable Long partitionId, int requestBucketCount) {
+        Long epoch = bucketLayoutEpochByTableId.get(tableId);
+
+        // --- Branch 1: legacy client (no bucket count in request) ---
+        // Nothing to compare, so readiness is irrelevant. Reject only when this server has
+        // confirmed a rescale (epoch > 0), because then the bucketId may be from an outdated
+        // count. Otherwise pass through and let the downstream replica lookup decide.
+        if (requestBucketCount <= 0) {
+            if (epoch != null && epoch > 0) {
+                return Errors.STALE_METADATA;
+            }
+            return Errors.NONE;
+        }
+
+        // --- Branch 2: new client (carries bucket count) ---
+        // The count must be compared against the known actual. Without the target's metadata the
+        // server can neither confirm nor refute the count, so it reports not-ready.
+        if (epoch == null) {
+            return Errors.TABLET_METADATA_NOT_READY;
+        }
+
+        Integer actual =
+                partitionId != null
+                        ? resolvePartitionBucketCountActual(tableId, partitionId, epoch)
+                        : getTableBucketCount(tableId);
+        if (actual == null) {
+            return Errors.TABLET_METADATA_NOT_READY;
+        }
+        if (requestBucketCount != actual) {
+            return Errors.STALE_METADATA;
+        }
+        return Errors.NONE;
+    }
+
+    /**
+     * Resolves the actual bucket count of the given partition, or null when it is not known yet.
+     *
+     * <p>An older Coordinator does not send the per-partition {@code bucket_count_actual} field.
+     * Without the fallback below, every known partition would permanently return null here, causing
+     * {@code TABLET_METADATA_NOT_READY} for all requests that carry a bucket count — which means
+     * infinite retries until the Coordinator is also upgraded.
+     *
+     * <p>At {@code bucketLayoutEpoch == 0} nothing has been rescaled, so a known partition's actual
+     * count is guaranteed to equal the table-level one. At a higher epoch the per-partition count
+     * must be explicit (the Coordinator that performed the rescale always sends it), so a missing
+     * count means the metadata genuinely hasn't arrived yet.
+     */
+    private @Nullable Integer resolvePartitionBucketCountActual(
+            long tableId, long partitionId, long bucketLayoutEpoch) {
+        Integer explicitCount =
+                partitionBucketCountActuals.get(new TablePartition(tableId, partitionId));
+        if (explicitCount != null) {
+            return explicitCount;
+        }
+        if (bucketLayoutEpoch == 0 && physicalPathByPartitionId.containsKey(partitionId)) {
+            return getTableBucketCount(tableId);
+        }
+        return null;
     }
 
     public Map<PhysicalTablePath, Long> getPartitionIdByPath() {

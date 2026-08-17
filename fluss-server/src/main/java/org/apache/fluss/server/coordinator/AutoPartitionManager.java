@@ -256,12 +256,23 @@ public class AutoPartitionManager implements AutoCloseable {
                                     partitionsByTable.get(tableId),
                                     "Auto partition state does not exist for table " + tableId);
                     if (!currentPartitions.containsKey(HISTORICAL_PARTITION_VALUE)) {
-                        createPartition(
-                                tableInfo,
-                                new ResolvedPartitionSpec(
-                                        tableInfo.getPartitionKeys(),
-                                        Collections.singletonList(HISTORICAL_PARTITION_VALUE)),
-                                currentPartitions);
+                        // Hold the per-table read lock and read the table-level bucket count fresh
+                        // from ZK so the new partition records the count a concurrent ALTER
+                        // bucket.num cannot invalidate.
+                        TablePath tablePath = tableInfo.getTablePath();
+                        Lock readLock = metadataManager.getBucketRescaleLock(tablePath).readLock();
+                        readLock.lock();
+                        try {
+                            createPartition(
+                                    tableInfo,
+                                    new ResolvedPartitionSpec(
+                                            tableInfo.getPartitionKeys(),
+                                            Collections.singletonList(HISTORICAL_PARTITION_VALUE)),
+                                    currentPartitions,
+                                    metadataManager.getTableRegistration(tablePath).bucketCount);
+                        } finally {
+                            readLock.unlock();
+                        }
                     }
                 });
     }
@@ -278,9 +289,13 @@ public class AutoPartitionManager implements AutoCloseable {
                             && !currentPartitions.containsKey(HISTORICAL_PARTITION_VALUE)) {
                         return;
                     }
+                    TablePath tablePath = tableInfo.getTablePath();
+                    Lock rescaleReadLock =
+                            metadataManager.getBucketRescaleLock(tablePath).readLock();
+                    rescaleReadLock.lock();
                     try {
                         metadataManager.dropPartition(
-                                tableInfo.getTablePath(),
+                                tablePath,
                                 new ResolvedPartitionSpec(
                                         tableInfo.getPartitionKeys(),
                                         Collections.singletonList(HISTORICAL_PARTITION_VALUE)),
@@ -288,14 +303,14 @@ public class AutoPartitionManager implements AutoCloseable {
                         if (currentPartitions != null) {
                             currentPartitions.remove(HISTORICAL_PARTITION_VALUE);
                         }
-                        LOG.info(
-                                "Deleted historical partition for table [{}].",
-                                tableInfo.getTablePath());
+                        LOG.info("Deleted historical partition for table [{}].", tablePath);
                     } catch (Exception e) {
                         LOG.warn(
                                 "Failed to delete historical partition for table [{}].",
-                                tableInfo.getTablePath(),
+                                tablePath,
                                 e);
+                    } finally {
+                        rescaleReadLock.unlock();
                     }
                 });
     }
@@ -482,32 +497,60 @@ public class AutoPartitionManager implements AutoCloseable {
             return;
         }
 
-        for (ResolvedPartitionSpec partition : partitionsToPreCreate) {
-            createPartition(tableInfo, partition, currentPartitions);
+        TablePath tablePath = tableInfo.getTablePath();
+
+        // Hold the per-table read lock so partition creation never interleaves with a concurrent
+        // ALTER bucket.num (write lock), and read the table-level bucket count fresh from ZK, not
+        // from the possibly-stale TableInfo. Lock order: AutoPartitionManager lock -> this lock.
+        Lock readLock = metadataManager.getBucketRescaleLock(tablePath).readLock();
+        readLock.lock();
+        try {
+            int bucketCount;
+            try {
+                bucketCount = metadataManager.getTableRegistration(tablePath).bucketCount;
+            } catch (Exception e) {
+                LOG.warn(
+                        "Skipping auto partitioning for table [{}] as failed to read the "
+                                + "table-level bucket count.",
+                        tablePath,
+                        e);
+                return;
+            }
+            for (ResolvedPartitionSpec partition : partitionsToPreCreate) {
+                createPartition(tableInfo, partition, currentPartitions, bucketCount);
+            }
+        } finally {
+            readLock.unlock();
         }
     }
 
     private void createPartition(
             TableInfo tableInfo,
             ResolvedPartitionSpec partition,
-            TreeMap<String, Set<String>> currentPartitions) {
+            TreeMap<String, Set<String>> currentPartitions,
+            int bucketCount) {
         TablePath tablePath = tableInfo.getTablePath();
         long tableId = tableInfo.getTableId();
         int replicaFactor = tableInfo.getTableConfig().getReplicationFactor();
         TabletServerInfo[] servers = metadataCache.getLiveServers();
-        long newKvLeaderReplicaCount = tableInfo.hasPrimaryKey() ? tableInfo.getNumBuckets() : 0;
+        long newKvLeaderReplicaCount = tableInfo.hasPrimaryKey() ? bucketCount : 0;
         try {
             replicaCapacityController.checkCanCreateKvLeaderReplicas(newKvLeaderReplicaCount);
 
             Map<Integer, BucketAssignment> bucketAssignments =
-                    generateAssignment(tableInfo.getNumBuckets(), replicaFactor, servers)
-                            .getBucketAssignments();
+                    generateAssignment(bucketCount, replicaFactor, servers).getBucketAssignments();
             PartitionAssignment partitionAssignment =
                     new PartitionAssignment(tableInfo.getTableId(), bucketAssignments);
 
             String remoteDataDir = remoteDirDynamicLoader.getRemoteDirSelector().nextDataDir();
             metadataManager.createPartition(
-                    tablePath, tableId, remoteDataDir, partitionAssignment, partition, false);
+                    tablePath,
+                    tableId,
+                    remoteDataDir,
+                    partitionAssignment,
+                    partition,
+                    false,
+                    bucketCount);
             currentPartitions.put(partition.getPartitionName(), null);
             LOG.info(
                     "Auto partitioning created partition {} for table [{}].", partition, tablePath);
@@ -610,14 +653,20 @@ public class AutoPartitionManager implements AutoCloseable {
         // (a=?,dt=20250506,b=?) (a=?,dt=20250507,b=?) will be retained.
         Iterator<Map.Entry<String, Set<String>>> iterator =
                 currentPartitions.headMap(lastRetainPartitionTime).entrySet().iterator();
-        while (iterator.hasNext()) {
-            Map.Entry<String, Set<String>> entry = iterator.next();
-            // Historical system partitions are managed explicitly by table configuration changes
-            // and Coordinator recovery, never by normal retention cleanup.
-            if (HISTORICAL_PARTITION_VALUE.equals(entry.getKey())) {
-                continue;
+        Lock readLock = metadataManager.getBucketRescaleLock(tablePath).readLock();
+        readLock.lock();
+        try {
+            while (iterator.hasNext()) {
+                Map.Entry<String, Set<String>> entry = iterator.next();
+                // Historical system partitions are managed explicitly by table configuration
+                // changes and Coordinator recovery, never by normal retention cleanup.
+                if (HISTORICAL_PARTITION_VALUE.equals(entry.getKey())) {
+                    continue;
+                }
+                dropPartitions(tablePath, partitionKeys, iterator, entry);
             }
-            dropPartitions(tablePath, partitionKeys, iterator, entry);
+        } finally {
+            readLock.unlock();
         }
     }
 

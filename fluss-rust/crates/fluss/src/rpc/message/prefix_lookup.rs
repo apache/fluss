@@ -43,6 +43,7 @@ impl PrefixLookupRequest {
                     partition_id,
                     bucket_id,
                     keys,
+                    bucket_count_actual: None,
                 },
             )
             .collect();

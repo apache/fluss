@@ -62,7 +62,14 @@ import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsRequest;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsResponse;
+import org.apache.fluss.rpc.messages.PbFetchLogReqForBucket;
+import org.apache.fluss.rpc.messages.PbFetchLogReqForTable;
+import org.apache.fluss.rpc.messages.PbLookupReqForBucket;
+import org.apache.fluss.rpc.messages.PbPrefixLookupReqForBucket;
+import org.apache.fluss.rpc.messages.PbProduceLogReqForBucket;
+import org.apache.fluss.rpc.messages.PbPutKvReqForBucket;
 import org.apache.fluss.rpc.messages.PbScanReqForBucket;
+import org.apache.fluss.rpc.messages.PbTableStatsReqForBucket;
 import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.messages.PrefixLookupResponse;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
@@ -212,6 +219,12 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     @Override
     public CompletableFuture<ProduceLogResponse> produceLog(ProduceLogRequest request) {
         authorizeTable(WRITE, request.getTableId());
+        for (PbProduceLogReqForBucket pbBucket : request.getBucketsReqsList()) {
+            Long partitionId = pbBucket.hasPartitionId() ? pbBucket.getPartitionId() : null;
+            int bucketCountActual =
+                    pbBucket.hasBucketCountActual() ? pbBucket.getBucketCountActual() : 0;
+            validateBucketCountActualOrThrow(request.getTableId(), partitionId, bucketCountActual);
+        }
         CompletableFuture<ProduceLogResponse> response = new CompletableFuture<>();
         Map<TableBucket, MemoryLogRecords> produceLogData = getProduceLogData(request);
         replicaManager.appendRecordsToLog(
@@ -223,8 +236,40 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         return response;
     }
 
+    private void validateBucketCountActualOrThrow(
+            long tableId, Long partitionId, int requestBucketCount) {
+        Errors error =
+                metadataCache.validateBucketCountActual(tableId, partitionId, requestBucketCount);
+        if (error != Errors.NONE) {
+            throw error.exception(
+                    error.name() + " for table " + tableId + ", partition " + partitionId);
+        }
+    }
+
+    /**
+     * Bucket-count validation applies to client requests only ({@code followerServerId < 0}).
+     * Server-internal replication traffic (follower fetch and follower listOffsets) never carries a
+     * bucket count, and a follower's bucket ids come from {@code NotifyLeaderAndIsr}, which is
+     * authoritative. Validating them against the leader's metadata cache would stall replication
+     * whenever that cache lags behind or the table has been rescaled.
+     */
+    private static boolean isFromClient(int followerServerId) {
+        return followerServerId < 0;
+    }
+
     @Override
     public CompletableFuture<FetchLogResponse> fetchLog(FetchLogRequest request) {
+        if (isFromClient(request.getFollowerServerId())) {
+            for (PbFetchLogReqForTable pbTable : request.getTablesReqsList()) {
+                long tableId = pbTable.getTableId();
+                for (PbFetchLogReqForBucket pbBucket : pbTable.getBucketsReqsList()) {
+                    validateBucketCountActualOrThrow(
+                            tableId,
+                            pbBucket.hasPartitionId() ? pbBucket.getPartitionId() : null,
+                            pbBucket.hasBucketCountActual() ? pbBucket.getBucketCountActual() : 0);
+                }
+            }
+        }
         Map<TableBucket, FetchReqInfo> fetchLogData = getFetchLogData(request);
         Map<TableBucket, FetchLogResultForBucket> errorResponseMap = new HashMap<>();
         Map<TableBucket, FetchReqInfo> interesting =
@@ -282,6 +327,12 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     @Override
     public CompletableFuture<PutKvResponse> putKv(PutKvRequest request) {
         authorizeTable(WRITE, request.getTableId());
+        for (PbPutKvReqForBucket pbBucket : request.getBucketsReqsList()) {
+            validateBucketCountActualOrThrow(
+                    request.getTableId(),
+                    pbBucket.hasPartitionId() ? pbBucket.getPartitionId() : null,
+                    pbBucket.hasBucketCountActual() ? pbBucket.getBucketCountActual() : 0);
+        }
 
         Map<TableBucket, KvRecordBatch> putKvData = getPutKvData(request);
         // Get mergeMode from request, default to DEFAULT if not set
@@ -303,6 +354,22 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
 
     @Override
     public CompletableFuture<LookupResponse> lookup(LookupRequest request) {
+        for (PbLookupReqForBucket pbBucket : request.getBucketsReqsList()) {
+            // Only throw on confirmed STALE_METADATA. Skip TABLET_METADATA_NOT_READY so the
+            // replica manager can return UnknownTableOrBucketException for dropped partitions,
+            // which triggers client-side metadata refresh and historical-partition fallback.
+            long tableId = request.getTableId();
+            Long partitionId = pbBucket.hasPartitionId() ? pbBucket.getPartitionId() : null;
+            int bucketCountActual =
+                    pbBucket.hasBucketCountActual() ? pbBucket.getBucketCountActual() : 0;
+            Errors error =
+                    metadataCache.validateBucketCountActual(
+                            tableId, partitionId, bucketCountActual);
+            if (error == Errors.STALE_METADATA) {
+                throw error.exception(
+                        error.name() + " for table " + tableId + ", partition " + partitionId);
+            }
+        }
         Map<TableBucket, LookupResultForBucket> errorResponseMap = new HashMap<>();
         CompletableFuture<LookupResponse> response = new CompletableFuture<>();
 
@@ -351,6 +418,12 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
 
     @Override
     public CompletableFuture<PrefixLookupResponse> prefixLookup(PrefixLookupRequest request) {
+        for (PbPrefixLookupReqForBucket pbBucket : request.getBucketsReqsList()) {
+            validateBucketCountActualOrThrow(
+                    request.getTableId(),
+                    pbBucket.hasPartitionId() ? pbBucket.getPartitionId() : null,
+                    pbBucket.hasBucketCountActual() ? pbBucket.getBucketCountActual() : 0);
+        }
         Map<TableBucket, List<byte[]>> prefixLookupData = toPrefixLookupData(request);
         Map<TableBucket, PrefixLookupResultForBucket> errorResponseMap = new HashMap<>();
         Map<TableBucket, List<byte[]>> interesting =
@@ -371,6 +444,10 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     @Override
     public CompletableFuture<LimitScanResponse> limitScan(LimitScanRequest request) {
         authorizeTable(READ, request.getTableId());
+        validateBucketCountActualOrThrow(
+                request.getTableId(),
+                request.hasPartitionId() ? request.getPartitionId() : null,
+                request.hasBucketCountActual() ? request.getBucketCountActual() : 0);
 
         CompletableFuture<LimitScanResponse> response = new CompletableFuture<>();
         replicaManager.limitScan(
@@ -386,6 +463,12 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     @Override
     public CompletableFuture<GetTableStatsResponse> getTableStats(GetTableStatsRequest request) {
         authorizeTable(READ, request.getTableId());
+        for (PbTableStatsReqForBucket pbBucket : request.getBucketsReqsList()) {
+            validateBucketCountActualOrThrow(
+                    request.getTableId(),
+                    pbBucket.hasPartitionId() ? pbBucket.getPartitionId() : null,
+                    pbBucket.hasBucketCountActual() ? pbBucket.getBucketCountActual() : 0);
+        }
 
         CompletableFuture<GetTableStatsResponse> response = new CompletableFuture<>();
         replicaManager.getTableStats(
@@ -457,6 +540,12 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     @Override
     public CompletableFuture<ListOffsetsResponse> listOffsets(ListOffsetsRequest request) {
         authorizeTable(DESCRIBE, request.getTableId());
+        if (isFromClient(request.getFollowerServerId())) {
+            validateBucketCountActualOrThrow(
+                    request.getTableId(),
+                    request.hasPartitionId() ? request.getPartitionId() : null,
+                    request.hasBucketCountActual() ? request.getBucketCountActual() : 0);
+        }
         CompletableFuture<ListOffsetsResponse> response = new CompletableFuture<>();
         Set<TableBucket> tableBuckets = getListOffsetsData(request);
         replicaManager.listOffsets(
@@ -589,6 +678,10 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
 
             if (request.hasBucketScanReq()) {
                 PbScanReqForBucket bucketReq = request.getBucketScanReq();
+                validateBucketCountActualOrThrow(
+                        bucketReq.getTableId(),
+                        bucketReq.hasPartitionId() ? bucketReq.getPartitionId() : null,
+                        bucketReq.hasBucketCountActual() ? bucketReq.getBucketCountActual() : 0);
                 long tableId = bucketReq.getTableId();
                 authorizeTable(READ, tableId);
 

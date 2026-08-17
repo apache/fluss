@@ -531,6 +531,21 @@ class HistoricalLakeLookupManager implements AutoCloseable {
 
         TablePath tablePath = tableInfo.getTablePath();
 
+        // TODO: Support historical lookup on rescaled tables. The request carries a bucketId the
+        //  client derived from a bucket count that may differ from the one the original partition
+        //  was tiered with, and that partition no longer exists in Fluss to tell them apart. Once
+        //  the lake bucket count is resolved here (Paimon exposes it as DataSplit#totalBuckets),
+        //  the lookup can be re-routed to the correct bucket instead of being rejected. Guard on
+        //  the server as well because the client's TableInfo may predate the ALTER.
+        if (tableInfo.getBucketLayoutEpoch() > 0) {
+            throw new InvalidPartitionException(
+                    String.format(
+                            "Historical partition lookup is not supported on table %s because its "
+                                    + "'bucket.num' has been altered, so the bucket layout of already "
+                                    + "tiered partitions can no longer be determined.",
+                            tablePath));
+        }
+
         ResolvedPartitionSpec originalPartitionSpec;
         try {
             originalPartitionSpec =

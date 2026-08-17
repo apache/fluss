@@ -271,12 +271,16 @@ abstract class FlinkCatalogITCase {
                 .hasMessage(
                         "Currently, auto partition is only supported for partitioned table, please set table property 'table.auto-partition.enabled' to false.");
 
+        // altering bucket.num is no longer blocked at the catalog layer; it is rejected by the
+        // server. This table is non-partitioned, so it fails with the non-partitioned rescale
+        // message (partitioned-table rescale is supported; non-partitioned is not yet).
         String unSupportedDml2 =
                 "alter table test_alter_table_append_only set ('bucket.num' = '1000')";
         assertThatThrownBy(() -> tEnv.executeSql(unSupportedDml2))
                 .rootCause()
-                .isInstanceOf(CatalogException.class)
-                .hasMessage("The option 'bucket.num' is not supported to alter yet.");
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining("Cannot alter 'bucket.num' on non-partitioned table")
+                .hasMessageContaining("not yet supported");
 
         String unSupportedDml3 =
                 "alter table test_alter_table_append_only set ('bucket.key' = 'a')";

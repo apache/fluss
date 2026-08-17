@@ -2257,6 +2257,7 @@ impl LogFetcher {
                             bucket_id: bucket.bucket_id(),
                             fetch_offset: offset,
                             max_fetch_bytes: self.fetch_max_bytes_for_bucket,
+                            bucket_count_actual: None,
                         };
 
                         fetch_log_req_for_buckets

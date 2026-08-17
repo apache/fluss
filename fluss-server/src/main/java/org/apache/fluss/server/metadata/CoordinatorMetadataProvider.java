@@ -103,7 +103,12 @@ public class CoordinatorMetadataProvider extends ZkBasedMetadataProvider {
                         partitionId,
                         ctx.getPartitionAssignment(new TablePartition(tableId, partitionId)));
         return Optional.of(
-                new PartitionMetadata(tableId, partitionName, partitionId, bucketMetadataList));
+                new PartitionMetadata(
+                        tableId,
+                        partitionName,
+                        partitionId,
+                        bucketMetadataList,
+                        bucketMetadataList.size()));
     }
 
     @Override

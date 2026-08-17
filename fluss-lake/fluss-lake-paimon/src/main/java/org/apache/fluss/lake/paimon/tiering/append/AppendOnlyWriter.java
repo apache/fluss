@@ -54,15 +54,22 @@ public class AppendOnlyWriter extends RecordWriter<InternalRow> {
             RowType flussRowType) {
         //noinspection unchecked
         super(
-                (TableWriteImpl<InternalRow>)
-                        // todo: set ioManager to support write-buffer-spillable
-                        fileStoreTable.newWrite(FLUSS_LAKE_TIERING_COMMIT_USER),
+                buildTableWrite(fileStoreTable),
                 fileStoreTable.rowType(),
                 tableBucket,
                 partition,
                 partitionKeys,
                 flussRowType);
         this.fileStoreTable = fileStoreTable;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static TableWriteImpl<InternalRow> buildTableWrite(FileStoreTable fileStoreTable) {
+        TableWriteImpl<InternalRow> tableWrite =
+                (TableWriteImpl<InternalRow>)
+                        // todo: set ioManager to support write-buffer-spillable
+                        fileStoreTable.newWrite(FLUSS_LAKE_TIERING_COMMIT_USER);
+        return tableWrite;
     }
 
     @Override

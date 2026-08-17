@@ -53,6 +53,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Consumer;
 
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeProduceLogRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makePutKvRequest;
@@ -111,6 +112,13 @@ public class Sender implements Runnable {
 
     private final WriterMetricGroup writerMetricGroup;
 
+    /**
+     * Called when a write batch receives STALE_METADATA so the owning {@link WriterClient} can
+     * remove the stale {@link BucketAssigner}. The next {@code send} will refresh metadata and
+     * create a new assigner with the updated bucket count.
+     */
+    private final Consumer<TableBucket> bucketAssignerInvalidator;
+
     public Sender(
             RecordAccumulator accumulator,
             int maxRequestTimeoutMs,
@@ -119,7 +127,8 @@ public class Sender implements Runnable {
             int retries,
             MetadataUpdater metadataUpdater,
             IdempotenceManager idempotenceManager,
-            WriterMetricGroup writerMetricGroup) {
+            WriterMetricGroup writerMetricGroup,
+            Consumer<TableBucket> bucketAssignerInvalidator) {
         this.accumulator = accumulator;
         this.maxRequestSize = maxRequestSize;
         this.maxRequestTimeoutMs = maxRequestTimeoutMs;
@@ -133,6 +142,7 @@ public class Sender implements Runnable {
 
         this.idempotenceManager = idempotenceManager;
         this.writerMetricGroup = writerMetricGroup;
+        this.bucketAssignerInvalidator = bucketAssignerInvalidator;
 
         // TODO add retry logic while send failed. See FLUSS-56364375
     }
@@ -556,6 +566,19 @@ public class Sender implements Runnable {
             // stalled for the configured max throttle window before the standard retry path
             // re-enqueues the batch.
             accumulator.updateThrottle(readyWriteBatch.tableBucket(), 1.0f);
+        }
+        if (error.error() == Errors.STALE_METADATA) {
+            // The bucketId in this batch was calculated with a stale bucket count. Fail the
+            // batch (do not re-enqueue — the bucketId is fixed), invalidate metadata, and remove
+            // the BucketAssigner so the next send creates a new one with the updated count.
+            LOG.warn(
+                    "Received STALE_METADATA error in write request on table bucket {}. "
+                            + "Failing batch and invalidating BucketAssigner.",
+                    readyWriteBatch.tableBucket());
+            failBatch(readyWriteBatch, error.exception(), false);
+            invalidMetadataTables.add(writeBatch.physicalTablePath());
+            bucketAssignerInvalidator.accept(readyWriteBatch.tableBucket());
+            return invalidMetadataTables;
         }
         if (error.error() == Errors.DUPLICATE_SEQUENCE_EXCEPTION) {
             // If we have received a duplicate batch sequence error, it means that the batch

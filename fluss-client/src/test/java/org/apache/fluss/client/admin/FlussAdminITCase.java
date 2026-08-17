@@ -25,6 +25,7 @@ import org.apache.fluss.client.metadata.TestingMetadataUpdater;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.client.table.writer.UpsertWriter;
+import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
@@ -1327,6 +1328,87 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
             snapshots = admin.getLatestKvSnapshots(tablePath1).get();
             assertTableSnapshot(snapshots, bucketNum, expectedSnapshots);
         }
+    }
+
+    @Test
+    void testGetKvSnapshotsPerPartitionBucketCountActual() throws Exception {
+        // End-to-end: after ALTER bucket.num on a partitioned PK table, getLatestKvSnapshots
+        // returns each partition's own recorded bucket count, not the current table-level
+        // value. Old partition keeps 2, new partition uses 4.
+        String dbName = DEFAULT_TABLE_PATH.getDatabaseName();
+        int originalBucketNum = 2;
+        int newBucketNum = 4;
+        TableDescriptor partitionedPkTable =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .primaryKey("id", "dt")
+                                        .column("id", DataTypes.INT())
+                                        .column("name", DataTypes.STRING())
+                                        .column("dt", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(originalBucketNum, "id")
+                        .partitionedBy("dt")
+                        .build();
+        TablePath tablePath = TablePath.of(dbName, "test_kv_snapshots_per_partition_bucket");
+        admin.createTable(tablePath, partitionedPkTable, true).get();
+        long tableId = admin.getTableInfo(tablePath).get().getTableId();
+
+        // Old partition created BEFORE the ALTER retains its original bucket count = 2.
+        admin.createPartition(tablePath, newPartitionSpec("dt", "2024-01"), false).get();
+        long oldPartitionId =
+                admin.listPartitionInfos(tablePath).get().stream()
+                        .filter(p -> "2024-01".equals(p.getPartitionName()))
+                        .findFirst()
+                        .orElseThrow(() -> new AssertionError("old partition missing"))
+                        .getPartitionId();
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter writer = table.newUpsert().createWriter();
+            for (int i = 0; i < 16; i++) {
+                writer.upsert(row(i, "v" + i, "2024-01"));
+            }
+            writer.flush();
+            for (int b = 0; b < originalBucketNum; b++) {
+                FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(
+                        new TableBucket(tableId, oldPartitionId, b));
+            }
+        }
+
+        // ALTER bucket.num 2 -> 4.
+        admin.alterTable(
+                        tablePath,
+                        Collections.singletonList(
+                                TableChange.set("bucket.num", String.valueOf(newBucketNum))),
+                        false)
+                .get();
+        assertThat(admin.getTableInfo(tablePath).get().getNumBuckets()).isEqualTo(newBucketNum);
+
+        // New partition created AFTER the ALTER uses the new bucket count = 4.
+        admin.createPartition(tablePath, newPartitionSpec("dt", "2024-02"), false).get();
+        long newPartitionId =
+                admin.listPartitionInfos(tablePath).get().stream()
+                        .filter(p -> "2024-02".equals(p.getPartitionName()))
+                        .findFirst()
+                        .orElseThrow(() -> new AssertionError("new partition missing"))
+                        .getPartitionId();
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter writer = table.newUpsert().createWriter();
+            for (int i = 0; i < 32; i++) {
+                writer.upsert(row(i, "v" + i, "2024-02"));
+            }
+            writer.flush();
+            for (int b = 0; b < newBucketNum; b++) {
+                FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(
+                        new TableBucket(tableId, newPartitionId, b));
+            }
+        }
+
+        // getLatestKvSnapshots(..., partitionName) must expose each partition's own count.
+        KvSnapshots oldSnapshots = admin.getLatestKvSnapshots(tablePath, "2024-01").get();
+        assertThat(oldSnapshots.getBucketIds()).hasSize(originalBucketNum);
+
+        KvSnapshots newSnapshots = admin.getLatestKvSnapshots(tablePath, "2024-02").get();
+        assertThat(newSnapshots.getBucketIds()).hasSize(newBucketNum);
     }
 
     @Test
@@ -2805,7 +2887,11 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
 
         ListOffsetsRequest request =
                 makeListOffsetsRequest(
-                        1L, null, Arrays.asList(0, 1, 2), new OffsetSpec.LatestSpec());
+                        1L,
+                        null,
+                        Arrays.asList(0, 1, 2),
+                        new OffsetSpec.LatestSpec(),
+                        Cluster.empty());
         Map<Integer, ListOffsetsRequest> leaderToRequestMap = new HashMap<>();
         leaderToRequestMap.put(1, request);
 
