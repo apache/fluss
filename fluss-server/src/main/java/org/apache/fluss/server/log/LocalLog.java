@@ -328,7 +328,6 @@ public final class LocalLog {
         if (newOffset == segmentToDelete.getBaseOffset()) {
             deleteSegmentFiles(Collections.singletonList(segmentToDelete), reason);
         }
-        reason.logReason(Collections.singletonList(segmentToDelete));
 
         // open a new segment.
         LogSegment newSegment = LogSegment.open(logTabletDir, newOffset, config, logFormat);
@@ -336,6 +335,7 @@ public final class LocalLog {
 
         if (newOffset != segmentToDelete.getBaseOffset()) {
             segments.remove(segmentToDelete.getBaseOffset());
+            deleteSegmentFiles(Collections.singletonList(segmentToDelete), reason);
         }
         return newSegment;
     }

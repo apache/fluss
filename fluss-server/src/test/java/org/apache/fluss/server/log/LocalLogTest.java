@@ -291,6 +291,7 @@ final class LocalLogTest extends LogTestBase {
         assertThat(localLog.getSegments().activeSegment()).isEqualTo(newActiveSegment);
         assertThat(localLog.getSegments().activeSegment()).isNotEqualTo(oldActiveSegment);
         assertThat(localLog.getSegments().activeSegment().getBaseOffset()).isEqualTo(newOffset);
+        assertThat(oldActiveSegment.deleted()).isTrue();
         assertThat(localLog.getRecoveryPoint()).isEqualTo(0L);
         assertThat(localLog.getLocalLogEndOffset()).isEqualTo(newOffset);
         FetchDataInfo read =
@@ -335,6 +336,19 @@ final class LocalLogTest extends LogTestBase {
         FetchDataInfo read =
                 readLog(localLog, 10L, localLog.getSegments().activeSegment().getSizeInBytes());
         assertThat(read.getRecords().sizeInBytes()).isEqualTo(0);
+    }
+
+    @Test
+    void testTruncateFullyAndStartAtDeletesOldActiveSegmentFile() throws Exception {
+        LogSegment oldActiveSegment = localLog.getSegments().activeSegment();
+        File oldLogFile = oldActiveSegment.getFileLogRecords().file();
+        assertThat(oldLogFile).exists();
+
+        localLog.truncateFullyAndStartAt(10L);
+
+        assertThat(localLog.getSegments().baseOffsets()).containsExactly(10L);
+        assertThat(oldActiveSegment.deleted()).isTrue();
+        assertThat(oldLogFile).doesNotExist();
     }
 
     @Test
