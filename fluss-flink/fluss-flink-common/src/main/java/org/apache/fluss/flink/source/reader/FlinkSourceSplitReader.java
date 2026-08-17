@@ -247,8 +247,7 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
     private LakeSplitReaderGenerator getLakeSplitReader() {
         if (lakeSplitReaderGenerator == null) {
             lakeSplitReaderGenerator =
-                    new LakeSplitReaderGenerator(
-                            table, projectedFields, checkNotNull(lakeSource), scannerTmpDir);
+                    new LakeSplitReaderGenerator(table, projectedFields, checkNotNull(lakeSource));
         }
         return lakeSplitReaderGenerator;
     }

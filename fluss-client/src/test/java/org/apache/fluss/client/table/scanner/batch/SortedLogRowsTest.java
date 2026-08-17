@@ -25,6 +25,7 @@ import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.KeyValueRow;
+import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
@@ -40,7 +41,6 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -62,8 +62,7 @@ class SortedLogRowsTest {
     private static final TableBucket TABLE_BUCKET = new TableBucket(1L, 0);
     private static final Duration TIMEOUT = Duration.ofMillis(1);
     private static final int TEST_SPILL_THRESHOLD = 4;
-    private static final Comparator<InternalRow> ASCENDING_COMPARATOR =
-            Comparator.comparingInt(row -> row.getInt(0));
+    private static final KeyEncoder ASCENDING_KEY_ENCODER = row -> encodeSortableInt(row.getInt(0));
 
     private @TempDir Path tempDir;
 
@@ -170,16 +169,15 @@ class SortedLogRowsTest {
     }
 
     @Test
-    void testSpilledIteratorUsesProvidedComparator() throws Exception {
-        Comparator<InternalRow> descendingComparator =
-                (row1, row2) -> Integer.compare(row2.getInt(0), row1.getInt(0));
+    void testSpilledIteratorUsesEncodedKeyOrder() throws Exception {
+        KeyEncoder descendingKeyEncoder = row -> encodeSortableInt(-row.getInt(0));
         List<ScanRecord> records = new ArrayList<>();
         for (int i = 0; i <= TEST_SPILL_THRESHOLD; i++) {
             records.add(record(i, row(ROW_TYPE, i, "v" + i)));
         }
 
         try (SortedLogRows logRows =
-                createLogRows(records, TEST_SPILL_THRESHOLD + 1, descendingComparator)) {
+                createLogRows(records, TEST_SPILL_THRESHOLD + 1, descendingKeyEncoder)) {
             load(logRows);
 
             assertThat(logRows.isSpilled()).isTrue();
@@ -219,7 +217,7 @@ class SortedLogRowsTest {
                 new SortedLogRows(
                         ROW_TYPE,
                         KEY_INDEXES,
-                        ASCENDING_COMPARATOR,
+                        ASCENDING_KEY_ENCODER,
                         logScanner,
                         TABLE_BUCKET,
                         2,
@@ -234,20 +232,30 @@ class SortedLogRowsTest {
     }
 
     private SortedLogRows createLogRows(List<ScanRecord> records, long stoppingOffset) {
-        return createLogRows(records, stoppingOffset, ASCENDING_COMPARATOR);
+        return createLogRows(records, stoppingOffset, ASCENDING_KEY_ENCODER);
     }
 
     private SortedLogRows createLogRows(
-            List<ScanRecord> records, long stoppingOffset, Comparator<InternalRow> rowComparator) {
+            List<ScanRecord> records, long stoppingOffset, KeyEncoder primaryKeyEncoder) {
         return new SortedLogRows(
                 ROW_TYPE,
                 KEY_INDEXES,
-                rowComparator,
+                primaryKeyEncoder,
                 new TestingLogScanner(scanRecords(records, stoppingOffset)),
                 TABLE_BUCKET,
                 stoppingOffset,
                 tempDir.toString(),
                 TEST_SPILL_THRESHOLD);
+    }
+
+    private static byte[] encodeSortableInt(int value) {
+        int normalized = value ^ Integer.MIN_VALUE;
+        return new byte[] {
+            (byte) (normalized >>> 24),
+            (byte) (normalized >>> 16),
+            (byte) (normalized >>> 8),
+            (byte) normalized
+        };
     }
 
     private static ScanRecord record(long offset, InternalRow row) {

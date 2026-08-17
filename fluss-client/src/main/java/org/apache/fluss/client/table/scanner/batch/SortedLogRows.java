@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.scanner.log.ScanRecords;
+import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.ChangeType;
@@ -31,6 +32,7 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.KeyValueRow;
 import org.apache.fluss.row.ProjectedRow;
 import org.apache.fluss.row.decode.RowDecoder;
+import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.row.serializer.RowSerializer;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
@@ -38,9 +40,7 @@ import org.apache.fluss.utils.CloseableIterator;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.IOUtils;
 
-import org.rocksdb.AbstractComparator;
 import org.rocksdb.ColumnFamilyOptions;
-import org.rocksdb.ComparatorOptions;
 import org.rocksdb.DBOptions;
 import org.rocksdb.RocksDBException;
 import org.rocksdb.RocksIterator;
@@ -51,13 +51,11 @@ import javax.annotation.concurrent.NotThreadSafe;
 
 import java.io.Closeable;
 import java.io.IOException;
-import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.Arrays;
-import java.util.Comparator;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.TreeMap;
@@ -66,7 +64,12 @@ import static org.apache.fluss.row.BinaryRow.BinaryRowFormat.INDEXED;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
-/** Sorted, deduplicated log rows for snapshot-and-log batch merge. */
+/**
+ * Sorted, deduplicated log rows for KV snapshot-and-log batch merge.
+ *
+ * <p>Primary keys are ordered by unsigned lexicographical comparison of their encoded bytes. This
+ * matches both the KV snapshot scan order and RocksDB's default bytewise comparator.
+ */
 @NotThreadSafe
 final class SortedLogRows implements Closeable {
     static final int DEFAULT_SPILL_THRESHOLD = 8192;
@@ -76,12 +79,10 @@ final class SortedLogRows implements Closeable {
     private static final int VALUE_FLAG_LENGTH = 1;
 
     private final int[] keyIndexes;
-    private final Comparator<InternalRow> rowComparator;
-    private final Map<InternalRow, KeyValueRow> memoryRows;
+    private final KeyEncoder primaryKeyEncoder;
+    private final Map<byte[], KeyValueRow> memoryRows;
     private final ProjectedRow keyProjectedRow;
-    private final RowSerializer keySerializer;
     private final RowSerializer valueSerializer;
-    private final RowDecoder keyDecoder;
     private final RowDecoder valueDecoder;
     private final LogScanner logScanner;
     private final TableBucket tableBucket;
@@ -94,35 +95,14 @@ final class SortedLogRows implements Closeable {
 
     @Nullable private Path spillDirectory;
     @Nullable private DBOptions dbOptions;
-    @Nullable private ComparatorOptions comparatorOptions;
-    @Nullable private InternalRowComparator rocksComparator;
     @Nullable private RocksDBHandle rocksDBHandle;
     @Nullable private WriteOptions writeOptions;
-
-    SortedLogRows(
-            RowType rowType,
-            int[] keyIndexes,
-            Comparator<InternalRow> rowComparator,
-            LogScanner logScanner,
-            TableBucket tableBucket,
-            long stoppingOffset,
-            String scannerTmpDir) {
-        this(
-                rowType,
-                keyIndexes,
-                rowComparator,
-                logScanner,
-                tableBucket,
-                stoppingOffset,
-                scannerTmpDir,
-                DEFAULT_SPILL_THRESHOLD);
-    }
 
     @VisibleForTesting
     SortedLogRows(
             RowType rowType,
             int[] keyIndexes,
-            Comparator<InternalRow> rowComparator,
+            KeyEncoder primaryKeyEncoder,
             LogScanner logScanner,
             TableBucket tableBucket,
             long stoppingOffset,
@@ -130,14 +110,11 @@ final class SortedLogRows implements Closeable {
             int spillThreshold) {
         checkArgument(spillThreshold > 0, "Spill threshold must be positive.");
         this.keyIndexes = Arrays.copyOf(keyIndexes, keyIndexes.length);
-        this.rowComparator = rowComparator;
-        this.memoryRows = new TreeMap<>(rowComparator);
+        this.primaryKeyEncoder = primaryKeyEncoder;
+        this.memoryRows = new TreeMap<>(SortedLogRows::compareKeys);
         this.keyProjectedRow = ProjectedRow.from(this.keyIndexes);
 
-        RowType keyRowType = rowType.project(this.keyIndexes);
-        this.keySerializer = new RowSerializer(toDataTypes(keyRowType), INDEXED);
         this.valueSerializer = new RowSerializer(toDataTypes(rowType), INDEXED);
-        this.keyDecoder = RowDecoder.create(KvFormat.INDEXED, toDataTypes(keyRowType));
         this.valueDecoder = RowDecoder.create(KvFormat.INDEXED, toDataTypes(rowType));
         this.logScanner = logScanner;
         this.tableBucket = tableBucket;
@@ -223,8 +200,6 @@ final class SortedLogRows implements Closeable {
         memoryRows.clear();
         IOUtils.closeQuietly(writeOptions);
         IOUtils.closeQuietly(rocksDBHandle);
-        IOUtils.closeQuietly(rocksComparator);
-        IOUtils.closeQuietly(comparatorOptions);
         IOUtils.closeQuietly(dbOptions);
         if (spillDirectory != null) {
             FileUtils.deleteDirectoryQuietly(spillDirectory.toFile());
@@ -243,9 +218,16 @@ final class SortedLogRows implements Closeable {
     }
 
     private void putToMemory(InternalRow row, boolean isDelete) {
-        BinaryRow copiedRow = valueSerializer.toBinaryRow(row).copy();
+        BinaryRow copiedRow = copyRow(row);
         KeyValueRow keyValueRow = new KeyValueRow(keyIndexes, copiedRow, isDelete);
-        memoryRows.put(keyValueRow.keyRow(), keyValueRow);
+        memoryRows.put(encodeKey(keyValueRow.keyRow()), keyValueRow);
+    }
+
+    private BinaryRow copyRow(InternalRow row) {
+        if (row instanceof BinaryRow) {
+            return ((BinaryRow) row).copy();
+        }
+        return valueSerializer.toBinaryRow(row).copy();
     }
 
     private void spillToRocksDB() throws IOException {
@@ -255,18 +237,15 @@ final class SortedLogRows implements Closeable {
             Files.createDirectories(scannerTmpDirectory);
             spillDirectory = Files.createTempDirectory(scannerTmpDirectory, "sorted-log-rows-");
             dbOptions = new DBOptions().setCreateIfMissing(true);
-            comparatorOptions = new ComparatorOptions().setUseDirectBuffer(false);
-            rocksComparator =
-                    new InternalRowComparator(comparatorOptions, keyDecoder, rowComparator);
-            ColumnFamilyOptions columnFamilyOptions =
-                    new ColumnFamilyOptions().setComparator(rocksComparator);
+            ColumnFamilyOptions columnFamilyOptions = new ColumnFamilyOptions();
             rocksDBHandle =
                     new RocksDBHandle(spillDirectory.toFile(), dbOptions, columnFamilyOptions);
             rocksDBHandle.openDB();
             writeOptions = new WriteOptions().setDisableWAL(true);
 
-            for (KeyValueRow keyValueRow : memoryRows.values()) {
-                putToRocksDB(keyValueRow.valueRow(), keyValueRow.isDelete());
+            for (Map.Entry<byte[], KeyValueRow> entry : memoryRows.entrySet()) {
+                KeyValueRow keyValueRow = entry.getValue();
+                putToRocksDB(entry.getKey(), keyValueRow.valueRow(), keyValueRow.isDelete());
             }
             memoryRows.clear();
         } catch (Exception e) {
@@ -276,35 +255,42 @@ final class SortedLogRows implements Closeable {
     }
 
     private void putToRocksDB(InternalRow row, boolean isDelete) throws IOException {
+        putToRocksDB(encodeKey(keyProjectedRow.replaceRow(row)), row, isDelete);
+    }
+
+    private void putToRocksDB(byte[] key, InternalRow row, boolean isDelete) throws IOException {
         try {
             rocksDBHandle
                     .getDb()
                     .put(
                             rocksDBHandle.getDefaultColumnFamilyHandle(),
                             writeOptions,
-                            serializeKey(row),
+                            key,
                             serializeValue(row, isDelete));
         } catch (RocksDBException e) {
             throw new IOException("Failed to write log row to RocksDB.", e);
         }
     }
 
-    private byte[] serializeKey(InternalRow row) {
-        return toBytes(keySerializer.toBinaryRow(keyProjectedRow.replaceRow(row)));
+    private byte[] encodeKey(InternalRow keyRow) {
+        return primaryKeyEncoder.encodeKey(keyRow);
     }
 
     private byte[] serializeValue(InternalRow row, boolean isDelete) {
-        byte[] rowBytes = toBytes(valueSerializer.toBinaryRow(row));
-        byte[] valueBytes = new byte[VALUE_FLAG_LENGTH + rowBytes.length];
+        BinaryRow binaryRow = valueSerializer.toBinaryRow(row);
+        byte[] valueBytes = new byte[VALUE_FLAG_LENGTH + binaryRow.getSizeInBytes()];
         valueBytes[0] = isDelete ? TOMBSTONE_ROW : NORMAL_ROW;
-        System.arraycopy(rowBytes, 0, valueBytes, VALUE_FLAG_LENGTH, rowBytes.length);
+        binaryRow.copyTo(valueBytes, VALUE_FLAG_LENGTH);
         return valueBytes;
     }
 
     private KeyValueRow deserializeValue(byte[] valueBytes) {
         boolean isDelete = valueBytes[0] == TOMBSTONE_ROW;
-        byte[] rowBytes = Arrays.copyOfRange(valueBytes, VALUE_FLAG_LENGTH, valueBytes.length);
-        InternalRow valueRow = valueDecoder.decode(rowBytes);
+        InternalRow valueRow =
+                valueDecoder.decode(
+                        MemorySegment.wrap(valueBytes),
+                        VALUE_FLAG_LENGTH,
+                        valueBytes.length - VALUE_FLAG_LENGTH);
         return new KeyValueRow(keyIndexes, valueRow, isDelete);
     }
 
@@ -316,43 +302,9 @@ final class SortedLogRows implements Closeable {
         return rowType.getChildren().toArray(new DataType[0]);
     }
 
-    private static byte[] toBytes(BinaryRow row) {
-        byte[] bytes = new byte[row.getSizeInBytes()];
-        row.copyTo(bytes, 0);
-        return bytes;
-    }
-
-    private static byte[] toBytes(ByteBuffer buffer) {
-        ByteBuffer duplicate = buffer.duplicate();
-        byte[] bytes = new byte[duplicate.remaining()];
-        duplicate.get(bytes);
-        return bytes;
-    }
-
-    private static class InternalRowComparator extends AbstractComparator {
-
-        private final RowDecoder keyDecoder;
-        private final Comparator<InternalRow> rowComparator;
-
-        InternalRowComparator(
-                ComparatorOptions comparatorOptions,
-                RowDecoder keyDecoder,
-                Comparator<InternalRow> rowComparator) {
-            super(comparatorOptions);
-            this.keyDecoder = keyDecoder;
-            this.rowComparator = rowComparator;
-        }
-
-        @Override
-        public String name() {
-            return "fluss-sorted-log-rows-comparator";
-        }
-
-        @Override
-        public int compare(ByteBuffer left, ByteBuffer right) {
-            return rowComparator.compare(
-                    keyDecoder.decode(toBytes(left)), keyDecoder.decode(toBytes(right)));
-        }
+    private static int compareKeys(byte[] left, byte[] right) {
+        return MemorySegment.wrap(left)
+                .compare(MemorySegment.wrap(right), 0, 0, left.length, right.length);
     }
 
     private class RocksDBLogRowsIterator implements CloseableIterator<KeyValueRow> {

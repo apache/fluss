@@ -102,7 +102,8 @@ public class KvSnapshotAndLogBatchScanner implements BatchScanner {
         ProjectionPlan projectionPlan = createProjectionPlan(table.getTableInfo(), projectedFields);
         this.keyIndexesInScanRow = projectionPlan.keyIndexesInScanRow;
         this.adjustProjectedFields = projectionPlan.adjustProjectedFields;
-        this.primaryKeyComparator = createPrimaryKeyComparator(table.getTableInfo());
+        KeyEncoder primaryKeyEncoder = createPrimaryKeyEncoder(table.getTableInfo());
+        this.primaryKeyComparator = createPrimaryKeyComparator(primaryKeyEncoder);
 
         this.snapshotScanner =
                 snapshotId >= 0
@@ -130,7 +131,7 @@ public class KvSnapshotAndLogBatchScanner implements BatchScanner {
                                     .getRowType()
                                     .project(projectionPlan.scanProjectedFields),
                             keyIndexesInScanRow,
-                            primaryKeyComparator,
+                            primaryKeyEncoder,
                             logScanner,
                             tableBucket,
                             logStoppingOffset,
@@ -214,16 +215,19 @@ public class KvSnapshotAndLogBatchScanner implements BatchScanner {
                 projectedFields);
     }
 
-    private static Comparator<InternalRow> createPrimaryKeyComparator(TableInfo tableInfo) {
+    private static KeyEncoder createPrimaryKeyEncoder(TableInfo tableInfo) {
         int[] physicalPrimaryKeyIndexes = getPhysicalPrimaryKeyIndexes(tableInfo);
         RowType primaryKeyRowType =
                 Schema.getKeyRowType(tableInfo.getSchema(), physicalPrimaryKeyIndexes);
-        KeyEncoder primaryKeyEncoder =
-                KeyEncoder.ofPrimaryKeyEncoder(
-                        primaryKeyRowType,
-                        tableInfo.getPhysicalPrimaryKeys(),
-                        tableInfo.getTableConfig(),
-                        tableInfo.isDefaultBucketKey());
+        return KeyEncoder.ofPrimaryKeyEncoder(
+                primaryKeyRowType,
+                tableInfo.getPhysicalPrimaryKeys(),
+                tableInfo.getTableConfig(),
+                tableInfo.isDefaultBucketKey());
+    }
+
+    private static Comparator<InternalRow> createPrimaryKeyComparator(
+            KeyEncoder primaryKeyEncoder) {
         return (row1, row2) -> {
             byte[] key1 = primaryKeyEncoder.encodeKey(row1);
             byte[] key2 = primaryKeyEncoder.encodeKey(row2);
