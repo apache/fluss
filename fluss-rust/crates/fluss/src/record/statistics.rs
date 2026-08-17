@@ -54,8 +54,8 @@ use arrow::array::{Array, RecordBatch};
 use arrow::compute::kernels::aggregate;
 use arrow::datatypes::{
     Date32Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
-    Int64Type, Time32MillisecondType, Time32SecondType, TimestampMicrosecondType,
-    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
+    Int64Type, Time32MillisecondType, TimestampMicrosecondType, TimestampMillisecondType,
+    TimestampNanosecondType, TimestampSecondType,
 };
 
 /// Version byte leading the statistics block, matching Java's
@@ -272,9 +272,20 @@ fn column_bounds(column: &dyn Array, data_type: &DataType) -> Result<Option<Colu
         DataType::BigInt(_) => primitive!(Int64Type, Int64),
         DataType::Float(_) => primitive!(Float32Type, Float32),
         DataType::Double(_) => primitive!(Float64Type, Float64),
+        // Fluss stores TIME as millis of day, so every unit but millisecond
+        // has to be converted back from what the Arrow array holds.
         DataType::Time(_) => match column.data_type() {
             ArrowType::Time32(arrow::datatypes::TimeUnit::Second) => {
-                primitive!(Time32SecondType, Int32)
+                let array = column
+                    .as_any()
+                    .downcast_ref::<Time32SecondArray>()
+                    .ok_or_else(|| unexpected_array(column, data_type))?;
+                match (aggregate::min(array), aggregate::max(array)) {
+                    (Some(min), Some(max)) => {
+                        Ok(Some(ColumnBounds::Int32(min * 1_000, max * 1_000)))
+                    }
+                    _ => Ok(None),
+                }
             }
             ArrowType::Time32(_) => primitive!(Time32MillisecondType, Int32),
             ArrowType::Time64(arrow::datatypes::TimeUnit::Microsecond) => time64_as_millis(
@@ -429,7 +440,7 @@ mod tests {
     use crate::metadata::{DataField, DataTypes};
     use arrow::array::{
         BooleanArray, Date32Array, Decimal128Array, Float32Array, Float64Array, Int8Array,
-        Int16Array, Int32Array, Int64Array, StringArray, Time32MillisecondArray,
+        Int16Array, Int32Array, Int64Array, StringArray, Time32MillisecondArray, Time32SecondArray,
         TimestampMicrosecondArray, TimestampMillisecondArray,
     };
     use arrow::datatypes::{DataType as ArrowType, Field, Schema};
@@ -700,6 +711,25 @@ mod tests {
         );
         assert_eq!(i32::from_le_bytes(min[8..12].try_into().unwrap()), 18_000);
         assert_eq!(i32::from_le_bytes(max[8..12].try_into().unwrap()), 19_000);
+    }
+
+    /// The Arrow array holds seconds at precision 0, but the statistics format
+    /// is always millis of day.
+    #[test]
+    fn scales_a_second_precision_time_to_millis() {
+        let (min, max) = single_column_rows(
+            DataTypes::time_with_precision(0),
+            ArrowType::Time32(arrow::datatypes::TimeUnit::Second),
+            Arc::new(Time32SecondArray::from(vec![Some(7_200), Some(3_600)])),
+        );
+        assert_eq!(
+            i32::from_le_bytes(min[8..12].try_into().unwrap()),
+            3_600_000
+        );
+        assert_eq!(
+            i32::from_le_bytes(max[8..12].try_into().unwrap()),
+            7_200_000
+        );
     }
 
     #[test]
