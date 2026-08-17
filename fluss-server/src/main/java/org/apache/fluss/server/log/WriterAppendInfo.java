@@ -21,6 +21,9 @@ import org.apache.fluss.exception.OutOfOrderSequenceException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.LogRecordBatch;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_BATCH_SEQUENCE;
 
 /**
@@ -28,6 +31,8 @@ import static org.apache.fluss.record.LogRecordBatchFormat.NO_BATCH_SEQUENCE;
  * log. It's initialized with writer's state after the last successful append.
  */
 public class WriterAppendInfo {
+    private static final Logger LOG = LoggerFactory.getLogger(WriterAppendInfo.class);
+
     private final long writerId;
     private final TableBucket tableBucket;
     private final WriterStateEntry currentEntry;
@@ -56,6 +61,26 @@ public class WriterAppendInfo {
                 batch.commitTimestamp());
     }
 
+    void appendForRecovery(LogRecordBatch batch) {
+        int currentLastSeq = currentLastBatchSequence();
+        if (!inSequence(currentLastSeq, batch.batchSequence(), false, false)) {
+            LOG.warn(
+                    "Detected discontinuous batch sequence while recovering writer {} at offset {} "
+                            + "in table-bucket {}: incoming sequence {}, current sequence {}. "
+                            + "Accepting the persisted batch.",
+                    writerId,
+                    batch.lastLogOffset(),
+                    tableBucket,
+                    batch.batchSequence(),
+                    currentLastSeq);
+        }
+        appendDataBatch(
+                batch.batchSequence(),
+                new LogOffsetMetadata(batch.baseLogOffset()),
+                batch.lastLogOffset(),
+                batch.commitTimestamp());
+    }
+
     public void appendDataBatch(
             int batchSequence,
             LogOffsetMetadata firstOffsetMetadata,
@@ -64,6 +89,14 @@ public class WriterAppendInfo {
             boolean isAppendAsLeader,
             long batchTimestamp) {
         maybeValidateDataBatch(batchSequence, isWriterInBatchExpired, lastOffset, isAppendAsLeader);
+        appendDataBatch(batchSequence, firstOffsetMetadata, lastOffset, batchTimestamp);
+    }
+
+    private void appendDataBatch(
+            int batchSequence,
+            LogOffsetMetadata firstOffsetMetadata,
+            long lastOffset,
+            long batchTimestamp) {
         updatedEntry.addBath(
                 batchSequence,
                 lastOffset,
@@ -76,10 +109,7 @@ public class WriterAppendInfo {
             boolean isWriterInBatchExpired,
             long lastOffset,
             boolean isAppendAsLeader) {
-        int currentLastSeq =
-                !updatedEntry.isEmpty()
-                        ? updatedEntry.lastBatchSequence()
-                        : currentEntry.lastBatchSequence();
+        int currentLastSeq = currentLastBatchSequence();
         // must be in sequence, even for the first batch should start from 0
         if (!inSequence(currentLastSeq, appendFirstSeq, isWriterInBatchExpired, isAppendAsLeader)) {
             throw new OutOfOrderSequenceException(
@@ -88,6 +118,12 @@ public class WriterAppendInfo {
                                     + "table-bucket %s : %s (incoming batch seq.), %s (current batch seq.)",
                             writerId, lastOffset, tableBucket, appendFirstSeq, currentLastSeq));
         }
+    }
+
+    private int currentLastBatchSequence() {
+        return !updatedEntry.isEmpty()
+                ? updatedEntry.lastBatchSequence()
+                : currentEntry.lastBatchSequence();
     }
 
     public WriterStateEntry toEntry() {

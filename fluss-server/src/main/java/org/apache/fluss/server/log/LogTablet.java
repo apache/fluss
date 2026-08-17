@@ -1565,7 +1565,13 @@ public final class LogTablet {
         Map<Long, WriterAppendInfo> loadedWriters = new HashMap<>();
         for (LogRecordBatch batch : records.batches()) {
             if (batch.hasWriterId()) {
-                updateWriterAppendInfo(writerStateManager, batch, loadedWriters, false);
+                long writerId = batch.writerId();
+                WriterAppendInfo appendInfo =
+                        loadedWriters.computeIfAbsent(
+                                writerId, id -> writerStateManager.prepareUpdate(id));
+                // The records have already been accepted and persisted. Recovery rebuilds writer
+                // state without applying online client sequence validation.
+                appendInfo.appendForRecovery(batch);
             }
         }
         loadedWriters.values().forEach(writerStateManager::update);
