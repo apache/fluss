@@ -169,7 +169,7 @@ public class ArrowBatchData implements AutoCloseable {
                 changeTypes == null
                         ? null
                         : Arrays.copyOfRange(changeTypes, skipRows, changeTypes.length);
-        // release original vector buffers; sliced vectors hold independent copies
+        // VectorSchemaRoot.slice transfers each slice into independently owned vectors.
         close();
         return new ArrowBatchData(
                 slicedRoot, baseLogOffset + skipRows, timestamp, schemaId, slicedChangeTypes);

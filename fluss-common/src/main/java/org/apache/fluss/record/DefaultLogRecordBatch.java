@@ -282,14 +282,15 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
 
         try {
             int recordsDataOffset = recordsDataOffset();
-            int arrowOffset = position + recordsDataOffset;
+            boolean appendOnly = isAppendOnly();
+            int changeTypesLength = appendOnly ? 0 : getRecordCount();
+            int arrowOffset = position + recordsDataOffset + changeTypesLength;
             byte[] changeTypes = null;
-            if (!isAppendOnly()) {
-                changeTypes = new byte[getRecordCount()];
-                segment.get(arrowOffset, changeTypes);
-                arrowOffset += changeTypes.length;
+            if (!appendOnly) {
+                changeTypes = new byte[changeTypesLength];
+                segment.get(position + recordsDataOffset, changeTypes);
             }
-            int arrowLength = position + sizeInBytes() - arrowOffset;
+            int arrowLength = sizeInBytes() - recordsDataOffset - changeTypesLength;
             batchAccess.loadArrowBatch(segment, arrowOffset, arrowLength);
             ArrowBatchData arrowBatchData =
                     batchAccess.createArrowBatchData(

@@ -684,15 +684,15 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
                         IntVector keys = (IntVector) b.getVectorSchemaRoot().getVector(0);
                         VarCharVector values = (VarCharVector) b.getVectorSchemaRoot().getVector(1);
                         for (int rowId = 0; rowId < b.getRecordCount(); rowId++) {
-                            int offset = (int) b.getBaseLogOffset() + rowId;
+                            long offset = b.getBaseLogOffset() + rowId;
                             assertThat(offset).isEqualTo(count);
                             assertThat(b.getChangeType(rowId))
-                                    .isEqualTo(expectedChangeTypes[offset]);
+                                    .isEqualTo(expectedChangeTypes[count]);
                             assertThat(changeTypes.get(rowId))
-                                    .isEqualTo(expectedChangeTypes[offset].toByteValue());
-                            assertThat(keys.get(rowId)).isEqualTo(expectedKeys[offset]);
+                                    .isEqualTo(expectedChangeTypes[count].toByteValue());
+                            assertThat(keys.get(rowId)).isEqualTo(expectedKeys[count]);
                             assertThat(values.getObject(rowId).toString())
-                                    .isEqualTo(expectedValues[offset]);
+                                    .isEqualTo(expectedValues[count]);
                             count++;
                         }
                     }
@@ -718,12 +718,12 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
                         assertThat(b.getVectorSchemaRoot().getFieldVectors()).hasSize(1);
                         VarCharVector values = (VarCharVector) b.getVectorSchemaRoot().getVector(0);
                         for (int rowId = 0; rowId < b.getRecordCount(); rowId++) {
-                            int offset = (int) b.getBaseLogOffset() + rowId;
+                            long offset = b.getBaseLogOffset() + rowId;
                             assertThat(offset).isEqualTo(count);
                             assertThat(b.getChangeType(rowId))
-                                    .isEqualTo(expectedChangeTypes[offset]);
+                                    .isEqualTo(expectedChangeTypes[count]);
                             assertThat(values.getObject(rowId).toString())
-                                    .isEqualTo(expectedValues[offset]);
+                                    .isEqualTo(expectedValues[count]);
                             count++;
                         }
                     }

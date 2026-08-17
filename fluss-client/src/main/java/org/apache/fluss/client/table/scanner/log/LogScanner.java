@@ -66,10 +66,12 @@ public interface LogScanner extends AutoCloseable {
      * @param timeout the timeout to poll
      * @return the Arrow batches returned by this poll
      * @throws UnsupportedOperationException if the table does not use the {@code ARROW} log format
+     *     or the scanner implementation does not support Arrow record batch polling
      * @throws IllegalStateException if the scanner is not subscribed to any buckets
      */
     default ArrowScanRecords pollRecordBatch(Duration timeout) {
-        throw new UnsupportedOperationException("Arrow record batch polling is not supported");
+        throw new UnsupportedOperationException(
+                "This LogScanner implementation does not support Arrow record batch polling");
     }
 
     /**
