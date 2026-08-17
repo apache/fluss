@@ -234,6 +234,12 @@
                             </relocations>
                             <filters combine.children="append">
                                 <filter>
+                                    <artifact>org.roaringbitmap:RoaringBitmap</artifact>
+                                    <excludes>
+                                        <exclude>META-INF/versions/**</exclude>
+                                    </excludes>
+                                </filter>
+                                <filter>
                                     <artifact>org.apache.fluss:fluss-flink-common</artifact>
                                     <excludes>
                                         <exclude>org/apache/fluss/flink/action/**</exclude>
