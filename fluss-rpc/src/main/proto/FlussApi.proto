@@ -403,7 +403,7 @@ message StopReplicaResponse {
 
 // Freeze writes to partition bucket leaders before lake-aware retention.
 message FreezePartitionRequest {
-  repeated PbFreezePartitionReqForBucket buckets_req = 2;
+  repeated PbFreezePartitionReqForBucket buckets_req = 1;
 }
 
 message FreezePartitionResponse {
