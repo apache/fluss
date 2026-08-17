@@ -23,13 +23,16 @@ import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
 import org.apache.fluss.lake.committer.CommitterInitContext;
 import org.apache.fluss.lake.committer.LakeCommitResult;
 import org.apache.fluss.lake.committer.LakeCommitter;
+import org.apache.fluss.lake.committer.PartitionMarkDoneMaintainer;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.lake.writer.LakeWriter;
+import org.apache.fluss.lake.writer.PartitionMarkDoneEnabler;
 import org.apache.fluss.lake.writer.TieringTableValidator;
 import org.apache.fluss.lake.writer.WriterInitContext;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.record.LogRecord;
+import org.apache.fluss.utils.function.SupplierWithException;
 
 import javax.annotation.Nullable;
 
@@ -41,7 +44,8 @@ import java.util.Map;
 /** An implementation of {@link LakeTieringFactory} for testing purpose. */
 public class TestingLakeTieringFactory
         implements LakeTieringFactory<TestingWriteResult, TestingCommittable>,
-                TieringTableValidator {
+                TieringTableValidator,
+                PartitionMarkDoneEnabler {
 
     @Nullable private TestingLakeCommitter testingLakeCommitter;
 
@@ -49,6 +53,9 @@ public class TestingLakeTieringFactory
     @Nullable private final IOException writerCompleteException;
 
     private final List<TestingLakeWriter> createdLakeWriters = new ArrayList<>();
+
+    // whether partition mark-done is enabled for all tables of this factory
+    private boolean partitionMarkDoneEnabled;
 
     public TestingLakeTieringFactory(@Nullable TestingLakeCommitter testingLakeCommitter) {
         this(testingLakeCommitter, null);
@@ -100,6 +107,15 @@ public class TestingLakeTieringFactory
                 "method getCommittableSerializer is not supported.");
     }
 
+    public void enablePartitionMarkDone() {
+        this.partitionMarkDoneEnabled = true;
+    }
+
+    @Override
+    public boolean isPartitionMarkDoneEnabled(TableInfo tableInfo) {
+        return partitionMarkDoneEnabled;
+    }
+
     /** A lake writer for testing purpose which tracks the closed state. */
     public static final class TestingLakeWriter implements LakeWriter<TestingWriteResult> {
 
@@ -142,11 +158,14 @@ public class TestingLakeTieringFactory
 
     /** A lake committer for testing purpose. */
     public static final class TestingLakeCommitter
-            implements LakeCommitter<TestingWriteResult, TestingCommittable> {
+            implements LakeCommitter<TestingWriteResult, TestingCommittable>,
+                    PartitionMarkDoneMaintainer {
 
         private long currentSnapshot;
 
         @Nullable private final CommittedLakeSnapshot mockMissingCommittedLakeSnapshot;
+
+        private int maintenanceInvocations;
 
         public TestingLakeCommitter() {
             this(null);
@@ -185,6 +204,18 @@ public class TestingLakeTieringFactory
                 return mockMissingCommittedLakeSnapshot;
             }
             return null;
+        }
+
+        @Nullable
+        @Override
+        public CommittedLakeSnapshot commitMarkDoneMaintenance(
+                SupplierWithException<String, IOException> offsetsFileProvider) throws IOException {
+            maintenanceInvocations++;
+            return null;
+        }
+
+        public int getMaintenanceInvocations() {
+            return maintenanceInvocations;
         }
 
         @Override

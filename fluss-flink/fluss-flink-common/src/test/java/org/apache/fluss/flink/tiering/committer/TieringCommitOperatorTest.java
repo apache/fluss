@@ -549,6 +549,49 @@ class TieringCommitOperatorTest extends FlinkTestBase {
                 .contains("dropped and recreated during tiering");
     }
 
+    @Test
+    void testEmptyRoundRecoversMissingLakeSnapshot() throws Exception {
+        TablePath tablePath =
+                TablePath.of("fluss", "test_empty_round_recovers_missing_lake_snapshot");
+        long tableId = createTable(tablePath, DATA1_PARTITIONED_TABLE_DESCRIPTOR);
+
+        // mimic a previous round that committed snapshot 5 to the lake but failed to commit
+        // to Fluss
+        Map<TableBucket, Long> expectedLogEndOffsets = new HashMap<>();
+        expectedLogEndOffsets.put(new TableBucket(tableId, 0), 3L);
+        CommittedLakeSnapshot mockMissingCommittedLakeSnapshot =
+                mockCommittedLakeSnapshot(tableId, tablePath, 5, expectedLogEndOffsets);
+        TestingLakeTieringFactory.TestingLakeCommitter testingLakeCommitter =
+                new TestingLakeTieringFactory.TestingLakeCommitter(
+                        mockMissingCommittedLakeSnapshot);
+        TestingLakeTieringFactory lakeTieringFactory =
+                new TestingLakeTieringFactory(testingLakeCommitter);
+        lakeTieringFactory.enablePartitionMarkDone();
+        // mark-done must also be enabled at the job level (disabled by default)
+        org.apache.fluss.config.Configuration lakeTieringConfig =
+                new org.apache.fluss.config.Configuration();
+        lakeTieringConfig.set(
+                org.apache.fluss.config.ConfigOptions.LAKE_TIERING_PARTITION_MARK_DONE_ENABLED,
+                true);
+        committerOperator =
+                new TieringCommitOperator<>(
+                        parameters,
+                        FLUSS_CLUSTER_EXTENSION.getClientConfig(),
+                        lakeTieringConfig,
+                        lakeTieringFactory);
+        committerOperator.open();
+
+        // an empty round runs mark-done maintenance and first brings Fluss up to date with
+        // the missing lake snapshot
+        committerOperator.processElement(
+                createTableBucketWriteResultStreamRecord(
+                        tablePath, new TableBucket(tableId, 0), null, null, -1, -1, 1));
+        assertThat(testingLakeCommitter.getMaintenanceInvocations()).isEqualTo(1);
+        LakeSnapshot lakeSnapshot = admin.getLatestLakeSnapshot(tablePath).get();
+        assertThat(lakeSnapshot.getSnapshotId()).isEqualTo(5);
+        assertThat(lakeSnapshot.getTableBucketsOffset()).isEqualTo(expectedLogEndOffsets);
+    }
+
     private CommittedLakeSnapshot mockCommittedLakeSnapshot(
             long tableId, TablePath tablePath, int snapshotId, Map<TableBucket, Long> logEndOffsets)
             throws Exception {

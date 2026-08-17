@@ -939,9 +939,6 @@ class PaimonTieringTest {
         paimonSchemaBuilder.column(BUCKET_COLUMN_NAME, DataTypes.INT());
         paimonSchemaBuilder.column(OFFSET_COLUMN_NAME, DataTypes.BIGINT());
         paimonSchemaBuilder.column(TIMESTAMP_COLUMN_NAME, DataTypes.TIMESTAMP_LTZ_MILLIS());
-        paimonSchemaBuilder.option(
-                CoreOptions.COMMIT_CALLBACKS.key(),
-                PaimonLakeCommitter.PaimonCommitCallback.class.getName());
         paimonCatalog.createDatabase(tablePath.getDatabaseName(), true);
         paimonCatalog.createTable(toPaimon(tablePath), paimonSchemaBuilder.build(), true);
     }

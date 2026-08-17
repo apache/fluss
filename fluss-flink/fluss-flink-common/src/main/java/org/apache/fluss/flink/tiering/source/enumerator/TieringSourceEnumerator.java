@@ -22,17 +22,21 @@ import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.metadata.MetadataUpdater;
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.metrics.FlinkMetricRegistry;
 import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
 import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
 import org.apache.fluss.flink.tiering.event.TieringReachMaxDurationEvent;
+import org.apache.fluss.flink.tiering.source.split.TieringLogSplit;
 import org.apache.fluss.flink.tiering.source.split.TieringSplit;
 import org.apache.fluss.flink.tiering.source.split.TieringSplitGenerator;
 import org.apache.fluss.flink.tiering.source.state.TieringSourceEnumeratorState;
 import org.apache.fluss.lake.committer.TieringStats;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
+import org.apache.fluss.lake.writer.PartitionMarkDoneEnabler;
 import org.apache.fluss.lake.writer.TieringTableValidator;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.GatewayClientProxy;
@@ -100,6 +104,7 @@ public class TieringSourceEnumerator
     private static final Logger LOG = LoggerFactory.getLogger(TieringSourceEnumerator.class);
 
     private final Configuration flussConf;
+    private final Configuration lakeTieringConfig;
     private final SplitEnumeratorContext<TieringSplit> context;
     private final LakeTieringFactory<?, ?> lakeTieringFactory;
     private final ScheduledExecutorService timerService;
@@ -130,7 +135,22 @@ public class TieringSourceEnumerator
             SplitEnumeratorContext<TieringSplit> context,
             LakeTieringFactory<?, ?> lakeTieringFactory,
             long pollTieringTableIntervalMs) {
+        this(
+                flussConf,
+                new Configuration(),
+                context,
+                lakeTieringFactory,
+                pollTieringTableIntervalMs);
+    }
+
+    public TieringSourceEnumerator(
+            Configuration flussConf,
+            Configuration lakeTieringConfig,
+            SplitEnumeratorContext<TieringSplit> context,
+            LakeTieringFactory<?, ?> lakeTieringFactory,
+            long pollTieringTableIntervalMs) {
         this.flussConf = flussConf;
+        this.lakeTieringConfig = lakeTieringConfig;
         this.context = context;
         this.lakeTieringFactory = lakeTieringFactory;
         this.timerService =
@@ -459,6 +479,24 @@ public class TieringSourceEnumerator
                 ((TieringTableValidator) lakeTieringFactory).validateTable(tableInfo);
             }
             List<TieringSplit> tieringSplits = splitGenerator.generateTableSplits(tableInfo);
+            if (tieringSplits.isEmpty()
+                    && lakeTieringConfig.get(ConfigOptions.LAKE_TIERING_PARTITION_MARK_DONE_ENABLED)
+                    && lakeTieringFactory instanceof PartitionMarkDoneEnabler
+                    && ((PartitionMarkDoneEnabler) lakeTieringFactory)
+                            .isPartitionMarkDoneEnabled(tableInfo)) {
+                // fully caught up but mark-done enabled: emit one skip-round split so the
+                // commit operator can run mark-done maintenance for the empty round
+                tieringSplits = new ArrayList<>();
+                tieringSplits.add(
+                        new TieringLogSplit(
+                                tablePath,
+                                new TableBucket(tableInfo.getTableId(), 0),
+                                null,
+                                0L,
+                                0L,
+                                1,
+                                true));
+            }
             // shuffle tiering split to avoid splits tiering skew
             // after introduce tiering max duration
             Collections.shuffle(tieringSplits);

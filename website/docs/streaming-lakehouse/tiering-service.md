@@ -77,6 +77,7 @@ The following `--lake.tiering.*` options are set when starting the tiering job:
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `lake.tiering.auto-expire-snapshot` | Boolean | false | Auto-trigger snapshot expiration on commit |
+| `lake.tiering.partition.mark-done.enabled` | Boolean | false | Whether the tiering service marks idle partitions of tiered partitioned tables as done. When enabled, a table opts in via its lake-format prefixed mark-done custom properties (e.g. `paimon.partition.idle-time-to-done` for Paimon) |
 | `lake.tiering.io.tmp.dirs` | String | Flink temporary directories | Local directories used for temporary I/O files. If not configured, a `fluss` child directory under each Flink temporary directory is used. Separate multiple directories with commas or the system path separator |
 
 ### Table-Level Options
