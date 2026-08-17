@@ -18,6 +18,7 @@
 
 package org.apache.fluss.lake.iceberg.source;
 
+import org.apache.fluss.lake.iceberg.utils.IcebergUtils;
 import org.apache.fluss.lake.source.RecordReader;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.GenericRecord;
@@ -53,18 +54,24 @@ import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
  * org.apache.iceberg.Scan#ignoreResiduals()} for details.
  */
 public class IcebergRecordReader implements RecordReader {
+
+    /** Sentinel value emitted when the lake table has no per-record offset/timestamp. */
+    private static final long NO_SYSTEM_COLUMN_VALUE = -1L;
+
     protected IcebergRecordAsFlussRecordIterator iterator;
     protected @Nullable int[][] project;
     protected Types.StructType struct;
 
     public IcebergRecordReader(FileScanTask fileScanTask, Table table, @Nullable int[][] project) {
+        boolean isLegacy = IcebergUtils.isLegacyTable(table.schema());
         TableScan tableScan = table.newScan();
         if (project != null) {
-            tableScan = applyProject(tableScan, project);
+            tableScan = applyProject(tableScan, project, isLegacy);
         }
         IcebergGenericReader reader = new IcebergGenericReader(tableScan, true);
         struct = tableScan.schema().asStruct();
-        this.iterator = new IcebergRecordAsFlussRecordIterator(reader.open(fileScanTask), struct);
+        this.iterator =
+                new IcebergRecordAsFlussRecordIterator(reader.open(fileScanTask), struct, isLegacy);
     }
 
     @Override
@@ -72,7 +79,7 @@ public class IcebergRecordReader implements RecordReader {
         return iterator;
     }
 
-    private TableScan applyProject(TableScan tableScan, int[][] projects) {
+    private TableScan applyProject(TableScan tableScan, int[][] projects, boolean isLegacy) {
         Types.StructType structType = tableScan.schema().asStruct();
         List<Types.NestedField> cols = new ArrayList<>(projects.length + 2);
 
@@ -80,8 +87,12 @@ public class IcebergRecordReader implements RecordReader {
             cols.add(structType.fields().get(project[0]));
         }
 
-        cols.add(structType.field(OFFSET_COLUMN_NAME));
-        cols.add(structType.field(TIMESTAMP_COLUMN_NAME));
+        if (isLegacy) {
+            // Legacy tables carry __offset and __timestamp; project them so the iterator can
+            // read the actual per-record offset and timestamp values.
+            cols.add(structType.field(OFFSET_COLUMN_NAME));
+            cols.add(structType.field(TIMESTAMP_COLUMN_NAME));
+        }
         return tableScan.project(new Schema(cols));
     }
 
@@ -97,13 +108,25 @@ public class IcebergRecordReader implements RecordReader {
         private final int timestampColIndex;
 
         public IcebergRecordAsFlussRecordIterator(
-                CloseableIterable<Record> icebergRecordIterator, Types.StructType struct) {
+                CloseableIterable<Record> icebergRecordIterator,
+                Types.StructType struct,
+                boolean isLegacy) {
             this.icebergRecordIterator = icebergRecordIterator.iterator();
-            this.logOffsetColIndex = struct.fields().indexOf(struct.field(OFFSET_COLUMN_NAME));
-            this.timestampColIndex = struct.fields().indexOf(struct.field(TIMESTAMP_COLUMN_NAME));
 
-            int[] project = IntStream.range(0, struct.fields().size() - 2).toArray();
-            projectedRow = ProjectedRow.from(project);
+            if (isLegacy) {
+                this.logOffsetColIndex = struct.fields().indexOf(struct.field(OFFSET_COLUMN_NAME));
+                this.timestampColIndex =
+                        struct.fields().indexOf(struct.field(TIMESTAMP_COLUMN_NAME));
+                // The last two projected columns are __offset and __timestamp; strip them from the
+                // business row.
+                int[] project = IntStream.range(0, struct.fields().size() - 2).toArray();
+                projectedRow = ProjectedRow.from(project);
+            } else {
+                this.logOffsetColIndex = -1;
+                this.timestampColIndex = -1;
+                projectedRow =
+                        ProjectedRow.from(IntStream.range(0, struct.fields().size()).toArray());
+            }
             icebergRecordAsFlussRow = new IcebergRecordAsFlussRow();
         }
 
@@ -124,12 +147,19 @@ public class IcebergRecordReader implements RecordReader {
         @Override
         public LogRecord next() {
             Record icebergRecord = icebergRecordIterator.next();
-            long offset = icebergRecord.get(logOffsetColIndex, Long.class);
-            long timestamp =
-                    icebergRecord
-                            .get(timestampColIndex, OffsetDateTime.class)
-                            .toInstant()
-                            .toEpochMilli();
+            long offset;
+            long timestamp;
+            if (logOffsetColIndex >= 0) {
+                offset = icebergRecord.get(logOffsetColIndex, Long.class);
+                timestamp =
+                        icebergRecord
+                                .get(timestampColIndex, OffsetDateTime.class)
+                                .toInstant()
+                                .toEpochMilli();
+            } else {
+                offset = NO_SYSTEM_COLUMN_VALUE;
+                timestamp = NO_SYSTEM_COLUMN_VALUE;
+            }
 
             return new GenericRecord(
                     offset,

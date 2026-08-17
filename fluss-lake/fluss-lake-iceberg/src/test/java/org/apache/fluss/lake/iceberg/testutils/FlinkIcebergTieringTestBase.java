@@ -338,8 +338,11 @@ public class FlinkIcebergTieringTestBase {
                 InternalRow flussRow = flussRowIterator.next();
                 assertThat(actualRecord.get(0)).isEqualTo(flussRow.getInt(0));
                 assertThat(actualRecord.get(1)).isEqualTo(flussRow.getString(1).toString());
-                // the idx 2 is __bucket, so use 3
-                assertThat(actualRecord.get(3)).isEqualTo(startingOffset++);
+                // FIP-27: a clean table stores only user columns; only legacy tables carry the
+                // trailing __bucket/__offset/__timestamp columns (offset at idx 3).
+                if (actualRecord.struct().field(OFFSET_COLUMN_NAME) != null) {
+                    assertThat(actualRecord.get(3)).isEqualTo(startingOffset++);
+                }
             }
             assertThat(flussRowIterator.hasNext()).isFalse();
         }
@@ -377,8 +380,11 @@ public class FlinkIcebergTieringTestBase {
                 assertThat(actualRecord.get(0)).isEqualTo(flussRow.getInt(0));
                 assertThat(actualRecord.get(1)).isEqualTo(flussRow.getString(1).toString());
                 assertThat(actualRecord.get(2)).isEqualTo(flussRow.getString(2).toString());
-                // the idx 3 is __bucket, so use 4
-                assertThat(actualRecord.get(4)).isEqualTo(startingOffset++);
+                // FIP-27: only legacy tables carry the trailing __bucket/__offset/__timestamp
+                // columns (offset at idx 4 for a 3-user-column partitioned table).
+                if (actualRecord.struct().field(OFFSET_COLUMN_NAME) != null) {
+                    assertThat(actualRecord.get(4)).isEqualTo(startingOffset++);
+                }
             }
             assertThat(flussRowIterator.hasNext()).isFalse();
         }
@@ -402,7 +408,33 @@ public class FlinkIcebergTieringTestBase {
             // is log table, we want to compare __offset column
             // so sort data files by __offset according to the column stats
             List<Record> records = new ArrayList<>();
-            int fieldId = table.schema().findField(OFFSET_COLUMN_NAME).fieldId();
+            org.apache.iceberg.types.Types.NestedField offsetField =
+                    table.schema().findField(OFFSET_COLUMN_NAME);
+            if (offsetField == null) {
+                // FIP-27: a clean table has no __offset column to sort by; read files directly.
+                table.refresh();
+                TableScan cleanScan = filterByPartition(table.newScan(), partitionSpec);
+                cleanScan
+                        .planFiles()
+                        .iterator()
+                        .forEachRemaining(
+                                fileScanTask -> {
+                                    DataFile file = fileScanTask.file();
+                                    Iterable<Record> iterable =
+                                            Parquet.read(table.io().newInputFile(file.location()))
+                                                    .project(table.schema())
+                                                    .createReaderFunc(
+                                                            fileSchema ->
+                                                                    GenericParquetReaders
+                                                                            .buildReader(
+                                                                                    table.schema(),
+                                                                                    fileSchema))
+                                                    .build();
+                                    iterable.forEach(records::add);
+                                });
+                return CloseableIterator.withClose(records.iterator());
+            }
+            int fieldId = offsetField.fieldId();
             SortedSet<DataFile> files =
                     new TreeSet<>(
                             (f1, f2) -> {

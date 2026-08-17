@@ -38,27 +38,39 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 
-import static org.apache.fluss.lake.iceberg.IcebergSchemaUtils.SYSTEM_COLUMNS;
+import static org.apache.fluss.lake.iceberg.IcebergSchemaUtils.LEGACY_SYSTEM_COLUMNS;
+import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
 
 /** Adapter for Iceberg Record as fluss row. */
 public class IcebergRecordAsFlussRow implements InternalRow {
 
     private Record icebergRecord;
+    // cached business field count, recomputed when the record changes
+    private int businessFieldCount;
 
     public IcebergRecordAsFlussRow() {}
 
     public IcebergRecordAsFlussRow(Record icebergRecord) {
         this.icebergRecord = icebergRecord;
+        this.businessFieldCount = computeBusinessFieldCount(icebergRecord);
     }
 
     public IcebergRecordAsFlussRow replaceIcebergRecord(Record icebergRecord) {
         this.icebergRecord = icebergRecord;
+        this.businessFieldCount = computeBusinessFieldCount(icebergRecord);
         return this;
+    }
+
+    private static int computeBusinessFieldCount(Record record) {
+        // A legacy table has __timestamp as the last column; a clean table has no system columns.
+        int total = record.struct().fields().size();
+        boolean isLegacy = record.struct().field(TIMESTAMP_COLUMN_NAME) != null;
+        return isLegacy ? total - LEGACY_SYSTEM_COLUMNS.size() : total;
     }
 
     @Override
     public int getFieldCount() {
-        return icebergRecord.struct().fields().size() - SYSTEM_COLUMNS.size();
+        return businessFieldCount;
     }
 
     @Override

@@ -61,7 +61,21 @@ public class IcebergConversions {
                 partitionKey.set(pos++, partition);
             }
         }
-        partitionKey.set(pos, bucket);
+        // Set the bucket value only when the partition spec has a trailing bucket field — either
+        // the legacy identity(__bucket) column or a bucket(userCol) transform. Unpartitioned clean
+        // tables (empty spec) and bucket-unaware partitioned tables (last field is an identity
+        // partition column) have no such field and must not set a bucket slot.
+        List<PartitionField> fields = partitionSpec.fields();
+        if (!fields.isEmpty()) {
+            PartitionField lastField = fields.get(fields.size() - 1);
+            Types.NestedField lastSourceField = schema.findField(lastField.sourceId());
+            boolean lastIsLegacyBucket =
+                    lastSourceField != null && lastSourceField.name().equals(BUCKET_COLUMN_NAME);
+            boolean lastIsBucketTransform = lastField.transform().toString().startsWith("bucket[");
+            if (lastIsLegacyBucket || lastIsBucketTransform) {
+                partitionKey.set(pos, bucket);
+            }
+        }
         return partitionKey;
     }
 
@@ -85,7 +99,11 @@ public class IcebergConversions {
                                         partition));
             }
         }
-        expression = Expressions.and(expression, Expressions.equal(BUCKET_COLUMN_NAME, bucket));
+        // FIP-27: legacy tables carry the __bucket column and are filtered per bucket. Clean
+        // tables have no __bucket column, so no bucket-level filter is applied.
+        if (table.schema().findField(BUCKET_COLUMN_NAME) != null) {
+            expression = Expressions.and(expression, Expressions.equal(BUCKET_COLUMN_NAME, bucket));
+        }
         return expression;
     }
 

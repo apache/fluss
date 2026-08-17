@@ -40,7 +40,6 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.lake.iceberg.utils.IcebergConversions.toIceberg;
-import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -125,7 +124,8 @@ class IcebergSchemaEvolutionITCase extends FlinkIcebergTieringTestBase {
                             .map(Types.NestedField::name)
                             .collect(Collectors.toList());
             assertThat(fieldNames.indexOf("f_new"))
-                    .isLessThan(fieldNames.indexOf(BUCKET_COLUMN_NAME));
+                    .isEqualTo(
+                            fieldNames.size() - 1); // FIP-27: clean table appends new columns last
 
             // Post-ALTER rows: new rows carry f_new values; old rows must surface NULL
             // via Iceberg field-ID schema evolution.
@@ -197,7 +197,8 @@ class IcebergSchemaEvolutionITCase extends FlinkIcebergTieringTestBase {
                             .map(Types.NestedField::name)
                             .collect(Collectors.toList());
             assertThat(fieldNames.indexOf("f_new"))
-                    .isLessThan(fieldNames.indexOf(BUCKET_COLUMN_NAME));
+                    .isEqualTo(
+                            fieldNames.size() - 1); // FIP-27: clean table appends new columns last
 
             // Post-ALTER upserts + snapshot trigger; verify all rows tier.
             List<InternalRow> postAlterRows = Arrays.asList(row(4, "v4", 100), row(5, "v5", 200));
@@ -272,7 +273,8 @@ class IcebergSchemaEvolutionITCase extends FlinkIcebergTieringTestBase {
                             .map(Types.NestedField::name)
                             .collect(Collectors.toList());
             assertThat(fieldNames.indexOf("f_new"))
-                    .isLessThan(fieldNames.indexOf(BUCKET_COLUMN_NAME));
+                    .isEqualTo(
+                            fieldNames.size() - 1); // FIP-27: clean table appends new columns last
 
             assertThat(icebergTable.schema().findField("f_tags").type().isListType()).isTrue();
             assertThat(icebergTable.schema().findField("f_meta").type().isMapType()).isTrue();
@@ -333,7 +335,8 @@ class IcebergSchemaEvolutionITCase extends FlinkIcebergTieringTestBase {
                             .map(Types.NestedField::name)
                             .collect(Collectors.toList());
             assertThat(fieldNames.indexOf("f_tags"))
-                    .isLessThan(fieldNames.indexOf(BUCKET_COLUMN_NAME));
+                    .isEqualTo(
+                            fieldNames.size() - 1); // FIP-27: clean table appends new columns last
 
             // Post-ALTER rows for a complex new column. Writing null exercises the
             // data-plane path through the new ARRAY field ID without forcing the test
@@ -394,7 +397,8 @@ class IcebergSchemaEvolutionITCase extends FlinkIcebergTieringTestBase {
                             .map(Types.NestedField::name)
                             .collect(Collectors.toList());
             assertThat(fieldNames.indexOf("f_new"))
-                    .isLessThan(fieldNames.indexOf(BUCKET_COLUMN_NAME));
+                    .isEqualTo(
+                            fieldNames.size() - 1); // FIP-27: clean table appends new columns last
 
             // Post-ALTER upserts with f_new values + snapshot trigger.
             List<InternalRow> postAlterRows =

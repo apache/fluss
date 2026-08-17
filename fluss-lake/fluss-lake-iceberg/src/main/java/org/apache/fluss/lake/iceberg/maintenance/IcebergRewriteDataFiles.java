@@ -106,9 +106,13 @@ public class IcebergRewriteDataFiles {
 
         // then, pack the fileScanTasks into compaction units which contains compactable
         // fileScanTasks, after compaction, we want to it still keep order by __offset column,
-        // so, let's first sort by __offset column
-        int offsetFieldId = table.schema().findField(OFFSET_COLUMN_NAME).fieldId();
-        fileScanTasks.sort(sortFileScanTask(offsetFieldId));
+        // so, let's first sort by __offset column. FIP-27: a clean table has no __offset column,
+        // so this ordering is skipped (files are packed as-is).
+        org.apache.iceberg.types.Types.NestedField offsetField =
+                table.schema().findField(OFFSET_COLUMN_NAME);
+        if (offsetField != null) {
+            fileScanTasks.sort(sortFileScanTask(offsetField.fieldId()));
+        }
 
         // do package now
         BinPacking.ListPacker<FileScanTask> packer =

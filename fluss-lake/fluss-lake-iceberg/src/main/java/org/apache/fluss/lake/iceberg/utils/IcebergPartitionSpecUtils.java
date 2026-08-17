@@ -82,9 +82,13 @@ public final class IcebergPartitionSpecUtils {
         }
 
         if (bucketKeys.isEmpty()) {
-            // __offset and __timestamp are system data columns, but only __bucket is a
-            // partition field when the Fluss table has no bucket key.
-            builder.identity(BUCKET_COLUMN_NAME);
+            // FIP-27: a bucket-unaware table is partitioned by the __bucket system column only for
+            // legacy tables that still carry it. Clean tables have no __bucket column, so they are
+            // left unpartitioned (IcebergSplitPlanner treats an empty/partition-less spec as
+            // bucket-unaware).
+            if (icebergSchema.findField(BUCKET_COLUMN_NAME) != null) {
+                builder.identity(BUCKET_COLUMN_NAME);
+            }
         } else {
             builder.bucket(bucketKeys.get(0), bucketCount);
         }
