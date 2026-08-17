@@ -441,7 +441,8 @@ mod tests {
     use arrow::array::{
         BooleanArray, Date32Array, Decimal128Array, Float32Array, Float64Array, Int8Array,
         Int16Array, Int32Array, Int64Array, StringArray, Time32MillisecondArray, Time32SecondArray,
-        TimestampMicrosecondArray, TimestampMillisecondArray,
+        Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
+        TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
     };
     use arrow::datatypes::{DataType as ArrowType, Field, Schema};
     use std::sync::Arc;
@@ -753,6 +754,101 @@ mod tests {
     }
 
     #[test]
+    fn scales_a_microsecond_time_to_millis() {
+        let (min, max) = single_column_rows(
+            DataTypes::time_with_precision(6),
+            ArrowType::Time64(arrow::datatypes::TimeUnit::Microsecond),
+            Arc::new(Time64MicrosecondArray::from(vec![
+                Some(7_200_000_000),
+                Some(3_600_000_000),
+            ])),
+        );
+        assert_eq!(
+            i32::from_le_bytes(min[8..12].try_into().unwrap()),
+            3_600_000
+        );
+        assert_eq!(
+            i32::from_le_bytes(max[8..12].try_into().unwrap()),
+            7_200_000
+        );
+    }
+
+    #[test]
+    fn scales_a_nanosecond_time_to_millis() {
+        let (min, max) = single_column_rows(
+            DataTypes::time_with_precision(9),
+            ArrowType::Time64(arrow::datatypes::TimeUnit::Nanosecond),
+            Arc::new(Time64NanosecondArray::from(vec![
+                Some(7_200_000_000_000),
+                Some(3_600_000_000_000),
+            ])),
+        );
+        assert_eq!(
+            i32::from_le_bytes(min[8..12].try_into().unwrap()),
+            3_600_000
+        );
+        assert_eq!(
+            i32::from_le_bytes(max[8..12].try_into().unwrap()),
+            7_200_000
+        );
+    }
+
+    #[test]
+    fn scales_a_second_precision_timestamp_to_millis() {
+        let (min, max) = single_column_rows(
+            DataTypes::timestamp_with_precision(0),
+            ArrowType::Timestamp(arrow::datatypes::TimeUnit::Second, None),
+            Arc::new(TimestampSecondArray::from(vec![Some(2), Some(1)])),
+        );
+        // Precision 0 is compact, so the millis sit in the slot.
+        assert_eq!(i64::from_le_bytes(min[8..16].try_into().unwrap()), 1_000);
+        assert_eq!(i64::from_le_bytes(max[8..16].try_into().unwrap()), 2_000);
+    }
+
+    /// Decodes a non-compact timestamp field into its (millis, nanos) pair.
+    fn split_timestamp(row: &[u8]) -> (i64, i32) {
+        let packed = i64::from_le_bytes(row[8..16].try_into().unwrap());
+        let offset = (packed >> 32) as usize;
+        let nanos = (packed & 0xFFFF_FFFF) as i32;
+        let millis = i64::from_le_bytes(row[offset..offset + 8].try_into().unwrap());
+        (millis, nanos)
+    }
+
+    #[test]
+    fn splits_a_nanosecond_timestamp_into_millis_and_nanos() {
+        let (min, max) = single_column_rows(
+            DataTypes::timestamp_with_precision(9),
+            ArrowType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None),
+            Arc::new(TimestampNanosecondArray::from(vec![
+                Some(2_000_456_789),
+                Some(1_000_654_321),
+            ])),
+        );
+        assert_eq!(split_timestamp(&min), (1_000, 654_321));
+        assert_eq!(split_timestamp(&max), (2_000, 456_789));
+    }
+
+    #[test]
+    fn spills_a_non_compact_decimal_bound_to_the_tail() {
+        let array = Decimal128Array::from(vec![Some(555_000_i128), Some(100_000_i128)])
+            .with_precision_and_scale(25, 5)
+            .expect("decimal array");
+        let (min, _) = single_column_rows(
+            DataTypes::decimal(25, 5),
+            ArrowType::Decimal128(25, 5),
+            Arc::new(array),
+        );
+        // Precision 25 is not compact, so the slot points into the tail.
+        let packed = i64::from_le_bytes(min[8..16].try_into().unwrap());
+        let (offset, size) = ((packed >> 32) as usize, (packed & 0xFFFF_FFFF) as usize);
+        assert_eq!(offset, 16);
+        let unscaled = Decimal::from_unscaled_bytes(&min[offset..offset + size], 25, 5)
+            .expect("decimal")
+            .to_big_decimal();
+        assert_eq!(unscaled.to_string(), "1.00000");
+    }
+
+    #[test]
     fn collects_bounds_for_a_compact_decimal() {
         let array = Decimal128Array::from(vec![Some(12_345_i128), Some(500_i128)])
             .with_precision_and_scale(10, 2)
@@ -783,7 +879,7 @@ mod tests {
 
     #[test]
     fn splits_a_microsecond_timestamp_into_millis_and_nanos() {
-        let (min, _) = single_column_rows(
+        let (min, max) = single_column_rows(
             DataTypes::timestamp_with_precision(6),
             ArrowType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None),
             Arc::new(TimestampMicrosecondArray::from(vec![
@@ -793,10 +889,8 @@ mod tests {
         );
         // Precision 6 is not compact, so millis move to the tail and the slot
         // carries the offset with the nano-of-millisecond.
-        let packed = i64::from_le_bytes(min[8..16].try_into().unwrap());
-        assert_eq!((packed >> 32) as usize, 16);
-        assert_eq!((packed & 0xFFFF_FFFF) as i32, 456_000);
-        assert_eq!(i64::from_le_bytes(min[16..24].try_into().unwrap()), 1_000);
+        assert_eq!(split_timestamp(&min), (1_000, 456_000));
+        assert_eq!(split_timestamp(&max), (2_000, 500_000));
     }
 
     #[test]
