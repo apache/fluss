@@ -15,6 +15,30 @@ Before upgrading, review any users, roles, scripts, or automation that call `cre
 
 ## Cluster Configuration Changes
 
+### Active Segment Retention Rollout
+
+When upgrading a cluster from v0.9, keep
+`log.retention.roll-active-segment.enabled` disabled for the entire upgrade. This is the default, so
+no configuration change is required before or during the rolling upgrade.
+
+After every CoordinatorServer, TabletServer, and client component has been upgraded to v1.0 and the
+upgrade is complete, enable the option with a dynamic cluster configuration update:
+
+```sql
+CALL sys.set_cluster_configs(
+  config_pairs => 'log.retention.roll-active-segment.enabled', 'true'
+);
+```
+
+Enabling the option allows a non-empty active local log segment to be rolled after its table log TTL
+expires and all records are committed. The rolled segment can then be uploaded to remote storage
+and cleaned up locally according to `table.log.local-ttl`. This avoids indefinitely retaining an
+expired active segment on low-traffic tables.
+
+See [TTL](../../table-design/data-distribution/ttl.md) for the segment lifecycle,
+[remote storage](../tiered-storage/remote-storage.md) for tiered-log retention, and
+[updating configs](updating-configs.md#updating-cluster-configs) for other dynamic update methods.
+
 ### New `datalake.enabled` Cluster Configuration
 
 Starting in v1.0, Fluss introduces the cluster-level configuration `datalake.enabled` to control whether the cluster is ready to create and manage lakehouse tables.

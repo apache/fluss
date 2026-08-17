@@ -33,9 +33,21 @@ Below is the list for all configurations to control the log segments tiered beha
 
 ### Table configurations about remote log
 
-When local log segments are copied to remote storage, the local log segments will be deleted to reduce local disk cost.
-But sometimes, we want to keep the several latest log segments retain in local, although they have been coped to remote storage for better read performance.
-You can control how many log segments to retain in local by setting the configuration `table.log.tiered.local-segments`(default is 2) per table.
+After a rolled local log segment is copied to remote storage, it can be removed to reduce local disk
+usage. Uncopied segments are never eligible for local TTL cleanup.
+
+Use the following table options to control local retention:
+
+- `table.log.local-ttl` retains copied local segments for a duration (default: 1 day). An explicitly
+  configured value must be greater than zero and, when `table.log.ttl` is positive, less than or
+  equal to `table.log.ttl`.
+- `table.log.tiered.local-segments` lets Fluss remove copied segments that exceed the configured
+  number of recent local segments (default: 2), which balances disk usage and read performance.
+
+`table.log.ttl` independently controls the retention of table log data, including its remote copy.
+See [TTL](../../table-design/data-distribution/ttl.md) for the complete lifecycle from an active
+local segment through rolling, upload, local cleanup, and remote expiration. The server-side
+remote-log settings are listed in [server configuration](../configuration.md#log-tiered-storage).
 
 ## Remote snapshot of primary key table
 
