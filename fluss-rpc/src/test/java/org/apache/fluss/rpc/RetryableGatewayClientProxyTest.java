@@ -18,6 +18,8 @@
 package org.apache.fluss.rpc;
 
 import org.apache.fluss.exception.NetworkException;
+import org.apache.fluss.exception.NotCoordinatorLeaderException;
+import org.apache.fluss.exception.RetriableException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.rpc.messages.ApiVersionsRequest;
 import org.apache.fluss.rpc.messages.ApiVersionsResponse;
@@ -230,6 +232,129 @@ class RetryableGatewayClientProxyTest {
         assertThat(refreshCount.get())
                 .as("concurrent retriers must share a single refresh")
                 .isEqualTo(1);
+    }
+
+    /**
+     * Verifies that a caller-supplied predicate retries only on the matching exception. This
+     * mirrors the write (coordinator) gateway which retries exclusively on {@link
+     * NotCoordinatorLeaderException} after a coordinator leader failover.
+     */
+    @Test
+    void testCustomPredicateRetriesOnMatchingExceptionThenSuccess() throws Exception {
+        AtomicInteger callCount = new AtomicInteger(0);
+        AtomicInteger refreshCount = new AtomicInteger(0);
+
+        // Fail the first call with NotCoordinatorLeaderException, then succeed on the single retry.
+        RpcGateway delegate =
+                new TestRpcGateway() {
+                    @Override
+                    public CompletableFuture<ApiVersionsResponse> apiVersions(
+                            ApiVersionsRequest request) {
+                        int count = callCount.incrementAndGet();
+                        CompletableFuture<ApiVersionsResponse> future = new CompletableFuture<>();
+                        if (count == 1) {
+                            future.completeExceptionally(
+                                    new NotCoordinatorLeaderException("not the current leader"));
+                        } else {
+                            future.complete(new ApiVersionsResponse());
+                        }
+                        return future;
+                    }
+                };
+
+        RpcGateway proxy =
+                RetryableGatewayClientProxy.createRetryableGatewayProxy(
+                        delegate,
+                        refreshCount::incrementAndGet,
+                        REFRESH_EXECUTOR,
+                        cause ->
+                                cause instanceof NotCoordinatorLeaderException
+                                        || cause instanceof RetriableException,
+                        cause -> cause instanceof NotCoordinatorLeaderException,
+                        RpcGateway.class);
+
+        CompletableFuture<ApiVersionsResponse> result = proxy.apiVersions(new ApiVersionsRequest());
+        assertThat(result.get()).isNotNull();
+        // Initial call + 1 retry = 2 total calls
+        assertThat(callCount.get()).isEqualTo(2);
+        // Metadata refresh should be called once before the retry
+        assertThat(refreshCount.get()).isEqualTo(1);
+    }
+
+    /**
+     * Verifies the write-gateway policy: a network error refreshes metadata (to repoint the stale
+     * connection) but is NOT auto-retried, because a non-idempotent mutation may already have
+     * executed on the server. The user can recover by retrying manually.
+     */
+    @Test
+    void testRefreshesButDoesNotRetryWhenOnlyRefreshPredicateMatches() {
+        AtomicInteger callCount = new AtomicInteger(0);
+        AtomicInteger refreshCount = new AtomicInteger(0);
+
+        // Always fail with NetworkException (a RetriableException).
+        RpcGateway delegate = createGateway(callCount, Integer.MAX_VALUE);
+
+        RpcGateway proxy =
+                RetryableGatewayClientProxy.createRetryableGatewayProxy(
+                        delegate,
+                        refreshCount::incrementAndGet,
+                        REFRESH_EXECUTOR,
+                        cause ->
+                                cause instanceof NotCoordinatorLeaderException
+                                        || cause instanceof RetriableException,
+                        cause -> cause instanceof NotCoordinatorLeaderException,
+                        RpcGateway.class);
+
+        CompletableFuture<ApiVersionsResponse> result = proxy.apiVersions(new ApiVersionsRequest());
+        assertThatThrownBy(result::get)
+                .isInstanceOf(ExecutionException.class)
+                .rootCause()
+                .isInstanceOf(NetworkException.class);
+        // Only the initial call happened (no retry), but metadata was refreshed once.
+        assertThat(callCount.get()).isEqualTo(1);
+        assertThat(refreshCount.get()).isEqualTo(1);
+    }
+
+    /**
+     * Verifies that a failure matching neither predicate neither refreshes metadata nor retries;
+     * the original error is surfaced directly.
+     */
+    @Test
+    void testNoRefreshAndNoRetryWhenNeitherPredicateMatches() {
+        AtomicInteger callCount = new AtomicInteger(0);
+        AtomicInteger refreshCount = new AtomicInteger(0);
+
+        RpcGateway delegate =
+                new TestRpcGateway() {
+                    @Override
+                    public CompletableFuture<ApiVersionsResponse> apiVersions(
+                            ApiVersionsRequest request) {
+                        callCount.incrementAndGet();
+                        CompletableFuture<ApiVersionsResponse> future = new CompletableFuture<>();
+                        future.completeExceptionally(
+                                new TableNotExistException("table does not exist"));
+                        return future;
+                    }
+                };
+
+        RpcGateway proxy =
+                RetryableGatewayClientProxy.createRetryableGatewayProxy(
+                        delegate,
+                        refreshCount::incrementAndGet,
+                        REFRESH_EXECUTOR,
+                        cause ->
+                                cause instanceof NotCoordinatorLeaderException
+                                        || cause instanceof RetriableException,
+                        cause -> cause instanceof NotCoordinatorLeaderException,
+                        RpcGateway.class);
+
+        CompletableFuture<ApiVersionsResponse> result = proxy.apiVersions(new ApiVersionsRequest());
+        assertThatThrownBy(result::get)
+                .isInstanceOf(ExecutionException.class)
+                .rootCause()
+                .isInstanceOf(TableNotExistException.class);
+        assertThat(callCount.get()).isEqualTo(1);
+        assertThat(refreshCount.get()).isEqualTo(0);
     }
 
     /**

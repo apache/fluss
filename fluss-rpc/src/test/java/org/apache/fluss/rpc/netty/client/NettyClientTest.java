@@ -253,6 +253,58 @@ final class NettyClientTest {
         assertThat(nettyClient.connections()).isEmpty();
     }
 
+    @Test
+    void testReconnectWhenServerAddressChangesForSameUid() throws Exception {
+        MetricGroup metricGroup = NOPMetricsGroup.newInstance();
+        ApiVersionsRequest request =
+                new ApiVersionsRequest()
+                        .setClientSoftwareName("testing_client")
+                        .setClientSoftwareVersion("1.0");
+        try (NetUtils.Port port1 = getAvailablePort();
+                NetUtils.Port port2 = getAvailablePort();
+                NettyServer server1 =
+                        new NettyServer(
+                                conf,
+                                Collections.singleton(
+                                        new Endpoint("localhost", port1.getPort(), "INTERNAL")),
+                                new TestingGatewayService(),
+                                metricGroup,
+                                RequestsMetrics.createCoordinatorServerRequestMetrics(
+                                        metricGroup));
+                NettyServer server2 =
+                        new NettyServer(
+                                conf,
+                                Collections.singleton(
+                                        new Endpoint("localhost", port2.getPort(), "INTERNAL")),
+                                new TestingGatewayService(),
+                                metricGroup,
+                                RequestsMetrics.createCoordinatorServerRequestMetrics(
+                                        metricGroup))) {
+            server1.start();
+            server2.start();
+
+            // Both nodes share the same uid "cs-0" but point at different addresses, mimicking a
+            // coordinator leader failover where the standby takes over the same server id.
+            ServerNode node1 =
+                    new ServerNode(0, "localhost", port1.getPort(), ServerType.COORDINATOR);
+            ServerNode node2 =
+                    new ServerNode(0, "localhost", port2.getPort(), ServerType.COORDINATOR);
+            assertThat(node1.uid()).isEqualTo(node2.uid());
+
+            nettyClient.sendRequest(node1, ApiKeys.API_VERSIONS, request).get();
+            assertThat(nettyClient.connections()).hasSize(1);
+            assertThat(nettyClient.connections().get(node1.uid()).getServerNode().port())
+                    .isEqualTo(port1.getPort());
+
+            // Sending to the same uid at a new address must reconnect to the new address instead of
+            // reusing the stale connection to the old server.
+            nettyClient.sendRequest(node2, ApiKeys.API_VERSIONS, request).get();
+            assertThat(nettyClient.connections()).hasSize(1);
+            assertThat(nettyClient.connections().get(node2.uid()).getServerNode().port())
+                    .isEqualTo(port2.getPort());
+        }
+    }
+
     private void buildNettyServer(int serverId) throws Exception {
         try (NetUtils.Port availablePort = getAvailablePort()) {
             serverNode =

@@ -31,15 +31,23 @@ import java.lang.reflect.Proxy;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Predicate;
 
 /**
- * A proxy that wraps an existing {@link RpcGateway} proxy and adds automatic retry with metadata
- * refresh on retriable (network) errors.
+ * A proxy that wraps an existing {@link RpcGateway} proxy and adds automatic metadata refresh on
+ * errors, plus an optional single retry of a subset of them.
  *
  * <p>This is designed to solve the stale metadata problem where cached server addresses become
- * invalid (e.g., during rolling upgrades in Kubernetes). When an RPC call fails with a {@link
- * RetriableException}, this proxy triggers a metadata refresh callback and retries the request with
- * potentially updated server addresses.
+ * invalid (e.g., during rolling upgrades in Kubernetes) or a cached coordinator leader becomes a
+ * standby after failover. When an RPC fails with an error accepted by {@code refreshPredicate},
+ * this proxy triggers a metadata refresh callback; when the error is also accepted by {@code
+ * retryPredicate}, it retries the request once with the potentially updated server addresses.
+ *
+ * <p>Separating the two predicates lets a write gateway refresh metadata on any recoverable error
+ * (so the connection is repointed and a later manual retry can succeed) while only auto-retrying
+ * failures that are provably safe to replay -- e.g. {@code NotCoordinatorLeaderException}, which
+ * the server raises before executing a non-idempotent mutation. Read-only gateways use {@link
+ * RetriableException} for both.
  *
  * <p>The retry flow for a cluster with stale tablet servers:
  *
@@ -68,6 +76,8 @@ public class RetryableGatewayClientProxy implements InvocationHandler {
     private final Object delegate;
     private final Runnable metadataRefreshAction;
     private final Executor refreshExecutor;
+    private final Predicate<Throwable> refreshPredicate;
+    private final Predicate<Throwable> retryPredicate;
 
     /**
      * Holds the currently in-flight metadata refresh, if any. Concurrent retriers piggyback on this
@@ -78,15 +88,22 @@ public class RetryableGatewayClientProxy implements InvocationHandler {
             new AtomicReference<>();
 
     RetryableGatewayClientProxy(
-            Object delegate, Runnable metadataRefreshAction, Executor refreshExecutor) {
+            Object delegate,
+            Runnable metadataRefreshAction,
+            Executor refreshExecutor,
+            Predicate<Throwable> refreshPredicate,
+            Predicate<Throwable> retryPredicate) {
         this.delegate = delegate;
         this.metadataRefreshAction = metadataRefreshAction;
         this.refreshExecutor = refreshExecutor;
+        this.refreshPredicate = refreshPredicate;
+        this.retryPredicate = retryPredicate;
     }
 
     /**
      * Creates a retryable proxy wrapping an existing gateway proxy. On {@link RetriableException},
-     * the proxy will invoke {@code metadataRefreshAction} and retry the failed RPC call once.
+     * the proxy will invoke {@code metadataRefreshAction} and retry the failed RPC call once. This
+     * is suitable for read-only gateways where retrying any network error is safe.
      *
      * @param delegate the underlying gateway proxy to wrap
      * @param metadataRefreshAction callback to refresh metadata (e.g., update cluster info)
@@ -102,6 +119,46 @@ public class RetryableGatewayClientProxy implements InvocationHandler {
             Runnable metadataRefreshAction,
             Executor refreshExecutor,
             Class<T> gatewayClass) {
+        Predicate<Throwable> retriable = cause -> cause instanceof RetriableException;
+        return createRetryableGatewayProxy(
+                delegate,
+                metadataRefreshAction,
+                refreshExecutor,
+                retriable,
+                retriable,
+                gatewayClass);
+    }
+
+    /**
+     * Creates a retryable proxy wrapping an existing gateway proxy. On a failure, the proxy invokes
+     * {@code metadataRefreshAction} when {@code refreshPredicate} accepts the cause, and then
+     * retries the RPC once only when {@code retryPredicate} also accepts it.
+     *
+     * <p>This lets a write gateway refresh metadata on any recoverable error (repointing the stale
+     * coordinator connection so a later manual retry can succeed) while auto-retrying only failures
+     * that are safe to replay, e.g. {@code NotCoordinatorLeaderException}, which the server raises
+     * before executing the mutation. Errors such as {@code NetworkException} may already have
+     * executed on the server, so they refresh metadata but are not auto-retried.
+     *
+     * @param delegate the underlying gateway proxy to wrap
+     * @param metadataRefreshAction callback to refresh metadata (e.g., update cluster info)
+     * @param refreshExecutor executor on which {@code metadataRefreshAction} is run; must NOT be a
+     *     Netty event loop and ideally should be a dedicated, single-thread executor (the in-flight
+     *     refresh is already coalesced to at most one concurrent task)
+     * @param refreshPredicate decides whether a failure cause should trigger a metadata refresh
+     * @param retryPredicate decides whether a failure cause should additionally be retried once
+     *     (should be a subset of {@code refreshPredicate})
+     * @param gatewayClass the gateway interface class
+     * @param <T> the gateway type
+     * @return a retryable gateway proxy
+     */
+    public static <T extends RpcGateway> T createRetryableGatewayProxy(
+            T delegate,
+            Runnable metadataRefreshAction,
+            Executor refreshExecutor,
+            Predicate<Throwable> refreshPredicate,
+            Predicate<Throwable> retryPredicate,
+            Class<T> gatewayClass) {
         ClassLoader classLoader = gatewayClass.getClassLoader();
 
         @SuppressWarnings("unchecked")
@@ -111,7 +168,11 @@ public class RetryableGatewayClientProxy implements InvocationHandler {
                                 classLoader,
                                 new Class<?>[] {gatewayClass},
                                 new RetryableGatewayClientProxy(
-                                        delegate, metadataRefreshAction, refreshExecutor));
+                                        delegate,
+                                        metadataRefreshAction,
+                                        refreshExecutor,
+                                        refreshPredicate,
+                                        retryPredicate));
         return proxy;
     }
 
@@ -143,22 +204,38 @@ public class RetryableGatewayClientProxy implements InvocationHandler {
                         return;
                     }
                     Throwable cause = ExceptionUtils.stripCompletionException(throwable);
-                    if (!(cause instanceof RetriableException) || !retry) {
+                    // Only the initial attempt may refresh/retry; a failed retry gives up.
+                    if (!retry) {
+                        resultFuture.completeExceptionally(cause);
+                        return;
+                    }
+                    boolean shouldRetry = retryPredicate.test(cause);
+                    boolean shouldRefresh = shouldRetry || refreshPredicate.test(cause);
+                    if (!shouldRefresh) {
                         resultFuture.completeExceptionally(cause);
                         return;
                     }
                     LOG.warn(
-                            "RPC call {} failed with retriable error, "
-                                    + "refreshing metadata and retrying once.",
+                            "RPC call {} failed, refreshing metadata{}.",
                             method.getName(),
+                            shouldRetry ? " and retrying once" : " (not retrying)",
                             cause);
                     // Coalesce concurrent refreshes so N parallel failing calls trigger only one
                     // metadata refresh (and one round of MetadataUpdater lock contention).
                     coalescedRefresh()
                             .thenCompose(
-                                    ignored ->
-                                            RetryableGatewayClientProxy.this.<T>invokeWithRetry(
-                                                    method, args, false))
+                                    ignored -> {
+                                        if (shouldRetry) {
+                                            return RetryableGatewayClientProxy.this
+                                                    .<T>invokeWithRetry(method, args, false);
+                                        }
+                                        // Metadata was refreshed but the failure is not safe to
+                                        // auto-retry; surface the original error for a manual
+                                        // retry.
+                                        CompletableFuture<T> notRetried = new CompletableFuture<>();
+                                        notRetried.completeExceptionally(cause);
+                                        return notRetried;
+                                    })
                             .whenComplete(
                                     (retryResult, retryError) -> {
                                         if (retryError != null) {
