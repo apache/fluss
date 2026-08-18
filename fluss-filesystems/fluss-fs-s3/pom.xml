@@ -344,6 +344,41 @@
                                     <include>*:*</include>
                                 </includes>
                             </artifactSet>
+                            <relocations>
+                                <!-- relocate the packages that are internal to Hadoop/AWS SDK
+                                     and not used / exposed downstream, mirroring the pattern
+                                     of fluss-fs-hadoop-shaded -->
+                                <relocation>
+                                    <pattern>com.google.re2j</pattern>
+                                    <shadedPattern>
+                                        org.apache.fluss.fs.shaded.s3.com.google.re2j
+                                    </shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>org.apache.htrace</pattern>
+                                    <shadedPattern>
+                                        org.apache.fluss.fs.shaded.s3.org.apache.htrace
+                                    </shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>com.fasterxml</pattern>
+                                    <shadedPattern>
+                                        org.apache.fluss.fs.shaded.s3.com.fasterxml
+                                    </shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>org.codehaus</pattern>
+                                    <shadedPattern>
+                                        org.apache.fluss.fs.shaded.s3.org.codehaus
+                                    </shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>com.ctc</pattern>
+                                    <shadedPattern>
+                                        org.apache.fluss.fs.shaded.s3.com.ctc
+                                    </shadedPattern>
+                                </relocation>
+                            </relocations>
                             <filters>
                                 <filter>
                                     <artifact>*</artifact>
@@ -353,6 +388,10 @@
                                         <exclude>mozilla/**</exclude>
                                         <exclude>META-INF/maven/**</exclude>
                                         <exclude>META-INF/LICENSE.txt</exclude>
+                                        <!-- the shade plugin relocates base-path classes but not
+                                             Multi-Release JAR entries under META-INF/versions,
+                                             so exclude them to avoid unshaded jackson leaking -->
+                                        <exclude>META-INF/versions/**/com/fasterxml/**</exclude>
                                     </excludes>
                                 </filter>
                                 <filter>
