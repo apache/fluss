@@ -51,6 +51,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
+import static org.apache.fluss.config.ConfigOptions.CLIENT_SASL_MECHANISM;
 import static org.apache.fluss.config.ConfigOptions.CLIENT_SASL_OAUTHBEARER_CLIENT_ID;
 import static org.apache.fluss.config.ConfigOptions.CLIENT_SASL_OAUTHBEARER_CLIENT_SECRET;
 import static org.apache.fluss.config.ConfigOptions.CLIENT_SASL_OAUTHBEARER_REQUEST_TIMEOUT;
@@ -60,6 +61,7 @@ import static org.apache.fluss.config.ConfigOptions.SERVER_SASL_OAUTHBEARER_EXPE
 import static org.apache.fluss.config.ConfigOptions.SERVER_SASL_OAUTHBEARER_EXPECTED_ISSUER;
 import static org.apache.fluss.config.ConfigOptions.SERVER_SASL_OAUTHBEARER_JWKS_ENDPOINT;
 import static org.apache.fluss.config.ConfigOptions.SERVER_SASL_OAUTHBEARER_JWKS_REFRESH_MIN_INTERVAL;
+import static org.apache.fluss.security.auth.sasl.oauthbearer.OAuthBearerClientAuthenticator.OAUTHBEARER_MECHANISM;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -196,7 +198,7 @@ class OAuthBearerAuthenticationTest {
                 new OAuthBearerServerAuthenticator(
                         configuration, new OAuthBearerJwksResolver(configuration));
 
-        assertThat(oauthServer.protocol()).isEqualTo("OAUTHBEARER");
+        assertThat(oauthServer.protocol()).isEqualTo(OAUTHBEARER_MECHANISM);
         assertThat(oauthServer.isCompleted()).isFalse();
         oauthServer.validateSession();
         assertThatThrownBy(oauthServer::createPrincipal)
@@ -220,7 +222,7 @@ class OAuthBearerAuthenticationTest {
 
         Configuration clientConfiguration = clientConfiguration();
         clientConfiguration.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "SASL");
-        clientConfiguration.setString("client.security.sasl.mechanism", "OAUTHBEARER");
+        clientConfiguration.set(CLIENT_SASL_MECHANISM, OAUTHBEARER_MECHANISM);
         Supplier<ClientAuthenticator> clientSupplier =
                 AuthenticationFactory.loadClientAuthenticatorSupplier(clientConfiguration);
         ClientAuthenticator firstClient = clientSupplier.get();
@@ -234,7 +236,8 @@ class OAuthBearerAuthenticationTest {
 
         Configuration serverConfiguration = serverConfiguration();
         serverConfiguration.set(
-                SERVER_SASL_ENABLED_MECHANISMS_CONFIG, Collections.singletonList("OAUTHBEARER"));
+                SERVER_SASL_ENABLED_MECHANISMS_CONFIG,
+                Collections.singletonList(OAUTHBEARER_MECHANISM));
         serverConfiguration.setString(
                 ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:SASL,INTERNAL:SASL");
         Map<String, Supplier<ServerAuthenticator>> serverSuppliers =
@@ -309,7 +312,7 @@ class OAuthBearerAuthenticationTest {
 
             @Override
             public String protocol() {
-                return "OAUTHBEARER";
+                return OAUTHBEARER_MECHANISM;
             }
         };
     }
