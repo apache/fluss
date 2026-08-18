@@ -1547,14 +1547,19 @@ public class ConfigOptions {
             key("client.lookup.queue-size")
                     .intType()
                     .defaultValue(25600)
-                    .withDescription("The maximum number of pending lookup operations.");
+                    .withDescription(
+                            "The capacity of pending and in-flight lookup operations. Each active lookup batch "
+                                    + "reserves 'client.lookup.max-batch-size' slots until that request attempt "
+                                    + "succeeds or fails. This value must not be smaller than 'client.lookup.max-batch-size'.");
 
     public static final ConfigOption<Integer> CLIENT_LOOKUP_MAX_BATCH_SIZE =
             key("client.lookup.max-batch-size")
                     .intType()
                     .defaultValue(128)
                     .withDescription(
-                            "The maximum batch size of merging lookup operations to one lookup request.");
+                            "The maximum number of lookup operations merged into one lookup request. Lookup "
+                                    + "operations are accumulated independently per table bucket, and ready bucket "
+                                    + "batches may share one request without exceeding this limit.");
 
     public static final ConfigOption<Integer> CLIENT_LOOKUP_MAX_INFLIGHT_SIZE =
             key("client.lookup.max-inflight-requests")
@@ -1562,6 +1567,14 @@ public class ConfigOptions {
                     .defaultValue(128)
                     .withDescription(
                             "The maximum number of unacknowledged lookup requests for lookup operations.");
+
+    public static final ConfigOption<Integer> CLIENT_LOOKUP_MAX_INFLIGHT_REQUESTS_PER_BUCKET =
+            key("client.lookup.max-inflight-requests-per-bucket")
+                    .intType()
+                    .defaultValue(5)
+                    .withDescription(
+                            "The maximum number of unacknowledged lookup requests per bucket. "
+                                    + "When a bucket reaches this limit, lookup requests for other buckets can still be sent.");
 
     public static final ConfigOption<Duration> CLIENT_LOOKUP_BATCH_TIMEOUT =
             key("client.lookup.batch-timeout")
