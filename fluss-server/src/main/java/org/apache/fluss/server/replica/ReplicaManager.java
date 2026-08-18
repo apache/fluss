@@ -414,6 +414,7 @@ public class ReplicaManager implements ServerReconfigurable {
     public void validate(Configuration newConfig) throws ConfigException {
         // Type validation is already handled by DynamicServerConfig.
         // Here we only do basic sanity checks.
+        HistoricalLakeLookupManager.validateConfig(newConfig);
         int newMinInSyncReplicas =
                 newConfig.get(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER);
         if (newMinInSyncReplicas <= 0) {
