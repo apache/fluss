@@ -52,6 +52,7 @@ import org.apache.flink.table.catalog.exceptions.DatabaseNotEmptyException;
 import org.apache.flink.table.catalog.exceptions.DatabaseNotExistException;
 import org.apache.flink.table.catalog.exceptions.FunctionNotExistException;
 import org.apache.flink.table.catalog.exceptions.PartitionAlreadyExistsException;
+import org.apache.flink.table.catalog.exceptions.PartitionSpecInvalidException;
 import org.apache.flink.table.catalog.exceptions.TableAlreadyExistException;
 import org.apache.flink.table.catalog.exceptions.TableNotExistException;
 import org.apache.flink.table.catalog.exceptions.TableNotPartitionedException;
@@ -783,9 +784,9 @@ class FlinkCatalogTest {
         CatalogPartitionSpec invalidTestSpec =
                 new CatalogPartitionSpec(Collections.singletonMap("second", ""));
         assertThatThrownBy(() -> catalog.listPartitions(path2, invalidTestSpec))
-                .isInstanceOf(CatalogException.class)
-                .hasMessage(
-                        "Failed to list partitions of table fluss.partitioned_t1 in test-catalog, by partitionSpec CatalogPartitionSpec{{second=}}");
+                .isInstanceOf(PartitionSpecInvalidException.class)
+                .hasMessageContaining(
+                        "PartitionSpec CatalogPartitionSpec{{second=}} does not match");
 
         // NEW: Test dropPartition functionality
         CatalogPartitionSpec firstPartSpec = catalogPartitionSpecs.get(0);
