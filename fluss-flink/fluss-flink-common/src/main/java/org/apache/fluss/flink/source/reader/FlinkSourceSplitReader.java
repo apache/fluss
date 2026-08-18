@@ -178,7 +178,9 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
                     return FlinkRecordsWithSplitIds.emptyRecords();
                 }
                 ScanRecords scanRecords = logScanner.poll(POLL_TIMEOUT);
-                return forLogRecords(scanRecords);
+                FlinkRecordsWithSplitIds records = forLogRecords(scanRecords);
+                removeFinishedSplits(records.finishedSplits());
+                return records;
             }
         }
     }
@@ -516,8 +518,6 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
                 new FlinkRecordsWithSplitIds(
                         splitRecords, splitIterator, tableScanBuckets.iterator(), finishedSplits);
         stoppingOffsets.forEach(recordsWithSplitIds::setTableBucketStoppingOffset);
-        // Build the current result before retiring finished buckets.
-        removeFinishedSplits(finishedSplits);
         return recordsWithSplitIds;
     }
 
