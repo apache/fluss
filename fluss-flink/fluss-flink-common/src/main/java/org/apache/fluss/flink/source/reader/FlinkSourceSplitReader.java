@@ -258,7 +258,7 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
             Optional<Long> stoppingOffsetOpt = logSplit.getStoppingOffset();
             if (stoppingOffsetOpt.isPresent()) {
                 Long stoppingOffset = stoppingOffsetOpt.get();
-                if (startingOffset >= stoppingOffset) {
+                if (isEmptyLogSplit(startingOffset, stoppingOffset)) {
                     // is empty log splits as no log record can be fetched
                     emptyLogSplits.add(split.splitId());
                     isEmptyLogSplit = true;
@@ -317,6 +317,19 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
                     startingOffset);
             subscribedBuckets.put(tableBucket, split.splitId());
         }
+    }
+
+    /**
+     * Whether no record can be read between {@code startingOffset} (inclusive) and {@code
+     * stoppingOffset} (exclusive).
+     *
+     * <p>{@code startingOffset} may still be the {@link LogScanner#EARLIEST_OFFSET} sentinel
+     * instead of a resolved offset, so it can only be compared when it is non-negative. A stopping
+     * offset of 0 means nothing has been written to the bucket yet, so the split is empty for any
+     * starting offset.
+     */
+    private static boolean isEmptyLogSplit(long startingOffset, long stoppingOffset) {
+        return stoppingOffset == 0 || (startingOffset >= 0 && startingOffset >= stoppingOffset);
     }
 
     public Set<TableBucket> removePartitions(Map<Long, String> removedPartitions) {
@@ -458,6 +471,7 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
         Set<String> finishedSplits = new HashSet<>();
         Map<TableBucket, String> splitIdByTableBucket = new HashMap<>();
         List<TableBucket> tableScanBuckets = new ArrayList<>(scanRecords.buckets().size());
+        List<TableBucket> finishedBuckets = new ArrayList<>();
         for (TableBucket scanBucket : scanRecords.buckets()) {
             long stoppingOffset = getStoppingOffset(scanBucket);
             String splitId = subscribedBuckets.get(scanBucket);
@@ -480,10 +494,20 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
                 if (lastRecord.logOffset() >= stoppingOffset - 1) {
                     stoppingOffsets.put(scanBucket, stoppingOffset);
                     finishedSplits.add(splitId);
+                    finishedBuckets.add(scanBucket);
                 }
             }
             splitRecords.put(splitId, toRecordAndPos(bucketScanRecords.iterator()));
         }
+
+        // A finished split is unregistered by SourceReaderBase, while the log scanner would keep
+        // returning records appended to its bucket afterwards. Stop reading those buckets now,
+        // otherwise a later fetch reports records for an unregistered split, which makes
+        // SourceReaderBase fail with "Have records for a split that was not registered".
+        for (TableBucket finishedBucket : finishedBuckets) {
+            unsubscribeFinishedBucket(finishedBucket);
+        }
+
         Iterator<TableBucket> buckets = tableScanBuckets.iterator();
         Iterator<String> splitIterator =
                 new Iterator<String>() {
@@ -544,6 +568,22 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
 
     private long getStoppingOffset(TableBucket tableBucket) {
         return stoppingOffsets.getOrDefault(tableBucket, Long.MAX_VALUE);
+    }
+
+    /**
+     * Stops reading the log of {@code tableBucket} whose bounded split has reached its stopping
+     * offset, so that records appended afterwards are not fetched for the finished split anymore.
+     */
+    private void unsubscribeFinishedBucket(TableBucket tableBucket) {
+        subscribedBuckets.remove(tableBucket);
+        stoppingOffsets.remove(tableBucket);
+        Long partitionId = tableBucket.getPartitionId();
+        if (partitionId != null) {
+            logScanner.unsubscribe(partitionId, tableBucket.getBucket());
+        } else {
+            logScanner.unsubscribe(tableBucket.getBucket());
+        }
+        LOG.info("Unsubscribe to read log of bucket {} since its split is finished.", tableBucket);
     }
 
     private FlinkRecordsWithSplitIds finishCurrentBoundedSplit() throws IOException {
