@@ -289,6 +289,20 @@ partitioning enabled and exactly one partition key. When enabled, the Coordinato
 retains the `__historical__` system partition used to route lookups to Paimon. Disabling the option
 removes that system partition.
 
+Historical partition lookups run on TabletServers. Configure `datalake.format` and the related
+`datalake.<format>.*` options on every TabletServer, for example:
+
+```yaml title="server.yaml"
+datalake.enabled: true
+datalake.format: paimon
+datalake.paimon.metastore: filesystem
+datalake.paimon.warehouse: /path/to/paimon/warehouse
+```
+
+Also make the Paimon connector, `paimon-bundle`, and required catalog or storage JARs available on
+every TabletServer. Use `${FLUSS_HOME}/plugins/paimon/` for the binary distribution or
+`${FLUSS_HOME}/lib/` for a flat classpath, then restart the TabletServers after changes.
+
 Lookup clients use the table configuration captured when the lookuper is created to decide whether
 to fall back after an original partition is missing. After changing
 `table.datalake.historical-partition.enabled`, restart existing lookup jobs that need to look up
