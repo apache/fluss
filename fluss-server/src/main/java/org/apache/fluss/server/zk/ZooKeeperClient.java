@@ -916,12 +916,7 @@ public class ZooKeeperClient implements AutoCloseable {
     /** Get the partition registrations of a table in ZK. */
     public Map<String, PartitionRegistration> getPartitionRegistrations(TablePath tablePath)
             throws Exception {
-        Map<String, PartitionRegistration> partitions = new HashMap<>();
-        for (String partitionName : getPartitions(tablePath)) {
-            Optional<PartitionRegistration> optPartition = getPartition(tablePath, partitionName);
-            optPartition.ifPresent(partition -> partitions.put(partitionName, partition));
-        }
-        return partitions;
+        return getPartitionRegistrations(tablePath, getPartitions(tablePath));
     }
 
     /** Get the partition and the id for the partitions of tables in ZK. */
@@ -969,20 +964,38 @@ public class ZooKeeperClient implements AutoCloseable {
             List<String> partitionKeys,
             ResolvedPartitionSpec partialPartitionSpec)
             throws Exception {
-        Map<String, PartitionRegistration> partitions = new HashMap<>();
+        List<String> matchedPartitionNames =
+                getPartitions(tablePath).stream()
+                        .filter(
+                                partitionName ->
+                                        fromPartitionName(partitionKeys, partitionName)
+                                                .contains(partialPartitionSpec))
+                        .collect(Collectors.toList());
+        return getPartitionRegistrations(tablePath, matchedPartitionNames);
+    }
 
-        for (String partitionName : getPartitions(tablePath)) {
-            ResolvedPartitionSpec resolvedPartitionSpec =
-                    fromPartitionName(partitionKeys, partitionName);
-            boolean contains = resolvedPartitionSpec.contains(partialPartitionSpec);
-            if (contains) {
-                Optional<PartitionRegistration> optPartition =
-                        getPartition(tablePath, partitionName);
-                optPartition.ifPresent(partition -> partitions.put(partitionName, partition));
-            }
-        }
-
-        return partitions;
+    private Map<String, PartitionRegistration> getPartitionRegistrations(
+            TablePath tablePath, Collection<String> partitionNames) throws Exception {
+        Map<String, String> path2PartitionName =
+                partitionNames.stream()
+                        .collect(
+                                toMap(
+                                        partitionName ->
+                                                PartitionZNode.path(tablePath, partitionName),
+                                        partitionName -> partitionName));
+        List<ZkGetDataResponse> responses = getDataInBackground(path2PartitionName.keySet());
+        return processGetDataResponses(
+                responses,
+                response -> path2PartitionName.get(response.getPath()),
+                data -> {
+                    PartitionRegistration partitionRegistration = PartitionZNode.decode(data);
+                    if (partitionRegistration.getRemoteDataDir() == null) {
+                        partitionRegistration =
+                                partitionRegistration.newRemoteDataDir(defaultRemoteDataDir);
+                    }
+                    return partitionRegistration;
+                },
+                "partition registrations");
     }
 
     /** Get the id and name for the partitions of a table in ZK. */

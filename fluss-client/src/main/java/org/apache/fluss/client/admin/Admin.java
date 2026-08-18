@@ -55,6 +55,7 @@ import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.exception.TableNotPartitionedException;
 import org.apache.fluss.exception.TooManyBucketsException;
 import org.apache.fluss.exception.TooManyPartitionsException;
+import org.apache.fluss.metadata.BucketInfo;
 import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
@@ -252,6 +253,46 @@ public interface Admin extends AutoCloseable {
      * @param tablePath The table path of the table.
      */
     CompletableFuture<TableInfo> getTableInfo(TablePath tablePath);
+
+    /**
+     * Describes the buckets of the given table asynchronously.
+     *
+     * <p>For a non-partitioned table, this returns the table buckets. For a partitioned table, this
+     * returns the buckets of all partitions. For a partitioned table with many partitions, prefer
+     * {@link #describeBuckets(TablePath, PartitionSpec)} to limit the result.
+     *
+     * <p>The following exceptions can be anticipated when calling {@code get()} on the returned
+     * future.
+     *
+     * <ul>
+     *   <li>{@link TableNotExistException} if the table does not exist.
+     * </ul>
+     *
+     * @param tablePath The table path of the table.
+     * @since 1.0
+     */
+    CompletableFuture<List<BucketInfo>> describeBuckets(TablePath tablePath);
+
+    /**
+     * Describes the buckets matching the given partition spec asynchronously.
+     *
+     * <p>The partition spec may contain all partition keys or a subset of them.
+     *
+     * <p>The following exceptions can be anticipated when calling {@code get()} on the returned
+     * future.
+     *
+     * <ul>
+     *   <li>{@link TableNotExistException} if the table does not exist.
+     *   <li>{@link TableNotPartitionedException} if the table is not partitioned.
+     *   <li>{@link InvalidPartitionException} if the partition spec is invalid.
+     * </ul>
+     *
+     * @param tablePath The table path of the table.
+     * @param partitionSpec The complete or partial partition spec.
+     * @since 1.0
+     */
+    CompletableFuture<List<BucketInfo>> describeBuckets(
+            TablePath tablePath, PartitionSpec partitionSpec);
 
     /**
      * Drop the table with the given table path asynchronously.

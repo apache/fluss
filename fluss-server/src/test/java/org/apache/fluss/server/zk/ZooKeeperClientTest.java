@@ -745,6 +745,11 @@ class ZooKeeperClientTest {
         assertThat(partition.getPartitionId()).isEqualTo(1L);
         partition = zookeeperClient.getPartition(tablePath, "p2").get();
         assertThat(partition.getPartitionId()).isEqualTo(2L);
+        Map<String, PartitionRegistration> partitionRegistrations =
+                zookeeperClient.getPartitionRegistrations(tablePath);
+        assertThat(partitionRegistrations).containsOnlyKeys("p1", "p2");
+        assertThat(partitionRegistrations.get("p1").getPartitionId()).isEqualTo(1L);
+        assertThat(partitionRegistrations.get("p2").getPartitionId()).isEqualTo(2L);
         assertThat(zookeeperClient.getPartitionsForTables(Arrays.asList(tablePath)))
                 .containsValues(new ArrayList<>(partitions));
 
