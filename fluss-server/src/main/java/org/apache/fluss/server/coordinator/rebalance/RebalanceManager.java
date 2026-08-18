@@ -318,7 +318,12 @@ public class RebalanceManager {
         progressForBucketMap.putAll(finishedRebalanceTasks);
         // the progress will be set at client.
         return new RebalanceProgress(
-                currentRebalanceId, rebalanceStatus, 0.0, progressForBucketMap);
+                currentRebalanceId,
+                rebalanceStatus,
+                0.0,
+                progressForBucketMap,
+                currentStartedAtMs,
+                currentCompletedAtMs);
     }
 
     /**

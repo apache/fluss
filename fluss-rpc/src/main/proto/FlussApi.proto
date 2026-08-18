@@ -756,6 +756,8 @@ message ListRebalanceProgressResponse {
   optional string rebalance_id = 1;
   optional int32 rebalance_status = 2;
   repeated PbRebalanceProgressForTable table_progress = 3;
+  optional int64 started_at_ms = 4;
+  optional int64 completed_at_ms = 5;
 }
 
 message CancelRebalanceRequest {

@@ -2164,6 +2164,12 @@ public class ServerRpcMessageUtils {
                 new ListRebalanceProgressResponse()
                         .setRebalanceId(rebalanceProgress.rebalanceId())
                         .setRebalanceStatus(rebalanceProgress.status().getCode());
+        if (rebalanceProgress.startedAtMs() >= 0) {
+            response.setStartedAtMs(rebalanceProgress.startedAtMs());
+        }
+        if (rebalanceProgress.completedAtMs() >= 0) {
+            response.setCompletedAtMs(rebalanceProgress.completedAtMs());
+        }
 
         Map<Long, List<PbRebalanceProgressForBucket>> tableIdToPbBuckets = new HashMap<>();
         for (Map.Entry<TableBucket, RebalanceResultForBucket> progressForBucket :
