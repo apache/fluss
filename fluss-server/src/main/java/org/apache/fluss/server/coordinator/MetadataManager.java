@@ -19,6 +19,7 @@ package org.apache.fluss.server.coordinator;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.DatabaseAlreadyExistException;
 import org.apache.fluss.exception.DatabaseNotEmptyException;
 import org.apache.fluss.exception.DatabaseNotExistException;
@@ -305,6 +306,8 @@ public class MetadataManager {
                 return zookeeperClient.getPartitionRegistrations(
                         tablePath, tableInfo.getPartitionKeys(), partitionFilter);
             }
+        } catch (ApiException e) {
+            throw e;
         } catch (Exception e) {
             throw new FlussRuntimeException(
                     String.format(

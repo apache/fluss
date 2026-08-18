@@ -37,7 +37,6 @@ import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.exception.DatabaseAlreadyExistException;
 import org.apache.fluss.exception.DatabaseNotEmptyException;
 import org.apache.fluss.exception.DatabaseNotExistException;
-import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidDatabaseException;
@@ -1270,7 +1269,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                                 admin.listPartitionInfos(partitionedTablePath, invalidPartitionSpec)
                                         .get())
                 .cause()
-                .isInstanceOf(FlussRuntimeException.class)
+                .isInstanceOf(InvalidPartitionException.class)
                 .hasMessageContaining("table don't contains this partitionKey: pt1");
     }
 

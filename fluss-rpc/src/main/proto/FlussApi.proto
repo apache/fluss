@@ -153,6 +153,16 @@ message GetTableInfoResponse {
   optional string remote_data_dir = 6;
 }
 
+// describe buckets request and response
+message DescribeBucketsRequest {
+  required PbTablePath table_path = 1;
+  optional PbPartitionSpec partition_spec = 2;
+}
+
+message DescribeBucketsResponse {
+  repeated PbBucketInfo bucket_info = 1;
+}
+
 // list tables request and response
 message ListTablesRequest {
   required string database_name = 1;
@@ -874,6 +884,19 @@ message PbBucketMetadata {
   repeated int32 replica_id = 3 [packed = true];
   // TODO: Add isr here.
   optional int32 leader_epoch = 4;
+}
+
+message PbBucketInfo {
+  required PbTablePath table_path = 1;
+  required int64 table_id = 2;
+  optional int64 partition_id = 3;
+  optional string partition_name = 4;
+  required int32 bucket_id = 5;
+  // optional as the leader may not be elected yet
+  optional int32 leader_id = 6;
+  repeated int32 replica_id = 7 [packed = true];
+  optional int32 leader_epoch = 8;
+  repeated int32 isr_id = 9 [packed = true];
 }
 
 message PbProduceLogReqForBucket {
