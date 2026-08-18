@@ -566,21 +566,27 @@ class LookupSender implements Runnable {
         }
 
         for (AbstractLookupQuery<?> lookup : lookups) {
+            String originalPartitionNameMsg =
+                    lookup.originalPartitionName() == null
+                            ? ""
+                            : " for historical partition " + lookup.originalPartitionName();
             if (canRetry(lookup, exception)) {
                 long retryDelayMs = prepareRetry(lookup, exception);
                 LOG.warn(
-                        "Get error {} response on table bucket {}, retrying after {} ms ({} attempts left). Error: {}",
+                        "Get error {} response on table bucket {}{}, retrying after {} ms ({} attempts left). Error: {}",
                         lookupType,
                         tableBucket,
+                        originalPartitionNameMsg,
                         retryDelayMs,
                         maxRetries - lookup.retries(),
                         error.formatErrMsg());
                 reEnqueueLookup(lookup);
             } else {
                 LOG.warn(
-                        "Get error {} response on table bucket {}, fail. Error: {}",
+                        "Get error {} response on table bucket {}{}, fail. Error: {}",
                         lookupType,
                         tableBucket,
+                        originalPartitionNameMsg,
                         error.formatErrMsg());
                 lookup.future().completeExceptionally(exception);
             }
