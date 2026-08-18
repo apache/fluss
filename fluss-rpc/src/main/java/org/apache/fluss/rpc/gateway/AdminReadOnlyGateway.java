@@ -24,6 +24,8 @@ import org.apache.fluss.rpc.messages.DescribeClusterConfigsRequest;
 import org.apache.fluss.rpc.messages.DescribeClusterConfigsResponse;
 import org.apache.fluss.rpc.messages.GetClusterHealthRequest;
 import org.apache.fluss.rpc.messages.GetClusterHealthResponse;
+import org.apache.fluss.rpc.messages.GetClusterVersionRequest;
+import org.apache.fluss.rpc.messages.GetClusterVersionResponse;
 import org.apache.fluss.rpc.messages.GetDatabaseInfoRequest;
 import org.apache.fluss.rpc.messages.GetDatabaseInfoResponse;
 import org.apache.fluss.rpc.messages.GetFileSystemSecurityTokenRequest;
@@ -202,4 +204,13 @@ public interface AdminReadOnlyGateway extends RpcGateway {
      */
     @RPC(api = ApiKeys.GET_CLUSTER_HEALTH)
     CompletableFuture<GetClusterHealthResponse> getClusterHealth(GetClusterHealthRequest request);
+
+    /**
+     * Get the human-readable version of the cluster.
+     *
+     * @return the cluster version response.
+     */
+    @RPC(api = ApiKeys.GET_CLUSTER_VERSION)
+    CompletableFuture<GetClusterVersionResponse> getClusterVersion(
+            GetClusterVersionRequest request);
 }
