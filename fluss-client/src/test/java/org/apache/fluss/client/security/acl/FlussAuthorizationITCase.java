@@ -73,6 +73,7 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.shaded.guava32.com.google.common.collect.Lists;
 import org.apache.fluss.utils.CloseableIterator;
+import org.apache.fluss.utils.VersionInfo;
 
 import org.assertj.core.api.ThrowableAssert;
 import org.junit.jupiter.api.AfterEach;
@@ -850,6 +851,32 @@ public class FlussAuthorizationITCase {
                                 DATALAKE_FORMAT.key(),
                                 "paimon",
                                 ConfigEntry.ConfigSource.INITIAL_SERVER_CONFIG));
+    }
+
+    @Test
+    void testGetClusterVersion() throws ExecutionException, InterruptedException {
+        assertThatThrownBy(() -> guestAdmin.getClusterVersion().get())
+                .rootCause()
+                .hasMessageContaining(
+                        String.format(
+                                "Principal %s have no authorization to operate DESCRIBE on resource Resource{type=CLUSTER, name='fluss-cluster'}",
+                                guestPrincipal));
+        rootAdmin
+                .createAcls(
+                        Collections.singletonList(
+                                new AclBinding(
+                                        Resource.cluster(),
+                                        new AccessControlEntry(
+                                                guestPrincipal,
+                                                "*",
+                                                OperationType.DESCRIBE,
+                                                PermissionType.ALLOW))))
+                .all()
+                .get();
+        assertThat(guestAdmin.getClusterVersion().get())
+                .isEqualTo(VersionInfo.getVersion())
+                .isNotEqualTo("unknown")
+                .matches("^\\d+\\.\\d+.*");
     }
 
     @Test
