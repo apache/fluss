@@ -51,6 +51,7 @@ import static org.apache.fluss.config.ConfigOptions.KV_SHARED_RATE_LIMITER_BYTES
 import static org.apache.fluss.config.ConfigOptions.KV_SNAPSHOT_INTERVAL;
 import static org.apache.fluss.config.ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER;
 import static org.apache.fluss.config.ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED;
+import static org.apache.fluss.config.ConfigOptions.NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS;
 import static org.apache.fluss.config.ConfigOptions.REMOTE_DATA_DIRS;
 import static org.apache.fluss.config.ConfigOptions.REMOTE_DATA_DIRS_STRATEGY;
 import static org.apache.fluss.config.ConfigOptions.REMOTE_DATA_DIRS_WEIGHTS;
@@ -58,6 +59,7 @@ import static org.apache.fluss.config.ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT
 import static org.apache.fluss.config.ConfigOptions.SERVER_DATA_DISK_WRITE_RECOVER_RATIO;
 import static org.apache.fluss.config.ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUPER_CACHE_EXPIRE_AFTER_ACCESS;
 import static org.apache.fluss.config.ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO;
+import static org.apache.fluss.config.ConfigOptions.SERVER_HISTORICAL_PARTITION_THREAD_POOL_MAX_SIZE;
 import static org.apache.fluss.config.ConfigOptions.SERVER_SASL_CREDENTIALS;
 import static org.apache.fluss.config.ConfigOptions.SERVER_SASL_PLAIN_JAAS_CONFIG;
 import static org.apache.fluss.utils.concurrent.LockUtils.inReadLock;
@@ -86,6 +88,8 @@ class DynamicServerConfig {
                             SERVER_DATA_DISK_WRITE_LIMIT_RATIO.key(),
                             SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO.key(),
                             SERVER_HISTORICAL_PARTITION_LOOKUPER_CACHE_EXPIRE_AFTER_ACCESS.key(),
+                            SERVER_HISTORICAL_PARTITION_THREAD_POOL_MAX_SIZE.key(),
+                            NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS.key(),
                             // Config options for remote.data.dirs
                             REMOTE_DATA_DIRS.key(),
                             REMOTE_DATA_DIRS_STRATEGY.key(),
