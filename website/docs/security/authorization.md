@@ -123,6 +123,7 @@ Below is a summary of the currently public protocols and their relationship with
 | LIST_REBALANCE_PROGRESS | DESCRIBE | Cluster | |
 | CANCEL_REBALANCE | WRITE | Cluster | |
 | GET_CLUSTER_HEALTH | DESCRIBE | Cluster | |
+| GET_CLUSTER_VERSION | DESCRIBE | Cluster | |
 | FIND_CONSUMER_GROUP_OWNER | DESCRIBE | Group | Authorization is checked before initializing the consumer-offset system table. |
 | COMMIT_CONSUMER_OFFSETS | READ | Group and source Tables | Requires `READ` on the consumer group and `READ` on every source table. Group authorization is checked before owner resolution and source-table authorization. |
 | GET_CONSUMER_OFFSETS | DESCRIBE | Group and source Tables | Requires `DESCRIBE` on the consumer group and every explicitly requested source table. `allOffsets` requests omit source tables the caller cannot describe. |

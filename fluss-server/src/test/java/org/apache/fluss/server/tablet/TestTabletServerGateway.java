@@ -42,6 +42,8 @@ import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerRequest;
 import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerResponse;
 import org.apache.fluss.rpc.messages.GetClusterHealthRequest;
 import org.apache.fluss.rpc.messages.GetClusterHealthResponse;
+import org.apache.fluss.rpc.messages.GetClusterVersionRequest;
+import org.apache.fluss.rpc.messages.GetClusterVersionResponse;
 import org.apache.fluss.rpc.messages.GetConsumerOffsetsRequest;
 import org.apache.fluss.rpc.messages.GetConsumerOffsetsResponse;
 import org.apache.fluss.rpc.messages.GetDatabaseInfoRequest;
@@ -255,6 +257,12 @@ public class TestTabletServerGateway implements TabletServerGateway {
     @Override
     public CompletableFuture<GetClusterHealthResponse> getClusterHealth(
             GetClusterHealthRequest request) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public CompletableFuture<GetClusterVersionResponse> getClusterVersion(
+            GetClusterVersionRequest request) {
         throw new UnsupportedOperationException();
     }
 
