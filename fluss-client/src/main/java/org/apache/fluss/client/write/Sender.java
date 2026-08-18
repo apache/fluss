@@ -410,8 +410,18 @@ public class Sender implements Runnable {
                     batches);
         } else {
             writeBatchByTable.forEach(
-                    (tableId, writeBatches) ->
-                            sendWriteRequestsForTable(gateway, tableId, acks, writeBatches));
+                (tableId, writeBatches) -> {
+                    try {
+                        sendWriteRequestsForTable(gateway, tableId, acks, writeBatches);
+                    } catch (Throwable t) {
+                        // A gateway may throw before returning a future, for example when RPC
+                        // encoding runs out of direct memory. No callback is registered in that
+                        // case, so complete the drained batches to release their buffer pages
+                        // and in-flight state.
+                        handleWriteRequestException(t, writeBatches);
+                    }
+                }
+            );
         }
     }
 
