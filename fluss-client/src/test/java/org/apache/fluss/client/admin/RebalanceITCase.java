@@ -257,6 +257,8 @@ public class RebalanceITCase {
         RebalanceProgress progress = progressOpt.get();
         assertThat(progress.progress()).isEqualTo(1d);
         assertThat(progress.status()).isEqualTo(RebalanceStatus.COMPLETED);
+        assertThat(progress.startedAtMs()).isGreaterThanOrEqualTo(0);
+        assertThat(progress.completedAtMs()).isGreaterThanOrEqualTo(progress.startedAtMs());
 
         // test list and cancel an un-existed rebalance id.
         assertThatThrownBy(() -> admin.listRebalanceProgress("unexisted-rebalance-id").get())
