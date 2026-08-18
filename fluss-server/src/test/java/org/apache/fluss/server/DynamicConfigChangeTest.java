@@ -430,6 +430,30 @@ public class DynamicConfigChangeTest {
     }
 
     @Test
+    void testHistoricalLookupConfigsCanBeChangedDynamically() throws Exception {
+        DynamicConfigManager dynamicConfigManager = createManager(new Configuration());
+        dynamicConfigManager.startup();
+
+        dynamicConfigManager.alterConfigs(
+                Arrays.asList(
+                        new AlterConfig(
+                                ConfigOptions.SERVER_HISTORICAL_PARTITION_THREAD_POOL_MAX_SIZE
+                                        .key(),
+                                "12",
+                                AlterConfigOpType.SET),
+                        new AlterConfig(
+                                ConfigOptions.NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS.key(),
+                                "60",
+                                AlterConfigOpType.SET)));
+
+        assertThat(zookeeperClient.fetchEntityConfig())
+                .containsEntry(
+                        ConfigOptions.SERVER_HISTORICAL_PARTITION_THREAD_POOL_MAX_SIZE.key(), "12")
+                .containsEntry(
+                        ConfigOptions.NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS.key(), "60");
+    }
+
+    @Test
     void testPreventInvalidConfig() throws Exception {
         // Test that generic type validation prevents invalid config values
         Configuration configuration = new Configuration();

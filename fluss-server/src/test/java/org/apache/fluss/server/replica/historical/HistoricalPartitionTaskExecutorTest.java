@@ -31,6 +31,7 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -55,6 +56,33 @@ class HistoricalPartitionTaskExecutorTest {
         executor.runNext();
         assertThat(first).isCompletedWithValue("accepted");
         assertThat(taskExecutor.numInflightRequests()).isZero();
+    }
+
+    @Test
+    void testReconfiguresRequestLimitWhileRequestsAreInflight() throws Exception {
+        ManualExecutor executor = new ManualExecutor();
+        HistoricalPartitionTaskExecutor taskExecutor =
+                new HistoricalPartitionTaskExecutor(configuration(2), executor);
+
+        CompletableFuture<String> first = taskExecutor.submit(() -> "accepted", () -> "throttled");
+        CompletableFuture<String> second = taskExecutor.submit(() -> "accepted", () -> "throttled");
+        taskExecutor.reconfigure(configuration(1));
+
+        CompletableFuture<String> third = taskExecutor.submit(() -> "accepted", () -> "throttled");
+        assertThat(third).isCompletedWithValue("throttled");
+        assertThat(taskExecutor.numInflightRequests()).isEqualTo(2);
+
+        executor.runNext();
+        executor.runNext();
+        assertThat(first).isCompletedWithValue("accepted");
+        assertThat(second).isCompletedWithValue("accepted");
+        assertThat(taskExecutor.numInflightRequests()).isZero();
+
+        taskExecutor.reconfigure(configuration(2));
+        CompletableFuture<String> fourth = taskExecutor.submit(() -> "accepted", () -> "throttled");
+        assertThat(fourth).isNotDone();
+        executor.runNext();
+        assertThat(fourth).isCompletedWithValue("accepted");
     }
 
     @Test
@@ -169,6 +197,32 @@ class HistoricalPartitionTaskExecutorTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining(
                         ConfigOptions.SERVER_HISTORICAL_PARTITION_THREAD_POOL_MAX_SIZE.key());
+    }
+
+    @Test
+    void testReconfiguresThreadPoolMaxSize() {
+        Configuration initialConf = configuration(1);
+        initialConf.set(ConfigOptions.SERVER_HISTORICAL_PARTITION_THREAD_POOL_MAX_SIZE, 1);
+        ThreadPoolExecutor executor =
+                new ThreadPoolExecutor(1, 1, 1L, TimeUnit.MINUTES, new LinkedBlockingQueue<>());
+        HistoricalPartitionTaskExecutor taskExecutor =
+                new HistoricalPartitionTaskExecutor(initialConf, executor);
+
+        try {
+            Configuration largerConf = new Configuration(initialConf);
+            largerConf.set(ConfigOptions.SERVER_HISTORICAL_PARTITION_THREAD_POOL_MAX_SIZE, 3);
+            taskExecutor.reconfigure(largerConf);
+            assertThat(executor.getCorePoolSize()).isEqualTo(3);
+            assertThat(executor.getMaximumPoolSize()).isEqualTo(3);
+
+            Configuration smallerConf = new Configuration(largerConf);
+            smallerConf.set(ConfigOptions.SERVER_HISTORICAL_PARTITION_THREAD_POOL_MAX_SIZE, 1);
+            taskExecutor.reconfigure(smallerConf);
+            assertThat(executor.getCorePoolSize()).isEqualTo(1);
+            assertThat(executor.getMaximumPoolSize()).isEqualTo(1);
+        } finally {
+            taskExecutor.close();
+        }
     }
 
     private static Configuration configuration(int maxQueuedHistoricalRequests) {
