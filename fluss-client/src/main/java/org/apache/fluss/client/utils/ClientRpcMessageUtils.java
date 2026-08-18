@@ -626,7 +626,9 @@ public class ClientRpcMessageUtils {
                         response.getRebalanceId(),
                         totalRebalanceStatus,
                         progress,
-                        rebalanceProgress));
+                        rebalanceProgress,
+                        response.hasStartedAtMs() ? response.getStartedAtMs() : -1,
+                        response.hasCompletedAtMs() ? response.getCompletedAtMs() : -1));
     }
 
     public static List<RebalanceInfo> toRebalanceInfos(ListRebalancesResponse response) {

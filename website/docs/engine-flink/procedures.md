@@ -475,12 +475,12 @@ CALL sys.rebalance('RACK_AWARE,REPLICA_DISTRIBUTION,LEADER_DISTRIBUTION');
 
 ### list_rebalance
 
-Query the progress and status of a rebalance operation. This procedure allows you to monitor ongoing or completed rebalance operations to track their progress and view detailed information about bucket movements.
+Query the progress and status of rebalance operations. This procedure allows you to monitor the ongoing rebalance operation, view detailed information about bucket movements, and list the retained history of finished rebalances.
 
 **Syntax:**
 
 ```sql
--- List the most recent rebalance progress
+-- List the current rebalance and the retained history of finished rebalances
 CALL [catalog_name.]sys.list_rebalance()
 
 -- List a specific rebalance progress by ID
@@ -491,18 +491,20 @@ CALL [catalog_name.]sys.list_rebalance(
 
 **Parameters:**
 
-- `rebalanceId` (optional): The rebalance ID to query. If omitted, returns the progress of the most recent rebalance operation. The rebalance ID is returned when calling the `rebalance` procedure.
+- `rebalanceId` (optional): The rebalance ID to query. If omitted, returns one row per known rebalance: the most recent rebalance followed by the retained history of finished rebalances, newest first. The ID to pass here is the value returned by the `rebalance` procedure.
 
-**Returns:** An array of strings containing:
-- Rebalance ID: The unique identifier of the rebalance operation
-- Rebalance total status: The overall status of the rebalance. Possible values are:
+**Returns:** One row per rebalance with the following columns:
+- `rebalance_id`: The unique identifier of the rebalance operation
+- `rebalance_status`: The overall status of the rebalance. Possible values are:
     - `NOT_STARTED`: The rebalance has been created but not yet started
     - `REBALANCING`: The rebalance is currently in progress
     - `COMPLETED`: The rebalance has successfully completed
     - `FAILED`: The rebalance has failed
     - `CANCELED`: The rebalance has been canceled
-- Rebalance progress: The completion percentage (e.g., `75.5%`)
-- Rebalance detail progress for bucket: Detailed progress information for each bucket being moved
+- `rebalance_progress`: The completion percentage (e.g., `75.5%`). `NULL` for historical rows, which do not carry per-bucket detail
+- `rebalance_plan`: Detailed progress information for each bucket being moved, as JSON. `NULL` for historical rows
+- `started_at`: The time the rebalance was started. `NULL` if unknown
+- `completed_at`: The time the rebalance reached a final status. `NULL` while the rebalance is still in progress
 
 If no rebalance is found, returns empty line.
 
@@ -512,7 +514,7 @@ If no rebalance is found, returns empty line.
 -- Use the Fluss catalog (replace 'fluss_catalog' with your catalog name if different)
 USE fluss_catalog;
 
--- List the most recent rebalance progress
+-- List the current rebalance and the retained history of finished rebalances
 CALL sys.list_rebalance();
 
 -- List a specific rebalance progress by ID
@@ -537,7 +539,7 @@ CALL [catalog_name.]sys.cancel_rebalance(
 
 **Parameters:**
 
-- `rebalanceId` (optional): The rebalance ID to cancel. If omitted, cancels the most recent rebalance operation. The rebalance ID is returned when calling the `rebalance` procedure.
+- `rebalanceId` (optional): The rebalance ID to cancel. If omitted, cancels the most recent rebalance operation. The ID to pass here is the value returned by the `rebalance` procedure.
 
 **Returns:** An array with a single element `'success'` if the operation completes successfully.
 
