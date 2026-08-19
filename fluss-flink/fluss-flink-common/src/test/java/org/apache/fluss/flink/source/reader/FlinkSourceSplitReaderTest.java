@@ -23,6 +23,7 @@ import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.client.write.HashBucketAssigner;
+import org.apache.fluss.flink.lake.split.LakeSnapshotAndFlussLogSplit;
 import org.apache.fluss.flink.source.metrics.FlinkSourceReaderMetrics;
 import org.apache.fluss.flink.source.split.HybridSnapshotLogSplit;
 import org.apache.fluss.flink.source.split.KvBatchSplit;
@@ -404,9 +405,15 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
         Map<String, List<RecordAndPos>> splitConsumedRecords = new HashMap<>();
         Set<String> expectedSnapshotPhaseFinishedSplits = new HashSet<>();
         for (SourceSplitBase split : splits) {
-            if (split.isHybridSnapshotLogSplit()
-                    && !split.asHybridSnapshotLogSplit().isBatch()
-                    && !split.asHybridSnapshotLogSplit().isSnapshotFinished()) {
+            boolean isUnfinishedStreamingHybridSplit =
+                    split.isHybridSnapshotLogSplit()
+                            && !split.asHybridSnapshotLogSplit().isBatch()
+                            && !split.asHybridSnapshotLogSplit().isSnapshotFinished();
+            boolean isUnfinishedStreamingLakeSplit =
+                    split instanceof LakeSnapshotAndFlussLogSplit
+                            && ((LakeSnapshotAndFlussLogSplit) split).isStreaming()
+                            && !((LakeSnapshotAndFlussLogSplit) split).isLakeSplitFinished();
+            if (isUnfinishedStreamingHybridSplit || isUnfinishedStreamingLakeSplit) {
                 expectedSnapshotPhaseFinishedSplits.add(split.splitId());
             }
         }
