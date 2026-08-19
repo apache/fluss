@@ -393,20 +393,9 @@ class HistoricalLakeLookupManager implements AutoCloseable {
         return maxQueuedHistoricalRequests - lookupPermits.availablePermits();
     }
 
-    /** Validates the historical lookup settings that can be changed at runtime. */
-    static void validateConfig(Configuration config) throws ConfigException {
-        validatePositive(
-                config.get(ConfigOptions.NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS),
-                ConfigOptions.NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS.key());
-        validatePositive(
-                config.get(ConfigOptions.SERVER_HISTORICAL_PARTITION_THREAD_POOL_MAX_SIZE),
-                ConfigOptions.SERVER_HISTORICAL_PARTITION_THREAD_POOL_MAX_SIZE.key());
-    }
-
     /** Applies dynamic historical lookup configuration changes. */
     void reconfigure(Configuration newConf) throws ConfigException {
         checkNotNull(newConf, "newConf must not be null.");
-        validateConfig(newConf);
         boolean lakeConfigChanged;
         boolean cacheLimitChanged;
         boolean expirationChanged;
@@ -475,14 +464,6 @@ class HistoricalLakeLookupManager implements AutoCloseable {
             // with the updated per-table limit.
             lakeTableLookupers.invalidateAll();
             lakeTableLookupers.cleanUp();
-        }
-    }
-
-    private static void validatePositive(int value, String configKey) throws ConfigException {
-        if (value <= 0) {
-            throw new ConfigException(
-                    String.format(
-                            "Invalid configuration for %s, it must be greater than 0.", configKey));
         }
     }
 
