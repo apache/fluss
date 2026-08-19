@@ -712,11 +712,11 @@ TEST_F(LogTableTest, TestPollBatches) {
     ASSERT_OK(adm.DropTable(table_path, false));
 }
 
-TEST_F(LogTableTest, PredicatePushdownWithProjection) {
+TEST_F(LogTableTest, FilterPushdownWithProjection) {
     auto& adm = admin();
     auto& conn = connection();
 
-    fluss::TablePath table_path("fluss", "test_predicate_pushdown_cpp");
+    fluss::TablePath table_path("fluss", "test_filter_pushdown_cpp");
     auto schema = fluss::Schema::NewBuilder()
                       .AddColumn("id", DataType::Int())
                       .AddColumn("name", DataType::String())

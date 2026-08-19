@@ -33,7 +33,7 @@ bazel build //...
 `ci.sh` defaults to optimized builds via `-c opt` (override with `BAZEL_BUILD_FLAGS` if needed).
 See [ci.sh](ci.sh) for the CI build sequence.
 
-## Log predicate pushdown
+## Log filter pushdown
 
 `TableScan::Filter()` pushes a predicate to Arrow log scans for server-side
 RecordBatch pruning:

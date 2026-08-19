@@ -317,7 +317,7 @@ class PredicateLiteral {
 
 /// Filter expression for server-side Arrow log RecordBatch pruning.
 ///
-/// Predicate pushdown is conservative: a returned RecordBatch may still
+/// Filter pushdown is conservative: a returned RecordBatch may still
 /// contain non-matching rows, so callers must evaluate the predicate again.
 class Predicate {
    public:
