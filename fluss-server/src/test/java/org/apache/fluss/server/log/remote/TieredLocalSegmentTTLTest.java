@@ -21,6 +21,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.log.LogSegment;
 import org.apache.fluss.server.log.LogTablet;
+import org.apache.fluss.server.replica.Replica;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -185,10 +186,11 @@ final class TieredLocalSegmentTTLTest extends RemoteLogTestBase {
         conf.set(ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED, true);
         logManager.reconfigure(conf);
         makeLogTableAsLeader(tb, partitionTable);
-        LogTablet logTablet = replicaManager.getReplicaOrException(tb).getLogTablet();
+        Replica replica = replicaManager.getReplicaOrException(tb);
+        LogTablet logTablet = replica.getLogTablet();
 
         addMultiSegmentsToLogTablet(logTablet, 5);
-        logTablet.updateTieredLogLocalSegments(5);
+        updateTableConfig(replica, ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS, "5");
         logTablet.updateHighestCopiedEndOffset(20L);
 
         manualClock.advanceTime(Duration.ofMinutes(90));
@@ -210,19 +212,20 @@ final class TieredLocalSegmentTTLTest extends RemoteLogTestBase {
     void testUpdatedLocalTtlTakesEffectImmediately() throws Exception {
         TableBucket tableBucket = new TableBucket(DATA1_TABLE_ID, 0);
         makeLogTableAsLeader(tableBucket, false);
-        LogTablet logTablet = replicaManager.getReplicaOrException(tableBucket).getLogTablet();
-        logTablet.updateTieredLogLocalSegments(5);
+        Replica replica = replicaManager.getReplicaOrException(tableBucket);
+        LogTablet logTablet = replica.getLogTablet();
+        updateTableConfig(replica, ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS, "5");
 
         addMultiSegmentsToLogTablet(logTablet, 5);
         remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
-        logTablet.updateLogTtls(Duration.ofHours(2).toMillis(), Duration.ofHours(2).toMillis());
+        updateTableConfig(replica, ConfigOptions.TABLE_LOG_LOCAL_TTL, "2h");
         assertThat(logTablet.getEffectiveLocalLogTtlMs()).isEqualTo(Duration.ofHours(2).toMillis());
 
         manualClock.advanceTime(Duration.ofMinutes(90));
         logManager.cleanupExpiredLocalLogSegments();
         assertThat(logTablet.getSegments()).hasSize(5);
 
-        logTablet.updateLogTtls(Duration.ofHours(2).toMillis(), Duration.ofHours(1).toMillis());
+        updateTableConfig(replica, ConfigOptions.TABLE_LOG_LOCAL_TTL, "1h");
         logManager.cleanupExpiredLocalLogSegments();
         assertThat(logTablet.getSegments()).hasSize(1);
         assertThat(logTablet.localLogStartOffset()).isEqualTo(40L);

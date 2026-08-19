@@ -296,20 +296,14 @@ public final class LogManager extends TabletManagerBase implements ServerReconfi
      * @param dataDir the local data directory chosen for the bucket
      * @param tablePath the table path of the bucket belongs to
      * @param tableBucket the table bucket
-     * @param logFormat the log format
-     * @param tieredLogLocalSegments the number of segments to retain in local for tiered log
-     * @param logTtlMs the table log TTL in milliseconds
-     * @param localLogTtlMs the local log TTL in milliseconds from table configuration
+     * @param tableConfig the table configuration
      * @param isChangelog whether the log is a changelog of primary key table
      */
     public LogTablet getOrCreateLog(
             File dataDir,
             PhysicalTablePath tablePath,
             TableBucket tableBucket,
-            LogFormat logFormat,
-            int tieredLogLocalSegments,
-            long logTtlMs,
-            long localLogTtlMs,
+            TableConfig tableConfig,
             boolean isChangelog)
             throws Exception {
         return inLock(
@@ -331,10 +325,7 @@ public final class LogManager extends TabletManagerBase implements ServerReconfi
                                     serverMetricGroup,
                                     0L,
                                     scheduler,
-                                    logFormat,
-                                    tieredLogLocalSegments,
-                                    logTtlMs,
-                                    localLogTtlMs,
+                                    tableConfig,
                                     isChangelog,
                                     clock,
                                     true);
@@ -358,16 +349,11 @@ public final class LogManager extends TabletManagerBase implements ServerReconfi
             int tieredLogLocalSegments,
             boolean isChangelog)
             throws Exception {
-        TableConfig tableConfig = new TableConfig(new Configuration());
+        Configuration tableProperties = new Configuration();
+        tableProperties.set(ConfigOptions.TABLE_LOG_FORMAT, logFormat);
+        tableProperties.set(ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS, tieredLogLocalSegments);
         return getOrCreateLog(
-                dataDir,
-                tablePath,
-                tableBucket,
-                logFormat,
-                tieredLogLocalSegments,
-                tableConfig.getLogTTLMs(),
-                tableConfig.getLocalLogTTLMs(),
-                isChangelog);
+                dataDir, tablePath, tableBucket, new TableConfig(tableProperties), isChangelog);
     }
 
     public Optional<LogTablet> getLog(TableBucket tableBucket) {
@@ -479,14 +465,10 @@ public final class LogManager extends TabletManagerBase implements ServerReconfi
                         serverMetricGroup,
                         logRecoveryPoint,
                         scheduler,
-                        tableInfo.getTableConfig().getLogFormat(),
-                        tableInfo.getTableConfig().getTieredLogLocalSegments(),
-                        tableInfo.getTableConfig().getLogTTLMs(),
-                        tableInfo.getTableConfig().getLocalLogTTLMs(),
+                        tableInfo.getTableConfig(),
                         tableInfo.hasPrimaryKey(),
                         clock,
                         isCleanShutdown);
-        logTablet.updateIsDataLakeEnabled(tableInfo.getTableConfig().isDataLakeEnabled());
 
         if (currentLogs.containsKey(tableBucket)) {
             throw new IllegalStateException(

@@ -1845,7 +1845,7 @@ public class ConfigOptions {
                                     + "maximum time log segments are retained before they become "
                                     + "eligible for deletion. When remote log tiering is enabled, "
                                     + "this value controls the retention of remote log segments. "
-                                    + "Setting the value to -1 disables TTL-based deletion. "
+                                    + "Setting the value to '0ms' disables TTL-based deletion. "
                                     + "The default value is 7 days.");
 
     public static final ConfigOption<Integer> TABLE_TIERED_LOG_LOCAL_SEGMENTS =
@@ -1865,7 +1865,7 @@ public class ConfigOptions {
                                     + "maximum time local log segments are retained before they become "
                                     + "eligible for deletion. When remote log tiering is enabled, an "
                                     + "expired local segment is deleted only after it has been copied "
-                                    + "to remote storage. Setting the value to -1 disables TTL-based "
+                                    + "to remote storage. Setting the value to '0ms' disables TTL-based "
                                     + "deletion. If not configured, the value inherits `table.log.ttl`. "
                                     + "When both values are positive, it must be less than or equal to "
                                     + "`table.log.ttl`.");

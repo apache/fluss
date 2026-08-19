@@ -41,7 +41,7 @@ class RemoteLogTabletOverlapTest {
     void testLogicalLookupUsesClippedRanges() {
         RemoteLogSegment first = segment(0L, 10L).withLogicalRange(0L, 5L);
         RemoteLogSegment second = segment(5L, 20L);
-        RemoteLogTablet tablet = new RemoteLogTablet(TABLE_PATH, TABLE_BUCKET, -1L);
+        RemoteLogTablet tablet = new RemoteLogTablet(TABLE_PATH, TABLE_BUCKET);
         tablet.loadRemoteLogManifest(
                 new RemoteLogManifest(TABLE_PATH, TABLE_BUCKET, Arrays.asList(first, second)));
 
@@ -55,7 +55,7 @@ class RemoteLogTabletOverlapTest {
     void testFetchV0StopsBeforePhysicalOverlap() {
         RemoteLogSegment first = segment(0L, 10L).withLogicalRange(0L, 5L);
         RemoteLogSegment second = segment(5L, 20L);
-        RemoteLogTablet tablet = new RemoteLogTablet(TABLE_PATH, TABLE_BUCKET, -1L);
+        RemoteLogTablet tablet = new RemoteLogTablet(TABLE_PATH, TABLE_BUCKET);
         tablet.loadRemoteLogManifest(
                 new RemoteLogManifest(TABLE_PATH, TABLE_BUCKET, Arrays.asList(first, second)));
 
@@ -67,7 +67,7 @@ class RemoteLogTabletOverlapTest {
     void testFetchV0ReturnsContiguousSegmentsTogether() {
         List<RemoteLogSegment> segments =
                 Arrays.asList(segment(0L, 10L), segment(10L, 20L), segment(20L, 30L));
-        RemoteLogTablet tablet = new RemoteLogTablet(TABLE_PATH, TABLE_BUCKET, -1L);
+        RemoteLogTablet tablet = new RemoteLogTablet(TABLE_PATH, TABLE_BUCKET);
         tablet.loadRemoteLogManifest(new RemoteLogManifest(TABLE_PATH, TABLE_BUCKET, segments));
 
         assertThat(tablet.relevantRemoteLogSegmentsForFetchV0(5L))
@@ -76,7 +76,7 @@ class RemoteLogTabletOverlapTest {
 
     @Test
     void testEmptyManifestKeepsCopyProgress() {
-        RemoteLogTablet tablet = new RemoteLogTablet(TABLE_PATH, TABLE_BUCKET, -1L);
+        RemoteLogTablet tablet = new RemoteLogTablet(TABLE_PATH, TABLE_BUCKET);
         tablet.loadRemoteLogManifest(
                 new RemoteLogManifest(TABLE_PATH, TABLE_BUCKET, Collections.emptyList(), 20L));
 

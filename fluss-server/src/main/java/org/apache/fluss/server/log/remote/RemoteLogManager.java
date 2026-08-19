@@ -152,8 +152,7 @@ public class RemoteLogManager implements Closeable {
         TableBucket tableBucket = replica.getTableBucket();
         PhysicalTablePath physicalTablePath = replica.getPhysicalTablePath();
         LogTablet log = replica.getLogTablet();
-        RemoteLogTablet remoteLog =
-                new RemoteLogTablet(physicalTablePath, tableBucket, replica.getLogTTLMs());
+        RemoteLogTablet remoteLog = new RemoteLogTablet(physicalTablePath, tableBucket);
         Optional<RemoteLogManifestHandle> remoteLogManifestHandleOpt =
                 zkClient.getRemoteLogManifestHandle(tableBucket);
         if (remoteLogManifestHandleOpt.isPresent()) {
@@ -288,25 +287,6 @@ public class RemoteLogManager implements Closeable {
     public List<RemoteLogSegment> relevantRemoteLogSegmentsForFetchV0(
             TableBucket tableBucket, long offset) {
         return remoteLogTablet(tableBucket).relevantRemoteLogSegmentsForFetchV0(offset);
-    }
-
-    /**
-     * Updates the ttl of the {@link RemoteLogTablet} for the given bucket.
-     *
-     * @return the previous ttl, or {@link Optional#empty()} if no tablet is registered (remote
-     *     logging disabled or replica still initializing; the eventually-constructed tablet will
-     *     read the latest ttl from {@code Replica.getLogTTLMs()}).
-     */
-    public Optional<Long> updateLogTtlMs(TableBucket tableBucket, long newTtlMs) {
-        RemoteLogTablet remoteLogTablet = remoteLogs.get(tableBucket);
-        if (remoteLogTablet == null) {
-            return Optional.empty();
-        }
-        long oldTtlMs = remoteLogTablet.getTtlMs();
-        if (oldTtlMs != newTtlMs) {
-            remoteLogTablet.updateTtlMs(newTtlMs);
-        }
-        return Optional.of(oldTtlMs);
     }
 
     private boolean remoteDisabled() {

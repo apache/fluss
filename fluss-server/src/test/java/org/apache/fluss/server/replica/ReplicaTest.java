@@ -1025,7 +1025,7 @@ final class ReplicaTest extends ReplicaTestBase {
         Replica logReplica =
                 makeLogReplica(DATA1_PHYSICAL_TABLE_PATH, new TableBucket(DATA1_TABLE_ID, 1));
         makeLogReplicaAsLeader(logReplica);
-        logReplica.updateIsDataLakeEnabled(true);
+        updateTableConfig(logReplica, ConfigOptions.TABLE_DATALAKE_ENABLED, "true");
 
         long initialTimestamp = manualClock.milliseconds();
         MemoryLogRecords firstBatch =
@@ -1072,7 +1072,7 @@ final class ReplicaTest extends ReplicaTestBase {
     }
 
     @Test
-    void testUpdateIsDataLakeEnabled() throws Exception {
+    void testUpdateTableInfoChangesDataLakeEnabled() throws Exception {
         Replica logReplica =
                 makeLogReplica(DATA1_PHYSICAL_TABLE_PATH, new TableBucket(DATA1_TABLE_ID, 1));
         makeLogReplicaAsLeader(logReplica);
@@ -1081,15 +1081,15 @@ final class ReplicaTest extends ReplicaTestBase {
         assertThat(logReplica.getLogTablet().isDataLakeEnabled()).isFalse();
 
         // update to true
-        logReplica.updateIsDataLakeEnabled(true);
+        updateTableConfig(logReplica, ConfigOptions.TABLE_DATALAKE_ENABLED, "true");
         assertThat(logReplica.getLogTablet().isDataLakeEnabled()).isTrue();
 
         // update with same value should not change anything (no-op)
-        logReplica.updateIsDataLakeEnabled(true);
+        updateTableConfig(logReplica, ConfigOptions.TABLE_DATALAKE_ENABLED, "true");
         assertThat(logReplica.getLogTablet().isDataLakeEnabled()).isTrue();
 
         // update to false
-        logReplica.updateIsDataLakeEnabled(false);
+        updateTableConfig(logReplica, ConfigOptions.TABLE_DATALAKE_ENABLED, "false");
         assertThat(logReplica.getLogTablet().isDataLakeEnabled()).isFalse();
     }
 

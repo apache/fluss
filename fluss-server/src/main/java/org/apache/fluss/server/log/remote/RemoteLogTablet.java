@@ -71,8 +71,6 @@ public class RemoteLogTablet {
     /** The lock to protect the remote log segment list. */
     private final ReadWriteLock lock = new ReentrantReadWriteLock();
 
-    private volatile long ttlMs;
-
     /** The registered metrics for remote log. */
     private volatile MetricGroup remoteLogMetrics;
 
@@ -94,9 +92,7 @@ public class RemoteLogTablet {
 
     private volatile boolean closed = false;
 
-    public RemoteLogTablet(
-            PhysicalTablePath physicalTablePath, TableBucket tableBucket, long ttlMs) {
-        this.ttlMs = ttlMs;
+    public RemoteLogTablet(PhysicalTablePath physicalTablePath, TableBucket tableBucket) {
         this.currentManifest =
                 new RemoteLogManifest(physicalTablePath, tableBucket, new ArrayList<>());
         reset();
@@ -157,15 +153,12 @@ public class RemoteLogTablet {
      * @param currentTimeMs the current time in milliseconds
      * @param lakeLogEndOffset the log end offset that has been synced to lake, null if data lake is
      *     disabled
+     * @param ttlMs the current table log TTL in milliseconds
      * @return list of expired segments that can be safely deleted
      */
     public List<RemoteLogSegment> expiredRemoteLogSegments(
-            long currentTimeMs, Long lakeLogEndOffset) {
-        // Snapshot ttlMs to prevent a concurrent update from changing the comparison base
-        // mid-iteration. Without this, an in-flight change to a non-positive value could wrongly
-        // delete all segments.
-        final long ttlSnapshotMs = ttlMs;
-        if (ttlSnapshotMs <= 0) {
+            long currentTimeMs, Long lakeLogEndOffset, long ttlMs) {
+        if (ttlMs <= 0) {
             return Collections.emptyList();
         }
         return inReadLock(
@@ -175,7 +168,7 @@ public class RemoteLogTablet {
                     for (Map.Entry<Long, Set<UUID>> entry :
                             timestampToRemoteLogSegmentId.entrySet()) {
                         long ts = entry.getKey();
-                        if (currentTimeMs - ts > ttlSnapshotMs) {
+                        if (currentTimeMs - ts > ttlMs) {
                             for (UUID uuid : entry.getValue()) {
                                 RemoteLogSegment segment = idToRemoteLogSegment.get(uuid);
                                 if (lakeLogEndOffset != null) {
@@ -338,20 +331,6 @@ public class RemoteLogTablet {
         timestampToRemoteLogSegmentId
                 .computeIfAbsent(remoteLogSegment.maxTimestamp(), k -> new HashSet<>())
                 .add(remoteLogSegmentId);
-    }
-
-    /** Returns the current ttl in milliseconds for remote log segments. */
-    public long getTtlMs() {
-        return ttlMs;
-    }
-
-    /**
-     * Update the ttl in milliseconds for remote log segments.
-     *
-     * @param newTtlMs the new ttl in milliseconds; a non-positive value disables expiration
-     */
-    public void updateTtlMs(long newTtlMs) {
-        this.ttlMs = newTtlMs;
     }
 
     private void reset() {

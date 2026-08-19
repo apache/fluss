@@ -444,14 +444,16 @@ public class RemoteLogITCase {
                                 false))
                 .get();
 
-        // Wait until the new TTL reaches the leader's remote and local tablets and the follower's
-        // local tablet.
+        // Wait until the new TableInfo reaches the leader and follower. Both local and remote
+        // retention read the TTL from this metadata snapshot.
         retry(
                 Duration.ofMinutes(1),
                 () -> {
-                    assertThat(remoteLogTablet.getTtlMs()).isEqualTo(newTtlMs);
+                    assertThat(leaderReplica.getTableInfo().getTableConfig().getLogTTLMs())
+                            .isEqualTo(newTtlMs);
                     assertThat(leaderLogTablet.getEffectiveLocalLogTtlMs()).isEqualTo(newTtlMs);
-                    assertThat(followerReplica.getLogTTLMs()).isEqualTo(newTtlMs);
+                    assertThat(followerReplica.getTableInfo().getTableConfig().getLogTTLMs())
+                            .isEqualTo(newTtlMs);
                     assertThat(followerLogTablet.getEffectiveLocalLogTtlMs()).isEqualTo(newTtlMs);
                 });
 
@@ -487,10 +489,12 @@ public class RemoteLogITCase {
                             .isGreaterThan(initialFollowerLocalStartOffset);
                 });
 
-        // Verify follower caching still preserves the shortened TTL through leader promotion.
+        // Verify the follower preserves the latest TableInfo through leader promotion.
         retry(
                 Duration.ofMinutes(1),
-                () -> assertThat(followerReplica.getLogTTLMs()).isEqualTo(newTtlMs));
+                () ->
+                        assertThat(followerReplica.getTableInfo().getTableConfig().getLogTTLMs())
+                                .isEqualTo(newTtlMs));
 
         // --- Failover: stop leader, wait for new leader ---
         FLUSS_CLUSTER_EXTENSION.stopTabletServer(leaderId);
@@ -498,7 +502,7 @@ public class RemoteLogITCase {
             int newLeaderId = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
             assertThat(newLeaderId).isNotEqualTo(leaderId);
 
-            // The promoted follower must construct its RemoteLogTablet with the altered TTL.
+            // The promoted follower must retain the altered TableInfo and resume remote tiering.
             TabletServer newLeaderServer = FLUSS_CLUSTER_EXTENSION.getTabletServerById(newLeaderId);
             RemoteLogManager newRemoteLogManager =
                     newLeaderServer.getReplicaManager().getRemoteLogManager();
@@ -507,7 +511,10 @@ public class RemoteLogITCase {
                     () -> {
                         RemoteLogTablet newRemoteLogTablet =
                                 newRemoteLogManager.remoteLogTablet(tb);
-                        assertThat(newRemoteLogTablet.getTtlMs()).isEqualTo(newTtlMs);
+                        Replica newLeaderReplica =
+                                newLeaderServer.getReplicaManager().getReplicaOrException(tb);
+                        assertThat(newLeaderReplica.getTableInfo().getTableConfig().getLogTTLMs())
+                                .isEqualTo(newTtlMs);
                         assertThat(newRemoteLogTablet.allRemoteLogSegments()).isNotEmpty();
                     });
         } finally {

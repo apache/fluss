@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.replica;
 
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.rpc.messages.NotifyLakeTableOffsetResponse;
@@ -62,7 +63,7 @@ class NotifyReplicaLakeTableOffsetTest extends ReplicaTestBase {
         TableBucket tb = makeTableBucket(false);
         makeLogTableAsLeader(tb, false);
         Replica replica = replicaManager.getReplicaOrException(tb);
-        replica.updateIsDataLakeEnabled(true);
+        updateTableConfig(replica, ConfigOptions.TABLE_DATALAKE_ENABLED, "true");
 
         long initialTimestamp = manualClock.milliseconds();
         MemoryLogRecords records =

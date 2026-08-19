@@ -29,6 +29,8 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
 
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
@@ -123,9 +125,13 @@ final class LocalSegmentTTLTest extends ReplicaTestBase {
     void testLogTtlRemainsEffectiveWhenRemoteLogDisabled() throws Exception {
         TableBucket tableBucket = new TableBucket(DATA1_TABLE_ID, 0);
         makeLogTableAsLeader(tableBucket, false);
-        LogTablet logTablet = replicaManager.getReplicaOrException(tableBucket).getLogTablet();
+        Replica replica = replicaManager.getReplicaOrException(tableBucket);
+        LogTablet logTablet = replica.getLogTablet();
 
-        logTablet.updateLogTtls(Duration.ofHours(2).toMillis(), Duration.ofMinutes(30).toMillis());
+        Map<String, String> configUpdates = new HashMap<>();
+        configUpdates.put(ConfigOptions.TABLE_LOG_TTL.key(), "2h");
+        configUpdates.put(ConfigOptions.TABLE_LOG_LOCAL_TTL.key(), "30m");
+        updateTableConfig(replica, configUpdates);
 
         assertThat(logTablet.getEffectiveLocalLogTtlMs()).isEqualTo(Duration.ofHours(2).toMillis());
     }
@@ -144,7 +150,8 @@ final class LocalSegmentTTLTest extends ReplicaTestBase {
         Replica replica = replicaManager.getReplicaOrException(tb);
         LogTablet logTablet = replica.getLogTablet();
 
-        // Remote log is disabled in this test base, so updateLogTtls must still reach LogTablet.
+        // Remote log is disabled in this test base, so LogTablet must still read the updated
+        // TableInfo.
         assertThatThrownBy(() -> remoteLogManager.remoteLogTablet(tb))
                 .isInstanceOf(IllegalStateException.class);
 
@@ -156,7 +163,7 @@ final class LocalSegmentTTLTest extends ReplicaTestBase {
         assertThat(logTablet.getSegments()).hasSize(1);
 
         // Shrink TTL to 1ms; the segment should now be expired.
-        replica.updateLogTtls(1L, 1L);
+        updateTableConfig(replica, ConfigOptions.TABLE_LOG_TTL, "1ms");
         logManager.cleanupExpiredLocalLogSegments();
         // The expired active segment is rolled, creating a new empty segment at offset 10.
         assertThat(logTablet.getSegments()).hasSize(2);
@@ -168,7 +175,7 @@ final class LocalSegmentTTLTest extends ReplicaTestBase {
         assertThat(logTablet.localLogStartOffset()).isEqualTo(10L);
 
         // Disable expiration; the remaining segment must survive even after a long time.
-        replica.updateLogTtls(-1L, -1L);
+        updateTableConfig(replica, ConfigOptions.TABLE_LOG_TTL, "0ms");
         manualClock.advanceTime(Duration.ofDays(365));
         logManager.cleanupExpiredLocalLogSegments();
         assertThat(logTablet.getSegments()).hasSize(1);
