@@ -25,11 +25,12 @@ import javax.annotation.Nullable;
 
 import java.util.Objects;
 
-/** A base source split for {@link SnapshotSplit} and {@link LogSplit}. */
+/** A base source split for {@link SnapshotSplit}, {@link LogSplit} and {@link KvBatchSplit}. */
 public abstract class SourceSplitBase implements SourceSplit {
 
     public static final byte HYBRID_SNAPSHOT_SPLIT_FLAG = 1;
     public static final byte LOG_SPLIT_FLAG = 2;
+    public static final byte KV_BATCH_SPLIT_FLAG = 3;
 
     protected final TableBucket tableBucket;
 
@@ -81,6 +82,11 @@ public abstract class SourceSplitBase implements SourceSplit {
         return getClass() == HybridSnapshotLogSplit.class;
     }
 
+    /** Checks whether this split is a {@link KvBatchSplit}. */
+    public final boolean isKvBatchSplit() {
+        return getClass() == KvBatchSplit.class;
+    }
+
     /** Casts this split into a {@link HybridSnapshotLogSplit}. */
     public final HybridSnapshotLogSplit asHybridSnapshotLogSplit() {
         return (HybridSnapshotLogSplit) this;
@@ -91,11 +97,18 @@ public abstract class SourceSplitBase implements SourceSplit {
         return (LogSplit) this;
     }
 
+    /** Casts this split into a {@link KvBatchSplit}. */
+    public final KvBatchSplit asKvBatchSplit() {
+        return (KvBatchSplit) this;
+    }
+
     protected byte splitKind() {
         if (isHybridSnapshotLogSplit()) {
             return HYBRID_SNAPSHOT_SPLIT_FLAG;
         } else if (isLogSplit()) {
             return LOG_SPLIT_FLAG;
+        } else if (isKvBatchSplit()) {
+            return KV_BATCH_SPLIT_FLAG;
         } else {
             throw new IllegalArgumentException("Unsupported split kind for " + getClass());
         }

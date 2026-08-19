@@ -26,6 +26,7 @@ import org.apache.fluss.client.initializer.OffsetsInitializer;
 import org.apache.fluss.client.initializer.OffsetsInitializer.BucketOffsetsRetriever;
 import org.apache.fluss.client.initializer.SnapshotOffsetsInitializer;
 import org.apache.fluss.client.metadata.KvSnapshots;
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.flink.FlinkConnectorOptions;
@@ -38,6 +39,7 @@ import org.apache.fluss.flink.source.event.PartitionBucketsUnsubscribedEvent;
 import org.apache.fluss.flink.source.event.PartitionsRemovedEvent;
 import org.apache.fluss.flink.source.reader.LeaseContext;
 import org.apache.fluss.flink.source.split.HybridSnapshotLogSplit;
+import org.apache.fluss.flink.source.split.KvBatchSplit;
 import org.apache.fluss.flink.source.split.LogSplit;
 import org.apache.fluss.flink.source.split.SourceSplitBase;
 import org.apache.fluss.flink.source.state.SourceEnumeratorState;
@@ -574,7 +576,12 @@ public class FlinkSourceEnumerator
     }
 
     private void startInBatchMode() {
-        if (hasPrimaryKey && !(startingOffsetsInitializer instanceof SnapshotOffsetsInitializer)) {
+        boolean kvBatchEnabled = flussConf.get(ConfigOptions.CLIENT_SCANNER_KV_SERVER_SIDE_ENABLED);
+        // The server-side KV scan reads the live KV state directly, so it does not require a
+        // snapshot-based full startup mode; only the snapshot-based path has that restriction.
+        if (hasPrimaryKey
+                && !kvBatchEnabled
+                && !(startingOffsetsInitializer instanceof SnapshotOffsetsInitializer)) {
             throw new UnsupportedOperationException(
                     "Batch mode on primary-key tables only supports full startup mode.");
         }
@@ -586,19 +593,24 @@ public class FlinkSourceEnumerator
             context.callAsync(
                     () -> {
                         List<SourceSplitBase> splits = generateHybridLakeFlussSplits();
-                        // No lake snapshot exists, fall back to Fluss-only splits
                         if (splits == null) {
                             LOG.info(
                                     "No lake snapshot found for table {},"
                                             + " falling back to Fluss-only splits.",
                                     tablePath);
-                            splits = flussOnlyBatchSplitGenerator.generate();
+                            splits =
+                                    generateFlussOnlyBatchSplits(
+                                            kvBatchEnabled, flussOnlyBatchSplitGenerator);
                         }
                         return splits;
                     },
                     this::handleSplitsAdd);
         } else {
-            context.callAsync(flussOnlyBatchSplitGenerator::generate, this::handleSplitsAdd);
+            context.callAsync(
+                    () ->
+                            generateFlussOnlyBatchSplits(
+                                    kvBatchEnabled, flussOnlyBatchSplitGenerator),
+                    this::handleSplitsAdd);
         }
     }
 
@@ -613,6 +625,43 @@ public class FlinkSourceEnumerator
                 this::listPartitions,
                 this::getLatestKvSnapshotsAndRegister,
                 this::ignoreTableBucket);
+    }
+
+    /**
+     * Generates the Fluss-only batch splits. When the server-side KV scan is enabled for a
+     * primary-key table, emits {@link KvBatchSplit}s that scan the live KV state directly;
+     * otherwise delegates to the snapshot-based {@link FlussOnlyBatchSplitGenerator}.
+     */
+    private List<SourceSplitBase> generateFlussOnlyBatchSplits(
+            boolean kvBatchEnabled, FlussOnlyBatchSplitGenerator flussOnlyBatchSplitGenerator) {
+        if (kvBatchEnabled && hasPrimaryKey) {
+            if (isPartitioned) {
+                Set<PartitionInfo> partitionInfos = listPartitions();
+                List<SourceSplitBase> splits = new ArrayList<>();
+                for (PartitionInfo partitionInfo : partitionInfos) {
+                    splits.addAll(
+                            buildKvBatchSplits(
+                                    partitionInfo.getPartitionId(),
+                                    partitionInfo.getPartitionName()));
+                }
+                return splits;
+            }
+            return buildKvBatchSplits(null, null);
+        }
+        return flussOnlyBatchSplitGenerator.generate();
+    }
+
+    private List<SourceSplitBase> buildKvBatchSplits(
+            @Nullable Long partitionId, @Nullable String partitionName) {
+        List<SourceSplitBase> splits = new ArrayList<>();
+        for (int bucketId = 0; bucketId < tableInfo.getNumBuckets(); bucketId++) {
+            TableBucket tb = new TableBucket(tableInfo.getTableId(), partitionId, bucketId);
+            if (ignoreTableBucket(tb)) {
+                continue;
+            }
+            splits.add(new KvBatchSplit(tb, partitionName));
+        }
+        return splits;
     }
 
     private void startInStreamModeForNonPartitionedTable() {
