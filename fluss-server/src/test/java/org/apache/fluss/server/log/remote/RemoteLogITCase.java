@@ -386,12 +386,13 @@ public class RemoteLogITCase {
     void testAlterTableLogTtlEndToEnd() throws Exception {
         TablePath tablePath = TablePath.of("fluss", "test_alter_table_log_ttl_e2e");
 
-        // Create table with short TTL (1 hour) so we can advance past it quickly.
+        // Keep enough local segments so that only TTL cleanup can advance local-log start offsets.
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder()
                         .schema(DATA1_SCHEMA)
                         .distributedBy(1)
-                        .property(ConfigOptions.TABLE_LOG_TTL, Duration.ofHours(1))
+                        .property(ConfigOptions.TABLE_LOG_TTL, Duration.ofDays(30))
+                        .property(ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS, 100)
                         .build();
 
         long tableId = createTable(FLUSS_CLUSTER_EXTENSION, tablePath, tableDescriptor);
@@ -402,81 +403,117 @@ public class RemoteLogITCase {
         TabletServerGateway leaderGateway =
                 FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leaderId);
 
-        // Produce records and wait for remote log copy.
+        // Produce the old segment cohort and wait for it to be copied to remote storage.
         produceRecordsAndWaitRemoteLogCopy(leaderGateway, tb);
 
         TabletServer leaderServer = FLUSS_CLUSTER_EXTENSION.getTabletServerById(leaderId);
         RemoteLogManager remoteLogManager = leaderServer.getReplicaManager().getRemoteLogManager();
         RemoteLogTablet remoteLogTablet = remoteLogManager.remoteLogTablet(tb);
-        assertThat(remoteLogTablet.allRemoteLogSegments().size()).isGreaterThan(0);
+        List<String> oldRemoteSegmentIds =
+                remoteLogTablet.allRemoteLogSegments().stream()
+                        .map(segment -> segment.remoteLogSegmentId().toString())
+                        .collect(Collectors.toList());
+        assertThat(oldRemoteSegmentIds).isNotEmpty();
 
-        // --- Real ALTER path: change TTL to 30 days ---
-        long newTtlMs = Duration.ofDays(30).toMillis();
+        Replica leaderReplica = FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(tb);
+        LogTablet leaderLogTablet = leaderReplica.getLogTablet();
+        long firstBatchEndOffset = leaderLogTablet.localLogEndOffset();
+
+        int followerId = (leaderId + 1) % 3;
+        Replica followerReplica = FLUSS_CLUSTER_EXTENSION.waitAndGetFollowerReplica(tb, followerId);
+        LogTablet followerLogTablet = followerReplica.getLogTablet();
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(followerLogTablet.localLogEndOffset())
+                                .isEqualTo(firstBatchEndOffset));
+
+        long initialLeaderLocalStartOffset = leaderLogTablet.localLogStartOffset();
+        long initialFollowerLocalStartOffset = followerLogTablet.localLogStartOffset();
+
+        // Shorten the TTL through the real ALTER path.
+        long newTtlMs = Duration.ofHours(1).toMillis();
         CoordinatorGateway coordinatorGateway = FLUSS_CLUSTER_EXTENSION.newCoordinatorClient();
         coordinatorGateway
                 .alterTable(
                         newAlterTableRequest(
                                 tablePath,
-                                Collections.singletonMap(ConfigOptions.TABLE_LOG_TTL.key(), "30d"),
+                                Collections.singletonMap(ConfigOptions.TABLE_LOG_TTL.key(), "1h"),
                                 Collections.emptyList(),
                                 Collections.emptyList(),
                                 false))
                 .get();
 
-        // Wait for metadata propagation: leader's RemoteLogTablet must reflect the new TTL.
+        // Wait until the new TTL reaches the leader's remote and local tablets and the follower's
+        // local tablet.
         retry(
                 Duration.ofMinutes(1),
-                () -> assertThat(remoteLogTablet.getTtlMs()).isEqualTo(newTtlMs));
+                () -> {
+                    assertThat(remoteLogTablet.getTtlMs()).isEqualTo(newTtlMs);
+                    assertThat(leaderLogTablet.getEffectiveLocalLogTtlMs()).isEqualTo(newTtlMs);
+                    assertThat(followerReplica.getLogTTLMs()).isEqualTo(newTtlMs);
+                    assertThat(followerLogTablet.getEffectiveLocalLogTtlMs()).isEqualTo(newTtlMs);
+                });
 
-        // Advance time past the original 1h TTL but well within the new 30d TTL.
+        // Expire the old cohort, then append a new cohort that must remain available.
         MANUAL_CLOCK.advanceTime(Duration.ofHours(1).plusMinutes(30));
+        produceRecordsAndWaitRemoteLogCopy(leaderGateway, tb, firstBatchEndOffset);
 
-        // Remote segments must NOT be deleted because the new TTL (30d) has not expired.
+        // The old remote segments must be removed while newly uploaded segments remain.
         retry(
                 Duration.ofMinutes(2),
-                () -> assertThat(remoteLogTablet.allRemoteLogSegments()).isNotEmpty());
+                () -> {
+                    List<RemoteLogSegment> remainingSegments =
+                            remoteLogTablet.allRemoteLogSegments();
+                    assertThat(remainingSegments).isNotEmpty();
+                    assertThat(remainingSegments)
+                            .extracting(segment -> segment.remoteLogSegmentId().toString())
+                            .doesNotContainAnyElementsOf(oldRemoteSegmentIds);
+                    assertThat(remainingSegments)
+                            .allMatch(
+                                    segment -> segment.remoteLogEndOffset() > firstBatchEndOffset);
+                });
 
-        // Local segments must also be preserved: the local-only cleaner must use the new TTL.
-        // With the old 1h TTL, inactive expired segments would be deleted, leaving only the active
-        // segment (count < tieredLogLocalSegments). With the new 30d TTL, they are retained.
-        Replica leaderReplica = FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(tb);
-        LogTablet logTablet = leaderReplica.getLogTablet();
+        // Wait for the second cohort to reach the follower and for LogManager's retention task to
+        // automatically discard the expired local prefix on both replicas.
         retry(
                 Duration.ofMinutes(2),
-                () ->
-                        assertThat(logTablet.getSegments().size())
-                                .isGreaterThanOrEqualTo(logTablet.getTieredLogLocalSegments()));
+                () -> {
+                    assertThat(followerLogTablet.localLogEndOffset())
+                            .isGreaterThan(firstBatchEndOffset);
+                    assertThat(leaderLogTablet.localLogStartOffset())
+                            .isGreaterThan(initialLeaderLocalStartOffset);
+                    assertThat(followerLogTablet.localLogStartOffset())
+                            .isGreaterThan(initialFollowerLocalStartOffset);
+                });
 
-        // --- Follower caching: verify a follower cached the new TTL ---
-        int followerId = (leaderId + 1) % 3;
-        Replica followerReplica = FLUSS_CLUSTER_EXTENSION.waitAndGetFollowerReplica(tb, followerId);
+        // Verify follower caching still preserves the shortened TTL through leader promotion.
         retry(
                 Duration.ofMinutes(1),
                 () -> assertThat(followerReplica.getLogTTLMs()).isEqualTo(newTtlMs));
 
         // --- Failover: stop leader, wait for new leader ---
         FLUSS_CLUSTER_EXTENSION.stopTabletServer(leaderId);
+        try {
+            int newLeaderId = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
+            assertThat(newLeaderId).isNotEqualTo(leaderId);
 
-        int newLeaderId = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
-        assertThat(newLeaderId).isNotEqualTo(leaderId);
-
-        // The new leader was a follower with no RemoteLogTablet; registerReplica must have
-        // constructed the new tablet using the cached TTL (30d), not the construction-time
-        // default (1h).
-        TabletServer newLeaderServer = FLUSS_CLUSTER_EXTENSION.getTabletServerById(newLeaderId);
-        RemoteLogManager newRemoteLogManager =
-                newLeaderServer.getReplicaManager().getRemoteLogManager();
-        retry(
-                Duration.ofMinutes(2),
-                () -> {
-                    RemoteLogTablet newRemoteLogTablet = newRemoteLogManager.remoteLogTablet(tb);
-                    assertThat(newRemoteLogTablet.getTtlMs()).isEqualTo(newTtlMs);
-                    // Remote segments must still be preserved (new TTL is 30d).
-                    assertThat(newRemoteLogTablet.allRemoteLogSegments()).isNotEmpty();
-                });
-
-        // Restart the stopped server so other tests are not affected.
-        FLUSS_CLUSTER_EXTENSION.startTabletServer(leaderId);
+            // The promoted follower must construct its RemoteLogTablet with the altered TTL.
+            TabletServer newLeaderServer = FLUSS_CLUSTER_EXTENSION.getTabletServerById(newLeaderId);
+            RemoteLogManager newRemoteLogManager =
+                    newLeaderServer.getReplicaManager().getRemoteLogManager();
+            retry(
+                    Duration.ofMinutes(2),
+                    () -> {
+                        RemoteLogTablet newRemoteLogTablet =
+                                newRemoteLogManager.remoteLogTablet(tb);
+                        assertThat(newRemoteLogTablet.getTtlMs()).isEqualTo(newTtlMs);
+                        assertThat(newRemoteLogTablet.allRemoteLogSegments()).isNotEmpty();
+                    });
+        } finally {
+            // Restart the stopped server so other tests are not affected.
+            FLUSS_CLUSTER_EXTENSION.startTabletServer(leaderId);
+        }
     }
 
     private static Configuration initConfig() {
@@ -485,6 +522,7 @@ public class RemoteLogITCase {
         conf.setInt(ConfigOptions.DEFAULT_REPLICATION_FACTOR, 3);
         // set a shorter interval for testing purpose
         conf.set(ConfigOptions.REMOTE_LOG_TASK_INTERVAL_DURATION, Duration.ofSeconds(1));
+        conf.set(ConfigOptions.LOG_RETENTION_CHECK_INTERVAL, Duration.ofSeconds(1));
         conf.set(ConfigOptions.LOG_SEGMENT_FILE_SIZE, MemorySize.parse("1kb"));
 
         // set a shorter max log time to allow replica shrink from isr. Don't be too low, otherwise
