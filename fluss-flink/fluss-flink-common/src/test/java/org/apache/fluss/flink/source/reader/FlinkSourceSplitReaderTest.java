@@ -402,6 +402,15 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
         assignSplits(reader, splits);
 
         Map<String, List<RecordAndPos>> splitConsumedRecords = new HashMap<>();
+        Set<String> expectedSnapshotPhaseFinishedSplits = new HashSet<>();
+        for (SourceSplitBase split : splits) {
+            if (split.isHybridSnapshotLogSplit()
+                    && !split.asHybridSnapshotLogSplit().isBatch()
+                    && !split.asHybridSnapshotLogSplit().isSnapshotFinished()) {
+                expectedSnapshotPhaseFinishedSplits.add(split.splitId());
+            }
+        }
+        Set<String> snapshotPhaseFinishedSplits = new HashSet<>();
         Set<String> finishedSplits = new HashSet<>();
 
         while (finishedSplits.size() < splits.size()) {
@@ -412,7 +421,16 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
                 List<RecordAndPos> splitFetch = new ArrayList<>();
                 RecordAndPos record;
                 while ((record = recordsBySplitIds.nextRecordFromSplit()) != null) {
-                    splitFetch.add(new RecordAndPos(record.record(), record.readRecordsCount()));
+                    if (record.isSnapshotPhaseFinished()) {
+                        assertThat(record.record()).isNull();
+                        assertThat(expectedSnapshotPhaseFinishedSplits).contains(splitId);
+                        assertThat(snapshotPhaseFinishedSplits.add(splitId))
+                                .as("only one snapshot phase finished marker per split")
+                                .isTrue();
+                    } else {
+                        splitFetch.add(
+                                new RecordAndPos(record.record(), record.readRecordsCount()));
+                    }
                 }
 
                 splitConsumedRecords
@@ -422,13 +440,18 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
                 // if records retrieved from this split is greater or equal to expected records,
                 // it means we should stop read
                 if (splitConsumedRecords.getOrDefault(splitId, Collections.emptyList()).size()
-                        >= expectedRecords.get(splitId).size()) {
+                                >= expectedRecords.get(splitId).size()
+                        && (!expectedSnapshotPhaseFinishedSplits.contains(splitId)
+                                || snapshotPhaseFinishedSplits.contains(splitId))) {
                     finishedSplits.add(splitId);
                 }
                 splitId = recordsBySplitIds.nextSplit();
             }
             recordsBySplitIds.recycle();
         }
+
+        assertThat(snapshotPhaseFinishedSplits)
+                .containsExactlyInAnyOrderElementsOf(expectedSnapshotPhaseFinishedSplits);
 
         // now, verify the records consumed from each split.
         verifyConsumedRecords(splitConsumedRecords, expectedRecords, rowType);

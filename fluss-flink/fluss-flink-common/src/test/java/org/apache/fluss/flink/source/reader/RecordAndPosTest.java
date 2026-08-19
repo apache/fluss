@@ -55,4 +55,25 @@ class RecordAndPosTest {
                 .isEqualTo(
                         "RecordAndPos{scanRecord=+A(1,null,3)@0, readRecordsCount=3, currentSplitIndex=0}");
     }
+
+    @Test
+    void testSnapshotPhaseFinishedMarker() {
+        RecordAndPos marker = RecordAndPos.snapshotPhaseFinished();
+        RecordAndPos equalMarker = RecordAndPos.snapshotPhaseFinished();
+        RecordAndPos regularNullRecord = new RecordAndPos(null);
+
+        assertThat(marker.record()).isNull();
+        assertThat(marker.isSnapshotPhaseFinished()).isTrue();
+        assertThat(marker).isEqualTo(equalMarker).isNotEqualTo(regularNullRecord);
+        assertThat(marker.hashCode()).isEqualTo(equalMarker.hashCode());
+        assertThat(marker.toString())
+                .isEqualTo(
+                        "RecordAndPos{scanRecord=null, readRecordsCount=-1, currentSplitIndex=0, "
+                                + "isSnapshotPhaseFinished=true}");
+
+        assertThat(regularNullRecord.isSnapshotPhaseFinished()).isFalse();
+        assertThat(regularNullRecord.toString())
+                .isEqualTo(
+                        "RecordAndPos{scanRecord=null, readRecordsCount=-1, currentSplitIndex=0}");
+    }
 }

@@ -53,6 +53,11 @@ public class HybridSnapshotLogSplitState extends SourceSplitState {
         this.recordsToSkip = recordsToSkip;
     }
 
+    /** Marks the snapshot phase as finished. */
+    public void markSnapshotFinished() {
+        snapshotFinished = true;
+    }
+
     public void setNextOffset(long nextOffset) {
         // if set offset, means snapshot is finished
         snapshotFinished = true;
