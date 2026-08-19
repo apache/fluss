@@ -358,6 +358,72 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
         }
     }
 
+    @Test
+    void testSubscribeEmptySplitWithEarliestStartingOffset() throws Exception {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "test-subscribe-empty-split-earliest");
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("name", DataTypes.STRING())
+                        .build();
+        long tableId =
+                createTable(
+                        tablePath,
+                        TableDescriptor.builder().schema(schema).distributedBy(1).build());
+
+        // the bucket is empty, so the stopping offset of the batch split is 0 while the starting
+        // offset is still the EARLIEST_OFFSET sentinel
+        LogSplit split = new LogSplit(new TableBucket(tableId, 0), null, EARLIEST_OFFSET, 0);
+
+        try (FlinkSourceSplitReader splitReader =
+                createSplitReader(tablePath, schema.getRowType())) {
+            splitReader.handleSplitsChanges(
+                    new SplitsAddition<>(Collections.singletonList((SourceSplitBase) split)));
+
+            RecordsWithSplitIds<RecordAndPos> records = splitReader.fetch();
+            assertThat(records.finishedSplits()).containsExactly(split.splitId());
+            assertThat(records.nextSplit()).isNull();
+        }
+    }
+
+    @Test
+    void testFinishedLogSplitIsNotFetchedAgain() throws Exception {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "test-finished-log-split");
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("name", DataTypes.STRING())
+                        .build();
+        long tableId =
+                createTable(
+                        tablePath,
+                        TableDescriptor.builder().schema(schema).distributedBy(1).build());
+
+        appendRows(tablePath, 5);
+        LogSplit split = new LogSplit(new TableBucket(tableId, 0), null, 0, 5);
+
+        try (FlinkSourceSplitReader splitReader =
+                createSplitReader(tablePath, schema.getRowType())) {
+            splitReader.handleSplitsChanges(
+                    new SplitsAddition<>(Collections.singletonList((SourceSplitBase) split)));
+
+            Set<String> finishedSplits = new HashSet<>();
+            while (finishedSplits.isEmpty()) {
+                RecordsWithSplitIds<RecordAndPos> records = splitReader.fetch();
+                finishedSplits.addAll(records.finishedSplits());
+                records.recycle();
+            }
+            assertThat(finishedSplits).containsExactly(split.splitId());
+
+            // records appended after the split finished must not be fetched for it anymore,
+            // SourceReaderBase has already unregistered the split at this point
+            appendRows(tablePath, 5);
+            RecordsWithSplitIds<RecordAndPos> records = splitReader.fetch();
+            assertThat(records.nextSplit()).isNull();
+            assertThat(records.finishedSplits()).isEmpty();
+        }
+    }
+
     // ------------------
 
     private void assignSplitsAndFetchUntilRetrieveRecords(
