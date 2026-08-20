@@ -132,10 +132,9 @@ class ClientRpcMessageUtilsTest {
 
     @Test
     void testToBucketInfos() {
-        DescribeBucketsResponse response = new DescribeBucketsResponse();
-        PbBucketInfo tableBucket =
-                response.addBucketInfo().setTableId(10L).setBucketId(0).setLeaderId(1);
-        tableBucket.setTablePath().setDatabaseName("db").setTableName("table");
+        DescribeBucketsResponse response = new DescribeBucketsResponse().setTableId(10L);
+        response.setTablePath().setDatabaseName("db").setTableName("table");
+        PbBucketInfo tableBucket = response.addBucketInfo().setBucketId(0).setLeaderId(1);
         tableBucket.setLeaderEpoch(7);
         tableBucket.addReplicaId(1);
         tableBucket.addReplicaId(2);
@@ -143,8 +142,7 @@ class ClientRpcMessageUtilsTest {
         tableBucket.addIsrId(1);
         tableBucket.addIsrId(3);
 
-        PbBucketInfo partitionBucket = response.addBucketInfo().setTableId(10L).setBucketId(1);
-        partitionBucket.setTablePath().setDatabaseName("db").setTableName("table");
+        PbBucketInfo partitionBucket = response.addBucketInfo().setBucketId(1);
         partitionBucket.setPartitionId(100L).setPartitionName("p1");
         partitionBucket.addReplicaId(2);
         partitionBucket.addReplicaId(3);
