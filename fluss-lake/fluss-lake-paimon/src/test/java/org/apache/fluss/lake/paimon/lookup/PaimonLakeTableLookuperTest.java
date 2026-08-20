@@ -70,6 +70,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_2;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
@@ -395,8 +396,18 @@ class PaimonLakeTableLookuperTest {
                         tableConfig(KvFormat.COMPACTED, KV_FORMAT_VERSION_2),
                         LOOKUP_CACHE_MAX_DISK_BYTES,
                         NO_OP_DISK_WRITE_GUARD)) {
+            AtomicInteger lookupFileDownloads = new AtomicInteger();
             LakeTableLookuper.LookupContext context =
-                    lookupContext(schema, "20240101", 0, SCHEMA_ID);
+                    lookupContext(
+                            schema,
+                            "20240101",
+                            0,
+                            SCHEMA_ID,
+                            (lookupTimeNanos, lookupFileDownloaded) -> {
+                                if (lookupFileDownloaded) {
+                                    lookupFileDownloads.incrementAndGet();
+                                }
+                            });
             int threadCount = 8;
             CountDownLatch start = new CountDownLatch(1);
             ExecutorService executor = Executors.newFixedThreadPool(threadCount);
@@ -434,6 +445,10 @@ class PaimonLakeTableLookuperTest {
             } finally {
                 executor.shutdownNow();
             }
+
+            // All concurrent requests query the same remote data file. Only the request that
+            // creates its local lookup file should be attributed with the download.
+            assertThat(lookupFileDownloads).hasValue(1);
         }
     }
 
