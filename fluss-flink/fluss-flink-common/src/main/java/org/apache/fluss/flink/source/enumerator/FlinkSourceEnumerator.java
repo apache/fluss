@@ -28,6 +28,7 @@ import org.apache.fluss.client.initializer.SnapshotOffsetsInitializer;
 import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.KvBatchStrategy;
 import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.flink.lake.LakeSplitGenerator;
@@ -576,12 +577,10 @@ public class FlinkSourceEnumerator
     }
 
     private void startInBatchMode() {
-        boolean kvBatchEnabled = flussConf.get(ConfigOptions.CLIENT_SCANNER_KV_SERVER_SIDE_ENABLED);
-        // The server-side KV scan reads the live KV state directly, so it does not require a
-        // snapshot-based full startup mode; only the snapshot-based path has that restriction.
-        if (hasPrimaryKey
-                && !kvBatchEnabled
-                && !(startingOffsetsInitializer instanceof SnapshotOffsetsInitializer)) {
+        boolean serverScan =
+                flussConf.get(ConfigOptions.CLIENT_SCANNER_KV_BATCH_STRATEGY)
+                        == KvBatchStrategy.SERVER_SCAN;
+        if (hasPrimaryKey && !(startingOffsetsInitializer instanceof SnapshotOffsetsInitializer)) {
             throw new UnsupportedOperationException(
                     "Batch mode on primary-key tables only supports full startup mode.");
         }
@@ -600,16 +599,14 @@ public class FlinkSourceEnumerator
                                     tablePath);
                             splits =
                                     generateFlussOnlyBatchSplits(
-                                            kvBatchEnabled, flussOnlyBatchSplitGenerator);
+                                            serverScan, flussOnlyBatchSplitGenerator);
                         }
                         return splits;
                     },
                     this::handleSplitsAdd);
         } else {
             context.callAsync(
-                    () ->
-                            generateFlussOnlyBatchSplits(
-                                    kvBatchEnabled, flussOnlyBatchSplitGenerator),
+                    () -> generateFlussOnlyBatchSplits(serverScan, flussOnlyBatchSplitGenerator),
                     this::handleSplitsAdd);
         }
     }
@@ -628,13 +625,13 @@ public class FlinkSourceEnumerator
     }
 
     /**
-     * Generates the Fluss-only batch splits. When the server-side KV scan is enabled for a
-     * primary-key table, emits {@link KvBatchSplit}s that scan the live KV state directly;
-     * otherwise delegates to the snapshot-based {@link FlussOnlyBatchSplitGenerator}.
+     * Generates the Fluss-only batch splits. Under {@link KvBatchStrategy#SERVER_SCAN} a
+     * primary-key table emits {@link KvBatchSplit}s that scan the live kv state on the server;
+     * otherwise it delegates to the snapshot-based {@link FlussOnlyBatchSplitGenerator}.
      */
     private List<SourceSplitBase> generateFlussOnlyBatchSplits(
-            boolean kvBatchEnabled, FlussOnlyBatchSplitGenerator flussOnlyBatchSplitGenerator) {
-        if (kvBatchEnabled && hasPrimaryKey) {
+            boolean serverScan, FlussOnlyBatchSplitGenerator flussOnlyBatchSplitGenerator) {
+        if (serverScan && hasPrimaryKey) {
             if (isPartitioned) {
                 Set<PartitionInfo> partitionInfos = listPartitions();
                 List<SourceSplitBase> splits = new ArrayList<>();

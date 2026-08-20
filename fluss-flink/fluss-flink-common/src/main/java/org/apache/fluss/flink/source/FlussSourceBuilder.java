@@ -176,10 +176,7 @@ public class FlussSourceBuilder<OUT> {
      * Builds a bounded source for batch execution. The source reads up to the latest offsets at job
      * startup and then finishes; combined with the default {@link OffsetsInitializer#full()} on a
      * datalake-enabled table this performs a bounded union read of the lake snapshot and the Fluss
-     * log. Alternatively, a bounded read of a primary-key table is supported via the server-side KV
-     * scan by setting {@code client.scanner.kv.server-side.enabled = true} (see {@link
-     * ConfigOptions#CLIENT_SCANNER_KV_SERVER_SIDE_ENABLED}). If not called, the source is unbounded
-     * (streaming).
+     * log. If not called, the source is unbounded (streaming).
      *
      * @return this builder
      */
@@ -356,19 +353,13 @@ public class FlussSourceBuilder<OUT> {
         boolean lakeEnabled = tableInfo.getTableConfig().isDataLakeEnabled();
         boolean fullStartup = offsetsInitializer instanceof SnapshotOffsetsInitializer;
 
-        boolean kvBatchEnabled = flussConf.get(ConfigOptions.CLIENT_SCANNER_KV_SERVER_SIDE_ENABLED);
-
-        // The server-side KV scan reads the live KV state directly, so it does not require full
-        // (snapshot) mode; only the snapshot-based path has that restriction.
-        if (bounded && hasPrimaryKey && !fullStartup && !kvBatchEnabled) {
+        if (bounded && hasPrimaryKey && !fullStartup) {
             throw new IllegalArgumentException(
                     String.format(
                             "Bounded (batch) read on primary-key tables requires full mode "
-                                    + "(OffsetsInitializer.full()) or the server-side KV scan "
-                                    + "('%s' = 'true'), but table '%s' has full startup mode=%s.",
-                            ConfigOptions.CLIENT_SCANNER_KV_SERVER_SIDE_ENABLED.key(),
-                            tablePath,
-                            fullStartup));
+                                    + "(OffsetsInitializer.full()), but table '%s' has full "
+                                    + "startup mode=%s.",
+                            tablePath, fullStartup));
         }
 
         LakeSource<LakeSplit> lakeSource = null;

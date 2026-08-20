@@ -724,7 +724,7 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
                                 + "  primary key (id) NOT ENFORCED)"
                                 + " with ("
                                 + "  'bucket.num' = '4',"
-                                + "  'client.scanner.kv.server-side.enabled' = 'true')",
+                                + "  'client.scanner.kv.batch-strategy' = 'server-scan')",
                         tableName));
         TablePath tablePath = TablePath.of(databaseName, tableName);
         try (Table table = conn.getTable(tablePath)) {
@@ -759,7 +759,7 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
                                 + "  primary key (id) NOT ENFORCED)"
                                 + " with ("
                                 + "  'bucket.num' = '4',"
-                                + "  'client.scanner.kv.server-side.enabled' = 'true')",
+                                + "  'client.scanner.kv.batch-strategy' = 'server-scan')",
                         tableName));
         TablePath tablePath = TablePath.of(databaseName, tableName);
         try (Table table = conn.getTable(tablePath)) {
@@ -785,6 +785,46 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
     }
 
     @Test
+    void testKvBatchStrategiesReturnSameState() throws Exception {
+        String tableName = String.format("test_kv_batch_strategies_%s", RandomUtils.nextInt());
+        tEnv.executeSql(
+                String.format(
+                        "create table %s ("
+                                + "  id int not null,"
+                                + "  name varchar,"
+                                + "  primary key (id) NOT ENFORCED)"
+                                + " with ('bucket.num' = '3')",
+                        tableName));
+        TablePath tablePath = TablePath.of(databaseName, tableName);
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
+            for (int i = 1; i <= 5; i++) {
+                upsertWriter.upsert(row(i, "name" + i));
+            }
+            upsertWriter.upsert(row(1, "name1-updated"));
+            upsertWriter.delete(row(2, "name2"));
+            upsertWriter.flush();
+        }
+
+        List<String> snapshotMerge =
+                collectBatchRows(
+                        tEnv.executeSql(String.format("SELECT * FROM %s", tableName)).collect());
+        List<String> serverScan =
+                collectBatchRows(
+                        tEnv.executeSql(
+                                        String.format(
+                                                "SELECT * FROM %s /*+ OPTIONS("
+                                                        + "'client.scanner.kv.batch-strategy' = 'server-scan') */",
+                                                tableName))
+                                .collect());
+
+        assertThat(snapshotMerge)
+                .containsExactlyInAnyOrder(
+                        "+I[1, name1-updated]", "+I[3, name3]", "+I[4, name4]", "+I[5, name5]");
+        assertThat(serverScan).containsExactlyInAnyOrderElementsOf(snapshotMerge);
+    }
+
+    @Test
     void testKvBatchScanReturnsAllRecords() throws Exception {
         String tableName = String.format("test_kv_batch_100_%s", RandomUtils.nextInt());
         tEnv.executeSql(
@@ -795,7 +835,7 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
                                 + "  primary key (id) NOT ENFORCED)"
                                 + " with ("
                                 + "  'bucket.num' = '3',"
-                                + "  'client.scanner.kv.server-side.enabled' = 'true')",
+                                + "  'client.scanner.kv.batch-strategy' = 'server-scan')",
                         tableName));
         TablePath tablePath = TablePath.of(databaseName, tableName);
         try (Table table = conn.getTable(tablePath)) {
@@ -829,7 +869,7 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
                                 + "  primary key (id) NOT ENFORCED)"
                                 + " with ("
                                 + "  'bucket.num' = '3',"
-                                + "  'client.scanner.kv.server-side.enabled' = 'true')",
+                                + "  'client.scanner.kv.batch-strategy' = 'server-scan')",
                         tableName));
         TablePath tablePath = TablePath.of(databaseName, tableName);
         try (Table table = conn.getTable(tablePath)) {
@@ -858,7 +898,7 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
                                 + "  primary key (id) NOT ENFORCED)"
                                 + " with ("
                                 + "  'bucket.num' = '3',"
-                                + "  'client.scanner.kv.server-side.enabled' = 'true')",
+                                + "  'client.scanner.kv.batch-strategy' = 'server-scan')",
                         tableName));
         // No rows written — scan must complete naturally with an empty result set.
         CloseableIterator<Row> collected =

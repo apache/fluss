@@ -23,6 +23,7 @@ import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.KvBatchStrategy;
 import org.apache.fluss.flink.source.deserializer.RowDataDeserializationSchema;
 import org.apache.fluss.flink.source.testutils.MockDataUtils;
 import org.apache.fluss.flink.source.testutils.Order;
@@ -121,7 +122,7 @@ public class FlussSourceITCase extends FlinkTestBase {
         writeRowsToTable(ordersPKTablePath);
 
         Configuration flussConf = new Configuration();
-        flussConf.set(ConfigOptions.CLIENT_SCANNER_KV_SERVER_SIDE_ENABLED, true);
+        flussConf.set(ConfigOptions.CLIENT_SCANNER_KV_BATCH_STRATEGY, KvBatchStrategy.SERVER_SCAN);
 
         FlussSource<Order> flussSource =
                 FlussSource.<Order>builder()

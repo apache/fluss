@@ -23,6 +23,7 @@ import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.client.write.HashBucketAssigner;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.KvBatchStrategy;
 import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.flink.lake.split.LakeSnapshotAndFlussLogSplit;
 import org.apache.fluss.flink.lake.split.LakeSnapshotSplit;
@@ -158,7 +159,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
         long tableId = createTable(DEFAULT_TABLE_PATH, DEFAULT_PK_TABLE_DESCRIPTOR);
         int numSubtasks = DEFAULT_BUCKET_NUM;
         Configuration enabled = new Configuration(flussConf);
-        enabled.set(ConfigOptions.CLIENT_SCANNER_KV_SERVER_SIDE_ENABLED, true);
+        enabled.set(ConfigOptions.CLIENT_SCANNER_KV_BATCH_STRATEGY, KvBatchStrategy.SERVER_SCAN);
         try (MockSplitEnumeratorContext<SourceSplitBase> context =
                 new MockSplitEnumeratorContext<>(numSubtasks)) {
             FlinkSourceEnumerator enumerator =
@@ -200,10 +201,47 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
         }
     }
 
+    @Test
+    void testBoundedPkTableEmitsSnapshotSplitsByDefault() throws Throwable {
+        createTable(DEFAULT_TABLE_PATH, DEFAULT_PK_TABLE_DESCRIPTOR);
+        int numSubtasks = DEFAULT_BUCKET_NUM;
+        try (MockSplitEnumeratorContext<SourceSplitBase> context =
+                new MockSplitEnumeratorContext<>(numSubtasks)) {
+            FlinkSourceEnumerator enumerator =
+                    new FlinkSourceEnumerator(
+                            DEFAULT_TABLE_PATH,
+                            flussConf,
+                            true,
+                            false,
+                            context,
+                            OffsetsInitializer.full(),
+                            DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
+                            false, // bounded
+                            null,
+                            null,
+                            LeaseContext.DEFAULT,
+                            false);
+
+            enumerator.start();
+            for (int i = 0; i < numSubtasks; i++) {
+                registerReader(context, enumerator, i);
+            }
+            context.runNextOneTimeCallable();
+
+            List<SourceSplitBase> allAssigned =
+                    context.getSplitsAssignmentSequence().stream()
+                            .flatMap(a -> a.assignment().values().stream())
+                            .flatMap(List::stream)
+                            .collect(Collectors.toList());
+            assertThat(allAssigned).isNotEmpty();
+            allAssigned.forEach(s -> assertThat(s.isHybridSnapshotLogSplit()).isTrue());
+        }
+    }
+
     /**
-     * With {@code kvBatchEnabled=true} and a partitioned primary-key table the enumerator must emit
-     * one {@link KvBatchSplit} per (partition, bucket) pair — one for each auto-created partition
-     * and each bucket within it.
+     * Under {@code server-scan} and a partitioned primary-key table the enumerator must emit one
+     * {@link KvBatchSplit} per (partition, bucket) pair — one for each auto-created partition and
+     * each bucket within it.
      */
     @Test
     void testBoundedPartitionedPkTableEmitsKvBatchSplits() throws Throwable {
@@ -215,7 +253,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
 
         int numSubtasks = DEFAULT_BUCKET_NUM;
         Configuration enabled = new Configuration(flussConf);
-        enabled.set(ConfigOptions.CLIENT_SCANNER_KV_SERVER_SIDE_ENABLED, true);
+        enabled.set(ConfigOptions.CLIENT_SCANNER_KV_BATCH_STRATEGY, KvBatchStrategy.SERVER_SCAN);
         try (MockSplitEnumeratorContext<SourceSplitBase> context =
                 new MockSplitEnumeratorContext<>(numSubtasks)) {
             FlinkSourceEnumerator enumerator =

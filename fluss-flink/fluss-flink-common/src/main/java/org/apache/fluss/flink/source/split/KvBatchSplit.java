@@ -22,15 +22,16 @@ import org.apache.fluss.metadata.TableBucket;
 import javax.annotation.Nullable;
 
 /**
- * A bounded split that reads the full primary-key state of a bucket via the server-side KV scan.
+ * A bounded split that reads the full primary-key state of a bucket via the server-side kv scan.
  * Emitted by the enumerator for every bucket of a primary-key table when the source is running in
- * bounded mode and the server-side KV scan is enabled (see {@code
- * client.scanner.kv.server-side.enabled}).
+ * bounded mode under {@code client.scanner.kv.batch-strategy = server-scan}, and the table has no
+ * lake snapshot to union-read from.
  *
  * <p>This split has no resumable position: on Flink task restart the bucket is rescanned from
- * scratch. Snapshot isolation is provided by the server (a consistent point-in-time view of the
- * RocksDB state at the moment {@code ScanKv} opens the scan), but the client cannot resume an
- * expired or invalidated session, so progress is not checkpointed.
+ * scratch, so rows already emitted are emitted again. The server pins one RocksDB snapshot per
+ * scanner session, which makes a bucket internally consistent as of the moment {@code ScanKv} opens
+ * it — buckets are opened as readers reach them, so a full scan is not consistent across buckets.
+ * The client cannot resume an expired or invalidated session, so progress is not checkpointed.
  *
  * <p>Unlike {@link HybridSnapshotLogSplit}, this split has no log handoff phase: when the bucket is
  * drained the split is marked finished.

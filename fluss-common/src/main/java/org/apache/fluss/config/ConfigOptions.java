@@ -1543,19 +1543,21 @@ public class ConfigOptions {
                                     + KV_SCANNER_MAX_BATCH_SIZE.key()
                                     + "'.");
 
-    public static final ConfigOption<Boolean> CLIENT_SCANNER_KV_SERVER_SIDE_ENABLED =
-            key("client.scanner.kv.server-side.enabled")
-                    .booleanType()
-                    .defaultValue(false)
+    public static final ConfigOption<KvBatchStrategy> CLIENT_SCANNER_KV_BATCH_STRATEGY =
+            key("client.scanner.kv.batch-strategy")
+                    .enumType(KvBatchStrategy.class)
+                    .defaultValue(KvBatchStrategy.SNAPSHOT_MERGE)
                     .withDescription(
-                            "Master switch for using the server-side KV scan in bounded reads "
-                                    + "of primary-key tables. When true, bounded primary-key reads "
-                                    + "scan the current KV state directly via the server-side KV scan. "
-                                    + "When false (default), bounded primary-key reads fall back to the "
-                                    + "prior behavior (log-only when lake is enabled, or fail when lake "
-                                    + "is disabled). This option has no effect when a lake snapshot "
-                                    + "already exists: in that case the bounded read always performs "
-                                    + "the lake + Fluss-log union read and this flag is not consulted.");
+                            "The strategy used for bounded reads of primary-key tables. "
+                                    + "'snapshot-merge' (default) merges the latest kv snapshot with the "
+                                    + "bounded changelog range that follows it; the scan is resumable and "
+                                    + "reflects a single point in time. 'server-scan' scans the live kv state "
+                                    + "on the tablet server instead, which avoids downloading snapshot files "
+                                    + "and replaying the changelog, but the scan is not resumable and each "
+                                    + "bucket is read at the point in time its scanner was opened. "
+                                    + "This option has no effect when a lake snapshot already exists: the "
+                                    + "bounded read then performs the lake + Fluss-log union read. "
+                                    + "Currently only the Flink connector honours this option.");
 
     public static final ConfigOption<Integer> CLIENT_LOOKUP_QUEUE_SIZE =
             key("client.lookup.queue-size")
