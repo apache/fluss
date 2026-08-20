@@ -22,6 +22,7 @@ import org.apache.fluss.flink.row.FlinkAsFlussRow;
 import org.apache.fluss.flink.utils.FlinkConversions;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.encode.CompactedKeyEncoder;
 import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.utils.MathUtils;
 import org.apache.fluss.utils.MurmurHashUtils;
@@ -104,8 +105,11 @@ public class FlussLookupInputPartitioner implements InputDataPartitioner {
             bucketKeyEncoder =
                     KeyEncoder.ofBucketKeyEncoder(flussKeyType, bucketKeyNames, lakeFormat);
             if (!partitionKeyNames.isEmpty()) {
+                // Partition bytes only distinguish Fluss partitions during Flink channel
+                // selection. The lookup client resolves the actual partition id from metadata, so
+                // lake-format bucket-key encoding must not be applied here.
                 partitionKeyEncoder =
-                        KeyEncoder.ofBucketKeyEncoder(flussKeyType, partitionKeyNames, lakeFormat);
+                        CompactedKeyEncoder.createKeyEncoder(flussKeyType, partitionKeyNames);
             }
             bucketingFunction = BucketingFunction.of(lakeFormat);
             reuseRow = new FlinkAsFlussRow();

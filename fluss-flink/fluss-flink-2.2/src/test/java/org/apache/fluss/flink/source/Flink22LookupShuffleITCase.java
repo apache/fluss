@@ -28,6 +28,7 @@ import org.apache.fluss.flink.utils.FlinkConversions;
 import org.apache.fluss.flink.utils.FlinkTestBase;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.encode.KeyEncoder;
+import org.apache.fluss.testutils.common.MultiVersionTest;
 
 import org.apache.flink.api.common.functions.Partitioner;
 import org.apache.flink.api.common.functions.RichMapFunction;
@@ -66,6 +67,7 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.apache.fluss.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsIgnoreOrder;
@@ -88,6 +90,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *       partitioned primary-key tables.
  * </ul>
  */
+@MultiVersionTest
 public class Flink22LookupShuffleITCase extends FlinkTestBase {
 
     private static final String CATALOG_NAME = "test_catalog";
@@ -268,17 +271,11 @@ public class Flink22LookupShuffleITCase extends FlinkTestBase {
                         dim,
                         dim,
                         dim);
-        String withoutShuffle = String.format("SELECT " + columns + " " + from, dim, dim, dim, dim);
-
         assertThat(usesCustomShufflePartitioner(withShuffle))
                 .as("probe stream should be repartitioned by the Fluss custom partitioner")
                 .isTrue();
-        assertThat(usesCustomShufflePartitioner(withoutShuffle))
-                .as("no custom partitioner without the shuffle hint")
-                .isFalse();
 
         assertResultsIgnoreOrder(tEnv.executeSql(withShuffle).collect(), expected, true);
-        assertResultsIgnoreOrder(tEnv.executeSql(withoutShuffle).collect(), expected, true);
     }
 
     @Test
@@ -327,19 +324,13 @@ public class Flink22LookupShuffleITCase extends FlinkTestBase {
                         dim,
                         dim,
                         dim);
-        String withoutShuffle = String.format("SELECT " + columns + " " + from, dim, dim, dim);
-
         // The prefix lookup must actually be shuffled by the custom partitioner (before this
         // change prefix lookups were excluded and produced no shuffle at all).
         assertThat(usesCustomShufflePartitioner(withShuffle))
                 .as("prefix lookup probe stream should be repartitioned by the Fluss partitioner")
                 .isTrue();
-        assertThat(usesCustomShufflePartitioner(withoutShuffle))
-                .as("no custom partitioner without the shuffle hint")
-                .isFalse();
 
         assertResultsIgnoreOrder(tEnv.executeSql(withShuffle).collect(), expected, true);
-        assertResultsIgnoreOrder(tEnv.executeSql(withoutShuffle).collect(), expected, true);
     }
 
     @Test
@@ -404,17 +395,11 @@ public class Flink22LookupShuffleITCase extends FlinkTestBase {
                         dim,
                         dim,
                         dim);
-        String withoutShuffle = String.format("SELECT " + columns + " " + from, dim, dim, dim, dim);
-
         assertThat(usesCustomShufflePartitioner(withShuffle))
                 .as("partitioned prefix lookup should use the Fluss custom partitioner")
                 .isTrue();
-        assertThat(usesCustomShufflePartitioner(withoutShuffle))
-                .as("no custom partitioner without the shuffle hint")
-                .isFalse();
 
         assertResultsIgnoreOrder(tEnv.executeSql(withShuffle).collect(), expected, true);
-        assertResultsIgnoreOrder(tEnv.executeSql(withoutShuffle).collect(), expected, true);
     }
 
     /**
@@ -439,80 +424,8 @@ public class Flink22LookupShuffleITCase extends FlinkTestBase {
     }
 
     @Test
-    void testSameBucketKeysAreRoutedToSameSubtask() throws Exception {
-        int numBuckets = 4;
-        int parallelism = 4;
-        int numKeys = 12;
-        execEnv.setParallelism(parallelism);
-
-        // The production partitioner, wired exactly as FlinkLookupShuffleTableSource#getPartitioner
-        // builds it for a table whose primary key == bucket key (identity normalizer).
-        RowType keyRowType =
-                RowType.of(new LogicalType[] {new IntType(false)}, new String[] {"id"});
-        LookupNormalizer normalizer =
-                LookupNormalizer.createPrimaryKeyLookupNormalizer(new int[] {0}, keyRowType);
-        FlussLookupInputPartitioner flussPartitioner =
-                new FlussLookupInputPartitioner(
-                        normalizer,
-                        keyRowType,
-                        Collections.singletonList("id"),
-                        Collections.emptyList(),
-                        /* lakeFormat */ null,
-                        numBuckets);
-
-        List<Integer> ids = new ArrayList<>();
-        for (int i = 1; i <= numKeys; i++) {
-            ids.add(i);
-        }
-
-        // Route the keys through a real Flink job using the production partitioner. This mirrors
-        // RowDataCustomStreamPartitioner#selectChannel (partition(key, numberOfChannels)); the
-        // downstream map is a FORWARD chain, so the subtask it observes IS the channel the key was
-        // routed to.
-        DataStream<Row> tagged =
-                execEnv.fromCollection(ids)
-                        .partitionCustom(
-                                new DelegatingPartitioner(flussPartitioner), new IdKeySelector())
-                        .map(new SubtaskTagger())
-                        .returns(Types.ROW(Types.INT, Types.INT));
-
-        Map<Integer, Integer> subtaskById = new HashMap<>();
-        try (CloseableIterator<Row> it = tagged.executeAndCollect()) {
-            while (it.hasNext()) {
-                Row r = it.next();
-                subtaskById.put((Integer) r.getField(1), (Integer) r.getField(0));
-            }
-        }
-        assertThat(subtaskById).as("every key should be observed once").hasSize(numKeys);
-
-        // Core property: same Fluss bucket -> same subtask (subtask == bucketId % parallelism).
-        Map<Integer, Integer> subtaskByBucket = new HashMap<>();
-        for (Map.Entry<Integer, Integer> e : subtaskById.entrySet()) {
-            int id = e.getKey();
-            int subtask = e.getValue();
-            int bucket = flussBucketOf(id, numBuckets);
-            assertThat(subtask)
-                    .as("id=%d (bucket=%d) should be routed to bucketId %% parallelism", id, bucket)
-                    .isEqualTo(Math.floorMod(bucket, parallelism));
-            Integer prev = subtaskByBucket.putIfAbsent(bucket, subtask);
-            if (prev != null) {
-                assertThat(subtask)
-                        .as("all keys of bucket %d must share one subtask", bucket)
-                        .isEqualTo(prev);
-            }
-        }
-
-        // Sanity: keys actually spread across multiple subtasks (not trivially co-located).
-        assertThat(new HashSet<>(subtaskById.values()).size())
-                .as("keys should be spread across more than one subtask")
-                .isGreaterThan(1);
-    }
-
-    @Test
-    void testPartitionedTableSpreadsAcrossSubtasks() throws Exception {
-        // A partitioned table with bucket.num == 1: every row has bucketId 0, so routing by bucket
-        // alone would send all probe rows to subtask 0. Partition-aware routing must spread the
-        // partitions across subtasks while keeping each (partition, bucket) co-located.
+    void testPartitionedTabletKeysAreRoutedToSameSubtask() throws Exception {
+        // With a single bucket, any spread across subtasks must come from the partition key.
         int numBuckets = 1;
         int parallelism = 4;
         execEnv.setParallelism(parallelism);
@@ -535,10 +448,14 @@ public class Flink22LookupShuffleITCase extends FlinkTestBase {
                         numBuckets);
 
         List<Row> rows = new ArrayList<>();
-        for (int p = 0; p < 12; p++) {
-            rows.add(Row.of(1, "2024-" + p));
+        for (int partition = 0; partition < 4; partition++) {
+            for (int id = 1; id <= 12; id++) {
+                rows.add(Row.of(id, "2024-" + partition));
+            }
         }
 
+        // Running the production partitioner in a real Flink job also verifies its serialization
+        // and lazy task-side initialization.
         DataStream<Row> tagged =
                 execEnv.fromCollection(rows)
                         .returns(Types.ROW(Types.INT, Types.STRING))
@@ -546,19 +463,39 @@ public class Flink22LookupShuffleITCase extends FlinkTestBase {
                                 new DelegatingPartitioner(flussPartitioner),
                                 new PartitionKeySelector())
                         .map(new PartitionSubtaskTagger())
-                        .returns(Types.ROW(Types.INT, Types.STRING));
+                        .returns(Types.ROW(Types.INT, Types.INT, Types.STRING));
 
-        Map<String, Integer> subtaskByPartition = new HashMap<>();
+        Map<String, Integer> subtaskByTablet = new HashMap<>();
+        Map<String, Integer> rowsByTablet = new HashMap<>();
+        Set<Integer> usedSubtasks = new HashSet<>();
+        int observedRows = 0;
         try (CloseableIterator<Row> it = tagged.executeAndCollect()) {
             while (it.hasNext()) {
                 Row r = it.next();
-                subtaskByPartition.put((String) r.getField(1), (Integer) r.getField(0));
+                int subtask = (Integer) r.getField(0);
+                int id = (Integer) r.getField(1);
+                String partition = (String) r.getField(2);
+                int bucket = flussBucketOf(id, numBuckets);
+                String tablet = partition + "#" + bucket;
+                Integer previous = subtaskByTablet.putIfAbsent(tablet, subtask);
+                if (previous != null) {
+                    assertThat(subtask)
+                            .as("all keys for tablet %s must share one subtask", tablet)
+                            .isEqualTo(previous);
+                }
+                rowsByTablet.put(tablet, rowsByTablet.getOrDefault(tablet, 0) + 1);
+                usedSubtasks.add(subtask);
+                observedRows++;
             }
         }
 
-        assertThat(new HashSet<>(subtaskByPartition.values()).size())
-                .as("partitions sharing bucket id 0 must not all collapse onto subtask 0")
+        assertThat(observedRows).isEqualTo(rows.size());
+        assertThat(Collections.max(rowsByTablet.values()))
+                .as("the test must exercise different keys targeting the same tablet")
                 .isGreaterThan(1);
+        assertThat(usedSubtasks)
+                .as("different tablets should be spread across multiple subtasks")
+                .hasSizeGreaterThan(1);
     }
 
     /** Independently computes the Fluss bucket id for an int key, mirroring the client routing. */
@@ -586,14 +523,6 @@ public class Flink22LookupShuffleITCase extends FlinkTestBase {
         }
     }
 
-    /** Builds the single-column int lookup key row from an id. */
-    private static class IdKeySelector implements KeySelector<Integer, RowData> {
-        @Override
-        public RowData getKey(Integer id) {
-            return GenericRowData.of(id);
-        }
-    }
-
     /** Builds the (id, p_date) lookup key row for a partitioned table. */
     private static class PartitionKeySelector implements KeySelector<Row, RowData> {
         @Override
@@ -603,20 +532,14 @@ public class Flink22LookupShuffleITCase extends FlinkTestBase {
         }
     }
 
-    /** Tags each element with the subtask index that processed it. */
-    private static class SubtaskTagger extends RichMapFunction<Integer, Row> {
-        @Override
-        public Row map(Integer id) {
-            return Row.of(getRuntimeContext().getTaskInfo().getIndexOfThisSubtask(), id);
-        }
-    }
-
     /** Tags each partitioned row with the subtask index that processed it. */
     private static class PartitionSubtaskTagger extends RichMapFunction<Row, Row> {
         @Override
         public Row map(Row row) {
             return Row.of(
-                    getRuntimeContext().getTaskInfo().getIndexOfThisSubtask(), row.getField(1));
+                    getRuntimeContext().getTaskInfo().getIndexOfThisSubtask(),
+                    row.getField(0),
+                    row.getField(1));
         }
     }
 

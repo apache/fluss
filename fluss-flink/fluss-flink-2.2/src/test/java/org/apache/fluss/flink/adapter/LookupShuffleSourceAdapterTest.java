@@ -24,6 +24,7 @@ import org.apache.fluss.flink.source.FlinkLookupShuffleTableSource;
 import org.apache.fluss.flink.source.FlinkTableSource;
 import org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.testutils.common.MultiVersionTest;
 
 import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.api.ValidationException;
@@ -52,6 +53,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  *       ValidationException}, regardless of eligibility.
  * </ul>
  */
+@MultiVersionTest
 class LookupShuffleSourceAdapterTest {
 
     private static FlinkTableSource tableSource() {

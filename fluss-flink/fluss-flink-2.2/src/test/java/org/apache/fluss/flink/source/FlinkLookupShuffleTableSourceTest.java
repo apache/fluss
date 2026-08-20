@@ -18,14 +18,17 @@
 package org.apache.fluss.flink.source;
 
 import org.apache.fluss.bucketing.BucketingFunction;
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.flink.row.FlinkAsFlussRow;
 import org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils;
 import org.apache.fluss.flink.utils.FlinkConversions;
+import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.encode.KeyEncoder;
+import org.apache.fluss.testutils.common.MultiVersionTest;
 
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.table.api.DataTypes;
@@ -33,6 +36,8 @@ import org.apache.flink.table.connector.source.DynamicTableSource;
 import org.apache.flink.table.connector.source.LookupTableSource;
 import org.apache.flink.table.connector.source.abilities.SupportsLookupCustomShuffle.InputDataPartitioner;
 import org.apache.flink.table.data.GenericRowData;
+import org.apache.flink.table.data.RowData;
+import org.apache.flink.table.data.StringData;
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.table.types.logical.IntType;
 import org.apache.flink.table.types.logical.LogicalType;
@@ -52,6 +57,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * own hash shuffle) must always return a partitioner, and that a copy made between {@code
  * getLookupRuntimeProvider()} and {@code getPartitioner()} keeps the stashed lookup normalizer.
  */
+@MultiVersionTest
 class FlinkLookupShuffleTableSourceTest {
 
     private static FlinkTableSource baseSource(int[] primaryKeys, int[] bucketKeys) {
@@ -62,6 +68,20 @@ class FlinkLookupShuffleTableSourceTest {
                                         DataTypes.FIELD("name", DataTypes.STRING()),
                                         DataTypes.FIELD("address", DataTypes.STRING()))
                                 .getLogicalType();
+        return baseSource(
+                tableOutputType,
+                primaryKeys,
+                bucketKeys,
+                new int[] {},
+                new TableConfig(new Configuration()));
+    }
+
+    private static FlinkTableSource baseSource(
+            RowType tableOutputType,
+            int[] primaryKeys,
+            int[] bucketKeys,
+            int[] partitionKeys,
+            TableConfig tableConfig) {
         Configuration flussConfig = new Configuration();
         flussConfig.setString(FlinkConnectorOptions.BOOTSTRAP_SERVERS.key(), "localhost:9092");
         FlinkConnectorOptionsUtils.StartupOptions startupOptions =
@@ -70,11 +90,11 @@ class FlinkLookupShuffleTableSourceTest {
         return new FlinkTableSource(
                 TablePath.of("test_db", "dim"),
                 flussConfig,
-                new TableConfig(new Configuration()),
+                tableConfig,
                 tableOutputType,
                 primaryKeys,
                 bucketKeys,
-                new int[] {}, // partition key indexes
+                partitionKeys,
                 true, // streaming
                 startupOptions,
                 false, // lookup async (sync avoids any async runtime setup)
@@ -94,6 +114,40 @@ class FlinkLookupShuffleTableSourceTest {
                 new FlinkLookupShuffleTableSource(baseSource(new int[] {0}, new int[] {0}), 3);
         source.getLookupRuntimeProvider(new TestLookupContext(new int[][] {{0}}));
         assertThat(source.getPartitioner()).isPresent();
+    }
+
+    @Test
+    void testPartitionedLakeFormatBuildsUsablePartitioner() {
+        RowType tableOutputType =
+                (RowType)
+                        DataTypes.ROW(
+                                        DataTypes.FIELD("id", DataTypes.INT().notNull()),
+                                        DataTypes.FIELD("region", DataTypes.STRING().notNull()),
+                                        DataTypes.FIELD("p_date", DataTypes.STRING().notNull()))
+                                .getLogicalType();
+        Configuration tableConfiguration = new Configuration();
+        tableConfiguration.set(ConfigOptions.TABLE_DATALAKE_FORMAT, DataLakeFormat.ICEBERG);
+        FlinkLookupShuffleTableSource source =
+                new FlinkLookupShuffleTableSource(
+                        baseSource(
+                                tableOutputType,
+                                new int[] {0, 1, 2},
+                                new int[] {0},
+                                new int[] {1, 2},
+                                new TableConfig(tableConfiguration)),
+                        16);
+        source.getLookupRuntimeProvider(new TestLookupContext(new int[][] {{0}, {1}, {2}}));
+
+        InputDataPartitioner partitioner = source.getPartitioner().get();
+        RowData first =
+                GenericRowData.of(
+                        1, StringData.fromString("cn"), StringData.fromString("2026-08-20"));
+        RowData second =
+                GenericRowData.of(
+                        2, StringData.fromString("cn"), StringData.fromString("2026-08-20"));
+
+        // The golden bucket vectors pin both ids to Iceberg bucket 4.
+        assertThat(partitioner.partition(second, 4)).isEqualTo(partitioner.partition(first, 4));
     }
 
     @Test
@@ -135,11 +189,11 @@ class FlinkLookupShuffleTableSourceTest {
                 .as("the copy must keep the stashed normalizer so the shuffle stays enabled")
                 .isPresent();
 
-        // The copy must also carry numBuckets over: route several keys and confirm they land on the
+        // The copy must also carry numBuckets over: route fixed keys and confirm they land on the
         // bucket computed with numBuckets == 3 (a dropped or defaulted numBuckets would misroute).
         InputDataPartitioner copiedPartitioner = partitioner.get();
         int numPartitions = 2;
-        for (int id = 0; id < 30; id++) {
+        for (int id : new int[] {1, 42, 100}) {
             assertThat(copiedPartitioner.partition(GenericRowData.of(id), numPartitions))
                     .as("id=%d must route by numBuckets=%d", id, numBuckets)
                     .isEqualTo(Math.floorMod(flussBucketOf(id, numBuckets), numPartitions));

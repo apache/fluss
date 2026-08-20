@@ -23,6 +23,7 @@ import org.apache.fluss.flink.utils.FlinkConversions;
 import org.apache.fluss.flink.utils.FlinkUtils;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.row.encode.KeyEncoder;
+import org.apache.fluss.testutils.common.MultiVersionTest;
 
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
@@ -32,6 +33,9 @@ import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.table.types.logical.VarCharType;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -42,13 +46,16 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 /**
  * Unit tests for {@link FlussLookupInputPartitioner}, verifying that the lookup-join probe stream
  * is partitioned consistently with the client-side Fluss bucket assignment.
  */
+@MultiVersionTest
 class FlussLookupInputPartitionerTest {
 
     private static final int GOLDEN_NUM_BUCKETS = 16;
@@ -64,7 +71,7 @@ class FlussLookupInputPartitionerTest {
      *
      * <p>This test pins only the exact bucket id ({@code numPartitions == numBuckets}); the {@code
      * bucket % numPartitions} channel selection is already covered by {@link
-     * #testPartitionEqualsFlussBucketModNumPartitions()}.
+     * #testNonPartitionedRoutingMatchesBucketAndIsDeterministic()}.
      */
     @Test
     void testGoldenBucketVectors() {
@@ -165,41 +172,35 @@ class FlussLookupInputPartitionerTest {
     }
 
     @Test
-    void testPartitionEqualsFlussBucketModNumPartitions() {
+    void testNonPartitionedRoutingMatchesBucketAndIsDeterministic() {
         RowType keyRowType = RowType.of(new LogicalType[] {new IntType()}, new String[] {"id"});
         List<String> bucketKeyNames = Collections.singletonList("id");
         int numBuckets = 8;
         FlussLookupInputPartitioner partitioner =
                 partitionerFor(keyRowType, bucketKeyNames, numBuckets);
 
+        assertThat(partitioner.isDeterministic()).isTrue();
         for (int numPartitions : new int[] {1, 2, 3, 5, 8}) {
+            Map<Integer, Integer> channelByBucket = new HashMap<>();
             for (int id = 0; id < 100; id++) {
                 RowData key = GenericRowData.of(id);
                 int actual = partitioner.partition(key, numPartitions);
-                int expected =
-                        Math.floorMod(
-                                flussBucketOf(keyRowType, bucketKeyNames, key, numBuckets),
-                                numPartitions);
+                int bucket = flussBucketOf(keyRowType, bucketKeyNames, key, numBuckets);
+                int expected = Math.floorMod(bucket, numPartitions);
                 assertThat(actual)
                         .as("id=%d, numPartitions=%d", id, numPartitions)
                         .isEqualTo(expected)
                         .isBetween(0, numPartitions - 1);
-            }
-        }
-    }
 
-    @Test
-    void testDeterministicAndStable() {
-        RowType keyRowType = RowType.of(new LogicalType[] {new IntType()}, new String[] {"id"});
-        FlussLookupInputPartitioner partitioner =
-                partitionerFor(keyRowType, Collections.singletonList("id"), 8);
-
-        assertThat(partitioner.isDeterministic()).isTrue();
-        // same key -> same partition across repeated calls
-        for (int id = 0; id < 50; id++) {
-            int first = partitioner.partition(GenericRowData.of(id), 4);
-            for (int i = 0; i < 5; i++) {
-                assertThat(partitioner.partition(GenericRowData.of(id), 4)).isEqualTo(first);
+                assertThat(partitioner.partition(key, numPartitions))
+                        .as("repeated routing for id=%d, numPartitions=%d", id, numPartitions)
+                        .isEqualTo(actual);
+                Integer previous = channelByBucket.putIfAbsent(bucket, actual);
+                if (previous != null) {
+                    assertThat(actual)
+                            .as("all keys in bucket %d must share a channel", bucket)
+                            .isEqualTo(previous);
+                }
             }
         }
     }
@@ -216,31 +217,6 @@ class FlussLookupInputPartitionerTest {
         assertThat(partitioner.partition(GenericRowData.of(null, 1), 4)).isZero();
         assertThat(partitioner.partition(GenericRowData.of(1, null), 4)).isZero();
         assertThat(partitioner.partition(GenericRowData.of(null, null), 4)).isZero();
-    }
-
-    @Test
-    void testRowsInSameBucketGoToSamePartition() {
-        RowType keyRowType = RowType.of(new LogicalType[] {new IntType()}, new String[] {"id"});
-        List<String> bucketKeyNames = Collections.singletonList("id");
-        int numBuckets = 4;
-        int numPartitions = 2;
-        FlussLookupInputPartitioner partitioner =
-                partitionerFor(keyRowType, bucketKeyNames, numBuckets);
-
-        // group ids by their fluss bucket, then assert every id in the same bucket maps to the
-        // same partition (co-partitioning by bucket key).
-        Map<Integer, Integer> bucketToPartition = new HashMap<>();
-        for (int id = 0; id < 200; id++) {
-            RowData key = GenericRowData.of(id);
-            int bucket = flussBucketOf(keyRowType, bucketKeyNames, key, numBuckets);
-            int partition = partitioner.partition(key, numPartitions);
-            Integer previous = bucketToPartition.putIfAbsent(bucket, partition);
-            if (previous != null) {
-                assertThat(partition)
-                        .as("all ids in bucket %d must share a partition", bucket)
-                        .isEqualTo(previous);
-            }
-        }
     }
 
     @Test
@@ -271,27 +247,48 @@ class FlussLookupInputPartitionerTest {
                 .hasSizeGreaterThan(1);
     }
 
-    @Test
-    void testPartitionedTableCoLocatesSameTablet() {
-        // Rows targeting the same (partition, bucket) tablet must always land on the same subtask.
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("lakeFormatCoLocationCases")
+    void testCompositePartitionKeysCoLocateSameTabletForLakeFormat(
+            String formatName, DataLakeFormat lakeFormat, int firstId, int secondId) {
         RowType keyRowType =
                 RowType.of(
                         new LogicalType[] {
-                            new IntType(false), new VarCharType(false, Integer.MAX_VALUE)
+                            new IntType(false),
+                            new VarCharType(false, Integer.MAX_VALUE),
+                            new VarCharType(false, Integer.MAX_VALUE)
                         },
-                        new String[] {"id", "p_date"});
+                        new String[] {"id", "region", "p_date"});
+        LookupNormalizer normalizer =
+                LookupNormalizer.createPrimaryKeyLookupNormalizer(new int[] {0, 1, 2}, keyRowType);
         FlussLookupInputPartitioner partitioner =
-                partitionerFor(
+                new FlussLookupInputPartitioner(
+                        normalizer,
                         keyRowType,
                         Collections.singletonList("id"),
-                        Collections.singletonList("p_date"),
-                        4);
+                        Arrays.asList("region", "p_date"),
+                        lakeFormat,
+                        GOLDEN_NUM_BUCKETS);
 
-        RowData key = GenericRowData.of(7, StringData.fromString("2024-01"));
-        int first = partitioner.partition(key, 4);
-        for (int i = 0; i < 5; i++) {
-            assertThat(partitioner.partition(key, 4)).isEqualTo(first);
-        }
+        RowData first =
+                GenericRowData.of(
+                        firstId, StringData.fromString("cn"), StringData.fromString("2026-08-20"));
+        RowData second =
+                GenericRowData.of(
+                        secondId, StringData.fromString("cn"), StringData.fromString("2026-08-20"));
+
+        assertThat(partitioner.partition(second, 4))
+                .as("%s rows targeting the same tablet must share a channel", formatName)
+                .isEqualTo(partitioner.partition(first, 4));
+    }
+
+    private static Stream<Arguments> lakeFormatCoLocationCases() {
+        // Each pair is pinned to the same bucket by testGoldenBucketVectors().
+        return Stream.of(
+                arguments("Fluss", null, 2, 42),
+                arguments("Paimon", DataLakeFormat.PAIMON, 42, 100),
+                arguments("Iceberg", DataLakeFormat.ICEBERG, 1, 2),
+                arguments("Hudi", DataLakeFormat.HUDI, 1, 100));
     }
 
     @Test

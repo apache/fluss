@@ -296,7 +296,6 @@ public class FlinkTableSource
         this.producedDataType = other.producedDataType;
         this.projectedFields = other.projectedFields;
         this.singleRowFilter = other.singleRowFilter;
-        this.modificationScanType = other.modificationScanType;
         // Note: selectRowCount/limit are intentionally not carried over (reset on copy).
         this.partitionFilters = other.partitionFilters;
         this.lakeSource = other.lakeSource;
