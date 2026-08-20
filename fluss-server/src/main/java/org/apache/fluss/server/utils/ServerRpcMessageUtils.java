@@ -653,8 +653,8 @@ public class ServerRpcMessageUtils {
                 pbBucketMetadata.setBucketEpoch(bucketEpoch);
             }
 
-            for (Integer isr : bucketMetadata.getIsr()) {
-                pbBucketMetadata.addIsrId(isr);
+            for (Integer isrId : bucketMetadata.getIsr()) {
+                pbBucketMetadata.addIsrId(isrId);
             }
 
             pbBucketMetadataList.add(pbBucketMetadata);
