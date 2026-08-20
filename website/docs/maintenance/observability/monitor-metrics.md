@@ -699,6 +699,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td rowspan="7">
           request_produceLog
           request_putKv
+          request_historicalPutKv
           request_lookup
           request_historicalLookup
           request_prefixLookup
@@ -789,7 +790,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </thead>
   <tbody>
     <tr>
-      <th rowspan="37"><strong>tabletserver</strong></th>
+      <th rowspan="39"><strong>tabletserver</strong></th>
       <td rowspan="20">table</td>
       <td>messagesInPerSecond</td>
       <td>The number of messages written per second to this table.</td>
@@ -891,7 +892,17 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>Meter</td>
     </tr>
     <tr>
-      <td rowspan="4">table_historical</td>
+      <td rowspan="6">table_historical</td>
+      <td>totalPutKvRequestsPerSecond</td>
+      <td>The number of historical put kv requests to this table per second.</td>
+      <td>Meter</td>
+    </tr>
+    <tr>
+      <td>failedPutKvRequestsPerSecond</td>
+      <td>The number of historical put kv requests that failed unexpectedly for this table per second.</td>
+      <td>Meter</td>
+    </tr>
+    <tr>
       <td>totalLookupRequestsPerSecond</td>
       <td>The number of historical lookup requests to this table per second.</td>
       <td>Meter</td>

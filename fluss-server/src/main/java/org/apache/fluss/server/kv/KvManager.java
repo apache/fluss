@@ -386,8 +386,6 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
                                 dropKvTablet.getKvTabletDir().getAbsolutePath()),
                         e);
             }
-        } else {
-            LOG.warn("Fail to delete kv bucket {}.", tableBucket.getBucket());
         }
     }
 

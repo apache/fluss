@@ -21,44 +21,31 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.compression.ArrowCompressionInfo;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.exception.DeletionDisabledException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.KvStorageException;
-import org.apache.fluss.exception.SchemaNotExistException;
 import org.apache.fluss.exception.StorageBackpressureException;
 import org.apache.fluss.memory.MemorySegmentPool;
 import org.apache.fluss.metadata.ChangelogImage;
-import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.KvFormat;
-import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
-import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
-import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.record.BinaryValue;
 import org.apache.fluss.record.ChangeType;
-import org.apache.fluss.record.KvRecord;
 import org.apache.fluss.record.KvRecordBatch;
-import org.apache.fluss.record.KvRecordReadContext;
-import org.apache.fluss.row.BinaryRow;
-import org.apache.fluss.row.PaddingRow;
 import org.apache.fluss.row.arrow.ArrowWriterPool;
-import org.apache.fluss.row.arrow.ArrowWriterProvider;
-import org.apache.fluss.row.encode.ValueDecoder;
 import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.server.kv.autoinc.AutoIncIDRange;
 import org.apache.fluss.server.kv.autoinc.AutoIncrementManager;
-import org.apache.fluss.server.kv.autoinc.AutoIncrementUpdater;
+import org.apache.fluss.server.kv.historical.HistoricalKvKeyEncoder;
+import org.apache.fluss.server.kv.historical.HistoricalKvStateAccessor;
+import org.apache.fluss.server.kv.historical.HistoricalValueLookup;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.PreparedFlush;
-import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.TruncateReason;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKv;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKvBuilder;
 import org.apache.fluss.server.kv.rocksdb.RocksDBResourceContainer;
 import org.apache.fluss.server.kv.rocksdb.RocksDBStatistics;
-import org.apache.fluss.server.kv.rowmerger.DefaultRowMerger;
 import org.apache.fluss.server.kv.rowmerger.RowMerger;
 import org.apache.fluss.server.kv.scan.OpenScanResult;
 import org.apache.fluss.server.kv.scan.ScannerContext;
@@ -66,18 +53,12 @@ import org.apache.fluss.server.kv.snapshot.KvFileHandleAndLocalPath;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotDataUploader;
 import org.apache.fluss.server.kv.snapshot.RocksIncrementalSnapshot;
 import org.apache.fluss.server.kv.snapshot.TabletState;
-import org.apache.fluss.server.kv.wal.ArrowWalBuilder;
-import org.apache.fluss.server.kv.wal.CompactedWalBuilder;
-import org.apache.fluss.server.kv.wal.IndexWalBuilder;
-import org.apache.fluss.server.kv.wal.WalBuilder;
 import org.apache.fluss.server.log.LogAppendInfo;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.server.utils.FatalErrorHandler;
 import org.apache.fluss.server.utils.ResourceGuard;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
-import org.apache.fluss.types.RowType;
-import org.apache.fluss.utils.BytesUtils;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.IOUtils;
 
@@ -102,6 +83,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
+import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.apache.fluss.utils.Preconditions.checkState;
 import static org.apache.fluss.utils.concurrent.LockUtils.inReadLock;
 import static org.apache.fluss.utils.concurrent.LockUtils.inWriteLock;
@@ -126,6 +108,8 @@ public final class KvTablet {
 
     private static final long ROW_COUNT_DISABLED = -1;
 
+    private static final byte[] HISTORICAL_TOMBSTONE = new byte[0];
+
     /**
      * Max records per native write of the asynchronous flush; mirrors the batching capacity of
      * {@code RocksDBWriteBatchWrapper} (hundreds of keys per write batch is RocksDB best practice).
@@ -135,35 +119,23 @@ public final class KvTablet {
 
     private final PhysicalTablePath physicalPath;
     private final TableBucket tableBucket;
+    private final boolean historicalPartition;
 
     private final LogTablet logTablet;
-    private final ArrowWriterProvider arrowWriterProvider;
-    private final MemorySegmentPool memorySegmentPool;
 
     private final File kvTabletDir;
     private final long writeBatchSize;
     private final RocksDBKv rocksDBKv;
     private final KvPreWriteBuffer kvPreWriteBuffer;
+    private final LocalKvStateAccessor localKvStateAccessor;
+    private final KvWriteProcessor kvWriteProcessor;
     private final TabletServerMetricGroup serverMetricGroup;
     private final KvFlushScheduler kvFlushScheduler;
     private final boolean closeFlushScheduler;
 
     // A lock that guards all modifications to the kv.
     private final ReadWriteLock kvLock = new ReentrantReadWriteLock();
-    private final LogFormat logFormat;
-    private final KvFormat kvFormat;
-    // defines how to merge rows on the same primary key
-    private final RowMerger rowMerger;
-    // Pre-created DefaultRowMerger for OVERWRITE mode (undo recovery scenarios)
-    // This avoids creating a new instance on every putAsLeader call
-    private final RowMerger overwriteRowMerger;
-    private final ArrowCompressionInfo arrowCompressionInfo;
     private final AutoIncrementManager autoIncrementManager;
-
-    private final SchemaGetter schemaGetter;
-
-    // the changelog image mode for this tablet
-    private final ChangelogImage changelogImage;
 
     // RocksDB statistics accessor for this tablet
     @Nullable private final RocksDBStatistics rocksDBStatistics;
@@ -201,7 +173,6 @@ public final class KvTablet {
             TabletServerMetricGroup serverMetricGroup,
             RocksDBKv rocksDBKv,
             long writeBatchSize,
-            LogFormat logFormat,
             BufferAllocator arrowBufferAllocator,
             MemorySegmentPool memorySegmentPool,
             KvFormat kvFormat,
@@ -216,6 +187,8 @@ public final class KvTablet {
             AutoIncrementManager autoIncrementManager) {
         this.physicalPath = physicalPath;
         this.tableBucket = tableBucket;
+        this.historicalPartition =
+                HISTORICAL_PARTITION_VALUE.equals(physicalPath.getPartitionName());
         this.logTablet = logTablet;
         this.kvTabletDir = kvTabletDir;
         this.rocksDBKv = rocksDBKv;
@@ -224,17 +197,19 @@ public final class KvTablet {
         this.kvFlushScheduler = kvFlushScheduler;
         this.closeFlushScheduler = closeFlushScheduler;
         this.kvPreWriteBuffer = new KvPreWriteBuffer(serverMetricGroup);
-        this.logFormat = logFormat;
-        this.arrowWriterProvider = new ArrowWriterPool(arrowBufferAllocator);
-        this.memorySegmentPool = memorySegmentPool;
-        this.kvFormat = kvFormat;
-        this.rowMerger = rowMerger;
-        // Pre-create DefaultRowMerger for OVERWRITE mode to avoid creating new instances
-        // on every putAsLeader call. Used for undo recovery scenarios.
-        this.overwriteRowMerger = new DefaultRowMerger(kvFormat, DeleteBehavior.ALLOW);
-        this.arrowCompressionInfo = arrowCompressionInfo;
-        this.schemaGetter = schemaGetter;
-        this.changelogImage = changelogImage;
+        this.localKvStateAccessor = new LocalKvStateAccessor(kvPreWriteBuffer, rocksDBKv);
+        this.kvWriteProcessor =
+                new KvWriteProcessor(
+                        tableBucket,
+                        logTablet,
+                        new ArrowWriterPool(arrowBufferAllocator),
+                        memorySegmentPool,
+                        kvFormat,
+                        rowMerger,
+                        arrowCompressionInfo,
+                        schemaGetter,
+                        changelogImage,
+                        autoIncrementManager);
         this.rocksDBStatistics = rocksDBStatistics;
         this.autoIncrementManager = autoIncrementManager;
         this.flushCompleteListener = flushCompleteListener;
@@ -371,7 +346,6 @@ public final class KvTablet {
                 serverMetricGroup,
                 kv,
                 serverConf.get(ConfigOptions.KV_WRITE_BATCH_SIZE).getBytes(),
-                logTablet.getLogFormat(),
                 arrowBufferAllocator,
                 memorySegmentPool,
                 kvFormat,
@@ -514,6 +488,37 @@ public final class KvTablet {
     public LogAppendInfo putAsLeader(
             KvRecordBatch kvRecords, @Nullable int[] targetColumns, MergeMode mergeMode)
             throws Exception {
+        checkState(!historicalPartition, "%s is a historical KV tablet", tableBucket);
+        return putAsLeader(kvRecords, targetColumns, mergeMode, localKvStateAccessor);
+    }
+
+    /**
+     * Puts records for one original partition into this historical KV tablet.
+     *
+     * <p>The original partition name namespaces the physical primary keys because one historical
+     * bucket can contain records from multiple original partitions. Local misses are resolved by
+     * the supplied fallback before the merge is applied.
+     */
+    public LogAppendInfo putHistoricalAsLeader(
+            KvRecordBatch kvRecords,
+            @Nullable int[] targetColumns,
+            MergeMode mergeMode,
+            String originalPartitionName,
+            HistoricalValueLookup fallbackLookup)
+            throws Exception {
+        checkState(historicalPartition, "%s is not a historical KV tablet", tableBucket);
+        KvStateAccessor historicalStateAccessor =
+                new HistoricalKvStateAccessor(
+                        localKvStateAccessor, originalPartitionName, fallbackLookup);
+        return putAsLeader(kvRecords, targetColumns, mergeMode, historicalStateAccessor);
+    }
+
+    private LogAppendInfo putAsLeader(
+            KvRecordBatch kvRecords,
+            @Nullable int[] targetColumns,
+            MergeMode mergeMode,
+            KvStateAccessor stateAccessor)
+            throws Exception {
         return inWriteLock(
                 kvLock,
                 () -> {
@@ -535,295 +540,9 @@ public final class KvTablet {
                                         tableBucket));
                     }
 
-                    SchemaInfo schemaInfo = schemaGetter.getLatestSchemaInfo();
-                    Schema latestSchema = schemaInfo.getSchema();
-                    short latestSchemaId = (short) schemaInfo.getSchemaId();
-                    validateSchemaId(kvRecords.schemaId(), latestSchemaId);
-
-                    AutoIncrementUpdater currentAutoIncrementUpdater =
-                            autoIncrementManager.getUpdaterForSchema(kvFormat, latestSchemaId);
-
-                    // Validate targetColumns doesn't contain auto-increment column
-                    currentAutoIncrementUpdater.validateTargetColumns(targetColumns);
-
-                    // Determine the row merger based on mergeMode:
-                    // - DEFAULT: Use the configured merge engine (rowMerger)
-                    // - OVERWRITE: Bypass merge engine, use pre-created overwriteRowMerger
-                    //   to directly replace values (for undo recovery scenarios)
-                    // We only support ADD COLUMN, so targetColumns is fine to be used directly.
-                    RowMerger currentMerger =
-                            (mergeMode == MergeMode.OVERWRITE)
-                                    ? overwriteRowMerger.configureTargetColumns(
-                                            targetColumns, latestSchemaId, latestSchema)
-                                    : rowMerger.configureTargetColumns(
-                                            targetColumns, latestSchemaId, latestSchema);
-
-                    RowType latestRowType = latestSchema.getRowType();
-                    WalBuilder walBuilder = createWalBuilder(latestSchemaId, latestRowType);
-                    walBuilder.setWriterState(kvRecords.writerId(), kvRecords.batchSequence());
-                    // we only support ADD COLUMN LAST, so the BinaryRow after RowMerger is
-                    // only has fewer ending columns than latest schema, so we pad nulls to
-                    // the end of the BinaryRow to get the latest schema row.
-                    PaddingRow latestSchemaRow = new PaddingRow(latestRowType.getFieldCount());
-                    // get offset to track the offset corresponded to the kv record
-                    long logEndOffsetOfPrevBatch = logTablet.localLogEndOffset();
-
-                    try {
-                        processKvRecords(
-                                kvRecords,
-                                kvRecords.schemaId(),
-                                currentMerger,
-                                currentAutoIncrementUpdater,
-                                walBuilder,
-                                latestSchemaRow,
-                                logEndOffsetOfPrevBatch);
-
-                        // There will be a situation that these batches of kvRecordBatch have not
-                        // generated any CDC logs, for example, when client attempts to delete
-                        // some non-existent keys or MergeEngineType set to FIRST_ROW. In this case,
-                        // we cannot simply return, as doing so would cause a
-                        // OutOfOrderSequenceException problem. Therefore, here we will build an
-                        // empty batch with lastLogOffset to 0L as the baseLogOffset is 0L. As doing
-                        // that, the logOffsetDelta in logRecordBatch will be set to 0L. So, we will
-                        // put a batch into file with recordCount 0 and offset plus 1L, it will
-                        // update the batchSequence corresponding to the writerId and also increment
-                        // the CDC log offset by 1.
-                        LogAppendInfo logAppendInfo = logTablet.appendAsLeader(walBuilder.build());
-
-                        // if the batch is duplicated, we should truncate the kvPreWriteBuffer
-                        // already written.
-                        if (logAppendInfo.duplicated()) {
-                            kvPreWriteBuffer.truncateTo(
-                                    logEndOffsetOfPrevBatch, TruncateReason.DUPLICATED);
-                        }
-                        return logAppendInfo;
-                    } catch (Throwable t) {
-                        // While encounter error here, the CDC logs may fail writing to disk,
-                        // and the client probably will resend the batch. If we do not remove the
-                        // values generated by the erroneous batch from the kvPreWriteBuffer, the
-                        // retry-send batch will produce incorrect CDC logs.
-                        // TODO for some errors, the cdc logs may already be written to disk, for
-                        //  those errors, we should not truncate the kvPreWriteBuffer.
-                        kvPreWriteBuffer.truncateTo(logEndOffsetOfPrevBatch, TruncateReason.ERROR);
-                        throw t;
-                    } finally {
-                        // deallocate the memory and arrow writer used by the wal builder
-                        walBuilder.deallocate();
-                    }
+                    return kvWriteProcessor.putAsLeader(
+                            kvRecords, targetColumns, mergeMode, stateAccessor);
                 });
-    }
-
-    private void validateSchemaId(short schemaIdOfNewData, short latestSchemaId) {
-        if (schemaIdOfNewData > latestSchemaId || schemaIdOfNewData < 0) {
-            throw new SchemaNotExistException(
-                    "Invalid schema id: "
-                            + schemaIdOfNewData
-                            + ", latest schema id: "
-                            + latestSchemaId);
-        }
-    }
-
-    private void processKvRecords(
-            KvRecordBatch kvRecords,
-            short schemaIdOfNewData,
-            RowMerger currentMerger,
-            AutoIncrementUpdater autoIncrementUpdater,
-            WalBuilder walBuilder,
-            PaddingRow latestSchemaRow,
-            long startLogOffset)
-            throws Exception {
-        long logOffset = startLogOffset;
-
-        // TODO: reuse the read context and decoder
-        KvRecordBatch.ReadContext readContext =
-                KvRecordReadContext.createReadContext(kvFormat, schemaGetter);
-        ValueDecoder valueDecoder = new ValueDecoder(schemaGetter, kvFormat);
-
-        for (KvRecord kvRecord : kvRecords.records(readContext)) {
-            byte[] keyBytes = BytesUtils.toArray(kvRecord.getKey());
-            KvPreWriteBuffer.Key key = KvPreWriteBuffer.Key.of(keyBytes);
-            BinaryRow row = kvRecord.getRow();
-            BinaryValue currentValue = row == null ? null : new BinaryValue(schemaIdOfNewData, row);
-
-            if (currentValue == null) {
-                logOffset =
-                        processDeletion(
-                                key,
-                                currentMerger,
-                                valueDecoder,
-                                walBuilder,
-                                latestSchemaRow,
-                                logOffset);
-            } else {
-                logOffset =
-                        processUpsert(
-                                key,
-                                currentValue,
-                                currentMerger,
-                                autoIncrementUpdater,
-                                valueDecoder,
-                                walBuilder,
-                                latestSchemaRow,
-                                logOffset);
-            }
-        }
-    }
-
-    private long processDeletion(
-            KvPreWriteBuffer.Key key,
-            RowMerger currentMerger,
-            ValueDecoder valueDecoder,
-            WalBuilder walBuilder,
-            PaddingRow latestSchemaRow,
-            long logOffset)
-            throws Exception {
-        DeleteBehavior deleteBehavior = currentMerger.deleteBehavior();
-        if (deleteBehavior == DeleteBehavior.IGNORE) {
-            // skip delete rows if the merger doesn't support yet
-            return logOffset;
-        } else if (deleteBehavior == DeleteBehavior.DISABLE) {
-            throw new DeletionDisabledException(
-                    "Delete operations are disabled for this table. "
-                            + "The table.delete.behavior is set to 'disable'.");
-        }
-
-        byte[] oldValueBytes = getFromBufferOrKv(key);
-        if (oldValueBytes == null) {
-            LOG.debug(
-                    "The specific key can't be found in kv tablet although the kv record is for deletion, "
-                            + "ignore it directly as it doesn't exist in the kv tablet yet.");
-            return logOffset;
-        }
-
-        BinaryValue oldValue = valueDecoder.decodeValue(oldValueBytes);
-        BinaryValue newValue = currentMerger.delete(oldValue);
-
-        // if newValue is null, it means the row should be deleted
-        if (newValue == null) {
-            return applyDelete(key, oldValue, walBuilder, latestSchemaRow, logOffset);
-        } else {
-            return applyUpdate(key, oldValue, newValue, walBuilder, latestSchemaRow, logOffset);
-        }
-    }
-
-    private long processUpsert(
-            KvPreWriteBuffer.Key key,
-            BinaryValue currentValue,
-            RowMerger currentMerger,
-            AutoIncrementUpdater autoIncrementUpdater,
-            ValueDecoder valueDecoder,
-            WalBuilder walBuilder,
-            PaddingRow latestSchemaRow,
-            long logOffset)
-            throws Exception {
-        // Optimization: IN WAL mode，when using DefaultRowMerger (full update, not partial update)
-        // and there is no auto-increment column, we can skip fetching old value for better
-        // performance since the result always reflects the new value. In this case, both INSERT and
-        // UPDATE will produce UPDATE_AFTER.
-        if (changelogImage == ChangelogImage.WAL
-                && !autoIncrementUpdater.hasAutoIncrement()
-                && currentMerger instanceof DefaultRowMerger) {
-            return applyUpdate(key, null, currentValue, walBuilder, latestSchemaRow, logOffset);
-        }
-
-        byte[] oldValueBytes = getFromBufferOrKv(key);
-        if (oldValueBytes == null) {
-            BinaryValue valueToInsert = currentMerger.merge(null, currentValue);
-            return applyInsert(
-                    key,
-                    valueToInsert,
-                    walBuilder,
-                    latestSchemaRow,
-                    logOffset,
-                    autoIncrementUpdater);
-        }
-
-        BinaryValue oldValue = valueDecoder.decodeValue(oldValueBytes);
-        BinaryValue newValue = currentMerger.merge(oldValue, currentValue);
-
-        if (newValue == oldValue) {
-            // no actual change, skip this record
-            return logOffset;
-        }
-
-        return applyUpdate(key, oldValue, newValue, walBuilder, latestSchemaRow, logOffset);
-    }
-
-    private long applyDelete(
-            KvPreWriteBuffer.Key key,
-            BinaryValue oldValue,
-            WalBuilder walBuilder,
-            PaddingRow latestSchemaRow,
-            long logOffset)
-            throws Exception {
-        walBuilder.append(ChangeType.DELETE, latestSchemaRow.replaceRow(oldValue.row));
-        kvPreWriteBuffer.delete(key, logOffset);
-        return logOffset + 1;
-    }
-
-    private long applyInsert(
-            KvPreWriteBuffer.Key key,
-            BinaryValue currentValue,
-            WalBuilder walBuilder,
-            PaddingRow latestSchemaRow,
-            long logOffset,
-            AutoIncrementUpdater autoIncrementUpdater)
-            throws Exception {
-        BinaryValue newValue = autoIncrementUpdater.updateAutoIncrementColumns(currentValue);
-        walBuilder.append(ChangeType.INSERT, latestSchemaRow.replaceRow(newValue.row));
-        kvPreWriteBuffer.insert(key, newValue.encodeValue(), logOffset);
-        return logOffset + 1;
-    }
-
-    private long applyUpdate(
-            KvPreWriteBuffer.Key key,
-            BinaryValue oldValue,
-            BinaryValue newValue,
-            WalBuilder walBuilder,
-            PaddingRow latestSchemaRow,
-            long logOffset)
-            throws Exception {
-        if (changelogImage == ChangelogImage.WAL) {
-            walBuilder.append(ChangeType.UPDATE_AFTER, latestSchemaRow.replaceRow(newValue.row));
-            kvPreWriteBuffer.update(key, newValue.encodeValue(), logOffset);
-            return logOffset + 1;
-        } else {
-            walBuilder.append(ChangeType.UPDATE_BEFORE, latestSchemaRow.replaceRow(oldValue.row));
-            walBuilder.append(ChangeType.UPDATE_AFTER, latestSchemaRow.replaceRow(newValue.row));
-            kvPreWriteBuffer.update(key, newValue.encodeValue(), logOffset + 1);
-            return logOffset + 2;
-        }
-    }
-
-    private WalBuilder createWalBuilder(int schemaId, RowType rowType) throws Exception {
-        switch (logFormat) {
-            case INDEXED:
-                if (kvFormat == KvFormat.COMPACTED) {
-                    // convert from compacted row to indexed row is time cost, and gain
-                    // less benefits, currently we won't support compacted as kv format and
-                    // indexed as cdc log format.
-                    // so in here we throw exception directly
-                    throw new IllegalArgumentException(
-                            "Primary Key Table with COMPACTED kv format doesn't support INDEXED cdc log format.");
-                }
-                return new IndexWalBuilder(schemaId, memorySegmentPool);
-            case COMPACTED:
-                return new CompactedWalBuilder(schemaId, rowType, memorySegmentPool);
-            case ARROW:
-                return new ArrowWalBuilder(
-                        schemaId,
-                        arrowWriterProvider.getOrCreateWriter(
-                                tableBucket.getTableId(),
-                                schemaId,
-                                // we don't limit size of the arrow batch, because all the
-                                // changelogs should be in a single batch
-                                Integer.MAX_VALUE,
-                                rowType,
-                                arrowCompressionInfo),
-                        memorySegmentPool);
-            default:
-                throw new IllegalArgumentException("Unsupported log format: " + logFormat);
-        }
     }
 
     @VisibleForTesting
@@ -988,7 +707,13 @@ public final class KvTablet {
                 for (KvPreWriteBuffer.KvEntry entry : segment.entries()) {
                     KvPreWriteBuffer.Value value = entry.getValue();
                     if (value.get() == null) {
-                        kvBatchWriter.delete(entry.getKey().get());
+                        if (historicalPartition) {
+                            // A physical delete would turn a local miss into a lake lookup and
+                            // could expose the stale value that this mutation deleted.
+                            kvBatchWriter.put(entry.getKey().get(), HISTORICAL_TOMBSTONE);
+                        } else {
+                            kvBatchWriter.delete(entry.getKey().get());
+                        }
                     } else {
                         kvBatchWriter.put(entry.getKey().get(), value.get());
                     }
@@ -1124,13 +849,13 @@ public final class KvTablet {
     /** put key,value,logOffset into pre-write buffer directly. */
     void putToPreWriteBuffer(
             ChangeType changeType, byte[] key, @Nullable byte[] value, long logOffset) {
-        KvPreWriteBuffer.Key wrapKey = KvPreWriteBuffer.Key.of(key);
+        KvPreWriteBuffer.Key wrapKey = localKvStateAccessor.encodeKey(key);
         if (changeType == ChangeType.DELETE && value == null) {
-            kvPreWriteBuffer.delete(wrapKey, logOffset);
+            localKvStateAccessor.delete(wrapKey, logOffset);
         } else if (changeType == ChangeType.INSERT) {
-            kvPreWriteBuffer.insert(wrapKey, value, logOffset);
+            localKvStateAccessor.insert(wrapKey, value, logOffset);
         } else if (changeType == ChangeType.UPDATE_AFTER) {
-            kvPreWriteBuffer.update(wrapKey, value, logOffset);
+            localKvStateAccessor.update(wrapKey, value, logOffset);
         } else {
             throw new IllegalArgumentException(
                     "Unsupported change type for putToPreWriteBuffer: " + changeType);
@@ -1148,13 +873,9 @@ public final class KvTablet {
         return runnable -> inWriteLock(kvLock, runnable::run);
     }
 
-    // get from kv pre-write buffer first, if can't find, get from rocksdb
+    // Get from the state pre-write buffer first, then fall back to the underlying storage.
     private byte[] getFromBufferOrKv(KvPreWriteBuffer.Key key) throws IOException {
-        KvPreWriteBuffer.Value value = kvPreWriteBuffer.get(key);
-        if (value == null) {
-            return rocksDBKv.get(key.get());
-        }
-        return value.get();
+        return localKvStateAccessor.lookup(key).value();
     }
 
     public List<byte[]> multiGet(List<byte[]> keys) throws IOException {
@@ -1181,9 +902,29 @@ public final class KvTablet {
                     rocksDBKv.checkIfRocksDBClosed();
                     List<byte[]> values = new ArrayList<>(keys.size());
                     for (byte[] key : keys) {
-                        values.add(getFromBufferOrKv(KvPreWriteBuffer.Key.of(key)));
+                        values.add(getFromBufferOrKv(localKvStateAccessor.encodeKey(key)));
                     }
                     return values;
+                });
+    }
+
+    /** Looks up one key from the flushed local state for an original historical partition. */
+    public KvStateLookupResult lookupHistoricalLocal(String originalPartitionName, byte[] key)
+            throws IOException {
+        checkState(historicalPartition, "%s is not a historical KV tablet", tableBucket);
+        return inReadLock(
+                kvLock,
+                () -> {
+                    rocksDBKv.checkIfRocksDBClosed();
+                    byte[] value =
+                            rocksDBKv.get(
+                                    HistoricalKvKeyEncoder.encode(originalPartitionName, key));
+                    if (value == null) {
+                        return KvStateLookupResult.notFound();
+                    }
+                    return value.length == 0
+                            ? KvStateLookupResult.deleted()
+                            : KvStateLookupResult.present(value);
                 });
     }
 

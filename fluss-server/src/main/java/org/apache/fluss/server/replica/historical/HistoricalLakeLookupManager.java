@@ -15,15 +15,13 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.server.replica;
+package org.apache.fluss.server.replica.historical;
 
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.FlussRuntimeException;
-import org.apache.fluss.exception.HistoricalPartitionThrottledException;
-import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.LakeStorageNotConfiguredException;
 import org.apache.fluss.lake.lakestorage.LakeStorage;
 import org.apache.fluss.lake.lakestorage.LakeStoragePlugin;
@@ -38,15 +36,11 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.Counter;
 import org.apache.fluss.metrics.ThreadSafeSimpleCounter;
 import org.apache.fluss.plugin.PluginManager;
-import org.apache.fluss.rpc.entity.LookupResultForBucket;
-import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.server.entity.LookupDataForBucket;
 import org.apache.fluss.server.storage.LocalDiskManager;
-import org.apache.fluss.utils.ExecutorUtils;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.IOUtils;
-import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 import org.apache.fluss.utils.concurrent.Scheduler;
 
 import com.github.benmanes.caffeine.cache.Cache;
@@ -68,13 +62,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.Semaphore;
-import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
@@ -85,10 +72,6 @@ import static org.apache.fluss.utils.Preconditions.checkState;
 
 /**
  * Handles server-side point lookup for historical partitions stored in lake storage.
- *
- * <p>Accepted requests run on a dedicated executor whose threads are started lazily and released
- * when idle. A semaphore bounds the total number of accepted historical lookup tasks so slow lake
- * storage cannot create an unbounded request backlog.
  *
  * <p>Creating a lake table lookuper may initialize catalog, table, and query state and allocate
  * local lookup files, so lookupers are cached and reused. The cache is keyed by table ID rather
@@ -118,10 +101,6 @@ class HistoricalLakeLookupManager implements AutoCloseable {
     private static final String LOOKUP_CACHE_DISK_SIZE_TASK_NAME =
             "historical-lookup-cache-disk-size";
     private static final Duration LOOKUP_CACHE_DISK_SIZE_CHECK_INTERVAL = Duration.ofMinutes(3);
-    private static final Duration HISTORICAL_PARTITION_THREAD_KEEP_ALIVE = Duration.ofMinutes(10);
-    private static final Duration HISTORICAL_PARTITION_EXECUTOR_SHUTDOWN_TIMEOUT =
-            Duration.ofSeconds(10);
-    private static final String HISTORICAL_PARTITION_THREAD_NAME_PREFIX = "historical-partition-io";
     // TODO: Share one Paimon IOManager disk budget across all table lookupers and evict cached
     // entries by data file instead of reserving fixed per-table capacity. See
     // https://github.com/apache/fluss/issues/3955.
@@ -131,12 +110,7 @@ class HistoricalLakeLookupManager implements AutoCloseable {
     private volatile long lakeConfigVersion;
     private final @Nullable PluginManager pluginManager;
     private final Counter capacityEvictions;
-    private final int maxQueuedHistoricalRequests;
-    private final Semaphore lookupPermits;
-    // Accepted lookup futures tracked so close() can cancel tasks left after executor shutdown.
-    private final Set<CompletableFuture<LookupResultForBucket>> pendingLookups;
     private final Cache<Long, CachedLakeTableLookuper> lakeTableLookupers;
-    private final ExecutorService historicalPartitionExecutor;
     private final File historicalLookupCacheRootDir;
     private final long dataDirVolumeBytes;
     // TODO: Introduce a minimum lookup cache disk ratio (default 0.01). When disk usage is high,
@@ -160,7 +134,6 @@ class HistoricalLakeLookupManager implements AutoCloseable {
         this(
                 conf,
                 pluginManager,
-                null,
                 dataDir,
                 dataDirVolumeBytes,
                 Ticker.systemTicker(),
@@ -173,7 +146,6 @@ class HistoricalLakeLookupManager implements AutoCloseable {
     HistoricalLakeLookupManager(
             Configuration conf,
             @Nullable PluginManager pluginManager,
-            @Nullable ExecutorService historicalPartitionExecutor,
             File dataDir,
             long dataDirVolumeBytes,
             Ticker ticker,
@@ -193,22 +165,6 @@ class HistoricalLakeLookupManager implements AutoCloseable {
                                 ConfigOptions
                                         .SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO));
         this.capacityEvictions = new ThreadSafeSimpleCounter();
-        this.maxQueuedHistoricalRequests =
-                conf.get(ConfigOptions.NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS);
-        checkArgument(
-                maxQueuedHistoricalRequests > 0,
-                "%s must be greater than 0.",
-                ConfigOptions.NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS.key());
-        int maxThreadPoolSize =
-                conf.get(ConfigOptions.SERVER_HISTORICAL_PARTITION_THREAD_POOL_MAX_SIZE);
-        checkArgument(
-                maxThreadPoolSize > 0,
-                "%s must be greater than 0.",
-                ConfigOptions.SERVER_HISTORICAL_PARTITION_THREAD_POOL_MAX_SIZE.key());
-        this.historicalPartitionExecutor =
-                historicalPartitionExecutor == null
-                        ? createHistoricalPartitionExecutor(maxThreadPoolSize)
-                        : historicalPartitionExecutor;
         this.lakeTableLookupers =
                 Caffeine.newBuilder()
                         .maximumSize(MAX_CACHED_TABLES)
@@ -221,8 +177,6 @@ class HistoricalLakeLookupManager implements AutoCloseable {
                         .executor(Runnable::run)
                         .removalListener(this::onLookuperRemoved)
                         .build();
-        this.lookupPermits = new Semaphore(maxQueuedHistoricalRequests);
-        this.pendingLookups = ConcurrentHashMap.newKeySet();
     }
 
     private static com.github.benmanes.caffeine.cache.Scheduler createCacheScheduler(
@@ -273,85 +227,39 @@ class HistoricalLakeLookupManager implements AutoCloseable {
     }
 
     /** Looks up a batch of keys from one historical lake partition. */
-    CompletableFuture<LookupResultForBucket> lookup(
+    List<byte[]> lookup(
             LookupDataForBucket lookupData,
             TableInfo tableInfo,
             SchemaInfo schemaInfo,
-            LakeTableLookuper.LookupMetricRecorder lookupMetricRecorder) {
+            ResolvedPartitionSpec originalPartitionSpec,
+            LakeTableLookuper.LookupMetricRecorder lookupMetricRecorder)
+            throws Exception {
+        LakeTableLookuper.LookupMetricRecorder checkedMetricRecorder =
+                checkNotNull(lookupMetricRecorder, "lookupMetricRecorder must not be null.");
         checkState(started, "Historical lake lookup manager has not been started.");
-        TableBucket tableBucket = lookupData.tableBucket();
-        if (!lookupPermits.tryAcquire()) {
-            return CompletableFuture.completedFuture(
-                    new LookupResultForBucket(
-                            tableBucket,
-                            null,
-                            lookupData.originalPartitionName(),
-                            ApiError.fromThrowable(
-                                    new HistoricalPartitionThrottledException(
-                                            "Historical lookup is throttled for "
-                                                    + tableBucket
-                                                    + "."))));
-        }
-
-        CompletableFuture<LookupResultForBucket> future;
+        LookupContext context =
+                createLookupContext(
+                        lookupData,
+                        tableInfo,
+                        schemaInfo,
+                        originalPartitionSpec,
+                        checkedMetricRecorder);
+        CachedLakeTableLookuper cachedLookuper = acquireLookuper(context, tableInfo);
         try {
-            future =
-                    submitLookup(
-                            lookupData,
-                            tableInfo,
-                            schemaInfo,
-                            checkNotNull(
-                                    lookupMetricRecorder,
-                                    "lookupMetricRecorder must not be null."));
-        } catch (RuntimeException e) {
-            lookupPermits.release();
-            throw e;
+            List<byte[]> values = new ArrayList<>(lookupData.keys().size());
+            for (byte[] key : lookupData.keys()) {
+                values.add(cachedLookuper.lookuper.lookup(key, context.lookupContext));
+            }
+            return values;
+        } finally {
+            cachedLookuper.release();
         }
-        future.whenComplete(
-                (ignored, error) -> {
-                    pendingLookups.remove(future);
-                    lookupPermits.release();
-                });
-        return future;
     }
 
     @Override
     public void close() {
-        ExecutorUtils.gracefulShutdown(
-                HISTORICAL_PARTITION_EXECUTOR_SHUTDOWN_TIMEOUT.toMillis(),
-                TimeUnit.MILLISECONDS,
-                historicalPartitionExecutor);
-        pendingLookups.forEach(future -> future.cancel(true));
         lakeTableLookupers.invalidateAll();
         lakeTableLookupers.cleanUp();
-    }
-
-    private CompletableFuture<LookupResultForBucket> submitLookup(
-            LookupDataForBucket lookupData,
-            TableInfo tableInfo,
-            SchemaInfo schemaInfo,
-            LakeTableLookuper.LookupMetricRecorder lookupMetricRecorder) {
-        CompletableFuture<LookupResultForBucket> future =
-                CompletableFuture.supplyAsync(
-                        () ->
-                                lookupInternal(
-                                        lookupData, tableInfo, schemaInfo, lookupMetricRecorder),
-                        historicalPartitionExecutor);
-        pendingLookups.add(future);
-        return future;
-    }
-
-    private ExecutorService createHistoricalPartitionExecutor(int maxThreadPoolSize) {
-        ThreadPoolExecutor executor =
-                new ThreadPoolExecutor(
-                        maxThreadPoolSize,
-                        maxThreadPoolSize,
-                        HISTORICAL_PARTITION_THREAD_KEEP_ALIVE.toMillis(),
-                        TimeUnit.MILLISECONDS,
-                        new LinkedBlockingQueue<>(),
-                        new ExecutorThreadFactory(HISTORICAL_PARTITION_THREAD_NAME_PREFIX));
-        executor.allowCoreThreadTimeOut(true);
-        return executor;
     }
 
     /** Invalidates the cached lake lookuper for the given table. */
@@ -367,11 +275,6 @@ class HistoricalLakeLookupManager implements AutoCloseable {
     /** Returns the counter for table lookuper evictions caused by the cached table limit. */
     Counter capacityEvictions() {
         return capacityEvictions;
-    }
-
-    /** Returns the number of accepted historical lookup requests that have not completed. */
-    int numInflightRequests() {
-        return maxQueuedHistoricalRequests - lookupPermits.availablePermits();
     }
 
     /** Applies dynamic historical lookup configuration changes. */
@@ -424,83 +327,6 @@ class HistoricalLakeLookupManager implements AutoCloseable {
         }
     }
 
-    private LookupResultForBucket lookupInternal(
-            LookupDataForBucket lookupData,
-            TableInfo tableInfo,
-            SchemaInfo schemaInfo,
-            LakeTableLookuper.LookupMetricRecorder lookupMetricRecorder) {
-        TableBucket tableBucket = lookupData.tableBucket();
-        CachedLakeTableLookuper cachedLookuper = null;
-        try {
-            LookupContext context =
-                    createLookupContext(lookupData, tableInfo, schemaInfo, lookupMetricRecorder);
-            long currentLakeConfigVersion = lakeConfigVersion;
-            Configuration currentConf = conf;
-            long cacheSizeBytes = lookupCacheMaxDiskBytesPerTable;
-            cachedLookuper =
-                    lakeTableLookupers
-                            .asMap()
-                            .compute(
-                                    context.tableId,
-                                    (ignored, currentLookuper) -> {
-                                        CachedLakeTableLookuper selectedLookuper = currentLookuper;
-                                        // Create the lookuper lazily, and recreate it after schema,
-                                        // lake configuration, or server cache size changes so it
-                                        // reloads lake table/query state and uses the current
-                                        // settings.
-                                        if (selectedLookuper == null
-                                                || selectedLookuper.schemaId != context.schemaId
-                                                || selectedLookuper.lakeConfigVersion
-                                                        != currentLakeConfigVersion
-                                                || selectedLookuper.cacheSizeBytes
-                                                        != cacheSizeBytes) {
-                                            File tableLookupDir =
-                                                    FlussPaths.historicalLookupTableDir(
-                                                            historicalLookupCacheRootDir,
-                                                            context.tablePath,
-                                                            context.tableId);
-                                            LakeTableLookuper lookuper =
-                                                    createLakeTableLookuper(
-                                                            context.tablePath,
-                                                            tableLookupDir.getAbsolutePath(),
-                                                            tableInfo.getTableConfig(),
-                                                            cacheSizeBytes,
-                                                            currentConf);
-                                            selectedLookuper =
-                                                    new CachedLakeTableLookuper(
-                                                            context.tableId,
-                                                            context.tablePath,
-                                                            context.schemaId,
-                                                            currentLakeConfigVersion,
-                                                            cacheSizeBytes,
-                                                            tableLookupDir,
-                                                            lookuper);
-                                        }
-                                        // Pin the lookuper before leaving the atomic cache update.
-                                        // Eviction or invalidation can then defer closing it until
-                                        // this lookup releases it.
-                                        selectedLookuper.acquire();
-                                        return selectedLookuper;
-                                    });
-            List<byte[]> values = new ArrayList<>(lookupData.keys().size());
-            for (byte[] key : lookupData.keys()) {
-                values.add(cachedLookuper.lookuper.lookup(key, context.lookupContext));
-            }
-            return new LookupResultForBucket(
-                    tableBucket, values, lookupData.originalPartitionName(), ApiError.NONE);
-        } catch (Exception e) {
-            return new LookupResultForBucket(
-                    tableBucket,
-                    null,
-                    lookupData.originalPartitionName(),
-                    ApiError.fromThrowable(e));
-        } finally {
-            if (cachedLookuper != null) {
-                cachedLookuper.release();
-            }
-        }
-    }
-
     private void onLookuperRemoved(
             Long ignored, @Nullable CachedLakeTableLookuper cachedLookuper, RemovalCause cause) {
         if (cachedLookuper == null) {
@@ -521,28 +347,10 @@ class HistoricalLakeLookupManager implements AutoCloseable {
             LookupDataForBucket lookupData,
             TableInfo tableInfo,
             SchemaInfo schemaInfo,
+            ResolvedPartitionSpec originalPartitionSpec,
             LakeTableLookuper.LookupMetricRecorder lookupMetricRecorder) {
         TableBucket tableBucket = lookupData.tableBucket();
-        String originalPartitionName = lookupData.originalPartitionName();
-        if (originalPartitionName == null) {
-            throw new InvalidPartitionException(
-                    "Historical lookup request must carry the original partition name.");
-        }
-
         TablePath tablePath = tableInfo.getTablePath();
-
-        ResolvedPartitionSpec originalPartitionSpec;
-        try {
-            originalPartitionSpec =
-                    ResolvedPartitionSpec.fromPartitionName(
-                            tableInfo.getPartitionKeys(), originalPartitionName);
-        } catch (RuntimeException e) {
-            throw new InvalidPartitionException(
-                    String.format(
-                            "Invalid original partition name %s for historical lookup on table %s.",
-                            originalPartitionName, tablePath));
-        }
-
         LakeTableLookuper.LookupContext lookupContext =
                 new LakeTableLookuper.LookupContext(
                         originalPartitionSpec,
@@ -657,6 +465,84 @@ class HistoricalLakeLookupManager implements AutoCloseable {
                         e);
             }
         }
+    }
+
+    @Nullable
+    byte[] lookupValue(
+            TableInfo tableInfo,
+            SchemaInfo schemaInfo,
+            ResolvedPartitionSpec originalPartitionSpec,
+            int bucketId,
+            byte[] key,
+            LakeTableLookuper.LookupMetricRecorder lookupMetricRecorder)
+            throws Exception {
+        checkState(started, "Historical lake lookup manager has not been started.");
+        LookupContext context =
+                new LookupContext(
+                        tableInfo.getTableId(),
+                        schemaInfo.getSchemaId(),
+                        tableInfo.getTablePath(),
+                        new LakeTableLookuper.LookupContext(
+                                originalPartitionSpec,
+                                bucketId,
+                                (short) schemaInfo.getSchemaId(),
+                                schemaInfo.getSchema().getRowType(),
+                                lookupMetricRecorder));
+        CachedLakeTableLookuper cachedLookuper = acquireLookuper(context, tableInfo);
+        try {
+            return cachedLookuper.lookuper.lookup(key, context.lookupContext);
+        } finally {
+            cachedLookuper.release();
+        }
+    }
+
+    private CachedLakeTableLookuper acquireLookuper(LookupContext context, TableInfo tableInfo) {
+        long currentLakeConfigVersion = lakeConfigVersion;
+        Configuration currentConf = conf;
+        long cacheSizeBytes = lookupCacheMaxDiskBytesPerTable;
+        return lakeTableLookupers
+                .asMap()
+                .compute(
+                        context.tableId,
+                        (ignored, currentLookuper) -> {
+                            CachedLakeTableLookuper selectedLookuper = currentLookuper;
+                            // Create the lookuper lazily, and recreate it after schema,
+                            // lake configuration, or server cache size changes so it
+                            // reloads lake table/query state and uses the current
+                            // settings.
+                            if (selectedLookuper == null
+                                    || selectedLookuper.schemaId != context.schemaId
+                                    || selectedLookuper.lakeConfigVersion
+                                            != currentLakeConfigVersion
+                                    || selectedLookuper.cacheSizeBytes != cacheSizeBytes) {
+                                File tableLookupDir =
+                                        FlussPaths.historicalLookupTableDir(
+                                                historicalLookupCacheRootDir,
+                                                context.tablePath,
+                                                context.tableId);
+                                LakeTableLookuper lookuper =
+                                        createLakeTableLookuper(
+                                                context.tablePath,
+                                                tableLookupDir.getAbsolutePath(),
+                                                tableInfo.getTableConfig(),
+                                                cacheSizeBytes,
+                                                currentConf);
+                                selectedLookuper =
+                                        new CachedLakeTableLookuper(
+                                                context.tableId,
+                                                context.tablePath,
+                                                context.schemaId,
+                                                currentLakeConfigVersion,
+                                                cacheSizeBytes,
+                                                tableLookupDir,
+                                                lookuper);
+                            }
+                            // Pin the lookuper before leaving the atomic cache update.
+                            // Eviction or invalidation can then defer closing it until
+                            // this lookup releases it.
+                            selectedLookuper.acquire();
+                            return selectedLookuper;
+                        });
     }
 
     private static final class LookupContext {

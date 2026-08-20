@@ -933,6 +933,8 @@ message PbPutKvReqForBucket {
   optional int64 partition_id = 1;
   required int32 bucket_id = 2;
   required bytes records = 3;
+  // The original partition name for historical PK writes. It is unset for normal writes.
+  optional string original_partition_name = 4;
 }
 
 message PbPutKvRespForBucket {

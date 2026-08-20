@@ -50,7 +50,6 @@ import org.apache.fluss.record.DefaultKvRecordBatch;
 import org.apache.fluss.record.DefaultValueRecordBatch;
 import org.apache.fluss.record.FileChannelChunk;
 import org.apache.fluss.record.FileLogRecords;
-import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.remote.RemoteLogFetchInfo;
@@ -188,6 +187,7 @@ import org.apache.fluss.server.entity.NotifyLakeTableOffsetData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 import org.apache.fluss.server.entity.NotifyRemoteLogOffsetsData;
+import org.apache.fluss.server.entity.PutKvDataForBucket;
 import org.apache.fluss.server.entity.StopReplicaData;
 import org.apache.fluss.server.entity.StopReplicaResultForBucket;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
@@ -1101,22 +1101,49 @@ public class ServerRpcMessageUtils {
         return fetchLogResponse;
     }
 
-    public static Map<TableBucket, KvRecordBatch> getPutKvData(PutKvRequest putKvRequest) {
+    /**
+     * Converts put-KV bucket requests while preserving their historical partition context.
+     *
+     * <p>The returned original partition name is null for normal writes. Normal and historical
+     * writes cannot be mixed in one request. Historical target and partition eligibility are
+     * validated by the historical write path.
+     */
+    public static Map<TableBucket, PutKvDataForBucket> toPutKvDataForBuckets(
+            PutKvRequest putKvRequest) {
         long tableId = putKvRequest.getTableId();
-        Map<TableBucket, KvRecordBatch> produceEntryData = new HashMap<>();
+        Map<TableBucket, PutKvDataForBucket> putKvData = new HashMap<>();
+        boolean historicalWriteRequest =
+                putKvRequest.getBucketsReqsCount() > 0
+                        && putKvRequest.getBucketsReqAt(0).hasOriginalPartitionName();
         for (PbPutKvReqForBucket putKvReqForBucket : putKvRequest.getBucketsReqsList()) {
+            if (putKvReqForBucket.hasOriginalPartitionName() != historicalWriteRequest) {
+                throw new IllegalArgumentException(
+                        "Normal and historical writes cannot be mixed in the same request.");
+            }
             ByteBuffer recordsBuffer = toByteBuffer(putKvReqForBucket.getRecordsSlice());
             DefaultKvRecordBatch kvRecords = DefaultKvRecordBatch.pointToByteBuffer(recordsBuffer);
-            TableBucket tb =
+            TableBucket tableBucket =
                     new TableBucket(
                             tableId,
                             putKvReqForBucket.hasPartitionId()
                                     ? putKvReqForBucket.getPartitionId()
                                     : null,
                             putKvReqForBucket.getBucketId());
-            produceEntryData.put(tb, kvRecords);
+            PutKvDataForBucket previous =
+                    putKvData.putIfAbsent(
+                            tableBucket,
+                            new PutKvDataForBucket(
+                                    tableBucket,
+                                    kvRecords,
+                                    putKvReqForBucket.hasOriginalPartitionName()
+                                            ? putKvReqForBucket.getOriginalPartitionName()
+                                            : null));
+            if (previous != null) {
+                throw new IllegalArgumentException(
+                        "A PutKv request contains duplicate table bucket " + tableBucket + '.');
+            }
         }
-        return produceEntryData;
+        return putKvData;
     }
 
     public static Map<TableBucket, List<byte[]>> toLookupData(LookupRequest lookupRequest) {
