@@ -337,10 +337,14 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         authorizeTable(OperationType.DESCRIBE, tablePath);
 
         TableInfo tableInfo = metadataManager.getTable(tablePath);
-        DescribeBucketsResponse response = new DescribeBucketsResponse();
+        DescribeBucketsResponse response =
+                new DescribeBucketsResponse().setTableId(tableInfo.getTableId());
+        response.setTablePath()
+                .setDatabaseName(tablePath.getDatabaseName())
+                .setTableName(tablePath.getTableName());
         if (tableInfo.isPartitioned()) {
             Map<String, PartitionRegistration> partitionRegistrations =
-                    listPartitionsForDescribeBuckets(request, tablePath);
+                    listPartitionsForDescribeBuckets(request, tablePath, tableInfo);
             partitionRegistrations.remove(HISTORICAL_PARTITION_VALUE);
             Map<Long, List<BucketMetadata>> partitionBucketMetadata =
                     getPartitionBucketMetadataForDescribeBuckets(
@@ -355,8 +359,6 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                                 long partitionId = entry.getValue().getPartitionId();
                                 addBucketInfos(
                                         response,
-                                        tablePath,
-                                        tableInfo.getTableId(),
                                         partitionId,
                                         entry.getKey(),
                                         partitionBucketMetadata.getOrDefault(
@@ -369,8 +371,6 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
             }
             addBucketInfos(
                     response,
-                    tablePath,
-                    tableInfo.getTableId(),
                     null,
                     null,
                     getTableBucketMetadataForDescribeBuckets(tablePath, tableInfo.getTableId()));
@@ -379,12 +379,12 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     }
 
     private Map<String, PartitionRegistration> listPartitionsForDescribeBuckets(
-            DescribeBucketsRequest request, TablePath tablePath) {
+            DescribeBucketsRequest request, TablePath tablePath, TableInfo tableInfo) {
         if (request.hasPartitionSpec()) {
             return metadataManager.listPartitions(
-                    tablePath, toResolvedPartitionSpec(request.getPartitionSpec()));
+                    tablePath, tableInfo, toResolvedPartitionSpec(request.getPartitionSpec()));
         }
-        return metadataManager.listPartitions(tablePath);
+        return metadataManager.listPartitions(tablePath, tableInfo, null);
     }
 
     private Map<Long, List<BucketMetadata>> getPartitionBucketMetadataForDescribeBuckets(
@@ -410,8 +410,6 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
 
     private static void addBucketInfos(
             DescribeBucketsResponse response,
-            TablePath tablePath,
-            long tableId,
             @Nullable Long partitionId,
             @Nullable String partitionName,
             List<BucketMetadata> bucketMetadataList) {
@@ -420,29 +418,16 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                 .forEach(
                         bucketMetadata ->
                                 addBucketInfo(
-                                        response,
-                                        tablePath,
-                                        tableId,
-                                        partitionId,
-                                        partitionName,
-                                        bucketMetadata));
+                                        response, partitionId, partitionName, bucketMetadata));
     }
 
     private static void addBucketInfo(
             DescribeBucketsResponse response,
-            TablePath tablePath,
-            long tableId,
             @Nullable Long partitionId,
             @Nullable String partitionName,
             BucketMetadata bucketMetadata) {
         PbBucketInfo pbBucketInfo =
-                response.addBucketInfo()
-                        .setTableId(tableId)
-                        .setBucketId(bucketMetadata.getBucketId());
-        pbBucketInfo
-                .setTablePath()
-                .setDatabaseName(tablePath.getDatabaseName())
-                .setTableName(tablePath.getTableName());
+                response.addBucketInfo().setBucketId(bucketMetadata.getBucketId());
         if (partitionId != null) {
             pbBucketInfo.setPartitionId(partitionId);
         }
@@ -645,9 +630,9 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
             ResolvedPartitionSpec partitionSpecFromRequest =
                     toResolvedPartitionSpec(request.getPartialPartitionSpec());
             partitionRegistrations =
-                    metadataManager.listPartitions(tablePath, partitionSpecFromRequest);
+                    metadataManager.listPartitions(tablePath, tableInfo, partitionSpecFromRequest);
         } else {
-            partitionRegistrations = metadataManager.listPartitions(tablePath);
+            partitionRegistrations = metadataManager.listPartitions(tablePath, tableInfo, null);
         }
         boolean includeSystemPartitions =
                 request.hasIncludeSystemPartitions() && request.isIncludeSystemPartitions();
