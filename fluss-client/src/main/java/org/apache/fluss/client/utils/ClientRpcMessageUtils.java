@@ -653,17 +653,21 @@ public class ClientRpcMessageUtils {
     }
 
     public static List<BucketInfo> toBucketInfos(DescribeBucketsResponse response) {
+        TablePath tablePath =
+                TablePath.of(
+                        response.getTablePath().getDatabaseName(),
+                        response.getTablePath().getTableName());
+        long tableId = response.getTableId();
         return response.getBucketInfosList().stream()
-                .map(ClientRpcMessageUtils::toBucketInfo)
+                .map(pbBucketInfo -> toBucketInfo(tablePath, tableId, pbBucketInfo))
                 .collect(Collectors.toList());
     }
 
-    private static BucketInfo toBucketInfo(PbBucketInfo pbBucketInfo) {
+    private static BucketInfo toBucketInfo(
+            TablePath tablePath, long tableId, PbBucketInfo pbBucketInfo) {
         return new BucketInfo(
-                TablePath.of(
-                        pbBucketInfo.getTablePath().getDatabaseName(),
-                        pbBucketInfo.getTablePath().getTableName()),
-                pbBucketInfo.getTableId(),
+                tablePath,
+                tableId,
                 pbBucketInfo.hasPartitionId() ? pbBucketInfo.getPartitionId() : null,
                 pbBucketInfo.hasPartitionName() ? pbBucketInfo.getPartitionName() : null,
                 pbBucketInfo.getBucketId(),

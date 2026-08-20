@@ -31,6 +31,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.entity.RegisterTableBucketLeadAndIsrInfo;
+import org.apache.fluss.server.zk.ZkAsyncResponse.ZkGetDataResponse;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.CoordinatorAddress;
@@ -43,6 +44,7 @@ import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
 import org.apache.fluss.server.zk.data.ZkData.BucketIdZNode;
+import org.apache.fluss.server.zk.data.ZkData.PartitionZNode;
 import org.apache.fluss.server.zk.data.lease.KvSnapshotLeaseMetadata;
 import org.apache.fluss.shaded.curator5.org.apache.curator.CuratorZookeeperClient;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
@@ -66,6 +68,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -80,6 +83,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.spy;
 
 /** Test for {@link ZooKeeperClient}. */
@@ -757,6 +761,44 @@ class ZooKeeperClientTest {
         zookeeperClient.deletePartition(tablePath, "p1");
         partitions = zookeeperClient.getPartitions(tablePath);
         assertThat(partitions).containsExactly("p2");
+    }
+
+    @Test
+    void testGetPartitionRegistrationsPreservesZookeeperErrors() throws Exception {
+        TablePath tablePath = TablePath.of("db", "tb");
+        String partition1Path = PartitionZNode.path(tablePath, "p1");
+        String partition2Path = PartitionZNode.path(tablePath, "p2");
+        PartitionRegistration partitionRegistration =
+                new PartitionRegistration(1L, 2L, remoteDataDir);
+
+        ZooKeeperClient testingClient = spy(zookeeperClient);
+        doReturn(new HashSet<>(Arrays.asList("p1", "p2")))
+                .when(testingClient)
+                .getPartitions(tablePath);
+        doReturn(
+                        Arrays.asList(
+                                new ZkGetDataResponse(
+                                        partition1Path,
+                                        KeeperException.Code.OK,
+                                        PartitionZNode.encode(partitionRegistration)),
+                                new ZkGetDataResponse(
+                                        partition2Path, KeeperException.Code.NONODE, null)))
+                .when(testingClient)
+                .getDataInBackground(anyCollection());
+
+        assertThat(testingClient.getPartitionRegistrations(tablePath))
+                .containsOnlyKeys("p1")
+                .containsValue(partitionRegistration);
+
+        doReturn(
+                        Collections.singletonList(
+                                new ZkGetDataResponse(
+                                        partition1Path, KeeperException.Code.CONNECTIONLOSS, null)))
+                .when(testingClient)
+                .getDataInBackground(anyCollection());
+
+        assertThatThrownBy(() -> testingClient.getPartitionRegistrations(tablePath))
+                .isInstanceOf(KeeperException.ConnectionLossException.class);
     }
 
     @Test

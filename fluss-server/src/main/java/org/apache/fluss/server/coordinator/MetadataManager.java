@@ -19,7 +19,6 @@ package org.apache.fluss.server.coordinator;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.DatabaseAlreadyExistException;
 import org.apache.fluss.exception.DatabaseNotEmptyException;
 import org.apache.fluss.exception.DatabaseNotExistException;
@@ -294,6 +293,19 @@ public class MetadataManager {
             TablePath tablePath, ResolvedPartitionSpec partitionFilter)
             throws TableNotExistException, TableNotPartitionedException, InvalidPartitionException {
         TableInfo tableInfo = getTable(tablePath);
+        return listPartitions(tablePath, tableInfo, partitionFilter);
+    }
+
+    /**
+     * List the partitions of the given table and partition spec using the provided table metadata.
+     *
+     * @return a map from partition name to partition registration.
+     */
+    public Map<String, PartitionRegistration> listPartitions(
+            TablePath tablePath,
+            TableInfo tableInfo,
+            @Nullable ResolvedPartitionSpec partitionFilter)
+            throws TableNotExistException, TableNotPartitionedException, InvalidPartitionException {
         if (!tableInfo.isPartitioned()) {
             throw new TableNotPartitionedException(
                     "Table '" + tablePath + "' is not a partitioned table.");
@@ -306,7 +318,7 @@ public class MetadataManager {
                 return zookeeperClient.getPartitionRegistrations(
                         tablePath, tableInfo.getPartitionKeys(), partitionFilter);
             }
-        } catch (ApiException e) {
+        } catch (InvalidPartitionException e) {
             throw e;
         } catch (Exception e) {
             throw new FlussRuntimeException(
