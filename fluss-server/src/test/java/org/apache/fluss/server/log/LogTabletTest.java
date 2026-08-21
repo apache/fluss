@@ -23,6 +23,7 @@ import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.record.FileLogRecords;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.LogRecordReadContext;
@@ -31,9 +32,10 @@ import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableIterator;
+import org.apache.fluss.utils.clock.Clock;
+import org.apache.fluss.utils.clock.ManualClock;
 import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.concurrent.FlussScheduler;
-import org.apache.fluss.utils.concurrent.Scheduler;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -42,6 +44,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -431,6 +434,65 @@ final class LogTabletTest extends LogTestBase {
     }
 
     @Test
+    void testTimeBasedRollUsesReplicatedCommitTimestamp() throws Exception {
+        Configuration config = new Configuration(conf);
+        config.set(ConfigOptions.LOG_SEGMENT_MAX_TIME, Duration.ofMillis(10));
+        ManualClock leaderClock = new ManualClock(100L);
+        ManualClock followerClock = new ManualClock(10_000L);
+        LogTablet leader = createLogTablet(config, leaderClock);
+        LogTablet follower = createLogTablet(config, followerClock);
+
+        MemoryLogRecords first =
+                genMemoryLogRecordsByObject(Collections.singletonList(new Object[] {1, "a"}));
+        leader.appendAsLeader(first);
+
+        leaderClock.advanceTime(Duration.ofMillis(10));
+        assertThat(leader.logSegments()).hasSize(1);
+
+        MemoryLogRecords atThreshold =
+                genMemoryLogRecordsByObject(Collections.singletonList(new Object[] {2, "b"}));
+        leader.appendAsLeader(atThreshold);
+        assertThat(leader.logSegments()).hasSize(1);
+
+        MemoryLogRecords firstFetch = fetchRecords(leader, 0L);
+        assertThat(firstFetch.batches()).hasSize(2);
+        follower.appendAsFollower(firstFetch);
+        assertThat(follower.logSegments()).hasSize(1);
+
+        leaderClock.advanceTime(Duration.ofMillis(1));
+        MemoryLogRecords afterThreshold =
+                genMemoryLogRecordsByObject(Collections.singletonList(new Object[] {3, "c"}));
+        leader.appendAsLeader(afterThreshold);
+        MemoryLogRecords secondFetch = fetchRecords(leader, 2L);
+        assertThat(secondFetch.batches()).hasSize(1);
+        follower.appendAsFollower(secondFetch);
+
+        assertThat(leader.logSegments())
+                .extracting(LogSegment::getBaseOffset)
+                .containsExactly(0L, 2L);
+        assertThat(follower.logSegments())
+                .extracting(LogSegment::getBaseOffset)
+                .containsExactly(0L, 2L);
+        assertThat(leader.localLogEndOffset()).isEqualTo(3L);
+        assertThat(follower.localLogEndOffset()).isEqualTo(3L);
+
+        assertLogRecordsListEquals(
+                Arrays.asList(first, atThreshold),
+                readLog(leader, 0L, Integer.MAX_VALUE, FetchIsolation.LOG_END, true).getRecords());
+        assertLogRecordsListEquals(
+                Arrays.asList(first, atThreshold),
+                readLog(follower, 0L, Integer.MAX_VALUE, FetchIsolation.LOG_END, true)
+                        .getRecords());
+        assertLogRecordsListEquals(
+                Collections.singletonList(afterThreshold),
+                readLog(leader, 2L, Integer.MAX_VALUE, FetchIsolation.LOG_END, true).getRecords());
+        assertLogRecordsListEquals(
+                Collections.singletonList(afterThreshold),
+                readLog(follower, 2L, Integer.MAX_VALUE, FetchIsolation.LOG_END, true)
+                        .getRecords());
+    }
+
+    @Test
     void testPeriodicWriterIdExpiration() throws Exception {
         conf.set(ConfigOptions.WRITER_ID_EXPIRATION_TIME, Duration.ofMillis(1000));
         conf.set(ConfigOptions.WRITER_ID_EXPIRATION_CHECK_INTERVAL, Duration.ofMillis(1000));
@@ -500,14 +562,16 @@ final class LogTabletTest extends LogTestBase {
     }
 
     private LogTablet createLogTablet(Configuration config) throws Exception {
+        return createLogTablet(config, SystemClock.getInstance());
+    }
+
+    private LogTablet createLogTablet(Configuration config, Clock clock) throws Exception {
         File logDir =
                 LogTestUtils.makeRandomLogTabletDir(
                         tempDir,
                         DATA1_TABLE_PATH.getDatabaseName(),
                         DATA1_TABLE_ID,
                         DATA1_TABLE_PATH.getTableName());
-        Scheduler scheduler = new FlussScheduler(1);
-        scheduler.startup();
         return LogTablet.create(
                 tempDir,
                 PhysicalTablePath.of(DATA1_TABLE_PATH),
@@ -521,7 +585,7 @@ final class LogTabletTest extends LogTestBase {
                 LogFormat.ARROW,
                 1,
                 false,
-                SystemClock.getInstance(),
+                clock,
                 true);
     }
 
@@ -606,6 +670,16 @@ final class LogTabletTest extends LogTestBase {
             boolean minOneMessage)
             throws Exception {
         return logTablet.read(offset, maxLength, isolation, minOneMessage, null, null);
+    }
+
+    private MemoryLogRecords fetchRecords(LogTablet leader, long offset) throws Exception {
+        FileLogRecords records =
+                (FileLogRecords)
+                        readLog(leader, offset, Integer.MAX_VALUE, FetchIsolation.LOG_END, true)
+                                .getRecords();
+        ByteBuffer buffer = ByteBuffer.allocate(records.sizeInBytes());
+        records.readInto(buffer, 0);
+        return MemoryLogRecords.pointToByteBuffer(buffer);
     }
 
     private void assertValidLogOffsetMetadata(LogOffsetMetadata offsetMetadata) throws IOException {
