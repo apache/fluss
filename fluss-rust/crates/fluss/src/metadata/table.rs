@@ -1049,6 +1049,38 @@ impl Display for PhysicalTablePath {
     }
 }
 
+/// Resolves `table.statistics.columns` against `row_type`, keeping any failure
+/// as a message so that it can be surfaced later without breaking construction.
+fn resolve_stats_index_mapping(
+    table_config: &TableConfig,
+    row_type: &RowType,
+) -> std::result::Result<Vec<usize>, String> {
+    let names = match table_config.get_statistics_columns() {
+        StatisticsColumns::Disabled => return Ok(Vec::new()),
+        StatisticsColumns::All => {
+            return Ok(row_type
+                .fields()
+                .iter()
+                .enumerate()
+                .filter(|(_, field)| is_supported_statistics_type(field.data_type()))
+                .map(|(index, _)| index)
+                .collect());
+        }
+        StatisticsColumns::Specified(names) => names,
+    };
+
+    names
+        .iter()
+        .map(|name| {
+            row_type
+                .fields()
+                .iter()
+                .position(|field| field.name() == name)
+                .ok_or_else(|| format!("Statistics column '{name}' not found in table schema"))
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone)]
 pub struct TableInfo {
     pub table_path: TablePath,
@@ -1067,6 +1099,9 @@ pub struct TableInfo {
     pub comment: Option<String>,
     pub created_time: i64,
     pub modified_time: i64,
+    /// Resolved once at construction. The failure is held rather than raised so
+    /// that a malformed property only breaks writers, not metadata loading.
+    stats_index_mapping: std::result::Result<Vec<usize>, String>,
 }
 
 impl TableInfo {
@@ -1302,6 +1337,7 @@ impl TableInfo {
         let physical_primary_keys =
             Self::generate_physical_primary_key(&primary_keys, &partition_keys);
         let table_config = TableConfig::from_properties(properties.clone());
+        let stats_index_mapping = resolve_stats_index_mapping(&table_config, &row_type);
 
         TableInfo {
             table_path,
@@ -1320,6 +1356,7 @@ impl TableInfo {
             comment,
             created_time,
             modified_time,
+            stats_index_mapping,
         }
     }
 
@@ -1404,34 +1441,13 @@ impl TableInfo {
     ///
     /// # Errors
     /// Returns an error if a named column is absent from the table schema.
-    pub fn get_stats_index_mapping(&self) -> Result<Vec<usize>> {
-        let names = match self.table_config.get_statistics_columns() {
-            StatisticsColumns::Disabled => return Ok(Vec::new()),
-            StatisticsColumns::All => {
-                return Ok(self
-                    .row_type
-                    .fields()
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, field)| is_supported_statistics_type(field.data_type()))
-                    .map(|(index, _)| index)
-                    .collect());
-            }
-            StatisticsColumns::Specified(names) => names,
-        };
-
-        names
-            .iter()
-            .map(|name| {
-                self.row_type
-                    .fields()
-                    .iter()
-                    .position(|field| field.name() == name)
-                    .ok_or_else(|| Error::IllegalArgument {
-                        message: format!("Statistics column '{name}' not found in table schema"),
-                    })
-            })
-            .collect()
+    pub fn get_stats_index_mapping(&self) -> Result<&[usize]> {
+        match &self.stats_index_mapping {
+            Ok(mapping) => Ok(mapping),
+            Err(message) => Err(IllegalArgument {
+                message: message.clone(),
+            }),
+        }
     }
 
     pub fn get_table_config(&self) -> &TableConfig {
