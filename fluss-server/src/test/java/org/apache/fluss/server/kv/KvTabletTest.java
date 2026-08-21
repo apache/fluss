@@ -97,8 +97,8 @@ import org.rocksdb.RocksDBException;
 import javax.annotation.Nullable;
 
 import java.io.File;
-import java.time.Duration;
 import java.lang.reflect.Field;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -207,6 +207,11 @@ class KvTabletTest {
                         schemaGetter,
                         tableConfig,
                         clock);
+    }
+
+    private LogTablet createLogTablet(File tempLogDir, long tableId, PhysicalTablePath tablePath)
+            throws Exception {
+        return createLogTablet(tempLogDir, tableId, tablePath, SystemClock.getInstance());
     }
 
     private LogTablet createLogTablet(
@@ -368,7 +373,7 @@ class KvTabletTest {
         KvRecord record = kvRecordFactory.ofRecord("k1".getBytes(), new Object[] {1, "a"});
         kvTablet.putAsLeader(
                 kvRecordBatchFactory.ofRecords(Collections.singletonList(record)), null);
-        kvTablet.flush(Long.MAX_VALUE, NOPErrorHandler.INSTANCE);
+        flushAndWait(kvTablet, Long.MAX_VALUE);
 
         byte[] value = kvTablet.multiGet(Collections.singletonList("k1".getBytes())).get(0);
         BinaryValue decoded =
@@ -394,7 +399,7 @@ class KvTabletTest {
                         "k1".getBytes(), new Object[] {1, 1234L, "event-time-row"});
         kvTablet.putAsLeader(
                 kvRecordBatchFactory.ofRecords(Collections.singletonList(record)), null);
-        kvTablet.flush(Long.MAX_VALUE, NOPErrorHandler.INSTANCE);
+        flushAndWait(kvTablet, Long.MAX_VALUE);
 
         byte[] value = readValue("k1");
         BinaryValue decoded = decodeVersion3Value(value);
@@ -418,7 +423,7 @@ class KvTabletTest {
                         "k1".getBytes(), new Object[] {1, null, "null-event-time-row"});
         kvTablet.putAsLeader(
                 kvRecordBatchFactory.ofRecords(Collections.singletonList(record)), null);
-        kvTablet.flush(Long.MAX_VALUE, NOPErrorHandler.INSTANCE);
+        flushAndWait(kvTablet, Long.MAX_VALUE);
 
         byte[] value = readValue("k1");
         BinaryValue decoded = decodeVersion3Value(value);
@@ -446,7 +451,7 @@ class KvTabletTest {
                                 key.getBytes(), new Object[] {1, null, "retained-name"})),
                 null);
         // Persist the never-expiring version before overwriting it with a partial update.
-        kvTablet.flush(Long.MAX_VALUE, NOPErrorHandler.INSTANCE);
+        flushAndWait(kvTablet, Long.MAX_VALUE);
 
         kvTablet.putAsLeader(
                 kvRecordBatchFactory.ofRecords(
@@ -454,7 +459,7 @@ class KvTabletTest {
                                 key.getBytes(),
                                 new Object[] {1, eventTimestampMs, "ignored-name"})),
                 new int[] {0, 1});
-        kvTablet.flush(Long.MAX_VALUE, NOPErrorHandler.INSTANCE);
+        flushAndWait(kvTablet, Long.MAX_VALUE);
 
         byte[] value = readValue(key);
         BinaryValue updatedValue = decodeVersion3Value(value);
@@ -485,7 +490,7 @@ class KvTabletTest {
                         kvRecordFactory.ofRecord(
                                 expiredKey.getBytes(), new Object[] {0, "expired-target"})),
                 null);
-        kvTablet.flush(Long.MAX_VALUE, NOPErrorHandler.INSTANCE);
+        flushAndWait(kvTablet, Long.MAX_VALUE);
 
         clock.advanceTime(Duration.ofHours(2L));
         List<KvRecord> freshRows = new ArrayList<>();
@@ -499,7 +504,7 @@ class KvTabletTest {
         String freshKey = "zz-fresh";
         freshRows.add(kvRecordFactory.ofRecord(freshKey.getBytes(), new Object[] {2000, "fresh"}));
         kvTablet.putAsLeader(kvRecordBatchFactory.ofRecords(freshRows), null);
-        kvTablet.flush(Long.MAX_VALUE, NOPErrorHandler.INSTANCE);
+        flushAndWait(kvTablet, Long.MAX_VALUE);
 
         kvTablet.getRocksDBKv().getDb().compactRange();
 
@@ -2567,7 +2572,7 @@ class KvTabletTest {
                 kvRecordBatchFactory.ofRecords(
                         kvRecordFactory.ofRecord("key1", new Object[] {1, "val1"}));
         kvTablet.putAsLeader(batch, null);
-        kvTablet.flush(Long.MAX_VALUE, NOPErrorHandler.INSTANCE);
+        flushAndWait(kvTablet, Long.MAX_VALUE);
 
         assertThatThrownBy(() -> kvTablet.getRowCount())
                 .isInstanceOf(InvalidTableException.class)

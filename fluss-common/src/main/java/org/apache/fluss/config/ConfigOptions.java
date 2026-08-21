@@ -26,8 +26,8 @@ import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.MergeEngineType;
-import org.apache.fluss.rpc.protocol.FetchLogReadPreference;
 import org.apache.fluss.metadata.RowTtlChangelogMode;
+import org.apache.fluss.rpc.protocol.FetchLogReadPreference;
 import org.apache.fluss.utils.ArrayUtils;
 
 import java.lang.reflect.Field;

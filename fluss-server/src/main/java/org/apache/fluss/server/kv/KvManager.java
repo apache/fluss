@@ -246,13 +246,7 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
             Clock clock)
             throws IOException {
         return create(
-                conf,
-                zkClient,
-                logManager,
-                tabletServerMetricGroup,
-                localDiskManager,
-                null,
-                clock);
+                conf, zkClient, logManager, tabletServerMetricGroup, localDiskManager, null, clock);
     }
 
     @VisibleForTesting
