@@ -916,12 +916,7 @@ public class ZooKeeperClient implements AutoCloseable {
     /** Get the partition registrations of a table in ZK. */
     public Map<String, PartitionRegistration> getPartitionRegistrations(TablePath tablePath)
             throws Exception {
-        Map<String, PartitionRegistration> partitions = new HashMap<>();
-        for (String partitionName : getPartitions(tablePath)) {
-            Optional<PartitionRegistration> optPartition = getPartition(tablePath, partitionName);
-            optPartition.ifPresent(partition -> partitions.put(partitionName, partition));
-        }
-        return partitions;
+        return getPartitionRegistrations(tablePath, getPartitions(tablePath));
     }
 
     /** Get the partition and the id for the partitions of tables in ZK. */
@@ -969,20 +964,44 @@ public class ZooKeeperClient implements AutoCloseable {
             List<String> partitionKeys,
             ResolvedPartitionSpec partialPartitionSpec)
             throws Exception {
-        Map<String, PartitionRegistration> partitions = new HashMap<>();
+        List<String> matchedPartitionNames =
+                getPartitions(tablePath).stream()
+                        .filter(
+                                partitionName ->
+                                        fromPartitionName(partitionKeys, partitionName)
+                                                .contains(partialPartitionSpec))
+                        .collect(Collectors.toList());
+        return getPartitionRegistrations(tablePath, matchedPartitionNames);
+    }
 
-        for (String partitionName : getPartitions(tablePath)) {
-            ResolvedPartitionSpec resolvedPartitionSpec =
-                    fromPartitionName(partitionKeys, partitionName);
-            boolean contains = resolvedPartitionSpec.contains(partialPartitionSpec);
-            if (contains) {
-                Optional<PartitionRegistration> optPartition =
-                        getPartition(tablePath, partitionName);
-                optPartition.ifPresent(partition -> partitions.put(partitionName, partition));
+    private Map<String, PartitionRegistration> getPartitionRegistrations(
+            TablePath tablePath, Collection<String> partitionNames) throws Exception {
+        Map<String, String> path2PartitionName =
+                partitionNames.stream()
+                        .collect(
+                                toMap(
+                                        partitionName ->
+                                                PartitionZNode.path(tablePath, partitionName),
+                                        partitionName -> partitionName));
+        List<ZkGetDataResponse> responses = getDataInBackground(path2PartitionName.keySet());
+        Map<String, PartitionRegistration> partitionRegistrations = new HashMap<>();
+        for (ZkGetDataResponse response : responses) {
+            if (response.getResultCode() == KeeperException.Code.NONODE) {
+                continue;
             }
-        }
+            if (response.getResultCode() != KeeperException.Code.OK) {
+                throw KeeperException.create(response.getResultCode(), response.getPath());
+            }
 
-        return partitions;
+            PartitionRegistration partitionRegistration = PartitionZNode.decode(response.getData());
+            if (partitionRegistration.getRemoteDataDir() == null) {
+                partitionRegistration =
+                        partitionRegistration.newRemoteDataDir(defaultRemoteDataDir);
+            }
+            partitionRegistrations.put(
+                    path2PartitionName.get(response.getPath()), partitionRegistration);
+        }
+        return partitionRegistrations;
     }
 
     /** Get the id and name for the partitions of a table in ZK. */
@@ -1801,8 +1820,9 @@ public class ZooKeeperClient implements AutoCloseable {
         LeaderAndIsr leaderAndIsr = leaderAndIsrs.get(bucket);
         Integer leader = leaderAndIsr != null ? leaderAndIsr.leader() : null;
         Integer leaderEpoch = leaderAndIsr != null ? leaderAndIsr.leaderEpoch() : null;
+        List<Integer> isr = leaderAndIsr != null ? leaderAndIsr.isr() : Collections.emptyList();
         List<Integer> replicas = assignment.getBucketAssignments().get(bucketId).getReplicas();
-        return new BucketMetadata(bucketId, leader, leaderEpoch, replicas);
+        return new BucketMetadata(bucketId, leader, leaderEpoch, replicas, isr);
     }
 
     /** Close the underlying ZooKeeperClient. */

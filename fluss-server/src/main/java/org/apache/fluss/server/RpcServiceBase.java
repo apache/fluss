@@ -44,6 +44,8 @@ import org.apache.fluss.rpc.messages.ApiVersionsRequest;
 import org.apache.fluss.rpc.messages.ApiVersionsResponse;
 import org.apache.fluss.rpc.messages.DatabaseExistsRequest;
 import org.apache.fluss.rpc.messages.DatabaseExistsResponse;
+import org.apache.fluss.rpc.messages.DescribeBucketsRequest;
+import org.apache.fluss.rpc.messages.DescribeBucketsResponse;
 import org.apache.fluss.rpc.messages.DescribeClusterConfigsRequest;
 import org.apache.fluss.rpc.messages.DescribeClusterConfigsResponse;
 import org.apache.fluss.rpc.messages.GetDatabaseInfoRequest;
@@ -71,6 +73,7 @@ import org.apache.fluss.rpc.messages.ListTablesResponse;
 import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.MetadataResponse;
 import org.apache.fluss.rpc.messages.PbApiVersion;
+import org.apache.fluss.rpc.messages.PbBucketInfo;
 import org.apache.fluss.rpc.messages.PbTablePath;
 import org.apache.fluss.rpc.messages.TableExistsRequest;
 import org.apache.fluss.rpc.messages.TableExistsResponse;
@@ -85,6 +88,7 @@ import org.apache.fluss.server.authorizer.Authorizer;
 import org.apache.fluss.server.coordinator.CoordinatorService;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
+import org.apache.fluss.server.metadata.BucketMetadata;
 import org.apache.fluss.server.metadata.MetadataProvider;
 import org.apache.fluss.server.metadata.PartitionMetadata;
 import org.apache.fluss.server.metadata.PartitionNegativeCache;
@@ -104,6 +108,8 @@ import javax.annotation.Nullable;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -319,6 +325,116 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     }
 
     @Override
+    public CompletableFuture<DescribeBucketsResponse> describeBuckets(
+            DescribeBucketsRequest request) {
+        TablePath tablePath = toTablePath(request.getTablePath());
+        authorizeTable(OperationType.DESCRIBE, tablePath);
+
+        TableInfo tableInfo = metadataManager.getTable(tablePath);
+        DescribeBucketsResponse response =
+                new DescribeBucketsResponse().setTableId(tableInfo.getTableId());
+        response.setTablePath()
+                .setDatabaseName(tablePath.getDatabaseName())
+                .setTableName(tablePath.getTableName());
+        if (tableInfo.isPartitioned()) {
+            Map<String, PartitionRegistration> partitionRegistrations =
+                    listPartitionsForDescribeBuckets(request, tablePath, tableInfo);
+            partitionRegistrations.remove(HISTORICAL_PARTITION_VALUE);
+            Map<Long, List<BucketMetadata>> partitionBucketMetadata =
+                    getPartitionBucketMetadataForDescribeBuckets(
+                            tablePath,
+                            partitionRegistrations.values().stream()
+                                    .map(PartitionRegistration::getPartitionId)
+                                    .collect(Collectors.toList()));
+            partitionRegistrations.entrySet().stream()
+                    .sorted(Map.Entry.comparingByKey())
+                    .forEach(
+                            entry -> {
+                                long partitionId = entry.getValue().getPartitionId();
+                                addBucketInfos(
+                                        response,
+                                        partitionId,
+                                        entry.getKey(),
+                                        partitionBucketMetadata.getOrDefault(
+                                                partitionId, Collections.emptyList()));
+                            });
+        } else {
+            if (request.hasPartitionSpec()) {
+                throw new TableNotPartitionedException(
+                        "Table '" + tablePath + "' is not a partitioned table.");
+            }
+            addBucketInfos(
+                    response,
+                    null,
+                    null,
+                    getTableBucketMetadataForDescribeBuckets(tablePath, tableInfo.getTableId()));
+        }
+        return CompletableFuture.completedFuture(response);
+    }
+
+    private Map<String, PartitionRegistration> listPartitionsForDescribeBuckets(
+            DescribeBucketsRequest request, TablePath tablePath, TableInfo tableInfo) {
+        if (request.hasPartitionSpec()) {
+            return metadataManager.listPartitions(
+                    tablePath, tableInfo, toResolvedPartitionSpec(request.getPartitionSpec()));
+        }
+        return metadataManager.listPartitions(tablePath, tableInfo, null);
+    }
+
+    private Map<Long, List<BucketMetadata>> getPartitionBucketMetadataForDescribeBuckets(
+            TablePath tablePath, Collection<Long> partitionIds) {
+        try {
+            return zkClient.getBucketMetadataForPartitions(partitionIds);
+        } catch (Exception e) {
+            throw new FlussRuntimeException(
+                    String.format("Failed to describe buckets for table '%s'.", tablePath), e);
+        }
+    }
+
+    private List<BucketMetadata> getTableBucketMetadataForDescribeBuckets(
+            TablePath tablePath, long tableId) {
+        try {
+            return zkClient.getBucketMetadataForTables(Collections.singleton(tableId))
+                    .getOrDefault(tableId, Collections.emptyList());
+        } catch (Exception e) {
+            throw new FlussRuntimeException(
+                    String.format("Failed to describe buckets for table '%s'.", tablePath), e);
+        }
+    }
+
+    private static void addBucketInfos(
+            DescribeBucketsResponse response,
+            @Nullable Long partitionId,
+            @Nullable String partitionName,
+            List<BucketMetadata> bucketMetadataList) {
+        bucketMetadataList.stream()
+                .sorted(Comparator.comparingInt(BucketMetadata::getBucketId))
+                .forEach(
+                        bucketMetadata ->
+                                addBucketInfo(
+                                        response, partitionId, partitionName, bucketMetadata));
+    }
+
+    private static void addBucketInfo(
+            DescribeBucketsResponse response,
+            @Nullable Long partitionId,
+            @Nullable String partitionName,
+            BucketMetadata bucketMetadata) {
+        PbBucketInfo pbBucketInfo =
+                response.addBucketInfo().setBucketId(bucketMetadata.getBucketId());
+        if (partitionId != null) {
+            pbBucketInfo.setPartitionId(partitionId);
+        }
+        if (partitionName != null) {
+            pbBucketInfo.setPartitionName(partitionName);
+        }
+        bucketMetadata.getLeaderId().ifPresent(pbBucketInfo::setLeaderId);
+        bucketMetadata.getLeaderEpoch().ifPresent(pbBucketInfo::setLeaderEpoch);
+        bucketMetadata.getReplicas().forEach(pbBucketInfo::addReplicaId);
+        bucketMetadata.getIsr().forEach(pbBucketInfo::addIsrId);
+    }
+
+    @Override
     public CompletableFuture<GetTableSchemaResponse> getTableSchema(GetTableSchemaRequest request) {
         TablePath tablePath = toTablePath(request.getTablePath());
         authorizeTable(OperationType.DESCRIBE, tablePath);
@@ -478,18 +594,18 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         TablePath tablePath = toTablePath(request.getTablePath());
         authorizeTable(OperationType.DESCRIBE, tablePath);
 
+        TableInfo tableInfo = metadataManager.getTable(tablePath);
         Map<String, PartitionRegistration> partitionRegistrations;
         if (request.hasPartialPartitionSpec()) {
             ResolvedPartitionSpec partitionSpecFromRequest =
                     toResolvedPartitionSpec(request.getPartialPartitionSpec());
             partitionRegistrations =
-                    metadataManager.listPartitions(tablePath, partitionSpecFromRequest);
+                    metadataManager.listPartitions(tablePath, tableInfo, partitionSpecFromRequest);
         } else {
-            partitionRegistrations = metadataManager.listPartitions(tablePath);
+            partitionRegistrations = metadataManager.listPartitions(tablePath, tableInfo, null);
         }
         // TODO: Return the actual lake partitions instead of the internal historical partition.
         partitionRegistrations.remove(HISTORICAL_PARTITION_VALUE);
-        TableInfo tableInfo = metadataManager.getTable(tablePath);
         List<String> partitionKeys = tableInfo.getPartitionKeys();
         return CompletableFuture.completedFuture(
                 toListPartitionInfosResponse(partitionKeys, partitionRegistrations));
