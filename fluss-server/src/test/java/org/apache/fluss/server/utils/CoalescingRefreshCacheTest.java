@@ -33,57 +33,60 @@ class CoalescingRefreshCacheTest {
     private static final long URGENT_MAX_DELAY_MS = 100;
 
     @Test
-    void testInitialValueIsReturnedUntouched() {
+    void testFreshCacheStartsDirtyWithTheSeedValue() {
         CoalescingRefreshCache<Integer> cache =
                 new CoalescingRefreshCache<>(0, URGENT_MAX_DELAY_MS);
         assertThat(cache.get()).isEqualTo(0);
-        assertThat(cache.isDirty()).isFalse();
+        // hasn't computed a real value yet -- starts dirty so a warm-up can force it through.
+        assertThat(cache.isDirty()).isTrue();
     }
 
     @Test
-    void testRefreshIfNeededIsNoOpWhenNotDirty() {
+    void testRefreshIsNoOpWhenNotDirtyEvenIfForced() {
         CoalescingRefreshCache<Integer> cache =
                 new CoalescingRefreshCache<>(0, URGENT_MAX_DELAY_MS);
+        cache.refresh(() -> 1, true); // clears the initial dirty state
         AtomicInteger computeCalls = new AtomicInteger();
 
-        cache.refreshIfNeeded(() -> computeCalls.incrementAndGet(), true);
+        cache.refresh(() -> computeCalls.incrementAndGet(), true);
 
-        // compute() must not even be invoked -- there was nothing to refresh.
+        // force overrides the timing gate, never the dirty gate -- nothing changed, so
+        // compute() must not even be invoked, force notwithstanding.
         assertThat(computeCalls.get()).isZero();
-        assertThat(cache.get()).isEqualTo(0);
+        assertThat(cache.get()).isEqualTo(1);
     }
 
     @Test
-    void testNonUrgentChangeWaitsUntilIdle() {
+    void testNonUrgentChangeWaitsForForce() {
         CoalescingRefreshCache<Integer> cache =
                 new CoalescingRefreshCache<>(0, URGENT_MAX_DELAY_MS);
         AtomicInteger source = new AtomicInteger(1);
         cache.markDirty(false);
 
-        cache.refreshIfNeeded(source::get, false); // not idle -- must wait
+        cache.refresh(source::get, false); // not forced -- must wait
         assertThat(cache.get()).isEqualTo(0);
         assertThat(cache.isDirty()).isTrue();
 
-        cache.refreshIfNeeded(source::get, true); // idle -- now it should recompute
+        cache.refresh(source::get, true); // forced -- now it should recompute
         assertThat(cache.get()).isEqualTo(1);
         assertThat(cache.isDirty()).isFalse();
     }
 
     @Test
-    void testUrgentChangeIsBoundedByMaxDelayEvenIfNeverIdle() throws InterruptedException {
+    void testUrgentChangeIsBoundedByMaxDelayEvenIfNeverForced() throws InterruptedException {
         CoalescingRefreshCache<Integer> cache =
                 new CoalescingRefreshCache<>(0, URGENT_MAX_DELAY_MS);
         AtomicInteger source = new AtomicInteger(1);
-        cache.update(source::get); // establishes a real lastRefreshTimeMs baseline
+        cache.refresh(source::get, true); // establishes a real lastRefreshTimeMs baseline
         source.set(2);
 
         cache.markDirty(true);
-        cache.refreshIfNeeded(source::get, false); // urgent, but delay not yet elapsed
+        cache.refresh(source::get, false); // urgent, but delay not yet elapsed
         assertThat(cache.get()).isEqualTo(1);
 
         Thread.sleep(URGENT_MAX_DELAY_MS + 50);
 
-        cache.refreshIfNeeded(source::get, false); // still not idle, but the bound is up
+        cache.refresh(source::get, false); // still not forced, but the bound is up
         assertThat(cache.get()).isEqualTo(2);
         assertThat(cache.isDirty()).isFalse();
         assertThat(cache.isUrgentlyDirty()).isFalse();
@@ -98,38 +101,39 @@ class CoalescingRefreshCacheTest {
 
         for (int i = 0; i < 50; i++) {
             cache.markDirty(false);
-            cache.refreshIfNeeded(
+            cache.refresh(
                     () -> {
                         computeCalls.incrementAndGet();
                         return source.incrementAndGet();
                     },
-                    false); // never idle -- simulates a burst arriving while the queue is busy
+                    false); // never forced -- simulates a burst arriving while the queue is busy
         }
         assertThat(computeCalls.get()).isZero();
 
-        cache.refreshIfNeeded(
+        cache.refresh(
                 () -> {
                     computeCalls.incrementAndGet();
                     return source.incrementAndGet();
                 },
-                true); // idle now -- exactly one recompute for the whole burst
+                true); // forced now -- exactly one recompute for the whole burst
 
         assertThat(computeCalls.get()).isEqualTo(1);
         assertThat(cache.get()).isEqualTo(1);
     }
 
     @Test
-    void testUpdateBypassesPolicyButDoesNotClearDirtyFlags() {
+    void testForceClearsDirtyFlagsAfterRecomputing() {
         CoalescingRefreshCache<Integer> cache =
                 new CoalescingRefreshCache<>(0, URGENT_MAX_DELAY_MS);
         cache.markDirty(true);
 
-        cache.update(() -> 7);
+        cache.refresh(() -> 7, true);
 
         assertThat(cache.get()).isEqualTo(7);
-        // update() is an unconditional bypass of the policy, not a substitute for it -- it must
-        // not silently clear flags that refreshIfNeeded is responsible for managing.
-        assertThat(cache.isDirty()).isTrue();
-        assertThat(cache.isUrgentlyDirty()).isTrue();
+        // a forced refresh still recomputed the current truth, so nothing is left
+        // unreflected -- force participates fully in the dirty-tracking system, it doesn't
+        // sidestep it.
+        assertThat(cache.isDirty()).isFalse();
+        assertThat(cache.isUrgentlyDirty()).isFalse();
     }
 }

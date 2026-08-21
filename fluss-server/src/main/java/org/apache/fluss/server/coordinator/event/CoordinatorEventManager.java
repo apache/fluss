@@ -287,7 +287,7 @@ public final class CoordinatorEventManager implements EventManager {
             // sooner only if healthCache itself decided a change was urgent. No AccessContextEvent
             // needed -- this thread already owns coordinatorContext directly.
             if (coordinatorContext != null) {
-                healthCache.refreshIfNeeded(coordinatorContext, queue.isEmpty());
+                healthCache.refresh(coordinatorContext, queue.isEmpty());
             }
 
             // Use poll with timeout instead of blocking take() so that the thread

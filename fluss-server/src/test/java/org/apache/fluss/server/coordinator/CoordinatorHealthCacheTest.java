@@ -57,7 +57,7 @@ class CoordinatorHealthCacheTest {
 
     @Test
     void testEmptyClusterReportsZeroLoadPerLiveServer() {
-        cache.update(ctx);
+        cache.refresh(ctx, true);
 
         ClusterHealthSnapshot snapshot = cache.getSnapshot();
         assertThat(snapshot.numReplicas()).isZero();
@@ -96,7 +96,7 @@ class CoordinatorHealthCacheTest {
 
         GetClusterHealthResponse expected = CoordinatorService.computeClusterHealth(ctx);
 
-        cache.update(ctx);
+        cache.refresh(ctx, true);
         ClusterHealthSnapshot snapshot = cache.getSnapshot();
 
         // the cache must reproduce the exact same cluster-wide aggregates as the
@@ -114,7 +114,7 @@ class CoordinatorHealthCacheTest {
         ctx.putBucketLeaderAndIsr(
                 tb, new LeaderAndIsr(0, 1, Arrays.asList(0, 1), Collections.emptyList(), 0, 1));
 
-        cache.update(ctx);
+        cache.refresh(ctx, true);
         ClusterHealthSnapshot snapshot = cache.getSnapshot();
 
         TabletServerLoad server0 = snapshot.tabletServerLoads().get(0);
@@ -164,7 +164,7 @@ class CoordinatorHealthCacheTest {
                         0,
                         1));
 
-        cache.update(ctx);
+        cache.refresh(ctx, true);
         ClusterHealthSnapshot snapshot = cache.getSnapshot();
 
         assertThat(snapshot.numLeaderReplicas()).isEqualTo(1); // one bucket, counted regardless
@@ -184,7 +184,7 @@ class CoordinatorHealthCacheTest {
                 new LeaderAndIsr(
                         0, 1, Collections.singletonList(0), Collections.emptyList(), 0, 1));
 
-        cache.update(ctx);
+        cache.refresh(ctx, true);
 
         // server 1 and 2 host nothing, but are live, so they must still be present with 0 load
         // (mirrors the "evacuated server explicitly shows zero replicas" contract).
@@ -197,16 +197,17 @@ class CoordinatorHealthCacheTest {
     void testPublishedSnapshotIsImmutableAcrossLaterUpdates() {
         TableBucket tb = new TableBucket(1L, 0);
         ctx.updateBucketReplicaAssignment(tb, Arrays.asList(0, 1));
-        cache.update(ctx);
+        cache.refresh(ctx, true);
 
         ClusterHealthSnapshot firstSnapshot = cache.getSnapshot();
         assertThat(firstSnapshot.numReplicas()).isEqualTo(2);
 
-        // a later mutation + update must not retroactively change a snapshot a caller already
+        // a later mutation + refresh must not retroactively change a snapshot a caller already
         // holds a reference to -- that is the entire point of copy-on-write.
         TableBucket tb2 = new TableBucket(2L, 0);
         ctx.updateBucketReplicaAssignment(tb2, Arrays.asList(0, 1, 2));
-        cache.update(ctx);
+        cache.onTopologyChanged(); // real callers always report through onXxx before refreshing
+        cache.refresh(ctx, true);
 
         assertThat(firstSnapshot.numReplicas()).isEqualTo(2);
         assertThat(cache.getSnapshot().numReplicas()).isEqualTo(5);
@@ -219,7 +220,7 @@ class CoordinatorHealthCacheTest {
         ctx.updateBucketReplicaAssignment(tb, Arrays.asList(0, 1, 2));
         ctx.putBucketLeaderAndIsr(
                 tb, new LeaderAndIsr(0, 1, Arrays.asList(0, 1, 2), Collections.emptyList(), 0, 1));
-        cache.update(ctx);
+        cache.refresh(ctx, true);
 
         AtomicBoolean stop = new AtomicBoolean(false);
         AtomicReference<AssertionError> failure = new AtomicReference<>();
@@ -248,10 +249,12 @@ class CoordinatorHealthCacheTest {
                         });
 
         reader.start();
-        // hammer update() from this thread while the reader spins, simulating the event thread
-        // republishing the snapshot concurrently with RPC-thread reads.
+        // hammer refresh() from this thread while the reader spins, simulating the event thread
+        // republishing the snapshot concurrently with RPC-thread reads. onTopologyChanged() keeps
+        // marking it dirty so each iteration actually recomputes and swaps, not just the first.
         for (int i = 0; i < 2000 && failure.get() == null; i++) {
-            cache.update(ctx);
+            cache.onTopologyChanged();
+            cache.refresh(ctx, true);
         }
         stop.set(true);
         reader.join();
@@ -315,45 +318,45 @@ class CoordinatorHealthCacheTest {
     }
 
     @Test
-    void testRefreshIfNeededIsNoOpWhenNotDirty() {
-        cache.update(ctx);
+    void testRefreshIsNoOpWhenNotDirty() {
+        cache.refresh(ctx, true);
         ClusterHealthSnapshot warm = cache.getSnapshot();
 
         // nothing reported dirty since the warm-up -- must not recompute, queue state aside.
-        cache.refreshIfNeeded(ctx, true);
+        cache.refresh(ctx, true);
         assertThat(cache.getSnapshot()).isSameAs(warm);
     }
 
     @Test
     void testNonUrgentChangeWaitsForQueueToDrain() {
-        cache.update(ctx);
+        cache.refresh(ctx, true);
         TableBucket tb = new TableBucket(1L, 0);
         ctx.updateBucketReplicaAssignment(tb, Arrays.asList(0, 1));
         cache.onTopologyChanged();
 
         ClusterHealthSnapshot beforeDrain = cache.getSnapshot();
-        cache.refreshIfNeeded(ctx, false); // queue still has work -- must not recompute yet
+        cache.refresh(ctx, false); // queue still has work -- must not recompute yet
         assertThat(cache.getSnapshot()).isSameAs(beforeDrain);
 
-        cache.refreshIfNeeded(ctx, true); // queue drained -- now it should
+        cache.refresh(ctx, true); // queue drained -- now it should
         assertThat(cache.getSnapshot()).isNotSameAs(beforeDrain);
         assertThat(cache.getSnapshot().numReplicas()).isEqualTo(2);
     }
 
     @Test
     void testUrgentChangeIsBoundedByMaxDelayEvenIfQueueNeverDrains() throws InterruptedException {
-        cache.update(ctx); // establishes a real lastRefreshTimeMs baseline
+        cache.refresh(ctx, true); // establishes a real lastRefreshTimeMs baseline
         TableBucket tb = new TableBucket(1L, 0);
         ctx.updateBucketReplicaAssignment(tb, Arrays.asList(0, 1));
         cache.onTabletServerDied(); // urgent
 
         ClusterHealthSnapshot beforeDelay = cache.getSnapshot();
-        cache.refreshIfNeeded(ctx, false); // queue busy, delay not yet elapsed -- must wait
+        cache.refresh(ctx, false); // queue busy, delay not yet elapsed -- must wait
         assertThat(cache.getSnapshot()).isSameAs(beforeDelay);
 
         Thread.sleep(CoordinatorHealthCache.URGENT_MAX_DELAY_MS + 50);
 
-        cache.refreshIfNeeded(ctx, false); // queue STILL busy, but the urgent bound is up
+        cache.refresh(ctx, false); // queue STILL busy, but the urgent bound is up
         assertThat(cache.getSnapshot()).isNotSameAs(beforeDelay);
         assertThat(cache.getSnapshot().numReplicas()).isEqualTo(2);
     }

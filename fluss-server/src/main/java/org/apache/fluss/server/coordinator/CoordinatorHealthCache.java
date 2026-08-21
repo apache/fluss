@@ -47,8 +47,8 @@ import java.util.TreeMap;
  * #computeTabletServerLoads} today; what changes is how often that scan runs and who waits for it,
  * not its cost.
  *
- * <p>{@link #refreshIfNeeded(CoordinatorContext, boolean)} must only be called from the coordinator
- * event thread, since {@code CoordinatorContext} is not thread-safe -- see {@link
+ * <p>{@link #refresh(CoordinatorContext, boolean)} must only be called from the coordinator event
+ * thread, since {@code CoordinatorContext} is not thread-safe -- see {@link
  * CoalescingRefreshCache}'s javadoc for the single-writer-thread assumption this relies on.
  */
 public final class CoordinatorHealthCache {
@@ -109,30 +109,23 @@ public final class CoordinatorHealthCache {
     // --------------------------------------------------------------------------------------------
 
     /**
-     * Recomputes and republishes the snapshot if, and only if, the accumulated changes since the
-     * last refresh warrant it: a non-urgent change waits for the event queue to fully drain
-     * (coalescing an arbitrarily large burst of mutations into one scan); an urgent change is still
-     * coalesced, but bounded by {@link #URGENT_MAX_DELAY_MS} regardless of queue state.
-     *
-     * @param queueIsEmpty whether the coordinator event queue currently has no more events waiting
-     *     -- the caller (the event loop) is the only one who knows this.
-     */
-    public void refreshIfNeeded(CoordinatorContext ctx, boolean queueIsEmpty) {
-        cache.refreshIfNeeded(() -> computeSnapshot(ctx), queueIsEmpty);
-    }
-
-    /**
-     * Unconditionally recomputes the health snapshot from the given context and atomically
-     * publishes it, regardless of dirty/urgent state. Intended for an explicit warm-up (e.g. right
-     * after the coordinator finishes loading its initial state) and for tests that want to bypass
-     * the refresh policy; the coordinator event loop should use {@link
-     * #refreshIfNeeded(CoordinatorContext, boolean)} instead.
+     * Recomputes and republishes the snapshot if, and only if, something has actually changed since
+     * the last refresh and now is the right time to act on it: a non-urgent change needs {@code
+     * force}; an urgent change is bounded by {@link #URGENT_MAX_DELAY_MS} regardless of {@code
+     * force}. If nothing changed, this is a no-op regardless of {@code force} -- see {@link
+     * CoalescingRefreshCache}'s javadoc for why that check always comes first.
      *
      * <p>Must only be called from a thread that safely owns {@code ctx} (i.e. the coordinator event
      * thread) — {@code ctx} itself is not thread-safe.
+     *
+     * @param force overrides the timing question directly. The coordinator event loop passes
+     *     whether its own event queue is currently empty; an explicit warm-up (e.g. right after the
+     *     coordinator finishes loading its initial state) or a test that wants to bypass the timing
+     *     policy passes {@code true} unconditionally -- which still only takes effect because a
+     *     freshly constructed cache starts dirty.
      */
-    public void update(CoordinatorContext ctx) {
-        cache.update(() -> computeSnapshot(ctx));
+    public void refresh(CoordinatorContext ctx, boolean force) {
+        cache.refresh(() -> computeSnapshot(ctx), force);
     }
 
     /** Returns the most recently published snapshot. Safe to call from any thread. */

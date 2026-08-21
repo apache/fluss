@@ -34,18 +34,30 @@ import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
  * recompute.
  *
  * <p>Callers report that something changed via {@link #markDirty(boolean)}; whether that change was
- * urgent affects only how soon {@link #refreshIfNeeded} is willing to act on it -- a non-urgent
- * change waits for the caller-supplied {@code idle} signal (e.g. an empty work queue); an urgent
- * one is bounded by {@code urgentMaxDelayMs} regardless of that signal, so a safety- or
- * correctness-relevant change can't be starved by an owner that never goes idle. Either way, the
- * eventual recompute is always a full recompute from the supplied {@link Supplier}, never
- * incremental -- a wrong or missed {@code markDirty} call costs at worst one extra recompute, it
- * never leaves the published value permanently wrong.
+ * urgent affects only how soon {@link #refresh} is willing to act on it. The {@code force} flag on
+ * {@link #refresh} lets a caller override the timing question directly -- typically because it
+ * knows something this class doesn't, e.g. that its own work queue is currently empty, so a
+ * non-urgent change is now welcome to be acted on. An urgent change doesn't need the caller's help:
+ * it's bounded by {@code urgentMaxDelayMs} regardless of {@code force}, so a safety- or
+ * correctness-relevant change can't be starved by an owner that never passes {@code force=true}.
  *
- * <p>{@link #markDirty}, {@link #refreshIfNeeded}, and {@link #update} must all be called from a
- * single owning thread; this class does no locking on that side, matching the assumption that
- * whoever computes the new value also holds whatever non-thread-safe source that computation reads
- * from. Only {@link #get()} is safe to call from any thread.
+ * <p>Crucially, {@code force} only ever overrides the <em>timing</em> gate, never the {@code dirty}
+ * gate: {@link #refresh} always checks "did anything actually change" first, unconditionally,
+ * before considering {@code force} at all. This is what keeps a quiet caller's cost at one boolean
+ * check per call -- if {@code force} skipped that check too, a caller that happens to be idle most
+ * of the time (the common case) would pay for a full recompute on every single call, whether or not
+ * anything had changed. A freshly constructed cache starts {@code dirty}, since it hasn't computed
+ * a real value yet -- that's what lets a one-time forced warm-up work without needing {@code force}
+ * to bypass the dirty check.
+ *
+ * <p>Either way, the eventual recompute is always a full recompute from the supplied {@link
+ * Supplier}, never incremental -- a wrong or missed {@code markDirty} call costs at worst one extra
+ * recompute, it never leaves the published value permanently wrong.
+ *
+ * <p>{@link #markDirty} and {@link #refresh} must both be called from a single owning thread; this
+ * class does no locking on that side, matching the assumption that whoever computes the new value
+ * also holds whatever non-thread-safe source that computation reads from. Only {@link #get()} is
+ * safe to call from any thread.
  *
  * @param <T> the type of the derived, immutable snapshot value
  */
@@ -60,7 +72,8 @@ public final class CoalescingRefreshCache<T> {
     private volatile T value;
 
     // only ever touched from the single owning thread -- see class javadoc.
-    private boolean dirty;
+    // starts true: a freshly constructed cache hasn't computed a real value yet.
+    private boolean dirty = true;
     private boolean urgentDirty;
     private long lastRefreshTimeMs = System.currentTimeMillis();
 
@@ -78,31 +91,27 @@ public final class CoalescingRefreshCache<T> {
     }
 
     /**
-     * Recomputes and republishes the value via {@code compute}, if and only if the accumulated
-     * changes since the last refresh warrant it right now.
+     * Recomputes and republishes the value via {@code compute}, if and only if something has
+     * actually changed since the last refresh <em>and</em> now is the right time to act on it.
      *
      * @param compute recomputes the value from scratch; only invoked if a refresh is due.
-     * @param idle whether the owning thread's other work is currently caught up. A non-urgent
-     *     change waits for this to be {@code true}; an urgent one is bounded by {@code
-     *     urgentMaxDelayMs} regardless.
+     * @param force overrides the timing question directly -- pass {@code true} when the caller
+     *     already knows now is a good time (e.g. its own work queue is empty), or to force an
+     *     unconditional warm-up. Never overrides the {@code dirty} check: if nothing changed, this
+     *     is a no-op regardless of {@code force}.
      */
-    public void refreshIfNeeded(Supplier<T> compute, boolean idle) {
+    public void refresh(Supplier<T> compute, boolean force) {
         if (!dirty) {
             return;
         }
         long now = System.currentTimeMillis();
-        boolean due = idle || (urgentDirty && (now - lastRefreshTimeMs) >= urgentMaxDelayMs);
+        boolean due = force || (urgentDirty && (now - lastRefreshTimeMs) >= urgentMaxDelayMs);
         if (due) {
-            update(compute);
+            inLock(updateLock, () -> this.value = compute.get());
+            lastRefreshTimeMs = now;
             dirty = false;
             urgentDirty = false;
         }
-    }
-
-    /** Unconditionally recomputes and republishes {@code compute}'s result. */
-    public void update(Supplier<T> compute) {
-        inLock(updateLock, () -> this.value = compute.get());
-        lastRefreshTimeMs = System.currentTimeMillis();
     }
 
     /** Returns the most recently published value. Safe to call from any thread. */

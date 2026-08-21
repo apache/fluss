@@ -513,7 +513,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         // relevant mutation lands. Bulk-loading buckets above does not mark it dirty on purpose
         // (that would mean one dirty-mark per bucket during startup, for no benefit); this single
         // explicit refresh covers it instead.
-        healthCache.update(coordinatorContext);
+        healthCache.refresh(coordinatorContext, true);
 
         // Auto-partition initialization schedules creation checks immediately. Start it only after
         // the observed KV leader replica count and live tablet server resources are restored.
