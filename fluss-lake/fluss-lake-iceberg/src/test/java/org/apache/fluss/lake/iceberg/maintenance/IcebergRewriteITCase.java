@@ -32,7 +32,6 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.Iterator;
@@ -69,7 +68,11 @@ class IcebergRewriteITCase extends FlinkIcebergTieringTestBase {
     }
 
     @Test
-    void testPkTableCompaction() throws Exception {
+    void testPkTableCompactionDisabledForCleanTable() throws Exception {
+        // FIP-27: clean-schema tables have no __bucket column, so per-bucket compaction can no
+        // longer scope an exclusive file set. Auto compaction is therefore disabled for clean
+        // tables; verify the files written here are NOT merged. Legacy-table compaction remains
+        // covered by IcebergRewriteTest.
         JobClient jobClient = buildTieringJob(execEnv);
         try {
             TablePath t1 = TablePath.of(DEFAULT_DB, "pk_table_1");
@@ -85,19 +88,17 @@ class IcebergRewriteITCase extends FlinkIcebergTieringTestBase {
             writeIcebergTableRecords(t1, t1Bucket, 2, false, rows);
             flussRows.addAll(rows);
 
-            // add pos-delete
-            rows = Arrays.asList(row(3, "v1"), row(3, "v2"));
-            writeIcebergTableRecords(t1, t1Bucket, 5, false, rows);
-            // one UPDATE_BEFORE and one UPDATE_AFTER
-            checkFileStatusInIcebergTable(t1, 3, true);
-            flussRows.add(rows.get(1));
-
-            // trigger compaction
-            rows = Collections.singletonList(row(4, "v1"));
-            writeIcebergTableRecords(t1, t1Bucket, 6, false, rows);
-            checkFileStatusInIcebergTable(t1, 2, false);
+            rows = Collections.singletonList(row(3, "v1"));
+            writeIcebergTableRecords(t1, t1Bucket, 3, false, rows);
             flussRows.addAll(rows);
 
+            rows = Collections.singletonList(row(4, "v1"));
+            writeIcebergTableRecords(t1, t1Bucket, 4, false, rows);
+            flussRows.addAll(rows);
+
+            // Would have triggered compaction on a legacy table; a clean table must not compact.
+            checkNoCompactionInIcebergTable(t1, 4);
+            // Data must still be complete and correct even without compaction.
             checkRecords(getIcebergRecords(t1), flussRows);
         } finally {
             jobClient.cancel().get();
@@ -126,45 +127,9 @@ class IcebergRewriteITCase extends FlinkIcebergTieringTestBase {
     }
 
     @Test
-    void testPkTableCompactionWithConflict() throws Exception {
-        JobClient jobClient = buildTieringJob(execEnv);
-        try {
-            TablePath t1 = TablePath.of(DEFAULT_DB, "pk_table_2");
-            long t1Id = createPkTable(t1, 1, true, pkSchema);
-            TableBucket t1Bucket = new TableBucket(t1Id, 0);
-            List<InternalRow> flussRows = new ArrayList<>();
-
-            List<InternalRow> rows = Collections.singletonList(row(1, "v1"));
-            flussRows.addAll(writeIcebergTableRecords(t1, t1Bucket, 1, false, rows));
-            checkFileStatusInIcebergTable(t1, 1, false);
-
-            rows = Collections.singletonList(row(2, "v1"));
-            flussRows.addAll(writeIcebergTableRecords(t1, t1Bucket, 2, false, rows));
-
-            rows = Collections.singletonList(row(3, "v1"));
-            flussRows.addAll(writeIcebergTableRecords(t1, t1Bucket, 3, false, rows));
-
-            // add pos-delete and trigger compaction
-            rows = Arrays.asList(row(4, "v1"), row(4, "v2"));
-            flussRows.add(writeIcebergTableRecords(t1, t1Bucket, 6, false, rows).get(1));
-            // rewritten files should fail to commit due to conflict, add check here
-            checkRecords(getIcebergRecords(t1), flussRows);
-            // 4 data file and 1 delete file
-            checkFileStatusInIcebergTable(t1, 4, true);
-
-            // previous compaction conflicts won't prevent further compaction, and check iceberg
-            // records
-            rows = Collections.singletonList(row(5, "v1"));
-            flussRows.addAll(writeIcebergTableRecords(t1, t1Bucket, 7, false, rows));
-            checkRecords(getIcebergRecords(t1), flussRows);
-            checkFileStatusInIcebergTable(t1, 2, false);
-        } finally {
-            jobClient.cancel().get();
-        }
-    }
-
-    @Test
-    void testLogTableCompaction() throws Exception {
+    void testLogTableCompactionDisabledForCleanTable() throws Exception {
+        // FIP-27: a clean bucket-aware log table still has no __bucket column; auto compaction is
+        // disabled for clean tables, so the small files written here must not be merged.
         JobClient jobClient = buildTieringJob(execEnv);
         try {
             TablePath t1 = TablePath.of(DEFAULT_DB, "log_table");
@@ -184,18 +149,14 @@ class IcebergRewriteITCase extends FlinkIcebergTieringTestBase {
             flussRows.addAll(
                     writeIcebergTableRecords(
                             t1, t1Bucket, ++i, true, Collections.singletonList(row(1, "v1"))));
-            checkFileStatusInIcebergTable(t1, 3, false);
 
-            // Write should trigger compaction now since the current data file count is greater or
-            // equal MIN_FILES_TO_COMPACT
             flussRows.addAll(
                     writeIcebergTableRecords(
                             t1, t1Bucket, ++i, true, Collections.singletonList(row(1, "v1"))));
-            // Should only have two files now, one file it for newly written, one file is for target
-            // compacted file
-            checkFileStatusInIcebergTable(t1, 2, false);
 
-            // check data in iceberg to make sure compaction won't lose data or duplicate data
+            // FIP-27: a clean table is not auto-compacted, so the files must not be merged.
+            checkNoCompactionInIcebergTable(t1, 4);
+            // check data in iceberg to make sure no data is lost or duplicated without compaction
             checkRecords(getIcebergRecords(t1), flussRows);
         } finally {
             jobClient.cancel().get();

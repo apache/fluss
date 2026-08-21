@@ -318,6 +318,60 @@ class IcebergLakeCatalogTest {
     }
 
     @Test
+    void testReEnableTieringOnLegacyTable() {
+        // FIP-27: re-enabling tiering on a legacy table (one created before FIP-27, carrying the
+        // three trailing system columns with an identity(__bucket) partition and asc(__offset) sort
+        // order) must be accepted. The clean-layout expectations are rebuilt in the legacy layout
+        // before the compatibility checks, so createTable on the existing legacy table must not
+        // throw.
+        String database = "test_db";
+        String tableName = "legacy_log_table";
+
+        Schema flussSchema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.BIGINT())
+                        .column("name", DataTypes.STRING())
+                        .column("amount", DataTypes.INT())
+                        .column("address", DataTypes.STRING())
+                        .build();
+        TableDescriptor td = TableDescriptor.builder().schema(flussSchema).distributedBy(3).build();
+
+        // Build the legacy physical Iceberg table directly through the underlying catalog.
+        org.apache.iceberg.Schema legacySchema =
+                IcebergSchemaUtils.createLegacyIcebergSchema(td, false);
+        PartitionSpec legacySpec =
+                PartitionSpec.builderFor(legacySchema).identity(BUCKET_COLUMN_NAME).build();
+        SortOrder legacySortOrder =
+                SortOrder.builderFor(legacySchema).asc(OFFSET_COLUMN_NAME).build();
+
+        Catalog icebergCatalog = flussIcebergCatalog.getIcebergCatalog();
+        try {
+            ((SupportsNamespaces) icebergCatalog).createNamespace(Namespace.of(database));
+        } catch (org.apache.iceberg.exceptions.AlreadyExistsException ignore) {
+            // namespace already exists
+        }
+        icebergCatalog
+                .buildTable(TableIdentifier.of(database, tableName), legacySchema)
+                .withPartitionSpec(legacySpec)
+                .withSortOrder(legacySortOrder)
+                .create();
+
+        TablePath tablePath = TablePath.of(database, tableName);
+        // Re-enabling tiering must be accepted for the legacy physical layout.
+        flussIcebergCatalog.createTable(tablePath, td, new TestingLakeCatalogContext());
+
+        // The physical layout must be preserved (still legacy: system columns +
+        // identity(__bucket)).
+        Table reloaded =
+                flussIcebergCatalog
+                        .getIcebergCatalog()
+                        .loadTable(TableIdentifier.of(database, tableName));
+        assertThat(reloaded.schema().findField(TIMESTAMP_COLUMN_NAME)).isNotNull();
+        assertThat(reloaded.spec().isUnpartitioned()).isFalse();
+        assertThat(reloaded.sortOrder().isUnsorted()).isFalse();
+    }
+
+    @Test
     void testCreatePartitionedLogTable() {
         String database = "test_db";
         String tableName = "partitioned_log_table";
@@ -1537,8 +1591,10 @@ class IcebergLakeCatalogTest {
                                         tablePath, td, new TestingLakeCatalogContext()))
                 .isInstanceOf(TableAlreadyExistException.class)
                 .hasMessageContaining("sort order is not compatible")
-                .hasMessageContaining("ASC(__offset)")
-                .hasMessageContaining("pre-create the Iceberg table without a custom sort order");
+                .hasMessageContaining("pre-create the Iceberg table without a custom sort order")
+                // FIP-27: this is a clean table (no __offset), so the guidance must not tell the
+                // user to pre-create with ASC(__offset) — that only applies to legacy tables.
+                .hasMessageNotContaining("ASC(__offset)");
     }
 
     /**

@@ -118,6 +118,8 @@ public class IcebergLakeCatalog implements LakeCatalog {
             createTable(
                     tablePath,
                     tableBuilder,
+                    tableDescriptor,
+                    isPkTable,
                     icebergSchema,
                     partitionSpec,
                     sortOrder,
@@ -129,6 +131,8 @@ public class IcebergLakeCatalog implements LakeCatalog {
                 createTable(
                         tablePath,
                         tableBuilder,
+                        tableDescriptor,
+                        isPkTable,
                         icebergSchema,
                         partitionSpec,
                         sortOrder,
@@ -305,6 +309,8 @@ public class IcebergLakeCatalog implements LakeCatalog {
     private void createTable(
             TablePath tablePath,
             Catalog.TableBuilder tableBuilder,
+            TableDescriptor tableDescriptor,
+            boolean isPkTable,
             Schema newIcebergSchema,
             PartitionSpec expectedSpec,
             SortOrder expectedSortOrder,
@@ -317,6 +323,22 @@ public class IcebergLakeCatalog implements LakeCatalog {
             TableIdentifier icebergId = toIcebergTableIdentifier(tablePath);
             Table existingTable = icebergCatalog.loadTable(icebergId);
             Schema existingSchema = existingTable.schema();
+
+            // FIP-27: re-enabling tiering on a legacy table (created before FIP-27) hits this path.
+            // The expectations above were built for the clean layout, so rebuild the expected
+            // schema/spec/sort-order in the legacy layout to match what the physical table actually
+            // has; otherwise the compatibility checks below would spuriously reject the legacy
+            // table.
+            boolean existingIsLegacy = IcebergUtils.isLegacyTable(existingSchema);
+            if (existingIsLegacy) {
+                newIcebergSchema =
+                        IcebergSchemaUtils.createLegacyIcebergSchema(tableDescriptor, isPkTable);
+                expectedSpec =
+                        IcebergPartitionSpecUtils.createPartitionSpec(
+                                tableDescriptor, newIcebergSchema);
+                expectedSortOrder = createSortOrder(newIcebergSchema);
+            }
+
             if (!isIcebergSchemaCompatibleWithSchema(existingSchema, newIcebergSchema)) {
                 throw new TableAlreadyExistException(
                         String.format(
@@ -343,17 +365,23 @@ public class IcebergLakeCatalog implements LakeCatalog {
                     existingSchema,
                     expectedSortOrder,
                     newIcebergSchema)) {
+                // Legacy tables expect ASC(__offset); clean tables (no __offset) expect unsorted().
+                String sortOrderGuidance =
+                        existingIsLegacy
+                                ? String.format(
+                                        "or with ASC(%s) set explicitly, ", OFFSET_COLUMN_NAME)
+                                : "";
                 throw new TableAlreadyExistException(
                         String.format(
                                 "The table %s already exists in Iceberg catalog, but the sort order is not compatible. "
                                         + "Existing sort order: %s, new sort order: %s. "
                                         + "Please first drop the table in Iceberg catalog, or pre-create the "
-                                        + "Iceberg table without a custom sort order, or with ASC(%s) set explicitly, "
+                                        + "Iceberg table without a custom sort order, %s"
                                         + "or use a new table name.",
                                 tablePath,
                                 existingTable.sortOrder(),
                                 expectedSortOrder,
-                                OFFSET_COLUMN_NAME),
+                                sortOrderGuidance),
                         e);
             }
 

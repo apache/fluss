@@ -366,6 +366,38 @@ public class FlinkIcebergTieringTestBase {
         assertThat(count).isEqualTo(expectedFileCount);
     }
 
+    /**
+     * Waits until the iceberg table has at least {@code minFileCount} data files and asserts the
+     * count then stays there (i.e. compaction does not reduce it). Used to verify that clean-schema
+     * tables (FIP-27) are intentionally NOT auto-compacted: their per-bucket ownership boundary
+     * (the {@code __bucket} predicate) no longer exists, so compaction is disabled for them.
+     */
+    protected void checkNoCompactionInIcebergTable(TablePath tablePath, int minFileCount)
+            throws Exception {
+        org.apache.iceberg.Table table = icebergCatalog.loadTable(toIceberg(tablePath));
+        // Wait until the writes have produced at least minFileCount files.
+        waitUntil(
+                () -> planDataFileCount(table) >= minFileCount,
+                Duration.ofMinutes(1),
+                "Expected at least " + minFileCount + " data files to be tiered.");
+        // Give any (erroneously scheduled) compaction a chance to run, then assert nothing merged.
+        Thread.sleep(2000L);
+        assertThat(planDataFileCount(table)).isGreaterThanOrEqualTo(minFileCount);
+    }
+
+    private static int planDataFileCount(org.apache.iceberg.Table table) {
+        table.refresh();
+        int count = 0;
+        try (CloseableIterable<FileScanTask> tasks = table.newScan().planFiles()) {
+            for (FileScanTask ignored : tasks) {
+                count++;
+            }
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to plan files for table " + table.name(), e);
+        }
+        return count;
+    }
+
     protected void checkDataInIcebergAppendOnlyPartitionedTable(
             TablePath tablePath,
             Map<String, String> partitionSpec,

@@ -22,6 +22,7 @@ import org.apache.fluss.lake.iceberg.maintenance.RewriteDataFileResult;
 import org.apache.fluss.lake.iceberg.tiering.writer.AppendOnlyTaskWriter;
 import org.apache.fluss.lake.iceberg.tiering.writer.DeltaTaskWriter;
 import org.apache.fluss.lake.iceberg.tiering.writer.TaskWriterFactory;
+import org.apache.fluss.lake.iceberg.utils.IcebergUtils;
 import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.lake.writer.WriterInitContext;
 import org.apache.fluss.metadata.TablePath;
@@ -73,7 +74,16 @@ public class IcebergLakeWriter implements LakeWriter<IcebergWriteResult> {
         // Create a record writer
         this.recordWriter = createRecordWriter(writerInitContext);
 
-        if (writerInitContext.tableInfo().getTableConfig().isDataLakeAutoCompaction()) {
+        // FIP-27: auto compaction relies on the per-bucket __bucket predicate to give each writer
+        // an
+        // exclusive file set. Clean tables have no __bucket column, so different buckets'
+        // compaction
+        // jobs would plan overlapping files and race on rewrite/commit. Only schedule compaction
+        // for
+        // legacy tables until a bucket-scoped ownership model for clean tables exists.
+        boolean isLegacyTable = IcebergUtils.isLegacyTable(icebergTable.schema());
+        if (isLegacyTable
+                && writerInitContext.tableInfo().getTableConfig().isDataLakeAutoCompaction()) {
             this.compactionExecutor =
                     Executors.newSingleThreadExecutor(
                             new ExecutorThreadFactory(

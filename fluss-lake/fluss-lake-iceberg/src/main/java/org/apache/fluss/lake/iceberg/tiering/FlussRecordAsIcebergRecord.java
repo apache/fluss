@@ -32,6 +32,7 @@ import static org.apache.fluss.lake.iceberg.IcebergSchemaUtils.LEGACY_SYSTEM_COL
 import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
+import static org.apache.fluss.utils.Preconditions.checkState;
 
 /**
  * Wrap Fluss {@link LogRecord} as Iceberg {@link Record}.
@@ -62,6 +63,14 @@ public class FlussRecordAsIcebergRecord extends FlussRowAsIcebergRecord {
     public void setFlussRecord(LogRecord logRecord) {
         this.logRecord = logRecord;
         this.internalRow = logRecord.getRow();
+        // Guard against a schema/record mismatch surfacing later as a bare
+        // ArrayIndexOutOfBoundsException inside the Iceberg appender. The Fluss row carries only
+        // business columns; system columns (if any) are supplied by this wrapper.
+        checkState(
+                internalRow.getFieldCount() == businessFieldCount,
+                "The Fluss record's field count (%s) must equal the business field count (%s).",
+                internalRow.getFieldCount(),
+                businessFieldCount);
     }
 
     @Override
