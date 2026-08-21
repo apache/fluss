@@ -120,6 +120,7 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
         private final TablePath tablePath;
         private final Configuration flussConfig;
         private final RowType tableRowType;
+        private final RowType consumedRowType;
         private final int numBucket;
         private final List<String> bucketKeys;
         private final List<String> partitionKeys;
@@ -131,6 +132,7 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
                 TablePath tablePath,
                 Configuration flussConfig,
                 RowType tableRowType,
+                RowType consumedRowType,
                 int numBucket,
                 List<String> bucketKeys,
                 List<String> partitionKeys,
@@ -140,6 +142,7 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
             this.tablePath = tablePath;
             this.flussConfig = flussConfig;
             this.tableRowType = tableRowType;
+            this.consumedRowType = consumedRowType;
             this.numBucket = numBucket;
             this.bucketKeys = bucketKeys;
             this.partitionKeys = partitionKeys;
@@ -155,6 +158,7 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
                     tablePath,
                     flussConfig,
                     tableRowType,
+                    consumedRowType,
                     mailboxExecutor,
                     flussSerializationSchema);
         }
@@ -245,6 +249,7 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
         private final TablePath tablePath;
         private final Configuration flussConfig;
         private final RowType tableRowType;
+        private final RowType consumedRowType;
         private final @Nullable int[] targetColumnIndexes;
         private final int numBucket;
         private final List<String> bucketKeys;
@@ -271,6 +276,7 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
                 TablePath tablePath,
                 Configuration flussConfig,
                 RowType tableRowType,
+                RowType consumedRowType,
                 @Nullable int[] targetColumnIndexes,
                 int numBucket,
                 List<String> bucketKeys,
@@ -283,6 +289,7 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
             this.tablePath = tablePath;
             this.flussConfig = flussConfig;
             this.tableRowType = tableRowType;
+            this.consumedRowType = consumedRowType;
             this.targetColumnIndexes = targetColumnIndexes;
             this.numBucket = numBucket;
             this.bucketKeys = bucketKeys;
@@ -309,6 +316,7 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
                     tablePath,
                     flussConfig,
                     tableRowType,
+                    consumedRowType,
                     targetColumnIndexes,
                     mailboxExecutor,
                     flussSerializationSchema,
