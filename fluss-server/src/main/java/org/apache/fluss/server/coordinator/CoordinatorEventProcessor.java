@@ -1926,7 +1926,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
         // TODO verify leader epoch.
 
         List<AdjustIsrResultForBucket> result = new ArrayList<>();
-        Map<TableBucket, LeaderAndIsr> newLeaderAndIsrList = new HashMap<>();
+        Map<TableBucket, LeaderAndIsr> proposedChanges = new HashMap<>();
+        Map<TableBucket, LeaderAndIsr> committedChanges = new HashMap<>();
         for (Map.Entry<TableBucket, LeaderAndIsr> entry : leaderAndIsrList.entrySet()) {
             TableBucket tableBucket = entry.getKey();
             LeaderAndIsr tryAdjustLeaderAndIsr = entry.getValue();
@@ -1960,19 +1961,20 @@ public class CoordinatorEventProcessor implements EventProcessor {
                             tryAdjustLeaderAndIsr.standbyReplicas(),
                             coordinatorContext.getCoordinatorEpoch(),
                             currentLeaderAndIsr.bucketEpoch() + 1);
-            newLeaderAndIsrList.put(tableBucket, newLeaderAndIsr);
+            proposedChanges.put(tableBucket, newLeaderAndIsr);
         }
 
         try {
             zooKeeperClient.batchUpdateLeaderAndIsr(
-                    newLeaderAndIsrList, coordinatorContext.getCoordinatorZkVersion());
-            newLeaderAndIsrList.forEach(
+                    proposedChanges, coordinatorContext.getCoordinatorZkVersion());
+            committedChanges.putAll(proposedChanges);
+            committedChanges.forEach(
                     (tableBucket, newLeaderAndIsr) ->
                             result.add(new AdjustIsrResultForBucket(tableBucket, newLeaderAndIsr)));
         } catch (Exception batchException) {
             LOG.error("Error when batch update leader and isr. Try one by one.", batchException);
 
-            for (Map.Entry<TableBucket, LeaderAndIsr> entry : newLeaderAndIsrList.entrySet()) {
+            for (Map.Entry<TableBucket, LeaderAndIsr> entry : proposedChanges.entrySet()) {
                 TableBucket tableBucket = entry.getKey();
                 LeaderAndIsr newLeaderAndIsr = entry.getValue();
                 try {
@@ -1980,21 +1982,21 @@ public class CoordinatorEventProcessor implements EventProcessor {
                             tableBucket,
                             newLeaderAndIsr,
                             coordinatorContext.getCoordinatorZkVersion());
+                    committedChanges.put(tableBucket, newLeaderAndIsr);
+                    result.add(new AdjustIsrResultForBucket(tableBucket, newLeaderAndIsr));
                 } catch (Exception e) {
                     LOG.error("Error when register leader and isr.", e);
                     result.add(
                             new AdjustIsrResultForBucket(tableBucket, ApiError.fromThrowable(e)));
                 }
-                // Successful return.
-                result.add(new AdjustIsrResultForBucket(tableBucket, newLeaderAndIsr));
             }
         }
 
         // update coordinator leader and isr cache.
-        newLeaderAndIsrList.forEach(coordinatorContext::putBucketLeaderAndIsr);
+        committedChanges.forEach(coordinatorContext::putBucketLeaderAndIsr);
 
         // First, try to judge whether the bucket is in rebalance task when isr change.
-        newLeaderAndIsrList.keySet().forEach(this::tryToCompleteRebalanceTaskOnLeaderAndIsrChange);
+        committedChanges.keySet().forEach(this::tryToCompleteRebalanceTaskOnLeaderAndIsrChange);
 
         // TODO update metadata for all alive tablet servers.
 

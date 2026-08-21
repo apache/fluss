@@ -74,6 +74,7 @@ import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.server.tablet.TestTabletServerGateway;
+import org.apache.fluss.server.zk.CuratorFrameworkWithUnhandledErrorListener;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZkEpoch;
 import org.apache.fluss.server.zk.ZooKeeperClient;
@@ -87,6 +88,7 @@ import org.apache.fluss.server.zk.data.TabletServerRegistration;
 import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.server.zk.data.ZkData.PartitionIdsZNode;
 import org.apache.fluss.server.zk.data.ZkData.TableIdsZNode;
+import org.apache.fluss.shaded.curator5.org.apache.curator.retry.ExponentialBackoffRetry;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
 import org.apache.fluss.types.DataTypes;
@@ -109,6 +111,7 @@ import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -135,6 +138,9 @@ import static org.apache.fluss.server.testutils.KvTestUtils.mockCompletedSnapsho
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getAdjustIsrResponseData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getUpdateMetadataRequestData;
 import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
+import static org.apache.fluss.server.zk.ZooKeeperUtils.startZookeeperClient;
+import static org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFrameworkFactory.Builder;
+import static org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFrameworkFactory.builder;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -177,6 +183,7 @@ class CoordinatorEventProcessorTest {
     private KvSnapshotLeaseManager kvSnapshotLeaseManager;
     private Scheduler scheduler;
     private String remoteDataDir;
+    private TestingAdjustIsrZooKeeperClient testingAdjustIsrZooKeeperClient;
 
     @BeforeAll
     static void baseBeforeAll() throws Exception {
@@ -252,6 +259,9 @@ class CoordinatorEventProcessorTest {
         }
         if (scheduler != null) {
             scheduler.shutdown();
+        }
+        if (testingAdjustIsrZooKeeperClient != null) {
+            testingAdjustIsrZooKeeperClient.close();
         }
         metadataManager.dropDatabase(defaultDatabase, false, true);
         // clear the assignment info for all tables;
@@ -1222,55 +1232,124 @@ class CoordinatorEventProcessorTest {
 
     @Test
     void testProcessAdjustIsr() throws Exception {
-        // make sure all request to gateway should be successful
-        initCoordinatorChannel();
-        // create a table,
-        TablePath t1 = TablePath.of(defaultDatabase, "create_process_adjust_isr");
-        int nBuckets = 3;
-        int replicationFactor = 3;
-        TableAssignment tableAssignment =
-                generateAssignment(
-                        nBuckets,
-                        replicationFactor,
-                        new TabletServerInfo[] {
-                            new TabletServerInfo(0, "rack0"),
-                            new TabletServerInfo(1, "rack1"),
-                            new TabletServerInfo(2, "rack2")
-                        });
-        long t1Id =
-                metadataManager.createTable(t1, remoteDataDir, TEST_TABLE, tableAssignment, false);
-        verifyTableCreated(t1Id, tableAssignment, nBuckets, replicationFactor);
-
-        // get the origin bucket leaderAndIsr
         Map<TableBucket, LeaderAndIsr> bucketLeaderAndIsrMap =
-                new HashMap<>(
-                        waitValue(
-                                () -> fromCtx((ctx) -> Optional.of(ctx.bucketLeaderAndIsr())),
-                                Duration.ofMinutes(1),
-                                "leader not elected"));
+                createAdjustIsrTestTable("process_adjust_isr");
 
-        // verify AdjustIsrReceivedEvent
-        CompletableFuture<AdjustIsrResponse> response = new CompletableFuture<>();
-        eventProcessor
-                .getCoordinatorEventManager()
-                .put(new AdjustIsrReceivedEvent(bucketLeaderAndIsrMap, response));
-
-        retryVerifyContext(
-                ctx ->
-                        bucketLeaderAndIsrMap.forEach(
-                                (tableBucket, leaderAndIsr) ->
-                                        assertThat(ctx.getBucketLeaderAndIsr(tableBucket))
-                                                .contains(
-                                                        leaderAndIsr.newLeaderAndIsr(
-                                                                leaderAndIsr.isr()))));
-
-        // verify the response
-        AdjustIsrResponse adjustIsrResponse = response.get();
+        // The normal batch path should commit every proposed change.
+        AdjustIsrResponse adjustIsrResponse = adjustIsr(bucketLeaderAndIsrMap);
         Map<TableBucket, AdjustIsrResultForBucket> resultForBucketMap =
                 getAdjustIsrResponseData(adjustIsrResponse);
+
+        assertAdjustIsrResponseCount(adjustIsrResponse, bucketLeaderAndIsrMap.size());
         assertThat(resultForBucketMap.keySet())
-                .containsAnyElementsOf(bucketLeaderAndIsrMap.keySet());
+                .containsExactlyInAnyOrderElementsOf(bucketLeaderAndIsrMap.keySet());
         assertThat(resultForBucketMap.values()).allMatch(AdjustIsrResultForBucket::succeeded);
+        assertAdjustedIsrInstalled(bucketLeaderAndIsrMap, bucketLeaderAndIsrMap.keySet());
+    }
+
+    @Test
+    void testProcessAdjustIsrFallsBackToSuccessfulIndividualUpdates() throws Exception {
+        Map<TableBucket, LeaderAndIsr> originalLeaderAndIsrs =
+                createAdjustIsrTestTable("adjust_isr_individual_success");
+        // Force the batch write to fail, but allow every per-bucket retry to reach ZooKeeper.
+        useTestingAdjustIsrZooKeeperClient(true, Collections.emptySet());
+
+        AdjustIsrResponse response = adjustIsr(originalLeaderAndIsrs);
+        Map<TableBucket, AdjustIsrResultForBucket> results = getAdjustIsrResponseData(response);
+
+        // Every fallback write is committed, so each bucket succeeds and is installed.
+        assertAdjustIsrResponseCount(response, originalLeaderAndIsrs.size());
+        assertThat(results.values()).allMatch(AdjustIsrResultForBucket::succeeded);
+        assertThat(testingAdjustIsrZooKeeperClient.getIndividualUpdates().keySet())
+                .containsExactlyInAnyOrderElementsOf(originalLeaderAndIsrs.keySet());
+        assertAdjustedIsrInstalled(originalLeaderAndIsrs, originalLeaderAndIsrs.keySet());
+    }
+
+    @Test
+    void testProcessAdjustIsrInstallsOnlyCommittedIndividualUpdates() throws Exception {
+        Map<TableBucket, LeaderAndIsr> originalLeaderAndIsrs =
+                createAdjustIsrTestTable("adjust_isr_mixed_individual_results");
+        List<TableBucket> buckets =
+                Arrays.asList(originalLeaderAndIsrs.keySet().toArray(new TableBucket[0]));
+        TableBucket failedBucket = buckets.get(1);
+        Set<TableBucket> committedBuckets = new HashSet<>(originalLeaderAndIsrs.keySet());
+        committedBuckets.remove(failedBucket);
+        // Simulate a mixed fallback result: this bucket fails while all other retries succeed.
+        useTestingAdjustIsrZooKeeperClient(true, Collections.singleton(failedBucket));
+
+        AdjustIsrResponse response = adjustIsr(originalLeaderAndIsrs);
+        Map<TableBucket, AdjustIsrResultForBucket> results = getAdjustIsrResponseData(response);
+
+        // The failed bucket must have one error, not an error followed by a success.
+        assertAdjustIsrResponseCount(response, originalLeaderAndIsrs.size());
+        assertThat(results.get(failedBucket).failed()).isTrue();
+        assertThat(results.entrySet())
+                .filteredOn(entry -> !entry.getKey().equals(failedBucket))
+                .allMatch(entry -> entry.getValue().succeeded());
+        // Only successful ZooKeeper writes may cross the committed-state boundary.
+        assertAdjustedIsrInstalled(originalLeaderAndIsrs, committedBuckets);
+    }
+
+    @Test
+    void testProcessAdjustIsrInstallsNothingWhenAllIndividualUpdatesFail() throws Exception {
+        Map<TableBucket, LeaderAndIsr> originalLeaderAndIsrs =
+                createAdjustIsrTestTable("adjust_isr_individual_failure");
+        // Fail the batch write and every per-bucket fallback write.
+        useTestingAdjustIsrZooKeeperClient(true, originalLeaderAndIsrs.keySet());
+
+        AdjustIsrResponse response = adjustIsr(originalLeaderAndIsrs);
+        Map<TableBucket, AdjustIsrResultForBucket> results = getAdjustIsrResponseData(response);
+
+        // No proposed change was committed, so CoordinatorContext must retain all old states.
+        assertAdjustIsrResponseCount(response, originalLeaderAndIsrs.size());
+        assertThat(results.values()).allMatch(AdjustIsrResultForBucket::failed);
+        assertAdjustedIsrInstalled(originalLeaderAndIsrs, Collections.emptySet());
+    }
+
+    @Test
+    void testProcessAdjustIsrKeepsValidationAndPersistenceResultsUnique() throws Exception {
+        Map<TableBucket, LeaderAndIsr> originalLeaderAndIsrs =
+                createAdjustIsrTestTable("adjust_isr_validation_and_persistence");
+        List<TableBucket> buckets =
+                Arrays.asList(originalLeaderAndIsrs.keySet().toArray(new TableBucket[0]));
+        TableBucket invalidBucket = buckets.get(0);
+        TableBucket persistenceFailureBucket = buckets.get(1);
+        LeaderAndIsr original = originalLeaderAndIsrs.get(invalidBucket);
+        Map<TableBucket, LeaderAndIsr> requestedLeaderAndIsrs =
+                new HashMap<>(originalLeaderAndIsrs);
+        // A lower leader epoch makes this request fail validation before any ZooKeeper write.
+        requestedLeaderAndIsrs.put(
+                invalidBucket,
+                new LeaderAndIsr(
+                        original.leader(),
+                        original.leaderEpoch() - 1,
+                        original.isr(),
+                        original.standbyReplicas(),
+                        original.coordinatorEpoch(),
+                        original.bucketEpoch()));
+        // A different valid bucket reaches the fallback path but fails its individual write.
+        useTestingAdjustIsrZooKeeperClient(true, Collections.singleton(persistenceFailureBucket));
+
+        AdjustIsrResponse response = adjustIsr(requestedLeaderAndIsrs);
+        Map<TableBucket, AdjustIsrResultForBucket> results = getAdjustIsrResponseData(response);
+
+        // Validation and persistence failures are each reported exactly once.
+        assertAdjustIsrResponseCount(response, requestedLeaderAndIsrs.size());
+        assertThat(results.get(invalidBucket).failed()).isTrue();
+        assertThat(results.get(persistenceFailureBucket).failed()).isTrue();
+        // Validation failures must never enter either persistence attempt.
+        assertThat(testingAdjustIsrZooKeeperClient.getBatchUpdates())
+                .doesNotContainKey(invalidBucket);
+        assertThat(testingAdjustIsrZooKeeperClient.getIndividualUpdates())
+                .doesNotContainKey(invalidBucket);
+        assertAdjustedIsrInstalled(
+                originalLeaderAndIsrs,
+                originalLeaderAndIsrs.keySet().stream()
+                        .filter(
+                                bucket ->
+                                        !bucket.equals(invalidBucket)
+                                                && !bucket.equals(persistenceFailureBucket))
+                        .collect(Collectors.toSet()));
     }
 
     @Test
@@ -2171,12 +2250,112 @@ class CoordinatorEventProcessorTest {
                 .hasSameElementsAs(expectedIsr);
     }
 
+    private Map<TableBucket, LeaderAndIsr> createAdjustIsrTestTable(String tableName)
+            throws Exception {
+        initCoordinatorChannel();
+        TableAssignment tableAssignment =
+                generateAssignment(
+                        N_BUCKETS,
+                        REPLICATION_FACTOR,
+                        new TabletServerInfo[] {
+                            new TabletServerInfo(0, "rack0"),
+                            new TabletServerInfo(1, "rack1"),
+                            new TabletServerInfo(2, "rack2")
+                        });
+        long tableId =
+                metadataManager.createTable(
+                        TablePath.of(defaultDatabase, tableName),
+                        remoteDataDir,
+                        TEST_TABLE,
+                        tableAssignment,
+                        false);
+        verifyTableCreated(tableId, tableAssignment, N_BUCKETS, REPLICATION_FACTOR);
+
+        return waitValue(
+                () ->
+                        fromCtx(
+                                ctx -> {
+                                    Map<TableBucket, LeaderAndIsr> leaderAndIsrs = new HashMap<>();
+                                    ctx.bucketLeaderAndIsr()
+                                            .forEach(
+                                                    (tableBucket, leaderAndIsr) -> {
+                                                        if (tableBucket.getTableId() == tableId) {
+                                                            leaderAndIsrs.put(
+                                                                    tableBucket, leaderAndIsr);
+                                                        }
+                                                    });
+                                    return leaderAndIsrs.size() == N_BUCKETS
+                                            ? Optional.of(leaderAndIsrs)
+                                            : Optional.empty();
+                                }),
+                Duration.ofMinutes(1),
+                "leader not elected");
+    }
+
+    private void useTestingAdjustIsrZooKeeperClient(
+            boolean failBatchUpdate, Set<TableBucket> failedIndividualUpdates) {
+        testingAdjustIsrZooKeeperClient = new TestingAdjustIsrZooKeeperClient(remoteDataDir);
+        CoordinatorEventProcessor previousEventProcessor = eventProcessor;
+        CoordinatorEventProcessor testingEventProcessor =
+                buildCoordinatorEventProcessor(testingAdjustIsrZooKeeperClient);
+        // Start the replacement first so it can load the existing table state before the original
+        // processor is shut down. Failure injection is enabled only after startup initialization.
+        testingEventProcessor.startup();
+        previousEventProcessor.shutdown();
+        eventProcessor = testingEventProcessor;
+        testingAdjustIsrZooKeeperClient.enableFailureInjection(
+                failBatchUpdate, failedIndividualUpdates);
+    }
+
+    private AdjustIsrResponse adjustIsr(Map<TableBucket, LeaderAndIsr> leaderAndIsrs)
+            throws Exception {
+        CompletableFuture<AdjustIsrResponse> response = new CompletableFuture<>();
+        eventProcessor
+                .getCoordinatorEventManager()
+                .put(new AdjustIsrReceivedEvent(leaderAndIsrs, response));
+        return response.get();
+    }
+
+    private void assertAdjustIsrResponseCount(AdjustIsrResponse response, int expectedCount) {
+        // Inspect the raw protobuf response: converting it to a map would hide duplicate results
+        // for the same bucket, such as an error followed by an unconditional success.
+        assertThat(
+                        response.getTablesRespsList().stream()
+                                .mapToInt(tableResponse -> tableResponse.getBucketsRespsCount())
+                                .sum())
+                .isEqualTo(expectedCount);
+    }
+
+    private void assertAdjustedIsrInstalled(
+            Map<TableBucket, LeaderAndIsr> originalLeaderAndIsrs, Set<TableBucket> committedBuckets)
+            throws Exception {
+        for (Map.Entry<TableBucket, LeaderAndIsr> entry : originalLeaderAndIsrs.entrySet()) {
+            TableBucket tableBucket = entry.getKey();
+            LeaderAndIsr originalLeaderAndIsr = entry.getValue();
+            Optional<LeaderAndIsr> installedLeaderAndIsr =
+                    fromCtx(ctx -> ctx.getBucketLeaderAndIsr(tableBucket));
+            // A committed bucket advances its bucket epoch; an uncommitted bucket must remain
+            // equal to the state observed before the request.
+            assertThat(installedLeaderAndIsr)
+                    .contains(
+                            committedBuckets.contains(tableBucket)
+                                    ? originalLeaderAndIsr.newLeaderAndIsr(
+                                            originalLeaderAndIsr.isr())
+                                    : originalLeaderAndIsr);
+        }
+    }
+
     private CoordinatorEventProcessor buildCoordinatorEventProcessor() {
+        return buildCoordinatorEventProcessor(zookeeperClient);
+    }
+
+    private CoordinatorEventProcessor buildCoordinatorEventProcessor(
+            ZooKeeperClient coordinatorZooKeeperClient) {
         Configuration conf = new Configuration();
         conf.set(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
         conf.set(ConfigOptions.COORDINATOR_OFFLINE_LEADER_RETRY_DELAY, Duration.ofDays(1));
         return new CoordinatorEventProcessor(
-                zookeeperClient,
+                coordinatorZooKeeperClient,
                 serverMetadataCache,
                 testCoordinatorChannelManager,
                 new CoordinatorContext(zkEpoch),
@@ -2190,6 +2369,84 @@ class CoordinatorEventProcessorTest {
                 kvSnapshotLeaseManager,
                 scheduler,
                 SystemClock.getInstance());
+    }
+
+    private static final class TestingAdjustIsrZooKeeperClient extends ZooKeeperClient {
+
+        private final Map<TableBucket, LeaderAndIsr> batchUpdates = new HashMap<>();
+        private final Map<TableBucket, LeaderAndIsr> individualUpdates = new HashMap<>();
+
+        private boolean failureInjectionEnabled;
+        private boolean failBatchUpdate;
+        private Set<TableBucket> failedIndividualUpdates = Collections.emptySet();
+
+        private TestingAdjustIsrZooKeeperClient(String remoteDataDir) {
+            super(createCuratorFrameworkWrapper(), createConfiguration(remoteDataDir));
+        }
+
+        private void enableFailureInjection(
+                boolean failBatchUpdate, Set<TableBucket> failedIndividualUpdates) {
+            this.failBatchUpdate = failBatchUpdate;
+            this.failedIndividualUpdates = new HashSet<>(failedIndividualUpdates);
+            // Startup uses the real ZooKeeper behavior; only the AdjustIsr call under test should
+            // observe the configured failures.
+            failureInjectionEnabled = true;
+        }
+
+        @Override
+        public void batchUpdateLeaderAndIsr(
+                Map<TableBucket, LeaderAndIsr> leaderAndIsrs, int expectedZkVersion)
+                throws Exception {
+            if (!failureInjectionEnabled) {
+                super.batchUpdateLeaderAndIsr(leaderAndIsrs, expectedZkVersion);
+                return;
+            }
+            // Record every proposed change before throwing so tests can verify validation
+            // filtering.
+            batchUpdates.putAll(leaderAndIsrs);
+            if (failBatchUpdate) {
+                throw new RuntimeException("Expected batch update failure");
+            }
+            super.batchUpdateLeaderAndIsr(leaderAndIsrs, expectedZkVersion);
+        }
+
+        @Override
+        public void updateLeaderAndIsr(
+                TableBucket tableBucket, LeaderAndIsr leaderAndIsr, int expectedZkVersion)
+                throws Exception {
+            // Record all fallback attempts, but persist only the buckets not selected to fail.
+            individualUpdates.put(tableBucket, leaderAndIsr);
+            if (failedIndividualUpdates.contains(tableBucket)) {
+                throw new RuntimeException("Expected individual update failure");
+            }
+            super.updateLeaderAndIsr(tableBucket, leaderAndIsr, expectedZkVersion);
+        }
+
+        private Map<TableBucket, LeaderAndIsr> getBatchUpdates() {
+            return batchUpdates;
+        }
+
+        private Map<TableBucket, LeaderAndIsr> getIndividualUpdates() {
+            return individualUpdates;
+        }
+
+        private static CuratorFrameworkWithUnhandledErrorListener createCuratorFrameworkWrapper() {
+            Builder builder =
+                    builder()
+                            .connectString(
+                                    ZOO_KEEPER_EXTENSION_WRAPPER
+                                            .getCustomExtension()
+                                            .getConnectString())
+                            .namespace("fluss")
+                            .retryPolicy(new ExponentialBackoffRetry(1000, 3));
+            return startZookeeperClient(builder, NOPErrorHandler.INSTANCE);
+        }
+
+        private static Configuration createConfiguration(String remoteDataDir) {
+            Configuration configuration = new Configuration();
+            configuration.set(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
+            return configuration;
+        }
     }
 
     private static class RecordingAutoPartitionManager extends AutoPartitionManager {
