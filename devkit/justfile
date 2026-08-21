@@ -51,8 +51,12 @@ build-tiering:
 ensure-dist:
     #!/usr/bin/env bash
     set -e
-    if [ ! -x "{{ FLUSS_DEV_HOME }}/build-target/bin/coordinator-server.sh" ]; then
-      echo "Local distribution not found. Run: just build"
+    DIST_HOME="{{ FLUSS_DEV_HOME }}/build-target"
+    if [ ! -x "$DIST_HOME/bin/coordinator-server.sh" ] || \
+       [ ! -x "$DIST_HOME/bin/tablet-server.sh" ] || \
+       [ ! -f "$DIST_HOME/conf/server.yaml" ] || \
+       [ ! -d "$DIST_HOME/lib" ]; then
+      echo "Complete local distribution not found. Run: just build"
       exit 1
     fi
 
@@ -114,6 +118,34 @@ ensure-flink:
     chmod -R a+rX "$ACTIVE_DIR"
 
 [private]
+stage-profile-jars profile:
+    #!/usr/bin/env bash
+    set -e
+    PROFILE={{ quote(profile) }}
+    PROFILE_DIR="{{ PROFILES_DIR }}/$PROFILE"
+    FORMAT=$(just profile-format "$PROFILE")
+    SERVER_PLUGIN_DIR="{{ FLUSS_DEV_HOME }}/build-target/plugins/${FORMAT:-$PROFILE}"
+    copy_urls() {
+      local FILE="$1"
+      local TARGET="$2"
+      local PREFIX="${3:-}"
+      local URL NAME
+      [ -f "$FILE" ] || return 0
+      while IFS= read -r URL; do
+        NAME="$(basename "${URL%%\?*}")"
+        mkdir -p "$TARGET"
+        cp "{{ CACHE_DIR }}/$NAME" "$TARGET/$PREFIX$NAME"
+      done < <(sed 's/#.*//; s/[[:space:]]//g; /^$/d' "$FILE")
+    }
+    ACTIVE_DIR="{{ DEPS_DIR }}/flink/active"
+    just deps "$PROFILE"
+    copy_urls "$PROFILE_DIR/jars.urls" "$SERVER_PLUGIN_DIR" "devkit-"
+    copy_urls "$PROFILE_DIR/jars.urls" "$ACTIVE_DIR/lib"
+    copy_urls "$PROFILE_DIR/server.urls" "$SERVER_PLUGIN_DIR" "devkit-"
+    copy_urls "$PROFILE_DIR/flink.urls" "$ACTIVE_DIR/lib"
+    chmod -R a+rX "$ACTIVE_DIR"
+
+[private]
 ensure-tiering profile:
     #!/usr/bin/env bash
     set -e
@@ -136,20 +168,7 @@ ensure-tiering profile:
       fi
       cp "${MATCHES[0]}" "$TARGET"
     }
-    copy_urls() {
-      local FILE="$1"
-      shift
-      local URL NAME TARGET
-      [ -f "$FILE" ] || return 0
-      while IFS= read -r URL; do
-        NAME="$(basename "${URL%%\?*}")"
-        for TARGET in "$@"; do
-          cp "{{ CACHE_DIR }}/$NAME" "$TARGET/"
-        done
-      done < <(sed 's/#.*//; s/[[:space:]]//g; /^$/d' "$FILE")
-    }
     ACTIVE_DIR="{{ DEPS_DIR }}/flink/active"
-    just deps "$PROFILE"
     stage "{{ FLUSS_DEV_HOME }}/fluss-lake/fluss-lake-$FORMAT/target/fluss-lake-$FORMAT-*.jar" "$ACTIVE_DIR/lib/fluss-lake-$FORMAT.jar"
     stage "{{ FLUSS_DEV_HOME }}/fluss-flink/fluss-flink-tiering/target/fluss-flink-tiering-*.jar" "$ACTIVE_DIR/jobs/fluss-flink-tiering.jar"
 
@@ -163,9 +182,6 @@ ensure-tiering profile:
       cp "{{ FLUSS_DEV_HOME }}/build-target/plugins/$SCHEME/"*.jar "$ACTIVE_DIR/lib/"
     fi
 
-    copy_urls "$PROFILE_DIR/jars.urls" "$SERVER_PLUGIN_DIR" "$ACTIVE_DIR/lib"
-    copy_urls "$PROFILE_DIR/server.urls" "$SERVER_PLUGIN_DIR"
-    copy_urls "$PROFILE_DIR/flink.urls" "$ACTIVE_DIR/lib"
     chmod -R a+rX "$ACTIVE_DIR"
 
 [doc("Start a profile from the profiles directory")]
@@ -183,21 +199,22 @@ up profile="core" nodes="1": ensure-dist ensure-flink
     FORMAT=$(just profile-format "$PROFILE")
     COMPOSE_ARGS=(-f "{{ DEVKIT_DIR }}/docker-compose.yml" -f "{{ DEVKIT_DIR }}/compose/tiering.yml")
     PROFILES=(--profile "$TOPOLOGY" --profile flink)
+    if [ -f "$PROFILE_DIR/compose.files" ]; then
+      while IFS= read -r FILE; do
+        FILE="${FILE%%#*}"
+        FILE="${FILE//[[:space:]]/}"
+        [ -n "$FILE" ] || continue
+        if [ ! -f "{{ DEVKIT_DIR }}/$FILE" ]; then
+          echo "Compose file not found: $FILE"
+          exit 1
+        fi
+        COMPOSE_ARGS+=(-f "{{ DEVKIT_DIR }}/$FILE")
+      done < "$PROFILE_DIR/compose.files"
+    fi
+    just stage-profile-jars "$PROFILE"
     if [ -n "$FORMAT" ]; then
       just ensure-tiering "$PROFILE"
       PROFILES+=(--profile tiering)
-      if [ -f "$PROFILE_DIR/compose.files" ]; then
-        while IFS= read -r FILE; do
-          FILE="${FILE%%#*}"
-          FILE="${FILE//[[:space:]]/}"
-          [ -n "$FILE" ] || continue
-          if [ ! -f "{{ DEVKIT_DIR }}/$FILE" ]; then
-            echo "Compose file not found: $FILE"
-            exit 1
-          fi
-          COMPOSE_ARGS+=(-f "{{ DEVKIT_DIR }}/$FILE")
-        done < "$PROFILE_DIR/compose.files"
-      fi
     fi
     export FLUSS_DEVKIT_CONFIG="$PROFILE_DIR/server.yaml"
     export FLUSS_REPLICATION_FACTOR="{{ nodes }}"
@@ -211,7 +228,15 @@ down:
 
 [doc("Stop services and remove data")]
 clean:
-    @{{ ALL_COMPOSE }} {{ ALL_PROFILES }} down -v --remove-orphans
+    #!/usr/bin/env bash
+    set -e
+    {{ ALL_COMPOSE }} {{ ALL_PROFILES }} down -v --remove-orphans
+    for JAR in "{{ FLUSS_DEV_HOME }}"/build-target/plugins/*/devkit-*.jar; do
+      [ -f "$JAR" ] || continue
+      PLUGIN_DIR="$(dirname "$JAR")"
+      rm -f "$JAR"
+      rmdir "$PLUGIN_DIR" 2>/dev/null || true
+    done
 
 [doc("Show service status")]
 status:

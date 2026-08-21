@@ -36,7 +36,7 @@ services:
       start_period: 5s
 
   rustfs-init:
-    image: minio/mc
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
     depends_on:
       rustfs:
         condition: service_healthy

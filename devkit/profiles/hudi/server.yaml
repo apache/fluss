@@ -37,5 +37,3 @@ datalake.hudi.hadoop.fs.s3a.connection.ssl.enabled: false
 datalake.hudi.hadoop.fs.s3a.impl.disable.cache: true
 datalake.hudi.hadoop.fs.s3a.aws.credentials.provider: org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider
 datalake.hudi.hoodie.write.lock.provider: org.apache.hudi.client.transaction.lock.InProcessLockProvider
-
-fluss.tiering.poll.table.interval: 1s

@@ -15,7 +15,7 @@
 # limitations under the License.
 
 x-flink-common: &flink-common
-  image: flink:1.20.0-scala_2.12-java17
+  image: ${FLUSS_DEVKIT_FLINK_IMAGE:-flink:1.20.3-scala_2.12-java17}
   entrypoint:
     - /bin/bash
     - -c

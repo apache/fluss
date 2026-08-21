@@ -2,12 +2,15 @@
 
 Fluss DevKit starts a local Fluss environment with Docker Compose and `just`. It uses upstream
 runtime images and mounts the local `../build-target` directory read-only, so testing source changes
-never requires building a Docker image.
+never requires building a Docker image. It is a contributor tool for validating a local distribution,
+startup scripts, and plugin classloaders; use the [deployment documentation](../website/docs/install-deploy/)
+for production environments.
 
 ## Requirements
 
 - JDK 11 or later
-- Docker with Docker Compose
+- A Unix-like environment with Bash and `curl`
+- Docker with Docker Compose v2
 - [just](https://github.com/casey/just)
 
 ## Quick Start
@@ -39,6 +42,11 @@ ready. Run `just --list` to see all available commands.
 | `paimon` | Core, RustFS, Flink, and Paimon tiering |
 | `lance` | Core, RustFS, Flink, and Lance tiering |
 | `hudi` | Core, RustFS, Flink, and Hudi tiering |
+
+These profiles are selected local-development combinations, not copies of every documented
+deployment. In particular, `core` does not include the Faker source and S3 dependencies bundled in
+the Flink quickstart image. The lake profiles currently exercise append-only table workflows; they
+do not yet cover primary-key snapshot and restart recovery.
 
 Profiles start one TabletServer by default. Pass `3` as the second argument to start three:
 
@@ -92,8 +100,8 @@ Start a profile with `just up` before using `run-sql`. SQL files are read from t
 the Flink SQL Client. Relative paths are resolved from the current working directory.
 
 `just up` replaces containers from the previous profile but preserves named volumes. `down` removes
-containers and keeps data; `clean` also removes Compose volumes. Downloaded JARs remain in the
-ignored `.deps` cache.
+containers and keeps data; `clean` also removes Compose volumes and staged Server JARs. Downloaded
+JARs remain in the ignored `.deps` cache.
 
 Default endpoints:
 
@@ -115,8 +123,10 @@ blocking startup. Prometheus export is also enabled by default and can be checke
 example with `curl http://localhost:9249/metrics`.
 
 The default Fluss runtime is `eclipse-temurin:17-jre-noble`; set `FLUSS_DEVKIT_IMAGE` to use
-another Java 17 runtime. Port environment variables in the Compose files can override the default
-addresses, for example `COORDINATOR_DEBUG_PORT=5005 just up` or
+another Java 17 runtime. Flink defaults to `flink:1.20.3-scala_2.12-java17`, matching the local Flink
+1.20 Connector and Tiering build baseline; set `FLUSS_DEVKIT_FLINK_IMAGE` to use another compatible
+image. Port environment variables in the Compose files can override the default addresses, for
+example `COORDINATOR_DEBUG_PORT=5005 just up` or
 `TABLET_SERVER_0_METRICS_PORT=9300 just up`.
 
 ## Adding a Profile
@@ -132,9 +142,15 @@ optional files:
 | `flink.urls` | Additional Flink-only JARs |
 | `compose.files` | Compose overlays, relative to `devkit/`, for extra local services |
 
-Put one URL or Compose path on each line; empty lines and `#` comments are ignored. If `server.yaml`
-contains `datalake.format`, `just up` automatically stages the matching locally built lake plugin
-and starts Flink tiering. Use `compose.files` only when the profile needs additional local services
-or runtime overrides.
+Put one URL or Compose path on each line; empty lines and `#` comments are ignored. `just up`
+applies the declared JARs and Compose overlays for every profile. Server JARs use a plugin directory
+named after the profile, or after the lake format when `server.yaml` contains `datalake.format`. Lake
+profiles also stage the matching locally built lake plugin and start Flink tiering. Server JARs are
+added across profile switches and removed by `just clean`.
 
 Start the new profile with `just up <profile>`. No `justfile` change is required.
+
+## Design and Dependency Sources
+
+See [DESIGN.md](DESIGN.md) for the execution flow, classloader boundaries, dependency matrix,
+configuration rationale, differences from the official guides, and deferred work.
