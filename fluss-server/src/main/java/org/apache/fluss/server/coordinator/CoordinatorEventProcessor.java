@@ -188,6 +188,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
     private final CoordinatorChangeWatcher coordinatorChangeWatcher;
     private final TabletServerChangeWatcher tabletServerChangeWatcher;
     private final CoordinatorMetadataCache serverMetadataCache;
+    private final CoordinatorHealthCache healthCache;
     private final CoordinatorRequestBatch coordinatorRequestBatch;
     private final String internalListenerName;
     private final CoordinatorMetricGroup coordinatorMetricGroup;
@@ -218,7 +219,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
         this.coordinatorChannelManager = coordinatorChannelManager;
         this.coordinatorContext = coordinatorContext;
         this.replicaCapacityController = replicaCapacityController;
-        this.coordinatorEventManager = new CoordinatorEventManager(this, coordinatorMetricGroup);
+        this.healthCache = new CoordinatorHealthCache();
+        this.coordinatorEventManager =
+                new CoordinatorEventManager(
+                        this, coordinatorContext, healthCache, coordinatorMetricGroup);
         this.replicaStateMachine =
                 new ReplicaStateMachine(
                         coordinatorContext,
@@ -298,6 +302,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
     public CoordinatorContext getCoordinatorContext() {
         return coordinatorContext;
+    }
+
+    public CoordinatorHealthCache getHealthCache() {
+        return healthCache;
     }
 
     @VisibleForTesting
@@ -501,6 +509,11 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 tabletServerInfoList,
                 coordinatorContext.getServerTags());
         updateTabletServerMetadataCacheWhenStartup(tabletServerInfoList);
+        // Warm the health cache once, unconditionally, so it isn't empty before the first
+        // relevant mutation lands. Bulk-loading buckets above does not mark it dirty on purpose
+        // (that would mean one dirty-mark per bucket during startup, for no benefit); this single
+        // explicit refresh covers it instead.
+        healthCache.update(coordinatorContext);
 
         // Auto-partition initialization schedules creation checks immediately. Start it only after
         // the observed KV leader replica count and live tablet server resources are restored.
@@ -669,12 +682,16 @@ public class CoordinatorEventProcessor implements EventProcessor {
     public void process(CoordinatorEvent event) {
         if (event instanceof CreateTableEvent) {
             processCreateTable((CreateTableEvent) event);
+            healthCache.onTopologyChanged();
         } else if (event instanceof CreatePartitionEvent) {
             processCreatePartition((CreatePartitionEvent) event);
+            healthCache.onTopologyChanged();
         } else if (event instanceof DropTableEvent) {
             processDropTable((DropTableEvent) event);
+            healthCache.onTopologyChanged();
         } else if (event instanceof DropPartitionEvent) {
             processDropPartition((DropPartitionEvent) event);
+            healthCache.onTopologyChanged();
         } else if (event instanceof SchemaChangeEvent) {
             SchemaChangeEvent schemaChangeEvent = (SchemaChangeEvent) event;
             processSchemaChange(schemaChangeEvent);
@@ -693,8 +710,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
             processDeadCoordinator((DeadCoordinatorEvent) event);
         } else if (event instanceof NewTabletServerEvent) {
             processNewTabletServer((NewTabletServerEvent) event);
+            healthCache.onTabletServerRegistered();
         } else if (event instanceof DeadTabletServerEvent) {
             processDeadTabletServer((DeadTabletServerEvent) event);
+            healthCache.onTabletServerDied();
         } else if (event instanceof AdjustIsrReceivedEvent) {
             AdjustIsrReceivedEvent adjustIsrReceivedEvent = (AdjustIsrReceivedEvent) event;
             CompletableFuture<AdjustIsrResponse> callback =
@@ -733,12 +752,21 @@ public class CoordinatorEventProcessor implements EventProcessor {
             AddServerTagEvent addServerTagEvent = (AddServerTagEvent) event;
             completeFromCallable(
                     addServerTagEvent.getRespCallback(),
-                    () -> processAddServerTag(addServerTagEvent));
+                    () -> {
+                        AddServerTagResponse response = processAddServerTag(addServerTagEvent);
+                        healthCache.onTopologyChanged();
+                        return response;
+                    });
         } else if (event instanceof RemoveServerTagEvent) {
             RemoveServerTagEvent removeServerTagEvent = (RemoveServerTagEvent) event;
             completeFromCallable(
                     removeServerTagEvent.getRespCallback(),
-                    () -> processRemoveServerTag(removeServerTagEvent));
+                    () -> {
+                        RemoveServerTagResponse response =
+                                processRemoveServerTag(removeServerTagEvent);
+                        healthCache.onTopologyChanged();
+                        return response;
+                    });
         } else if (event instanceof RebalanceEvent) {
             RebalanceEvent rebalanceEvent = (RebalanceEvent) event;
             completeFromCallable(
@@ -1790,6 +1818,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
             // A2. Set RS = TRS, AR = [], RR = [] in memory.
             coordinatorContext.updateBucketReplicaAssignment(tableBucket, reassignment.replicas);
+            healthCache.onTopologyChanged();
             updateReplicaAssignmentForBucket(tableBucket, reassignment.replicas);
 
             // A3. replicas in AR -> NewReplica
@@ -1815,6 +1844,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
             maybeReassignedBucketLeaderIfRequired(tableBucket, targetReplicas);
             // B3. Set RS = TRS, AR = [], RR = [] in memory.
             coordinatorContext.updateBucketReplicaAssignment(tableBucket, targetReplicas);
+            healthCache.onTopologyChanged();
             // B4. Re-send LeaderAndIsr request with new leader and a new RS (using TRS) and same
             // isr to every tabletServer in TRS.
             updateBucketEpochAndSendRequest(tableBucket, targetReplicas);
@@ -1991,7 +2021,14 @@ public class CoordinatorEventProcessor implements EventProcessor {
         }
 
         // update coordinator leader and isr cache.
-        newLeaderAndIsrList.forEach(coordinatorContext::putBucketLeaderAndIsr);
+        newLeaderAndIsrList.forEach(
+                (tableBucket, newLeaderAndIsr) -> {
+                    coordinatorContext.putBucketLeaderAndIsr(tableBucket, newLeaderAndIsr);
+                    healthCache.onBucketLeaderAndIsrChanged(
+                            tableBucket,
+                            coordinatorContext.getAssignment(tableBucket),
+                            Optional.of(newLeaderAndIsr));
+                });
 
         // First, try to judge whether the bucket is in rebalance task when isr change.
         newLeaderAndIsrList.keySet().forEach(this::tryToCompleteRebalanceTaskOnLeaderAndIsrChange);
@@ -2552,6 +2589,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
         LeaderAndIsr newLeaderAndIsr = leaderAndIsr.newLeaderAndIsr(leaderAndIsr.isr());
 
         coordinatorContext.putBucketLeaderAndIsr(tableBucket, newLeaderAndIsr);
+        healthCache.onBucketLeaderAndIsrChanged(
+                tableBucket,
+                coordinatorContext.getAssignment(tableBucket),
+                Optional.of(newLeaderAndIsr));
         zooKeeperClient.updateLeaderAndIsr(
                 tableBucket, newLeaderAndIsr, coordinatorContext.getCoordinatorZkVersion());
 

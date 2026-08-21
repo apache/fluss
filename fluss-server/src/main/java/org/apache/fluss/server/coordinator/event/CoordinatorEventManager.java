@@ -24,6 +24,7 @@ import org.apache.fluss.metrics.DescriptiveStatisticsHistogram;
 import org.apache.fluss.metrics.Histogram;
 import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
+import org.apache.fluss.server.coordinator.CoordinatorHealthCache;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaState;
 import org.apache.fluss.server.metrics.group.CoordinatorEventMetricGroup;
 import org.apache.fluss.server.metrics.group.CoordinatorMetricGroup;
@@ -31,6 +32,8 @@ import org.apache.fluss.utils.concurrent.ShutdownableThread;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import javax.annotation.Nullable;
 
 import java.util.Set;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -54,6 +57,8 @@ public final class CoordinatorEventManager implements EventManager {
 
     private final EventProcessor eventProcessor;
     private final CoordinatorMetricGroup coordinatorMetricGroup;
+    private final @Nullable CoordinatorContext coordinatorContext;
+    private final CoordinatorHealthCache healthCache;
 
     private final LinkedBlockingQueue<QueuedEvent> queue = new LinkedBlockingQueue<>();
     private final CoordinatorEventThread thread =
@@ -84,7 +89,22 @@ public final class CoordinatorEventManager implements EventManager {
 
     public CoordinatorEventManager(
             EventProcessor eventProcessor, CoordinatorMetricGroup coordinatorMetricGroup) {
+        this(eventProcessor, null, new CoordinatorHealthCache(), coordinatorMetricGroup);
+    }
+
+    /**
+     * @param coordinatorContext used to coalesce-refresh {@code healthCache} from the event
+     *     thread's own loop; {@code null} disables that refresh entirely (used by callers, e.g.
+     *     tests, that only care about the metrics-polling behavior of this class).
+     */
+    public CoordinatorEventManager(
+            EventProcessor eventProcessor,
+            @Nullable CoordinatorContext coordinatorContext,
+            CoordinatorHealthCache healthCache,
+            CoordinatorMetricGroup coordinatorMetricGroup) {
         this.eventProcessor = eventProcessor;
+        this.coordinatorContext = coordinatorContext;
+        this.healthCache = healthCache;
         this.coordinatorMetricGroup = coordinatorMetricGroup;
         registerMetrics();
     }
@@ -261,6 +281,13 @@ public final class CoordinatorEventManager implements EventManager {
             if (currentTime - lastMetricsUpdateTime >= METRICS_UPDATE_INTERVAL_MS) {
                 updateMetricsViaAccessContext();
                 lastMetricsUpdateTime = currentTime;
+            }
+
+            // Coalesce health-cache refreshes the same way: at most once per drained queue,
+            // sooner only if healthCache itself decided a change was urgent. No AccessContextEvent
+            // needed -- this thread already owns coordinatorContext directly.
+            if (coordinatorContext != null) {
+                healthCache.refreshIfNeeded(coordinatorContext, queue.isEmpty());
             }
 
             // Use poll with timeout instead of blocking take() so that the thread
