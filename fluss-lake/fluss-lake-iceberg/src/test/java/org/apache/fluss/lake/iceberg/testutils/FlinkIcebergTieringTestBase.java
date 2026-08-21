@@ -69,6 +69,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
@@ -338,11 +339,32 @@ public class FlinkIcebergTieringTestBase {
                 InternalRow flussRow = flussRowIterator.next();
                 assertThat(actualRecord.get(0)).isEqualTo(flussRow.getInt(0));
                 assertThat(actualRecord.get(1)).isEqualTo(flussRow.getString(1).toString());
-                // FIP-27: a clean table stores only user columns; only legacy tables carry the
-                // trailing __bucket/__offset/__timestamp columns (offset at idx 3).
-                if (actualRecord.struct().field(OFFSET_COLUMN_NAME) != null) {
-                    assertThat(actualRecord.get(3)).isEqualTo(startingOffset++);
-                }
+                // FIP-27: a clean table stores only user columns and carries none of the trailing
+                // __bucket/__offset/__timestamp system columns.
+                assertThat(actualRecord.struct().field(OFFSET_COLUMN_NAME)).isNull();
+            }
+            assertThat(flussRowIterator.hasNext()).isFalse();
+        }
+    }
+
+    /**
+     * Legacy counterpart of {@link #checkDataInIcebergAppendOnlyTable}: a legacy table carries the
+     * trailing {@code __bucket}/{@code __offset}/{@code __timestamp} system columns, so this
+     * asserts the {@code __offset} column is present and advances per row (offset at idx 3 for a
+     * 2-user- column table).
+     */
+    protected void checkDataInIcebergLegacyAppendOnlyTable(
+            TablePath tablePath, List<InternalRow> expectedRows, long startingOffset)
+            throws Exception {
+        try (CloseableIterator<Record> records = getIcebergRows(tablePath)) {
+            Iterator<InternalRow> flussRowIterator = expectedRows.iterator();
+            while (records.hasNext()) {
+                Record actualRecord = records.next();
+                InternalRow flussRow = flussRowIterator.next();
+                assertThat(actualRecord.get(0)).isEqualTo(flussRow.getInt(0));
+                assertThat(actualRecord.get(1)).isEqualTo(flussRow.getString(1).toString());
+                assertThat(actualRecord.struct().field(OFFSET_COLUMN_NAME)).isNotNull();
+                assertThat(actualRecord.get(3)).isEqualTo(startingOffset++);
             }
             assertThat(flussRowIterator.hasNext()).isFalse();
         }
@@ -412,11 +434,34 @@ public class FlinkIcebergTieringTestBase {
                 assertThat(actualRecord.get(0)).isEqualTo(flussRow.getInt(0));
                 assertThat(actualRecord.get(1)).isEqualTo(flussRow.getString(1).toString());
                 assertThat(actualRecord.get(2)).isEqualTo(flussRow.getString(2).toString());
-                // FIP-27: only legacy tables carry the trailing __bucket/__offset/__timestamp
-                // columns (offset at idx 4 for a 3-user-column partitioned table).
-                if (actualRecord.struct().field(OFFSET_COLUMN_NAME) != null) {
-                    assertThat(actualRecord.get(4)).isEqualTo(startingOffset++);
-                }
+                // FIP-27: a clean partitioned table carries no trailing system columns.
+                assertThat(actualRecord.struct().field(OFFSET_COLUMN_NAME)).isNull();
+            }
+            assertThat(flussRowIterator.hasNext()).isFalse();
+        }
+    }
+
+    /**
+     * Legacy counterpart of {@link #checkDataInIcebergAppendOnlyPartitionedTable}: asserts the
+     * trailing {@code __offset} column is present and advances per row (offset at idx 4 for a 3-
+     * user-column partitioned table).
+     */
+    protected void checkDataInIcebergLegacyAppendOnlyPartitionedTable(
+            TablePath tablePath,
+            Map<String, String> partitionSpec,
+            List<InternalRow> expectedRows,
+            long startingOffset)
+            throws Exception {
+        try (CloseableIterator<Record> records = getIcebergRows(tablePath, partitionSpec)) {
+            Iterator<InternalRow> flussRowIterator = expectedRows.iterator();
+            while (records.hasNext()) {
+                Record actualRecord = records.next();
+                InternalRow flussRow = flussRowIterator.next();
+                assertThat(actualRecord.get(0)).isEqualTo(flussRow.getInt(0));
+                assertThat(actualRecord.get(1)).isEqualTo(flussRow.getString(1).toString());
+                assertThat(actualRecord.get(2)).isEqualTo(flussRow.getString(2).toString());
+                assertThat(actualRecord.struct().field(OFFSET_COLUMN_NAME)).isNotNull();
+                assertThat(actualRecord.get(4)).isEqualTo(startingOffset++);
             }
             assertThat(flussRowIterator.hasNext()).isFalse();
         }
@@ -443,27 +488,28 @@ public class FlinkIcebergTieringTestBase {
             org.apache.iceberg.types.Types.NestedField offsetField =
                     table.schema().findField(OFFSET_COLUMN_NAME);
             if (offsetField == null) {
-                // FIP-27: a clean table has no __offset column to sort by; read files directly.
+                // FIP-27: a clean table has no __offset column to sort by. Iterate files in a
+                // deterministic order (by data-file location) so the row order is stable regardless
+                // of manifest ordering, which FastAppend may change across tiering commits.
                 table.refresh();
                 TableScan cleanScan = filterByPartition(table.newScan(), partitionSpec);
+                List<DataFile> cleanFiles = new ArrayList<>();
                 cleanScan
                         .planFiles()
                         .iterator()
-                        .forEachRemaining(
-                                fileScanTask -> {
-                                    DataFile file = fileScanTask.file();
-                                    Iterable<Record> iterable =
-                                            Parquet.read(table.io().newInputFile(file.location()))
-                                                    .project(table.schema())
-                                                    .createReaderFunc(
-                                                            fileSchema ->
-                                                                    GenericParquetReaders
-                                                                            .buildReader(
-                                                                                    table.schema(),
-                                                                                    fileSchema))
-                                                    .build();
-                                    iterable.forEach(records::add);
-                                });
+                        .forEachRemaining(fileScanTask -> cleanFiles.add(fileScanTask.file()));
+                cleanFiles.sort(Comparator.comparing(f -> f.location()));
+                for (DataFile file : cleanFiles) {
+                    Iterable<Record> iterable =
+                            Parquet.read(table.io().newInputFile(file.location()))
+                                    .project(table.schema())
+                                    .createReaderFunc(
+                                            fileSchema ->
+                                                    GenericParquetReaders.buildReader(
+                                                            table.schema(), fileSchema))
+                                    .build();
+                    iterable.forEach(records::add);
+                }
                 return CloseableIterator.withClose(records.iterator());
             }
             int fieldId = offsetField.fieldId();

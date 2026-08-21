@@ -23,6 +23,7 @@ import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
+import org.apache.fluss.lake.iceberg.testutils.IcebergTestUtils;
 import org.apache.fluss.lake.lakestorage.TestingLakeCatalogContext;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableChange;
@@ -318,50 +319,37 @@ class IcebergLakeCatalogTest {
     }
 
     @Test
-    void testReEnableTieringOnLegacyTable() {
-        // FIP-27: re-enabling tiering on a legacy table (one created before FIP-27, carrying the
-        // three trailing system columns with an identity(__bucket) partition and asc(__offset) sort
-        // order) must be accepted. The clean-layout expectations are rebuilt in the legacy layout
-        // before the compatibility checks, so createTable on the existing legacy table must not
-        // throw.
+    void testEnableLakeTableWithLegacySystemTimestampColumn() {
+        // FIP-27: a legacy table (created before FIP-27, carrying the three trailing system columns
+        // with an identity(__bucket) partition and asc(__offset) sort order) must survive
+        // disable-then-re-enable tiering. Re-enabling goes through createTable() on the existing
+        // physical table; the clean-layout expectations are rebuilt in the legacy layout before the
+        // compatibility checks, so this must not throw and must preserve the legacy layout.
         String database = "test_db";
         String tableName = "legacy_log_table";
-
-        Schema flussSchema =
-                Schema.newBuilder()
-                        .column("id", DataTypes.BIGINT())
-                        .column("name", DataTypes.STRING())
-                        .column("amount", DataTypes.INT())
-                        .column("address", DataTypes.STRING())
-                        .build();
-        TableDescriptor td = TableDescriptor.builder().schema(flussSchema).distributedBy(3).build();
-
-        // Build the legacy physical Iceberg table directly through the underlying catalog.
-        org.apache.iceberg.Schema legacySchema =
-                IcebergSchemaUtils.createLegacyIcebergSchema(td, false);
-        PartitionSpec legacySpec =
-                PartitionSpec.builderFor(legacySchema).identity(BUCKET_COLUMN_NAME).build();
-        SortOrder legacySortOrder =
-                SortOrder.builderFor(legacySchema).asc(OFFSET_COLUMN_NAME).build();
-
-        Catalog icebergCatalog = flussIcebergCatalog.getIcebergCatalog();
-        try {
-            ((SupportsNamespaces) icebergCatalog).createNamespace(Namespace.of(database));
-        } catch (org.apache.iceberg.exceptions.AlreadyExistsException ignore) {
-            // namespace already exists
-        }
-        icebergCatalog
-                .buildTable(TableIdentifier.of(database, tableName), legacySchema)
-                .withPartitionSpec(legacySpec)
-                .withSortOrder(legacySortOrder)
-                .create();
-
         TablePath tablePath = TablePath.of(database, tableName);
-        // Re-enabling tiering must be accepted for the legacy physical layout.
+
+        TableDescriptor td =
+                TableDescriptor.builder().schema(FLUSS_SCHEMA).distributedBy(3).build();
+
+        // Create the table clean, then turn it into a legacy table (simulating a pre-FIP-27 table).
+        flussIcebergCatalog.createTable(tablePath, td, new TestingLakeCatalogContext());
+        IcebergTestUtils.adjustToLegacyV1Table(
+                flussIcebergCatalog.getIcebergCatalog(), TableIdentifier.of(database, tableName));
+
+        // Sanity: the table is now legacy (has __timestamp, identity(__bucket), asc(__offset)).
+        Table legacy =
+                flussIcebergCatalog
+                        .getIcebergCatalog()
+                        .loadTable(TableIdentifier.of(database, tableName));
+        assertThat(legacy.schema().findField(TIMESTAMP_COLUMN_NAME)).isNotNull();
+        assertThat(legacy.spec().isUnpartitioned()).isFalse();
+        assertThat(legacy.sortOrder().isUnsorted()).isFalse();
+
+        // Re-enabling tiering (createTable on the existing legacy table) must be accepted.
         flussIcebergCatalog.createTable(tablePath, td, new TestingLakeCatalogContext());
 
-        // The physical layout must be preserved (still legacy: system columns +
-        // identity(__bucket)).
+        // The legacy physical layout must be preserved.
         Table reloaded =
                 flussIcebergCatalog
                         .getIcebergCatalog()
@@ -369,6 +357,54 @@ class IcebergLakeCatalogTest {
         assertThat(reloaded.schema().findField(TIMESTAMP_COLUMN_NAME)).isNotNull();
         assertThat(reloaded.spec().isUnpartitioned()).isFalse();
         assertThat(reloaded.sortOrder().isUnsorted()).isFalse();
+    }
+
+    @Test
+    void testAddColumnForLegacyTableWithSystemColumns() {
+        // FIP-27: adding a business column to a legacy table must insert it before the trailing
+        // system columns, so the __bucket/__offset/__timestamp columns stay last. (Clean tables
+        // append the new column last; that path is covered by testAlterTableAddColumnLastNullable.)
+        String database = "test_db";
+        String tableName = "legacy_add_col_table";
+        TablePath tablePath = TablePath.of(database, tableName);
+
+        // Create clean, then convert to legacy layout.
+        flussIcebergCatalog.createTable(
+                tablePath,
+                TableDescriptor.builder().schema(FLUSS_SCHEMA).distributedBy(3).build(),
+                new TestingLakeCatalogContext());
+        IcebergTestUtils.adjustToLegacyV1Table(
+                flussIcebergCatalog.getIcebergCatalog(), TableIdentifier.of(database, tableName));
+
+        List<TableChange> changes =
+                Collections.singletonList(
+                        TableChange.addColumn(
+                                "new_col",
+                                DataTypes.INT(),
+                                "new_col comment",
+                                TableChange.ColumnPosition.last()));
+        flussIcebergCatalog.alterTable(
+                tablePath, changes, getLakeCatalogContext(FLUSS_SCHEMA, changes));
+
+        Table table =
+                flussIcebergCatalog
+                        .getIcebergCatalog()
+                        .loadTable(TableIdentifier.of(database, tableName));
+        List<String> fieldNames =
+                table.schema().columns().stream()
+                        .map(Types.NestedField::name)
+                        .collect(Collectors.toList());
+        // The new column goes before the trailing system columns.
+        assertThat(fieldNames)
+                .containsExactly(
+                        "id",
+                        "name",
+                        "amount",
+                        "address",
+                        "new_col",
+                        BUCKET_COLUMN_NAME,
+                        OFFSET_COLUMN_NAME,
+                        TIMESTAMP_COLUMN_NAME);
     }
 
     @Test

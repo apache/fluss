@@ -18,6 +18,7 @@
 package org.apache.fluss.lake.iceberg.tiering;
 
 import org.apache.fluss.lake.iceberg.testutils.FlinkIcebergTieringTestBase;
+import org.apache.fluss.lake.iceberg.testutils.IcebergTestUtils;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
@@ -40,6 +41,9 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.lake.iceberg.utils.IcebergConversions.toIceberg;
+import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
+import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
+import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -146,6 +150,61 @@ class IcebergSchemaEvolutionITCase extends FlinkIcebergTieringTestBase {
             assertThat(fNewByFInt.get(3)).isNull();
             assertThat(fNewByFInt.get(4)).isEqualTo("newA");
             assertThat(fNewByFInt.get(5)).isEqualTo("newB");
+        } finally {
+            jobClient.cancel().get();
+        }
+    }
+
+    @Test
+    void testSchemaEvolutionLegacyLogTable() throws Exception {
+        // FIP-27: a legacy table keeps the three trailing system columns, so a newly added business
+        // column must be inserted BEFORE the first system column (the moveBefore branch), not
+        // appended last. This complements testSchemaEvolutionLogTable, which covers the clean
+        // append-last path.
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "schemaEvoLegacyLogTable");
+        long tableId = createLogTable(tablePath, 1, false, INITIAL_LOG_SCHEMA);
+        TableBucket bucket = new TableBucket(tableId, 0);
+
+        List<InternalRow> initialRows = Arrays.asList(row(1, "v1"), row(2, "v2"), row(3, "v3"));
+        writeRows(tablePath, initialRows, true);
+
+        JobClient jobClient = buildTieringJob(execEnv);
+        try {
+            assertReplicaStatus(bucket, 3);
+            // Initial tiered data is still clean at this point.
+            checkDataInIcebergAppendOnlyTable(tablePath, initialRows, 0);
+
+            // Convert the tiered table into a legacy table (system columns + identity(__bucket) +
+            // asc(__offset)), simulating a table created before FIP-27.
+            IcebergTestUtils.adjustToLegacyV1Table(icebergCatalog, toIceberg(tablePath));
+
+            // ALTER TABLE ADD COLUMN via Admin API.
+            admin.alterTable(
+                            tablePath,
+                            Collections.singletonList(
+                                    TableChange.addColumn(
+                                            "f_new",
+                                            DataTypes.STRING(),
+                                            null,
+                                            TableChange.ColumnPosition.last())),
+                            false)
+                    .get();
+
+            org.apache.iceberg.Table icebergTable = icebergCatalog.loadTable(toIceberg(tablePath));
+            icebergTable.refresh();
+            List<String> fieldNames =
+                    icebergTable.schema().columns().stream()
+                            .map(Types.NestedField::name)
+                            .collect(Collectors.toList());
+            // The new column must sit before the three trailing system columns.
+            assertThat(fieldNames)
+                    .containsExactly(
+                            "f_int",
+                            "f_str",
+                            "f_new",
+                            BUCKET_COLUMN_NAME,
+                            OFFSET_COLUMN_NAME,
+                            TIMESTAMP_COLUMN_NAME);
         } finally {
             jobClient.cancel().get();
         }
