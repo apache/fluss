@@ -33,5 +33,3 @@ datalake.lance.allow_http: true
 datalake.lance.region: us-east-1
 datalake.lance.access_key_id: rustfsadmin
 datalake.lance.secret_access_key: rustfsadmin
-
-fluss.tiering.poll.table.interval: 1s
