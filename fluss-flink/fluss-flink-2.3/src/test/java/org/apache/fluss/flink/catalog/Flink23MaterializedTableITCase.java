@@ -17,5 +17,54 @@
 
 package org.apache.fluss.flink.catalog;
 
+import org.apache.flink.table.api.config.ExecutionConfigOptions;
+import org.apache.flink.table.catalog.CommonCatalogOptions;
+import org.apache.flink.table.gateway.api.endpoint.EndpointVersion;
+import org.apache.flink.table.gateway.api.session.SessionEnvironment;
+import org.apache.flink.table.gateway.service.SqlGatewayServiceImpl;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.io.TempDir;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.HashMap;
+import java.util.Map;
+
 /** IT case for materialized table in Flink 2.3. */
-public class Flink23MaterializedTableITCase extends MaterializedTableITCase {}
+public class Flink23MaterializedTableITCase extends MaterializedTableITCase {
+
+    /**
+     * Flink 2.3 introduces {@link ExecutionConfigOptions#TABLE_EXEC_SINK_REQUIRE_ON_CONFLICT}
+     * ({@code table.exec.sink.require-on-conflict}), defaulting to {@code true}. In {@code
+     * FlinkChangelogModeInferenceProgram} this triggers a "upsert key differs from primary key"
+     * ValidationException for the Materialized Table continuous-refresh job before the
+     * partial-update handling in {@code FlinkTableSink#getSinkRuntimeProvider} runs, leaving the
+     * refresh job in FAILED state. {@code waitUntilAllTasksAreRunning} (called from {@link
+     * MaterializedTableITCase#testCreateMaterializedTableInContinuousMode()}) then hangs until the
+     * JUnit timeout because Flink 2.3's {@code CommonTestUtils.waitUntilCondition(supplier)} has no
+     * overall timeout — it only retries with a 100 ms sleep between polls.
+     *
+     * <p>Restore the pre-2.3 behaviour by disabling the option in the SQL Gateway session so the
+     * refresh job can be scheduled and reach RUNNING.
+     */
+    @BeforeAll
+    static void setUp(@TempDir Path temporaryFolder) throws Exception {
+        if (service == null) {
+            service = (SqlGatewayServiceImpl) SQL_GATEWAY_SERVICE_EXTENSION.getService();
+        }
+        Path fileCatalogStore = temporaryFolder.resolve(FILE_CATALOG_STORE);
+        if (!Files.exists(fileCatalogStore)) {
+            Files.createDirectory(fileCatalogStore);
+        }
+        Map<String, String> sessionConfig = new HashMap<>();
+        sessionConfig.put(CommonCatalogOptions.TABLE_CATALOG_STORE_KIND.key(), "file");
+        sessionConfig.put("table.catalog-store.file.path", fileCatalogStore.toString());
+        sessionConfig.put(
+                ExecutionConfigOptions.TABLE_EXEC_SINK_REQUIRE_ON_CONFLICT.key(), "false");
+        defaultSessionEnvironment =
+                SessionEnvironment.newBuilder()
+                        .addSessionConfig(sessionConfig)
+                        .setSessionEndpointVersion(new EndpointVersion() {})
+                        .build();
+    }
+}

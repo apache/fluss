@@ -84,7 +84,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 /** Test the support of Materialized Table. */
 public abstract class MaterializedTableITCase {
 
-    private static final String FILE_CATALOG_STORE = "file_store";
+    protected static final String FILE_CATALOG_STORE = "file_store";
 
     static Configuration initClusterConf() {
         Configuration clusterConf = new Configuration();
@@ -129,7 +129,7 @@ public abstract class MaterializedTableITCase {
             new SqlGatewayRestEndpointExtension(SQL_GATEWAY_SERVICE_EXTENSION::getService);
 
     protected static SqlGatewayServiceImpl service;
-    private static SessionEnvironment defaultSessionEnvironment;
+    protected static SessionEnvironment defaultSessionEnvironment;
 
     static final String CATALOG_NAME = "testcatalog";
     static final String DEFAULT_DB = FlinkCatalogOptions.DEFAULT_DATABASE.defaultValue();
