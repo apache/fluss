@@ -55,6 +55,14 @@ import static org.apache.flink.table.api.DataTypes.VARBINARY;
 import static org.apache.flink.table.api.DataTypes.VARCHAR;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_KEY;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_NUMBER;
+import static org.apache.fluss.flink.FlinkConnectorOptions.MATERIALIZED_TABLE_DEFINITION_QUERY;
+import static org.apache.fluss.flink.FlinkConnectorOptions.MATERIALIZED_TABLE_EXPANDED_QUERY;
+import static org.apache.fluss.flink.FlinkConnectorOptions.MATERIALIZED_TABLE_INTERVAL_FRESHNESS;
+import static org.apache.fluss.flink.FlinkConnectorOptions.MATERIALIZED_TABLE_INTERVAL_FRESHNESS_TIME_UNIT;
+import static org.apache.fluss.flink.FlinkConnectorOptions.MATERIALIZED_TABLE_LOGICAL_REFRESH_MODE;
+import static org.apache.fluss.flink.FlinkConnectorOptions.MATERIALIZED_TABLE_ORIGINAL_QUERY;
+import static org.apache.fluss.flink.FlinkConnectorOptions.MATERIALIZED_TABLE_REFRESH_MODE;
+import static org.apache.fluss.flink.FlinkConnectorOptions.MATERIALIZED_TABLE_REFRESH_STATUS;
 import static org.apache.fluss.flink.utils.CatalogTableTestUtils.addOptions;
 import static org.apache.fluss.flink.utils.CatalogTableTestUtils.checkEqualsIgnoreSchema;
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
@@ -527,6 +535,142 @@ public class FlinkConversionsTest {
 
         // Verify aggregation functions are preserved
         assertThat(convertedFlinkTable.getOptions()).containsAllEntriesOf(options);
+    }
+
+    /**
+     * Verifies that {@link FlinkConversions#toFlinkTable} reads the definition-, original- and
+     * expanded-query from their own materialized-table option keys. Prior to adapting to Flink 2.3
+     * the deserialization re-used {@code definitionQuery} for both the original and expanded query.
+     * The test asserts the three queries are read independently and stripped from the resulting
+     * flink table's {@code getOptions()} (consumed by the materialized-table prefix).
+     *
+     * <p>This test runs against the {@code fluss-flink-common} test classpath, where the {@code
+     * CatalogMaterializedTableAdapter} for Flink 1.20/2.2 treats original/expanded as no-ops, so
+     * the assertion deliberately targets only what the common adapter exposes: the consumed keys
+     * are absent from {@code getOptions()} and the {@code definitionQuery} matches the input.
+     * Verifying distinct original/expanded values survive a roundtrip is left to the Flink 2.3
+     * module where the adapter actually preserves those fields.
+     */
+    @Test
+    void testMaterializedTableReadsSeparateQueriesFromCustomProperties() {
+        String definitionQuery = "SELECT order_id FROM t";
+        String originalQuery = "select order_id from t";
+        String expandedQuery = "SELECT `t`.`order_id` FROM `mydb`.`t` AS `t`";
+
+        Map<String, String> customProperties = new HashMap<>();
+        customProperties.put(MATERIALIZED_TABLE_DEFINITION_QUERY.key(), definitionQuery);
+        customProperties.put(MATERIALIZED_TABLE_ORIGINAL_QUERY.key(), originalQuery);
+        customProperties.put(MATERIALIZED_TABLE_EXPANDED_QUERY.key(), expandedQuery);
+        customProperties.put(MATERIALIZED_TABLE_INTERVAL_FRESHNESS.key(), "5");
+        customProperties.put(
+                MATERIALIZED_TABLE_INTERVAL_FRESHNESS_TIME_UNIT.key(),
+                IntervalFreshness.TimeUnit.SECOND.name());
+        customProperties.put(
+                MATERIALIZED_TABLE_LOGICAL_REFRESH_MODE.key(),
+                CatalogMaterializedTable.LogicalRefreshMode.CONTINUOUS.name());
+        customProperties.put(
+                MATERIALIZED_TABLE_REFRESH_MODE.key(),
+                CatalogMaterializedTable.RefreshMode.CONTINUOUS.name());
+        customProperties.put(
+                MATERIALIZED_TABLE_REFRESH_STATUS.key(),
+                CatalogMaterializedTable.RefreshStatus.INITIALIZING.name());
+
+        org.apache.fluss.metadata.Schema flussSchema =
+                org.apache.fluss.metadata.Schema.newBuilder()
+                        .column("order_id", org.apache.fluss.types.DataTypes.STRING())
+                        .build();
+        TableDescriptor flussDescriptor =
+                TableDescriptor.builder()
+                        .schema(flussSchema)
+                        .distributedBy(1, Collections.singletonList("order_id"))
+                        .customProperties(customProperties)
+                        .build();
+
+        TablePath tablePath = TablePath.of("db", "table");
+        long currentMillis = System.currentTimeMillis();
+        TableInfo tableInfo =
+                TableInfo.of(
+                        tablePath,
+                        1L,
+                        1,
+                        flussDescriptor,
+                        DEFAULT_REMOTE_DATA_DIR,
+                        currentMillis,
+                        currentMillis);
+
+        CatalogMaterializedTable flinkTable =
+                (CatalogMaterializedTable) FlinkConversions.toFlinkTable(tableInfo);
+
+        // The definitionQuery is exposed by flink's CatalogMaterializedTable on every supported
+        // version, so it is the only query value we can directly assert on from common tests.
+        assertThat(flinkTable.getDefinitionQuery()).isEqualTo(definitionQuery);
+
+        // All three materialized-table query options are consumed during deserialization
+        // (excluded by the materialized-table prefix), so they must not leak into getOptions().
+        assertThat(flinkTable.getOptions())
+                .doesNotContainKey(MATERIALIZED_TABLE_DEFINITION_QUERY.key())
+                .doesNotContainKey(MATERIALIZED_TABLE_ORIGINAL_QUERY.key())
+                .doesNotContainKey(MATERIALIZED_TABLE_EXPANDED_QUERY.key());
+    }
+
+    /**
+     * Verifies that {@link FlinkConversions#toFlussTable} writes the definition-query key (along
+     * with the rest of the materialized-table configuration) into {@code
+     * TableDescriptor.getCustomProperties()}, while keeping original/expanded-query out of the map
+     * when the active adapter does not expose them. Under the {@code fluss-flink-common} test
+     * classpath {@code CatalogMaterializedTableAdapter#getOriginalQuery} and {@code
+     * getExpandedQuery} return {@code null} for Flink 1.20/2.2, so those keys must be omitted
+     * entirely (a null value would otherwise break downstream readers that route customProperties
+     * through {@code Configuration.setString}). On Flink 2.3+ both keys would appear with their
+     * real values — that branch is covered by the dedicated test in the Flink 2.3 module.
+     */
+    @Test
+    void testMaterializedTableSerializesSeparateQueriesIntoCustomProperties() {
+        String definitionQuery = "SELECT order_id, orig_ts FROM t";
+
+        ResolvedSchema resolvedSchema =
+                new ResolvedSchema(
+                        Arrays.asList(
+                                Column.physical(
+                                        "order_id",
+                                        org.apache.flink.table.api.DataTypes.STRING().notNull()),
+                                Column.physical(
+                                        "orig_ts",
+                                        org.apache.flink.table.api.DataTypes.TIMESTAMP())),
+                        Collections.emptyList(),
+                        UniqueConstraint.primaryKey(
+                                "PK_order_id", Collections.singletonList("order_id")));
+        Map<String, String> flinkOptions = new HashMap<>();
+        flinkOptions.put("k1", "v1");
+
+        CatalogMaterializedTable flinkMaterializedTable =
+                CatalogMaterializedTable.newBuilder()
+                        .schema(Schema.newBuilder().fromResolvedSchema(resolvedSchema).build())
+                        .comment("test comment")
+                        .options(flinkOptions)
+                        .definitionQuery(definitionQuery)
+                        .freshness(IntervalFreshness.of("5", IntervalFreshness.TimeUnit.SECOND))
+                        .logicalRefreshMode(CatalogMaterializedTable.LogicalRefreshMode.CONTINUOUS)
+                        .refreshMode(CatalogMaterializedTable.RefreshMode.CONTINUOUS)
+                        .refreshStatus(CatalogMaterializedTable.RefreshStatus.INITIALIZING)
+                        .build();
+
+        TableDescriptor flussTable =
+                FlinkConversions.toFlussTable(
+                        new ResolvedCatalogMaterializedTable(
+                                flinkMaterializedTable, resolvedSchema));
+
+        Map<String, String> customProperties = flussTable.getCustomProperties();
+
+        // definitionQuery is supported by every Flink version and is always persisted verbatim.
+        assertThat(customProperties)
+                .containsEntry(MATERIALIZED_TABLE_DEFINITION_QUERY.key(), definitionQuery);
+        // On Flink 1.20/2.2 the adapter returns null for original/expanded; the serialization
+        // must omit them entirely instead of writing a null entry, otherwise downstream readers
+        // (e.g. Configuration.setString) blow up with a NullPointerException.
+        assertThat(customProperties)
+                .doesNotContainKey(MATERIALIZED_TABLE_ORIGINAL_QUERY.key())
+                .doesNotContainKey(MATERIALIZED_TABLE_EXPANDED_QUERY.key());
     }
 
     /** Test refresh handler for testing purpose. */

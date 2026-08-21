@@ -248,6 +248,18 @@ public class FlinkConnectorOptions {
                     .noDefaultValue()
                     .withDescription(
                             "The definition query text of materialized table, text is expanded in contrast to the original SQL.");
+    public static final ConfigOption<String> MATERIALIZED_TABLE_ORIGINAL_QUERY =
+            ConfigOptions.key("materialized-table.original-query")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Original text of the materialized table definition that preserves the original formatting.");
+    public static final ConfigOption<String> MATERIALIZED_TABLE_EXPANDED_QUERY =
+            ConfigOptions.key("materialized-table.expanded-query")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Expanded text of the original materialized table definition with resolved identifiers.");
     public static final ConfigOption<String> MATERIALIZED_TABLE_INTERVAL_FRESHNESS =
             ConfigOptions.key("materialized-table.interval-freshness")
                     .stringType()

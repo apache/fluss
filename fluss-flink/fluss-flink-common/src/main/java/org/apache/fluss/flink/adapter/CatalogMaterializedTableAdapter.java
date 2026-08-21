@@ -120,4 +120,12 @@ public class CatalogMaterializedTableAdapter {
     public CatalogMaterializedTable build() {
         return this.builder.build();
     }
+
+    public static String getExpandedQuery(CatalogMaterializedTable mt) {
+        return null;
+    }
+
+    public static String getOriginalQuery(CatalogMaterializedTable mt) {
+        return null;
+    }
 }

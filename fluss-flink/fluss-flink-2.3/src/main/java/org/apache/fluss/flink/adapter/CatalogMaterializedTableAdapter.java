@@ -124,4 +124,12 @@ public class CatalogMaterializedTableAdapter {
     public CatalogMaterializedTable build() {
         return this.builder.build();
     }
+
+    public static String getExpandedQuery(CatalogMaterializedTable mt) {
+        return mt.getExpandedQuery();
+    }
+
+    public static String getOriginalQuery(CatalogMaterializedTable mt) {
+        return mt.getOriginalQuery();
+    }
 }
