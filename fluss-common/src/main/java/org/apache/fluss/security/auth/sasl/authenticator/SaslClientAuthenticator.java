@@ -33,6 +33,7 @@ import javax.security.sasl.SaslClient;
 
 import java.util.Map;
 
+import static org.apache.fluss.config.ConfigOptions.CLIENT_SASL_AUTHORIZATION_ID;
 import static org.apache.fluss.config.ConfigOptions.CLIENT_SASL_JAAS_CONFIG;
 import static org.apache.fluss.config.ConfigOptions.CLIENT_SASL_JAAS_PASSWORD;
 import static org.apache.fluss.config.ConfigOptions.CLIENT_SASL_JAAS_USERNAME;
@@ -46,6 +47,7 @@ public class SaslClientAuthenticator implements ClientAuthenticator {
     private final String mechanism;
     private final Map<String, String> pros;
     private final String jaasConfig;
+    @Nullable private final String authorizationId;
 
     private SaslClient saslClient;
     private LoginManager loginManager;
@@ -74,6 +76,7 @@ public class SaslClientAuthenticator implements ClientAuthenticator {
             }
         }
         this.jaasConfig = jaasConfigStr;
+        this.authorizationId = configuration.get(CLIENT_SASL_AUTHORIZATION_ID);
         this.pros = configuration.toMap();
     }
 
@@ -147,7 +150,8 @@ public class SaslClientAuthenticator implements ClientAuthenticator {
         }
 
         try {
-            saslClient = createSaslClient(mechanism, hostAddress, pros, loginManager);
+            saslClient =
+                    createSaslClient(mechanism, authorizationId, hostAddress, pros, loginManager);
         } catch (Exception e) {
             throw new AuthenticationException("Failed to create SASL client", e);
         }

@@ -44,6 +44,9 @@ public class PlainSaslServerTest {
     private static final String PASSWORD_A = "passwordA";
     private static final String USER_B = "userB";
     private static final String PASSWORD_B = "passwordB";
+    private static final String USER_C = "userC";
+    private static final String PASSWORD_C = "passwordC";
+    private static final String USER_D = "userD";
 
     private SaslServer saslServer;
     private LoginManager loginManager;
@@ -54,6 +57,9 @@ public class PlainSaslServerTest {
         Map<String, String> options = new HashMap<>();
         options.put("user_" + USER_A, PASSWORD_A);
         options.put("user_" + USER_B, PASSWORD_B);
+        options.put("user_" + USER_C, PASSWORD_C);
+        options.put("impersonate_" + USER_A, "*");
+        options.put("impersonate_" + USER_B, USER_C + ", " + USER_D);
         jaasConfig.addEntry("jaasContext", PlainLoginModule.class.getName(), options);
         JaasContext jaasContext =
                 new JaasContext("jaasContext", JaasContext.Type.SERVER, jaasConfig, null);
@@ -75,22 +81,53 @@ public class PlainSaslServerTest {
     @Test
     public void testNoAuthorizationIdSpecified() throws SaslException {
         assertThat(saslServer.evaluateResponse(saslMessage("", USER_A, PASSWORD_A))).isEmpty();
+        assertThat(saslServer.getAuthorizationID()).isEqualTo(USER_A);
         assertThat(saslServer.evaluateResponse(saslMessage("", USER_B, PASSWORD_B))).isEmpty();
+        assertThat(saslServer.getAuthorizationID()).isEqualTo(USER_B);
     }
 
     @Test
     public void testAuthorizationIdEqualsAuthenticationId() throws SaslException {
         assertThat(saslServer.evaluateResponse(saslMessage(USER_A, USER_A, PASSWORD_A))).isEmpty();
+        assertThat(saslServer.getAuthorizationID()).isEqualTo(USER_A);
         assertThat(saslServer.evaluateResponse(saslMessage(USER_B, USER_B, PASSWORD_B))).isEmpty();
+        assertThat(saslServer.getAuthorizationID()).isEqualTo(USER_B);
     }
 
     @Test
-    public void testAuthorizationIdNotEqualsAuthenticationId() {
+    public void testImpersonationRejected() {
+        // userC has no impersonate_userC option configured
+        assertThatThrownBy(
+                        () -> saslServer.evaluateResponse(saslMessage(USER_A, USER_C, PASSWORD_C)))
+                .isExactlyInstanceOf(AuthenticationException.class)
+                .hasMessage(
+                        "Authentication failed: user 'userC' is not authorized to impersonate 'userA'");
+
+        // userA is not in userB's allowlist
         assertThatThrownBy(
                         () -> saslServer.evaluateResponse(saslMessage(USER_A, USER_B, PASSWORD_B)))
                 .isExactlyInstanceOf(AuthenticationException.class)
                 .hasMessage(
-                        "Authentication failed: Client requested an authorization id that is different from username");
+                        "Authentication failed: user 'userB' is not authorized to impersonate 'userA'");
+
+        // authentication is always checked before impersonation authorization
+        assertThatThrownBy(
+                        () -> saslServer.evaluateResponse(saslMessage(USER_C, USER_A, PASSWORD_B)))
+                .isExactlyInstanceOf(AuthenticationException.class)
+                .hasMessage("Authentication failed: Invalid username or password");
+    }
+
+    @Test
+    public void testImpersonationAllowed() throws SaslException {
+        // Wildcard allows any authorization id.
+        assertThat(saslServer.evaluateResponse(saslMessage(USER_C, USER_A, PASSWORD_A))).isEmpty();
+        assertThat(saslServer.getAuthorizationID()).isEqualTo(USER_C);
+
+        // Allowlist entries are trimmed and need not have a user_<name> option.
+        assertThat(saslServer.evaluateResponse(saslMessage(USER_C, USER_B, PASSWORD_B))).isEmpty();
+        assertThat(saslServer.getAuthorizationID()).isEqualTo(USER_C);
+        assertThat(saslServer.evaluateResponse(saslMessage(USER_D, USER_B, PASSWORD_B))).isEmpty();
+        assertThat(saslServer.getAuthorizationID()).isEqualTo(USER_D);
     }
 
     @Test
