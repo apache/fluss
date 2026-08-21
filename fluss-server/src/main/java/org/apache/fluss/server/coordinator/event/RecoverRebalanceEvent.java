@@ -17,23 +17,22 @@
 
 package org.apache.fluss.server.coordinator.event;
 
-import org.apache.fluss.server.coordinator.rebalance.RebalanceExecutionKey;
+import org.apache.fluss.server.zk.data.RebalanceTask;
 
-/** An event fired when a rebalance task exceeds the timeout without completing. */
-public class RebalanceTaskTimeoutEvent implements CoordinatorEvent {
+/** An event that recovers and reconciles a persisted rebalance task. */
+public final class RecoverRebalanceEvent implements CoordinatorEvent {
+    private final RebalanceTask rebalanceTask;
 
-    private final RebalanceExecutionKey executionKey;
-
-    public RebalanceTaskTimeoutEvent(RebalanceExecutionKey executionKey) {
-        this.executionKey = executionKey;
+    public RecoverRebalanceEvent(RebalanceTask rebalanceTask) {
+        this.rebalanceTask = rebalanceTask;
     }
 
-    public RebalanceExecutionKey getExecutionKey() {
-        return executionKey;
+    public RebalanceTask getRebalanceTask() {
+        return rebalanceTask;
     }
 
     @Override
     public String toString() {
-        return "RebalanceTaskTimeoutEvent{executionKey=" + executionKey + "}";
+        return "RecoverRebalanceEvent{rebalanceTask=" + rebalanceTask + "}";
     }
 }

@@ -17,45 +17,21 @@
 
 package org.apache.fluss.cluster.rebalance;
 
-import org.apache.fluss.annotation.PublicEvolving;
+import org.junit.jupiter.api.Test;
 
-import java.util.Arrays;
-import java.util.HashSet;
-import java.util.Set;
+import static org.apache.fluss.cluster.rebalance.RebalanceStatus.CANCELED;
+import static org.apache.fluss.cluster.rebalance.RebalanceStatus.COMPLETED;
+import static org.apache.fluss.cluster.rebalance.RebalanceStatus.FAILED;
+import static org.apache.fluss.cluster.rebalance.RebalanceStatus.FINAL_STATUSES;
+import static org.apache.fluss.cluster.rebalance.RebalanceStatus.TIMEOUT;
+import static org.assertj.core.api.Assertions.assertThat;
 
-/**
- * Rebalance status.
- *
- * @since 0.9
- */
-@PublicEvolving
-public enum RebalanceStatus {
-    NOT_STARTED(0),
-    REBALANCING(1),
-    FAILED(2),
-    COMPLETED(3),
-    CANCELED(4),
-    TIMEOUT(5);
+/** Test for {@link RebalanceStatus}. */
+class RebalanceStatusTest {
 
-    public static final Set<RebalanceStatus> FINAL_STATUSES =
-            new HashSet<>(Arrays.asList(COMPLETED, CANCELED, FAILED));
-
-    private final int code;
-
-    RebalanceStatus(int code) {
-        this.code = code;
-    }
-
-    public int getCode() {
-        return code;
-    }
-
-    public static RebalanceStatus of(int code) {
-        for (RebalanceStatus status : RebalanceStatus.values()) {
-            if (status.code == code) {
-                return status;
-            }
-        }
-        return null;
+    @Test
+    void testTimeoutIsRecoverableRatherThanFinal() {
+        assertThat(FINAL_STATUSES).containsExactlyInAnyOrder(COMPLETED, CANCELED, FAILED);
+        assertThat(FINAL_STATUSES).doesNotContain(TIMEOUT);
     }
 }
