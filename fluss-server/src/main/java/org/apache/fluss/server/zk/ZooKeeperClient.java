@@ -180,6 +180,7 @@ public class ZooKeeperClient implements AutoCloseable {
     private static final Logger LOG = LoggerFactory.getLogger(ZooKeeperClient.class);
     public static final int UNKNOWN_VERSION = -2;
     private static final int MAX_BATCH_SIZE = 1024;
+    @VisibleForTesting static final int TABLE_BUCKET_SNAPSHOT_READ_BATCH_SIZE = 32;
     private static final int DEFAULT_SCHEMA_ID = 1;
 
     private final CuratorFrameworkWithUnhandledErrorListener curatorFrameworkWrapper;
@@ -1202,6 +1203,104 @@ public class ZooKeeperClient implements AutoCloseable {
         } else {
             return Optional.empty();
         }
+    }
+
+    /**
+     * Get the latest snapshots for the given table buckets.
+     *
+     * <p>The requests are divided into small batches, then pipelined and bounded by {@link
+     * ConfigOptions#ZOOKEEPER_MAX_INFLIGHT_REQUESTS}. Unlike {@link
+     * #getTableLatestBucketSnapshot(long)}, this method only accesses the requested buckets and
+     * does not load the table or partition assignment first.
+     *
+     * <p>A returned empty optional means that the bucket was successfully read and had no
+     * snapshots. A missing map entry means that the bucket could not be resolved, for example
+     * because its latest snapshot was replaced between listing and reading. Callers should retry
+     * missing buckets.
+     */
+    public Map<TableBucket, Optional<BucketSnapshot>> getTableBucketsLatestSnapshot(
+            Collection<TableBucket> tableBuckets) throws Exception {
+        Map<TableBucket, Optional<BucketSnapshot>> snapshots = new HashMap<>();
+        List<TableBucket> batch = new ArrayList<>(TABLE_BUCKET_SNAPSHOT_READ_BATCH_SIZE);
+        for (TableBucket tableBucket : tableBuckets) {
+            batch.add(tableBucket);
+            if (batch.size() == TABLE_BUCKET_SNAPSHOT_READ_BATCH_SIZE) {
+                snapshots.putAll(getTableBucketsLatestSnapshotBatch(batch));
+                batch.clear();
+            }
+        }
+        if (!batch.isEmpty()) {
+            snapshots.putAll(getTableBucketsLatestSnapshotBatch(batch));
+        }
+        return snapshots;
+    }
+
+    private Map<TableBucket, Optional<BucketSnapshot>> getTableBucketsLatestSnapshotBatch(
+            Collection<TableBucket> tableBuckets) throws Exception {
+        Map<TableBucket, Optional<BucketSnapshot>> snapshots = new HashMap<>();
+        Map<String, TableBucket> snapshotPathToTableBucket = new HashMap<>();
+        for (TableBucket tableBucket : tableBuckets) {
+            snapshotPathToTableBucket.put(BucketSnapshotsZNode.path(tableBucket), tableBucket);
+        }
+
+        List<ZkGetChildrenResponse> childrenResponses =
+                getChildrenInBackground(snapshotPathToTableBucket.keySet());
+        Map<String, TableBucket> snapshotDataPathToTableBucket = new HashMap<>();
+        for (ZkGetChildrenResponse response : childrenResponses) {
+            TableBucket tableBucket =
+                    checkNotNull(snapshotPathToTableBucket.get(response.getPath()));
+            if (response.getResultCode() == KeeperException.Code.NONODE) {
+                snapshots.put(tableBucket, Optional.empty());
+                continue;
+            }
+            if (response.hasError()) {
+                LOG.debug(
+                        "Failed to list snapshots for table bucket {}: {}",
+                        tableBucket,
+                        response.getErrorMessage());
+                continue;
+            }
+
+            try {
+                OptionalLong latestSnapshotId =
+                        response.getChildren().stream().mapToLong(Long::parseLong).max();
+                if (latestSnapshotId.isPresent()) {
+                    snapshotDataPathToTableBucket.put(
+                            BucketSnapshotIdZNode.path(tableBucket, latestSnapshotId.getAsLong()),
+                            tableBucket);
+                } else {
+                    snapshots.put(tableBucket, Optional.empty());
+                }
+            } catch (RuntimeException e) {
+                LOG.warn("Failed to parse snapshots for table bucket {}.", tableBucket, e);
+            }
+        }
+
+        List<ZkGetDataResponse> dataResponses =
+                getDataInBackground(snapshotDataPathToTableBucket.keySet());
+        for (ZkGetDataResponse response : dataResponses) {
+            TableBucket tableBucket =
+                    checkNotNull(snapshotDataPathToTableBucket.get(response.getPath()));
+            if (response.getResultCode() == KeeperException.Code.NONODE) {
+                // The snapshot may be deleted between listing the children and reading its data.
+                continue;
+            }
+            if (response.hasError()) {
+                LOG.debug(
+                        "Failed to read the latest snapshot for table bucket {}: {}",
+                        tableBucket,
+                        response.getErrorMessage());
+                continue;
+            }
+
+            try {
+                snapshots.put(
+                        tableBucket, Optional.of(BucketSnapshotIdZNode.decode(response.getData())));
+            } catch (RuntimeException e) {
+                LOG.warn("Failed to decode snapshot for table bucket {}.", tableBucket, e);
+            }
+        }
+        return snapshots;
     }
 
     public List<Tuple2<BucketSnapshot, Long>> getTableBucketAllSnapshotAndIds(

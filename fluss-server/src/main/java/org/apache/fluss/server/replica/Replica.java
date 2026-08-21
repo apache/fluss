@@ -210,6 +210,11 @@ public final class Replica {
     private volatile int coordinatorEpoch = CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
     private volatile boolean isStandbyReplica = false;
 
+    // The follower restores this state from the latest committed KV snapshot on startup. Leaders
+    // restore it while initializing the KV tablet.
+    private volatile boolean minRetainOffsetRestored;
+    private final AtomicBoolean minRetainOffsetRestoreInProgress = new AtomicBoolean(false);
+
     // null if table without pk or haven't become leader
     private volatile @Nullable KvTablet kvTablet;
     private volatile @Nullable CloseableRegistry closeableRegistryForKv;
@@ -272,6 +277,7 @@ public final class Replica {
                         tableInfo.getSchema());
         this.tableInfo = tableInfo;
         this.tableConfig = tableInfo.getTableConfig();
+        this.minRetainOffsetRestored = !isKvTable();
         this.logFormat = tableConfig.getLogFormat();
         this.arrowCompressionInfo = tableConfig.getArrowCompressionInfo();
         this.snapshotContext = snapshotContext;
@@ -859,6 +865,7 @@ public final class Replica {
             }
 
             logTablet.updateMinRetainOffset(restoreStartOffset);
+            minRetainOffsetRestored = true;
             recoverKvTablet(restoreStartOffset, rowCount, autoIncIDRange);
         } catch (Exception e) {
             throw new KvStorageException(
@@ -945,6 +952,25 @@ public final class Replica {
                     e);
         }
         return Optional.empty();
+    }
+
+    boolean tryStartMinRetainOffsetRestore() {
+        return !minRetainOffsetRestored
+                && minRetainOffsetRestoreInProgress.compareAndSet(false, true);
+    }
+
+    boolean isMinRetainOffsetRestored() {
+        return minRetainOffsetRestored;
+    }
+
+    void completeMinRetainOffsetRestore(Optional<Long> snapshotOffset) {
+        snapshotOffset.ifPresent(logTablet::updateMinRetainOffset);
+        minRetainOffsetRestored = true;
+        minRetainOffsetRestoreInProgress.set(false);
+    }
+
+    void cancelMinRetainOffsetRestore() {
+        minRetainOffsetRestoreInProgress.set(false);
     }
 
     private void recoverKvTablet(
