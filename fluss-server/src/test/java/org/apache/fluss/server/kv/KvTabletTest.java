@@ -90,6 +90,8 @@ import org.apache.fluss.utils.concurrent.FlussScheduler;
 
 import io.github.fluss_contrib.rocksdb.FlushOptions;
 import io.github.fluss_contrib.rocksdb.RocksDBException;
+import io.github.fluss_contrib.rocksdb.Statistics;
+import io.github.fluss_contrib.rocksdb.TickerType;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -702,6 +704,8 @@ class KvTabletTest {
 
         checkEqual(actualLogRecords, expectedLogs, rowType);
 
+        flushAndWait(kvTablet, Long.MAX_VALUE);
+
         // create one kv batch with only writing second one column
         KvRecordBatch kvRecordBatch2 =
                 kvRecordBatchFactory.ofRecords(
@@ -904,6 +908,101 @@ class KvTabletTest {
                                         new Object[] {1, "v1", null},
                                         new Object[] {1, "v1", "c1"})));
         checkEqual(actualLogRecords, expectedLogs, rowType);
+    }
+
+    @Test
+    void testBatchOldValuesPreserveOrderedChangelogAndBufferedTombstones() throws Exception {
+        initLogTabletAndKvTablet(DATA1_SCHEMA_PK, new HashMap<>());
+        kvTablet.putAsLeader(
+                kvRecordBatchFactory.ofRecords(
+                        kvRecordFactory.ofRecord("k1", new Object[] {1, "v1"}),
+                        kvRecordFactory.ofRecord("k2", new Object[] {2, "v2"})),
+                null);
+        flushAndWait(kvTablet, Long.MAX_VALUE);
+        kvTablet.putAsLeader(
+                kvRecordBatchFactory.ofRecords(
+                        kvRecordFactory.ofRecord("k2", null),
+                        kvRecordFactory.ofRecord("k3", new Object[] {3, "v3"})),
+                null);
+        long offset = logTablet.localLogEndOffset();
+        Statistics statistics = kvTablet.getRocksDBKv().getStatistics();
+        long calls = statistics.getTickerCount(TickerType.NUMBER_MULTIGET_CALLS);
+        long keys = statistics.getTickerCount(TickerType.NUMBER_MULTIGET_KEYS_READ);
+        kvTablet.putAsLeader(
+                kvRecordBatchFactory.ofRecords(
+                        kvRecordFactory.ofRecord("k1", new Object[] {1, "v11"}),
+                        kvRecordFactory.ofRecord("k1", null),
+                        kvRecordFactory.ofRecord("k1", new Object[] {1, "v12"}),
+                        kvRecordFactory.ofRecord("missing", null),
+                        kvRecordFactory.ofRecord("missing", null),
+                        kvRecordFactory.ofRecord("k2", new Object[] {2, "v22"}),
+                        kvRecordFactory.ofRecord("k3", new Object[] {3, "v33"})),
+                null);
+        assertThat(statistics.getTickerCount(TickerType.NUMBER_MULTIGET_CALLS) - calls)
+                .isEqualTo(1);
+        assertThat(statistics.getTickerCount(TickerType.NUMBER_MULTIGET_KEYS_READ) - keys)
+                .isEqualTo(2);
+        checkEqual(
+                readLogRecords(offset),
+                Collections.singletonList(
+                        logRecords(
+                                offset,
+                                Arrays.asList(
+                                        ChangeType.UPDATE_BEFORE,
+                                        ChangeType.UPDATE_AFTER,
+                                        ChangeType.DELETE,
+                                        ChangeType.INSERT,
+                                        ChangeType.INSERT,
+                                        ChangeType.UPDATE_BEFORE,
+                                        ChangeType.UPDATE_AFTER),
+                                Arrays.asList(
+                                        new Object[] {1, "v1"},
+                                        new Object[] {1, "v11"},
+                                        new Object[] {1, "v11"},
+                                        new Object[] {1, "v12"},
+                                        new Object[] {2, "v22"},
+                                        new Object[] {3, "v3"},
+                                        new Object[] {3, "v33"}))));
+    }
+
+    @Test
+    void testWalBatchStartsPrefetchAfterStreamingUpsert() throws Exception {
+        Map<String, String> config = new HashMap<>();
+        config.put("table.changelog.image", "WAL");
+        initLogTabletAndKvTablet(DATA1_SCHEMA_PK, config);
+        kvTablet.putAsLeader(
+                kvRecordBatchFactory.ofRecords(
+                        kvRecordFactory.ofRecord("k1", new Object[] {1, "v1"}),
+                        kvRecordFactory.ofRecord("k2", new Object[] {2, "v2"})),
+                null);
+        flushAndWait(kvTablet, Long.MAX_VALUE);
+        long offset = logTablet.localLogEndOffset();
+        Statistics statistics = kvTablet.getRocksDBKv().getStatistics();
+        long calls = statistics.getTickerCount(TickerType.NUMBER_MULTIGET_CALLS);
+        long keys = statistics.getTickerCount(TickerType.NUMBER_MULTIGET_KEYS_READ);
+        kvTablet.putAsLeader(
+                kvRecordBatchFactory.ofRecords(
+                        kvRecordFactory.ofRecord("k1", new Object[] {1, "new"}),
+                        kvRecordFactory.ofRecord("k1", null),
+                        kvRecordFactory.ofRecord("k2", null)),
+                null);
+        assertThat(statistics.getTickerCount(TickerType.NUMBER_MULTIGET_CALLS) - calls)
+                .isEqualTo(1);
+        assertThat(statistics.getTickerCount(TickerType.NUMBER_MULTIGET_KEYS_READ) - keys)
+                .isEqualTo(1);
+        checkEqual(
+                readLogRecords(offset),
+                Collections.singletonList(
+                        logRecords(
+                                offset,
+                                Arrays.asList(
+                                        ChangeType.UPDATE_AFTER,
+                                        ChangeType.DELETE,
+                                        ChangeType.DELETE),
+                                Arrays.asList(
+                                        new Object[] {1, "new"},
+                                        new Object[] {1, "new"},
+                                        new Object[] {2, "v2"}))));
     }
 
     @Test
@@ -1718,6 +1817,10 @@ class KvTabletTest {
         KvRecordBatch kvRecordBatch1 = kvRecordBatchFactory.ofRecords(kvData1);
         kvTablet.putAsLeader(kvRecordBatch1, null);
         long endOffset = logTablet.localLogEndOffset();
+
+        Statistics nativeStatistics = kvTablet.getRocksDBKv().getStatistics();
+        assertThat(nativeStatistics.getTickerCount(TickerType.NUMBER_MULTIGET_CALLS)).isZero();
+        assertThat(nativeStatistics.getTickerCount(TickerType.NUMBER_KEYS_READ)).isZero();
 
         // Verify inserts produce +U (optimization in WAL mode with default merge engine and full
         // row update)

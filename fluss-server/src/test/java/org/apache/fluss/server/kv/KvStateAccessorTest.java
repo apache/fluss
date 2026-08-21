@@ -31,6 +31,10 @@ import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 
 import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
+import java.util.Arrays;
+import java.util.LinkedHashSet;
+import java.util.Map;
 import java.util.function.Supplier;
 
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
@@ -38,7 +42,10 @@ import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static org.apache.fluss.testutils.DataTestUtils.compactedRow;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -100,6 +107,39 @@ class KvStateAccessorTest {
         assertThat(stateAccessor.lookupLocal(key)).isEqualTo(KvStateLookupResult.notFound());
         assertThat(stateAccessor.lookupLocal(key)).isEqualTo(KvStateLookupResult.deleted());
         assertThat(stateAccessor.lookup(key, valueDecoder, null)).isEqualTo(value);
+    }
+
+    @Test
+    void testPrefetchExcludesBufferedValuesAndDeletesAndPreservesMisses() throws Exception {
+        Key buffered = Key.of(new byte[] {2});
+        Key deleted = Key.of(new byte[] {3});
+        Key missing = Key.of(new byte[] {4});
+        byte[] stored = new byte[] {10};
+        stateAccessor.update(buffered, new byte[] {20}, 0L);
+        stateAccessor.delete(deleted, 1L);
+        when(rocksDBKv.multiGet(Arrays.asList(key.get(), missing.get())))
+                .thenReturn(Arrays.asList(stored, null));
+        Map<Key, byte[]> values =
+                stateAccessor.prefetchRocksDBValues(
+                        new LinkedHashSet<>(Arrays.asList(key, buffered, deleted, missing, key)));
+        assertThat(values).containsOnlyKeys(key, missing);
+        assertThat(values.get(key)).isSameAs(stored);
+        assertThat(values).containsEntry(missing, null);
+        verify(rocksDBKv).multiGet(Arrays.asList(key.get(), missing.get()));
+        verify(rocksDBKv).get(missing.get());
+        verify(rocksDBKv, never()).get(key.get());
+    }
+
+    @Test
+    void testPrefetchDoesNotTurnReadErrorsIntoMissingValues() throws Exception {
+        when(rocksDBKv.multiGet(Arrays.asList(key.get()))).thenReturn(Arrays.asList((byte[]) null));
+        when(rocksDBKv.get(key.get())).thenThrow(new IOException("read failed"));
+        assertThatThrownBy(
+                        () ->
+                                stateAccessor.prefetchRocksDBValues(
+                                        new LinkedHashSet<>(Arrays.asList(key))))
+                .isInstanceOf(IOException.class)
+                .hasMessage("read failed");
     }
 
     private static BinaryValue binaryValue(String value) {
