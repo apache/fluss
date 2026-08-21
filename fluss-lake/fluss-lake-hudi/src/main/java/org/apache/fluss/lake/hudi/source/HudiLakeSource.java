@@ -17,6 +17,7 @@
 
 package org.apache.fluss.lake.hudi.source;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.lake.hudi.utils.FlussToHudiExpressionPredicateConverter;
 import org.apache.fluss.lake.hudi.utils.HudiTableInfo;
@@ -26,6 +27,7 @@ import org.apache.fluss.lake.source.Planner;
 import org.apache.fluss.lake.source.RecordReader;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.predicate.Predicate;
+import org.apache.fluss.utils.ArrayUtils;
 
 import org.apache.hudi.common.model.HoodieTableType;
 import org.apache.hudi.org.apache.avro.Schema;
@@ -55,9 +57,24 @@ public class HudiLakeSource implements LakeSource<HudiSplit> {
         this.tablePath = tablePath;
     }
 
+    private HudiLakeSource(HudiLakeSource source) {
+        this.hudiConfig = new Configuration(source.hudiConfig);
+        this.tablePath = source.tablePath;
+        this.project = ArrayUtils.deepCopy(source.project);
+        this.predicates =
+                source.predicates.isEmpty()
+                        ? Collections.emptyList()
+                        : Collections.unmodifiableList(new ArrayList<>(source.predicates));
+    }
+
+    @Override
+    public HudiLakeSource copy() {
+        return new HudiLakeSource(this);
+    }
+
     @Override
     public void withProject(int[][] project) {
-        this.project = project;
+        this.project = ArrayUtils.deepCopy(project);
     }
 
     @Override
@@ -124,6 +141,11 @@ public class HudiLakeSource implements LakeSource<HudiSplit> {
     @Override
     public SimpleVersionedSerializer<HudiSplit> getSplitSerializer() {
         return new HudiSplitSerializer();
+    }
+
+    @VisibleForTesting
+    List<ExpressionPredicates.Predicate> getPredicates() {
+        return predicates;
     }
 
     private Schema getHudiSchema() {

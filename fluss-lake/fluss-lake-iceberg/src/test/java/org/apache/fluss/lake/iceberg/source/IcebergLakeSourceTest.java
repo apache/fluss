@@ -18,6 +18,7 @@
 
 package org.apache.fluss.lake.iceberg.source;
 
+import org.apache.fluss.config.Configuration;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.RecordReader;
 import org.apache.fluss.metadata.TablePath;
@@ -77,6 +78,18 @@ class IcebergLakeSourceTest extends IcebergSourceTestBase {
     }
 
     @Test
+    void testEmptyFiltersDoNotAccessCatalog() {
+        IcebergLakeSource lakeSource =
+                new IcebergLakeSource(
+                        new Configuration(), TablePath.of("missing_db", "missing_table"));
+
+        LakeSource.FilterPushDownResult result = lakeSource.withFilters(Collections.emptyList());
+
+        assertThat(result.acceptedPredicates()).isEmpty();
+        assertThat(result.remainingPredicates()).isEmpty();
+    }
+
+    @Test
     void testWithFilters() throws Exception {
         TablePath tablePath = TablePath.of("fluss", "test_filters");
         createTable(tablePath, SCHEMA, PARTITION_SPEC);
@@ -122,6 +135,7 @@ class IcebergLakeSourceTest extends IcebergSourceTestBase {
         LakeSource.FilterPushDownResult filterPushDownResult = lakeSource.withFilters(allFilters);
         assertThat(filterPushDownResult.acceptedPredicates()).isEqualTo(allFilters);
         assertThat(filterPushDownResult.remainingPredicates()).isEmpty();
+        LakeSource<IcebergSplit> copiedLakeSource = lakeSource.copy();
 
         // read data to verify the filters work
         List<IcebergSplit> icebergSplits =
@@ -159,6 +173,14 @@ class IcebergLakeSourceTest extends IcebergSourceTestBase {
         assertThat(filterPushDownResult.acceptedPredicates()).isEmpty();
         assertThat(filterPushDownResult.remainingPredicates().toString())
                 .isEqualTo(allFilters.toString());
+
+        assertThat(lakeSource.createPlanner(() -> table.currentSnapshot().snapshotId()).plan())
+                .hasSize(2);
+        assertThat(
+                        copiedLakeSource
+                                .createPlanner(() -> table.currentSnapshot().snapshotId())
+                                .plan())
+                .hasSize(1);
     }
 
     @Test
