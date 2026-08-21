@@ -37,7 +37,9 @@ public class PartitionRegistrationJsonSerde
     private static final String TABLE_ID_KEY = "table_id";
     private static final String PARTITION_ID_KEY = "partition_id";
     private static final String REMOTE_DATA_DIR_KEY = "remote_data_dir";
-    private static final int VERSION = 1;
+    private static final String FROZEN_KEY = "frozen";
+    private static final String LEGACY_FROZEN_BUCKETS_KEY = "retention_frozen_buckets";
+    private static final int VERSION = 2;
 
     @Override
     public void serialize(PartitionRegistration registration, JsonGenerator generator)
@@ -48,6 +50,9 @@ public class PartitionRegistrationJsonSerde
         generator.writeNumberField(PARTITION_ID_KEY, registration.getPartitionId());
         if (registration.getRemoteDataDir() != null) {
             generator.writeStringField(REMOTE_DATA_DIR_KEY, registration.getRemoteDataDir());
+        }
+        if (registration.isFrozen()) {
+            generator.writeBooleanField(FROZEN_KEY, true);
         }
         generator.writeEndObject();
     }
@@ -62,6 +67,10 @@ public class PartitionRegistrationJsonSerde
         if (node.has(REMOTE_DATA_DIR_KEY)) {
             remoteDataDir = node.get(REMOTE_DATA_DIR_KEY).asText();
         }
-        return new PartitionRegistration(tableId, partitionId, remoteDataDir);
+        boolean frozen =
+                (node.has(FROZEN_KEY) && node.get(FROZEN_KEY).asBoolean())
+                        || (node.has(LEGACY_FROZEN_BUCKETS_KEY)
+                                && node.get(LEGACY_FROZEN_BUCKETS_KEY).size() > 0);
+        return new PartitionRegistration(tableId, partitionId, remoteDataDir, frozen);
     }
 }

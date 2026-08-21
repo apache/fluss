@@ -375,6 +375,15 @@ message StopReplicaResponse {
   repeated PbStopReplicaRespForBucket stop_replicas_resp = 1;
 }
 
+// Freeze writes to partition bucket leaders before lake-aware retention.
+message FreezePartitionRequest {
+  repeated PbFreezePartitionReqForBucket buckets_req = 2;
+}
+
+message FreezePartitionResponse {
+  repeated PbFreezePartitionRespForBucket buckets_resp = 1;
+}
+
 // adjust isr request and response
 message AdjustIsrRequest {
   required int32 serverId = 1;
@@ -1073,6 +1082,19 @@ message PbStopReplicaRespForBucket {
   required PbTableBucket table_bucket = 1;
   optional int32 error_code = 2;
   optional string error_message = 3;
+}
+
+message PbFreezePartitionReqForBucket {
+  required PbTableBucket table_bucket = 1;
+  required int32 leader_epoch = 2;
+}
+
+message PbFreezePartitionRespForBucket {
+  required PbTableBucket table_bucket = 1;
+  optional int32 error_code = 2;
+  optional string error_message = 3;
+  optional int64 high_watermark = 4;
+  optional int64 log_end_offset = 5;
 }
 
 message PbKvSnapshot {

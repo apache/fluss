@@ -20,9 +20,12 @@ package org.apache.fluss.server.coordinator;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.exception.TabletServerNotAvailableException;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.ApiMessage;
+import org.apache.fluss.rpc.messages.FreezePartitionRequest;
+import org.apache.fluss.rpc.messages.FreezePartitionResponse;
 import org.apache.fluss.rpc.messages.NotifyKvSnapshotOffsetRequest;
 import org.apache.fluss.rpc.messages.NotifyKvSnapshotOffsetResponse;
 import org.apache.fluss.rpc.messages.NotifyLakeTableOffsetRequest;
@@ -119,6 +122,20 @@ public class CoordinatorChannelManager {
                 stopReplicaRequest,
                 TabletServerGateway::stopReplica,
                 responseConsumer);
+    }
+
+    /** Send a request to freeze partition writes on a tablet server. */
+    public CompletableFuture<FreezePartitionResponse> sendFreezePartitionRequest(
+            int receiveServerId, FreezePartitionRequest request) {
+        Optional<TabletServerGateway> gateway = getTabletServerGateway(receiveServerId);
+        if (gateway.isPresent()) {
+            return gateway.get().freezePartition(request);
+        }
+        CompletableFuture<FreezePartitionResponse> response = new CompletableFuture<>();
+        response.completeExceptionally(
+                new TabletServerNotAvailableException(
+                        "Tablet server " + receiveServerId + " is not available."));
+        return response;
     }
 
     /** Send UpdateMetadataRequest to the server and handle the response. */

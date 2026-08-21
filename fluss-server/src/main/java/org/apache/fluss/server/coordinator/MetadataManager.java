@@ -917,6 +917,23 @@ public class MetadataManager {
         }
     }
 
+    boolean dropFrozenPartition(
+            TablePath tablePath,
+            String partitionName,
+            long expectedTableId,
+            long expectedPartitionId) {
+        try {
+            return zookeeperClient.deleteFrozenPartitionIfMatches(
+                    tablePath, partitionName, expectedTableId, expectedPartitionId);
+        } catch (Exception e) {
+            throw new FlussRuntimeException(
+                    String.format(
+                            "Fail to delete frozen partition '%s' from zookeeper for table %s.",
+                            partitionName, tablePath),
+                    e);
+        }
+    }
+
     Optional<PartitionRegistration> getOptionalPartitionRegistration(
             TablePath tablePath, String partitionName) {
         try {
@@ -926,6 +943,23 @@ public class MetadataManager {
                     String.format(
                             "Fail to get partition '%s' of table %s from zookeeper.",
                             tablePath, partitionName),
+                    e);
+        }
+    }
+
+    Optional<PartitionRegistration> markPartitionFrozen(
+            TablePath tablePath,
+            String partitionName,
+            long expectedTableId,
+            long expectedPartitionId) {
+        try {
+            return zookeeperClient.markPartitionFrozen(
+                    tablePath, partitionName, expectedTableId, expectedPartitionId);
+        } catch (Exception e) {
+            throw new FlussRuntimeException(
+                    String.format(
+                            "Fail to mark partition '%s' of table %s as frozen.",
+                            partitionName, tablePath),
                     e);
         }
     }
