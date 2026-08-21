@@ -58,10 +58,14 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH_PK;
+import static org.apache.fluss.record.TestData.DATA2_TABLE_ID;
+import static org.apache.fluss.record.TestData.DATA2_TABLE_INFO;
+import static org.apache.fluss.record.TestData.DATA2_TABLE_PATH;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -96,7 +100,7 @@ public class LookupSenderTest {
                         .build();
 
         Configuration conf = new Configuration();
-        conf.set(ConfigOptions.CLIENT_LOOKUP_QUEUE_SIZE, 5);
+        conf.set(ConfigOptions.CLIENT_LOOKUP_QUEUE_SIZE, 20);
         conf.set(ConfigOptions.CLIENT_LOOKUP_MAX_BATCH_SIZE, 10);
         lookupQueue = new LookupQueue(conf);
 
@@ -234,6 +238,119 @@ public class LookupSenderTest {
         assertThat(request.getBucketsReqsCount()).isEqualTo(1);
         assertThat(request.getBucketsReqAt(0).getKeysCount()).isEqualTo(2);
         assertThat(request.getBucketsReqAt(0).hasOriginalPartitionName()).isFalse();
+    }
+
+    @Test
+    void testReadyBucketBatchesArePackedUpToMaxBatchSize() {
+        // The sender may combine ready batches from different buckets into one RPC, but the total
+        // number of lookups in an RPC must not exceed maxBatchSize (10 in setup()).
+        LookupBatch batchWithFourLookups = createLookupBatch(new TableBucket(1, 0), 4);
+        LookupBatch batchWithSixLookups = createLookupBatch(new TableBucket(1, 1), 6);
+        LookupBatch batchWithOneLookup = createLookupBatch(new TableBucket(1, 2), 1);
+
+        List<List<LookupBatch>> requestGroups =
+                lookupSender.packLookupBatches(
+                        Arrays.asList(
+                                batchWithFourLookups, batchWithSixLookups, batchWithOneLookup));
+
+        // The first two batches exactly fill one RPC. The third batch must be sent in another RPC.
+        assertThat(requestGroups).hasSize(2);
+        assertThat(requestGroups.get(0)).containsExactly(batchWithFourLookups, batchWithSixLookups);
+        assertThat(requestGroups.get(1)).containsExactly(batchWithOneLookup);
+        assertThat(totalLookupCount(requestGroups.get(0))).isEqualTo(10);
+        assertThat(totalLookupCount(requestGroups.get(1))).isEqualTo(1);
+    }
+
+    @Test
+    void testPerBucketInFlightLimitDoesNotBlockOtherBucketOnSameServer() throws Exception {
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.CLIENT_LOOKUP_QUEUE_SIZE, 10);
+        conf.set(ConfigOptions.CLIENT_LOOKUP_MAX_BATCH_SIZE, 1);
+        conf.set(ConfigOptions.CLIENT_LOOKUP_MAX_INFLIGHT_REQUESTS_PER_BUCKET, 5);
+        conf.setString(ConfigOptions.CLIENT_LOOKUP_BATCH_TIMEOUT.key(), "1ms");
+        LookupQueue limitedQueue = new LookupQueue(conf);
+
+        ConfigurableTestTabletServerGateway node1Gateway =
+                new ConfigurableTestTabletServerGateway();
+        List<LookupRequest> node1Requests = Collections.synchronizedList(new ArrayList<>());
+        List<CompletableFuture<LookupResponse>> node1Responses =
+                Collections.synchronizedList(new ArrayList<>());
+        AtomicInteger otherBucketRequestCount = new AtomicInteger();
+
+        node1Gateway.setLookupHandler(
+                request -> {
+                    if (request.getTableId() == DATA2_TABLE_ID) {
+                        otherBucketRequestCount.incrementAndGet();
+                        return createSuccessResponse(request, bytes("other-bucket"));
+                    }
+                    node1Requests.add(request);
+                    CompletableFuture<LookupResponse> response = new CompletableFuture<>();
+                    node1Responses.add(response);
+                    return response;
+                });
+
+        Map<TablePath, TableInfo> tableInfos = new HashMap<>();
+        tableInfos.put(DATA1_TABLE_PATH_PK, DATA1_TABLE_INFO_PK);
+        tableInfos.put(DATA2_TABLE_PATH, DATA2_TABLE_INFO);
+        TestingMetadataUpdater limitedMetadataUpdater =
+                TestingMetadataUpdater.builder(tableInfos)
+                        .withTabletServerGateway(1, node1Gateway)
+                        .build();
+        LookupSender limitedSender =
+                new LookupSender(
+                        limitedMetadataUpdater, limitedQueue, 128, MAX_RETRIES, (short) -1, 1000);
+        Thread limitedSenderThread = new Thread(limitedSender);
+        limitedSenderThread.start();
+
+        try {
+            List<LookupQuery> node1Queries = new ArrayList<>();
+            for (int i = 0; i < 6; i++) {
+                LookupQuery query =
+                        new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("node-1-" + i));
+                node1Queries.add(query);
+                limitedQueue.appendLookup(query);
+            }
+
+            waitUntil(
+                    () -> node1Requests.size() == 5,
+                    Duration.ofSeconds(5),
+                    "five requests for the capped bucket");
+            assertThat(limitedQueue.hasUnDrained()).isTrue();
+
+            LookupQuery otherBucketQuery =
+                    new LookupQuery(
+                            DATA2_TABLE_PATH,
+                            new TableBucket(DATA2_TABLE_ID, 0),
+                            bytes("other-bucket"));
+            limitedQueue.appendLookup(otherBucketQuery);
+
+            assertThat(otherBucketQuery.future().get(1, TimeUnit.SECONDS))
+                    .isEqualTo(bytes("other-bucket"));
+            assertThat(otherBucketRequestCount).hasValue(1);
+            assertThat(node1Requests).hasSize(5);
+
+            node1Responses
+                    .get(0)
+                    .complete(createSuccessResponse(node1Requests.get(0), bytes("node-1")).join());
+            waitUntil(
+                    () -> node1Requests.size() == 6,
+                    Duration.ofSeconds(5),
+                    "sixth request after one bucket permit is released");
+
+            for (int i = 1; i < node1Responses.size(); i++) {
+                node1Responses
+                        .get(i)
+                        .complete(
+                                createSuccessResponse(node1Requests.get(i), bytes("node-1"))
+                                        .join());
+            }
+            for (LookupQuery query : node1Queries) {
+                assertThat(query.future().get(1, TimeUnit.SECONDS)).isEqualTo(bytes("node-1"));
+            }
+        } finally {
+            limitedSender.forceClose();
+            limitedSenderThread.join(5000);
+        }
     }
 
     @Test
@@ -599,6 +716,98 @@ public class LookupSenderTest {
                 .isGreaterThanOrEqualTo(2); // at least 1 failure + 1 success for the batch
     }
 
+    @Test
+    void testRunFutureCompletionsAfterReleasingOriginalBatchCapacity() throws Exception {
+        Configuration conf = new Configuration();
+        // Keep exactly one batch slot so the first in-flight lookup keeps the queue full until its
+        // original batch capacity is released.
+        conf.set(ConfigOptions.CLIENT_LOOKUP_QUEUE_SIZE, 1);
+        conf.set(ConfigOptions.CLIENT_LOOKUP_MAX_BATCH_SIZE, 1);
+        conf.setString(ConfigOptions.CLIENT_LOOKUP_BATCH_TIMEOUT.key(), "1ms");
+        LookupQueue singleSlotQueue = new LookupQueue(conf);
+
+        ConfigurableTestTabletServerGateway singleSlotGateway =
+                new ConfigurableTestTabletServerGateway();
+        CompletableFuture<LookupResponse> firstResponse = new CompletableFuture<>();
+        AtomicReference<LookupRequest> firstRequest = new AtomicReference<>();
+        AtomicReference<LookupQuery> continuationQuery = new AtomicReference<>();
+        CountDownLatch continuationAppended = new CountDownLatch(1);
+        AtomicInteger requestCount = new AtomicInteger();
+        singleSlotGateway.setLookupHandler(
+                request -> {
+                    if (requestCount.incrementAndGet() == 1) {
+                        firstRequest.set(request);
+                        return firstResponse;
+                    }
+                    return createSuccessResponse(request, bytes("second-value"));
+                });
+
+        TestingMetadataUpdater singleSlotMetadataUpdater =
+                TestingMetadataUpdater.builder(
+                                Collections.singletonMap(DATA1_TABLE_PATH_PK, DATA1_TABLE_INFO_PK))
+                        .withTabletServerGateway(1, singleSlotGateway)
+                        .build();
+        LookupSender singleSlotSender =
+                new LookupSender(
+                        singleSlotMetadataUpdater,
+                        singleSlotQueue,
+                        MAX_INFLIGHT_REQUESTS,
+                        MAX_RETRIES,
+                        (short) -1,
+                        1000);
+        Thread singleSlotSenderThread = new Thread(singleSlotSender);
+        singleSlotSenderThread.start();
+
+        try {
+            LookupQuery query =
+                    new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("first-key"));
+            // thenRun is a synchronous continuation. It runs inside future.complete(...)
+            // and tries to append another lookup while the first lookup completion is still
+            // on the stack.
+            query.future()
+                    .thenRun(
+                            () -> {
+                                LookupQuery nextQuery =
+                                        new LookupQuery(
+                                                DATA1_TABLE_PATH_PK,
+                                                TABLE_BUCKET,
+                                                bytes("second-key"));
+                                continuationQuery.set(nextQuery);
+                                singleSlotQueue.appendLookup(nextQuery);
+                                continuationAppended.countDown();
+                            });
+            singleSlotQueue.appendLookup(query);
+
+            waitUntil(
+                    () -> firstRequest.get() != null,
+                    Duration.ofSeconds(5),
+                    "first lookup request");
+            // Complete the first response from a separate thread. If user future completion happens
+            // before the original batch capacity is released, the synchronous continuation above
+            // blocks on appendLookup and this thread never exits.
+            Thread completer =
+                    new Thread(
+                            () ->
+                                    firstResponse.complete(
+                                            createSuccessResponse(
+                                                            firstRequest.get(),
+                                                            bytes("first-value"))
+                                                    .join()));
+            completer.start();
+
+            assertThat(query.future().get(5, TimeUnit.SECONDS)).isEqualTo(bytes("first-value"));
+            assertThat(continuationAppended.await(5, TimeUnit.SECONDS)).isTrue();
+            completer.join(5000);
+            assertThat(completer.isAlive()).isFalse();
+            assertThat(continuationQuery.get().future().get(5, TimeUnit.SECONDS))
+                    .isEqualTo(bytes("second-value"));
+            assertThat(requestCount.get()).isEqualTo(2);
+        } finally {
+            singleSlotSender.forceClose();
+            singleSlotSenderThread.join(5000);
+        }
+    }
+
     // Helper methods
 
     private CompletableFuture<LookupResponse> createPartitionNameEchoResponse(
@@ -629,6 +838,26 @@ public class LookupSenderTest {
             }
         }
         return CompletableFuture.completedFuture(response);
+    }
+
+    private static LookupBatch createLookupBatch(TableBucket tableBucket, int lookupCount) {
+        LookupBatch lookupBatch =
+                new LookupBatch(
+                        new LookupQuery(DATA1_TABLE_PATH_PK, tableBucket, new byte[] {0}),
+                        System.nanoTime());
+        for (int i = 1; i < lookupCount; i++) {
+            lookupBatch.addLookup(
+                    new LookupQuery(DATA1_TABLE_PATH_PK, tableBucket, new byte[] {(byte) i}));
+        }
+        return lookupBatch;
+    }
+
+    private static int totalLookupCount(List<LookupBatch> lookupBatches) {
+        int count = 0;
+        for (LookupBatch lookupBatch : lookupBatches) {
+            count += lookupBatch.size();
+        }
+        return count;
     }
 
     private static byte[] bytes(String value) {
@@ -682,19 +911,18 @@ public class LookupSenderTest {
     private CompletableFuture<LookupResponse> createSuccessResponse(
             LookupRequest request, byte[] value) {
         LookupResponse response = new LookupResponse();
-        PbLookupRespForBucket bucketResp = response.addBucketsResp();
-        bucketResp.setBucketId(TABLE_BUCKET.getBucket());
-        if (TABLE_BUCKET.getPartitionId() != null) {
-            bucketResp.setPartitionId(TABLE_BUCKET.getPartitionId());
-        }
-        if (request.getBucketsReqAt(0).hasOriginalPartitionName()) {
-            bucketResp.setOriginalPartitionName(
-                    request.getBucketsReqAt(0).getOriginalPartitionName());
-        }
-        // Add value for each key in the request
-        int keyCount = request.getBucketsReqAt(0).getKeysCount();
-        for (int i = 0; i < keyCount; i++) {
-            bucketResp.addValue().setValues(value);
+        for (PbLookupReqForBucket bucketRequest : request.getBucketsReqsList()) {
+            PbLookupRespForBucket bucketResp = response.addBucketsResp();
+            bucketResp.setBucketId(bucketRequest.getBucketId());
+            if (bucketRequest.hasPartitionId()) {
+                bucketResp.setPartitionId(bucketRequest.getPartitionId());
+            }
+            if (bucketRequest.hasOriginalPartitionName()) {
+                bucketResp.setOriginalPartitionName(bucketRequest.getOriginalPartitionName());
+            }
+            for (int i = 0; i < bucketRequest.getKeysCount(); i++) {
+                bucketResp.addValue().setValues(value);
+            }
         }
         return CompletableFuture.completedFuture(response);
     }

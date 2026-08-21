@@ -18,71 +18,66 @@
 package org.apache.fluss.client.lookup;
 
 import org.apache.fluss.annotation.Internal;
-import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.metadata.TableBucket;
 
-import javax.annotation.Nullable;
-
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
-/** A batch that contains the lookup operations that send to same tablet bucket together. */
+/** A batch of lookup operations accumulated for the same table bucket and lookup kind. */
 @Internal
-public class LookupBatch {
+final class LookupBatch {
 
-    private final LookupBatchKey lookupBatchKey;
+    private final TableBucket tableBucket;
+    private final LookupType lookupType;
+    private final boolean historical;
+    private final long createdNanos;
+    private final List<AbstractLookupQuery<?>> lookups;
 
-    private final List<LookupQuery> lookups;
+    private boolean completed;
 
-    LookupBatch(LookupBatchKey lookupBatchKey) {
-        this.lookupBatchKey = lookupBatchKey;
+    LookupBatch(AbstractLookupQuery<?> firstLookup, long createdNanos) {
+        this.tableBucket = firstLookup.tableBucket();
+        this.lookupType = firstLookup.lookupType();
+        this.historical = firstLookup.originalPartitionName() != null;
+        this.createdNanos = createdNanos;
         this.lookups = new ArrayList<>();
+        this.lookups.add(firstLookup);
     }
 
-    public void addLookup(LookupQuery lookup) {
+    void addLookup(AbstractLookupQuery<?> lookup) {
         lookups.add(lookup);
     }
 
-    public List<LookupQuery> lookups() {
-        return lookups;
+    TableBucket tableBucket() {
+        return tableBucket;
     }
 
-    public TableBucket tableBucket() {
-        return lookupBatchKey.tableBucket();
+    LookupType lookupType() {
+        return lookupType;
     }
 
-    public @Nullable String originalPartitionName() {
-        return lookupBatchKey.originalPartitionName();
+    boolean historical() {
+        return historical;
     }
 
-    LookupBatchKey lookupBatchKey() {
-        return lookupBatchKey;
+    List<AbstractLookupQuery<?>> lookups() {
+        return Collections.unmodifiableList(lookups);
     }
 
-    /** Complete the lookup operations using given values . */
-    public void complete(List<byte[]> values) {
-        // if the size of return values of lookup operation are not equal to the number of lookups,
-        // should complete an exception.
-        if (values.size() != lookups.size()) {
-            completeExceptionally(
-                    new FlussRuntimeException(
-                            String.format(
-                                    "The number of return values of lookup operation is not equal to the number of "
-                                            + "lookups. Return %d values, but expected %d.",
-                                    values.size(), lookups.size())));
-        } else {
-            for (int i = 0; i < values.size(); i++) {
-                AbstractLookupQuery<byte[]> lookup = lookups.get(i);
-                // single value.
-                lookup.future().complete(values.get(i));
-            }
+    int size() {
+        return lookups.size();
+    }
+
+    long waitedNanos(long nowNanos) {
+        return nowNanos - createdNanos;
+    }
+
+    boolean markCompleted() {
+        if (completed) {
+            return false;
         }
-    }
-
-    /** Complete the lookup operations with given exception. */
-    public void completeExceptionally(Exception exception) {
-        for (LookupQuery lookup : lookups) {
-            lookup.future().completeExceptionally(exception);
-        }
+        completed = true;
+        return true;
     }
 }

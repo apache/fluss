@@ -21,7 +21,7 @@ import org.apache.fluss.client.admin.ClusterHealth;
 import org.apache.fluss.client.admin.ClusterHealthStatus;
 import org.apache.fluss.client.admin.OffsetSpec;
 import org.apache.fluss.client.admin.ProducerOffsetsResult;
-import org.apache.fluss.client.lookup.LookupBatch;
+import org.apache.fluss.client.lookup.LookupRequestBatch;
 import org.apache.fluss.client.lookup.PrefixLookupBatch;
 import org.apache.fluss.client.metadata.AcquireKvSnapshotLeaseResult;
 import org.apache.fluss.client.metadata.ActiveKvSnapshots;
@@ -208,7 +208,7 @@ public class ClientRpcMessageUtils {
 
     public static LookupRequest makeLookupRequest(
             long tableId,
-            Collection<LookupBatch> lookupBatches,
+            Collection<LookupRequestBatch> lookupBatches,
             boolean insertIfNotExists,
             short acks,
             int timeoutMs) {

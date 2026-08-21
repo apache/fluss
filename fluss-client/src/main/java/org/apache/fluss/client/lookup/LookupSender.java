@@ -78,7 +78,7 @@ class LookupSender implements Runnable {
 
     private final LookupQueue lookupQueue;
 
-    private final Semaphore maxInFlightReuqestsSemaphore;
+    private final Semaphore maxInFlightRequestsSemaphore;
 
     private final int maxRetries;
 
@@ -97,7 +97,7 @@ class LookupSender implements Runnable {
             int maxRequestTimeoutMs) {
         this.metadataUpdater = metadataUpdater;
         this.lookupQueue = lookupQueue;
-        this.maxInFlightReuqestsSemaphore = new Semaphore(maxFlightRequests);
+        this.maxInFlightRequestsSemaphore = new Semaphore(maxFlightRequests);
         this.maxRetries = maxRetries;
         this.running = true;
         this.acks = acks;
@@ -123,7 +123,7 @@ class LookupSender implements Runnable {
         // okay we stopped accepting requests but there may still be requests in the accumulator or
         // waiting for acknowledgment, wait until these are completed.
         // TODO Check the in flight request count in the accumulator.
-        if (!forceClose && lookupQueue.hasUnDrained()) {
+        while (!forceClose && lookupQueue.hasUnDrained()) {
             try {
                 runOnce(true);
             } catch (Exception e) {
@@ -137,83 +137,134 @@ class LookupSender implements Runnable {
 
     /** Run a single iteration of sending. */
     private void runOnce(boolean drainAll) throws Exception {
-        List<AbstractLookupQuery<?>> lookups =
-                drainAll ? lookupQueue.drainAll() : lookupQueue.drain();
-        sendLookups(lookups);
+        List<LookupBatch> lookupBatches = drainAll ? lookupQueue.drainAll() : lookupQueue.drain();
+        Map<Tuple2<Integer, LookupType>, List<LookupBatch>> batchesByLeaderAndType =
+                groupByLeaderAndType(lookupBatches);
+        for (Map.Entry<Tuple2<Integer, LookupType>, List<LookupBatch>> entry :
+                batchesByLeaderAndType.entrySet()) {
+            sendLookupBatches(entry.getKey().f0, entry.getKey().f1, entry.getValue());
+        }
     }
 
-    private void sendLookups(List<AbstractLookupQuery<?>> lookups) throws Exception {
-        if (lookups.isEmpty()) {
-            return;
-        }
-        // group by <leader, lookup type> to lookup batches
-        Map<Tuple2<Integer, LookupType>, List<AbstractLookupQuery<?>>> lookupBatches =
-                groupByLeaderAndType(lookups);
-
-        // if no lookup batches, sleep a bit to avoid busy loop. This case will happen when there is
-        // no leader for all the lookup request in queue.
-        if (lookupBatches.isEmpty() && !lookupQueue.hasUnDrained()) {
-            // TODO: may use wait/notify mechanism to avoid active sleep, and use a dynamic sleep
-            // time based on the request waited time.
-            Thread.sleep(100);
-        }
-
-        // now, send the batches
-        lookupBatches.forEach(
-                (destAndType, batch) -> sendLookups(destAndType.f0, destAndType.f1, batch));
-    }
-
-    private Map<Tuple2<Integer, LookupType>, List<AbstractLookupQuery<?>>> groupByLeaderAndType(
-            List<AbstractLookupQuery<?>> lookups) {
-        // <leader, LookupType> -> lookup batches
-        Map<Tuple2<Integer, LookupType>, List<AbstractLookupQuery<?>>> lookupBatchesByLeader =
-                new HashMap<>();
-        for (AbstractLookupQuery<?> lookup : lookups) {
-            int leader;
-            // lookup the leader node
-            TableBucket tb = lookup.tableBucket();
+    private Map<Tuple2<Integer, LookupType>, List<LookupBatch>> groupByLeaderAndType(
+            List<LookupBatch> lookupBatches) {
+        Map<Tuple2<Integer, LookupType>, List<LookupBatch>> batchesByLeaderAndType =
+                new LinkedHashMap<>();
+        for (LookupBatch lookupBatch : lookupBatches) {
+            AbstractLookupQuery<?> firstLookup = lookupBatch.lookups().get(0);
+            int destination;
             try {
-                // TODO Metadata requests are being sent too frequently here. consider first
-                // collecting the tables that need to be updated and then sending them together in
-                // one request.
-                leader = metadataUpdater.leaderFor(lookup.tablePath(), tb);
+                destination =
+                        metadataUpdater.leaderFor(
+                                firstLookup.tablePath(), lookupBatch.tableBucket());
             } catch (PartitionNotExistException e) {
-                // Metadata refresh confirmed that the queued lookup carries a deleted partition
-                // id. Complete it instead of repeatedly enqueueing the stale TableBucket; a
-                // primary key lookuper can then reroute by partition name.
-                lookup.future().completeExceptionally(e);
+                lookupQueue.releaseBatchCapacity(lookupBatch);
+                for (AbstractLookupQuery<?> lookup : lookupBatch.lookups()) {
+                    lookup.future().completeExceptionally(e);
+                }
                 continue;
             } catch (Exception e) {
-                // if leader is not found, re-enqueue the lookup to send again.
-                LOG.warn("Failed to lookup the leader for {} when lookup", tb, e);
-                reEnqueueLookup(lookup);
+                LOG.warn(
+                        "Failed to lookup the leader for {} when lookup",
+                        lookupBatch.tableBucket(),
+                        e);
+                for (AbstractLookupQuery<?> lookup : lookupBatch.lookups()) {
+                    reEnqueueLookup(lookup);
+                }
+                lookupQueue.releaseBatchCapacity(lookupBatch);
                 continue;
             }
-            lookupBatchesByLeader
-                    .computeIfAbsent(Tuple2.of(leader, lookup.lookupType()), k -> new ArrayList<>())
-                    .add(lookup);
+
+            batchesByLeaderAndType
+                    .computeIfAbsent(
+                            Tuple2.of(destination, lookupBatch.lookupType()),
+                            ignored -> new ArrayList<>())
+                    .add(lookupBatch);
         }
-        return lookupBatchesByLeader;
+        return batchesByLeaderAndType;
+    }
+
+    private void sendLookupBatches(
+            int destination, LookupType lookupType, List<LookupBatch> lookupBatches) {
+        Map<Tuple2<Long, Boolean>, List<LookupBatch>> batchesByTableAndKind = new LinkedHashMap<>();
+        for (LookupBatch lookupBatch : lookupBatches) {
+            batchesByTableAndKind
+                    .computeIfAbsent(
+                            Tuple2.of(
+                                    lookupBatch.tableBucket().getTableId(),
+                                    lookupBatch.historical()),
+                            ignored -> new ArrayList<>())
+                    .add(lookupBatch);
+        }
+
+        for (List<LookupBatch> batchesForTableAndKind : batchesByTableAndKind.values()) {
+            for (List<LookupBatch> requestBatches : packLookupBatches(batchesForTableAndKind)) {
+                List<AbstractLookupQuery<?>> lookups = new ArrayList<>();
+                for (LookupBatch requestBatch : requestBatches) {
+                    lookups.addAll(requestBatch.lookups());
+                }
+                sendLookups(
+                        destination,
+                        lookupType,
+                        lookups,
+                        () -> {
+                            for (LookupBatch requestBatch : requestBatches) {
+                                lookupQueue.releaseBatchCapacity(requestBatch);
+                            }
+                        });
+            }
+        }
     }
 
     @VisibleForTesting
-    void sendLookups(
-            int destination, LookupType lookupType, List<AbstractLookupQuery<?>> lookupBatches) {
+    List<List<LookupBatch>> packLookupBatches(List<LookupBatch> lookupBatches) {
+        List<List<LookupBatch>> requestGroups = new ArrayList<>();
+        List<LookupBatch> currentGroup = new ArrayList<>();
+        int currentSize = 0;
+        for (LookupBatch lookupBatch : lookupBatches) {
+            if (!currentGroup.isEmpty()
+                    && currentSize + lookupBatch.size() > lookupQueue.maxBatchSize()) {
+                requestGroups.add(currentGroup);
+                currentGroup = new ArrayList<>();
+                currentSize = 0;
+            }
+            currentGroup.add(lookupBatch);
+            currentSize += lookupBatch.size();
+        }
+        if (!currentGroup.isEmpty()) {
+            requestGroups.add(currentGroup);
+        }
+        return requestGroups;
+    }
+
+    @VisibleForTesting
+    void sendLookups(int destination, LookupType lookupType, List<AbstractLookupQuery<?>> lookups) {
+        sendLookups(destination, lookupType, lookups, null);
+    }
+
+    private void sendLookups(
+            int destination,
+            LookupType lookupType,
+            List<AbstractLookupQuery<?>> lookups,
+            @Nullable Runnable releaseOriginalBatchCapacity) {
         if (lookupType == LookupType.LOOKUP) {
-            sendLookupRequest(destination, lookupBatches, false);
+            sendLookupRequest(destination, lookups, false, releaseOriginalBatchCapacity);
         } else if (lookupType == LookupType.LOOKUP_WITH_INSERT_IF_NOT_EXISTS) {
-            sendLookupRequest(destination, lookupBatches, true);
+            sendLookupRequest(destination, lookups, true, releaseOriginalBatchCapacity);
         } else if (lookupType == LookupType.PREFIX_LOOKUP) {
-            sendPrefixLookupRequest(destination, lookupBatches);
+            sendPrefixLookupRequest(destination, lookups, releaseOriginalBatchCapacity);
         } else {
             throw new IllegalArgumentException("Unsupported lookup type: " + lookupType);
         }
     }
 
     private void sendLookupRequest(
-            int destination, List<AbstractLookupQuery<?>> lookups, boolean insertIfNotExists) {
+            int destination,
+            List<AbstractLookupQuery<?>> lookups,
+            boolean insertIfNotExists,
+            @Nullable Runnable releaseOriginalBatchCapacity) {
         // table id -> (bucket and original partition name -> lookups)
-        Map<Long, Map<LookupBatchKey, LookupBatch>> lookupByTableId = new LinkedHashMap<>();
+        Map<Long, Map<LookupBatchKey, LookupRequestBatch>> lookupByTableId = new LinkedHashMap<>();
         for (AbstractLookupQuery<?> abstractLookupQuery : lookups) {
             LookupQuery lookup = (LookupQuery) abstractLookupQuery;
             TableBucket tb = lookup.tableBucket();
@@ -221,12 +272,13 @@ class LookupSender implements Runnable {
             LookupBatchKey batchKey = new LookupBatchKey(tb, lookup.originalPartitionName());
             lookupByTableId
                     .computeIfAbsent(tableId, k -> new LinkedHashMap<>())
-                    .computeIfAbsent(batchKey, k -> new LookupBatch(batchKey))
+                    .computeIfAbsent(batchKey, k -> new LookupRequestBatch(batchKey))
                     .addLookup(lookup);
         }
 
         TabletServerGateway gateway = metadataUpdater.newTabletServerClientForNode(destination);
         if (gateway == null) {
+            List<Runnable> futureCompletions = new ArrayList<>();
             lookupByTableId.forEach(
                     (tableId, lookupsByBatchKey) ->
                             handleLookupRequestException(
@@ -235,15 +287,18 @@ class LookupSender implements Runnable {
                                                     + destination
                                                     + " is not found in metadata cache."),
                                     destination,
-                                    lookupsByBatchKey.values()));
+                                    lookupsByBatchKey.values(),
+                                    futureCompletions));
+            runFutureCompletionsAfterReleasingOriginalBatchCapacity(
+                    releaseOriginalBatchCapacity, futureCompletions);
             return;
         }
 
         lookupByTableId.forEach(
                 (tableId, lookupsByBatchKey) -> {
-                    List<Map<LookupBatchKey, LookupBatch>> lookupRequestGroups =
+                    List<Map<LookupBatchKey, LookupRequestBatch>> lookupRequestGroups =
                             packLookupRequestGroups(lookupsByBatchKey.values());
-                    for (Map<LookupBatchKey, LookupBatch> lookupsByBatchKeyInRequest :
+                    for (Map<LookupBatchKey, LookupRequestBatch> lookupsByBatchKeyInRequest :
                             lookupRequestGroups) {
                         sendLookupRequestAndHandleResponse(
                                 destination,
@@ -255,7 +310,8 @@ class LookupSender implements Runnable {
                                         acks,
                                         maxRequestTimeoutMs),
                                 tableId,
-                                lookupsByBatchKeyInRequest);
+                                lookupsByBatchKeyInRequest,
+                                releaseOriginalBatchCapacity);
                     }
                 });
     }
@@ -267,11 +323,11 @@ class LookupSender implements Runnable {
      * multiple original partitions may target the same {@link TableBucket}; responses carry the
      * original partition name so they can be dispatched using {@link LookupBatchKey}.
      */
-    private List<Map<LookupBatchKey, LookupBatch>> packLookupRequestGroups(
-            Collection<LookupBatch> lookupBatches) {
-        Map<LookupBatchKey, LookupBatch> normalLookups = new LinkedHashMap<>();
-        Map<LookupBatchKey, LookupBatch> historicalLookups = new LinkedHashMap<>();
-        for (LookupBatch lookupBatch : lookupBatches) {
+    private List<Map<LookupBatchKey, LookupRequestBatch>> packLookupRequestGroups(
+            Collection<LookupRequestBatch> lookupBatches) {
+        Map<LookupBatchKey, LookupRequestBatch> normalLookups = new LinkedHashMap<>();
+        Map<LookupBatchKey, LookupRequestBatch> historicalLookups = new LinkedHashMap<>();
+        for (LookupRequestBatch lookupBatch : lookupBatches) {
             if (lookupBatch.originalPartitionName() == null) {
                 normalLookups.put(lookupBatch.lookupBatchKey(), lookupBatch);
             } else {
@@ -279,7 +335,7 @@ class LookupSender implements Runnable {
             }
         }
 
-        List<Map<LookupBatchKey, LookupBatch>> lookupRequestGroups = new ArrayList<>(2);
+        List<Map<LookupBatchKey, LookupRequestBatch>> lookupRequestGroups = new ArrayList<>(2);
         if (!normalLookups.isEmpty()) {
             lookupRequestGroups.add(normalLookups);
         }
@@ -290,7 +346,9 @@ class LookupSender implements Runnable {
     }
 
     private void sendPrefixLookupRequest(
-            int destination, List<AbstractLookupQuery<?>> prefixLookups) {
+            int destination,
+            List<AbstractLookupQuery<?>> prefixLookups,
+            @Nullable Runnable releaseOriginalBatchCapacity) {
         // table id -> (bucket -> lookups)
         Map<Long, Map<TableBucket, PrefixLookupBatch>> lookupByTableId = new HashMap<>();
         for (AbstractLookupQuery<?> abstractLookupQuery : prefixLookups) {
@@ -305,6 +363,7 @@ class LookupSender implements Runnable {
 
         TabletServerGateway gateway = metadataUpdater.newTabletServerClientForNode(destination);
         if (gateway == null) {
+            List<Runnable> futureCompletions = new ArrayList<>();
             lookupByTableId.forEach(
                     (tableId, lookupsByBucket) ->
                             handlePrefixLookupException(
@@ -313,7 +372,10 @@ class LookupSender implements Runnable {
                                                     + destination
                                                     + " is not found in metadata cache."),
                                     destination,
-                                    lookupsByBucket));
+                                    lookupsByBucket,
+                                    futureCompletions));
+            runFutureCompletionsAfterReleasingOriginalBatchCapacity(
+                    releaseOriginalBatchCapacity, futureCompletions);
             return;
         }
 
@@ -324,7 +386,8 @@ class LookupSender implements Runnable {
                                 gateway,
                                 makePrefixLookupRequest(tableId, prefixLookupBatch.values()),
                                 tableId,
-                                prefixLookupBatch));
+                                prefixLookupBatch,
+                                releaseOriginalBatchCapacity));
     }
 
     private void sendLookupRequestAndHandleResponse(
@@ -332,35 +395,69 @@ class LookupSender implements Runnable {
             TabletServerGateway gateway,
             LookupRequest lookupRequest,
             long tableId,
-            Map<LookupBatchKey, LookupBatch> lookupsByBatchKey) {
-        // TODO: Normal and historical lookups share the in-flight permits for simplicity. See
-        // https://github.com/apache/fluss/issues/3766.
+            Map<LookupBatchKey, LookupRequestBatch> lookupsByBatchKey,
+            @Nullable Runnable releaseOriginalBatchCapacity) {
+        Set<TableBucket> tableBuckets =
+                lookupsByBatchKey.keySet().stream()
+                        .map(LookupBatchKey::tableBucket)
+                        .collect(Collectors.toSet());
+        boolean acquired = false;
+
         try {
-            maxInFlightReuqestsSemaphore.acquire();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new FlussRuntimeException("interrupted:", e);
+            acquireInFlightRequest(tableBuckets);
+            acquired = true;
+            gateway.lookup(lookupRequest)
+                    .whenComplete(
+                            (lookupResponse, e) -> {
+                                List<Runnable> futureCompletions = new ArrayList<>();
+                                try {
+                                    if (e != null) {
+                                        handleLookupRequestException(
+                                                e,
+                                                destination,
+                                                lookupsByBatchKey.values(),
+                                                futureCompletions);
+                                    } else {
+                                        try {
+                                            handleLookupResponse(
+                                                    tableId,
+                                                    destination,
+                                                    lookupResponse,
+                                                    lookupsByBatchKey,
+                                                    futureCompletions);
+                                        } catch (Throwable t) {
+                                            handleLookupRequestException(
+                                                    t,
+                                                    destination,
+                                                    lookupsByBatchKey.values(),
+                                                    futureCompletions);
+                                        }
+                                    }
+                                } finally {
+                                    try {
+                                        releaseInFlightRequest(tableBuckets);
+                                    } finally {
+                                        runFutureCompletionsAfterReleasingOriginalBatchCapacity(
+                                                releaseOriginalBatchCapacity, futureCompletions);
+                                    }
+                                }
+                            });
+        } catch (Throwable t) {
+            List<Runnable> futureCompletions = new ArrayList<>();
+            try {
+                handleLookupRequestException(
+                        t, destination, lookupsByBatchKey.values(), futureCompletions);
+            } finally {
+                try {
+                    if (acquired) {
+                        releaseInFlightRequest(tableBuckets);
+                    }
+                } finally {
+                    runFutureCompletionsAfterReleasingOriginalBatchCapacity(
+                            releaseOriginalBatchCapacity, futureCompletions);
+                }
+            }
         }
-        gateway.lookup(lookupRequest)
-                .thenAccept(
-                        lookupResponse -> {
-                            try {
-                                handleLookupResponse(
-                                        tableId, destination, lookupResponse, lookupsByBatchKey);
-                            } finally {
-                                maxInFlightReuqestsSemaphore.release();
-                            }
-                        })
-                .exceptionally(
-                        e -> {
-                            try {
-                                handleLookupRequestException(
-                                        e, destination, lookupsByBatchKey.values());
-                                return null;
-                            } finally {
-                                maxInFlightReuqestsSemaphore.release();
-                            }
-                        });
     }
 
     private void sendPrefixLookupRequestAndHandleResponse(
@@ -368,42 +465,100 @@ class LookupSender implements Runnable {
             TabletServerGateway gateway,
             PrefixLookupRequest prefixLookupRequest,
             long tableId,
-            Map<TableBucket, PrefixLookupBatch> lookupsByBucket) {
+            Map<TableBucket, PrefixLookupBatch> lookupsByBucket,
+            @Nullable Runnable releaseOriginalBatchCapacity) {
+        Set<TableBucket> tableBuckets = lookupsByBucket.keySet();
+        boolean acquired = false;
+
         try {
-            maxInFlightReuqestsSemaphore.acquire();
+            acquireInFlightRequest(tableBuckets);
+            acquired = true;
+            gateway.prefixLookup(prefixLookupRequest)
+                    .whenComplete(
+                            (prefixLookupResponse, e) -> {
+                                List<Runnable> futureCompletions = new ArrayList<>();
+                                try {
+                                    if (e != null) {
+                                        handlePrefixLookupException(
+                                                e, destination, lookupsByBucket, futureCompletions);
+                                    } else {
+                                        try {
+                                            handlePrefixLookupResponse(
+                                                    tableId,
+                                                    destination,
+                                                    prefixLookupResponse,
+                                                    lookupsByBucket,
+                                                    futureCompletions);
+                                        } catch (Throwable t) {
+                                            handlePrefixLookupException(
+                                                    t,
+                                                    destination,
+                                                    lookupsByBucket,
+                                                    futureCompletions);
+                                        }
+                                    }
+                                } finally {
+                                    try {
+                                        releaseInFlightRequest(tableBuckets);
+                                    } finally {
+                                        runFutureCompletionsAfterReleasingOriginalBatchCapacity(
+                                                releaseOriginalBatchCapacity, futureCompletions);
+                                    }
+                                }
+                            });
+        } catch (Throwable t) {
+            List<Runnable> futureCompletions = new ArrayList<>();
+            try {
+                handlePrefixLookupException(t, destination, lookupsByBucket, futureCompletions);
+            } finally {
+                try {
+                    if (acquired) {
+                        releaseInFlightRequest(tableBuckets);
+                    }
+                } finally {
+                    runFutureCompletionsAfterReleasingOriginalBatchCapacity(
+                            releaseOriginalBatchCapacity, futureCompletions);
+                }
+            }
+        }
+    }
+
+    private static void runFutureCompletionsAfterReleasingOriginalBatchCapacity(
+            @Nullable Runnable releaseOriginalBatchCapacity, List<Runnable> futureCompletions) {
+        try {
+            if (releaseOriginalBatchCapacity != null) {
+                releaseOriginalBatchCapacity.run();
+            }
+        } finally {
+            // Complete user futures only after releasing original batch capacity, because
+            // CompletableFuture continuations run synchronously and may append new lookups.
+            for (Runnable futureCompletion : futureCompletions) {
+                futureCompletion.run();
+            }
+        }
+    }
+
+    private void acquireInFlightRequest(Set<TableBucket> tableBuckets) {
+        try {
+            maxInFlightRequestsSemaphore.acquire();
+            lookupQueue.addInFlightRequests(tableBuckets);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new FlussRuntimeException("interrupted:", e);
+            throw new FlussRuntimeException("Interrupted while sending lookup request.", e);
         }
-        gateway.prefixLookup(prefixLookupRequest)
-                .thenAccept(
-                        prefixLookupResponse -> {
-                            try {
-                                handlePrefixLookupResponse(
-                                        tableId,
-                                        destination,
-                                        prefixLookupResponse,
-                                        lookupsByBucket);
-                            } finally {
-                                maxInFlightReuqestsSemaphore.release();
-                            }
-                        })
-                .exceptionally(
-                        e -> {
-                            try {
-                                handlePrefixLookupException(e, destination, lookupsByBucket);
-                                return null;
-                            } finally {
-                                maxInFlightReuqestsSemaphore.release();
-                            }
-                        });
+    }
+
+    private void releaseInFlightRequest(Set<TableBucket> tableBuckets) {
+        lookupQueue.completeInFlightRequests(tableBuckets);
+        maxInFlightRequestsSemaphore.release();
     }
 
     private void handleLookupResponse(
             long tableId,
             int destination,
             LookupResponse lookupResponse,
-            Map<LookupBatchKey, LookupBatch> lookupsByBatchKey) {
+            Map<LookupBatchKey, LookupRequestBatch> lookupsByBatchKey,
+            List<Runnable> futureCompletions) {
         for (PbLookupRespForBucket pbLookupRespForBucket : lookupResponse.getBucketsRespsList()) {
             TableBucket tableBucket =
                     new TableBucket(
@@ -418,10 +573,16 @@ class LookupSender implements Runnable {
                             pbLookupRespForBucket.hasOriginalPartitionName()
                                     ? pbLookupRespForBucket.getOriginalPartitionName()
                                     : null);
-            LookupBatch lookupBatch = lookupsByBatchKey.get(lookupBatchKey);
+            LookupRequestBatch lookupBatch = lookupsByBatchKey.get(lookupBatchKey);
             if (pbLookupRespForBucket.hasErrorCode()) {
                 ApiError error = ApiError.fromErrorMessage(pbLookupRespForBucket);
-                handleLookupError(tableBucket, destination, error, lookupBatch.lookups(), "lookup");
+                handleLookupError(
+                        tableBucket,
+                        destination,
+                        error,
+                        lookupBatch.lookups(),
+                        "lookup",
+                        futureCompletions);
             } else {
                 List<byte[]> byteValues =
                         pbLookupRespForBucket.getValuesList().stream()
@@ -434,7 +595,7 @@ class LookupSender implements Runnable {
                                             }
                                         })
                                 .collect(Collectors.toList());
-                lookupBatch.complete(byteValues);
+                futureCompletions.add(() -> lookupBatch.complete(byteValues));
             }
         }
     }
@@ -443,7 +604,8 @@ class LookupSender implements Runnable {
             long tableId,
             int destination,
             PrefixLookupResponse prefixLookupResponse,
-            Map<TableBucket, PrefixLookupBatch> prefixLookupsByBucket) {
+            Map<TableBucket, PrefixLookupBatch> prefixLookupsByBucket,
+            List<Runnable> futureCompletions) {
         for (PbPrefixLookupRespForBucket pbRespForBucket :
                 prefixLookupResponse.getBucketsRespsList()) {
             TableBucket tableBucket =
@@ -462,7 +624,8 @@ class LookupSender implements Runnable {
                         destination,
                         error,
                         prefixLookupBatch.lookups(),
-                        "prefix lookup");
+                        "prefix lookup",
+                        futureCompletions);
             } else {
                 List<List<byte[]>> result = new ArrayList<>(pbRespForBucket.getValueListsCount());
                 for (int i = 0; i < pbRespForBucket.getValueListsCount(); i++) {
@@ -473,22 +636,33 @@ class LookupSender implements Runnable {
                     }
                     result.add(keyResult);
                 }
-                prefixLookupBatch.complete(result);
+                futureCompletions.add(() -> prefixLookupBatch.complete(result));
             }
         }
     }
 
     private void handleLookupRequestException(
-            Throwable t, int destination, Collection<LookupBatch> lookupBatches) {
+            Throwable t,
+            int destination,
+            Collection<LookupRequestBatch> lookupBatches,
+            List<Runnable> futureCompletions) {
         ApiError error = ApiError.fromThrowable(t);
-        for (LookupBatch lookupBatch : lookupBatches) {
+        for (LookupRequestBatch lookupBatch : lookupBatches) {
             handleLookupError(
-                    lookupBatch.tableBucket(), destination, error, lookupBatch.lookups(), "lookup");
+                    lookupBatch.tableBucket(),
+                    destination,
+                    error,
+                    lookupBatch.lookups(),
+                    "lookup",
+                    futureCompletions);
         }
     }
 
     private void handlePrefixLookupException(
-            Throwable t, int destination, Map<TableBucket, PrefixLookupBatch> lookupsByBucket) {
+            Throwable t,
+            int destination,
+            Map<TableBucket, PrefixLookupBatch> lookupsByBucket,
+            List<Runnable> futureCompletions) {
         ApiError error = ApiError.fromThrowable(t);
         for (PrefixLookupBatch lookupBatch : lookupsByBucket.values()) {
             handleLookupError(
@@ -496,7 +670,8 @@ class LookupSender implements Runnable {
                     destination,
                     error,
                     lookupBatch.lookups(),
-                    "prefix lookup");
+                    "prefix lookup",
+                    futureCompletions);
         }
     }
 
@@ -531,14 +706,15 @@ class LookupSender implements Runnable {
      * @param tableBucket the table bucket
      * @param error the error from server response
      * @param lookups the list of lookups to handle
-     * @param lookupType the type of lookup ("" for regular lookup, "prefix " for prefix lookup)
+     * @param futureCompletions deferred successful or terminal future completions
      */
     private void handleLookupError(
             TableBucket tableBucket,
             int destination,
             ApiError error,
             List<? extends AbstractLookupQuery<?>> lookups,
-            String lookupType) {
+            String lookupType,
+            List<Runnable> futureCompletions) {
         ApiException exception = error.exception();
         LOG.error(
                 "Failed to {} from node {} for bucket {}",
@@ -588,7 +764,7 @@ class LookupSender implements Runnable {
                         tableBucket,
                         originalPartitionNameMsg,
                         error.formatErrMsg());
-                lookup.future().completeExceptionally(exception);
+                futureCompletions.add(() -> lookup.future().completeExceptionally(exception));
             }
         }
     }
