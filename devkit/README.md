@@ -149,8 +149,3 @@ profiles also stage the matching locally built lake plugin and start Flink tieri
 added across profile switches and removed by `just clean`.
 
 Start the new profile with `just up <profile>`. No `justfile` change is required.
-
-## Design and Dependency Sources
-
-See [DESIGN.md](DESIGN.md) for the execution flow, classloader boundaries, dependency matrix,
-configuration rationale, differences from the official guides, and deferred work.
