@@ -27,7 +27,7 @@
     </parent>
 
     <artifactId>fluss-flink-2.3</artifactId>
-    <name>Apache Fluss (Incubating) : Engine Flink : 2.3 </name>
+    <name>Apache Fluss : Engine Flink : 2.3 </name>
     <properties>
         <flink.major.version>2.3</flink.major.version>
         <flink.minor.version>2.3.0</flink.minor.version>
@@ -89,6 +89,12 @@
             <version>${project.version}</version>
             <scope>test</scope>
             <type>test-jar</type>
+        </dependency>
+
+        <dependency>
+            <groupId>org.roaringbitmap</groupId>
+            <artifactId>RoaringBitmap</artifactId>
+            <version>${roaringbitmap.version}</version>
         </dependency>
 
         <dependency>
@@ -256,8 +262,28 @@
                                 <includes combine.children="append">
                                     <include>org.apache.fluss:fluss-flink-common</include>
                                     <include>org.apache.fluss:fluss-client</include>
+                                    <include>org.roaringbitmap:RoaringBitmap</include>
                                 </includes>
                             </artifactSet>
+                            <relocations combine.children="append">
+                                <relocation>
+                                    <pattern>org.roaringbitmap</pattern>
+                                    <shadedPattern>org.apache.fluss.shaded.org.roaringbitmap</shadedPattern>
+                                </relocation>
+                            </relocations>
+                            <filters combine.children="append">
+                                <filter>
+                                    <artifact>org.roaringbitmap:RoaringBitmap</artifact>
+                                    <excludes>
+                                        <exclude>META-INF/versions/**</exclude>
+                                    </excludes>
+                                </filter>
+                            </filters>
+                            <transformers combine.children="append">
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                    <mainClass>org.apache.fluss.flink.action.FlussActionEntrypoint</mainClass>
+                                </transformer>
+                            </transformers>
                         </configuration>
                     </execution>
                 </executions>
