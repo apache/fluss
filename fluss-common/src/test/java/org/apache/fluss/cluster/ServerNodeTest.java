@@ -45,7 +45,8 @@ public class ServerNodeTest {
         assertThat(serverNode.hashCode()).isNotEqualTo(serverNode2.hashCode());
         assertThat(serverNode).isEqualTo(new ServerNode(0, "HOST1", 9023, ServerType.COORDINATOR));
 
-        assertThat(serverNode.toString()).isEqualTo("HOST1:9023 (id: cs-0, rack: null)");
-        assertThat(serverNode2.toString()).isEqualTo("HOST2:9123 (id: ts-1, rack: null)");
+        assertThat(serverNode.toString()).isEqualTo("HOST1:9023 (id: cs-0, rack: null, tag: null)");
+        assertThat(serverNode2.toString())
+                .isEqualTo("HOST2:9123 (id: ts-1, rack: null, tag: null)");
     }
 }

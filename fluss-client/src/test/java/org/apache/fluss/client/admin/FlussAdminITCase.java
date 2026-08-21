@@ -86,7 +86,6 @@ import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.tablet.TestTabletServerGateway;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperClient;
-import org.apache.fluss.server.zk.data.ServerTags;
 import org.apache.fluss.types.DataTypeChecks;
 import org.apache.fluss.types.DataTypes;
 
@@ -105,7 +104,6 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -2376,7 +2374,6 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
 
     @Test
     public void testAddAndRemoveServerTags() throws Exception {
-        ZooKeeperClient zkClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
         // 1.add server tag to a none exists server.
         assertThatThrownBy(
                         () ->
@@ -2390,8 +2387,11 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
 
         // 2.add server tag for server 0,1.
         admin.addServerTag(Arrays.asList(0, 1), ServerTag.PERMANENT_OFFLINE).get();
-        assertThat(zkClient.getServerTags()).isPresent();
-        assertThat(zkClient.getServerTags().get().getServerTags())
+        List<ServerNode> serverNodes = admin.getServerNodes().get();
+        assertThat(
+                        serverNodes.stream()
+                                .filter(node -> node.serverTag() != null)
+                                .collect(Collectors.toMap(ServerNode::id, ServerNode::serverTag)))
                 .containsEntry(0, ServerTag.PERMANENT_OFFLINE)
                 .containsEntry(1, ServerTag.PERMANENT_OFFLINE);
 
@@ -2406,9 +2406,10 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .hasMessageContaining(
                         "Server tag PERMANENT_OFFLINE already exists for server 0. However "
                                 + "you want to set it to TEMPORARY_OFFLINE, please remove the server tag first.");
-        Optional<ServerTags> serverTagsOpt = zkClient.getServerTags();
-        assertThat(serverTagsOpt).isPresent();
-        Map<Integer, ServerTag> serverTags = serverTagsOpt.get().getServerTags();
+        Map<Integer, ServerTag> serverTags =
+                admin.getServerNodes().get().stream()
+                        .filter(node -> node.serverTag() != null)
+                        .collect(Collectors.toMap(ServerNode::id, ServerNode::serverTag));
         assertThat(serverTags.size()).isEqualTo(2);
         assertThat(serverTags)
                 .containsEntry(0, ServerTag.PERMANENT_OFFLINE)
@@ -2429,7 +2430,11 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         coordinatorContext.removeLiveTabletServer(0);
 
         admin.removeServerTag(Arrays.asList(0, 1), ServerTag.PERMANENT_OFFLINE).get();
-        assertThat(zkClient.getServerTags()).isNotPresent();
+        assertThat(
+                        admin.getServerNodes().get().stream()
+                                .filter(node -> node.serverTag() != null)
+                                .collect(Collectors.toMap(ServerNode::id, ServerNode::serverTag)))
+                .isEmpty();
 
         // restore after test, or else will influence other tests
         coordinatorContext.addLiveTabletServer(tmpServerInfo);
@@ -2448,6 +2453,8 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .hasMessageContaining(
                         "Server tag PERMANENT_OFFLINE not exists for server 2, the current "
                                 + "server tag of this server is TEMPORARY_OFFLINE.");
+        // clear server tag
+        admin.removeServerTag(Collections.singletonList(2), ServerTag.TEMPORARY_OFFLINE).get();
     }
 
     @Test

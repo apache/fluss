@@ -101,6 +101,7 @@ import org.apache.fluss.server.log.FetchParamsBuilder;
 import org.apache.fluss.server.log.FilterInfo;
 import org.apache.fluss.server.log.ListOffsetsParam;
 import org.apache.fluss.server.metadata.ClusterMetadata;
+import org.apache.fluss.server.metadata.ServerMetadataCache;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.metadata.TabletServerMetadataProvider;
 import org.apache.fluss.server.replica.Replica;
@@ -777,6 +778,11 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
             }
             authorizeTable(operationType, tablePath);
         }
+    }
+
+    @Override
+    protected ServerMetadataCache getServerMetadataCache() {
+        return metadataCache;
     }
 
     private void authorizeAnyTable(OperationType operationType, List<TablePath> tablePaths) {
