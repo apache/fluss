@@ -34,6 +34,7 @@ import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.SchemaNotExistException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
+import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
@@ -66,6 +67,8 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.TableAssignment;
+import org.apache.fluss.server.zk.data.ZkData.PartitionsZNode;
+import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.ZooDefs;
 import org.apache.fluss.types.DataTypeChecks;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
@@ -115,6 +118,7 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toServerNode;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTablePath;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
+import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.apache.fluss.utils.PartitionUtils.generateAutoPartition;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -812,6 +816,59 @@ class TableManagerITCase {
         return newPartitionedTableBuilder(null).build();
     }
 
+    private static FlussClusterExtension historicalPartitionCluster(int maxPartitionNum) {
+        Configuration conf = initConf();
+        conf.set(ConfigOptions.DATALAKE_FORMAT, DataLakeFormat.PAIMON);
+        conf.set(ConfigOptions.MAX_PARTITION_NUM, maxPartitionNum);
+        return FlussClusterExtension.builder()
+                .setNumOfTabletServers(1)
+                .setClusterConf(conf)
+                .build();
+    }
+
+    private static TableDescriptor historicalPartitionTable(boolean historicalPartitionEnabled) {
+        return newPartitionedTableBuilder(null)
+                .property(ConfigOptions.TABLE_AUTO_PARTITION_KEY, "dt")
+                .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                .property(
+                        ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED,
+                        historicalPartitionEnabled)
+                .build();
+    }
+
+    private static void createHistoricalPartitionTable(
+            AdminGateway gateway, TablePath tablePath, boolean enabled) throws Exception {
+        gateway.createTable(
+                        newCreateTableRequest(tablePath, historicalPartitionTable(enabled), false))
+                .get();
+    }
+
+    private static void setHistoricalPartitionEnabled(
+            AdminGateway gateway, TablePath tablePath, boolean enabled) throws Exception {
+        gateway.alterTable(
+                        newAlterTableRequest(
+                                tablePath,
+                                Collections.singletonMap(
+                                        ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED
+                                                .key(),
+                                        Boolean.toString(enabled)),
+                                Collections.emptyList(),
+                                Collections.emptyList(),
+                                false))
+                .get();
+    }
+
+    private static boolean isHistoricalPartitionEnabled(AdminGateway gateway, TablePath tablePath)
+            throws Exception {
+        TableDescriptor tableDescriptor =
+                TableDescriptor.fromJsonBytes(
+                        gateway.getTableInfo(newGetTableInfoRequest(tablePath))
+                                .get()
+                                .getTableJson());
+        return Configuration.fromMap(tableDescriptor.getProperties())
+                .get(ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED);
+    }
+
     private static TableDescriptor.Builder newPartitionedTableBuilder(
             @Nullable Schema.Column extraColumn) {
         Schema.Builder builder =
@@ -1017,6 +1074,68 @@ class TableManagerITCase {
                     .isPresent();
         } finally {
             limitedCluster.close();
+        }
+    }
+
+    @Test
+    void testHistoricalPartitionLifecycleFailures() throws Exception {
+        FlussClusterExtension creationFailureCluster = historicalPartitionCluster(0);
+
+        try {
+            creationFailureCluster.start();
+            AdminGateway gateway = creationFailureCluster.newCoordinatorClient();
+
+            // Case 1: CREATE reports that table metadata remains after partition creation fails.
+            TablePath createTablePath = TablePath.of("fluss", "historical_partition_partial_state");
+            assertThatThrownBy(() -> createHistoricalPartitionTable(gateway, createTablePath, true))
+                    .cause()
+                    .hasMessageContaining(
+                            "failed after the table metadata was persisted: the required "
+                                    + "historical system partition '__historical__' could not be "
+                                    + "created");
+            assertThat(gateway.tableExists(newTableExistsRequest(createTablePath)).get().isExists())
+                    .isTrue();
+
+            // Case 2: ALTER enable keeps the option disabled when partition creation fails.
+            TablePath alterTablePath = TablePath.of("fluss", "historical_partition_enable_retry");
+            createHistoricalPartitionTable(gateway, alterTablePath, false);
+            assertThatThrownBy(() -> setHistoricalPartitionEnabled(gateway, alterTablePath, true))
+                    .cause()
+                    .hasMessageContaining(
+                            "option was not changed and "
+                                    + "'table.datalake.historical-partition.enabled' remains "
+                                    + "'false'");
+            assertThat(isHistoricalPartitionEnabled(gateway, alterTablePath)).isFalse();
+        } finally {
+            creationFailureCluster.close();
+        }
+
+        FlussClusterExtension deletionFailureCluster =
+                historicalPartitionCluster(ConfigOptions.MAX_PARTITION_NUM.defaultValue());
+
+        try {
+            deletionFailureCluster.start();
+            AdminGateway gateway = deletionFailureCluster.newCoordinatorClient();
+            TablePath tablePath = TablePath.of("fluss", "historical_partition_drop_failure");
+            createHistoricalPartitionTable(gateway, tablePath, true);
+
+            ZooKeeperClient zooKeeperClient = deletionFailureCluster.getZooKeeperClient();
+            // Case 3: ALTER disable reports the orphan after partition deletion fails.
+            zooKeeperClient
+                    .getCuratorClient()
+                    .setACL()
+                    .withACL(ZooDefs.Ids.READ_ACL_UNSAFE)
+                    .forPath(PartitionsZNode.path(tablePath));
+            assertThatThrownBy(() -> setHistoricalPartitionEnabled(gateway, tablePath, false))
+                    .cause()
+                    .hasMessageContaining(
+                            "failed to delete the system partition '__historical__'. "
+                                    + "The orphan partition still consumes KV capacity");
+            assertThat(isHistoricalPartitionEnabled(gateway, tablePath)).isFalse();
+            assertThat(zooKeeperClient.getPartition(tablePath, HISTORICAL_PARTITION_VALUE))
+                    .isPresent();
+        } finally {
+            deletionFailureCluster.close();
         }
     }
 

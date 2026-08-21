@@ -46,6 +46,8 @@ import org.apache.fluss.utils.StringUtils;
 
 import javax.annotation.Nullable;
 
+import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.EnumSet;
@@ -126,6 +128,7 @@ public class TableDescriptorValidation {
         checkMergeEngine(tableConf, hasPrimaryKey, schema);
         checkDeleteBehavior(tableConf, hasPrimaryKey);
         checkTieredLog(tableConf);
+        checkHistoricalPartition(tableDescriptor, tableConf);
         checkPartition(tableConf, tableDescriptor.getPartitionKeys(), schema.getRowType());
         checkSystemColumns(schema.getRowType());
         validateStatisticsConfig(tableDescriptor);
@@ -135,6 +138,7 @@ public class TableDescriptorValidation {
     /** Validates the schema after altering table columns. */
     @Internal
     public static void validateAlterTableSchema(TableInfo table, Schema newSchema) {
+        checkSystemColumns(newSchema.getRowType());
         if (table.getTableConfig()
                 .getMergeEngineType()
                 .map(MergeEngineType.AGGREGATION::equals)
@@ -166,6 +170,62 @@ public class TableDescriptorValidation {
                             ConfigOptions.DATALAKE_FORMAT.key(),
                             clusterDataLakeFormat,
                             ConfigOptions.TABLE_DATALAKE_ENABLED.key()));
+        }
+    }
+
+    private static void checkHistoricalPartition(
+            TableDescriptor tableDescriptor, Configuration tableConf) {
+        if (!tableConf.get(ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED)) {
+            return;
+        }
+
+        List<String> unmetRequirements = new ArrayList<>();
+        if (!tableConf.get(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED)) {
+            unmetRequirements.add(
+                    String.format(
+                            "'%s' must be set to true",
+                            ConfigOptions.TABLE_AUTO_PARTITION_ENABLED.key()));
+        }
+        if (!tableConf.get(ConfigOptions.TABLE_DATALAKE_ENABLED)) {
+            unmetRequirements.add(
+                    String.format(
+                            "'%s' must be set to true",
+                            ConfigOptions.TABLE_DATALAKE_ENABLED.key()));
+        }
+
+        Optional<DataLakeFormat> dataLakeFormat =
+                tableConf.getOptional(ConfigOptions.TABLE_DATALAKE_FORMAT);
+        if (!dataLakeFormat.isPresent()) {
+            unmetRequirements.add(
+                    String.format(
+                            "'%s' must be set to '%s' (currently not set)",
+                            ConfigOptions.TABLE_DATALAKE_FORMAT.key(), DataLakeFormat.PAIMON));
+        } else if (dataLakeFormat.get() != DataLakeFormat.PAIMON) {
+            unmetRequirements.add(
+                    String.format(
+                            "'%s' must be set to '%s' (currently '%s')",
+                            ConfigOptions.TABLE_DATALAKE_FORMAT.key(),
+                            DataLakeFormat.PAIMON,
+                            dataLakeFormat.get()));
+        }
+        if (!tableDescriptor.hasPrimaryKey()) {
+            unmetRequirements.add("the table must define a primary key");
+        }
+
+        int partitionKeyCount = tableDescriptor.getPartitionKeys().size();
+        if (partitionKeyCount != 1) {
+            unmetRequirements.add(
+                    String.format(
+                            "the table must define exactly one partition key (found %s)",
+                            partitionKeyCount));
+        }
+
+        if (!unmetRequirements.isEmpty()) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "'%s' has unmet requirements: %s.",
+                            ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED.key(),
+                            String.join("; ", unmetRequirements)));
         }
     }
 
@@ -456,6 +516,23 @@ public class TableDescriptorValidation {
                     String.format(
                             "'%s' must be greater than 0.",
                             ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS.key()));
+        }
+
+        Optional<Duration> localTtl = tableConf.getOptional(ConfigOptions.TABLE_LOG_LOCAL_TTL);
+        if (!localTtl.isPresent()) {
+            return;
+        }
+        Duration logTtl = tableConf.get(ConfigOptions.TABLE_LOG_TTL);
+        if (!localTtl.get().isZero()
+                && !localTtl.get().isNegative()
+                && !logTtl.isZero()
+                && !logTtl.isNegative()
+                && localTtl.get().compareTo(logTtl) > 0) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "'%s' must be less than or equal to '%s'.",
+                            ConfigOptions.TABLE_LOG_LOCAL_TTL.key(),
+                            ConfigOptions.TABLE_LOG_TTL.key()));
         }
     }
 

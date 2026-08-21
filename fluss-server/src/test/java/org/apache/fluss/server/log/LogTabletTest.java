@@ -52,6 +52,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
@@ -92,6 +93,8 @@ final class LogTabletTest extends LogTestBase {
                         PhysicalTablePath.of(DATA1_TABLE_PATH),
                         logDir,
                         conf,
+                        new AtomicBoolean(
+                                conf.get(ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED)),
                         TestingMetricGroups.TABLET_SERVER_METRICS,
                         0,
                         scheduler,
@@ -105,6 +108,20 @@ final class LogTabletTest extends LogTestBase {
     @AfterEach
     public void teardown() throws Exception {
         scheduler.shutdown();
+    }
+
+    @Test
+    void testRemoteLogEndOffsetCanReset() {
+        logTablet.updateRemoteLogStartOffset(0L);
+        logTablet.updateRemoteLogEndOffset(10L);
+        assertThat(logTablet.canFetchFromRemoteLog(0L)).isTrue();
+
+        logTablet.updateRemoteLogEndOffset(-1L);
+        assertThat(logTablet.canFetchFromRemoteLog(0L)).isFalse();
+
+        // A new non-empty range can become readable after the empty state.
+        logTablet.updateRemoteLogEndOffset(5L);
+        assertThat(logTablet.canFetchFromRemoteLog(0L)).isTrue();
     }
 
     @Test
@@ -496,6 +513,8 @@ final class LogTabletTest extends LogTestBase {
                 PhysicalTablePath.of(DATA1_TABLE_PATH),
                 logDir,
                 config,
+                new AtomicBoolean(
+                        config.get(ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED)),
                 TestingMetricGroups.TABLET_SERVER_METRICS,
                 0,
                 scheduler,

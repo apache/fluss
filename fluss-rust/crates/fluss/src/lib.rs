@@ -123,6 +123,7 @@
 
 pub mod client;
 pub mod metadata;
+pub mod predicate;
 pub mod record;
 pub mod row;
 pub mod rpc;

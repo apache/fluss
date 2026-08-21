@@ -27,6 +27,7 @@ import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidRequiredAcksException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
@@ -82,6 +83,7 @@ import org.apache.fluss.server.testutils.KvTestUtils;
 import org.apache.fluss.server.testutils.ServerTestTags;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.TableRegistration;
+import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.testutils.DataTestUtils;
 import org.apache.fluss.types.DataField;
 import org.apache.fluss.types.DataTypes;
@@ -1330,9 +1332,15 @@ class ReplicaManagerTest extends ReplicaTestBase {
                         Tuple2.of(new Object[] {2, "a", 4L}, new Object[] {2, "a", 4L, "value4"}));
         // send one batch kv.
         CompletableFuture<List<PutKvResultForBucket>> future = new CompletableFuture<>();
+        // ConfigOptions.CLIENT_WRITER_ACKS documents acks = 1 as completing after the leader
+        // appends to its local log; it does not require the local KV view to be materialized. The
+        // async-flush review explicitly preserved this contract:
+        // https://github.com/apache/fluss/pull/3463#discussion_r3652720767.
+        // Use acks = -1 because this correctness test requires lookup-visible state. For KV
+        // replicas, the high watermark cannot advance beyond the flushed KV offset.
         replicaManager.putRecordsToKv(
                 20000,
-                1,
+                -1,
                 Collections.singletonMap(tb, genKvRecordBatch(keyType, rowType, data1)),
                 null,
                 MergeMode.DEFAULT,
@@ -1412,9 +1420,10 @@ class ReplicaManagerTest extends ReplicaTestBase {
 
         // first, send one batch kv.
         CompletableFuture<List<PutKvResultForBucket>> future1 = new CompletableFuture<>();
+        // Limit scan reads from RocksDB, so wait for the asynchronous KV flush to complete.
         replicaManager.putRecordsToKv(
                 20000,
-                1,
+                -1,
                 Collections.singletonMap(tb, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)),
                 null,
                 MergeMode.DEFAULT,
@@ -1719,6 +1728,47 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                                 + "TableBucket{tableId=150001, bucket=1}")));
         assertReplicaEpochEquals(
                 replicaManager.getReplicaOrException(tb), true, 1, INITIAL_BUCKET_EPOCH);
+    }
+
+    @Test
+    void testLakeSnapshotReadFailureDoesNotFailLeaderTransition() throws Exception {
+        TablePath tablePath = TablePath.of("test_db", "lake_table");
+        long tableId = 2998233L;
+        Map<String, String> properties = new HashMap<>();
+        properties.put(ConfigOptions.TABLE_DATALAKE_FORMAT.key(), DataLakeFormat.PAIMON.toString());
+        registerTableInZkClient(
+                tablePath, DATA1_SCHEMA, tableId, Collections.emptyList(), properties);
+
+        FsPath missingOffsetsPath =
+                new FsPath(new File(tempDir, "missing.offsets").getAbsolutePath());
+        zkClient.upsertLakeTable(
+                tableId,
+                new LakeTable(
+                        new LakeTable.LakeSnapshotMetadata(
+                                1L, missingOffsetsPath, missingOffsetsPath)),
+                false);
+
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+        CompletableFuture<List<NotifyLeaderAndIsrResultForBucket>> future =
+                new CompletableFuture<>();
+        replicaManager.becomeLeaderOrFollower(
+                INITIAL_COORDINATOR_EPOCH,
+                Collections.singletonList(
+                        new NotifyLeaderAndIsrData(
+                                PhysicalTablePath.of(tablePath),
+                                tableBucket,
+                                Collections.singletonList(TABLET_SERVER_ID),
+                                new LeaderAndIsr(
+                                        TABLET_SERVER_ID,
+                                        INITIAL_LEADER_EPOCH,
+                                        Collections.singletonList(TABLET_SERVER_ID),
+                                        Collections.emptyList(),
+                                        INITIAL_COORDINATOR_EPOCH,
+                                        INITIAL_BUCKET_EPOCH))),
+                future::complete);
+
+        assertThat(future.get()).containsOnly(new NotifyLeaderAndIsrResultForBucket(tableBucket));
+        assertThat(replicaManager.getReplicaOrException(tableBucket).isLeader()).isTrue();
     }
 
     @Test

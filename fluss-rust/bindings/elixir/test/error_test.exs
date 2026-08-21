@@ -31,7 +31,8 @@ defmodule Fluss.ErrorTest do
     :storage_exception,
     :not_enough_replicas_after_append_exception,
     :not_enough_replicas_exception,
-    :leader_not_available_exception
+    :leader_not_available_exception,
+    :storage_backpressure_exception
   ]
 
   @non_retriable_codes [

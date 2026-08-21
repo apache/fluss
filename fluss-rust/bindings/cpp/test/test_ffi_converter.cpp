@@ -51,6 +51,17 @@ fluss::ffi::FfiTypeNode Node(int32_t type_id, uint32_t child_count = 0, bool nul
 
 }  // namespace
 
+TEST(FfiConverterTest, KvBackpressureConfiguration) {
+    fluss::Configuration config;
+    EXPECT_EQ(config.writer_kv_backpressure_max_throttle_ms, 3000u);
+
+    config.writer_kv_backpressure_max_throttle_ms = 1500;
+    auto ffi_config = fluss::utils::to_ffi_config(config);
+    EXPECT_EQ(ffi_config.writer_kv_backpressure_max_throttle_ms, 1500u);
+    EXPECT_EQ(fluss::ErrorCode::STORAGE_BACKPRESSURE_EXCEPTION, 72);
+    EXPECT_TRUE(fluss::ErrorCode::IsRetriable(72));
+}
+
 // --- DataType value semantics ---
 
 TEST(DataTypeTest, DefaultNullable) { EXPECT_TRUE(DataType::Int().nullable()); }

@@ -20,7 +20,6 @@ package org.apache.fluss.server.utils;
 import org.apache.fluss.cluster.TabletServerInfo;
 import org.apache.fluss.exception.InvalidBucketsException;
 import org.apache.fluss.exception.InvalidReplicationFactorException;
-import org.apache.fluss.exception.InvalidServerRackInfoException;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.TableAssignment;
 
@@ -468,7 +467,7 @@ class TableAssignmentUtilsTest {
     }
 
     @Test
-    void testPartialTabletServersHaveRackInfo() {
+    void testFallBackToRackUnawareAssignmentWhenRackInfoIsPartial() {
         Map<Integer, String> rackMap = new HashMap<>();
         rackMap.put(0, "rack1");
         rackMap.put(1, null);
@@ -476,13 +475,20 @@ class TableAssignmentUtilsTest {
         rackMap.put(3, null);
         rackMap.put(4, "rack3");
 
-        assertThatThrownBy(
-                        () ->
-                                generateAssignment(
-                                        6, 3, toTabletServerInfo(rackMap, Collections.emptyList())))
-                .isInstanceOf(InvalidServerRackInfoException.class)
-                .hasMessageContaining(
-                        "Not all tabletServers have rack information for replica rack aware assignment.");
+        TableAssignment tableAssignment =
+                generateAssignment(
+                        6, 3, toTabletServerInfo(rackMap, Collections.emptyList()), 0, 0);
+        TableAssignment expectedAssignment =
+                TableAssignment.builder()
+                        .add(0, BucketAssignment.of(0, 1, 2))
+                        .add(1, BucketAssignment.of(1, 2, 3))
+                        .add(2, BucketAssignment.of(2, 3, 4))
+                        .add(3, BucketAssignment.of(3, 4, 0))
+                        .add(4, BucketAssignment.of(4, 0, 1))
+                        .add(5, BucketAssignment.of(0, 2, 3))
+                        .build();
+
+        assertThat(tableAssignment).isEqualTo(expectedAssignment);
     }
 
     private static void checkTableAssignment(

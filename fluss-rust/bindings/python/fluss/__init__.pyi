@@ -232,6 +232,10 @@ class Config:
     @writer_buffer_wait_timeout_ms.setter
     def writer_buffer_wait_timeout_ms(self, timeout: int) -> None: ...
     @property
+    def writer_kv_backpressure_max_throttle_ms(self) -> int: ...
+    @writer_kv_backpressure_max_throttle_ms.setter
+    def writer_kv_backpressure_max_throttle_ms(self, timeout: int) -> None: ...
+    @property
     def connect_timeout_ms(self) -> int: ...
     @connect_timeout_ms.setter
     def connect_timeout_ms(self, timeout: int) -> None: ...
@@ -1280,6 +1284,7 @@ class ErrorCode:
     INELIGIBLE_REPLICA_EXCEPTION: int
     INVALID_ALTER_TABLE_EXCEPTION: int
     DELETION_DISABLED_EXCEPTION: int
+    STORAGE_BACKPRESSURE_EXCEPTION: int
 
 @final
 class OffsetSpec:

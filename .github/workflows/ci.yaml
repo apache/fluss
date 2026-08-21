@@ -27,6 +27,7 @@ on:
       - 'helm/**'
       - 'fluss-rust/**'
       - 'devkit/**'
+      - 'fluss-gateway/**'
       - '**/*.md'
   pull_request:
     paths-ignore:
@@ -34,6 +35,7 @@ on:
       - 'helm/**'
       - 'fluss-rust/**'
       - 'devkit/**'
+      - 'fluss-gateway/**'
       - '**/*.md'
 
 concurrency:

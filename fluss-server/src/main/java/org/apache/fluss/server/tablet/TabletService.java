@@ -20,6 +20,7 @@ package org.apache.fluss.server.tablet;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.exception.AuthorizationException;
 import org.apache.fluss.exception.InvalidScanRequestException;
+import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.exception.ScannerExpiredException;
 import org.apache.fluss.exception.StaleMetadataException;
@@ -85,6 +86,7 @@ import org.apache.fluss.server.RpcServiceBase;
 import org.apache.fluss.server.authorizer.Authorizer;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.entity.FetchReqInfo;
+import org.apache.fluss.server.entity.LookupDataForBucket;
 import org.apache.fluss.server.entity.NotifyKvSnapshotOffsetData;
 import org.apache.fluss.server.entity.NotifyLakeTableOffsetData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
@@ -120,6 +122,7 @@ import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.hasHistoricalLookup;
 import static org.apache.fluss.security.acl.OperationType.DESCRIBE;
 import static org.apache.fluss.security.acl.OperationType.READ;
 import static org.apache.fluss.security.acl.OperationType.WRITE;
@@ -149,6 +152,7 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makePrefixLook
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeProduceLogResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makePutKvResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeStopReplicaResponse;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toHistoricalLookupData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toLookupData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toPrefixLookupData;
 
@@ -299,30 +303,48 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
 
     @Override
     public CompletableFuture<LookupResponse> lookup(LookupRequest request) {
-        Map<TableBucket, List<byte[]>> lookupData = toLookupData(request);
         Map<TableBucket, LookupResultForBucket> errorResponseMap = new HashMap<>();
         CompletableFuture<LookupResponse> response = new CompletableFuture<>();
 
         if (request.hasInsertIfNotExists() && request.isInsertIfNotExists()) {
             authorizeTable(WRITE, request.getTableId());
+            if (hasHistoricalLookup(request)) {
+                throw new InvalidTableException(
+                        "Lookup with insertIfNotExists is not supported for "
+                                + "historical partition lookup.");
+            }
+            Map<TableBucket, List<byte[]>> normalLookupData = toLookupData(request);
             replicaManager.lookups(
                     request.isInsertIfNotExists(),
                     request.getTimeoutMs(),
                     request.getAcks(),
-                    lookupData,
+                    normalLookupData,
                     currentSession().getApiVersion(),
                     value -> response.complete(makeLookupResponse(value, errorResponseMap)));
         } else {
-            Map<TableBucket, List<byte[]>> interesting =
-                    authorizeRequestData(
-                            READ, lookupData, errorResponseMap, LookupResultForBucket::new);
-            if (interesting.isEmpty()) {
-                return CompletableFuture.completedFuture(makeLookupResponse(errorResponseMap));
+            boolean historicalLookupRequest = hasHistoricalLookup(request);
+            if (historicalLookupRequest) {
+                List<LookupDataForBucket> historicalLookupData = toHistoricalLookupData(request);
+                authorizeTable(READ, request.getTableId());
+                replicaManager.historicalLookups(
+                        historicalLookupData,
+                        value -> response.complete(makeLookupResponse(value)));
+            } else {
+                Map<TableBucket, List<byte[]>> normalLookupData = toLookupData(request);
+                Map<TableBucket, List<byte[]>> interesting =
+                        authorizeRequestData(
+                                READ,
+                                normalLookupData,
+                                errorResponseMap,
+                                LookupResultForBucket::new);
+                if (interesting.isEmpty()) {
+                    return CompletableFuture.completedFuture(makeLookupResponse(errorResponseMap));
+                }
+                replicaManager.lookups(
+                        interesting,
+                        currentSession().getApiVersion(),
+                        value -> response.complete(makeLookupResponse(value, errorResponseMap)));
             }
-            replicaManager.lookups(
-                    lookupData,
-                    currentSession().getApiVersion(),
-                    value -> response.complete(makeLookupResponse(value, errorResponseMap)));
         }
         return response;
     }

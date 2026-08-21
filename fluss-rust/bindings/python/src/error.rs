@@ -273,4 +273,7 @@ impl ErrorCode {
     /// Deletion operations are disabled on this table.
     #[classattr]
     const DELETION_DISABLED_EXCEPTION: i32 = 57;
+    /// The server rejected a write due to storage backpressure.
+    #[classattr]
+    const STORAGE_BACKPRESSURE_EXCEPTION: i32 = 72;
 }

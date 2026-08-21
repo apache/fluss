@@ -46,6 +46,7 @@ import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.utils.PartitionUtils.convertValueOfType;
 import static org.apache.fluss.utils.PartitionUtils.generateAutoPartition;
+import static org.apache.fluss.utils.PartitionUtils.isPastAutoPartition;
 import static org.apache.fluss.utils.PartitionUtils.parseValueOfType;
 import static org.apache.fluss.utils.PartitionUtils.validateAutoPartitionTime;
 import static org.apache.fluss.utils.PartitionUtils.validatePartitionSpec;
@@ -301,6 +302,7 @@ class PartitionUtilsTest {
         dashedDayConf.setBoolean(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true);
         dashedDayConf.set(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, AutoPartitionTimeUnit.DAY);
         dashedDayConf.setString(ConfigOptions.TABLE_AUTO_PARTITION_TIME_FORMAT, "yyyy-MM-dd");
+        dashedDayConf.setString(ConfigOptions.TABLE_AUTO_PARTITION_TIMEZONE, "UTC");
         AutoPartitionStrategy dashedDayStrategy = AutoPartitionStrategy.from(dashedDayConf);
 
         LocalDate today =
@@ -329,6 +331,12 @@ class PartitionUtilsTest {
                 .isInstanceOf(InvalidPartitionException.class)
                 .hasMessageContaining("yyyy-MM-dd")
                 .hasMessageContaining("DAY");
+
+        Instant now = Instant.parse("2024-01-10T00:00:00Z");
+        assertThat(isPastAutoPartition("2024-01-09", dashedDayStrategy, now)).isTrue();
+        assertThat(isPastAutoPartition("2024-01-10", dashedDayStrategy, now)).isFalse();
+        assertThat(isPastAutoPartition("2024-01-11", dashedDayStrategy, now)).isFalse();
+        assertThat(isPastAutoPartition("20240109", dashedDayStrategy, now)).isFalse();
     }
 
     @Test

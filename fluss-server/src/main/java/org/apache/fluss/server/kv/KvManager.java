@@ -65,6 +65,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -228,11 +229,18 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
     }
 
     public void shutdown() {
-        LOG.info("Shutting down KvManager");
+        shutdown(KvCloseMode.PRESERVE_LOCAL_STATE);
+    }
+
+    public void shutdown(KvCloseMode closeMode) {
+        Objects.requireNonNull(closeMode, "closeMode");
+        LOG.info("Shutting down KvManager with close mode {}.", closeMode);
         isShutdown = true;
         kvFlushScheduler.close();
         List<KvTablet> kvs = new ArrayList<>(currentKvs.values());
-        closeTabletsConcurrently(kvs, "kv-tablet-closing", this::closeKvTablet).join();
+        closeTabletsConcurrently(
+                        kvs, "kv-tablet-closing", kvTablet -> closeKvTablet(kvTablet, closeMode))
+                .join();
         arrowBufferAllocator.close();
         memorySegmentPool.close();
         if (sharedRocksDBRateLimiter != null) {
@@ -241,11 +249,15 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
         LOG.info("Shut down KvManager complete.");
     }
 
-    private void closeKvTablet(KvTablet kvTablet) {
+    private void closeKvTablet(KvTablet kvTablet, KvCloseMode closeMode) {
         try {
-            kvTablet.close();
+            kvTablet.close(closeMode);
         } catch (Exception e) {
-            LOG.warn("Exception while closing kv tablet {}.", kvTablet.getTableBucket(), e);
+            LOG.warn(
+                    "Exception while closing kv tablet {} with mode {}.",
+                    kvTablet.getTableBucket(),
+                    closeMode,
+                    e);
         }
     }
 

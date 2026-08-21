@@ -209,12 +209,12 @@ public class LogFetcher implements Closeable {
      * have an in-flight fetch or pending fetch data.
      */
     public void sendFetches() {
-        List<TableBucket> fetchable = fetchableBuckets();
-        checkAndUpdateMetadata(fetchable);
+        checkAndUpdateMetadata(fetchableBuckets());
         synchronized (this) {
-            // NOTE: Don't perform heavy I/O operations or synchronous waits inside this lock to
-            // avoid blocking the future complete of FetchLogResponse.
-            Map<Integer, FetchLogRequest> fetchRequestMap = prepareFetchLogRequests(fetchable);
+            // Recompute after metadata update because response callbacks can populate the buffer.
+            // Don't perform heavy I/O operations or synchronous waits here.
+            Map<Integer, FetchLogRequest> fetchRequestMap =
+                    prepareFetchLogRequests(fetchableBuckets());
             fetchRequestMap.forEach(
                     (nodeId, fetchLogRequest) -> {
                         LOG.debug("Adding pending request for node id {}", nodeId);

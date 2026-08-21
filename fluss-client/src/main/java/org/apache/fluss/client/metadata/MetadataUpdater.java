@@ -467,6 +467,14 @@ public class MetadataUpdater {
         }
     }
 
+    /** Invalid the bucket metadata and partition ID mappings for the given physical table paths. */
+    public void invalidPhysicalTableBucketAndPartitionMeta(
+            Set<PhysicalTablePath> physicalTablesToInvalid) {
+        if (!physicalTablesToInvalid.isEmpty()) {
+            cluster = cluster.invalidPhysicalTableBucketAndPartitionMeta(physicalTablesToInvalid);
+        }
+    }
+
     /** Get the table physical paths by table ids and partition ids. */
     public Set<PhysicalTablePath> getPhysicalTablePathByIds(
             @Nullable Collection<Long> tableId,

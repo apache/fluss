@@ -26,6 +26,7 @@ import org.apache.fluss.flink.adapter.ResolvedCatalogMaterializedTableAdapter;
 import org.apache.fluss.flink.lake.LakeFlinkCatalog;
 import org.apache.fluss.flink.utils.FlinkConversionsTest;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.testutils.common.MultiVersionTest;
 import org.apache.fluss.utils.ExceptionUtils;
 
 import org.apache.flink.table.api.DataTypes;
@@ -225,6 +226,7 @@ class FlinkCatalogTest {
     }
 
     @Test
+    @MultiVersionTest
     void testCreateTable() throws Exception {
         Map<String, String> options = new HashMap<>();
         assertThatThrownBy(() -> catalog.getTable(tableInDefaultDb))
@@ -1085,12 +1087,15 @@ class FlinkCatalogTest {
                         "rb_build_agg",
                         "rb_or_agg",
                         "rb_and_agg",
+                        "rb_xor_agg",
                         "rb_cardinality",
                         "rb_build",
                         "rb_contains",
                         "rb_to_array",
                         "rb_or",
-                        "rb_and");
+                        "rb_and",
+                        "rb_xor",
+                        "rb_andnot");
 
         ObjectPath functionPath = new ObjectPath(DEFAULT_DB, "testFunction");
         assertThat(catalog.functionExists(functionPath)).isFalse();
@@ -1191,7 +1196,7 @@ class FlinkCatalogTest {
         List<String> functions = catalog.listFunctions(DEFAULT_DB);
 
         // aggregate functions
-        assertThat(functions).contains("rb_build_agg", "rb_or_agg", "rb_and_agg");
+        assertThat(functions).contains("rb_build_agg", "rb_or_agg", "rb_and_agg", "rb_xor_agg");
         // scalar functions
         assertThat(functions)
                 .contains(
@@ -1200,7 +1205,9 @@ class FlinkCatalogTest {
                         "rb_contains",
                         "rb_to_array",
                         "rb_or",
-                        "rb_and");
+                        "rb_and",
+                        "rb_xor",
+                        "rb_andnot");
 
         // verify each function exists and resolves to the correct class
         assertThat(catalog.functionExists(new ObjectPath(DEFAULT_DB, "rb_cardinality"))).isTrue();
@@ -1209,8 +1216,44 @@ class FlinkCatalogTest {
         assertThat(catalog.functionExists(new ObjectPath(DEFAULT_DB, "rb_to_array"))).isTrue();
         assertThat(catalog.functionExists(new ObjectPath(DEFAULT_DB, "rb_or"))).isTrue();
         assertThat(catalog.functionExists(new ObjectPath(DEFAULT_DB, "rb_and"))).isTrue();
+        assertThat(catalog.functionExists(new ObjectPath(DEFAULT_DB, "rb_xor_agg"))).isTrue();
+        assertThat(catalog.functionExists(new ObjectPath(DEFAULT_DB, "rb_xor"))).isTrue();
+        assertThat(catalog.functionExists(new ObjectPath(DEFAULT_DB, "rb_andnot"))).isTrue();
 
         // verify unknown still returns false
         assertThat(catalog.functionExists(new ObjectPath(DEFAULT_DB, "unknown_fn"))).isFalse();
+    }
+
+    @Test
+    void testBuiltinFunctionsRequireExistingDatabase() throws Exception {
+        String nonexistentDb = "nonexistent_db_for_functions";
+        assertThat(catalog.databaseExists(nonexistentDb)).isFalse();
+
+        // listFunctions on a nonexistent database throws
+        assertThatThrownBy(() -> catalog.listFunctions(nonexistentDb))
+                .isInstanceOf(DatabaseNotExistException.class)
+                .hasMessage(
+                        "Database %s does not exist in Catalog %s.", nonexistentDb, CATALOG_NAME);
+
+        // functionExists on a nonexistent database returns false, not throw
+        ObjectPath qualifiedInNonexistentDb = new ObjectPath(nonexistentDb, "rb_build");
+        assertThat(catalog.functionExists(qualifiedInNonexistentDb)).isFalse();
+
+        // getFunction on a nonexistent database throws FunctionNotExistException
+        assertThatThrownBy(() -> catalog.getFunction(qualifiedInNonexistentDb))
+                .isInstanceOf(FunctionNotExistException.class);
+
+        // built-in functions still resolve from every existing database, not just DEFAULT_DB
+        String secondDb = "second_db_for_functions";
+        catalog.createDatabase(
+                secondDb, new CatalogDatabaseImpl(Collections.emptyMap(), null), true);
+        try {
+            assertThat(catalog.functionExists(new ObjectPath(secondDb, "rb_build"))).isTrue();
+            assertThat(catalog.getFunction(new ObjectPath(secondDb, "rb_build"))).isNotNull();
+            assertThat(catalog.listFunctions(secondDb))
+                    .contains("rb_build_agg", "rb_or_agg", "rb_and_agg", "rb_xor_agg");
+        } finally {
+            catalog.dropDatabase(secondDb, true, true);
+        }
     }
 }

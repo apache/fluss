@@ -15,25 +15,13 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.flink.adapter;
+package org.apache.fluss.server.kv;
 
-import org.apache.flink.table.catalog.CatalogBaseTable;
-import org.junit.jupiter.api.Test;
+/** Controls whether closing a KV tablet must persist its current local RocksDB state. */
+public enum KvCloseMode {
+    /** Preserve the existing local-reopen behavior by allowing RocksDB to flush on close. */
+    PRESERVE_LOCAL_STATE,
 
-import static org.assertj.core.api.Assertions.assertThat;
-
-/** Test for {@link CatalogTableAdapter}. */
-public class FlinkCatalogTableTest {
-
-    @Test
-    public void testIsMaterializedTable() {
-        assertThat(
-                        CatalogTableAdapter.isMaterializedTable(
-                                CatalogBaseTable.TableKind.MATERIALIZED_TABLE))
-                .isEqualTo(true);
-        assertThat(CatalogTableAdapter.isMaterializedTable(CatalogBaseTable.TableKind.VIEW))
-                .isEqualTo(false);
-        assertThat(CatalogTableAdapter.isMaterializedTable(CatalogBaseTable.TableKind.TABLE))
-                .isEqualTo(false);
-    }
+    /** Skip flushing data that recovery will rebuild from a snapshot and changelog. */
+    DISCARD_UNPERSISTED_STATE
 }

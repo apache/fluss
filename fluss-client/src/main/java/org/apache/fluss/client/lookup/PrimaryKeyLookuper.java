@@ -22,6 +22,7 @@ import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.table.getter.PartitionGetter;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
@@ -32,10 +33,15 @@ import org.apache.fluss.types.RowType;
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.NotThreadSafe;
 
+import java.time.Instant;
 import java.util.Collections;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
 import static org.apache.fluss.client.utils.ClientUtils.getPartitionId;
+import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
+import static org.apache.fluss.utils.PartitionUtils.isPastAutoPartition;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /** An implementation of {@link Lookuper} that lookups by primary key. */
@@ -54,6 +60,18 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
     private final int numBuckets;
     private final boolean insertIfNotExists;
 
+    /**
+     * Missing past partition names already routed to the historical system partition.
+     *
+     * <p>The historical partition option is fixed for the lifetime of the lookuper. Existing lookup
+     * jobs that need historical partition data must be restarted after changing the option so newly
+     * created lookupers use the latest table configuration. Missing current and future partitions
+     * are not cached because the coordinator may create them later.
+     */
+    // TODO: Introduce list_historical_partitions or list_all_partitions to initialize this set
+    // eagerly and avoid exception-driven discovery during bootstrap.
+    private final Set<String> confirmedHistoricalPartitions;
+
     /** a getter to extract partition from lookup key row, null when it's not a partitioned. */
     private @Nullable final PartitionGetter partitionGetter;
 
@@ -70,6 +88,7 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
                 tableInfo.getTablePath());
         this.numBuckets = tableInfo.getNumBuckets();
         this.insertIfNotExists = insertIfNotExists;
+        this.confirmedHistoricalPartitions = new HashSet<>();
 
         // the row type of the input lookup row
         RowType lookupRowType = tableInfo.getRowType().project(tableInfo.getPrimaryKeys());
@@ -105,8 +124,14 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
                 bucketKeyEncoder == primaryKeyEncoder
                         ? pkBytes
                         : bucketKeyEncoder.encodeKey(lookupKey);
+        int bucketId = bucketingFunction.bucketing(bkBytes, numBuckets);
         Long partitionId = null;
+        String originalPartitionName = null;
         if (partitionGetter != null) {
+            originalPartitionName = partitionGetter.getPartition(lookupKey);
+            if (confirmedHistoricalPartitions.contains(originalPartitionName)) {
+                return historicalLookup(bucketId, pkBytes, originalPartitionName);
+            }
             try {
                 partitionId =
                         getPartitionId(
@@ -115,19 +140,105 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
                                 tableInfo.getTablePath(),
                                 metadataUpdater);
             } catch (PartitionNotExistException e) {
-                return CompletableFuture.completedFuture(new LookupResult(Collections.emptyList()));
+                return mayFallbackToHistoricalLookup(bucketId, pkBytes, originalPartitionName);
             }
         }
 
-        int bucketId = bucketingFunction.bucketing(bkBytes, numBuckets);
         TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), partitionId, bucketId);
+        return lookupBucket(tableBucket, pkBytes, insertIfNotExists, false, originalPartitionName);
+    }
+
+    /**
+     * Falls back to historical lookup when the normal partition is missing and fallback is enabled.
+     */
+    private CompletableFuture<LookupResult> mayFallbackToHistoricalLookup(
+            int bucketId, byte[] keyBytes, String originalPartitionName) {
+        // Clear the stale normal-partition route before deciding whether to fall back so that a
+        // partition created later can be discovered by the next lookup.
+        metadataUpdater.invalidPhysicalTableBucketAndPartitionMeta(
+                Collections.singleton(
+                        PhysicalTablePath.of(tableInfo.getTablePath(), originalPartitionName)));
+        if (!tableInfo.getTableConfig().isHistoricalPartitionEnabled()) {
+            return CompletableFuture.completedFuture(new LookupResult(Collections.emptyList()));
+        }
+        // A missing current or future partition may still be created by auto-partitioning. Do not
+        // cache it as historical, otherwise this lookuper would keep bypassing the normal partition
+        // after it is created.
+        if (!isPastAutoPartition(
+                originalPartitionName,
+                tableInfo.getTableConfig().getAutoPartitionStrategy(),
+                Instant.now())) {
+            return CompletableFuture.completedFuture(new LookupResult(Collections.emptyList()));
+        }
+        confirmedHistoricalPartitions.add(originalPartitionName);
+        return historicalLookup(bucketId, keyBytes, originalPartitionName);
+    }
+
+    private CompletableFuture<LookupResult> historicalLookup(
+            int bucketId, byte[] keyBytes, String originalPartitionName) {
+        if (insertIfNotExists) {
+            return completedExceptionally(
+                    new UnsupportedOperationException(
+                            "Lookup with insertIfNotExists is not supported for historical partition lookup."));
+        }
+        PhysicalTablePath historicalPartitionPath =
+                PhysicalTablePath.of(tableInfo.getTablePath(), HISTORICAL_PARTITION_VALUE);
+        try {
+            if (!metadataUpdater.checkAndUpdatePartitionMetadata(historicalPartitionPath)) {
+                throw new PartitionNotExistException(
+                        "Historical partition " + historicalPartitionPath + " does not exist.");
+            }
+            Long historicalPartitionId =
+                    metadataUpdater.getPartitionIdOrElseThrow(historicalPartitionPath);
+            TableBucket tableBucket =
+                    new TableBucket(tableInfo.getTableId(), historicalPartitionId, bucketId);
+            return lookupBucket(tableBucket, keyBytes, false, true, originalPartitionName);
+        } catch (Throwable t) {
+            return completedExceptionally(t);
+        }
+    }
+
+    private CompletableFuture<LookupResult> lookupBucket(
+            TableBucket tableBucket,
+            byte[] keyBytes,
+            boolean insertIfNotExists,
+            boolean historicalLookup,
+            @Nullable String originalPartitionName) {
         CompletableFuture<LookupResult> lookupFuture = new CompletableFuture<>();
         lookupClient
-                .lookup(tableInfo.getTablePath(), tableBucket, pkBytes, insertIfNotExists)
+                .lookup(
+                        tableInfo.getTablePath(),
+                        tableBucket,
+                        keyBytes,
+                        insertIfNotExists,
+                        historicalLookup ? originalPartitionName : null)
                 .whenComplete(
                         (result, error) -> {
                             if (error != null) {
-                                lookupFuture.completeExceptionally(error);
+                                // Only a missing normal partition with a captured original name can
+                                // fall back. An already historical lookup must propagate its
+                                // failure; falling back again would repeatedly issue the same
+                                // historical lookup.
+                                if (!(error instanceof PartitionNotExistException)
+                                        || historicalLookup
+                                        || originalPartitionName == null) {
+                                    lookupFuture.completeExceptionally(error);
+                                    return;
+                                }
+
+                                mayFallbackToHistoricalLookup(
+                                                tableBucket.getBucket(),
+                                                keyBytes,
+                                                originalPartitionName)
+                                        .whenComplete(
+                                                (historicalResult, historicalError) -> {
+                                                    if (historicalError != null) {
+                                                        lookupFuture.completeExceptionally(
+                                                                historicalError);
+                                                    } else {
+                                                        lookupFuture.complete(historicalResult);
+                                                    }
+                                                });
                             } else {
                                 handleLookupResponse(
                                         result == null
@@ -137,5 +248,11 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
                             }
                         });
         return lookupFuture;
+    }
+
+    private static CompletableFuture<LookupResult> completedExceptionally(Throwable throwable) {
+        CompletableFuture<LookupResult> future = new CompletableFuture<>();
+        future.completeExceptionally(throwable);
+        return future;
     }
 }

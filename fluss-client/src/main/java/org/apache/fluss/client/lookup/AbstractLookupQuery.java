@@ -21,6 +21,8 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 
+import javax.annotation.Nullable;
+
 import java.util.concurrent.CompletableFuture;
 
 /** Abstract Class to represent a lookup operation. */
@@ -30,13 +32,31 @@ public abstract class AbstractLookupQuery<T> {
     private final TablePath tablePath;
     private final TableBucket tableBucket;
     private final byte[] key;
+
+    /**
+     * Null for normal and prefix lookups. Historical lookups use this to carry the original
+     * partition name.
+     */
+    private final @Nullable String originalPartitionName;
+
     private int retries;
+    private long nextRetryTimeMs;
 
     public AbstractLookupQuery(TablePath tablePath, TableBucket tableBucket, byte[] key) {
+        this(tablePath, tableBucket, key, null);
+    }
+
+    public AbstractLookupQuery(
+            TablePath tablePath,
+            TableBucket tableBucket,
+            byte[] key,
+            @Nullable String originalPartitionName) {
         this.tablePath = tablePath;
         this.tableBucket = tableBucket;
         this.key = key;
+        this.originalPartitionName = originalPartitionName;
         this.retries = 0;
+        this.nextRetryTimeMs = 0;
     }
 
     public byte[] key() {
@@ -51,12 +71,24 @@ public abstract class AbstractLookupQuery<T> {
         return tableBucket;
     }
 
+    public @Nullable String originalPartitionName() {
+        return originalPartitionName;
+    }
+
     public int retries() {
         return retries;
     }
 
     public void incrementRetries() {
         retries++;
+    }
+
+    public long nextRetryTimeMs() {
+        return nextRetryTimeMs;
+    }
+
+    public void setNextRetryTimeMs(long nextRetryTimeMs) {
+        this.nextRetryTimeMs = nextRetryTimeMs;
     }
 
     public abstract LookupType lookupType();

@@ -1,0 +1,144 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Gateway-only CI: gateway changes never build the fluss-rust workspace and vice versa.
+# `uses:` step inputs are relative to the repository root.
+name: Gateway CI
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'fluss-gateway/**'
+      - '.github/workflows/gateway-ci.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'fluss-gateway/**'
+      - '.github/workflows/gateway-ci.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: fluss-gateway
+
+jobs:
+  build-and-unit-test:
+    name: "Gateway Build and Tests"
+    timeout-minutes: 60
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: fluss-gateway
+
+      # Without `--locked` Cargo rewrites a stale lockfile in the CI workspace, and the run would
+      # validate a dependency graph the repository does not contain.
+      - name: Build
+        run: cargo build --locked --all-targets
+
+      - name: Unit Test
+        run: cargo test --locked --all-targets
+        env:
+          RUST_LOG: DEBUG
+          RUST_BACKTRACE: full
+
+      - name: OpenAPI drift check
+        run: |
+          cargo test --locked --lib protocol::rest::openapi::tests::export_checked_in_document -- --ignored --exact
+          git diff --exit-code openapi.yaml
+
+      - name: OpenAPI external validation
+        run: npx --yes @redocly/cli@1 lint openapi.yaml
+
+  msrv:
+    name: "Gateway MSRV (1.88)"
+    # rust-toolchain.toml floats to stable, so a plain build never catches features newer
+    # than the declared rust-version; `+toolchain` overrides the file here.
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install the MSRV toolchain
+        run: rustup toolchain install 1.88.0 --profile minimal
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: fluss-gateway
+
+      - name: Check on the declared MSRV
+        run: cargo +1.88.0 check --locked --all-targets
+
+  check-license-and-formatting:
+    name: "Gateway License and Formatting Check"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Check License Header
+        uses: apache/skywalking-eyes/header@61275cc80d0798a405cb070f7d3a8aaf7cf2c2c1 # v0.8.0
+        with:
+          config: fluss-gateway/.licenserc.yaml
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.14.22
+
+      - name: Check dependency licenses (Apache-compatible)
+        run: cargo deny --locked check licenses
+
+      - name: Check banned dependencies (HTTP/2 stack stays out)
+        run: cargo deny --locked check bans
+
+      # The inventory ships with the source release, so a stale one is worse than none.
+      - name: Dependency inventory drift check
+        run: |
+          cargo deny --locked list -f tsv -t 0.6 > DEPENDENCIES.rust.tsv
+          git diff --exit-code DEPENDENCIES.rust.tsv
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: fluss-gateway
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Rustdoc
+        run: cargo doc --locked --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings

@@ -404,35 +404,37 @@ public class TestTabletServerGateway implements TabletServerGateway {
     }
 
     public void response(int index, ApiMessage response) {
+        removeRequestFuture(index).complete(response);
+    }
+
+    /** Completes the request at the given index exceptionally. */
+    public void failRequest(int index, Throwable throwable) {
+        removeRequestFuture(index).completeExceptionally(throwable);
+    }
+
+    @SuppressWarnings("unchecked")
+    private CompletableFuture<ApiMessage> removeRequestFuture(int index) {
         if (requests.isEmpty()) {
             throw new IllegalStateException("No requests pending for inbound response.");
         }
 
-        // Index out of bounds check.
         if (index >= requests.size()) {
             throw new IllegalArgumentException(
                     "Index " + index + " is out of bounds for requests queue.");
         }
 
-        CompletableFuture<ApiMessage> result = null;
         int currentIndex = 0;
         for (Iterator<Tuple2<ApiMessage, CompletableFuture<?>>> it = requests.iterator();
                 it.hasNext(); ) {
             Tuple2<ApiMessage, CompletableFuture<?>> tuple = it.next();
             if (currentIndex == index) {
-                result = (CompletableFuture<ApiMessage>) tuple.f1;
                 it.remove();
-                break;
+                return (CompletableFuture<ApiMessage>) tuple.f1;
             }
             currentIndex++;
         }
 
-        if (result != null) {
-            result.complete(response);
-        } else {
-            throw new IllegalStateException(
-                    "The future to complete was not found at index " + index);
-        }
+        throw new IllegalStateException("The future to complete was not found at index " + index);
     }
 
     private StopReplicaResponse mockStopReplicaResponse(

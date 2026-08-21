@@ -27,6 +27,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.testutils.common.MultiVersionTest;
 import org.apache.fluss.utils.clock.ManualClock;
 
 import org.apache.flink.api.common.JobID;
@@ -59,12 +60,12 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
+import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.collectBatchRows;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.collectRowsWithTimeout;
 import static org.apache.fluss.flink.utils.FlinkTestBase.writeRows;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Integration test for $changelog virtual table functionality. */
 abstract class ChangelogVirtualTableITCase {
@@ -175,6 +176,7 @@ abstract class ChangelogVirtualTableITCase {
     }
 
     @Test
+    @MultiVersionTest
     public void testDescribeChangelogTable() throws Exception {
         // Create a table with various data types to test complex schema
         tEnv.executeSql(
@@ -249,7 +251,7 @@ abstract class ChangelogVirtualTableITCase {
     }
 
     @Test
-    public void testBatchReadChangelogTableFailsFast() throws Exception {
+    public void testBatchReadChangelogTable() throws Exception {
         tEnv.executeSql(
                 "CREATE TABLE batch_changelog_test ("
                         + "  id INT NOT NULL,"
@@ -257,11 +259,151 @@ abstract class ChangelogVirtualTableITCase {
                         + "  PRIMARY KEY (id) NOT ENFORCED"
                         + ") WITH ('bucket.num' = '1')");
 
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "batch_changelog_test");
+        CLOCK.advanceTime(Duration.ofMillis(1000));
+        writeRows(conn, tablePath, Arrays.asList(row(1, "Alice"), row(2, "Bob")), false);
+        CLOCK.advanceTime(Duration.ofMillis(1000));
+        writeRows(conn, tablePath, Arrays.asList(row(1, "Alice-updated")), false);
+        CLOCK.advanceTime(Duration.ofMillis(1000));
+        deleteRows(conn, tablePath, Arrays.asList(row(2, "Bob")));
+
         tEnv = initBatchTableEnvironment();
 
-        assertThatThrownBy(() -> tEnv.explainSql("SELECT * FROM batch_changelog_test$changelog"))
-                .hasRootCauseInstanceOf(UnsupportedOperationException.class)
-                .hasRootCauseMessage("$changelog virtual tables only support streaming mode.");
+        // The default FULL startup mode maps to the earliest log offset for virtual tables. The
+        // batch source captures the latest offsets as stopping offsets and terminates after
+        // replaying the bounded changelog.
+        List<String> allChanges =
+                collectBatchRows(
+                        tEnv.executeSql(
+                                        "SELECT _change_type, _log_offset, id, name "
+                                                + "FROM batch_changelog_test$changelog "
+                                                + "ORDER BY _log_offset")
+                                .collect());
+        assertThat(allChanges)
+                .containsExactly(
+                        "+I[insert, 0, 1, Alice]",
+                        "+I[insert, 1, 2, Bob]",
+                        "+I[update_before, 2, 1, Alice]",
+                        "+I[update_after, 3, 1, Alice-updated]",
+                        "+I[delete, 4, 2, Bob]");
+
+        List<String> primaryKeyFilteredAndLimited =
+                collectBatchRows(
+                        tEnv.executeSql(
+                                        "SELECT _change_type, _log_offset, id, name "
+                                                + "FROM batch_changelog_test$changelog "
+                                                + "WHERE id = 1 "
+                                                + "ORDER BY _log_offset LIMIT 2")
+                                .collect());
+        assertThat(primaryKeyFilteredAndLimited)
+                .containsExactly("+I[insert, 0, 1, Alice]", "+I[update_before, 2, 1, Alice]");
+
+        // Filters on _commit_timestamp are covered by
+        // testBatchReadChangelogTableWithCommitTimestampFilter, which is disabled on Flink 1.18
+        // (FLINK-35318).
+        List<String> metadataFiltered =
+                collectBatchRows(
+                        tEnv.executeSql(
+                                        "SELECT _change_type, _log_offset, id "
+                                                + "FROM batch_changelog_test$changelog "
+                                                + "WHERE _change_type = 'delete' "
+                                                + "AND _log_offset = 4")
+                                .collect());
+        assertThat(metadataFiltered).containsExactly("+I[delete, 4, 2]");
+
+        List<String> timestampStartup =
+                collectBatchRows(
+                        tEnv.executeSql(
+                                        "SELECT _change_type, _log_offset "
+                                                + "FROM batch_changelog_test$changelog "
+                                                + "/*+ OPTIONS("
+                                                + "'scan.startup.mode' = 'timestamp', "
+                                                + "'scan.startup.timestamp' = '1500') */ "
+                                                + "ORDER BY _log_offset")
+                                .collect());
+        assertThat(timestampStartup)
+                .containsExactly("+I[update_before, 2]", "+I[update_after, 3]", "+I[delete, 4]");
+
+        tEnv.executeSql(
+                "CREATE TABLE partitioned_batch_changelog_test ("
+                        + "  id INT NOT NULL,"
+                        + "  name STRING,"
+                        + "  region STRING NOT NULL,"
+                        + "  PRIMARY KEY (id, region) NOT ENFORCED"
+                        + ") PARTITIONED BY (region) WITH ('bucket.num' = '1')");
+        CLOCK.advanceTime(Duration.ofMillis(1000));
+        tEnv.executeSql(
+                        "INSERT INTO partitioned_batch_changelog_test VALUES "
+                                + "(1, 'Item-1', 'us'), "
+                                + "(2, 'Item-2', 'us'), "
+                                + "(3, 'Item-3', 'eu')")
+                .await();
+
+        List<String> partitionedChanges =
+                collectBatchRows(
+                        tEnv.executeSql(
+                                        "SELECT _change_type, id, name, region "
+                                                + "FROM partitioned_batch_changelog_test$changelog "
+                                                + "ORDER BY region, id")
+                                .collect());
+        assertThat(partitionedChanges)
+                .containsExactly(
+                        "+I[insert, 3, Item-3, eu]",
+                        "+I[insert, 1, Item-1, us]",
+                        "+I[insert, 2, Item-2, us]");
+    }
+
+    /**
+     * Bounded reads with a predicate on the {@code _commit_timestamp} metadata column.
+     *
+     * <p>This is kept apart from {@code testBatchReadChangelogTable} because Flink 1.18 rebuilds
+     * the remaining TIMESTAMP_LTZ filter using the session time zone instead of UTC after {@code
+     * applyFilters()} (FLINK-35318, fixed in Flink 1.19.2 and 1.20.0), which shifts the literal and
+     * drops all rows in non-UTC environments. The Flink 1.18 subclass therefore disables this test
+     * only, keeping the rest of the batch coverage.
+     */
+    @Test
+    public void testBatchReadChangelogTableWithCommitTimestampFilter() throws Exception {
+        tEnv.executeSql(
+                "CREATE TABLE batch_changelog_ts_test ("
+                        + "  id INT NOT NULL,"
+                        + "  name STRING,"
+                        + "  PRIMARY KEY (id) NOT ENFORCED"
+                        + ") WITH ('bucket.num' = '1')");
+
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "batch_changelog_ts_test");
+        CLOCK.advanceTime(Duration.ofMillis(1000));
+        writeRows(conn, tablePath, Arrays.asList(row(1, "Alice"), row(2, "Bob")), false);
+        CLOCK.advanceTime(Duration.ofMillis(1000));
+        writeRows(conn, tablePath, Arrays.asList(row(1, "Alice-updated")), false);
+        CLOCK.advanceTime(Duration.ofMillis(1000));
+        deleteRows(conn, tablePath, Arrays.asList(row(2, "Bob")));
+
+        tEnv = initBatchTableEnvironment();
+
+        List<String> timestampRangeFiltered =
+                collectBatchRows(
+                        tEnv.executeSql(
+                                        "SELECT _change_type, _log_offset, id, name "
+                                                + "FROM batch_changelog_ts_test$changelog "
+                                                + "WHERE _commit_timestamp >= TO_TIMESTAMP_LTZ(2000, 3) "
+                                                + "AND _commit_timestamp < TO_TIMESTAMP_LTZ(3000, 3) "
+                                                + "ORDER BY _log_offset")
+                                .collect());
+        assertThat(timestampRangeFiltered)
+                .containsExactly(
+                        "+I[update_before, 2, 1, Alice]", "+I[update_after, 3, 1, Alice-updated]");
+
+        List<String> metadataFiltered =
+                collectBatchRows(
+                        tEnv.executeSql(
+                                        "SELECT _change_type, _log_offset, id "
+                                                + "FROM batch_changelog_ts_test$changelog "
+                                                + "WHERE _change_type = 'delete' "
+                                                + "AND _log_offset = 4 "
+                                                + "AND _commit_timestamp = TO_TIMESTAMP_LTZ(3000, 3)")
+                                .collect());
+        assertThat(metadataFiltered).containsExactly("+I[delete, 4, 2]");
     }
 
     @Test
@@ -342,6 +484,142 @@ abstract class ChangelogVirtualTableITCase {
                 conn, tablePath, Arrays.asList(row(1, "Item-1-Updated", 150L, "Desc-1-Updated")));
         List<String> deleteResult = collectRowsWithTimeout(rowIter, 1, true);
         assertThat(deleteResult.get(0)).isEqualTo("+I[delete, 1, Item-1-Updated]");
+    }
+
+    @Test
+    public void testReorderedProjectionOnChangelogTable() throws Exception {
+        // Reordered projection: data columns out of their original order with a metadata column
+        // in between. This exercises data projection plus FlinkSource output projection end to end
+        // through the real planner.
+        tEnv.executeSql(
+                "CREATE TABLE reordered_projection_test ("
+                        + "  id INT NOT NULL,"
+                        + "  name STRING,"
+                        + "  amount BIGINT,"
+                        + "  PRIMARY KEY (id) NOT ENFORCED"
+                        + ") WITH ('bucket.num' = '1')");
+
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "reordered_projection_test");
+
+        String query = "SELECT amount, _change_type, id FROM reordered_projection_test$changelog";
+        // The planner pushes the reordered projection into the scan as-is (no Calc reorder), so
+        // the source receives the out-of-order indices end to end.
+        assertThat(tEnv.explainSql(query)).contains("project=[amount, _change_type, id]");
+
+        CloseableIterator<Row> rowIter = tEnv.executeSql(query).collect();
+
+        CLOCK.advanceTime(Duration.ofMillis(100));
+        writeRows(conn, tablePath, Arrays.asList(row(1, "Item-1", 100L)), false);
+        List<String> insertResult = collectRowsWithTimeout(rowIter, 1, false);
+        assertThat(insertResult).containsExactly("+I[100, insert, 1]");
+
+        CLOCK.advanceTime(Duration.ofMillis(100));
+        writeRows(conn, tablePath, Arrays.asList(row(1, "Item-1", 250L)), false);
+        List<String> updateResults = collectRowsWithTimeout(rowIter, 2, true);
+        assertThat(updateResults)
+                .containsExactly("+I[100, update_before, 1]", "+I[250, update_after, 1]");
+    }
+
+    @Test
+    public void testChangelogDataColumnFilterAndProjectionPushdown() throws Exception {
+        // Statistics columns are only supported on log tables (not PK tables), so use a log table.
+        // A log table's changelog is append-only, which is sufficient to exercise pushdown.
+        tEnv.executeSql(
+                "CREATE TABLE data_filter_test ("
+                        + "  id INT NOT NULL,"
+                        + "  name STRING,"
+                        + "  amount BIGINT"
+                        + ") WITH ('bucket.num' = '1', 'table.statistics.columns' = 'amount')");
+
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "data_filter_test");
+
+        String query =
+                "SELECT _change_type, id, amount FROM data_filter_test$changelog WHERE amount > 150";
+
+        // Projection and the data-column filter should be pushed into the source scan. Assert the
+        // exact pushed projection and predicate, because "filter=[" would also match an empty
+        // "filter=[]" digest when nothing is pushed down.
+        String plan = tEnv.explainSql(query);
+        assertThat(plan).contains("project=[_change_type, id, amount]");
+        assertThat(plan).contains("filter=[>(amount, 150)]");
+        // The filter is still retained in the Calc operator as a safety net (FLINK-38635).
+        assertThat(plan).contains("where=");
+
+        CloseableIterator<Row> rowIter = tEnv.executeSql(query).collect();
+
+        CLOCK.advanceTime(Duration.ofMillis(100));
+        writeRows(
+                conn,
+                tablePath,
+                Arrays.asList(
+                        row(1, "Item-1", 100L), row(2, "Item-2", 200L), row(3, "Item-3", 300L)),
+                true);
+
+        // Only amount > 150 rows pass the filter (safety net + pushdown produce identical results).
+        List<String> results = collectRowsWithTimeout(rowIter, 2, true);
+        assertThat(results).containsExactly("+I[insert, 2, 200]", "+I[insert, 3, 300]");
+        rowIter.close();
+    }
+
+    @Test
+    public void testChangelogPartitionFilterPushdown() throws Exception {
+        tEnv.executeSql(
+                "CREATE TABLE partition_filter_test ("
+                        + "  id INT NOT NULL,"
+                        + "  name STRING,"
+                        + "  region STRING NOT NULL,"
+                        + "  PRIMARY KEY (id, region) NOT ENFORCED"
+                        + ") PARTITIONED BY (region) WITH ('bucket.num' = '1')");
+
+        CLOCK.advanceTime(Duration.ofMillis(100));
+        tEnv.executeSql(
+                        "INSERT INTO partition_filter_test VALUES "
+                                + "(1, 'Item-1', 'us'), "
+                                + "(2, 'Item-2', 'us'), "
+                                + "(3, 'Item-3', 'eu')")
+                .await();
+
+        String query =
+                "SELECT _change_type, id, name, region FROM partition_filter_test$changelog "
+                        + "WHERE region = 'us'";
+
+        // The partition-key filter should be pushed into the source scan (assert the exact pushed
+        // predicate), and retained in the Calc operator as a safety net (FLINK-38635).
+        String plan = tEnv.explainSql(query);
+        assertThat(plan).contains("filter=[=(region, _UTF-16LE'us'");
+        assertThat(plan).contains("where=");
+
+        CloseableIterator<Row> rowIter = tEnv.executeSql(query).collect();
+        List<String> results = collectRowsWithTimeout(rowIter, 2, true);
+        assertThat(results)
+                .containsExactly("+I[insert, 1, Item-1, us]", "+I[insert, 2, Item-2, us]");
+        rowIter.close();
+    }
+
+    @Test
+    public void testChangelogMetadataOnlyProjection() throws Exception {
+        // Projecting only metadata columns leaves no data column to scan. The source normalizes the
+        // scan projection to null (full data row scan) to avoid a zero-column scan that produces no
+        // records, then emits only the metadata columns. Verify this runtime path works end to end.
+        tEnv.executeSql(
+                "CREATE TABLE metadata_only_test ("
+                        + "  id INT NOT NULL,"
+                        + "  name STRING"
+                        + ") WITH ('bucket.num' = '1')");
+
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "metadata_only_test");
+
+        String query = "SELECT _change_type, _log_offset FROM metadata_only_test$changelog";
+        assertThat(tEnv.explainSql(query)).contains("project=[_change_type, _log_offset]");
+
+        CloseableIterator<Row> rowIter = tEnv.executeSql(query).collect();
+
+        CLOCK.advanceTime(Duration.ofMillis(100));
+        writeRows(conn, tablePath, Arrays.asList(row(1, "Item-1"), row(2, "Item-2")), true);
+
+        List<String> results = collectRowsWithTimeout(rowIter, 2, true);
+        assertThat(results).containsExactly("+I[insert, 0]", "+I[insert, 1]");
+        rowIter.close();
     }
 
     @Test
@@ -539,10 +817,11 @@ abstract class ChangelogVirtualTableITCase {
         String query = "SELECT _change_type, id, name, region FROM partitioned_test$changelog";
         CloseableIterator<Row> rowIter = tEnv.executeSql(query).collect();
 
-        // Collect initial inserts
+        // Collect initial inserts. Records from different partitions may arrive in any order,
+        // so the assertion must be order-insensitive.
         List<String> results = collectRowsWithTimeout(rowIter, 3, false);
         assertThat(results)
-                .containsExactly(
+                .containsExactlyInAnyOrder(
                         "+I[insert, 1, Item-1, us]",
                         "+I[insert, 2, Item-2, us]",
                         "+I[insert, 3, Item-3, eu]");

@@ -127,6 +127,7 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toListPartitio
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toPbConfigEntries;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toPbDatabaseSummary;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTablePath;
+import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
 /**
@@ -486,6 +487,8 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         } else {
             partitionRegistrations = metadataManager.listPartitions(tablePath);
         }
+        // TODO: Return the actual lake partitions instead of the internal historical partition.
+        partitionRegistrations.remove(HISTORICAL_PARTITION_VALUE);
         TableInfo tableInfo = metadataManager.getTable(tablePath);
         List<String> partitionKeys = tableInfo.getPartitionKeys();
         return CompletableFuture.completedFuture(

@@ -23,9 +23,15 @@ import org.apache.fluss.client.table.scanner.RemoteFileDownloader;
 import org.apache.fluss.client.table.scanner.log.RemoteLogDownloader.RemoteLogDownloadRequest;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.fs.FSDataInputStream;
+import org.apache.fluss.fs.FSDataInputStreamWrapper;
+import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.fs.FsPathAndFileName;
+import org.apache.fluss.fs.local.LocalFileSystem;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.record.FileLogRecords;
 import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.IOUtils;
@@ -36,6 +42,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -62,6 +69,7 @@ import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.apache.fluss.utils.FlussPaths.remoteLogDir;
 import static org.apache.fluss.utils.FlussPaths.remoteLogTabletDir;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for {@link RemoteLogDownloader}. */
 class RemoteLogDownloaderTest {
@@ -146,6 +154,90 @@ class RemoteLogDownloaderTest {
             IOUtils.closeQuietly(remoteLogDownloader);
             IOUtils.closeQuietly(remoteFileDownloader);
         }
+    }
+
+    @Test
+    void testDuplicateRemoteLogDownloadDoesNotBreakOpenReader() throws Exception {
+        CountDownLatch duplicateDownloadCopyStarted = new CountDownLatch(1);
+        CountDownLatch continueDuplicateDownload = new CountDownLatch(1);
+
+        BlockingRemoteFileDownloader fileDownloader =
+                new BlockingRemoteFileDownloader(
+                        duplicateDownloadCopyStarted, continueDuplicateDownload);
+        RemoteLogDownloader downloader =
+                new RemoteLogDownloader(
+                        DATA1_TABLE_PATH.toString(), conf, fileDownloader, scannerMetricGroup, 10L);
+        try {
+            TableBucket tableBucket = new TableBucket(DATA1_TABLE_ID, 0);
+            RemoteLogSegment segment =
+                    buildRemoteLogSegmentList(tableBucket, DATA1_PHYSICAL_TABLE_PATH, 1, conf, 10)
+                            .get(0);
+            FsPath tabletDir =
+                    remoteLogTabletDir(remoteLogDir, DATA1_PHYSICAL_TABLE_PATH, tableBucket);
+
+            RemoteLogDownloadFuture firstDownload = downloader.requestRemoteLog(tabletDir, segment);
+            downloader.fetchOnce();
+            retry(Duration.ofSeconds(30), () -> assertThat(firstDownload.isDone()).isTrue());
+
+            RemoteLogDownloadFuture duplicateDownload =
+                    downloader.requestRemoteLog(tabletDir, segment);
+            FileLogRecords openReader = firstDownload.getFileLogRecords(0);
+            try {
+                downloader.fetchOnce();
+                assertThat(duplicateDownloadCopyStarted.await(30, TimeUnit.SECONDS)).isTrue();
+                assertThat(openReader.batches().iterator().hasNext()).isTrue();
+                continueDuplicateDownload.countDown();
+                retry(
+                        Duration.ofSeconds(30),
+                        () -> assertThat(duplicateDownload.isDone()).isTrue());
+                duplicateDownload.getFileLogRecords(0).closeHandlers();
+            } finally {
+                continueDuplicateDownload.countDown();
+                openReader.closeHandlers();
+            }
+
+            assertThat(FileUtils.listDirectory(downloader.getLocalLogDir())).hasSize(1);
+        } finally {
+            IOUtils.closeQuietly(downloader);
+            IOUtils.closeQuietly(fileDownloader);
+        }
+    }
+
+    @Test
+    void testTemporaryFileCleanupOnError() throws Exception {
+        Path remoteFile = remoteDataDir.toPath().resolve("remote.log");
+        Files.write(remoteFile, new byte[] {1});
+        FileSystem failingFileSystem =
+                new LocalFileSystem() {
+                    @Override
+                    public FSDataInputStream open(FsPath path) throws IOException {
+                        return new FSDataInputStreamWrapper(super.open(path)) {
+                            @Override
+                            public int read(byte[] buffer) {
+                                throw new OutOfMemoryError("test");
+                            }
+                        };
+                    }
+                };
+        FsPath remotePath =
+                new FsPath(remoteFile.toUri()) {
+                    @Override
+                    public FileSystem getFileSystem() {
+                        return failingFileSystem;
+                    }
+                };
+
+        try (RemoteFileDownloader downloader = new RemoteFileDownloader(1)) {
+            assertThatThrownBy(
+                            () ->
+                                    downloader
+                                            .downloadFileAsync(
+                                                    new FsPathAndFileName(remotePath, "local.log"),
+                                                    localDir.toPath())
+                                            .get())
+                    .hasCauseInstanceOf(OutOfMemoryError.class);
+        }
+        assertThat(FileUtils.listDirectory(localDir.toPath())).isEmpty();
     }
 
     @Test
@@ -501,6 +593,59 @@ class RemoteLogDownloaderTest {
             blockLatch.countDown(); // ensure latch is released even on test failure
             IOUtils.closeQuietly(downloader);
             IOUtils.closeQuietly(fileDownloader);
+        }
+    }
+
+    private static class BlockingRemoteFileDownloader extends RemoteFileDownloader {
+        private final CountDownLatch duplicateDownloadCopyStarted;
+        private final CountDownLatch continueDuplicateDownload;
+        private final AtomicInteger downloadCount = new AtomicInteger();
+
+        private BlockingRemoteFileDownloader(
+                CountDownLatch duplicateDownloadCopyStarted,
+                CountDownLatch continueDuplicateDownload) {
+            super(1);
+            this.duplicateDownloadCopyStarted = duplicateDownloadCopyStarted;
+            this.continueDuplicateDownload = continueDuplicateDownload;
+        }
+
+        @Override
+        protected long downloadFile(Path targetFilePath, FsPath remoteFilePath) throws IOException {
+            if (downloadCount.incrementAndGet() == 2) {
+                FileSystem blockingFileSystem =
+                        new LocalFileSystem() {
+                            @Override
+                            public FSDataInputStream open(FsPath path) throws IOException {
+                                return new FSDataInputStreamWrapper(super.open(path)) {
+                                    @Override
+                                    public int read(byte[] buffer) throws IOException {
+                                        duplicateDownloadCopyStarted.countDown();
+                                        try {
+                                            if (!continueDuplicateDownload.await(
+                                                    30, TimeUnit.SECONDS)) {
+                                                throw new IOException(
+                                                        "Timed out waiting to continue duplicate download");
+                                            }
+                                        } catch (InterruptedException e) {
+                                            Thread.currentThread().interrupt();
+                                            throw new IOException(
+                                                    "Interrupted while blocking duplicate download",
+                                                    e);
+                                        }
+                                        return super.read(buffer);
+                                    }
+                                };
+                            }
+                        };
+                remoteFilePath =
+                        new FsPath(remoteFilePath.toUri()) {
+                            @Override
+                            public FileSystem getFileSystem() {
+                                return blockingFileSystem;
+                            }
+                        };
+            }
+            return super.downloadFile(targetFilePath, remoteFilePath);
         }
     }
 

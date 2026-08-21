@@ -203,14 +203,18 @@ public final class FlussConnection implements Connection {
 
     @Override
     public void close() throws Exception {
+        // graceful close: wait for all pending write/lookup requests to be processed
+        close(Duration.ofMillis(Long.MAX_VALUE));
+    }
+
+    @Override
+    public void close(Duration timeout) throws Exception {
         if (writerClient != null) {
-            writerClient.close(Duration.ofMillis(Long.MAX_VALUE));
+            writerClient.close(timeout);
         }
 
         if (lookupClient != null) {
-            // timeout is Long.MAX_VALUE to make the pending get request
-            // to be processed
-            lookupClient.close(Duration.ofMillis(Long.MAX_VALUE));
+            lookupClient.close(timeout);
         }
 
         if (remoteFileDownloader != null) {

@@ -854,28 +854,26 @@ Aggregates serialized 32-bit RoaringBitmap values by union.
 
 ```sql
 CREATE TABLE user_visits (
-    user_id BIGINT,
+    user_id    BIGINT,
     visit_bitmap BYTES,
     PRIMARY KEY (user_id) NOT ENFORCED
 ) WITH (
-    'table.merge-engine' = 'aggregation',
-    'fields.visit_bitmap.agg' = 'rbm32'
+    'table.merge-engine'         = 'aggregation',
+    'fields.visit_bitmap.agg'    = 'rbm32'
 );
 
--- Insert serialized RoaringBitmap values as hex literals
--- Bitmap {1,2}
-INSERT INTO user_visits VALUES (1, x'3A30000001000000000001001000000001000200');
--- Bitmap {2,3}
-INSERT INTO user_visits VALUES (1, x'3A30000001000000000001001000000002000300');
+-- Insert two bitmaps for the same user; rbm32 unions them on write
+INSERT INTO user_visits VALUES
+    (1, rb_build(ARRAY[1, 2])),
+    (1, rb_build(ARRAY[2, 3]));
 
-SELECT * FROM user_visits WHERE user_id = 1;
--- Result: visit_bitmap contains the union {1,2,3}
--- (serialized as x'3A300000010000000000020010000000010002000300')
+-- Query: read the merged bitmap as a human-readable array
+SELECT user_id, rb_to_array(visit_bitmap) AS visited_pages
+FROM user_visits
+WHERE user_id = 1;
+-- Output: user_id=1, visited_pages=[1, 2, 3]
 ```
 
-:::note
-RoaringBitmap values must be pre-serialized on the client side. The hex literals above represent bitmaps serialized using the [RoaringBitmap](https://github.com/RoaringBitmap/RoaringBitmap) library's standard format.
-:::
 
 </TabItem>
 <TabItem value="java-client" label="Java Client">
@@ -969,6 +967,12 @@ TableDescriptor.builder()
 
 </TabItem>
 </Tabs>
+
+:::tip
+To query and manipulate bitmap columns from Flink SQL, use the built-in RoaringBitmap SQL
+functions (`rb_build_agg`, `rb_or_agg`, `rb_cardinality`, etc.) provided by FlussCatalog.
+See [SQL Functions](/engine-flink/sql-functions.md) for the full function reference.
+:::
 
 ### bool_and
 

@@ -183,7 +183,7 @@ public class UndoRecoveryExecutor {
         while (!allComplete(contexts)) {
             ScanRecords records = scanner.poll(Duration.ofMillis(POLL_TIMEOUT_MS));
 
-            if (records.isEmpty()) {
+            if (!records.hasProgress()) {
                 // Check if we've exceeded the maximum total wait time
                 long elapsedMs = System.currentTimeMillis() - startTimeMs;
                 if (elapsedMs >= maxTotalWaitTimeMs) {
@@ -196,20 +196,24 @@ public class UndoRecoveryExecutor {
                 }
 
                 LOG.debug("Empty poll (total elapsed: {}ms)", elapsedMs);
-            } else {
-                // Process records for each bucket
-                for (BucketRecoveryContext ctx : contexts) {
-                    if (ctx.isComplete()) {
-                        continue;
-                    }
-                    List<ScanRecord> bucketRecords = records.records(ctx.getBucket());
-                    if (!bucketRecords.isEmpty()) {
-                        processRecords(ctx, bucketRecords, allFutures);
-                    }
-                    // Unsubscribe completed buckets to stop fetching data from them
-                    if (ctx.isComplete() && unsubscribedBuckets.add(ctx.getBucket())) {
-                        unsubscribeBucket(ctx.getBucket());
-                    }
+            }
+
+            // Process records before applying the post-poll progress. A poll may consume the
+            // complete recovery range while returning its final records.
+            for (BucketRecoveryContext ctx : contexts) {
+                if (ctx.isComplete()) {
+                    continue;
+                }
+                List<ScanRecord> bucketRecords = records.records(ctx.getBucket());
+                if (!bucketRecords.isEmpty()) {
+                    processRecords(ctx, bucketRecords, allFutures);
+                }
+                Long consumedUpToOffset = records.consumedUpToOffset(ctx.getBucket());
+                if (consumedUpToOffset != null) {
+                    ctx.updateScanPosition(consumedUpToOffset);
+                }
+                if (ctx.isComplete() && unsubscribedBuckets.add(ctx.getBucket())) {
+                    unsubscribeBucket(ctx.getBucket());
                 }
             }
 
@@ -255,14 +259,14 @@ public class UndoRecoveryExecutor {
             List<CompletableFuture<?>> futures) {
         Set<ByteArrayWrapper> processedKeys = ctx.getProcessedKeys();
         for (ScanRecord record : records) {
+            if (record.logOffset() >= ctx.getLogEndOffset()) {
+                continue;
+            }
             CompletableFuture<?> future = undoComputer.processRecord(record, processedKeys);
             if (future != null) {
                 futures.add(future);
             }
-            ctx.recordProcessed(record.logOffset());
-            if (ctx.isComplete()) {
-                break;
-            }
+            ctx.recordProcessed();
         }
     }
 

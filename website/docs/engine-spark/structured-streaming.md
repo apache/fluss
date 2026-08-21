@@ -51,7 +51,7 @@ Fluss supports exactly-once semantics for streaming writes through Spark's check
 Fluss supports reading data from Fluss tables using Spark Structured Streaming. The streaming source continuously reads new data as it arrives.
 
 :::caution Limitations
-- Streaming read currently only supports the `latest` startup mode. Other modes (`full`, `earliest`, `timestamp`) are not yet supported and will be available in a future release.
+- Streaming read currently only supports the `latest` startup mode. Other modes (`full`, `earliest`) are not yet supported and will be available in a future release. To read a bounded time range, use an incremental batch read instead (see [Reads](reads.md#time-range-batch-read)).
 :::
 
 ### Read from Log Table

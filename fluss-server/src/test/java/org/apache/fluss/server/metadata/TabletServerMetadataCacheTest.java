@@ -207,38 +207,42 @@ public class TabletServerMetadataCacheTest {
                 initialBucketMetadata);
 
         // test delete one table.
-        serverMetadataCache.updateClusterMetadata(
-                new ClusterMetadata(
-                        coordinatorServer,
-                        aliveTableServers,
-                        Collections.singletonList(
-                                new TableMetadata(
-                                        TableInfo.of(
-                                                DATA1_TABLE_PATH,
-                                                DELETED_TABLE_ID, // mark this table as
-                                                // deletion.
-                                                1,
-                                                DATA1_TABLE_DESCRIPTOR,
-                                                DEFAULT_REMOTE_DATA_DIR,
-                                                System.currentTimeMillis(),
-                                                System.currentTimeMillis()),
-                                        changedBucket1BucketMetadata)),
-                        Collections.emptyList()));
+        Set<Long> deletedTableIds =
+                serverMetadataCache.updateClusterMetadata(
+                        new ClusterMetadata(
+                                coordinatorServer,
+                                aliveTableServers,
+                                Collections.singletonList(
+                                        new TableMetadata(
+                                                TableInfo.of(
+                                                        DATA1_TABLE_PATH,
+                                                        DELETED_TABLE_ID, // mark this table as
+                                                        // deletion.
+                                                        1,
+                                                        DATA1_TABLE_DESCRIPTOR,
+                                                        DEFAULT_REMOTE_DATA_DIR,
+                                                        System.currentTimeMillis(),
+                                                        System.currentTimeMillis()),
+                                                changedBucket1BucketMetadata)),
+                                Collections.emptyList()));
+        assertThat(deletedTableIds).containsExactly(DATA1_TABLE_ID);
         assertThat(serverMetadataCache.getTablePath(DATA1_TABLE_ID)).isEmpty();
 
         // test delete one partition.
-        serverMetadataCache.updateClusterMetadata(
-                new ClusterMetadata(
-                        coordinatorServer,
-                        aliveTableServers,
-                        Collections.emptyList(),
-                        Collections.singletonList(
-                                new PartitionMetadata(
-                                        partitionTableId,
-                                        partitionName1,
-                                        DELETED_PARTITION_ID, // mark this partition as
-                                        // deletion.
-                                        Collections.emptyList()))));
+        deletedTableIds =
+                serverMetadataCache.updateClusterMetadata(
+                        new ClusterMetadata(
+                                coordinatorServer,
+                                aliveTableServers,
+                                Collections.emptyList(),
+                                Collections.singletonList(
+                                        new PartitionMetadata(
+                                                partitionTableId,
+                                                partitionName1,
+                                                DELETED_PARTITION_ID, // mark this partition as
+                                                // deletion.
+                                                Collections.emptyList()))));
+        assertThat(deletedTableIds).isEmpty();
         assertThat(serverMetadataCache.getPhysicalTablePath(partitionId1)).isEmpty();
         assertPartitionMetadataEquals(
                 partitionId2,

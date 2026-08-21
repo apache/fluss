@@ -23,7 +23,7 @@ import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link CatalogTableAdapter} in flink 1.19. */
-public class Flink119CatalogTableTest extends FlinkCatalogTableTest {
+public class Flink119CatalogTableAdapterTest extends FlinkCatalogTableAdapterTest {
 
     @Test
     public void testIsMaterializedTable() {

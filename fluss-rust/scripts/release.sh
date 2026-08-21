@@ -47,6 +47,21 @@ mkdir -p "$DIST_DIR"
 echo "Creating source archive: ${TARBALL}"
 git archive --format=tar.gz --prefix="${PREFIX}/" -o "${DIST_DIR}/${TARBALL}" HEAD
 
+# The archive root is fluss-rust/, not the repo root, so it does not inherit the
+# repo's LICENSE/NOTICE. An ASF source release must carry both.
+echo "Verifying LICENSE and NOTICE at archive root"
+ARCHIVE_FILES=$(tar -tzf "${DIST_DIR}/${TARBALL}")
+for f in LICENSE NOTICE; do
+  if ! echo "$ARCHIVE_FILES" | grep -qx "${PREFIX}/${f}"; then
+    echo "Error: ${f} is missing from the root of ${TARBALL}"
+    exit 1
+  fi
+  if [ -z "$(tar -xzOf "${DIST_DIR}/${TARBALL}" "${PREFIX}/${f}")" ]; then
+    echo "Error: ${f} is empty in ${TARBALL}"
+    exit 1
+  fi
+done
+
 echo "Generating SHA-512 checksum: ${TARBALL}.sha512"
 if command -v shasum >/dev/null 2>&1; then
   (cd "$DIST_DIR" && shasum -a 512 "$TARBALL" > "${TARBALL}.sha512")

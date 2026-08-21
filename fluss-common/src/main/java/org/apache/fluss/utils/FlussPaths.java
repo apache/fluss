@@ -37,7 +37,8 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
 /**
- * Central place for defining all the paths of kv and log local/remote files/directories.
+ * Central place for defining all the paths of kv, log, and historical lookup local/remote
+ * files/directories.
  *
  * <p>All the local file/directories returns the {@link File java.io.File} interface.
  *
@@ -51,6 +52,9 @@ public class FlussPaths {
 
     /** Prefix of a local kv tablet directory to store kv files for a specific kv tablet. */
     public static final String KV_TABLET_DIR_PREFIX = "kv-";
+
+    /** The directory name for historical lookup cache files under a local data directory. */
+    public static final String HISTORICAL_LOOKUP_CACHE_DIR_NAME = ".historical-lookup-cache";
 
     /** Prefix for a partition id to distinguish between table id and partition id. */
     public static final String PARTITION_DIR_PREFIX = "p";
@@ -145,6 +149,37 @@ public class FlussPaths {
             File dataDir, PhysicalTablePath tablePath, TableBucket tableBucket) {
         final Path tabletParentDir = tabletParentDir(dataDir, tablePath, tableBucket);
         return tabletParentDir.resolve(KV_TABLET_DIR_PREFIX + tableBucket.getBucket()).toFile();
+    }
+
+    /**
+     * Returns the historical lookup cache root under the local data directory.
+     *
+     * @param dataDir the local data directory
+     */
+    public static File historicalLookupRootDir(File dataDir) {
+        return new File(dataDir, HISTORICAL_LOOKUP_CACHE_DIR_NAME);
+    }
+
+    /**
+     * Returns the local directory path for storing historical lookup files for a table.
+     *
+     * <p>The path contract:
+     *
+     * <pre>
+     * {$lookupRoot}/{databaseName}/{tableName}-{tableId}
+     * </pre>
+     *
+     * @param lookupRoot the historical lookup root directory
+     * @param tablePath the table path
+     * @param tableId the table ID
+     */
+    public static File historicalLookupTableDir(
+            File lookupRoot, TablePath tablePath, long tableId) {
+        return Paths.get(
+                        lookupRoot.getAbsolutePath(),
+                        tablePath.getDatabaseName(),
+                        tablePath.getTableName() + "-" + tableId)
+                .toFile();
     }
 
     private static Path tabletParentDir(

@@ -17,6 +17,7 @@ Complete API reference for the Fluss Rust client.
 | `writer_dynamic_batch_size_enabled`   | `bool`          | `true`             | Enable per-table dynamic batch sizing: target grows 10% above 80% fill, shrinks 5% below 50%, clamped to `[writer_dynamic_batch_size_min, writer_batch_size]` |
 | `writer_dynamic_batch_size_min`       | `i32`           | `262144` (256 KB)  | Lower bound for the dynamic batch size estimator (ignored when `writer_dynamic_batch_size_enabled` is `false`) |
 | `writer_batch_timeout_ms`             | `i64`           | `100`              | Maximum time in ms to wait for a writer batch to fill up before sending              |
+| `writer_kv_backpressure_max_throttle_ms` | `u64`         | `3000`             | Maximum per-bucket KV backpressure throttle in milliseconds                          |
 | `writer_bucket_no_key_assigner`       | `NoKeyAssigner` | `sticky`           | Bucket assignment strategy for tables without bucket keys: `sticky` or `round_robin` |
 | `scanner_remote_log_prefetch_num`     | `usize`         | `4`                | Number of remote log segments to prefetch                                            |
 | `remote_file_download_thread_num`     | `usize`         | `3`                | Number of threads for remote log downloads                                           |

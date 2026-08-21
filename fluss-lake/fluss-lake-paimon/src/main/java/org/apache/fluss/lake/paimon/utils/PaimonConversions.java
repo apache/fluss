@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.lake.paimon.source.FlussRowAsPaimonRow;
+import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
@@ -36,6 +37,7 @@ import org.apache.paimon.data.BinaryRow;
 import org.apache.paimon.options.Options;
 import org.apache.paimon.schema.Schema;
 import org.apache.paimon.schema.SchemaChange;
+import org.apache.paimon.table.Table;
 import org.apache.paimon.types.DataField;
 import org.apache.paimon.types.DataType;
 import org.apache.paimon.types.RowKind;
@@ -47,8 +49,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Function;
 
-import static org.apache.fluss.lake.paimon.PaimonLakeCatalog.SYSTEM_COLUMNS;
+import static org.apache.fluss.lake.paimon.PaimonLakeCatalog.LEGACY_SYSTEM_COLUMNS;
+import static org.apache.fluss.utils.Preconditions.checkState;
 
 /** Utils for conversion between Paimon and Fluss. */
 public class PaimonConversions {
@@ -58,7 +62,8 @@ public class PaimonConversions {
     // can help avoid NoSuchField error
     // todo: after upgrade paimon version, we call fall back to use PARTITION_GENERATE_LEGACY_NAME
     // again
-    private static final String PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY = "partition.legacy-name";
+    /** Option controlling whether Paimon uses legacy partition value encoding. */
+    public static final String PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY = "partition.legacy-name";
 
     // for fluss config
     public static final String FLUSS_CONF_PREFIX = "fluss.";
@@ -142,7 +147,37 @@ public class PaimonConversions {
         return values;
     }
 
-    public static List<SchemaChange> toPaimonSchemaChanges(List<TableChange> tableChanges) {
+    /** Converts a Fluss resolved partition spec to a Paimon partition row. */
+    public static BinaryRow toPaimonPartition(
+            ResolvedPartitionSpec partitionSpec,
+            org.apache.fluss.types.RowType flussRowType,
+            RowType paimonRowType,
+            Function<org.apache.paimon.data.InternalRow, BinaryRow> partitionExtractor) {
+        List<String> partitionKeys = partitionSpec.getPartitionKeys();
+        List<String> partitionValues = partitionSpec.getPartitionValues();
+
+        // The synthetic row must match the Paimon table row layout, including system columns.
+        GenericRow partitionRow = new GenericRow(paimonRowType.getFieldCount());
+        for (int i = 0; i < partitionKeys.size(); i++) {
+            String partitionKey = partitionKeys.get(i);
+            int fieldIndex = flussRowType.getFieldIndex(partitionKey);
+            checkState(
+                    fieldIndex >= 0,
+                    "Partition key '%s' not found in Fluss row type.",
+                    partitionKey);
+            DataTypeRoot typeRoot = flussRowType.getTypeAt(fieldIndex).getTypeRoot();
+            partitionRow.setField(
+                    fieldIndex, PartitionUtils.parseValueOfType(partitionValues.get(i), typeRoot));
+        }
+
+        return partitionExtractor.apply(new FlussRowAsPaimonRow(partitionRow, paimonRowType));
+    }
+
+    public static List<SchemaChange> toPaimonSchemaChanges(
+            Table paimonTable, List<TableChange> tableChanges) {
+        // A legacy table (created before FIP-27) still carries the three trailing system columns,
+        // recognisable by the presence of the __timestamp column. A clean table has none of them.
+        boolean paimonIncludingSystemColumns = PaimonUtils.isLegacyTable(paimonTable.rowType());
         List<SchemaChange> schemaChanges = new ArrayList<>(tableChanges.size());
 
         for (TableChange tableChange : tableChanges) {
@@ -159,6 +194,13 @@ public class PaimonConversions {
             } else if (tableChange instanceof TableChange.AddColumn) {
                 TableChange.AddColumn addColumn = (TableChange.AddColumn) tableChange;
 
+                if (LEGACY_SYSTEM_COLUMNS.containsKey(addColumn.getName())) {
+                    throw new InvalidTableException(
+                            "Column "
+                                    + addColumn.getName()
+                                    + " conflicts with a system column name of paimon table, please rename the column.");
+                }
+
                 if (!(addColumn.getPosition() instanceof TableChange.Last)) {
                     throw new UnsupportedOperationException(
                             "Only support to add column at last for paimon table.");
@@ -173,14 +215,27 @@ public class PaimonConversions {
                 org.apache.paimon.types.DataType paimonDataType =
                         flussDataType.accept(FlussDataTypeToPaimonDataType.INSTANCE);
 
-                String firstSystemColumnName = SYSTEM_COLUMNS.keySet().iterator().next();
-                schemaChanges.add(
-                        SchemaChange.addColumn(
-                                addColumn.getName(),
-                                paimonDataType,
-                                addColumn.getComment(),
-                                SchemaChange.Move.before(
-                                        addColumn.getName(), firstSystemColumnName)));
+                if (paimonIncludingSystemColumns) {
+                    // Legacy tables keep the three system columns as the last physical columns, so
+                    // a new business column must be inserted right before the first system column.
+                    String firstSystemColumnName = LEGACY_SYSTEM_COLUMNS.keySet().iterator().next();
+                    schemaChanges.add(
+                            SchemaChange.addColumn(
+                                    addColumn.getName(),
+                                    paimonDataType,
+                                    addColumn.getComment(),
+                                    SchemaChange.Move.before(
+                                            addColumn.getName(), firstSystemColumnName)));
+                } else {
+                    // Clean tables have no trailing system columns, so a new business column is
+                    // simply appended at the end.
+                    schemaChanges.add(
+                            SchemaChange.addColumn(
+                                    addColumn.getName(),
+                                    paimonDataType,
+                                    addColumn.getComment(),
+                                    SchemaChange.Move.last(addColumn.getName())));
+                }
             } else {
                 throw new UnsupportedOperationException(
                         "Unsupported table change: " + tableChange.getClass());
@@ -222,7 +277,7 @@ public class PaimonConversions {
         for (org.apache.fluss.metadata.Schema.Column column :
                 tableDescriptor.getSchema().getColumns()) {
             String columnName = column.getName();
-            if (SYSTEM_COLUMNS.containsKey(columnName)) {
+            if (LEGACY_SYSTEM_COLUMNS.containsKey(columnName)) {
                 throw new InvalidTableException(
                         "Column "
                                 + columnName
@@ -232,11 +287,6 @@ public class PaimonConversions {
                     columnName,
                     column.getDataType().accept(FlussDataTypeToPaimonDataType.INSTANCE),
                     column.getComment().orElse(null));
-        }
-
-        // add system metadata columns to schema
-        for (Map.Entry<String, DataType> systemColumn : SYSTEM_COLUMNS.entrySet()) {
-            schemaBuilder.column(systemColumn.getKey(), systemColumn.getValue());
         }
 
         // set pk

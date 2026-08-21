@@ -20,6 +20,7 @@ package org.apache.fluss.server.replica;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.compression.ArrowCompressionInfo;
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.ConfigurationUtils;
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.FencedLeaderEpochException;
 import org.apache.fluss.exception.InvalidColumnProjectionException;
@@ -70,6 +71,7 @@ import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.KvFileHandleAndLocalPath;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotDataDownloader;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotDownloadSpec;
+import org.apache.fluss.server.kv.snapshot.KvSnapshotHandle;
 import org.apache.fluss.server.kv.snapshot.KvTabletSnapshotTarget;
 import org.apache.fluss.server.kv.snapshot.PeriodicSnapshotManager;
 import org.apache.fluss.server.kv.snapshot.RocksIncrementalSnapshot;
@@ -134,7 +136,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.IntSupplier;
 import java.util.function.Supplier;
@@ -184,13 +185,12 @@ public final class Replica {
     private final AdjustIsrManager adjustIsrManager;
 
     private final SchemaGetter schemaGetter;
-    private final TableInfo tableInfo;
-    private final TableConfig tableConfig;
-    // logFormat and arrowCompressionInfo are used in hot-path, so cache them here.
+    private volatile TableInfo tableInfo;
+    // logFormat and arrowCompressionInfo are immutable and used in hot-path, so cache them here.
     private final LogFormat logFormat;
     private final ArrowCompressionInfo arrowCompressionInfo;
     private final AtomicReference<Integer> leaderReplicaIdOpt = new AtomicReference<>();
-    private final ReadWriteLock leaderIsrUpdateLock = new ReentrantReadWriteLock();
+    private final ReentrantReadWriteLock leaderIsrUpdateLock = new ReentrantReadWriteLock();
     private final Clock clock;
     private final RemoteLogManager remoteLogManager;
 
@@ -271,7 +271,7 @@ public final class Replica {
                         tableInfo.getSchemaId(),
                         tableInfo.getSchema());
         this.tableInfo = tableInfo;
-        this.tableConfig = tableInfo.getTableConfig();
+        TableConfig tableConfig = tableInfo.getTableConfig();
         this.logFormat = tableConfig.getLogFormat();
         this.arrowCompressionInfo = tableConfig.getArrowCompressionInfo();
         this.snapshotContext = snapshotContext;
@@ -279,7 +279,6 @@ public final class Replica {
         this.closeableRegistry = new CloseableRegistry();
 
         this.logTablet = createLog(dataDir, lazyHighWatermarkCheckpoint);
-        this.logTablet.updateIsDataLakeEnabled(tableConfig.isDataLakeEnabled());
         this.clock = clock;
         this.remoteLogManager = remoteLogManager;
         this.scannerManager = checkNotNull(scannerManager, "scannerManager");
@@ -293,6 +292,11 @@ public final class Replica {
         isrExpands = serverMetrics.isrExpands();
         isrShrinks = serverMetrics.isrShrinks();
         failedIsrUpdates = serverMetrics.failedIsrUpdates();
+
+        // physical storage metrics.
+        MetricGroup physicalStorageMetrics = bucketMetricGroup.addGroup("physicalStorage");
+        physicalStorageMetrics.gauge(
+                MetricNames.BUCKET_PHYSICAL_STORAGE_LOCAL_LOG_SIZE, logTablet::logSize);
 
         // logical storage metrics.
         MetricGroup logicalStorageMetrics = bucketMetricGroup.addGroup("logicalStorage");
@@ -340,6 +344,10 @@ public final class Replica {
         return tableInfo;
     }
 
+    private TableConfig getTableConfig() {
+        return tableInfo.getTableConfig();
+    }
+
     public @Nullable Integer getLeaderId() {
         return leaderReplicaIdOpt.get();
     }
@@ -357,7 +365,7 @@ public final class Replica {
     }
 
     public boolean isDataLakeEnabled() {
-        return tableConfig.isDataLakeEnabled();
+        return getTableConfig().isDataLakeEnabled();
     }
 
     public long getLocalLogStartOffset() {
@@ -374,10 +382,6 @@ public final class Replica {
 
     public TableBucket getTableBucket() {
         return tableBucket;
-    }
-
-    public long getLogTTLMs() {
-        return tableConfig.getLogTTLMs();
     }
 
     public int writerIdCount() {
@@ -437,9 +441,23 @@ public final class Replica {
 
                             int requestLeaderEpoch = data.getLeaderEpoch();
                             if (requestLeaderEpoch > leaderEpoch) {
+                                boolean isNewLeader = !isLeader();
                                 leaderEpoch = requestLeaderEpoch;
                                 onBecomeNewLeader();
                                 leaderReplicaIdOpt.set(localTabletServerId);
+                                // onBecomeNewLeader may recover a KV snapshot, so start the ISR lag
+                                // grace period after it completes.
+                                currentTimeMs = clock.milliseconds();
+                                long leaderEndOffset = logTablet.localLogEndOffset();
+                                for (FollowerReplica followerReplica :
+                                        followerReplicasMap.values()) {
+                                    followerReplica.resetFollowerReplicaState(
+                                            currentTimeMs,
+                                            leaderEndOffset,
+                                            isNewLeader,
+                                            data.getIsr()
+                                                    .contains(followerReplica.getFollowerId()));
+                                }
                                 LOG.info(
                                         "TabletServer {} becomes leader for bucket {}",
                                         localTabletServerId,
@@ -636,51 +654,46 @@ public final class Replica {
         logTablet.updateLeaderEndOffsetSnapshot();
     }
 
-    public void updateIsDataLakeEnabled(boolean isDataLakeEnabled) {
-        boolean old = logTablet.isDataLakeEnabled();
-        if (old == isDataLakeEnabled) {
-            return;
-        }
+    /** Updates the table metadata snapshot used by this replica. */
+    public void updateTableInfo(TableInfo tableInfo) {
+        TableInfo oldTableInfo = this.tableInfo;
+        TableInfo newTableInfo = checkNotNull(tableInfo, "tableInfo");
+        boolean wasDataLakeEnabled = isDataLakeEnabled();
+        this.tableInfo = newTableInfo;
+        logTablet.applyTableConfig(newTableInfo.getTableConfig());
 
-        logTablet.updateIsDataLakeEnabled(isDataLakeEnabled);
-
-        if (isLeader()) {
+        boolean isDataLakeEnabled = isDataLakeEnabled();
+        if (isLeader() && wasDataLakeEnabled != isDataLakeEnabled) {
             if (isDataLakeEnabled) {
                 registerLakeTieringMetrics();
-            } else {
-                if (lakeTieringMetricGroup != null) {
-                    lakeTieringMetricGroup.close();
-                    lakeTieringMetricGroup = null;
-                }
+            } else if (lakeTieringMetricGroup != null) {
+                lakeTieringMetricGroup.close();
+                lakeTieringMetricGroup = null;
             }
         }
 
-        LOG.info(
-                "Replica for {} isDataLakeEnabled changed from {} to {}",
-                tableBucket,
-                old,
-                isDataLakeEnabled);
+        logTableConfigChanges(oldTableInfo, newTableInfo);
     }
 
-    /**
-     * Update the number of log segments to retain in local storage. This method is called when the
-     * table configuration is altered.
-     *
-     * @param tieredLogLocalSegments the new number of segments to retain locally
-     */
-    public void updateTieredLogLocalSegments(int tieredLogLocalSegments) {
-        int oldValue = logTablet.getTieredLogLocalSegments();
-        if (oldValue == tieredLogLocalSegments) {
-            return;
+    private void logTableConfigChanges(TableInfo oldTableInfo, TableInfo newTableInfo) {
+        Map<String, String> oldProperties = oldTableInfo.getProperties().toMap();
+        Map<String, String> newProperties = newTableInfo.getProperties().toMap();
+        Set<String> configKeys = new HashSet<>(oldProperties.keySet());
+        configKeys.addAll(newProperties.keySet());
+
+        for (String configKey : configKeys) {
+            String oldValue = oldProperties.get(configKey);
+            String newValue = newProperties.get(configKey);
+            if (!Objects.equals(oldValue, newValue)) {
+                LOG.info(
+                        "Table config {} for bucket {} of table {} changed from {} to {}.",
+                        configKey,
+                        tableBucket,
+                        physicalPath,
+                        ConfigurationUtils.hideSensitiveValue(configKey, oldValue),
+                        ConfigurationUtils.hideSensitiveValue(configKey, newValue));
+            }
         }
-
-        logTablet.updateTieredLogLocalSegments(tieredLogLocalSegments);
-
-        LOG.info(
-                "Replica for {} tieredLogLocalSegments changed from {} to {}",
-                tableBucket,
-                oldValue,
-                tieredLogLocalSegments);
     }
 
     private void createKv() {
@@ -765,6 +778,7 @@ public final class Replica {
      */
     private Optional<CompletedSnapshot> initKvTablet() {
         checkNotNull(kvManager);
+        TableConfig tableConfig = getTableConfig();
         long startTime = clock.milliseconds();
         LOG.info("Start to init kv tablet for {} of table {}.", tableBucket, physicalPath);
 
@@ -877,7 +891,7 @@ public final class Replica {
         try {
             kvSnapshotDataDownloader.transferAllDataToDirectory(downloadSpec, closeableRegistry);
         } catch (Exception e) {
-            if (e.getMessage().contains(CompletedSnapshot.SNAPSHOT_DATA_NOT_EXISTS_ERROR_MESSAGE)) {
+            if (isSnapshotDataNotExists(e, downloadSpec)) {
                 try {
                     snapshotContext.handleSnapshotBroken(completedSnapshot);
                 } catch (Exception t) {
@@ -892,6 +906,26 @@ public final class Replica {
                 completedSnapshot,
                 kvDbPath,
                 end - start);
+    }
+
+    private static boolean isSnapshotDataNotExists(
+            Throwable throwable, KvSnapshotDownloadSpec downloadSpec) {
+        if (!CompletedSnapshot.isSnapshotDataNotExists(throwable)) {
+            return false;
+        }
+
+        List<KvFileHandleAndLocalPath> fileHandles = new ArrayList<>();
+        KvSnapshotHandle handle = downloadSpec.getKvSnapshotHandle();
+        fileHandles.addAll(handle.getSharedKvFileHandles());
+        fileHandles.addAll(handle.getPrivateFileHandles());
+
+        for (KvFileHandleAndLocalPath fileHandle : fileHandles) {
+            FsPath filePath = new FsPath(fileHandle.getKvFileHandle().getFilePath());
+            if (CompletedSnapshot.isSnapshotDataNotExists(throwable, filePath)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private Optional<CompletedSnapshot> getLatestSnapshot(TableBucket tableBucket) {
@@ -912,6 +946,7 @@ public final class Replica {
             long startRecoverLogOffset,
             @Nullable Long rowCount,
             @Nullable AutoIncIDRange autoIncIDRange) {
+        TableConfig tableConfig = getTableConfig();
         long start = clock.milliseconds();
         checkNotNull(kvTablet, "kv tablet should not be null.");
         try {
@@ -1292,7 +1327,8 @@ public final class Replica {
             // Due to code paths accessing followerReplicasMap without a lock, first add the new
             // replicas and then remove the old ones.
             for (Integer replica : followers) {
-                followerReplicasMap.put(replica, new FollowerReplica(replica, tableBucket));
+                followerReplicasMap.computeIfAbsent(
+                        replica, id -> new FollowerReplica(id, tableBucket));
             }
             for (Integer replica : removedReplicas) {
                 followerReplicasMap.remove(replica);
@@ -1824,25 +1860,25 @@ public final class Replica {
      * <p>This function can be triggered when a replica's LEO has incremented.
      */
     private void maybeExpandISr(FollowerReplica followerReplica) {
-        IsrState currentIsrState = isrState;
         boolean needsIsrUpdate =
-                !currentIsrState.isInflight()
-                        && inReadLock(leaderIsrUpdateLock, () -> needsExpandIsr(followerReplica));
+                inReadLock(
+                        leaderIsrUpdateLock,
+                        () -> !isrState.isInflight() && needsExpandIsr(followerReplica));
 
         if (needsIsrUpdate) {
             Optional<IsrState.PendingExpandIsrState> adjustIsrUpdateOpt =
                     inWriteLock(
                             leaderIsrUpdateLock,
                             () -> {
+                                IsrState currentIsrState = isrState;
                                 // check if this replica needs to be added to the ISR.
-                                if (currentIsrState instanceof IsrState.CommittedIsrState) {
-                                    if (needsExpandIsr(followerReplica)) {
-                                        return Optional.of(
-                                                prepareIsrExpand(
-                                                        (IsrState.CommittedIsrState)
-                                                                currentIsrState,
-                                                        followerReplica.getFollowerId()));
-                                    }
+                                if (isLeader()
+                                        && currentIsrState instanceof IsrState.CommittedIsrState
+                                        && needsExpandIsr(followerReplica)) {
+                                    return Optional.of(
+                                            prepareIsrExpand(
+                                                    (IsrState.CommittedIsrState) currentIsrState,
+                                                    followerReplica.getFollowerId()));
                                 }
 
                                 return Optional.empty();
@@ -1856,28 +1892,27 @@ public final class Replica {
     }
 
     void maybeShrinkIsr() {
-        IsrState currentIstState = isrState;
         boolean needsIsrUpdate =
-                !currentIstState.isInflight()
-                        && inReadLock(leaderIsrUpdateLock, this::needsShrinkIsr);
+                inReadLock(leaderIsrUpdateLock, () -> !isrState.isInflight() && needsShrinkIsr());
 
         if (needsIsrUpdate) {
             Optional<IsrState.PendingShrinkIsrState> adjustIsrUpdateOpt =
                     inWriteLock(
                             leaderIsrUpdateLock,
                             () -> {
-                                if (isLeader()) {
+                                IsrState currentIsrState = isrState;
+                                if (isLeader()
+                                        && currentIsrState instanceof IsrState.CommittedIsrState) {
                                     List<Integer> outOfSyncFollowerReplicas =
                                             getOutOfSyncFollowerReplicas(replicaMaxLagTime);
-                                    if (currentIstState instanceof IsrState.CommittedIsrState
-                                            && !outOfSyncFollowerReplicas.isEmpty()) {
+                                    if (!outOfSyncFollowerReplicas.isEmpty()) {
                                         List<Integer> newIsr =
-                                                new ArrayList<>(currentIstState.isr());
+                                                new ArrayList<>(currentIsrState.isr());
                                         newIsr.removeAll(outOfSyncFollowerReplicas);
                                         LOG.info(
                                                 "Shrink ISR From {} to {} for bucket {}. Leader: (high watermark: {}, "
                                                         + "end offset: {}, out of sync replicas: {})",
-                                                currentIstState.isr(),
+                                                currentIsrState.isr(),
                                                 newIsr,
                                                 tableBucket,
                                                 logTablet.getHighWatermark(),
@@ -1886,7 +1921,7 @@ public final class Replica {
                                         return Optional.of(
                                                 prepareIsrShrink(
                                                         (IsrState.CommittedIsrState)
-                                                                currentIstState,
+                                                                currentIsrState,
                                                         newIsr,
                                                         outOfSyncFollowerReplicas));
                                     }
@@ -1909,7 +1944,7 @@ public final class Replica {
         // reflect the updated ISR even if there is a delay before we receive the confirmation.
         // Alternatively, if the update fails, no harm is done since the expanded ISR puts
         // a stricter requirement for advancement of the HW.
-        List<Integer> isrToSend = new ArrayList<>(isrState.isr());
+        List<Integer> isrToSend = new ArrayList<>(currentState.isr());
         isrToSend.add(newInSyncReplicaId);
 
         // TODO add server epoch to isr.
@@ -2221,7 +2256,7 @@ public final class Replica {
 
     public boolean isUnderReplicated() {
         // is leader and isr size less than numReplicas
-        return isLeader() && isrState.isr().size() < tableConfig.getReplicationFactor();
+        return isLeader() && isrState.isr().size() < getTableConfig().getReplicationFactor();
     }
 
     public boolean isUnderMinIsr() {
@@ -2249,15 +2284,11 @@ public final class Replica {
     private LogTablet createLog(
             File dataDir, OffsetCheckpointFile.LazyOffsetCheckpoints lazyHighWatermarkCheckpoint)
             throws Exception {
+        TableConfig tableConfig = getTableConfig();
         LogTablet log =
                 logManager.getOrCreateLog(
-                        dataDir,
-                        physicalPath,
-                        tableBucket,
-                        tableConfig.getLogFormat(),
-                        tableConfig.getTieredLogLocalSegments(),
-                        tableConfig.getLogTTLMs(),
-                        isKvTable());
+                        dataDir, physicalPath, tableBucket, tableConfig, isKvTable());
+        log.applyTableConfig(tableConfig);
         // update high watermark.
         Optional<Long> watermarkOpt = lazyHighWatermarkCheckpoint.fetch(tableBucket);
         long watermark =
@@ -2322,6 +2353,11 @@ public final class Replica {
     @VisibleForTesting
     public int getBucketEpoch() {
         return bucketEpoch;
+    }
+
+    @VisibleForTesting
+    ReentrantReadWriteLock getLeaderIsrUpdateLock() {
+        return leaderIsrUpdateLock;
     }
 
     @VisibleForTesting

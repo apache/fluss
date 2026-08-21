@@ -359,6 +359,32 @@ impl Metadata {
         Ok(())
     }
 
+    /// Checks that the partition ids exist, refreshing metadata for uncached ids.
+    pub async fn check_and_update_partition_metadata_by_ids(
+        &self,
+        table_path: &TablePath,
+        partition_ids: &[PartitionId],
+    ) -> Result<()> {
+        let cluster_binding = self.cluster.read().clone();
+        let need_update_partition_ids: Vec<PartitionId> = partition_ids
+            .iter()
+            .filter(|partition_id| cluster_binding.get_partition_name(**partition_id).is_none())
+            .copied()
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+
+        if !need_update_partition_ids.is_empty() {
+            self.update_tables_metadata(
+                &HashSet::from([table_path]),
+                &HashSet::new(),
+                need_update_partition_ids,
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
     /// Resolves the partition id, refreshing metadata once if not cached.
     /// Returns `None` when the partition does not exist — `PartitionNotExists`
     /// server errors are swallowed so callers can short-circuit to an empty result.

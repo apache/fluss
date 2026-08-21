@@ -33,6 +33,7 @@ import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.testutils.common.MultiVersionTest;
 
 import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.api.EnvironmentSettings;
@@ -159,6 +160,7 @@ abstract class FlinkCatalogITCase {
     }
 
     @Test
+    @MultiVersionTest
     void testCreateTable() throws Exception {
         // create a table will all supported data types
         tEnv.executeSql(
@@ -775,6 +777,75 @@ abstract class FlinkCatalogITCase {
     }
 
     @Test
+    void testAlterTableWatermark() throws Exception {
+        String tableName = "test_watermark_table";
+        ObjectPath tablePath = new ObjectPath(DEFAULT_DB, tableName);
+
+        // 1. create table without watermark
+        tEnv.executeSql(
+                String.format(
+                        "CREATE TABLE %s ("
+                                + "  id BIGINT,"
+                                + "  ts TIMESTAMP(3),"
+                                + "  PRIMARY KEY (id) NOT ENFORCED"
+                                + ")",
+                        tableName));
+
+        CatalogTable table = (CatalogTable) catalog.getTable(tablePath);
+        assertThat(table.getUnresolvedSchema().getWatermarkSpecs()).isEmpty();
+
+        // 2. add watermark
+        tEnv.executeSql(
+                String.format(
+                        "ALTER TABLE %s ADD WATERMARK FOR ts AS ts - INTERVAL '10' SECOND",
+                        tableName));
+
+        table = (CatalogTable) catalog.getTable(tablePath);
+        List<Schema.UnresolvedWatermarkSpec> watermarks =
+                table.getUnresolvedSchema().getWatermarkSpecs();
+        assertThat(watermarks).hasSize(1);
+        assertThat(watermarks.get(0).getColumnName()).isEqualTo("ts");
+        assertThat(watermarks.get(0).getWatermarkExpression().asSummaryString())
+                .contains("INTERVAL '10' SECOND");
+
+        // 3. modify watermark
+        tEnv.executeSql(
+                String.format(
+                        "ALTER TABLE %s MODIFY WATERMARK FOR ts AS ts - INTERVAL '5' SECOND",
+                        tableName));
+
+        table = (CatalogTable) catalog.getTable(tablePath);
+        watermarks = table.getUnresolvedSchema().getWatermarkSpecs();
+        assertThat(watermarks).hasSize(1);
+        assertThat(watermarks.get(0).getColumnName()).isEqualTo("ts");
+        String modifySummary = watermarks.get(0).getWatermarkExpression().asSummaryString();
+        assertThat(modifySummary)
+                .contains("INTERVAL '5' SECOND")
+                .doesNotContain("INTERVAL '10' SECOND");
+
+        // 4. drop watermark
+        tEnv.executeSql(String.format("ALTER TABLE %s DROP WATERMARK", tableName));
+
+        table = (CatalogTable) catalog.getTable(tablePath);
+        assertThat(table.getUnresolvedSchema().getWatermarkSpecs()).isEmpty();
+
+        // 5. add watermark again and verify persistence
+        tEnv.executeSql(
+                String.format(
+                        "ALTER TABLE %s ADD WATERMARK FOR ts AS ts - INTERVAL '15' SECOND",
+                        tableName));
+
+        CatalogTable reloadedTable = (CatalogTable) catalog.getTable(tablePath);
+        List<Schema.UnresolvedWatermarkSpec> reloadedWatermarks =
+                reloadedTable.getUnresolvedSchema().getWatermarkSpecs();
+
+        assertThat(reloadedWatermarks).hasSize(1);
+        assertThat(reloadedWatermarks.get(0).getColumnName()).isEqualTo("ts");
+        assertThat(reloadedWatermarks.get(0).getWatermarkExpression().asSummaryString())
+                .contains("INTERVAL '15' SECOND");
+    }
+
+    @Test
     void testCreateWithUnSupportDataType() {
         // create a table with varchar datatype
         assertThatThrownBy(
@@ -1002,6 +1073,17 @@ abstract class FlinkCatalogITCase {
                 .isExactlyInstanceOf(CatalogException.class)
                 .hasMessage(
                         "The configured default-database 'non-exist' does not exist in the Fluss cluster.");
+    }
+
+    @Test
+    void testBitmapFunctionFailsForFullyQualifiedNonexistentDatabase() {
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                        "SELECT "
+                                                + CATALOG_NAME
+                                                + ".nonexistent_db.rb_build(ARRAY[1,2])"))
+                .hasMessageContaining("No match found for function signature");
     }
 
     @Test

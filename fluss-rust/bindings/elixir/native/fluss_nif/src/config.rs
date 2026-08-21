@@ -50,6 +50,7 @@ pub struct NifConfig {
     pub writer_bucket_no_key_assigner: Option<NifNoKeyAssigner>,
     pub writer_buffer_memory_size: Option<u64>,
     pub writer_buffer_wait_timeout_ms: Option<u64>,
+    pub writer_kv_backpressure_max_throttle_ms: Option<u64>,
     pub writer_dynamic_batch_size_enabled: Option<bool>,
     pub writer_dynamic_batch_size_min: Option<i32>,
     pub writer_enable_idempotence: Option<bool>,
@@ -129,6 +130,9 @@ impl NifConfig {
         }
         if let Some(timeout_ms) = self.writer_buffer_wait_timeout_ms {
             config.writer_buffer_wait_timeout_ms = timeout_ms;
+        }
+        if let Some(timeout_ms) = self.writer_kv_backpressure_max_throttle_ms {
+            config.writer_kv_backpressure_max_throttle_ms = timeout_ms;
         }
         if let Some(enabled) = self.writer_enable_idempotence {
             config.writer_enable_idempotence = enabled;

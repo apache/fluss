@@ -25,6 +25,7 @@ import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.client.write.HashBucketAssigner;
 import org.apache.fluss.flink.source.metrics.FlinkSourceReaderMetrics;
 import org.apache.fluss.flink.source.split.HybridSnapshotLogSplit;
+import org.apache.fluss.flink.source.split.KvBatchSplit;
 import org.apache.fluss.flink.source.split.LogSplit;
 import org.apache.fluss.flink.source.split.SourceSplitBase;
 import org.apache.fluss.flink.utils.FlinkTestBase;
@@ -308,6 +309,35 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
     }
 
     @Test
+    void testHandleKvBatchSplitChangesAndFetch() throws Exception {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "test-kv-batch-split-table");
+        long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
+        try (FlinkSourceSplitReader splitReader =
+                createSplitReader(tablePath, DEFAULT_PK_TABLE_SCHEMA.getRowType())) {
+            Map<TableBucket, List<InternalRow>> rows = putRows(tableId, tablePath, 10);
+
+            List<SourceSplitBase> splits = new ArrayList<>();
+            for (TableBucket bucket : rows.keySet()) {
+                splits.add(new KvBatchSplit(bucket, null));
+            }
+
+            Map<String, List<RecordAndPos>> expectedRecords = new HashMap<>();
+            for (Map.Entry<TableBucket, List<InternalRow>> e : rows.entrySet()) {
+                String splitId = new KvBatchSplit(e.getKey(), null).splitId();
+                List<RecordAndPos> records = new ArrayList<>(e.getValue().size());
+                int pos = 1;
+                for (InternalRow row : e.getValue()) {
+                    records.add(new RecordAndPos(new ScanRecord(row), pos++));
+                }
+                expectedRecords.put(splitId, records);
+            }
+
+            assignSplitsAndFetchUntilRetrieveRecords(
+                    splitReader, splits, expectedRecords, DEFAULT_PK_TABLE_SCHEMA.getRowType());
+        }
+    }
+
+    @Test
     void testNoSubscribedBucket() throws Exception {
         TablePath tablePath = TablePath.of(DEFAULT_DB, "test-no-subscribe-bucket-table");
         Schema schema =
@@ -340,10 +370,10 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
                         tablePath,
                         TableDescriptor.builder().schema(schema).distributedBy(3).build());
 
-        // create two empty splits with log start offset equal to end offset
+        // create empty splits, including a split starting from EARLIEST_OFFSET
         LogSplit split1 = new LogSplit(new TableBucket(tableId, 0), null, 0, 0);
         LogSplit split2 = new LogSplit(new TableBucket(tableId, 1), null, 0, 0);
-        LogSplit split3 = new LogSplit(new TableBucket(tableId, 2), null, EARLIEST_OFFSET);
+        LogSplit split3 = new LogSplit(new TableBucket(tableId, 2), null, EARLIEST_OFFSET, 0);
         List<SourceSplitBase> subscribeSplits = Arrays.asList(split1, split2, split3);
 
         try (FlinkSourceSplitReader splitReader =
@@ -352,9 +382,10 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
 
             // fetch records
             RecordsWithSplitIds<RecordAndPos> records = splitReader.fetch();
-            // finished splits should be split1,split2
+            // all empty splits should finish without subscribing to the log
             assertThat(records.finishedSplits())
-                    .containsExactlyInAnyOrder(split1.splitId(), split2.splitId());
+                    .containsExactlyInAnyOrder(
+                            split1.splitId(), split2.splitId(), split3.splitId());
         }
     }
 

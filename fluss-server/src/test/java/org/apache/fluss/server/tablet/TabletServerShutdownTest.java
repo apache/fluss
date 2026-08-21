@@ -20,6 +20,7 @@ package org.apache.fluss.server.tablet;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.server.kv.KvCloseMode;
 
 import org.junit.jupiter.api.Test;
 
@@ -60,6 +61,7 @@ final class TabletServerShutdownTest {
             assertThat(server.getShutdownEvents())
                     .containsExactly(
                             "rpc-started", "rpc-completed", "replica-manager", "tablet-managers");
+            assertThat(server.getKvCloseMode()).isEqualTo(KvCloseMode.DISCARD_UNPERSISTED_STATE);
         } finally {
             server.completeRpcShutdown();
             shutdownExecutor.shutdownNow();
@@ -81,6 +83,7 @@ final class TabletServerShutdownTest {
         assertThat(server.getShutdownEvents())
                 .containsExactly(
                         "rpc-started", "rpc-completed", "replica-manager", "tablet-managers");
+        assertThat(server.getKvCloseMode()).isEqualTo(KvCloseMode.DISCARD_UNPERSISTED_STATE);
     }
 
     private static final class TestingTabletServer extends TabletServer {
@@ -88,6 +91,7 @@ final class TabletServerShutdownTest {
         private final CountDownLatch rpcShutdownStarted = new CountDownLatch(1);
         private final List<String> shutdownEvents = new CopyOnWriteArrayList<>();
         private boolean failReplicaManagerShutdown;
+        private KvCloseMode kvCloseMode;
 
         private TestingTabletServer(Configuration conf) {
             super(conf);
@@ -110,8 +114,9 @@ final class TabletServerShutdownTest {
         }
 
         @Override
-        void shutdownTabletManagers() {
+        void shutdownKvManager(KvCloseMode closeMode) {
             shutdownEvents.add("tablet-managers");
+            kvCloseMode = closeMode;
         }
 
         private boolean awaitRpcShutdownStarted() throws InterruptedException {
@@ -128,6 +133,10 @@ final class TabletServerShutdownTest {
 
         private List<String> getShutdownEvents() {
             return shutdownEvents;
+        }
+
+        private KvCloseMode getKvCloseMode() {
+            return kvCloseMode;
         }
     }
 }

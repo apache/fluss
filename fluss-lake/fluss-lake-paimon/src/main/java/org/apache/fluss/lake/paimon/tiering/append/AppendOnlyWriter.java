@@ -46,12 +46,15 @@ public class AppendOnlyWriter extends RecordWriter<InternalRow> {
      */
     @Nullable private AutoCloseable arrowBatchHelper;
 
+    private final boolean paimonIncludingSystemColumns;
+
     public AppendOnlyWriter(
             FileStoreTable fileStoreTable,
             TableBucket tableBucket,
             @Nullable String partition,
             List<String> partitionKeys,
-            RowType flussRowType) {
+            RowType flussRowType,
+            boolean paimonIncludingSystemColumns) {
         //noinspection unchecked
         super(
                 (TableWriteImpl<InternalRow>)
@@ -61,8 +64,10 @@ public class AppendOnlyWriter extends RecordWriter<InternalRow> {
                 tableBucket,
                 partition,
                 partitionKeys,
-                flussRowType);
+                flussRowType,
+                paimonIncludingSystemColumns);
         this.fileStoreTable = fileStoreTable;
+        this.paimonIncludingSystemColumns = paimonIncludingSystemColumns;
     }
 
     @Override
@@ -90,7 +95,11 @@ public class AppendOnlyWriter extends RecordWriter<InternalRow> {
         if (arrowBatchHelper == null) {
             helper =
                     new AppendOnlyArrowBatchHelper(
-                            fileStoreTable, tableWrite, tableRowType, bucket);
+                            fileStoreTable,
+                            tableWrite,
+                            tableRowType,
+                            bucket,
+                            paimonIncludingSystemColumns);
             arrowBatchHelper = helper;
         } else {
             helper = (AppendOnlyArrowBatchHelper) arrowBatchHelper;

@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.TableConfig;
+import org.apache.fluss.config.cluster.ServerReconfigurable;
 import org.apache.fluss.exception.FlussException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.LogStorageException;
@@ -67,6 +68,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
 
@@ -82,7 +84,7 @@ import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
  * log instances.
  */
 @ThreadSafe
-public final class LogManager extends TabletManagerBase {
+public final class LogManager extends TabletManagerBase implements ServerReconfigurable {
     private static final Logger LOG = LoggerFactory.getLogger(LogManager.class);
 
     @VisibleForTesting
@@ -110,6 +112,7 @@ public final class LogManager extends TabletManagerBase {
     private volatile Map<File, OffsetCheckpointFile> recoveryPointCheckpoints;
     private volatile ScheduledFuture<?> recoveryPointCheckpointTask;
     private volatile ScheduledFuture<?> localLogRetentionTask;
+    private final AtomicBoolean rollExpiredActiveSegmentEnabled;
     private boolean loadLogsCompletedFlag = false;
 
     private LogManager(
@@ -127,6 +130,9 @@ public final class LogManager extends TabletManagerBase {
         this.clock = clock;
         this.serverMetricGroup = serverMetricGroup;
         this.localDiskManager = localDiskManager;
+        this.rollExpiredActiveSegmentEnabled =
+                new AtomicBoolean(
+                        conf.get(ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED));
 
         initializeCheckpointMaps();
     }
@@ -290,18 +296,14 @@ public final class LogManager extends TabletManagerBase {
      * @param dataDir the local data directory chosen for the bucket
      * @param tablePath the table path of the bucket belongs to
      * @param tableBucket the table bucket
-     * @param logFormat the log format
-     * @param tieredLogLocalSegments the number of segments to retain in local for tiered log
-     * @param logTtlMs the log TTL in milliseconds from table configuration
+     * @param tableConfig the table configuration
      * @param isChangelog whether the log is a changelog of primary key table
      */
     public LogTablet getOrCreateLog(
             File dataDir,
             PhysicalTablePath tablePath,
             TableBucket tableBucket,
-            LogFormat logFormat,
-            int tieredLogLocalSegments,
-            long logTtlMs,
+            TableConfig tableConfig,
             boolean isChangelog)
             throws Exception {
         return inLock(
@@ -319,12 +321,11 @@ public final class LogManager extends TabletManagerBase {
                                     tablePath,
                                     tabletDir,
                                     conf,
+                                    rollExpiredActiveSegmentEnabled,
                                     serverMetricGroup,
                                     0L,
                                     scheduler,
-                                    logFormat,
-                                    tieredLogLocalSegments,
-                                    logTtlMs,
+                                    tableConfig,
                                     isChangelog,
                                     clock,
                                     true);
@@ -348,15 +349,11 @@ public final class LogManager extends TabletManagerBase {
             int tieredLogLocalSegments,
             boolean isChangelog)
             throws Exception {
-        TableConfig tableConfig = new TableConfig(new Configuration());
+        Configuration tableProperties = new Configuration();
+        tableProperties.set(ConfigOptions.TABLE_LOG_FORMAT, logFormat);
+        tableProperties.set(ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS, tieredLogLocalSegments);
         return getOrCreateLog(
-                dataDir,
-                tablePath,
-                tableBucket,
-                logFormat,
-                tieredLogLocalSegments,
-                tableConfig.getLogTTLMs(),
-                isChangelog);
+                dataDir, tablePath, tableBucket, new TableConfig(tableProperties), isChangelog);
     }
 
     public Optional<LogTablet> getLog(TableBucket tableBucket) {
@@ -464,16 +461,14 @@ public final class LogManager extends TabletManagerBase {
                         physicalTablePath,
                         tabletDir,
                         conf,
+                        rollExpiredActiveSegmentEnabled,
                         serverMetricGroup,
                         logRecoveryPoint,
                         scheduler,
-                        tableInfo.getTableConfig().getLogFormat(),
-                        tableInfo.getTableConfig().getTieredLogLocalSegments(),
-                        tableInfo.getTableConfig().getLogTTLMs(),
+                        tableInfo.getTableConfig(),
                         tableInfo.hasPrimaryKey(),
                         clock,
                         isCleanShutdown);
-        logTablet.updateIsDataLakeEnabled(tableInfo.getTableConfig().isDataLakeEnabled());
 
         if (currentLogs.containsKey(tableBucket)) {
             throw new IllegalStateException(
@@ -562,6 +557,34 @@ public final class LogManager extends TabletManagerBase {
                         e);
             }
         }
+    }
+
+    // ============ ServerReconfigurable Implementation ============
+
+    @Override
+    public void validate(Configuration newConfig) {
+        // Type validation is handled by DynamicServerConfig.
+    }
+
+    @Override
+    public void reconfigure(Configuration newConfig) {
+        boolean newRollExpiredActiveSegmentEnabled =
+                newConfig.get(ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED);
+        boolean oldRollExpiredActiveSegmentEnabled =
+                rollExpiredActiveSegmentEnabled.getAndSet(newRollExpiredActiveSegmentEnabled);
+        if (newRollExpiredActiveSegmentEnabled == oldRollExpiredActiveSegmentEnabled) {
+            LOG.debug(
+                    "{} unchanged: {}",
+                    ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED.key(),
+                    newRollExpiredActiveSegmentEnabled);
+            return;
+        }
+
+        LOG.info(
+                "{} reconfigured: {} -> {}",
+                ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED.key(),
+                oldRollExpiredActiveSegmentEnabled,
+                newRollExpiredActiveSegmentEnabled);
     }
 
     private void waitForShutdownLogsInDir(

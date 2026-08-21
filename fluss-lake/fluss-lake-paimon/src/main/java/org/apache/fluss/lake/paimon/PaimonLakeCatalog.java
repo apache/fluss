@@ -62,17 +62,19 @@ public class PaimonLakeCatalog implements LakeCatalog {
 
     private static final Logger LOG = LoggerFactory.getLogger(PaimonLakeCatalog.class);
     private static final String PAIMON_PATH_KEY = "paimon.path";
-    public static final LinkedHashMap<String, DataType> SYSTEM_COLUMNS = new LinkedHashMap<>();
+    public static final LinkedHashMap<String, DataType> LEGACY_SYSTEM_COLUMNS =
+            new LinkedHashMap<>();
 
     static {
         // We need __bucket system column to filter out the given bucket
         // for paimon bucket-unaware append only table.
         // It's not required for paimon bucket-aware table like primary key table
-        // and bucket-aware append only table, but we always add the system column
-        // for consistent behavior
-        SYSTEM_COLUMNS.put(BUCKET_COLUMN_NAME, DataTypes.INT());
-        SYSTEM_COLUMNS.put(OFFSET_COLUMN_NAME, DataTypes.BIGINT());
-        SYSTEM_COLUMNS.put(TIMESTAMP_COLUMN_NAME, DataTypes.TIMESTAMP_LTZ_MILLIS());
+        // and bucket-aware append only table, but legacy tables always carry the system column
+        // for consistent behavior. Under FIP-27 these columns are no longer added to newly created
+        // (clean) tables; they only remain on legacy tables created before FIP-27.
+        LEGACY_SYSTEM_COLUMNS.put(BUCKET_COLUMN_NAME, DataTypes.INT());
+        LEGACY_SYSTEM_COLUMNS.put(OFFSET_COLUMN_NAME, DataTypes.BIGINT());
+        LEGACY_SYSTEM_COLUMNS.put(TIMESTAMP_COLUMN_NAME, DataTypes.TIMESTAMP_LTZ_MILLIS());
     }
 
     private final Catalog paimonCatalog;
@@ -133,12 +135,13 @@ public class PaimonLakeCatalog implements LakeCatalog {
                     currentPaimonSchema, toPaimonSchema(context.getCurrentTable()))) {
                 // if the paimon schema is same as current fluss schema, directly apply all the
                 // changes.
-                paimonSchemaChanges = toPaimonSchemaChanges(changesToApply);
+                paimonSchemaChanges = toPaimonSchemaChanges(table, changesToApply);
             } else if (isPaimonSchemaCompatible(
                     currentPaimonSchema, toPaimonSchema(context.getExpectedTable()))) {
                 // if the schema is same as applied fluss schema , skip adding columns.
                 paimonSchemaChanges =
                         toPaimonSchemaChanges(
+                                table,
                                 changesToApply.stream()
                                         .filter(
                                                 tableChange ->

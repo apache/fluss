@@ -135,6 +135,22 @@ public final class Cluster {
                 new HashMap<>(partitionsIdByPath));
     }
 
+    /** Invalidates bucket metadata and partition ID mappings for the given physical table paths. */
+    public Cluster invalidPhysicalTableBucketAndPartitionMeta(
+            Set<PhysicalTablePath> physicalTablesToInvalid) {
+        Cluster cluster = invalidPhysicalTableBucketMeta(physicalTablesToInvalid);
+        Map<PhysicalTablePath, Long> newPartitionsIdByPath = new HashMap<>(partitionsIdByPath);
+        for (PhysicalTablePath physicalTablePath : physicalTablesToInvalid) {
+            newPartitionsIdByPath.remove(physicalTablePath);
+        }
+        return new Cluster(
+                new HashMap<>(aliveTabletServersById),
+                coordinatorServer,
+                new HashMap<>(cluster.availableLocationsByPath),
+                new HashMap<>(tableIdByPath),
+                newPartitionsIdByPath);
+    }
+
     @Nullable
     public ServerNode getCoordinatorServer() {
         return coordinatorServer;

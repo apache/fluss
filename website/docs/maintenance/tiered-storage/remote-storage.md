@@ -35,7 +35,11 @@ Below is the list for all configurations to control the log segments tiered beha
 
 When local log segments are copied to remote storage, the local log segments will be deleted to reduce local disk cost.
 But sometimes, we want to keep the several latest log segments retain in local, although they have been coped to remote storage for better read performance.
-You can control how many log segments to retain in local by setting the configuration `table.log.tiered.local-segments`(default is 2) per table.
+You can control local retention per table with `table.log.tiered.local-segments` (default is 2)
+and `table.log.local-ttl`. When `table.log.local-ttl` is not configured, it falls back to
+`table.log.ttl`. A non-positive local TTL disables TTL-based local cleanup. When both TTLs are
+positive, the local TTL must be less than or equal to `table.log.ttl`. An expired local segment is
+deleted only after it has been copied to remote storage.
 
 ## Remote snapshot of primary key table
 

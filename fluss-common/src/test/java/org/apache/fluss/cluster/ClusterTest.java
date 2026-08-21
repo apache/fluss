@@ -32,6 +32,7 @@ import java.util.Map;
 import java.util.Set;
 
 import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
+import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH_PA_2024;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA2_TABLE_ID;
@@ -112,6 +113,37 @@ class ClusterTest {
                                         1,
                                         NODES_IDS[0],
                                         NODES_IDS)));
+    }
+
+    @Test
+    void testInvalidPartitionMeta() {
+        long partitionId = 42L;
+        Cluster initialCluster = createCluster(aliveTabletServersById);
+        Cluster cluster =
+                new Cluster(
+                        aliveTabletServersById,
+                        COORDINATOR_SERVER,
+                        new HashMap<>(initialCluster.getBucketLocationsByPath()),
+                        new HashMap<>(initialCluster.getTableIdByPath()),
+                        Collections.singletonMap(DATA1_PHYSICAL_TABLE_PATH_PA_2024, partitionId));
+
+        assertThat(cluster.getPartitionId(DATA1_PHYSICAL_TABLE_PATH_PA_2024)).hasValue(partitionId);
+        assertThat(cluster.getPartitionName(partitionId)).hasValue("2024");
+
+        Cluster bucketMetadataInvalidated =
+                cluster.invalidPhysicalTableBucketMeta(
+                        Collections.singleton(DATA1_PHYSICAL_TABLE_PATH_PA_2024));
+
+        assertThat(bucketMetadataInvalidated.getPartitionId(DATA1_PHYSICAL_TABLE_PATH_PA_2024))
+                .hasValue(partitionId);
+        assertThat(bucketMetadataInvalidated.getPartitionName(partitionId)).hasValue("2024");
+
+        cluster =
+                cluster.invalidPhysicalTableBucketAndPartitionMeta(
+                        Collections.singleton(DATA1_PHYSICAL_TABLE_PATH_PA_2024));
+
+        assertThat(cluster.getPartitionId(DATA1_PHYSICAL_TABLE_PATH_PA_2024)).isNotPresent();
+        assertThat(cluster.getPartitionName(partitionId)).isNotPresent();
     }
 
     @Test

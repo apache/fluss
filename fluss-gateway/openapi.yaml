@@ -1,0 +1,177 @@
+components:
+  schemas:
+    ErrorBody:
+      description: Body of the REST error envelope.
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        message:
+          type: string
+        request_id:
+          description: Correlates the response with the `x-request-id` header and the access log.
+          format: uuid
+          type: string
+      required:
+      - code
+      - message
+      - request_id
+      type: object
+    ErrorCode:
+      description: Stable error code, resource-specific where the error names a resource.
+      enum:
+      - already_exists
+      - backend
+      - cancelled
+      - cluster_already_exists
+      - cluster_not_found
+      - database_already_exists
+      - database_not_empty
+      - database_not_found
+      - failed_precondition
+      - internal
+      - invalid_argument
+      - limit_exceeded
+      - method_not_allowed
+      - not_acceptable
+      - not_found
+      - partition_already_exists
+      - partition_not_found
+      - resource_exhausted
+      - table_already_exists
+      - table_not_found
+      - timeout
+      - unauthenticated
+      - unauthorized
+      - unavailable
+      - unsupported
+      - unsupported_media_type
+      type: string
+    ErrorEnvelope:
+      description: 'REST error envelope: `{"error": {"code", "message", "request_id"}}`.'
+      examples:
+      - error:
+          code: table_not_found
+          message: table `mydb.orders` does not exist
+          request_id: 8f6c7f4a-f9b8-4c71-91ec-6e5578d7a913
+      properties:
+        error:
+          $ref: '#/components/schemas/ErrorBody'
+      required:
+      - error
+      type: object
+    HealthResponse:
+      description: 'Response of `GET /health` (FIP-49): liveness plus process uptime.'
+      properties:
+        status:
+          type: string
+        uptime_ms:
+          description: Milliseconds since the gateway process started.
+          format: int64
+          minimum: 0
+          type: integer
+      required:
+      - status
+      - uptime_ms
+      type: object
+    ReadyResponse:
+      description: 'Response of `GET /ready`: the gateway accepts application traffic.'
+      properties:
+        status:
+          type: string
+      required:
+      - status
+      type: object
+info:
+  description: Stateless REST gateway for Apache Fluss
+  license:
+    name: Apache-2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+  title: fluss-gateway
+  version: 1.0.0
+openapi: 3.1.0
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+          description: Gateway liveness and uptime
+        '405':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Wrong method for this route
+      summary: 'The FIP-49 health summary: `{status, uptime_ms}`, always 200 while the process answers.'
+      tags:
+      - health
+  /ready:
+    get:
+      description: |-
+        `/health` is liveness and stays 200 while the process answers, so a liveness probe never
+        restarts a draining process; this route reports acceptance instead. Readiness covers the process
+        lifecycle only: Fluss cluster availability surfaces through request errors and metrics, not by
+        unloading every gateway instance at once.
+      operationId: getReady
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadyResponse'
+          description: The gateway accepts application traffic
+        '405':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Wrong method for this route
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: The gateway is starting or shutting down
+      summary: Readiness for load balancers and readiness probes.
+      tags:
+      - health
+  /v1/openapi.json:
+    get:
+      operationId: getOpenApi
+      responses:
+        '200':
+          description: OpenAPI 3.1 document
+        '405':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Wrong method for this route
+        '413':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Request body above the configured limit
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Gateway starting or shutting down
+        '504':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Request deadline exceeded
+      summary: Serves the generated OpenAPI 3.1 document as JSON.
+      tags:
+      - metadata
+security: []
+servers:
+- url: /

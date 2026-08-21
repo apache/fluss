@@ -21,6 +21,7 @@ import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.memory.MemorySegmentOutputView;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.utils.CloseableIterator;
+import org.apache.fluss.utils.MurmurHashUtils;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -130,6 +131,11 @@ public class DefaultValueRecordBatch implements ValueRecordBatch {
         int sizeInBytes = sizeInBytes();
         return sizeInBytes == that.sizeInBytes()
                 && segment.equalTo(that.segment, position, that.position, sizeInBytes);
+    }
+
+    @Override
+    public int hashCode() {
+        return MurmurHashUtils.hashBytes(segment, position, sizeInBytes());
     }
 
     // ------------------------------------------------------------------------------------------

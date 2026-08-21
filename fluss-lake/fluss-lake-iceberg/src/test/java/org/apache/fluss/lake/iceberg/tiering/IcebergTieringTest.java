@@ -212,6 +212,30 @@ class IcebergTieringTest {
     }
 
     @Test
+    void testEmptyCommitCreatesSnapshot() throws Exception {
+        TablePath tablePath = TablePath.of("iceberg", "test_empty_commit");
+        createTable(tablePath, false, false);
+        TableInfo tableInfo = createTableInfo(tablePath, false, false);
+
+        // an empty commit should still create a snapshot to persist tiering progress
+        try (LakeCommitter<IcebergWriteResult, IcebergCommittable> lakeCommitter =
+                createLakeCommitter(tablePath, tableInfo)) {
+            IcebergCommittable committable = lakeCommitter.toCommittable(Collections.emptyList());
+            long snapshotId =
+                    lakeCommitter
+                            .commit(
+                                    committable,
+                                    Collections.singletonMap("fluss-offsets", "offsets-path"))
+                            .getCommittedSnapshotId();
+            Table icebergTable = icebergCatalog.loadTable(toIceberg(tablePath));
+            Snapshot icebergSnapshot = icebergTable.currentSnapshot();
+            assertThat(icebergSnapshot).isNotNull();
+            assertThat(snapshotId).isEqualTo(icebergSnapshot.snapshotId());
+            assertThat(icebergSnapshot.summary()).containsEntry("fluss-offsets", "offsets-path");
+        }
+    }
+
+    @Test
     void testRejectIncompatiblePartitionSpec() {
         TablePath tablePath = TablePath.of("iceberg", "test_incompatible_partition_spec");
         createTable(tablePath, true, false);

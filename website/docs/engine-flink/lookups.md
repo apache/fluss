@@ -268,6 +268,32 @@ ON `o`.`o_custkey` = `c`.`c_custkey` AND  `o`.`o_dt` = `c`.`dt`;
 
 For more details about Fluss partitioned table, see [Partitioned Tables](table-design/data-distribution/partitioning.md).
 
+## Historical Partition Lookup
+
+Auto-partitioning removes expired Fluss partitions according to the configured retention policy.
+After a partition is removed, a lookup join that references that partition can no longer find its
+rows in Fluss, even if the data has already been tiered to Paimon.
+
+Historical partition lookup addresses this problem by letting primary-key lookups fall back to
+Paimon when the original Fluss partition no longer exists. Enable this behavior on the dimension
+table:
+
+```sql title="Flink SQL"
+ALTER TABLE customer_partitioned_with_bucket_key SET (
+  'table.datalake.historical-partition.enabled' = 'true'
+);
+```
+
+This option is disabled by default and currently supports only Paimon primary-key tables with auto
+partitioning enabled and exactly one partition key. When enabled, the Coordinator creates and
+retains the `__historical__` system partition used to route lookups to Paimon. Disabling the option
+removes that system partition.
+
+Lookup clients use the table configuration captured when the lookuper is created to decide whether
+to fall back after an original partition is missing. After changing
+`table.datalake.historical-partition.enabled`, restart existing lookup jobs that need to look up
+historical partition data so that their clients load the updated table configuration.
+
 ## Insert If Not Exists
 
 ### Overview

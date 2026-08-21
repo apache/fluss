@@ -20,8 +20,12 @@ package org.apache.fluss.server.kv;
 import org.apache.fluss.exception.RemoteStorageException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.LogRecordBatch;
+import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.remote.RemoteLogManifest;
 import org.apache.fluss.remote.RemoteLogSegment;
+import org.apache.fluss.server.log.LogSegment;
 import org.apache.fluss.server.log.LogTablet;
+import org.apache.fluss.server.log.remote.LogSegmentFiles;
 import org.apache.fluss.server.log.remote.RemoteLogTestBase;
 import org.apache.fluss.server.replica.Replica;
 
@@ -32,8 +36,10 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CountDownLatch;
@@ -42,7 +48,9 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
+import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsWithWriterId;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -104,6 +112,75 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
                 assertThat(batch.baseLogOffset()).isGreaterThan(prevOffset);
                 prevOffset = batch.baseLogOffset();
             }
+        }
+    }
+
+    @Test
+    void testFetchOverlappingSegmentsFromReplicasWithDifferentBoundaries() throws Exception {
+        TableBucket targetBucket = new TableBucket(DATA1_TABLE_ID, 0);
+        TableBucket sourceBucket = new TableBucket(DATA1_TABLE_ID, 1);
+        makeLogTableAsLeader(targetBucket, false);
+        makeLogTableAsLeader(sourceBucket, false);
+        LogTablet oldLeaderLog = replicaManager.getReplicaOrException(targetBucket).getLogTablet();
+        LogTablet newLeaderLog = replicaManager.getReplicaOrException(sourceBucket).getLogTablet();
+
+        // Both replicas contain the same record batches but roll at different offsets.
+        for (int offset = 0; offset < 30; offset++) {
+            MemoryLogRecords records =
+                    genMemoryLogRecordsWithWriterId(
+                            Collections.singletonList(DATA1.get(offset % DATA1.size())),
+                            offset + 1L,
+                            0,
+                            offset);
+            oldLeaderLog.appendAsLeader(records);
+            newLeaderLog.appendAsFollower(records);
+            if (offset == 9 || offset == 29) {
+                newLeaderLog.roll(Optional.empty());
+            }
+            if (offset == 19) {
+                oldLeaderLog.roll(Optional.empty());
+            }
+        }
+        oldLeaderLog.updateHighWatermark(oldLeaderLog.localLogEndOffset());
+        newLeaderLog.updateHighWatermark(newLeaderLog.localLogEndOffset());
+
+        RemoteLogSegment oldLeaderSegment =
+                copyLogSegmentToRemote(oldLeaderLog, remoteLogStorage, 0);
+        RemoteLogSegment newLeaderSegment =
+                copySegmentToRemoteForBucket(newLeaderLog, 1, targetBucket);
+        assertThat(oldLeaderSegment.remoteLogStartOffset()).isZero();
+        assertThat(oldLeaderSegment.remoteLogEndOffset()).isEqualTo(20L);
+        assertThat(newLeaderSegment.remoteLogStartOffset()).isEqualTo(10L);
+        assertThat(newLeaderSegment.remoteLogEndOffset()).isEqualTo(30L);
+
+        RemoteLogManifest manifest =
+                new RemoteLogManifest(
+                                oldLeaderLog.getPhysicalTablePath(),
+                                targetBucket,
+                                Collections.singletonList(oldLeaderSegment))
+                        .trimAndMerge(
+                                Collections.emptyList(),
+                                Collections.singletonList(newLeaderSegment));
+        remoteLogManager.remoteLogTablet(targetBucket).loadRemoteLogManifest(manifest);
+        assertThat(manifest.getRemoteLogSegmentList())
+                .extracting(RemoteLogSegment::logicalStartOffset)
+                .containsExactly(0L, 10L);
+        assertThat(manifest.getRemoteLogSegmentList())
+                .extracting(RemoteLogSegment::logicalEndOffset)
+                .containsExactly(10L, 30L);
+
+        List<LogRecordBatch> fetchedBatches = new ArrayList<>();
+        try (RemoteLogFetcher fetcher = newFetcher(targetBucket, oldLeaderLog.getLogDir())) {
+            for (LogRecordBatch batch : fetcher.fetch(0L, 30L)) {
+                fetchedBatches.add(batch);
+            }
+        }
+
+        assertThat(fetchedBatches).hasSize(30);
+        for (int offset = 0; offset < fetchedBatches.size(); offset++) {
+            LogRecordBatch batch = fetchedBatches.get(offset);
+            assertThat(batch.baseLogOffset()).isEqualTo(offset);
+            assertThat(batch.nextLogOffset()).isEqualTo(offset + 1L);
         }
     }
 
@@ -873,5 +950,31 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
         try (java.util.stream.Stream<Path> paths = Files.list(dir)) {
             return paths.filter(path -> path.getFileName().toString().endsWith(".log")).count();
         }
+    }
+
+    private RemoteLogSegment copySegmentToRemoteForBucket(
+            LogTablet sourceLog, int segmentIndex, TableBucket targetBucket) throws Exception {
+        List<LogSegment> segments = sourceLog.getSegments();
+        LogSegment sourceSegment = segments.get(segmentIndex);
+        long nextOffset = segments.get(segmentIndex + 1).getBaseOffset();
+        File writerSnapshot = sourceLog.writerStateManager().fetchSnapshot(nextOffset).orElse(null);
+        LogSegmentFiles files =
+                new LogSegmentFiles(
+                        sourceSegment.getFileLogRecords().file().toPath(),
+                        sourceSegment.offsetIndex().file().toPath(),
+                        sourceSegment.timeIndex().file().toPath(),
+                        writerSnapshot == null ? null : writerSnapshot.toPath());
+        RemoteLogSegment remoteSegment =
+                RemoteLogSegment.Builder.builder()
+                        .remoteLogSegmentId(UUID.randomUUID())
+                        .remoteLogStartOffset(sourceSegment.getBaseOffset())
+                        .remoteLogEndOffset(nextOffset)
+                        .maxTimestamp(sourceSegment.maxTimestampSoFar())
+                        .segmentSizeInBytes(sourceSegment.getFileLogRecords().sizeInBytes())
+                        .tableBucket(targetBucket)
+                        .physicalTablePath(sourceLog.getPhysicalTablePath())
+                        .build();
+        remoteLogStorage.copyLogSegmentFiles(remoteSegment, files);
+        return remoteSegment;
     }
 }

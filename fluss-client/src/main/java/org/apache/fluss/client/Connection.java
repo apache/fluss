@@ -26,6 +26,8 @@ import org.apache.fluss.metadata.TablePath;
 
 import javax.annotation.concurrent.ThreadSafe;
 
+import java.time.Duration;
+
 /**
  * A cluster connection encapsulating lower level individual connections to actual Fluss servers.
  * Connections are instantiated through the {@link ConnectionFactory} class. The lifecycle of the
@@ -67,7 +69,26 @@ public interface Connection extends AutoCloseable {
      */
     MultiTable getMultiTable();
 
-    /** Close the connection and release all resources. */
+    /**
+     * Close the connection and release all resources.
+     *
+     * <p>This is equivalent to closing with an unbounded timeout: it waits for all pending write
+     * and lookup requests to be processed before releasing the resources.
+     */
     @Override
     void close() throws Exception;
+
+    /**
+     * Close the connection, waiting for at most the given timeout for pending write and lookup
+     * requests to complete.
+     *
+     * <p>A zero or negative timeout closes the connection immediately, abandoning any unsent or
+     * in-flight requests. This is useful for fail-fast scenarios such as task failover or
+     * cancellation, where waiting for pending requests may block indefinitely.
+     *
+     * @param timeout the maximum time to wait for pending requests to complete
+     */
+    default void close(Duration timeout) throws Exception {
+        close();
+    }
 }

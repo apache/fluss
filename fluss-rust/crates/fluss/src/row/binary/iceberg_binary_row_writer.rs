@@ -61,11 +61,6 @@ impl IcebergBinaryRowWriter {
         }
     }
 
-    // Dependency order note:
-    // 1) Keep this PR scoped to writer-level Java parity.
-    // 2) Wire the writer through IcebergKeyEncoder in follow-up #308.
-    // TODO(#308): add end-to-end key-encoding tests via IcebergKeyEncoder
-    // (similar to CompactedKeyEncoder tests for CompactedKeyWriter).
     pub fn create_value_writer(field_type: &DataType) -> Result<ValueWriter> {
         match field_type {
             // Match Java IcebergBinaryRowWriter.createFieldWriter() supported types exactly.

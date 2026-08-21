@@ -27,10 +27,12 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.exception.ApiException;
+import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidDatabaseException;
+import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.LakeTableAlreadyExistException;
 import org.apache.fluss.exception.NonPrimaryKeyTableException;
@@ -231,6 +233,7 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toDatabaseChan
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTableBucketOffsets;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTablePath;
 import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
+import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.apache.fluss.utils.PartitionUtils.validateAutoPartitionTime;
 import static org.apache.fluss.utils.PartitionUtils.validatePartitionSpec;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -529,18 +532,29 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         String remoteDataDir = remoteDirDynamicLoader.getRemoteDirSelector().nextDataDir();
 
         // then create table;
-        metadataManager.createTable(
-                tablePath,
-                remoteDataDir,
-                tableDescriptor,
-                tableAssignment,
-                request.isIgnoreIfExists());
+        long tableId =
+                metadataManager.createTable(
+                        tablePath,
+                        remoteDataDir,
+                        tableDescriptor,
+                        tableAssignment,
+                        request.isIgnoreIfExists());
+        if (tableId >= 0 && isHistoricalPartitionEnabled(tableDescriptor)) {
+            try {
+                createHistoricalPartition(tablePath, tableId, tableDescriptor);
+            } catch (Exception e) {
+                throw historicalPartitionCreateTableException(tablePath, e);
+            }
+        }
 
         return CompletableFuture.completedFuture(new CreateTableResponse());
     }
 
     private long getNewKvLeaderReplicaCount(TableDescriptor tableDescriptor) {
-        if (!tableDescriptor.hasPrimaryKey() || tableDescriptor.isPartitioned()) {
+        if (!tableDescriptor.hasPrimaryKey()) {
+            return 0;
+        }
+        if (tableDescriptor.isPartitioned() && !isHistoricalPartitionEnabled(tableDescriptor)) {
             return 0;
         }
         // the distribution and bucket count must be set now
@@ -580,10 +594,125 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                     alterTableConfigChanges,
                     tablePropertyChanges,
                     request.isIgnoreIfNotExists(),
-                    currentSession().getPrincipal());
+                    currentSession().getPrincipal(),
+                    this::beforeTablePropertiesUpdate,
+                    this::afterTablePropertiesUpdate);
         }
 
         return CompletableFuture.completedFuture(new AlterTableResponse());
+    }
+
+    private void beforeTablePropertiesUpdate(TableInfo currentTable, TableDescriptor updatedTable) {
+        if (!currentTable.getTableConfig().isHistoricalPartitionEnabled()
+                && isHistoricalPartitionEnabled(updatedTable)) {
+            try {
+                replicaCapacityController.checkCanCreateKvLeaderReplicas(
+                        getBucketCount(updatedTable));
+                createHistoricalPartition(
+                        currentTable.getTablePath(), currentTable.getTableId(), updatedTable);
+            } catch (Exception e) {
+                throw historicalPartitionEnableException(currentTable.getTablePath(), e);
+            }
+        }
+    }
+
+    private void afterTablePropertiesUpdate(TableInfo currentTable, TableDescriptor updatedTable) {
+        boolean oldEnabled = currentTable.getTableConfig().isHistoricalPartitionEnabled();
+        boolean newEnabled = isHistoricalPartitionEnabled(updatedTable);
+        if (!oldEnabled || newEnabled) {
+            return;
+        }
+
+        try {
+            metadataManager.dropPartition(
+                    currentTable.getTablePath(), historicalPartitionSpec(updatedTable), true);
+        } catch (Exception e) {
+            throw historicalPartitionDisableException(currentTable.getTablePath(), e);
+        }
+    }
+
+    private void createHistoricalPartition(
+            TablePath tablePath, long tableId, TableDescriptor tableDescriptor) {
+        int replicaFactor = tableDescriptor.getReplicationFactor();
+        TabletServerInfo[] servers = metadataCache.getLiveServers();
+        Map<Integer, BucketAssignment> bucketAssignments =
+                generateAssignment(getBucketCount(tableDescriptor), replicaFactor, servers)
+                        .getBucketAssignments();
+        PartitionAssignment partitionAssignment =
+                new PartitionAssignment(tableId, bucketAssignments);
+        String remoteDataDir = remoteDirDynamicLoader.getRemoteDirSelector().nextDataDir();
+
+        metadataManager.createPartition(
+                tablePath,
+                tableId,
+                remoteDataDir,
+                partitionAssignment,
+                historicalPartitionSpec(tableDescriptor),
+                true);
+    }
+
+    private static ResolvedPartitionSpec historicalPartitionSpec(TableDescriptor tableDescriptor) {
+        return new ResolvedPartitionSpec(
+                tableDescriptor.getPartitionKeys(),
+                Collections.singletonList(HISTORICAL_PARTITION_VALUE));
+    }
+
+    private static boolean isHistoricalPartitionEnabled(TableDescriptor tableDescriptor) {
+        return Configuration.fromMap(tableDescriptor.getProperties())
+                .get(ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED);
+    }
+
+    private static int getBucketCount(TableDescriptor tableDescriptor) {
+        // The descriptor has already passed validation, so distribution and bucket count exist.
+        //noinspection OptionalGetWithoutIsPresent
+        return tableDescriptor.getTableDistribution().get().getBucketCount().get();
+    }
+
+    private static FlussRuntimeException historicalPartitionCreateTableException(
+            TablePath tablePath, Exception cause) {
+        String option = ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED.key();
+        String message =
+                String.format(
+                        "CREATE TABLE for %s failed after the table metadata was persisted: the "
+                                + "required historical system partition '%s' could not be created. "
+                                + "The table exists with '%s'='true', but historical lookup is "
+                                + "unavailable.%nAction: do not retry CREATE TABLE "
+                                + "because the table already exists. Fix the underlying error, then "
+                                + "either set '%s' to 'false' and back to 'true', or drop and "
+                                + "recreate the table.",
+                        tablePath, HISTORICAL_PARTITION_VALUE, option, option);
+        return new FlussRuntimeException(message, cause);
+    }
+
+    private static FlussRuntimeException historicalPartitionEnableException(
+            TablePath tablePath, Exception cause) {
+        String option = ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED.key();
+        String message =
+                String.format(
+                        "ALTER TABLE for %s failed to enable historical lookup because the "
+                                + "required system partition '%s' could not be prepared. The table "
+                                + "option was not changed and '%s' remains 'false'.%n"
+                                + "Action: fix the underlying error, then retry setting '%s' to "
+                                + "'true'.",
+                        tablePath, HISTORICAL_PARTITION_VALUE, option, option);
+        return new FlussRuntimeException(message, cause);
+    }
+
+    private static FlussRuntimeException historicalPartitionDisableException(
+            TablePath tablePath, Exception cause) {
+        String option = ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED.key();
+        String message =
+                String.format(
+                        "ALTER TABLE for %s disabled historical lookup and persisted '%s'='false', "
+                                + "but failed to delete the system partition '%s'. The orphan "
+                                + "partition still consumes KV capacity.%nAction: fix "
+                                + "the underlying error, then set '%s' to "
+                                + "'true' and back to 'false' to retry the deletion, or restart the "
+                                + "Coordinator to run startup reconciliation. Setting only "
+                                + "'%s'='false' again will not retry the deletion because the "
+                                + "option is already disabled.",
+                        tablePath, option, HISTORICAL_PARTITION_VALUE, option, option);
+        return new FlussRuntimeException(message, cause);
     }
 
     public static TablePropertyChanges toTablePropertyChanges(List<TableChange> tableChanges) {
@@ -803,6 +932,12 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         validatePartitionSpec(tablePath, table.partitionKeys, partitionSpec, false);
         ResolvedPartitionSpec partitionToDrop =
                 ResolvedPartitionSpec.fromPartitionSpec(table.partitionKeys, partitionSpec);
+        if (table.getTableConfig().isHistoricalPartitionEnabled()
+                && HISTORICAL_PARTITION_VALUE.equals(partitionToDrop.getPartitionName())) {
+            throw new InvalidPartitionException(
+                    "Historical system partition is managed by the coordinator and cannot be "
+                            + "dropped manually.");
+        }
 
         metadataManager.dropPartition(tablePath, partitionToDrop, request.isIgnoreIfNotExists());
         return CompletableFuture.completedFuture(response);

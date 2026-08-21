@@ -88,6 +88,12 @@
         </dependency>
 
         <dependency>
+            <groupId>org.roaringbitmap</groupId>
+            <artifactId>RoaringBitmap</artifactId>
+            <version>${roaringbitmap.version}</version>
+        </dependency>
+
+        <dependency>
             <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-server</artifactId>
             <version>${project.version}</version>
@@ -217,9 +223,22 @@
                                 <includes combine.children="append">
                                     <include>org.apache.fluss:fluss-flink-common</include>
                                     <include>org.apache.fluss:fluss-client</include>
+                                    <include>org.roaringbitmap:RoaringBitmap</include>
                                 </includes>
                             </artifactSet>
+                            <relocations combine.children="append">
+                                <relocation>
+                                    <pattern>org.roaringbitmap</pattern>
+                                    <shadedPattern>org.apache.fluss.shaded.org.roaringbitmap</shadedPattern>
+                                </relocation>
+                            </relocations>
                             <filters combine.children="append">
+                                <filter>
+                                    <artifact>org.roaringbitmap:RoaringBitmap</artifact>
+                                    <excludes>
+                                        <exclude>META-INF/versions/**</exclude>
+                                    </excludes>
+                                </filter>
                                 <filter>
                                     <artifact>org.apache.fluss:fluss-flink-common</artifact>
                                     <excludes>

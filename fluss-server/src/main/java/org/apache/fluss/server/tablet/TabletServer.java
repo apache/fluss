@@ -22,7 +22,6 @@ import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.exception.InvalidServerRackInfoException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metrics.registry.MetricRegistry;
 import org.apache.fluss.rpc.GatewayClientProxy;
@@ -39,6 +38,7 @@ import org.apache.fluss.server.authorizer.Authorizer;
 import org.apache.fluss.server.authorizer.AuthorizerLoader;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
+import org.apache.fluss.server.kv.KvCloseMode;
 import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.server.kv.scan.ScannerManager;
 import org.apache.fluss.server.kv.snapshot.DefaultCompletedKvSnapshotCommitter;
@@ -102,8 +102,9 @@ public class TabletServer extends ServerBase {
      * rack-aware scenarios, this may lead to an inability to guarantee proper awareness
      * capabilities.
      *
-     * <p>Note: Either all tabletServers are configured with rack, or none of them are configured;
-     * otherwise, an {@link InvalidServerRackInfoException} will be thrown.
+     * <p>Rack-aware assignment is enabled only when all live tabletServers are configured with rack
+     * information. During a rolling configuration update, assignment falls back to rack-unaware
+     * mode until all live tabletServers report rack information.
      */
     private final @Nullable String rack;
 
@@ -301,7 +302,8 @@ public class TabletServer extends ServerBase {
                             scannerManager,
                             clock,
                             ioExecutor,
-                            localDiskManager);
+                            localDiskManager,
+                            pluginManager);
             replicaManager.startup();
 
             this.tabletService =
@@ -331,6 +333,8 @@ public class TabletServer extends ServerBase {
                             requestsMetrics);
 
             dynamicConfigManager.register(lakeCatalogDynamicLoader);
+            // Register logManager for dynamic log retention configuration.
+            dynamicConfigManager.register(logManager);
             // Register kvManager to dynamicConfigManager for dynamic reconfiguration
             dynamicConfigManager.register(kvManager);
             // Register DefaultSnapshotContext for dynamic kv.snapshot.interval
@@ -571,9 +575,7 @@ public class TabletServer extends ServerBase {
 
     @VisibleForTesting
     void shutdownTabletManagers() throws IOException {
-        if (kvManager != null) {
-            kvManager.shutdown();
-        }
+        shutdownKvManager(KvCloseMode.DISCARD_UNPERSISTED_STATE);
 
         if (remoteLogManager != null) {
             remoteLogManager.close();
@@ -581,6 +583,13 @@ public class TabletServer extends ServerBase {
 
         if (logManager != null) {
             logManager.shutdown();
+        }
+    }
+
+    @VisibleForTesting
+    void shutdownKvManager(KvCloseMode closeMode) {
+        if (kvManager != null) {
+            kvManager.shutdown(closeMode);
         }
     }
 

@@ -28,6 +28,7 @@ import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.time.Duration;
@@ -44,8 +45,8 @@ import java.util.concurrent.TimeUnit;
  * that is responsible for turning these lookup operations into network requests and transmitting
  * them to the cluster.
  *
- * <p>The {@link #lookup(TablePath, TableBucket, byte[], boolean)} method is asynchronous, when
- * called, it adds the lookup operation to a queue of pending lookup operations and immediately
+ * <p>The {@link #lookup(TablePath, TableBucket, byte[], boolean, String)} method is asynchronous,
+ * when called, it adds the lookup operation to a queue of pending lookup operations and immediately
  * returns. This allows the lookup operations to batch together individual lookup operations for
  * efficiency.
  */
@@ -95,12 +96,27 @@ public class LookupClient {
         return Executors.newFixedThreadPool(1, new ExecutorThreadFactory(LOOKUP_THREAD_PREFIX));
     }
 
+    /**
+     * Looks up a key from the specified table bucket.
+     *
+     * @param tablePath path of the table to look up
+     * @param tableBucket bucket to look up
+     * @param keyBytes serialized key to look up
+     * @param insertIfNotExists whether to insert the key when it does not exist
+     * @param originalPartitionName null for a regular lookup against an active Fluss partition; the
+     *     original partition name for a historical lookup against a partition whose Fluss data has
+     *     expired and is looked up from lake storage
+     * @return a future containing the serialized value, or null if the key does not exist
+     */
     public CompletableFuture<byte[]> lookup(
             TablePath tablePath,
             TableBucket tableBucket,
             byte[] keyBytes,
-            boolean insertIfNotExists) {
-        LookupQuery lookup = new LookupQuery(tablePath, tableBucket, keyBytes, insertIfNotExists);
+            boolean insertIfNotExists,
+            @Nullable String originalPartitionName) {
+        LookupQuery lookup =
+                new LookupQuery(
+                        tablePath, tableBucket, keyBytes, insertIfNotExists, originalPartitionName);
         lookupQueue.appendLookup(lookup);
         return lookup.future();
     }

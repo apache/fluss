@@ -23,6 +23,7 @@ import org.apache.fluss.client.table.Table;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.testutils.common.MultiVersionTest;
 
 import org.apache.flink.api.common.RuntimeExecutionMode;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
@@ -105,6 +106,7 @@ abstract class FlinkComplexTypeITCase extends AbstractTestBase {
     }
 
     @Test
+    @MultiVersionTest
     void testComplexTypesInLogTable() throws Exception {
         tEnv.executeSql(
                 "create table complex_log_test ("

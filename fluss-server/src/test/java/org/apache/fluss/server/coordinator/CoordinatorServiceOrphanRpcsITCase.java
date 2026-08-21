@@ -221,7 +221,7 @@ class CoordinatorServiceOrphanRpcsITCase {
                 tb,
                 snapshotId,
                 new FsPath(snapDir.resolve("_metadata").toUri().toString()),
-                new KvSnapshotHandle(Collections.emptyList(), Collections.emptyList(), 0L),
+                KvSnapshotHandle.create(Collections.emptyList(), Collections.emptyList(), 0L),
                 snapshotId,
                 null,
                 null);

@@ -199,11 +199,17 @@ pub struct RecordAccumulator {
     /// for its next poll cycle. This is the Rust equivalent of Java's
     /// `Sender.wakeup()` / Kafka's `RecordAccumulator.wakeup()`.
     sender_wakeup: Notify,
+    /// Per-bucket backpressure throttle expiry timestamps in milliseconds.
+    throttle_expiry_ms: DashMap<TableBucket, i64>,
+    max_throttle_ms: i64,
 }
 
 impl RecordAccumulator {
     pub fn new(config: Config, idempotence_manager: Arc<IdempotenceManager>) -> Self {
         let batch_timeout_ms = config.writer_batch_timeout_ms;
+        let max_throttle_ms = config
+            .writer_kv_backpressure_max_throttle_ms
+            .min(i64::MAX as u64) as i64;
         let memory_limiter = Arc::new(MemoryLimiter::new(
             config.writer_buffer_memory_size,
             Duration::from_millis(config.writer_buffer_wait_timeout_ms),
@@ -221,6 +227,8 @@ impl RecordAccumulator {
             idempotence_manager,
             memory_limiter,
             sender_wakeup: Notify::new(),
+            throttle_expiry_ms: Default::default(),
+            max_throttle_ms,
         }
     }
 
@@ -405,6 +413,9 @@ impl RecordAccumulator {
     }
 
     pub fn ready(&self, cluster: &Arc<Cluster>) -> Result<ReadyCheckResult> {
+        let now = current_time_ms();
+        self.throttle_expiry_ms.retain(|_, expiry| *expiry > now);
+
         // Snapshot just the Arcs we need, avoiding cloning the entire BucketAndWriteBatches struct
         let entries: Vec<(Arc<PhysicalTablePath>, Option<PartitionId>, BucketBatches)> = self
             .write_batches
@@ -496,6 +507,13 @@ impl RecordAccumulator {
             let deque_size = batch_guard.len();
             let full = deque_size > 1 || batch.is_closed();
             let table_bucket = cluster.get_table_bucket(physical_table_path, bucket_id)?;
+            if let Some(expiry) = self.throttle_expiry_ms.get(&table_bucket).map(|e| *e) {
+                let remaining = expiry.saturating_sub(current_time_ms());
+                if remaining > 0 {
+                    next_delay = next_delay.min(remaining);
+                    continue;
+                }
+            }
             if let Some(leader) = cluster.leader_for(&table_bucket) {
                 next_delay = self.batch_ready(
                     leader,
@@ -566,6 +584,9 @@ impl RecordAccumulator {
         first: &WriteBatch,
         table_bucket: &TableBucket,
     ) -> bool {
+        if self.is_throttled(table_bucket) {
+            return true;
+        }
         if !self.idempotence_manager.is_enabled() {
             return false;
         }
@@ -597,6 +618,42 @@ impl RecordAccumulator {
             // Re-enqueued batch that's NOT first in-flight: stop
             true
         }
+    }
+
+    /// Returns whether the bucket is currently throttled.
+    pub(crate) fn is_throttled(&self, table_bucket: &TableBucket) -> bool {
+        let expiry = match self.throttle_expiry_ms.get(table_bucket) {
+            Some(entry) => *entry,
+            None => return false,
+        };
+        if current_time_ms() < expiry {
+            return true;
+        }
+        self.throttle_expiry_ms.remove(table_bucket);
+        false
+    }
+
+    /// Updates the bucket throttle using `max_throttle * pressure²`.
+    /// Pressure `1.0` represents a hard rejection and applies the full window.
+    pub(crate) fn update_throttle(&self, table_bucket: &TableBucket, pressure: f32) {
+        if pressure >= 1f32 {
+            self.throttle_expiry_ms.insert(
+                table_bucket.clone(),
+                current_time_ms().saturating_add(self.max_throttle_ms),
+            );
+            return;
+        }
+        if pressure > 0f32 {
+            let delay = (self.max_throttle_ms as f64 * pressure as f64 * pressure as f64) as i64;
+            if delay > 0 {
+                self.throttle_expiry_ms.insert(
+                    table_bucket.clone(),
+                    current_time_ms().saturating_add(delay),
+                );
+                return;
+            }
+        }
+        self.throttle_expiry_ms.remove(table_bucket);
     }
 
     fn drain_batches_for_one_node(
@@ -1099,6 +1156,68 @@ mod tests {
 
     fn disabled_idempotence() -> Arc<IdempotenceManager> {
         Arc::new(IdempotenceManager::new(false, 5))
+    }
+
+    #[test]
+    fn test_update_throttle() {
+        let accumulator = RecordAccumulator::new(Config::default(), disabled_idempotence());
+        let tb = TableBucket::new(1, 0);
+
+        let before = current_time_ms();
+        accumulator.update_throttle(&tb, 0.5);
+        let expiry = *accumulator.throttle_expiry_ms.get(&tb).expect("entry");
+        assert!((750..=800).contains(&(expiry - before)));
+
+        let before = current_time_ms();
+        accumulator.update_throttle(&tb, 1.0);
+        let expiry = *accumulator.throttle_expiry_ms.get(&tb).expect("entry");
+        assert!((3_000..=3_050).contains(&(expiry - before)));
+
+        accumulator.update_throttle(&tb, 0.0);
+        assert!(!accumulator.is_throttled(&tb));
+
+        accumulator
+            .throttle_expiry_ms
+            .insert(tb.clone(), current_time_ms() - 1);
+        assert!(!accumulator.is_throttled(&tb));
+        assert!(!accumulator.throttle_expiry_ms.contains_key(&tb));
+    }
+
+    #[test]
+    fn test_throttle_blocks_ready_and_drain() -> Result<()> {
+        let config = Config {
+            writer_batch_timeout_ms: 10_000,
+            ..Config::default()
+        };
+        let accumulator = RecordAccumulator::new(config, disabled_idempotence());
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let cluster = Arc::new(build_cluster(&table_path, 1, 1));
+        let table_info = Arc::new(build_table_info(table_path.clone(), 1, 1));
+        let physical_table_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path)));
+        let row = GenericRow {
+            values: vec![Datum::Int32(1)],
+        };
+        let record = WriteRecord::for_append(table_info, physical_table_path, 1, &row);
+        accumulator.append(&record, 0, &cluster, false)?;
+
+        let tb = TableBucket::new(1, 0);
+        accumulator.update_throttle(&tb, 1.0);
+        let ready = accumulator.ready(&cluster)?;
+        assert!(ready.ready_nodes.is_empty());
+        assert!((1..=3_000).contains(&ready.next_ready_check_delay_ms));
+
+        let server = cluster.get_tablet_server(1).expect("server");
+        let nodes = HashSet::from([server.clone()]);
+        assert!(
+            accumulator
+                .drain(cluster.clone(), &nodes, 1024 * 1024)?
+                .is_empty()
+        );
+
+        accumulator.update_throttle(&tb, 0.0);
+        let mut batches = accumulator.drain(cluster, &nodes, 1024 * 1024)?;
+        assert_eq!(batches.remove(&1).expect("drained").len(), 1);
+        Ok(())
     }
 
     fn enabled_idempotence() -> Arc<IdempotenceManager> {

@@ -243,6 +243,47 @@ while (true) {
 }
 ```
 
+#### Filter Pushdown
+
+Filter pushdown can reduce the data read by a `LogScanner`. Fluss evaluates the predicate against
+the column statistics stored in each record batch and skips batches that cannot contain matching
+rows.
+
+Use `PredicateBuilder` with the table's `RowType` to build a predicate, and pass it to
+`Scan#filter(Predicate)` before creating the scanner:
+
+```java
+TableInfo tableInfo = table.getTableInfo();
+PredicateBuilder predicateBuilder = new PredicateBuilder(tableInfo.getRowType());
+
+int ageIndex = predicateBuilder.indexOf("age");
+int activeIndex = predicateBuilder.indexOf("is_active");
+Predicate predicate = PredicateBuilder.and(
+        predicateBuilder.greaterOrEqual(ageIndex, 18),
+        predicateBuilder.equal(activeIndex, true));
+
+LogScanner logScanner = table.newScan()
+        .filter(predicate)
+        .createLogScanner();
+```
+
+The builder supports comparison predicates (`equal`, `notEqual`, `lessThan`, `lessOrEqual`,
+`greaterThan`, and `greaterOrEqual`), null checks, `in`, `notIn`, `between`, string predicates
+(`startsWith`, `endsWith`, and `contains`), and `and`/`or` combinations.
+
+:::note
+
+- Filter pushdown is supported only for Log Tables using the Arrow log format
+  (`'table.log.format' = 'arrow'`).
+- Every filtered column must be configured in the table's `table.statistics.columns` property.
+  Only records written after statistics are enabled benefit from the optimization.
+- Filtering is performed at record-batch granularity and can produce false positives. It does not
+  remove individual non-matching rows, so applications must still evaluate the predicate on each
+  returned row when exact filtering is required (for example, with `predicate.test(row)`).
+- `BatchScanner`, including snapshot scans, does not support filter pushdown.
+
+:::
+
 ### Batch Scan — Full Primary Key Table
 
 For Primary Key tables, `BatchScanner` reads every live row in the table once

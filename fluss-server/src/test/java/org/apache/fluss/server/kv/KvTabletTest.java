@@ -58,6 +58,8 @@ import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.Key;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.KvEntry;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.PreparedFlush;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.Value;
+import org.apache.fluss.server.kv.rocksdb.RocksDBKv;
+import org.apache.fluss.server.kv.rocksdb.RocksDBKvTestUtils;
 import org.apache.fluss.server.kv.rocksdb.RocksDBStatistics;
 import org.apache.fluss.server.kv.rowmerger.RowMerger;
 import org.apache.fluss.server.kv.scan.OpenScanResult;
@@ -84,10 +86,12 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.rocksdb.FlushOptions;
+import org.rocksdb.RocksDBException;
 
 import javax.annotation.Nullable;
 
 import java.io.File;
+import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -99,6 +103,7 @@ import java.util.Random;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -116,6 +121,7 @@ import static org.apache.fluss.testutils.DataTestUtils.compactedRow;
 import static org.apache.fluss.testutils.DataTestUtils.createBasicMemoryLogRecords;
 import static org.apache.fluss.testutils.LogRecordsAssert.assertThatLogRecords;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Fail.fail;
 
@@ -187,6 +193,8 @@ class KvTabletTest {
                 tablePath,
                 logTabletDir,
                 conf,
+                new AtomicBoolean(
+                        conf.get(ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED)),
                 TestingMetricGroups.TABLET_SERVER_METRICS,
                 0,
                 new FlussScheduler(1),
@@ -263,6 +271,20 @@ class KvTabletTest {
                 kvFlushScheduler,
                 null,
                 autoIncrementManager);
+    }
+
+    @Test
+    void testDropDeletesDirectoryWhenAvoidFlushOptionFails() throws Exception {
+        initLogTabletAndKvTablet(DATA1_SCHEMA_PK, new HashMap<>());
+        RocksDBKv failingRocksDBKv =
+                RocksDBKvTestUtils.spyWithAvoidFlushFailure(
+                        kvTablet.getRocksDBKv(), new RocksDBException("expected"));
+        Field rocksDBKvField = KvTablet.class.getDeclaredField("rocksDBKv");
+        rocksDBKvField.setAccessible(true);
+        rocksDBKvField.set(kvTablet, failingRocksDBKv);
+
+        assertThatCode(kvTablet::drop).doesNotThrowAnyException();
+        assertThat(kvTablet.getKvTabletDir()).doesNotExist();
     }
 
     @Test

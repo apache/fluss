@@ -590,15 +590,15 @@ fn estimate_arrow_ipc_overhead(
 ) -> Result<usize> {
     use arrow::array::new_null_array;
 
-    // Create a 1-row batch of nulls. Null arrays have minimal, predictable
-    // data: no validity bitmap, no variable-length data, just fixed-width
-    // zero buffers. This lets us compute raw data size exactly.
-    let null_arrays: Vec<ArrayRef> = schema
-        .fields()
-        .iter()
-        .map(|field| new_null_array(field.data_type(), 1))
-        .collect();
-    let batch = RecordBatch::try_new(schema.clone(), null_arrays)?;
+    let fields = schema.fields();
+    let mut probe_fields = Vec::with_capacity(fields.len());
+    let mut null_arrays: Vec<ArrayRef> = Vec::with_capacity(fields.len());
+    for f in fields {
+        null_arrays.push(new_null_array(f.data_type(), 1));
+        probe_fields.push(f.as_ref().clone().with_nullable(true));
+    }
+    let probe_schema: SchemaRef = Arc::new(arrow_schema::Schema::new(probe_fields));
+    let batch = RecordBatch::try_new(probe_schema.clone(), null_arrays)?;
 
     // Sum the raw buffer sizes — this is what buffer_size() would report.
     let raw_data: usize = batch
@@ -621,7 +621,7 @@ fn estimate_arrow_ipc_overhead(
     let mut buf = vec![];
     let write_option =
         IpcWriteOptions::try_with_compression(IpcWriteOptions::default(), compression);
-    let mut writer = StreamWriter::try_new_with_options(&mut buf, schema, write_option?)?;
+    let mut writer = StreamWriter::try_new_with_options(&mut buf, &probe_schema, write_option?)?;
     let header_len = writer.get_ref().len();
     writer.write(&batch)?;
     let total_len = writer.get_ref().len();
@@ -1901,6 +1901,83 @@ mod tests {
     use crate::metadata::{DataField, DataTypes, PhysicalTablePath, RowType, TablePath};
     use crate::row::{DataGetters, GenericRow};
     use crate::test_utils::build_table_info;
+
+    #[test]
+    fn nonnullable_append_builder_roundtrips_for_both_append_modes() {
+        let row_type = RowType::new(vec![DataField::new(
+            "id",
+            DataTypes::bigint().as_non_nullable(),
+            None,
+        )]);
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = Arc::new(build_table_info(table_path.clone(), 1, 1));
+        let physical_table_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path)));
+
+        for to_append_record_batch in [false, true] {
+            let mut builder = MemoryLogRecordsArrowBuilder::new(
+                1,
+                &row_type,
+                to_append_record_batch,
+                ArrowCompressionInfo {
+                    compression_type: ArrowCompressionType::None,
+                    compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
+                },
+                usize::MAX,
+                Arc::new(ArrowCompressionRatioEstimator::default()),
+            )
+            .expect("NOT NULL builder should construct");
+
+            if to_append_record_batch {
+                let batch_schema = Arc::new(arrow_schema::Schema::new(vec![Field::new(
+                    "id",
+                    arrow_schema::DataType::Int64,
+                    false,
+                )]));
+                let batch = RecordBatch::try_new(
+                    batch_schema,
+                    vec![Arc::new(arrow::array::Int64Array::from(vec![1_i64, 2_i64]))
+                        as arrow::array::ArrayRef],
+                )
+                .expect("non-nullable record batch");
+                let record = WriteRecord::for_append_record_batch(
+                    Arc::clone(&table_info),
+                    physical_table_path.clone(),
+                    1,
+                    batch,
+                );
+                builder
+                    .append(&record)
+                    .expect("append batch should succeed");
+            } else {
+                let mut r1 = GenericRow::new(1);
+                r1.set_field(0, 1_i64);
+                let mut r2 = GenericRow::new(1);
+                r2.set_field(0, 2_i64);
+                builder
+                    .append(&WriteRecord::for_append(
+                        Arc::clone(&table_info),
+                        physical_table_path.clone(),
+                        1,
+                        &r1,
+                    ))
+                    .expect("append row 1 should succeed");
+                builder
+                    .append(&WriteRecord::for_append(
+                        Arc::clone(&table_info),
+                        physical_table_path.clone(),
+                        1,
+                        &r2,
+                    ))
+                    .expect("append row 2 should succeed");
+            }
+
+            assert_eq!(builder.records_count(), 2);
+            let bytes = builder
+                .build()
+                .expect("build should succeed for NOT NULL column");
+            assert!(!bytes.is_empty());
+        }
+    }
 
     fn single_int_read_context() -> (ReadContext, SchemaRef) {
         let row_type = Arc::new(RowType::new(vec![DataField::new(

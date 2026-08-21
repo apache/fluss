@@ -322,15 +322,6 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
         FlinkConnectorOptionsUtils.validateTableSourceOptions(tableOptions);
     }
 
-    private static void validateVirtualLogTableRuntimeMode(
-            String virtualTableSuffix, boolean isStreamingMode) {
-        if (!isStreamingMode) {
-            throw new UnsupportedOperationException(
-                    String.format(
-                            "%s virtual tables only support streaming mode.", virtualTableSuffix));
-        }
-    }
-
     /** Creates a ChangelogFlinkTableSource for $changelog virtual tables. */
     private DynamicTableSource createChangelogTableSource(
             Context context, ObjectIdentifier tableIdentifier, String tableName) {
@@ -342,7 +333,6 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
         boolean isStreamingMode =
                 context.getConfiguration().get(ExecutionOptions.RUNTIME_MODE)
                         == RuntimeExecutionMode.STREAMING;
-        validateVirtualLogTableRuntimeMode(FlinkCatalog.CHANGELOG_TABLE_SUFFIX, isStreamingMode);
 
         // tableOutputType includes metadata columns: [_change_type, _log_offset, _commit_timestamp,
         // data_cols...]
@@ -405,7 +395,6 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
         boolean isStreamingMode =
                 context.getConfiguration().get(ExecutionOptions.RUNTIME_MODE)
                         == RuntimeExecutionMode.STREAMING;
-        validateVirtualLogTableRuntimeMode(FlinkCatalog.BINLOG_TABLE_SUFFIX, isStreamingMode);
 
         // tableOutputType: [_change_type, _log_offset, _commit_timestamp, before ROW<...>, after
         // ROW<...>]

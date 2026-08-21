@@ -28,7 +28,9 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.coordinator.SchemaUpdate;
 import org.apache.fluss.types.DataTypes;
 
+import org.apache.paimon.CoreOptions;
 import org.apache.paimon.catalog.Identifier;
+import org.apache.paimon.schema.SchemaChange;
 import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.table.Table;
 import org.junit.jupiter.api.AfterEach;
@@ -43,7 +45,9 @@ import java.util.List;
 
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_ENABLED;
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_FORMAT;
+import static org.apache.fluss.lake.paimon.utils.PaimonConversions.PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
+import static org.apache.fluss.lake.paimon.utils.PaimonTableValidation.isPaimonSchemaCompatible;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -156,15 +160,119 @@ class PaimonLakeCatalogTest {
 
         Table table = flussPaimonCatalog.getPaimonCatalog().getTable(identifier);
         assertThat(table.rowType().getFieldNames())
-                .containsSequence(
-                        "id",
-                        "name",
-                        "amount",
-                        "address",
-                        "new_col",
-                        "__bucket",
-                        "__offset",
-                        "__timestamp");
+                .containsSequence("id", "name", "amount", "address", "new_col");
+    }
+
+    @Test
+    void testAlterTableAddColumnIgnoresPaimonCommentsAndOptions() throws Exception {
+        String database = "test_alter_table_add_column_ignores_paimon_comments_and_options_db";
+        String tableName = "test_alter_table_add_column_ignores_paimon_comments_and_options_table";
+        TablePath tablePath = TablePath.of(database, tableName);
+        Identifier identifier = Identifier.create(database, tableName);
+        createTable(database, tableName);
+
+        flussPaimonCatalog
+                .getPaimonCatalog()
+                .alterTable(
+                        identifier,
+                        Arrays.asList(
+                                SchemaChange.updateComment(""),
+                                SchemaChange.updateColumnComment(
+                                        "address", "updated address comment"),
+                                SchemaChange.setOption("fluss.key", "value")),
+                        false);
+
+        List<TableChange> changes =
+                Collections.singletonList(
+                        TableChange.addColumn(
+                                "is_direct_play",
+                                DataTypes.SMALLINT(),
+                                "whether direct play is enabled",
+                                TableChange.ColumnPosition.last()));
+
+        flussPaimonCatalog.alterTable(
+                tablePath, changes, getLakeCatalogContext(FLUSS_SCHEMA, changes));
+
+        Table table = flussPaimonCatalog.getPaimonCatalog().getTable(identifier);
+        assertThat(((FileStoreTable) table).schema().toSchema().comment()).isEqualTo("");
+        assertThat(table.options().get("fluss.key")).isEqualTo("value");
+        assertThat(table.rowType().getFieldNames())
+                .containsSequence("id", "name", "amount", "address", "is_direct_play");
+    }
+
+    @Test
+    void testPaimonSchemaCompatibilityChecksPhysicalMetadata() {
+        org.apache.paimon.schema.Schema schema =
+                createPaimonSchema(
+                        Arrays.asList("id", "pt"), Collections.singletonList("pt"), "1", "id");
+
+        assertThat(
+                        isPaimonSchemaCompatible(
+                                schema,
+                                createPaimonSchema(
+                                        Arrays.asList("id", "pt"),
+                                        Collections.singletonList("pt"),
+                                        "2",
+                                        "id")))
+                .isFalse();
+        assertThat(
+                        isPaimonSchemaCompatible(
+                                schema,
+                                createPaimonSchema(
+                                        Arrays.asList("id", "pt"),
+                                        Collections.singletonList("pt"),
+                                        "1",
+                                        "pt")))
+                .isFalse();
+        assertThat(
+                        isPaimonSchemaCompatible(
+                                schema,
+                                createPaimonSchema(
+                                        Arrays.asList("pt", "id"),
+                                        Collections.singletonList("pt"),
+                                        "1",
+                                        "id")))
+                .isFalse();
+        assertThat(
+                        isPaimonSchemaCompatible(
+                                schema,
+                                createPaimonSchema(
+                                        Arrays.asList("id", "pt"),
+                                        Collections.<String>emptyList(),
+                                        "1",
+                                        "id")))
+                .isFalse();
+        assertThat(
+                        isPaimonSchemaCompatible(
+                                schema,
+                                createPaimonSchema(
+                                        Arrays.asList("id", "pt"),
+                                        Collections.singletonList("pt"),
+                                        "1",
+                                        "id",
+                                        Boolean.TRUE.toString())))
+                .isFalse();
+        assertThat(
+                        isPaimonSchemaCompatible(
+                                schema,
+                                createPaimonSchemaWithoutPartitionLegacyName(
+                                        Arrays.asList("id", "pt"),
+                                        Collections.singletonList("pt"),
+                                        "1",
+                                        "id")))
+                .isFalse();
+
+        assertThat(CoreOptions.IMMUTABLE_OPTIONS).contains(CoreOptions.BUCKET_FUNCTION_TYPE.key());
+        org.apache.paimon.schema.Schema schemaWithDifferentImmutableOption =
+                createPaimonSchemaBuilder(
+                                Arrays.asList("id", "pt"),
+                                Collections.singletonList("pt"),
+                                "1",
+                                "id")
+                        .option(PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY, Boolean.FALSE.toString())
+                        .option(CoreOptions.BUCKET_FUNCTION_TYPE.key(), "mod")
+                        .build();
+        assertThat(isPaimonSchemaCompatible(schema, schemaWithDifferentImmutableOption)).isFalse();
     }
 
     @Test
@@ -291,18 +399,9 @@ class PaimonLakeCatalogTest {
                                 "the address comment",
                                 TableChange.ColumnPosition.last()));
 
-        assertThatThrownBy(
-                        () ->
-                                flussPaimonCatalog.alterTable(
-                                        tablePath,
-                                        changes4,
-                                        getLakeCatalogContext(FLUSS_SCHEMA, changes4)))
-                .isInstanceOf(InvalidAlterTableException.class)
-                .hasMessageContaining("Paimon schema is not compatible with Fluss schema")
-                .hasMessageContaining(
-                        String.format(
-                                "therefore you need to add the diff columns all at once, rather than applying other table changes: %s.",
-                                changes4));
+        // column comments don't affect schema compatibility.
+        flussPaimonCatalog.alterTable(
+                tablePath, changes4, getLakeCatalogContext(FLUSS_SCHEMA, changes4));
 
         // no exception thrown only when adding existing column to match fluss and paimon.
         flussPaimonCatalog.alterTable(
@@ -373,6 +472,39 @@ class PaimonLakeCatalogTest {
                         String.format(
                                 "therefore you need to add the diff columns all at once, rather than applying other table changes: %s.",
                                 changes));
+    }
+
+    private org.apache.paimon.schema.Schema createPaimonSchema(
+            List<String> primaryKeys, List<String> partitionKeys, String bucket, String bucketKey) {
+        return createPaimonSchema(
+                primaryKeys, partitionKeys, bucket, bucketKey, Boolean.FALSE.toString());
+    }
+
+    private org.apache.paimon.schema.Schema createPaimonSchema(
+            List<String> primaryKeys,
+            List<String> partitionKeys,
+            String bucket,
+            String bucketKey,
+            String partitionLegacyName) {
+        return createPaimonSchemaBuilder(primaryKeys, partitionKeys, bucket, bucketKey)
+                .option(PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY, partitionLegacyName)
+                .build();
+    }
+
+    private org.apache.paimon.schema.Schema createPaimonSchemaWithoutPartitionLegacyName(
+            List<String> primaryKeys, List<String> partitionKeys, String bucket, String bucketKey) {
+        return createPaimonSchemaBuilder(primaryKeys, partitionKeys, bucket, bucketKey).build();
+    }
+
+    private org.apache.paimon.schema.Schema.Builder createPaimonSchemaBuilder(
+            List<String> primaryKeys, List<String> partitionKeys, String bucket, String bucketKey) {
+        return org.apache.paimon.schema.Schema.newBuilder()
+                .column("id", org.apache.paimon.types.DataTypes.INT().notNull())
+                .column("pt", org.apache.paimon.types.DataTypes.STRING().notNull())
+                .primaryKey(primaryKeys.toArray(new String[0]))
+                .partitionKeys(partitionKeys.toArray(new String[0]))
+                .option(CoreOptions.BUCKET.key(), bucket)
+                .option(CoreOptions.BUCKET_KEY.key(), bucketKey);
     }
 
     private void createTable(String database, String tableName) {

@@ -21,11 +21,13 @@ on:
   push:
     paths-ignore:
       - 'fluss-rust/**'
+      - 'fluss-gateway/**'
       - 'website/**'
       - '**/*.md'
   pull_request:
     paths-ignore:
       - 'fluss-rust/**'
+      - 'fluss-gateway/**'
       - 'website/**'
       - '**/*.md'
 

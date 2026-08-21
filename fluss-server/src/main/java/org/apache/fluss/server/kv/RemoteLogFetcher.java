@@ -369,6 +369,9 @@ public class RemoteLogFetcher implements Closeable {
         /** Tracks the current read offset, advancing as batches are consumed. */
         private long currentOffset;
 
+        /** Exclusive logical end of the physical segment currently being consumed. */
+        private long currentSegmentLogicalEndOffset = -1L;
+
         private int currentSegmentIndex = 0;
         private FileLogRecords currentFileLogRecords;
         private Iterator<LogRecordBatch> currentBatchIterator;
@@ -475,6 +478,18 @@ public class RemoteLogFetcher implements Closeable {
                     if (batch.nextLogOffset() <= currentOffset) {
                         continue;
                     }
+                    if (batch.baseLogOffset() >= currentSegmentLogicalEndOffset) {
+                        closeCurrentFileLogRecords();
+                        continue;
+                    }
+                    if (batch.nextLogOffset() > currentSegmentLogicalEndOffset) {
+                        throw new IllegalStateException(
+                                String.format(
+                                        "Logical boundary %s cuts record batch [%s, %s)",
+                                        currentSegmentLogicalEndOffset,
+                                        batch.baseLogOffset(),
+                                        batch.nextLogOffset()));
+                    }
                     // stop if we've reached localLogStartOffset
                     if (batch.baseLogOffset() >= localLogStartOffset) {
                         finished = true;
@@ -497,15 +512,16 @@ public class RemoteLogFetcher implements Closeable {
                 }
 
                 RemoteLogSegment segment = segments.get(currentSegmentIndex++);
-                // remoteLogEndOffset() is inclusive — last offset in segment
-                if (segment.remoteLogEndOffset() < currentOffset) {
+                if (segment.logicalEndOffset() <= currentOffset) {
                     continue;
                 }
                 // skip segments that start at or after localLogStartOffset
-                if (segment.remoteLogStartOffset() >= localLogStartOffset) {
+                if (segment.logicalStartOffset() >= localLogStartOffset) {
                     finished = true;
                     return;
                 }
+                currentOffset = Math.max(currentOffset, segment.logicalStartOffset());
+                currentSegmentLogicalEndOffset = segment.logicalEndOffset();
 
                 try {
                     File localFile = fetchSegmentFile(segment);
@@ -621,12 +637,12 @@ public class RemoteLogFetcher implements Closeable {
                 RemoteLogSegment segment = segments.get(nextPrefetchIndex);
 
                 // segment entirely before currentOffset — skip and advance index.
-                if (segment.remoteLogEndOffset() < currentOffset) {
+                if (segment.logicalEndOffset() <= currentOffset) {
                     nextPrefetchIndex++;
                     continue;
                 }
                 // segment starts at or beyond localLogStartOffset — nothing more to prefetch.
-                if (segment.remoteLogStartOffset() >= localLogStartOffset) {
+                if (segment.logicalStartOffset() >= localLogStartOffset) {
                     return;
                 }
 

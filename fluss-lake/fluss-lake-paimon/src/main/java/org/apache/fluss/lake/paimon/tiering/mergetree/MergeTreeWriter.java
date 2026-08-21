@@ -31,16 +31,12 @@ import org.apache.paimon.table.sink.TableWriteImpl;
 import javax.annotation.Nullable;
 
 import java.util.List;
-import java.util.Map;
 
 import static org.apache.fluss.lake.paimon.tiering.PaimonLakeTieringFactory.FLUSS_LAKE_TIERING_COMMIT_USER;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toRowKind;
 
 /** A {@link RecordWriter} to write to Paimon's primary-key table. */
 public class MergeTreeWriter extends RecordWriter<KeyValue> {
-
-    // the option key to configure the temporary directory used by fluss tiering
-    private static final String FLUSS_TIERING_TMP_DIR_KEY = "fluss.tiering.io-tmpdir";
 
     private final KeyValue keyValue = new KeyValue();
 
@@ -53,14 +49,34 @@ public class MergeTreeWriter extends RecordWriter<KeyValue> {
             TableBucket tableBucket,
             @Nullable String partition,
             List<String> partitionKeys,
-            RowType flussRowType) {
+            RowType flussRowType,
+            boolean paimonIncludingSystemColumns) {
         this(
                 fileStoreTable,
-                createIOManager(fileStoreTable),
                 tableBucket,
                 partition,
                 partitionKeys,
-                flussRowType);
+                flussRowType,
+                (String[]) null,
+                paimonIncludingSystemColumns);
+    }
+
+    public MergeTreeWriter(
+            FileStoreTable fileStoreTable,
+            TableBucket tableBucket,
+            @Nullable String partition,
+            List<String> partitionKeys,
+            RowType flussRowType,
+            @Nullable String[] ioTmpDirs,
+            boolean paimonIncludingSystemColumns) {
+        this(
+                fileStoreTable,
+                createIOManager(ioTmpDirs),
+                tableBucket,
+                partition,
+                partitionKeys,
+                flussRowType,
+                paimonIncludingSystemColumns);
     }
 
     MergeTreeWriter(
@@ -69,27 +85,29 @@ public class MergeTreeWriter extends RecordWriter<KeyValue> {
             TableBucket tableBucket,
             @Nullable String partition,
             List<String> partitionKeys,
-            RowType flussRowType) {
+            RowType flussRowType,
+            boolean paimonIncludingSystemColumns) {
         super(
                 createTableWrite(fileStoreTable, ioManager),
                 fileStoreTable.rowType(),
                 tableBucket,
                 partition,
                 partitionKeys,
-                flussRowType);
+                flussRowType,
+                paimonIncludingSystemColumns);
         this.rowKeyExtractor = fileStoreTable.createRowKeyExtractor();
         this.ioManager = ioManager;
     }
 
-    private static IOManager createIOManager(FileStoreTable fileStoreTable) {
-        // we allow users to configure the temporary directory used by fluss tiering
-        // since the default java.io.tmpdir may not be suitable.
-        // currently, we don't expose the option, as a workaround way, maybe in the future we can
-        // expose it if it's needed
-        Map<String, String> props = fileStoreTable.options();
-        String tmpDir =
-                props.getOrDefault(FLUSS_TIERING_TMP_DIR_KEY, System.getProperty("java.io.tmpdir"));
-        return IOManager.create(tmpDir);
+    private static IOManager createIOManager(@Nullable String[] ioTmpDirs) {
+        return IOManager.create(getIoManagerTmpDirs(ioTmpDirs));
+    }
+
+    static String[] getIoManagerTmpDirs(@Nullable String[] ioTmpDirs) {
+        if (ioTmpDirs != null && ioTmpDirs.length > 0) {
+            return ioTmpDirs;
+        }
+        return new String[] {System.getProperty("java.io.tmpdir")};
     }
 
     private static TableWriteImpl<KeyValue> createTableWrite(

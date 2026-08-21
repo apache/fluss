@@ -42,6 +42,7 @@ import org.apache.fluss.server.zk.data.ServerTags;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
+import org.apache.fluss.server.zk.data.ZkData.BucketIdZNode;
 import org.apache.fluss.server.zk.data.lease.KvSnapshotLeaseMetadata;
 import org.apache.fluss.shaded.curator5.org.apache.curator.CuratorZookeeperClient;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
@@ -77,6 +78,9 @@ import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignm
 import static org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.common.ZKConfig.JUTE_MAXBUFFER;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyCollection;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.spy;
 
 /** Test for {@link ZooKeeperClient}. */
 class ZooKeeperClientTest {
@@ -529,6 +533,124 @@ class ZooKeeperClientTest {
         zookeeperClient.deleteTableBucketSnapshot(table1Bucket2, 2);
         assertThat(zookeeperClient.getTableBucketAllSnapshotAndIds(table1Bucket2)).isEmpty();
         assertThat(zookeeperClient.getTableBucketSnapshot(table1Bucket2, 1)).isEmpty();
+    }
+
+    @Test
+    void testGetLatestBucketSnapshotsInBatch() throws Exception {
+        long tableId = 1L;
+        TableBucket bucketWithSnapshots = new TableBucket(tableId, 0);
+        TableBucket bucketWithoutPath = new TableBucket(tableId, 1);
+        TableBucket bucketWithoutSnapshotsPath = new TableBucket(tableId, 2);
+        TableBucket bucketWithEmptySnapshotsPath = new TableBucket(tableId, 3);
+        TableBucket unassignedBucketWithoutSnapshotsPath = new TableBucket(tableId, 4);
+        zookeeperClient.registerTableAssignment(
+                tableId,
+                TableAssignment.builder()
+                        .add(bucketWithSnapshots.getBucket(), BucketAssignment.of(0))
+                        .add(bucketWithoutPath.getBucket(), BucketAssignment.of(0))
+                        .add(bucketWithoutSnapshotsPath.getBucket(), BucketAssignment.of(0))
+                        .add(bucketWithEmptySnapshotsPath.getBucket(), BucketAssignment.of(0))
+                        .build());
+
+        BucketSnapshot olderSnapshot = new BucketSnapshot(1L, 10L, "oss://test/cp1");
+        BucketSnapshot latestSnapshot = new BucketSnapshot(3L, 30L, "oss://test/cp3");
+        zookeeperClient.registerTableBucketSnapshot(bucketWithSnapshots, olderSnapshot);
+        zookeeperClient.registerTableBucketSnapshot(bucketWithSnapshots, latestSnapshot);
+
+        // Create a bucket path without its snapshots child path.
+        zookeeperClient
+                .getCuratorClient()
+                .create()
+                .creatingParentsIfNeeded()
+                .forPath(BucketIdZNode.path(bucketWithoutSnapshotsPath));
+        zookeeperClient
+                .getCuratorClient()
+                .create()
+                .creatingParentsIfNeeded()
+                .forPath(BucketIdZNode.path(unassignedBucketWithoutSnapshotsPath));
+
+        // Deleting the only snapshot leaves an empty snapshots path.
+        BucketSnapshot deletedSnapshot = new BucketSnapshot(2L, 20L, "oss://test/cp2");
+        zookeeperClient.registerTableBucketSnapshot(bucketWithEmptySnapshotsPath, deletedSnapshot);
+        zookeeperClient.deleteTableBucketSnapshot(
+                bucketWithEmptySnapshotsPath, deletedSnapshot.getSnapshotId());
+
+        Map<Integer, Optional<BucketSnapshot>> expectedSnapshots = new HashMap<>();
+        expectedSnapshots.put(bucketWithSnapshots.getBucket(), Optional.of(latestSnapshot));
+        expectedSnapshots.put(bucketWithoutPath.getBucket(), Optional.empty());
+        expectedSnapshots.put(bucketWithoutSnapshotsPath.getBucket(), Optional.empty());
+        expectedSnapshots.put(bucketWithEmptySnapshotsPath.getBucket(), Optional.empty());
+        expectedSnapshots.put(unassignedBucketWithoutSnapshotsPath.getBucket(), Optional.empty());
+
+        assertThat(zookeeperClient.getTableLatestBucketSnapshot(tableId))
+                .isEqualTo(expectedSnapshots);
+
+        long partitionId = 2L;
+        Map<Integer, BucketAssignment> partitionBucketAssignments =
+                Collections.singletonMap(0, BucketAssignment.of(0));
+        zookeeperClient.registerPartitionAssignmentAndMetadata(
+                partitionId,
+                "p1",
+                new PartitionAssignment(tableId, partitionBucketAssignments),
+                remoteDataDir,
+                TablePath.of("db", "partitioned_table"),
+                tableId);
+        TableBucket partitionBucket = new TableBucket(tableId, partitionId, 0);
+        BucketSnapshot partitionSnapshot = new BucketSnapshot(5L, 50L, "oss://test/partition-cp5");
+        zookeeperClient.registerTableBucketSnapshot(partitionBucket, partitionSnapshot);
+
+        assertThat(zookeeperClient.getPartitionLatestBucketSnapshot(partitionId))
+                .containsEntry(partitionBucket.getBucket(), Optional.of(partitionSnapshot));
+    }
+
+    @Test
+    void testGetLatestBucketSnapshotsBeyondMaxInflightRequests() throws Exception {
+        long tableId = 1L;
+        int bucketCount = ConfigOptions.ZOOKEEPER_MAX_INFLIGHT_REQUESTS.defaultValue() + 1;
+        TableAssignment.Builder assignmentBuilder = TableAssignment.builder();
+        Map<Integer, Optional<BucketSnapshot>> expectedSnapshots = new HashMap<>();
+        for (int bucketId = 0; bucketId < bucketCount; bucketId++) {
+            assignmentBuilder.add(bucketId, BucketAssignment.of(0));
+            BucketSnapshot snapshot = new BucketSnapshot(1L, bucketId, "oss://test/cp-" + bucketId);
+            expectedSnapshots.put(bucketId, Optional.of(snapshot));
+        }
+        zookeeperClient.registerTableAssignment(tableId, assignmentBuilder.build());
+
+        for (Map.Entry<Integer, Optional<BucketSnapshot>> entry : expectedSnapshots.entrySet()) {
+            zookeeperClient.registerTableBucketSnapshot(
+                    new TableBucket(tableId, entry.getKey()), entry.getValue().get());
+        }
+
+        assertThat(zookeeperClient.getTableLatestBucketSnapshot(tableId))
+                .isEqualTo(expectedSnapshots);
+    }
+
+    @Test
+    void testLatestBucketSnapshotDeletedBetweenBatchReads() throws Exception {
+        long tableId = 1L;
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+        zookeeperClient.registerTableAssignment(
+                tableId,
+                TableAssignment.builder()
+                        .add(tableBucket.getBucket(), BucketAssignment.of(0))
+                        .build());
+        BucketSnapshot olderSnapshot = new BucketSnapshot(1L, 10L, "oss://test/cp1");
+        BucketSnapshot latestSnapshot = new BucketSnapshot(2L, 20L, "oss://test/cp2");
+        zookeeperClient.registerTableBucketSnapshot(tableBucket, olderSnapshot);
+        zookeeperClient.registerTableBucketSnapshot(tableBucket, latestSnapshot);
+
+        ZooKeeperClient raceTestingClient = spy(zookeeperClient);
+        doAnswer(
+                        invocation -> {
+                            zookeeperClient.deleteTableBucketSnapshot(
+                                    tableBucket, latestSnapshot.getSnapshotId());
+                            return invocation.callRealMethod();
+                        })
+                .when(raceTestingClient)
+                .getDataInBackground(anyCollection());
+
+        assertThat(raceTestingClient.getTableLatestBucketSnapshot(tableId))
+                .containsEntry(tableBucket.getBucket(), Optional.empty());
     }
 
     @Test

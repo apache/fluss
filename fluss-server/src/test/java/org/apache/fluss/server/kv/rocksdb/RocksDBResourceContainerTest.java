@@ -169,6 +169,7 @@ class RocksDBResourceContainerTest {
             assertThat(dbOptions.keepLogFileNum()).isEqualTo(10);
             assertThat(dbOptions.maxLogFileSize()).isEqualTo(2 * SizeUnit.MB);
             assertThat(dbOptions.statistics()).isNotNull();
+            assertThat(dbOptions.avoidFlushDuringShutdown()).isFalse();
 
             ColumnFamilyOptions columnOptions = optionsContainer.getColumnOptions();
             assertThat(columnOptions.compactionStyle()).isEqualTo(CompactionStyle.LEVEL);

@@ -21,7 +21,6 @@ import org.apache.fluss.client.initializer.OffsetsInitializer;
 import org.apache.fluss.client.table.getter.PartitionGetter;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.config.StatisticsColumnsConfig;
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.flink.row.FlinkAsFlussRow;
@@ -42,12 +41,10 @@ import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.predicate.CompoundPredicate;
 import org.apache.fluss.predicate.PartitionPredicateVisitor;
 import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.predicate.PredicateBuilder;
 import org.apache.fluss.predicate.PredicateVisitor;
-import org.apache.fluss.types.DataTypeChecks;
 import org.apache.fluss.types.RowType;
 
 import org.apache.flink.annotation.VisibleForTesting;
@@ -160,9 +157,6 @@ public class FlinkTableSource
 
     @Nullable private GenericRowData singleRowFilter;
 
-    // whether the scan is for row-level modification
-    @Nullable private RowLevelModificationType modificationScanType;
-
     // count(*) push down
     private boolean selectRowCount = false;
 
@@ -266,7 +260,8 @@ public class FlinkTableSource
 
         // Pre-compute available statistics columns to avoid repeated calculation
         RowType flussRowType = FlinkConversions.toFlussRowType(tableOutputType);
-        this.availableStatsColumns = computeAvailableStatsColumns(flussRowType);
+        this.availableStatsColumns =
+                PushdownUtils.computeAvailableStatsColumns(flussRowType, tableConfig);
     }
 
     @Override
@@ -415,6 +410,8 @@ public class FlinkTableSource
                         scanPartitionDiscoveryIntervalMs,
                         splitPerAssignmentBatchSize,
                         new RowDataDeserializationSchema(),
+                        FlinkConversions.toFlussRowType(
+                                (org.apache.flink.table.types.logical.RowType) producedDataType),
                         streaming,
                         partitionFilters,
                         enableLakeSource ? lakeSource : null,
@@ -431,12 +428,6 @@ public class FlinkTableSource
 
                 @Override
                 public Source<RowData, ?, ?> createSource() {
-                    if (modificationScanType != null) {
-                        throw new UnsupportedOperationException(
-                                "Currently, Fluss table only supports "
-                                        + modificationScanType
-                                        + " statement with conditions on primary key.");
-                    }
                     if (hasPrimaryKey()
                             && startupOptions.startupMode
                                     != FlinkConnectorOptions.ScanStartupMode.FULL) {
@@ -533,7 +524,6 @@ public class FlinkTableSource
         source.producedDataType = producedDataType;
         source.projectedFields = projectedFields;
         source.singleRowFilter = singleRowFilter;
-        source.modificationScanType = modificationScanType;
         source.partitionFilters = partitionFilters;
         source.lakeSource = lakeSource;
         source.logRecordBatchFilter = logRecordBatchFilter;
@@ -681,7 +671,8 @@ public class FlinkTableSource
                 Predicate predicate = predicateOpt.get();
                 LOG.trace("Converted filter to predicate: {}", predicate);
                 // Check if predicate can benefit from statistics
-                if (canPredicateUseStatistics(predicate, flussRowType, availableStatsColumns)) {
+                if (PushdownUtils.canPredicateUseStatistics(
+                        predicate, flussRowType, availableStatsColumns)) {
                     pushdownPredicates.add(predicate);
                     acceptedFilters.add(filter);
                 }
@@ -734,94 +725,10 @@ public class FlinkTableSource
         }
     }
 
-    /**
-     * Checks if a predicate can benefit from statistics based on the available statistics columns.
-     *
-     * @param predicate the predicate to check
-     * @param rowType the row type
-     * @param availableStatsColumns the columns that have statistics available
-     * @return true if the predicate can use statistics
-     */
-    private boolean canPredicateUseStatistics(
-            Predicate predicate, RowType rowType, Set<String> availableStatsColumns) {
-
-        class StatisticsUsageVisitor implements PredicateVisitor<Boolean> {
-            @Override
-            public Boolean visit(org.apache.fluss.predicate.LeafPredicate leaf) {
-                // Check if the field referenced by this predicate has statistics available
-                String fieldName = rowType.getFieldNames().get(leaf.index());
-                // Check if statistics are available for this column
-                return availableStatsColumns.contains(fieldName);
-            }
-
-            @Override
-            public Boolean visit(CompoundPredicate compound) {
-                // For compound predicates, all children must be able to use statistics
-                for (Predicate child : compound.children()) {
-                    if (!child.visit(this)) {
-                        return false;
-                    }
-                }
-                return true;
-            }
-        }
-
-        return predicate.visit(new StatisticsUsageVisitor());
-    }
-
-    /**
-     * Computes the available statistics columns based on table configuration. This method is called
-     * once during construction to pre-compute the result.
-     *
-     * @param flussRowType the row type
-     * @return set of column names that have statistics available
-     */
-    private Set<String> computeAvailableStatsColumns(RowType flussRowType) {
-        StatisticsColumnsConfig statsConfig = tableConfig.getStatisticsColumns();
-
-        if (!statsConfig.isEnabled()) {
-            LOG.debug("Statistics collection is disabled for the table");
-            return Collections.emptySet();
-        }
-
-        Set<String> columns = new HashSet<>();
-        if (statsConfig.getMode() == StatisticsColumnsConfig.Mode.ALL) {
-            // Collect all columns with supported statistics types
-            for (int i = 0; i < flussRowType.getFieldCount(); i++) {
-                org.apache.fluss.types.DataType fieldType = flussRowType.getTypeAt(i);
-                if (DataTypeChecks.isSupportedStatisticsType(fieldType)) {
-                    columns.add(flussRowType.getFieldNames().get(i));
-                }
-            }
-        } else {
-            // Use user-specified columns (validate they exist and have supported types)
-            for (String columnName : statsConfig.getColumns()) {
-                int columnIndex = flussRowType.getFieldNames().indexOf(columnName);
-                if (columnIndex >= 0) {
-                    org.apache.fluss.types.DataType fieldType = flussRowType.getTypeAt(columnIndex);
-                    if (DataTypeChecks.isSupportedStatisticsType(fieldType)) {
-                        columns.add(columnName);
-                    } else {
-                        LOG.trace(
-                                "Configured statistics column '{}' has unsupported type and will be ignored",
-                                columnName);
-                    }
-                } else {
-                    LOG.trace(
-                            "Configured statistics column '{}' does not exist in table schema",
-                            columnName);
-                }
-            }
-        }
-
-        return columns;
-    }
-
     @Override
     public RowLevelModificationScanContext applyRowLevelModificationScan(
             RowLevelModificationType rowLevelModificationType,
             @Nullable RowLevelModificationScanContext rowLevelModificationScanContext) {
-        modificationScanType = rowLevelModificationType;
         return null;
     }
 

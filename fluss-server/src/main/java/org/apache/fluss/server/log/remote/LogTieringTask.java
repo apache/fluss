@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.log.remote;
 
+import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.RemoteStorageException;
 import org.apache.fluss.exception.RetriableException;
 import org.apache.fluss.fs.FsPath;
@@ -39,9 +40,10 @@ import org.slf4j.LoggerFactory;
 import java.io.File;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
-import java.util.OptionalLong;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -137,10 +139,14 @@ public class LogTieringTask implements Runnable {
             List<EnrichedLogSegment> candidateToCopySegments =
                     candidateToCopyLogSegments(logTablet);
             // Only delete segments that have been tiered to lake to ensure data safety
+            TableConfig tableConfig = replica.getTableInfo().getTableConfig();
             List<RemoteLogSegment> expiredRemoteLogSegments =
                     remoteLog.expiredRemoteLogSegments(
                             clock.milliseconds(),
-                            logTablet.isDataLakeEnabled() ? logTablet.getLakeLogEndOffset() : null);
+                            tableConfig.isDataLakeEnabled()
+                                    ? logTablet.getLakeLogEndOffset()
+                                    : null,
+                            tableConfig.getLogTTLMs());
 
             // 1. For these candidateToCopySegments, we will first copy segment files to
             // remote before commit the remote log manifest.
@@ -152,20 +158,30 @@ public class LogTieringTask implements Runnable {
             // 2. try to commit the remote log manifest snapshot to coordinator server and
             // update the local cache of remote log manifest.
             if (!copiedSegments.isEmpty() || !expiredRemoteLogSegments.isEmpty()) {
-                boolean success =
-                        tryToCommitRemoteLogManifest(
-                                remoteLog, expiredRemoteLogSegments, copiedSegments);
+                RemoteLogManifest currentManifest = remoteLog.currentManifest();
+                RemoteLogManifest newManifest;
+                try {
+                    newManifest =
+                            currentManifest.trimAndMerge(expiredRemoteLogSegments, copiedSegments);
+                } catch (IllegalArgumentException mergeError) {
+                    deleteRemoteLogSegmentFiles(copiedSegments, metricGroup);
+                    throw mergeError;
+                }
+                boolean success = tryToCommitRemoteLogManifest(remoteLog, newManifest);
 
                 if (success) {
-                    if (!expiredRemoteLogSegments.isEmpty()) {
+                    List<RemoteLogSegment> segmentsToDelete =
+                            segmentsToDeleteAfterCommit(
+                                    currentManifest, copiedSegments, newManifest);
+                    if (!segmentsToDelete.isEmpty()) {
                         // 3. For these expiredRemoteLogSegments, we will delete remote log
                         // segment files from remote after commit the remote log manifest.
                         // TODO introduce the read reference count to avoid deleting remote log
                         // segments while there are readers is in progress.
-                        deleteRemoteLogSegmentFiles(expiredRemoteLogSegments, metricGroup);
+                        deleteRemoteLogSegmentFiles(segmentsToDelete, metricGroup);
 
                         remoteLogIndexCache.removeAll(
-                                expiredRemoteLogSegments.stream()
+                                segmentsToDelete.stream()
                                         .map(RemoteLogSegment::remoteLogSegmentId)
                                         .collect(Collectors.toList()));
                     }
@@ -332,15 +348,8 @@ public class LogTieringTask implements Runnable {
      *        - If commit failed, we will apply rollback action (i.e., delete the new added remote segments), and return false.
      * </pre>
      */
-    public boolean tryToCommitRemoteLogManifest(
-            RemoteLogTablet remoteLogTablet,
-            List<RemoteLogSegment> expiredSegments,
-            List<RemoteLogSegment> newAddedSegments) {
-
-        // 1. apply the build snapshot method.
-        RemoteLogManifest newRemoteLogManifest =
-                remoteLogTablet.currentManifest().trimAndMerge(expiredSegments, newAddedSegments);
-
+    private boolean tryToCommitRemoteLogManifest(
+            RemoteLogTablet remoteLogTablet, RemoteLogManifest newRemoteLogManifest) {
         FsPath remoteLogManifestPath;
         try {
             // 1. upload the remote log manifest file to remote storage.
@@ -369,6 +378,7 @@ public class LogTieringTask implements Runnable {
                                         remoteLogManifestPath,
                                         newRemoteLogStartOffset,
                                         newRemoteLogEndOffset,
+                                        newRemoteLogManifest.getHighestCopiedEndOffset(),
                                         // TODO: manifest snapshot should include the epoch info,
                                         //  and this should be moved into Replica under read lock of
                                         //  leaderIsrUpdateLock, see FLUSS-56282058
@@ -388,9 +398,11 @@ public class LogTieringTask implements Runnable {
                 } else {
                     // commit succeed.
                     // TODO: commit with version to avoid the manifest has been updated
-                    remoteLogTablet.addAndDeleteLogSegments(newAddedSegments, expiredSegments);
+                    remoteLogTablet.loadRemoteLogManifest(newRemoteLogManifest);
                     LogTablet logTablet = replica.getLogTablet();
                     logTablet.updateRemoteLogStartOffset(newRemoteLogStartOffset);
+                    logTablet.updateHighestCopiedEndOffset(
+                            newRemoteLogManifest.getHighestCopiedEndOffset());
                     // make the local log cleaner clean log segments that are committed to remote.
                     logTablet.updateRemoteLogEndOffset(newRemoteLogEndOffset);
                     logTablet.updateRemoteLogSize(newRemoteLogSize);
@@ -416,6 +428,38 @@ public class LogTieringTask implements Runnable {
         return false;
     }
 
+    private List<RemoteLogSegment> segmentsToDeleteAfterCommit(
+            RemoteLogManifest previousManifest,
+            List<RemoteLogSegment> copiedSegments,
+            RemoteLogManifest newManifest) {
+        List<RemoteLogSegment> segmentsToDelete = new ArrayList<>();
+        Set<UUID> activeSegmentIds =
+                newManifest.getRemoteLogSegmentList().stream()
+                        .map(RemoteLogSegment::remoteLogSegmentId)
+                        .collect(Collectors.toSet());
+        Set<UUID> segmentIdsToDelete = new HashSet<>();
+        addInactiveSegments(
+                segmentsToDelete,
+                segmentIdsToDelete,
+                activeSegmentIds,
+                previousManifest.getRemoteLogSegmentList());
+        addInactiveSegments(segmentsToDelete, segmentIdsToDelete, activeSegmentIds, copiedSegments);
+        return segmentsToDelete;
+    }
+
+    private void addInactiveSegments(
+            List<RemoteLogSegment> target,
+            Set<UUID> targetIds,
+            Set<UUID> activeSegmentIds,
+            List<RemoteLogSegment> candidates) {
+        for (RemoteLogSegment candidate : candidates) {
+            UUID segmentId = candidate.remoteLogSegmentId();
+            if (!activeSegmentIds.contains(segmentId) && targetIds.add(segmentId)) {
+                target.add(candidate);
+            }
+        }
+    }
+
     private boolean commitRemoteLogManifest(CommitRemoteLogManifestData data) throws Exception {
         CommitRemoteLogManifestRequest request = makeCommitRemoteLogManifestRequest(data);
         return coordinatorGateway.commitRemoteLogManifest(request).get().isCommitSuccess();
@@ -427,37 +471,30 @@ public class LogTieringTask implements Runnable {
 
     private void maybeUpdateCopiedOffset(LogTablet logTablet) {
         if (copiedOffset == null) {
-            copiedOffset = findRemoteLogEndOffset(logTablet);
+            copiedOffset = findCopiedOffset(logTablet);
             LOG.info(
-                    "Found the copied remote log end offset: {} for bucket {} after becoming leader",
+                    "Found copied offset {} for bucket {} after becoming leader",
                     copiedOffset,
                     tableBucket);
         }
     }
 
-    private long findRemoteLogEndOffset(LogTablet logTablet) {
-        OptionalLong remoteLogEndOffsetOpt = remoteLog.getRemoteLogEndOffset();
-        long newRemoteLogEndOffset;
-        if (remoteLogEndOffsetOpt.isPresent()) {
-            long remoteLogEndOffset = remoteLogEndOffsetOpt.getAsLong();
-            long localEndOffset = logTablet.localLogEndOffset();
-            if (localEndOffset <= remoteLogEndOffset) {
-                LOG.warn(
-                        "Local end offset should be greater than remote end offset, "
-                                + "but the offset of bucket {} is local: {} and remote: {}. "
-                                + "Reset remote end offset to local end offset.",
-                        tableBucket,
-                        localEndOffset,
-                        remoteLogEndOffset);
-                newRemoteLogEndOffset = localEndOffset;
-            } else {
-                newRemoteLogEndOffset = remoteLogEndOffset;
-            }
-        } else {
-            newRemoteLogEndOffset = -1L;
+    private long findCopiedOffset(LogTablet logTablet) {
+        long highestCopiedEndOffset = remoteLog.getHighestCopiedEndOffset();
+        if (highestCopiedEndOffset < 0L) {
+            return -1L;
         }
 
-        return newRemoteLogEndOffset;
+        long localEndOffset = logTablet.localLogEndOffset();
+        if (localEndOffset < highestCopiedEndOffset) {
+            LOG.warn(
+                    "Local end offset is behind the highest copied end offset for bucket {}: "
+                            + "local={}, copied={}. Reset copied progress to the local end.",
+                    tableBucket,
+                    localEndOffset,
+                    highestCopiedEndOffset);
+        }
+        return Math.min(localEndOffset, highestCopiedEndOffset) - 1L;
     }
 
     /**

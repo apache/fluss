@@ -1186,11 +1186,11 @@ mod tests {
 
         assert_eq!(
             resolve_api_version_for(None, ApiKey::PutKv).unwrap(),
-            ApiVersion(1)
+            ApiVersion(2)
         );
 
         let server_versions = vec![
-            // PutKv: server v0..v3, client v0 only (v1 key encoding not yet implemented) → negotiated v0
+            // PutKv: server v0..v3, client v0..v2 → negotiated v2
             PbApiVersion {
                 api_key: 1016,
                 min_version: 0,
@@ -1220,7 +1220,7 @@ mod tests {
         // Successful negotiation cases
         assert_eq!(
             negotiated.highest_available_version(ApiKey::PutKv).unwrap(),
-            ApiVersion(1)
+            ApiVersion(2)
         );
         assert_eq!(
             negotiated

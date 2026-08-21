@@ -22,6 +22,7 @@ import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.metrics.Counter;
 import org.apache.fluss.metrics.Histogram;
 import org.apache.fluss.rocksdb.RocksDBOperationUtils;
+import org.apache.fluss.server.kv.KvCloseMode;
 import org.apache.fluss.server.utils.ResourceGuard;
 import org.apache.fluss.utils.BytesUtils;
 import org.apache.fluss.utils.IOUtils;
@@ -29,6 +30,7 @@ import org.apache.fluss.utils.IOUtils;
 import org.rocksdb.Cache;
 import org.rocksdb.ColumnFamilyHandle;
 import org.rocksdb.ColumnFamilyOptions;
+import org.rocksdb.MutableDBOptions;
 import org.rocksdb.ReadOptions;
 import org.rocksdb.RocksDB;
 import org.rocksdb.RocksDBException;
@@ -43,6 +45,7 @@ import javax.annotation.Nullable;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -269,6 +272,13 @@ public class RocksDBKv implements AutoCloseable {
 
     @Override
     public void close() throws Exception {
+        close(KvCloseMode.PRESERVE_LOCAL_STATE);
+    }
+
+    /** Closes this RocksDB KV instance using the provided persistence mode. */
+    public void close(KvCloseMode closeMode) throws Exception {
+        Objects.requireNonNull(closeMode);
+
         if (this.closed) {
             return;
         }
@@ -279,29 +289,46 @@ public class RocksDBKv implements AutoCloseable {
         // parallel.
         rocksDBResourceGuard.close();
 
-        // IMPORTANT: null reference to signal potential async checkpoint workers that the db was
-        // disposed, as
-        // working on the disposed object results in SEGFAULTS.
-        if (db != null) {
+        try {
+            if (closeMode == KvCloseMode.DISCARD_UNPERSISTED_STATE) {
+                try {
+                    setAvoidFlushDuringShutdown();
+                } catch (RocksDBException e) {
+                    LOG.warn(
+                            "Failed to enable avoid_flush_during_shutdown for RocksDB in {}. "
+                                    + "Falling back to the default close behavior.",
+                            optionsContainer.getInstanceRocksDBPath(),
+                            e);
+                }
+            }
+        } finally {
+            // IMPORTANT: null reference to signal potential async checkpoint workers that the db
+            // was disposed, as working on the disposed object results in SEGFAULTS.
+            if (db != null) {
 
-            // RocksDB's native memory management requires that *all* CFs (including default) are
-            // closed before the
-            // DB is closed. See:
-            // https://github.com/facebook/rocksdb/wiki/RocksJava-Basics#opening-a-database-with-column-families
-            // Start with default CF ...
-            List<ColumnFamilyOptions> columnFamilyOptions = new ArrayList<>();
-            RocksDBOperationUtils.addColumnFamilyOptionsToCloseLater(
-                    columnFamilyOptions, defaultColumnFamilyHandle);
-            IOUtils.closeQuietly(defaultColumnFamilyHandle);
+                // RocksDB's native memory management requires that *all* CFs (including default)
+                // are closed before the DB is closed. See:
+                // https://github.com/facebook/rocksdb/wiki/RocksJava-Basics#opening-a-database-with-column-families
+                // Start with default CF ...
+                List<ColumnFamilyOptions> columnFamilyOptions = new ArrayList<>();
+                RocksDBOperationUtils.addColumnFamilyOptionsToCloseLater(
+                        columnFamilyOptions, defaultColumnFamilyHandle);
+                IOUtils.closeQuietly(defaultColumnFamilyHandle);
 
-            // ... and finally close the DB instance ...
-            IOUtils.closeQuietly(db);
+                // ... and finally close the DB instance ...
+                IOUtils.closeQuietly(db);
 
-            columnFamilyOptions.forEach(IOUtils::closeQuietly);
+                columnFamilyOptions.forEach(IOUtils::closeQuietly);
 
-            IOUtils.closeQuietly(optionsContainer);
+                IOUtils.closeQuietly(optionsContainer);
+            }
+            this.closed = true;
         }
-        this.closed = true;
+    }
+
+    @VisibleForTesting
+    void setAvoidFlushDuringShutdown() throws RocksDBException {
+        db.setDBOptions(MutableDBOptions.builder().setAvoidFlushDuringShutdown(true).build());
     }
 
     public RocksDB getDb() {

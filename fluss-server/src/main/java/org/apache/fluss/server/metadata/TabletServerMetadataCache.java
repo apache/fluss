@@ -36,6 +36,7 @@ import javax.annotation.concurrent.GuardedBy;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -177,10 +178,19 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
         return serverMetadataSnapshot.contains(tableBucket);
     }
 
-    public void updateClusterMetadata(ClusterMetadata clusterMetadata) {
-        inLock(
+    /**
+     * Applies a partial cluster metadata update.
+     *
+     * @param clusterMetadata the partial cluster metadata to apply
+     * @return the real table IDs identified by table-deletion tombstones in this update; partition
+     *     deletion tombstones are not included
+     */
+    public Set<Long> updateClusterMetadata(ClusterMetadata clusterMetadata) {
+        return inLock(
                 metadataLock,
                 () -> {
+                    Set<Long> deletedTableIds = new HashSet<>();
+
                     // 1. update coordinator server.
                     ServerInfo coordinatorServer = clusterMetadata.getCoordinatorServer();
 
@@ -212,12 +222,14 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                             Long removedTableId = tableIdByPath.remove(tablePath);
                             if (removedTableId != null) {
                                 bucketMetadataMapForTables.remove(removedTableId);
+                                deletedTableIds.add(removedTableId);
                             }
                         } else if (tablePath == DELETED_TABLE_PATH) {
                             serverMetadataSnapshot
                                     .getTablePath(tableId)
                                     .ifPresent(tableIdByPath::remove);
                             bucketMetadataMapForTables.remove(tableId);
+                            deletedTableIds.add(tableId);
                         } else {
                             tableIdByPath.put(tablePath, tableId);
                             tableMetadata
@@ -287,6 +299,7 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                                     partitionIdByPath,
                                     bucketMetadataMapForTables,
                                     bucketMetadataMapForPartitions);
+                    return deletedTableIds;
                 });
     }
 

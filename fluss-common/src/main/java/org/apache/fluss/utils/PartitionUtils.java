@@ -47,6 +47,8 @@ import static org.apache.fluss.metadata.TablePath.validatePrefix;
 /** Utils for partition. */
 public class PartitionUtils {
 
+    public static final String HISTORICAL_PARTITION_VALUE = "__historical__";
+
     public static final List<DataTypeRoot> PARTITION_KEY_SUPPORTED_TYPES =
             Arrays.asList(
                     DataTypeRoot.CHAR,
@@ -166,6 +168,23 @@ public class PartitionUtils {
                                     + "partition is '%s'.",
                             partitionTime, lastRetainPartitionTime));
         }
+    }
+
+    /**
+     * Returns whether a valid auto-partition value is earlier than the partition containing {@code
+     * now}.
+     */
+    public static boolean isPastAutoPartition(
+            String partitionTime, AutoPartitionStrategy autoPartitionStrategy, Instant now) {
+        AutoPartitionTimeUnit timeUnit = autoPartitionStrategy.timeUnit();
+        if (!isValidPartitionTime(partitionTime, timeUnit, autoPartitionStrategy)) {
+            return false;
+        }
+        ZonedDateTime current =
+                ZonedDateTime.ofInstant(now, autoPartitionStrategy.timeZone().toZoneId());
+        String currentPartitionTime =
+                generateAutoPartitionTime(current, 0, timeUnit, autoPartitionStrategy);
+        return partitionTime.compareTo(currentPartitionTime) < 0;
     }
 
     /**

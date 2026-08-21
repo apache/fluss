@@ -77,7 +77,7 @@ const PILLARS: Pillar[] = [
         number: '06',
         title: 'Ecosystem Openness',
         summary: 'Open formats. No vendor lock-in.',
-        body: 'Readable by Flink, Spark, Trino, StarRocks, and DuckDB. Native hot tier plus Iceberg, Paimon, and Lance for the cold tier, open formats end to end.',
+        body: 'Readable by Flink, Spark, Trino, StarRocks, Doris, and DuckDB. Native hot tier plus Iceberg, Paimon, and Lance for the cold tier, open formats end to end.',
         basis: 'Open lake formats throughout, governed at the Apache Software Foundation.',
         Svg: require('@site/static/img/feature_changelog.svg').default,
     },

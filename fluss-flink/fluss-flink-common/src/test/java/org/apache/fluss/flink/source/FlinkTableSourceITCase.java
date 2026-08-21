@@ -30,6 +30,7 @@ import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.testutils.common.MultiVersionTest;
 import org.apache.fluss.utils.clock.ManualClock;
 
 import org.apache.commons.lang3.RandomUtils;
@@ -144,6 +145,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
     }
 
     @Test
+    @MultiVersionTest
     public void testCreateTableLike() throws Exception {
         tEnv.executeSql(
                         "CREATE TEMPORARY TABLE Orders (\n"

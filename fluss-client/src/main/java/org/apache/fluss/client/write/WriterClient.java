@@ -76,6 +76,13 @@ public class WriterClient {
      */
     private static final int MAX_IN_FLIGHT_REQUESTS_PER_BUCKET_FOR_IDEMPOTENCE = 5;
 
+    /**
+     * The bounded time to wait for the sender thread to exit after it has been force closed. Once
+     * force closed, the sender abandons all pending requests and exits promptly, so this is only a
+     * safety net to avoid blocking close forever.
+     */
+    private static final long FORCE_CLOSE_TERMINATION_TIMEOUT_MS = 5000;
+
     private final Configuration conf;
     private final int maxRequestSize;
     private final RecordAccumulator accumulator;
@@ -319,7 +326,8 @@ public class WriterClient {
     }
 
     public void close(Duration timeout) {
-        LOG.info("Closing writer.");
+        long timeoutMs = timeout.toMillis();
+        LOG.info("Closing writer with timeout {} ms.", timeoutMs);
 
         writerMetricGroup.close();
 
@@ -330,22 +338,34 @@ public class WriterClient {
         if (ioThreadPool != null) {
             ioThreadPool.shutdown();
 
-            try {
-                if (!ioThreadPool.awaitTermination(timeout.toMillis(), TimeUnit.MILLISECONDS)) {
-                    ioThreadPool.shutdownNow();
-
-                    if (!ioThreadPool.awaitTermination(timeout.toMillis(), TimeUnit.MILLISECONDS)) {
-                        LOG.error("Failed to shutdown writer.");
+            if (timeoutMs > 0) {
+                try {
+                    if (!ioThreadPool.awaitTermination(timeoutMs, TimeUnit.MILLISECONDS)) {
+                        LOG.warn("Writer graceful close timed out after {} ms.", timeoutMs);
                     }
+                } catch (InterruptedException e) {
+                    LOG.error("Interrupted while waiting for writer sender thread.", e);
+                    Thread.currentThread().interrupt();
                 }
-            } catch (InterruptedException e) {
-                ioThreadPool.shutdownNow();
-                Thread.currentThread().interrupt();
             }
         }
 
-        if (sender != null) {
+        if (sender != null && ioThreadPool != null && !ioThreadPool.isTerminated()) {
+            LOG.info(
+                    "Proceeding to force close the writer since pending requests could not be completed "
+                            + "within timeout {} ms.",
+                    timeoutMs);
             sender.forceClose();
+            ioThreadPool.shutdownNow();
+            try {
+                if (!ioThreadPool.awaitTermination(
+                        FORCE_CLOSE_TERMINATION_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+                    LOG.error("Failed to shutdown writer.");
+                }
+            } catch (InterruptedException e) {
+                LOG.error("Interrupted while force closing writer sender thread.", e);
+                Thread.currentThread().interrupt();
+            }
         }
 
         LOG.info("Writer closed.");

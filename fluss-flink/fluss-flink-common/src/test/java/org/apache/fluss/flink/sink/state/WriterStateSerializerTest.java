@@ -28,10 +28,12 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Unit tests for {@link WriterStateSerializer}'s TypeSerializer implementation. */
 class WriterStateSerializerTest {
@@ -43,61 +45,16 @@ class WriterStateSerializerTest {
         serializer = new WriterStateSerializer();
     }
 
-    /** Tests serialize/deserialize with normal state, empty state, and reuse scenarios. */
+    /** Tests that binary copy preserves both V1 legacy and V2 complete state formats. */
     @Test
-    void testSerializeDeserialize() throws IOException {
-        // Test with multiple bucket offsets (including partitioned table)
-        Map<TableBucket, Long> bucketOffsets = new HashMap<>();
-        bucketOffsets.put(new TableBucket(1L, null, 0), 100L);
-        bucketOffsets.put(new TableBucket(1L, null, 1), 200L);
-        bucketOffsets.put(new TableBucket(2L, 10L, 0), 300L);
-        WriterState original = new WriterState(bucketOffsets);
+    void testCopyPreservesV1AndV2State() throws IOException {
+        byte[] v1Payload = createV1Payload();
+        WriterState v1State = serializer.deserialize(new DataInputDeserializer(v1Payload));
+        assertCopiedState(v1Payload, v1State);
 
-        DataOutputSerializer output = new DataOutputSerializer(256);
-        serializer.serialize(original, output);
-
-        DataInputDeserializer input = new DataInputDeserializer(output.getCopyOfBuffer());
-        WriterState deserialized = serializer.deserialize(input);
-
-        assertThat(deserialized).isEqualTo(original);
-        assertThat(deserialized.getBucketOffsets()).hasSize(3);
-
-        // Test empty state
-        WriterState emptyState = WriterState.empty();
-        output = new DataOutputSerializer(64);
-        serializer.serialize(emptyState, output);
-        input = new DataInputDeserializer(output.getCopyOfBuffer());
-        assertThat(serializer.deserialize(input)).isEqualTo(emptyState);
-
-        // Test deserialize with reuse (should be ignored for immutable types)
-        output = new DataOutputSerializer(256);
-        serializer.serialize(original, output);
-        input = new DataInputDeserializer(output.getCopyOfBuffer());
-        WriterState reuse = WriterState.empty();
-        deserialized = serializer.deserialize(reuse, input);
-        assertThat(deserialized).isEqualTo(original);
-        assertThat(deserialized).isNotSameAs(reuse);
-    }
-
-    /** Tests copy between DataInputView and DataOutputView. */
-    @Test
-    void testCopyBetweenViews() throws IOException {
-        Map<TableBucket, Long> bucketOffsets = new HashMap<>();
-        bucketOffsets.put(new TableBucket(1L, null, 0), 100L);
-        bucketOffsets.put(new TableBucket(2L, 10L, 1), 200L);
-        WriterState original = new WriterState(bucketOffsets);
-
-        DataOutputSerializer sourceOutput = new DataOutputSerializer(256);
-        serializer.serialize(original, sourceOutput);
-
-        DataInputDeserializer sourceInput =
-                new DataInputDeserializer(sourceOutput.getCopyOfBuffer());
-        DataOutputSerializer targetOutput = new DataOutputSerializer(256);
-        serializer.copy(sourceInput, targetOutput);
-
-        DataInputDeserializer targetInput =
-                new DataInputDeserializer(targetOutput.getCopyOfBuffer());
-        assertThat(serializer.deserialize(targetInput)).isEqualTo(original);
+        byte[] v2Payload = createV2Payload();
+        WriterState v2State = serializer.deserialize(new DataInputDeserializer(v2Payload));
+        assertCopiedState(v2Payload, v2State);
     }
 
     /** Tests TypeSerializerSnapshot creation and restoration. */
@@ -141,8 +98,7 @@ class WriterStateSerializerTest {
         assertThat(serializer.hashCode()).isEqualTo(other.hashCode());
 
         // CreateInstance returns empty state
-        WriterState instance = serializer.createInstance();
-        assertThat(instance.getBucketOffsets()).isEmpty();
+        assertThat(serializer.createInstance()).isEqualTo(WriterState.empty());
 
         // Copy returns same instance for immutable types
         Map<TableBucket, Long> bucketOffsets = new HashMap<>();
@@ -152,23 +108,109 @@ class WriterStateSerializerTest {
         assertThat(serializer.copy(original, WriterState.empty())).isSameAs(original);
     }
 
-    /** Tests that TypeSerializer and SimpleVersionedSerializer produce compatible bytes. */
     @Test
-    void testSimpleVersionedSerializerCompatibility() throws IOException {
-        Map<TableBucket, Long> bucketOffsets = new HashMap<>();
-        bucketOffsets.put(new TableBucket(1L, null, 0), 100L);
-        bucketOffsets.put(new TableBucket(2L, 10L, 1), 200L);
-        WriterState original = new WriterState(bucketOffsets);
+    void testDeserializeLiteralV1PayloadRemainsLegacy() throws IOException {
+        Map<TableBucket, Long> expectedOffsets = new HashMap<>();
+        expectedOffsets.put(new TableBucket(1L, null, 0), 100L);
+        expectedOffsets.put(new TableBucket(1L, 10L, 1), 200L);
 
-        // Serialize using TypeSerializer
-        DataOutputSerializer output = new DataOutputSerializer(256);
+        WriterState reuse = WriterState.empty();
+        WriterState state =
+                serializer.deserialize(reuse, new DataInputDeserializer(createV1Payload()));
+
+        assertThat(state.getStateFormat()).isEqualTo(WriterState.StateFormat.V1_LEGACY);
+        assertThat(state.getBucketOffsets()).isEqualTo(expectedOffsets);
+        assertThat(state).isNotSameAs(reuse);
+    }
+
+    @Test
+    void testV2GoldenPayload() throws IOException {
+        long tableId = 7L;
+        Map<TableBucket, Long> offsets =
+                Collections.singletonMap(new TableBucket(tableId, 12L, 1), 20L);
+        WriterState original = WriterState.complete(tableId, offsets);
+
+        byte[] expectedPayload = createV2Payload();
+        WriterState restored = serializer.deserialize(new DataInputDeserializer(expectedPayload));
+        DataOutputSerializer output = new DataOutputSerializer(128);
         serializer.serialize(original, output);
-        byte[] typeSerializerBytes = output.getCopyOfBuffer();
 
-        // Both should deserialize to equal results
-        DataInputDeserializer input = new DataInputDeserializer(typeSerializerBytes);
-        WriterState fromTypeSerializer = serializer.deserialize(input);
+        assertThat(restored).isEqualTo(original);
+        assertThat(output.getCopyOfBuffer()).containsExactly(expectedPayload);
+    }
 
-        assertThat(fromTypeSerializer).isEqualTo(original);
+    @Test
+    void testV2RoundTripWithEmptyCompleteMarker() throws IOException {
+        WriterState original = WriterState.complete(7L, Collections.emptyMap());
+
+        DataOutputSerializer output = new DataOutputSerializer(32);
+        serializer.serialize(original, output);
+        WriterState restored =
+                serializer.deserialize(new DataInputDeserializer(output.getCopyOfBuffer()));
+
+        assertThat(restored.getStateFormat()).isEqualTo(WriterState.StateFormat.V2_COMPLETE);
+        assertThat(restored.getTableId()).isEqualTo(7L);
+        assertThat(restored.getBucketOffsets()).isEmpty();
+        assertThat(restored).isNotEqualTo(WriterState.empty());
+    }
+
+    @Test
+    void testRejectsUnsupportedVersion() throws IOException {
+        assertMalformedPayload(payloadWithVersion(99), "version");
+    }
+
+    private void assertCopiedState(byte[] sourceBytes, WriterState expectedState)
+            throws IOException {
+        DataOutputSerializer copiedOutput = new DataOutputSerializer(128);
+        serializer.copy(new DataInputDeserializer(sourceBytes), copiedOutput);
+
+        WriterState copied =
+                serializer.deserialize(new DataInputDeserializer(copiedOutput.getCopyOfBuffer()));
+        assertThat(copied).isEqualTo(expectedState);
+    }
+
+    private void assertMalformedPayload(byte[] payload, String expectedMessage) {
+        assertThatThrownBy(() -> serializer.deserialize(new DataInputDeserializer(payload)))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining(expectedMessage);
+    }
+
+    private static byte[] createV1Payload() throws IOException {
+        DataOutputSerializer output = new DataOutputSerializer(128);
+        output.writeInt(1);
+        output.writeInt(2);
+        writeV1Entry(output, 1L, null, 0, 100L);
+        writeV1Entry(output, 1L, 10L, 1, 200L);
+        return output.getCopyOfBuffer();
+    }
+
+    private static byte[] createV2Payload() throws IOException {
+        DataOutputSerializer output = new DataOutputSerializer(64);
+        output.writeInt(2);
+        output.writeLong(7L);
+        output.writeInt(1);
+        output.writeBoolean(true);
+        output.writeLong(12L);
+        output.writeInt(1);
+        output.writeLong(20L);
+        return output.getCopyOfBuffer();
+    }
+
+    private static byte[] payloadWithVersion(int version) throws IOException {
+        DataOutputSerializer output = new DataOutputSerializer(8);
+        output.writeInt(version);
+        return output.getCopyOfBuffer();
+    }
+
+    private static void writeV1Entry(
+            DataOutputSerializer output, long tableId, Long partitionId, int bucketId, long offset)
+            throws IOException {
+        output.writeLong(tableId);
+        output.writeBoolean(partitionId != null);
+        if (partitionId != null) {
+            output.writeLong(partitionId);
+        }
+        output.writeInt(bucketId);
+        output.writeLong(offset);
     }
 }

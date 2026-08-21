@@ -18,19 +18,26 @@
 package org.apache.fluss.server.kv.rocksdb;
 
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.metrics.SimpleCounter;
 import org.apache.fluss.metrics.util.TestHistogram;
+import org.apache.fluss.server.kv.KvCloseMode;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.rocksdb.ColumnFamilyOptions;
 import org.rocksdb.FlushOptions;
+import org.rocksdb.RocksDBException;
 
 import java.io.File;
 import java.nio.file.Path;
 import java.util.Arrays;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.spy;
 
 /** Test for {@link org.apache.fluss.server.kv.rocksdb.RocksDBKv}. */
 class RocksDBKvTest {
@@ -38,15 +45,7 @@ class RocksDBKvTest {
     @Test
     void testRocksDbKv(@TempDir Path tempDir) throws Exception {
         File instanceBasePath = tempDir.toFile();
-        RocksDBResourceContainer rocksDBResourceContainer =
-                new RocksDBResourceContainer(new Configuration(), instanceBasePath);
-        RocksDBKvBuilder rocksDBKvBuilder =
-                new RocksDBKvBuilder(
-                        instanceBasePath,
-                        rocksDBResourceContainer,
-                        rocksDBResourceContainer.getColumnOptions());
-
-        try (RocksDBKv rocksDBKv = rocksDBKvBuilder.build()) {
+        try (RocksDBKv rocksDBKv = buildRocksDBKv(instanceBasePath)) {
             // put the k/v
             byte[] key = new byte[] {1, 2, 3};
             byte[] val = new byte[] {1, 2};
@@ -66,6 +65,20 @@ class RocksDBKvTest {
             rocksDBKv.put(key2, val2);
 
             assertThat(rocksDBKv.multiGet(Arrays.asList(key, key2))).containsExactly(null, val2);
+        }
+    }
+
+    @Test
+    void testClosePreservesUnflushedStateByDefault(@TempDir Path tempDir) throws Exception {
+        byte[] key = new byte[] {1};
+        byte[] value = new byte[] {2};
+
+        RocksDBKv rocksDBKv = buildRocksDBKv(tempDir.toFile());
+        rocksDBKv.put(key, value);
+        rocksDBKv.close();
+
+        try (RocksDBKv reopened = buildRocksDBKv(tempDir.toFile())) {
+            assertThat(reopened.get(key)).isEqualTo(value);
         }
     }
 
@@ -183,6 +196,19 @@ class RocksDBKvTest {
             p = kv.currentPressure();
             assertThat(p).isLessThan(1f);
             assertThat(p).isCloseTo(3f / 4f, org.assertj.core.data.Offset.offset(0.01f));
+        }
+    }
+
+    @Test
+    void testDiscardCloseDoesNotPersistUnflushedState(@TempDir Path tempDir) throws Exception {
+        byte[] key = new byte[] {1};
+
+        RocksDBKv rocksDBKv = buildRocksDBKv(tempDir.toFile());
+        rocksDBKv.put(key, new byte[] {2});
+        rocksDBKv.close(KvCloseMode.DISCARD_UNPERSISTED_STATE);
+
+        try (RocksDBKv reopened = buildRocksDBKv(tempDir.toFile())) {
+            assertThat(reopened.get(key)).isNull();
         }
     }
 
@@ -317,5 +343,31 @@ class RocksDBKvTest {
 
         // Pressure sampling must degrade gracefully once the native handle is gone.
         assertThat(kv.currentPressure()).isEqualTo(0f);
+    }
+
+    @Test
+    void testDiscardOptionFailureStillClosesNativeResources(@TempDir Path tempDir)
+            throws Exception {
+        RocksDBKv rocksDBKv = spy(buildRocksDBKv(tempDir.toFile()));
+        doThrow(new RocksDBException("expected")).when(rocksDBKv).setAvoidFlushDuringShutdown();
+
+        assertThatCode(() -> rocksDBKv.close(KvCloseMode.DISCARD_UNPERSISTED_STATE))
+                .doesNotThrowAnyException();
+        assertThatThrownBy(rocksDBKv::checkIfRocksDBClosed)
+                .isInstanceOf(FlussRuntimeException.class);
+
+        // Reopening the same path also proves the native DB handle was released.
+        try (RocksDBKv ignored = buildRocksDBKv(tempDir.toFile())) {}
+    }
+
+    private RocksDBKv buildRocksDBKv(File instanceBasePath) throws Exception {
+        RocksDBResourceContainer rocksDBResourceContainer =
+                new RocksDBResourceContainer(new Configuration(), instanceBasePath);
+        RocksDBKvBuilder rocksDBKvBuilder =
+                new RocksDBKvBuilder(
+                        instanceBasePath,
+                        rocksDBResourceContainer,
+                        rocksDBResourceContainer.getColumnOptions());
+        return rocksDBKvBuilder.build();
     }
 }

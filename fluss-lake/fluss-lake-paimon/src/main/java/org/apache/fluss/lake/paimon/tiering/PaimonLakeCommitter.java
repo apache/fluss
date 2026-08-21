@@ -108,6 +108,9 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
 
         try {
             tableCommit = fileStoreTable.newCommit(FLUSS_LAKE_TIERING_COMMIT_USER);
+            // don't skip empty commits: tiering relies on empty snapshots to persist bucket
+            // offsets when only empty WAL batches were consumed
+            tableCommit.ignoreEmptyCommit(false);
             tableCommit.commit(manifestCommittable);
 
             long committedSnapshotId =

@@ -182,11 +182,9 @@ public class TieringCommitOperator<WriteResult, Committable>
     }
 
     /**
-     * Commits the collected write results for one table to the lake and Fluss.
-     *
-     * <p>Always returns a non-null {@link CommitResult}. When all buckets produced no data (empty
-     * commit), {@link CommitResult#committable} is {@code null} and stats are {@link
-     * TieringStats#UNKNOWN}.
+     * Commits the collected write results for one table to the lake and Fluss. When buckets
+     * advanced their tiered offsets without writing any data (e.g. splits only covering empty WAL
+     * batches), an empty lake snapshot is committed to persist the tiering progress.
      */
     private CommitResult commitWriteResults(
             long tableId,
@@ -199,13 +197,39 @@ public class TieringCommitOperator<WriteResult, Committable>
                         .filter(r -> r.writeResult() != null)
                         .collect(Collectors.toList());
 
-        // all buckets were empty — nothing to commit to the lake
-        if (nonEmptyResults.isEmpty()) {
+        // collect tiered offsets from all buckets, including those finished without writing
+        // data, otherwise their splits would be regenerated forever; buckets with unknown
+        // progress (e.g. splits skipped in this round) are excluded
+        Map<TableBucket, Long> logEndOffsets = new HashMap<>();
+        Map<TableBucket, Long> logMaxTieredTimestamps = new HashMap<>();
+        for (TableBucketWriteResult<WriteResult> writeResult : committableWriteResults) {
+            if (writeResult.logEndOffset() < 0) {
+                continue;
+            }
+            TableBucket tableBucket = writeResult.tableBucket();
+            logEndOffsets.put(tableBucket, writeResult.logEndOffset());
+            if (writeResult.maxTimestamp() >= 0) {
+                logMaxTieredTimestamps.put(tableBucket, writeResult.maxTimestamp());
+            }
+        }
+
+        // nothing was written and no tiered offset advanced — nothing to commit
+        if (nonEmptyResults.isEmpty() && logEndOffsets.isEmpty()) {
             LOG.info(
                     "Commit tiering write results is empty for table {}, table path {}",
                     tableId,
                     tablePath);
             return new CommitResult(null, null);
+        }
+
+        if (nonEmptyResults.isEmpty()) {
+            LOG.info(
+                    "No data was written for table {} (table path {}) but buckets {} advanced "
+                            + "their tiered offsets, committing an empty lake snapshot to "
+                            + "persist the tiering progress.",
+                    tableId,
+                    tablePath,
+                    logEndOffsets.keySet());
         }
 
         // Check if the table was dropped and recreated during tiering.
@@ -229,14 +253,6 @@ public class TieringCommitOperator<WriteResult, Committable>
                     nonEmptyResults.stream()
                             .map(TableBucketWriteResult::writeResult)
                             .collect(Collectors.toList());
-
-            Map<TableBucket, Long> logEndOffsets = new HashMap<>();
-            Map<TableBucket, Long> logMaxTieredTimestamps = new HashMap<>();
-            for (TableBucketWriteResult<WriteResult> writeResult : nonEmptyResults) {
-                TableBucket tableBucket = writeResult.tableBucket();
-                logEndOffsets.put(tableBucket, writeResult.logEndOffset());
-                logMaxTieredTimestamps.put(tableBucket, writeResult.maxTimestamp());
-            }
 
             // to committable
             Committable committable = lakeCommitter.toCommittable(writeResults);

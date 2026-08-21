@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.coordinator;
 
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotHandle;
@@ -40,8 +41,10 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -56,6 +59,7 @@ import java.util.concurrent.Executors;
 
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link CompletedSnapshotStoreManager}. */
 class CompletedSnapshotStoreManagerTest {
@@ -186,6 +190,55 @@ class CompletedSnapshotStoreManagerTest {
 
     @Test
     void testMetadataInconsistencyWithMetadataNotExistsException() throws Exception {
+        verifyMissingSnapshotMetadataIsCleanedUp(
+                new FileNotFoundException(
+                        CompletedSnapshot.SNAPSHOT_DATA_NOT_EXISTS_ERROR_MESSAGE));
+    }
+
+    @Test
+    void testMetadataInconsistencyWithHadoopFileDoesNotExistException() throws Exception {
+        verifyMissingSnapshotMetadataIsCleanedUp(
+                new IOException(
+                        "Failed to open snapshot metadata.",
+                        new IOException("File does not exist: /remote/snapshot/_METADATA")));
+    }
+
+    @Test
+    void testMetadataRetrievalFailureKeepsHandleWhenMetadataExists() throws Exception {
+        TableBucket tableBucket = new TableBucket(1, 1);
+        CompletedSnapshot snapshot = KvTestUtils.mockCompletedSnapshot(tempDir, tableBucket, 1L);
+        Files.createDirectories(new File(snapshot.getSnapshotLocation().getPath()).toPath());
+        Files.createFile(new File(snapshot.getMetadataFilePath().getPath()).toPath());
+
+        CompletedSnapshotHandleStore completedSnapshotHandleStore =
+                new InMemoryCompletedSnapshotHandleStore();
+        completedSnapshotHandleStore.add(
+                tableBucket,
+                1L,
+                new TestingBrokenCompletedSnapshotHandle(
+                        snapshot,
+                        new IOException(
+                                "Failed to open snapshot metadata.",
+                                new IOException(
+                                        "File does not exist: temporary standby response"))));
+        CompletedSnapshotStoreManager completedSnapshotStoreManager =
+                new CompletedSnapshotStoreManager(
+                        10,
+                        ioExecutor,
+                        zookeeperClient,
+                        zooKeeperClient -> completedSnapshotHandleStore,
+                        TestingMetricGroups.COORDINATOR_METRICS,
+                        bucket -> true);
+
+        assertThatThrownBy(
+                        () ->
+                                completedSnapshotStoreManager.getOrCreateCompletedSnapshotStore(
+                                        DATA1_TABLE_PATH, tableBucket))
+                .hasRootCauseInstanceOf(IOException.class);
+        assertThat(completedSnapshotHandleStore.get(tableBucket, 1L)).isPresent();
+    }
+
+    private void verifyMissingSnapshotMetadataIsCleanedUp(IOException exception) throws Exception {
         // setup test data with mixed valid and invalid snapshots
         TableBucket tableBucket = new TableBucket(1, 1);
         CompletedSnapshot validSnapshot =
@@ -196,7 +249,7 @@ class CompletedSnapshotStoreManagerTest {
         CompletedSnapshot invalidSnapshot =
                 KvTestUtils.mockCompletedSnapshot(tempDir, tableBucket, 2L);
         TestingCompletedSnapshotHandle invalidSnapshotHandle =
-                new TestingCompletedSnapshotHandleWithFileNotFound(invalidSnapshot);
+                new TestingBrokenCompletedSnapshotHandle(invalidSnapshot, exception);
 
         // create CompletedSnapshotHandleStore with real implementations
         CompletedSnapshotHandleStore completedSnapshotHandleStore =
@@ -220,6 +273,7 @@ class CompletedSnapshotStoreManagerTest {
                         DATA1_TABLE_PATH, tableBucket);
         assertThat(completedSnapshotStore.getAllSnapshots()).hasSize(1);
         assertThat(completedSnapshotStore.getAllSnapshots().get(0).getSnapshotID()).isEqualTo(1L);
+        assertThat(completedSnapshotHandleStore.get(tableBucket, 2L)).isEmpty();
     }
 
     private CompletedSnapshotStoreManager createCompletedSnapshotStoreManager(
@@ -277,21 +331,28 @@ class CompletedSnapshotStoreManagerTest {
         return tableBuckets;
     }
 
-    /**
-     * A test-specific implementation of CompletedSnapshotHandle that throws FileNotFoundException
-     * with the specific error message expected by CompletedSnapshotStoreManager.
-     */
-    private static class TestingCompletedSnapshotHandleWithFileNotFound
+    /** A test-specific handle that throws the configured exception during retrieval. */
+    private static class TestingBrokenCompletedSnapshotHandle
             extends TestingCompletedSnapshotHandle {
 
-        public TestingCompletedSnapshotHandleWithFileNotFound(CompletedSnapshot snapshot) {
+        private final IOException exception;
+        private final FsPath metadataFilePath;
+
+        public TestingBrokenCompletedSnapshotHandle(
+                CompletedSnapshot snapshot, IOException exception) {
             super(snapshot, false);
+            this.exception = exception;
+            this.metadataFilePath = snapshot.getMetadataFilePath();
         }
 
         @Override
         public CompletedSnapshot retrieveCompleteSnapshot() throws IOException {
-            throw new FileNotFoundException(
-                    CompletedSnapshot.SNAPSHOT_DATA_NOT_EXISTS_ERROR_MESSAGE);
+            throw exception;
+        }
+
+        @Override
+        public FsPath getMetadataFilePath() {
+            return metadataFilePath;
         }
     }
 

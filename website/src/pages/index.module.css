@@ -1028,7 +1028,7 @@
 
 /* Architecture section has no lead paragraph between the H2 and the diagram,
    so we collapse the header's bottom spacing and the title's own bottom
-   margin to put the SVG directly under "Unlocking the Streamhouse Architecture". */
+   margin to put the SVG directly under "Unlocking the Lakestream Architecture". */
 .archSection .sectionHeader,
 .archSection .archTitle {
     margin-bottom: 0;

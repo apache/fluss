@@ -565,6 +565,7 @@ message CommitRemoteLogManifestRequest {
   required int64 remote_log_end_offset = 6;
   required int32 coordinator_epoch = 7;
   required int32 bucket_leader_epoch = 8;
+  optional int64 highest_copied_end_offset = 9;
 }
 
 message CommitRemoteLogManifestResponse {
@@ -579,6 +580,7 @@ message NotifyRemoteLogOffsetsRequest {
   required int32 coordinator_epoch = 4;
   required int64 remote_start_offset = 5;
   required int64 remote_end_offset = 6;
+  optional int64 highest_copied_end_offset = 7;
 }
 
 message NotifyRemoteLogOffsetsResponse {
@@ -921,9 +923,9 @@ message PbFetchLogRespForBucket {
   optional int64 log_start_offset = 6; // TODO now we don't introduce log start offset, but remain it in protobuf
   optional PbRemoteLogFetchInfo remote_log_fetch_info = 7;
   optional bytes records = 8;
-  // The next fetch offset when all batches in this bucket are filtered out by server-side
-  // filter. When set (>= 0), the records field MUST be empty — the two fields are mutually
-  // exclusive. The client should use this offset as the starting offset for the next fetch.
+  // The offset the server scanned up to while filtering out batches, which may accompany a
+  // non-empty records field when only trailing batches were filtered. The client should start
+  // its next fetch from the later of this offset and the end of the records it received.
   optional int64 filtered_end_offset = 9;
 }
 
@@ -951,6 +953,8 @@ message PbLookupReqForBucket {
   optional int64 partition_id = 1;
   required int32 bucket_id = 2;
   repeated bytes keys = 3;
+  // The original partition name for historical lookup. It is unset for normal lookup.
+  optional string original_partition_name = 4;
 }
 
 message PbLookupRespForBucket {
@@ -959,6 +963,8 @@ message PbLookupRespForBucket {
   optional int32 error_code = 3;
   optional string error_message = 4;
   repeated PbValue values = 5;
+  // The original partition name for historical lookup. It is unset for normal lookup.
+  optional string original_partition_name = 6;
 }
 
 message PbValue {

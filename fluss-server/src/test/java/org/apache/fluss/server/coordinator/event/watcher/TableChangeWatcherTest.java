@@ -409,7 +409,13 @@ class TableChangeWatcherTest {
         builder.setCustomProperty("custom.key", "custom.value");
         TablePropertyChanges tablePropertyChanges = builder.build();
         metadataManager.alterTableProperties(
-                tablePath, Collections.emptyList(), tablePropertyChanges, false, null);
+                tablePath,
+                Collections.emptyList(),
+                tablePropertyChanges,
+                false,
+                null,
+                (currentTable, updatedTable) -> {},
+                (currentTable, updatedTable) -> {});
 
         // get the updated table registration
         TableRegistration updatedTableRegistration =

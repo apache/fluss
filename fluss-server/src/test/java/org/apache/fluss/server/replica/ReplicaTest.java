@@ -20,6 +20,7 @@ package org.apache.fluss.server.replica;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaGetter;
@@ -43,6 +44,8 @@ import org.apache.fluss.server.kv.KvFlushScheduler;
 import org.apache.fluss.server.kv.KvTablet;
 import org.apache.fluss.server.kv.TestingHoldableKvFlushScheduler;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
+import org.apache.fluss.server.kv.snapshot.KvSnapshotDataDownloader;
+import org.apache.fluss.server.kv.snapshot.KvSnapshotDownloadSpec;
 import org.apache.fluss.server.kv.snapshot.TestingCompletedKvSnapshotCommitter;
 import org.apache.fluss.server.log.FetchParams;
 import org.apache.fluss.server.log.LogAppendInfo;
@@ -52,12 +55,16 @@ import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.testutils.DataTestUtils;
 import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.utils.CloseableRegistry;
+import org.apache.fluss.utils.concurrent.Executors;
+import org.apache.fluss.utils.function.FunctionWithException;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -66,8 +73,11 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Collectors;
 
 import static org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
 import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
@@ -198,6 +208,63 @@ final class ReplicaTest extends ReplicaTestBase {
         // read with old schema id.
         assertLogRecordsEquals(
                 DATA1_ROW_TYPE, logReadInfo.getFetchedData().getRecords(), DATA2, schemaGetter);
+    }
+
+    @Test
+    void testBucketPhysicalStorageLocalLogSizeIncludesFollower() throws Exception {
+        TableBucket tableBucket = new TableBucket(DATA1_TABLE_ID, 1);
+        Replica logReplica = makeLogReplica(DATA1_PHYSICAL_TABLE_PATH, tableBucket);
+        makeLogReplicaAsLeader(logReplica);
+        logReplica.appendRecordsToLeader(genMemoryLogRecordsByObject(DATA1), 0);
+
+        Gauge<Long> localLogSizeGauge = getBucketLocalLogSizeGauge(logReplica);
+        long localLogSize = logReplica.getLogTablet().logSize();
+        assertThat(localLogSize).isPositive();
+        assertThat(localLogSizeGauge.getValue()).isEqualTo(localLogSize);
+
+        int followerLeaderEpoch = INITIAL_LEADER_EPOCH + 1;
+        int newLeaderId = TABLET_SERVER_ID + 1;
+        List<Integer> replicas = Arrays.asList(TABLET_SERVER_ID, newLeaderId);
+        logReplica.makeFollower(
+                new NotifyLeaderAndIsrData(
+                        DATA1_PHYSICAL_TABLE_PATH,
+                        tableBucket,
+                        replicas,
+                        new LeaderAndIsr(
+                                newLeaderId,
+                                followerLeaderEpoch,
+                                replicas,
+                                Collections.emptyList(),
+                                INITIAL_COORDINATOR_EPOCH,
+                                followerLeaderEpoch)));
+
+        assertThat(logReplica.isLeader()).isFalse();
+        assertThat(localLogSizeGauge.getValue()).isEqualTo(localLogSize);
+    }
+
+    @Test
+    void testPhysicalStorageLocalLogSizeIsScopedPerBucket() throws Exception {
+        TableBucket firstTableBucket = new TableBucket(DATA1_TABLE_ID, 1);
+        TableBucket secondTableBucket = new TableBucket(DATA1_TABLE_ID, 2);
+        Replica firstReplica = makeLogReplica(DATA1_PHYSICAL_TABLE_PATH, firstTableBucket);
+        Replica secondReplica = makeLogReplica(DATA1_PHYSICAL_TABLE_PATH, secondTableBucket);
+        makeLeaderReplica(firstReplica, DATA1_TABLE_PATH, firstTableBucket, INITIAL_LEADER_EPOCH);
+        makeLeaderReplica(secondReplica, DATA1_TABLE_PATH, secondTableBucket, INITIAL_LEADER_EPOCH);
+
+        firstReplica.appendRecordsToLeader(genMemoryLogRecordsByObject(DATA1), 0);
+
+        Gauge<Long> firstBucketGauge = getBucketLocalLogSizeGauge(firstReplica);
+        Gauge<Long> secondBucketGauge = getBucketLocalLogSizeGauge(secondReplica);
+        assertThat(firstBucketGauge.getValue())
+                .isEqualTo(firstReplica.getLogTablet().logSize())
+                .isGreaterThan(secondBucketGauge.getValue());
+        assertThat(secondBucketGauge.getValue()).isEqualTo(secondReplica.getLogTablet().logSize());
+        assertThat(firstReplica.bucketMetrics().getAllVariables())
+                .containsEntry("partition", "")
+                .containsEntry("bucket", "1");
+        assertThat(secondReplica.bucketMetrics().getAllVariables())
+                .containsEntry("partition", "")
+                .containsEntry("bucket", "2");
     }
 
     @Test
@@ -635,6 +702,103 @@ final class ReplicaTest extends ReplicaTestBase {
     }
 
     @Test
+    void testTransientMissingSnapshotExceptionKeepsHealthySnapshot(
+            @TempDir File snapshotKvTabletDir) throws Exception {
+        TableBucket tableBucket = new TableBucket(DATA1_TABLE_ID_PK, 1);
+        TestSnapshotContext testKvSnapshotContext =
+                new TestSnapshotContext(snapshotKvTabletDir.getPath());
+        ManuallyTriggeredScheduledExecutorService scheduledExecutorService =
+                testKvSnapshotContext.scheduledExecutorService;
+        TestingCompletedKvSnapshotCommitter kvSnapshotStore =
+                testKvSnapshotContext.testKvSnapshotStore;
+
+        Replica kvReplica =
+                makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, tableBucket, testKvSnapshotContext);
+        makeKvReplicaAsLeader(kvReplica);
+        KvRecordBatch kvRecords =
+                genKvRecordBatch(
+                        Tuple2.of("k1", new Object[] {1, "a"}),
+                        Tuple2.of("k2", new Object[] {2, "b"}));
+        putRecordsToLeader(kvReplica, kvRecords);
+
+        scheduledExecutorService.triggerAllNonPeriodicTasks();
+        CompletedSnapshot snapshot = kvSnapshotStore.waitUntilSnapshotComplete(tableBucket, 0);
+        assertThat(snapshot.getKvSnapshotHandle().getSharedKvFileHandles()).isNotEmpty();
+        String existingSnapshotFilePath =
+                snapshot.getKvSnapshotHandle()
+                        .getSharedKvFileHandles()
+                        .get(0)
+                        .getKvFileHandle()
+                        .getFilePath();
+        FsPath existingSnapshotFile = new FsPath(existingSnapshotFilePath);
+        assertThat(existingSnapshotFile.getFileSystem().exists(existingSnapshotFile)).isTrue();
+
+        makeKvReplicaAsFollower(kvReplica, 1);
+
+        AtomicBoolean failNextDownload = new AtomicBoolean(true);
+        List<Long> attemptedSnapshotIds = new ArrayList<>();
+        List<Long> brokenSnapshotIds = new ArrayList<>();
+        testKvSnapshotContext =
+                new TestSnapshotContext(snapshotKvTabletDir.getPath(), kvSnapshotStore) {
+                    @Override
+                    public FunctionWithException<TableBucket, CompletedSnapshot, Exception>
+                            getLatestCompletedSnapshotProvider() {
+                        FunctionWithException<TableBucket, CompletedSnapshot, Exception>
+                                snapshotProvider = super.getLatestCompletedSnapshotProvider();
+                        return bucket -> {
+                            CompletedSnapshot latestSnapshot = snapshotProvider.apply(bucket);
+                            if (latestSnapshot != null) {
+                                attemptedSnapshotIds.add(latestSnapshot.getSnapshotID());
+                            }
+                            return latestSnapshot;
+                        };
+                    }
+
+                    @Override
+                    public KvSnapshotDataDownloader getSnapshotDataDownloader() {
+                        return new KvSnapshotDataDownloader(executorService) {
+                            @Override
+                            public void transferAllDataToDirectory(
+                                    KvSnapshotDownloadSpec downloadSpec,
+                                    CloseableRegistry closeableRegistry)
+                                    throws Exception {
+                                if (failNextDownload.compareAndSet(true, false)) {
+                                    throw new IOException(
+                                            "Fail to download kv snapshot.",
+                                            new FileNotFoundException(
+                                                    "File does not exist: "
+                                                            + existingSnapshotFilePath));
+                                }
+                                super.transferAllDataToDirectory(downloadSpec, closeableRegistry);
+                            }
+                        };
+                    }
+
+                    @Override
+                    public void handleSnapshotBroken(CompletedSnapshot snapshot) throws Exception {
+                        brokenSnapshotIds.add(snapshot.getSnapshotID());
+                        super.handleSnapshotBroken(snapshot);
+                    }
+                };
+        kvReplica = makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, tableBucket, testKvSnapshotContext);
+        makeKvReplicaAsLeader(kvReplica, 2);
+
+        assertThat(failNextDownload).isFalse();
+        assertThat(attemptedSnapshotIds).containsExactly(0L, 0L);
+        assertThat(brokenSnapshotIds).isEmpty();
+        assertThat(kvSnapshotStore.getLatestCompletedSnapshot(tableBucket).getSnapshotID())
+                .isEqualTo(0);
+        assertThat(existingSnapshotFile.getFileSystem().exists(existingSnapshotFile)).isTrue();
+        assertThat(kvReplica.getKvTablet()).isNotNull();
+        verifyGetKeyValues(
+                kvReplica.getKvTablet(),
+                getKeyValuePairs(
+                        genKvRecords(
+                                Tuple2.of("k1", new Object[] {1, "a"}),
+                                Tuple2.of("k2", new Object[] {2, "b"}))));
+    }
+
+    @Test
     void testBrokenSnapshotRecovery(@TempDir File snapshotKvTabletDir) throws Exception {
         TableBucket tableBucket = new TableBucket(DATA1_TABLE_ID_PK, 1);
 
@@ -671,7 +835,7 @@ final class ReplicaTest extends ReplicaTestBase {
 
         // trigger second snapshot (may need to wait the task being scheduled)
         scheduledExecutorService.triggerNextNonPeriodicScheduledTask(Duration.ofSeconds(30));
-        kvSnapshotStore.waitUntilSnapshotComplete(tableBucket, 1);
+        CompletedSnapshot snapshot1 = kvSnapshotStore.waitUntilSnapshotComplete(tableBucket, 1);
 
         // put more data and create third snapshot (this will be the broken one)
         kvRecords =
@@ -688,13 +852,24 @@ final class ReplicaTest extends ReplicaTestBase {
         assertThat(kvSnapshotStore.getLatestCompletedSnapshot(tableBucket).getSnapshotID())
                 .isEqualTo(2);
 
-        // now simulate the latest snapshot (snapshot2) being broken by
-        // deleting its metadata files and unshared SST files
-        // This simulates file corruption while ZK metadata remains intact
-        snapshot2.getKvSnapshotHandle().discard();
+        Set<String> sharedFilePathsUsedByBothSnapshots =
+                snapshot1.getKvSnapshotHandle().getSharedKvFileHandles().stream()
+                        .map(handle -> handle.getKvFileHandle().getFilePath())
+                        .collect(Collectors.toSet());
+        sharedFilePathsUsedByBothSnapshots.retainAll(
+                snapshot2.getKvSnapshotHandle().getSharedKvFileHandles().stream()
+                        .map(handle -> handle.getKvFileHandle().getFilePath())
+                        .collect(Collectors.toSet()));
+        assertThat(sharedFilePathsUsedByBothSnapshots).isNotEmpty();
+        for (String sharedFilePath : sharedFilePathsUsedByBothSnapshots) {
+            FsPath path = new FsPath(sharedFilePath);
+            assertThat(path.getFileSystem().exists(path)).isTrue();
+        }
 
-        // ZK metadata should still show snapshot2 as latest (file corruption hasn't been detected
-        // yet)
+        // Simulate snapshot corruption by deleting only one private file while its metadata and
+        // shared files remain intact.
+        assertThat(snapshot2.getKvSnapshotHandle().getPrivateFileHandles()).isNotEmpty();
+        snapshot2.getKvSnapshotHandle().getPrivateFileHandles().get(0).getKvFileHandle().discard();
         assertThat(kvSnapshotStore.getLatestCompletedSnapshot(tableBucket).getSnapshotID())
                 .isEqualTo(2);
 
@@ -704,8 +879,30 @@ final class ReplicaTest extends ReplicaTestBase {
         // create a new replica with the same snapshot context
         // During initialization, it will try to use snapshot2 but find it broken,
         // then handle the broken snapshot and fall back to snapshot1
+        List<Long> attemptedSnapshotIds = new ArrayList<>();
         testKvSnapshotContext =
-                new TestSnapshotContext(snapshotKvTabletDir.getPath(), kvSnapshotStore);
+                new TestSnapshotContext(snapshotKvTabletDir.getPath(), kvSnapshotStore) {
+                    @Override
+                    public FunctionWithException<TableBucket, CompletedSnapshot, Exception>
+                            getLatestCompletedSnapshotProvider() {
+                        FunctionWithException<TableBucket, CompletedSnapshot, Exception>
+                                snapshotProvider = super.getLatestCompletedSnapshotProvider();
+                        return bucket -> {
+                            CompletedSnapshot snapshot = snapshotProvider.apply(bucket);
+                            if (snapshot != null) {
+                                attemptedSnapshotIds.add(snapshot.getSnapshotID());
+                            }
+                            return snapshot;
+                        };
+                    }
+
+                    @Override
+                    public void handleSnapshotBroken(CompletedSnapshot snapshot) throws Exception {
+                        testKvSnapshotStore.removeSnapshot(
+                                snapshot.getTableBucket(), snapshot.getSnapshotID());
+                        snapshot.discardAsync(Executors.directExecutor()).get();
+                    }
+                };
         kvReplica = makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, tableBucket, testKvSnapshotContext);
 
         // make it leader again - this should trigger the broken snapshot recovery logic
@@ -717,21 +914,22 @@ final class ReplicaTest extends ReplicaTestBase {
         assertThat(kvReplica.getKvTablet()).isNotNull();
         KvTablet kvTablet = kvReplica.getKvTablet();
 
-        // verify that the data from snapshot1 is restored (snapshot2 was broken and cleaned up)
-        // snapshot1 should contain: k1->3,c and k3->4,d
+        assertThat(attemptedSnapshotIds).containsExactly(2L, 1L);
+        assertThat(kvSnapshotStore.getLatestCompletedSnapshot(tableBucket).getSnapshotID())
+                .isEqualTo(1);
+        for (String sharedFilePath : sharedFilePathsUsedByBothSnapshots) {
+            FsPath path = new FsPath(sharedFilePath);
+            assertThat(path.getFileSystem().exists(path)).isTrue();
+        }
+
+        // Snapshot1 is restored after snapshot2 is discarded.
         List<Tuple2<byte[], byte[]>> expectedKeyValues =
                 getKeyValuePairs(
                         genKvRecords(
                                 Tuple2.of("k1", new Object[] {3, "c"}),
+                                Tuple2.of("k2", new Object[] {2, "b"}),
                                 Tuple2.of("k3", new Object[] {4, "d"})));
         verifyGetKeyValues(kvTablet, expectedKeyValues);
-
-        // Verify the core functionality: KvTablet successfully initialized despite broken snapshot
-        // The key test is that the system can handle broken snapshots and recover correctly
-
-        // Verify that we successfully simulated the broken snapshot condition
-        File metadataFile = new File(snapshot2.getMetadataFilePath().getPath());
-        assertThat(metadataFile.exists()).isFalse();
     }
 
     @Test
@@ -827,7 +1025,7 @@ final class ReplicaTest extends ReplicaTestBase {
         Replica logReplica =
                 makeLogReplica(DATA1_PHYSICAL_TABLE_PATH, new TableBucket(DATA1_TABLE_ID, 1));
         makeLogReplicaAsLeader(logReplica);
-        logReplica.updateIsDataLakeEnabled(true);
+        updateTableConfig(logReplica, ConfigOptions.TABLE_DATALAKE_ENABLED, "true");
 
         long initialTimestamp = manualClock.milliseconds();
         MemoryLogRecords firstBatch =
@@ -874,7 +1072,7 @@ final class ReplicaTest extends ReplicaTestBase {
     }
 
     @Test
-    void testUpdateIsDataLakeEnabled() throws Exception {
+    void testUpdateTableInfoChangesDataLakeEnabled() throws Exception {
         Replica logReplica =
                 makeLogReplica(DATA1_PHYSICAL_TABLE_PATH, new TableBucket(DATA1_TABLE_ID, 1));
         makeLogReplicaAsLeader(logReplica);
@@ -883,15 +1081,15 @@ final class ReplicaTest extends ReplicaTestBase {
         assertThat(logReplica.getLogTablet().isDataLakeEnabled()).isFalse();
 
         // update to true
-        logReplica.updateIsDataLakeEnabled(true);
+        updateTableConfig(logReplica, ConfigOptions.TABLE_DATALAKE_ENABLED, "true");
         assertThat(logReplica.getLogTablet().isDataLakeEnabled()).isTrue();
 
         // update with same value should not change anything (no-op)
-        logReplica.updateIsDataLakeEnabled(true);
+        updateTableConfig(logReplica, ConfigOptions.TABLE_DATALAKE_ENABLED, "true");
         assertThat(logReplica.getLogTablet().isDataLakeEnabled()).isTrue();
 
         // update to false
-        logReplica.updateIsDataLakeEnabled(false);
+        updateTableConfig(logReplica, ConfigOptions.TABLE_DATALAKE_ENABLED, "false");
         assertThat(logReplica.getLogTablet().isDataLakeEnabled()).isFalse();
     }
 
@@ -902,6 +1100,16 @@ final class ReplicaTest extends ReplicaTestBase {
                 (Gauge<Long>)
                         ((AbstractMetricGroup) lakeTieringMetricGroup).getMetrics().get(metricName);
         return gauge.getValue();
+    }
+
+    @SuppressWarnings("unchecked")
+    private Gauge<Long> getBucketLocalLogSizeGauge(Replica replica) {
+        MetricGroup physicalStorageMetricGroup =
+                replica.bucketMetrics().addGroup("physicalStorage");
+        return (Gauge<Long>)
+                ((AbstractMetricGroup) physicalStorageMetricGroup)
+                        .getMetrics()
+                        .get(MetricNames.BUCKET_PHYSICAL_STORAGE_LOCAL_LOG_SIZE);
     }
 
     private void makeLogReplicaAsLeader(Replica replica) throws Exception {

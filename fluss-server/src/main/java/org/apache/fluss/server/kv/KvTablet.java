@@ -1288,7 +1288,15 @@ public final class KvTablet {
     }
 
     public void close() throws Exception {
-        LOG.info("close kv tablet {} for table {}.", tableBucket, physicalPath);
+        close(KvCloseMode.PRESERVE_LOCAL_STATE);
+    }
+
+    public void close(KvCloseMode closeMode) throws Exception {
+        LOG.info(
+                "Close kv tablet {} for table {} with mode {}.",
+                tableBucket,
+                physicalPath,
+                closeMode);
         boolean shouldClose =
                 inWriteLock(
                         kvLock,
@@ -1308,7 +1316,7 @@ public final class KvTablet {
         if (shouldClose && rocksDBKv != null) {
             // Note: RocksDB metrics lifecycle is managed by TableMetricGroup.
             // Close outside kvLock so an async flush can finish and release its RocksDB lease.
-            rocksDBKv.close();
+            rocksDBKv.close(closeMode);
         }
     }
 
@@ -1318,7 +1326,7 @@ public final class KvTablet {
                 kvLock,
                 () -> {
                     // first close the kv.
-                    close();
+                    close(KvCloseMode.DISCARD_UNPERSISTED_STATE);
                     // then delete the directory.
                     FileUtils.deleteDirectory(kvTabletDir);
                 });

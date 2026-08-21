@@ -23,12 +23,14 @@ import org.apache.fluss.client.metadata.TestingMetadataUpdater;
 import org.apache.fluss.client.metrics.TestingScannerMetricGroup;
 import org.apache.fluss.client.table.scanner.RemoteFileDownloader;
 import org.apache.fluss.cluster.BucketLocation;
+import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
@@ -50,6 +52,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.apache.fluss.client.metadata.TestingMetadataUpdater.NODE1;
 import static org.apache.fluss.client.metadata.TestingMetadataUpdater.NODE2;
@@ -166,6 +171,33 @@ public class LogFetcherTest {
     }
 
     @Test
+    void testSendFetchesRechecksFetchableBucketsAfterMetadataUpdate() throws Exception {
+        IOUtils.closeQuietly(logFetcher);
+        DelayedTabletServerGateway delayedGateway = new DelayedTabletServerGateway();
+        BlockingMetadataUpdater blockingMetadataUpdater =
+                new BlockingMetadataUpdater(delayedGateway);
+        metadataUpdater = blockingMetadataUpdater;
+        logFetcher = createLogFetcher(new Configuration());
+
+        logFetcher.sendFetches();
+        assertThat(delayedGateway.getRequestCount()).isOne();
+
+        blockingMetadataUpdater.invalidateTableMetadata();
+        CompletableFuture<Void> secondSend = CompletableFuture.runAsync(logFetcher::sendFetches);
+        try {
+            assertThat(blockingMetadataUpdater.awaitMetadataUpdateStarted()).isTrue();
+            delayedGateway.completeResponse();
+            assertThat(logFetcher.getCompletedFetchesSize()).isOne();
+        } finally {
+            blockingMetadataUpdater.continueMetadataUpdate();
+            delayedGateway.completeResponse();
+        }
+
+        secondSend.get(30, TimeUnit.SECONDS);
+        assertThat(delayedGateway.getRequestCount()).isOne();
+    }
+
+    @Test
     void testPrepareFetchLogRequestWithReadPreference() throws Exception {
         Map<Integer, FetchLogRequest> defaultRequestMap =
                 logFetcher.prepareFetchLogRequests(Collections.singletonList(tb1));
@@ -227,16 +259,67 @@ public class LogFetcherTest {
     private static class DelayedTabletServerGateway extends TestingTabletServerGateway {
         private final CompletableFuture<FetchLogResponse> responseFuture =
                 new CompletableFuture<>();
+        private final AtomicInteger requestCount = new AtomicInteger();
         private FetchLogResponse response;
 
         @Override
         public CompletableFuture<FetchLogResponse> fetchLog(FetchLogRequest request) {
+            requestCount.incrementAndGet();
             response = super.fetchLog(request).join();
             return responseFuture;
         }
 
+        private int getRequestCount() {
+            return requestCount.get();
+        }
+
         private void completeResponse() {
             responseFuture.complete(response);
+        }
+    }
+
+    private static class BlockingMetadataUpdater extends TestingMetadataUpdater {
+        private final CountDownLatch metadataUpdateStarted = new CountDownLatch(1);
+        private final CountDownLatch continueMetadataUpdate = new CountDownLatch(1);
+        private final Cluster refreshedCluster;
+
+        private BlockingMetadataUpdater(TestTabletServerGateway gateway) {
+            super(
+                    COORDINATOR,
+                    Arrays.asList(NODE1, NODE2, NODE3),
+                    Collections.singletonMap(DATA1_TABLE_PATH, DATA1_TABLE_INFO),
+                    Collections.singletonMap(1, gateway),
+                    new Configuration());
+            refreshedCluster = getCluster();
+        }
+
+        @Override
+        public void updateTableOrPartitionMetadata(TablePath tablePath, Long partitionId) {
+            metadataUpdateStarted.countDown();
+            try {
+                if (!continueMetadataUpdate.await(30, TimeUnit.SECONDS)) {
+                    throw new AssertionError("Timed out waiting to continue metadata update");
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new AssertionError("Interrupted while blocking metadata update", e);
+            }
+            updateCluster(refreshedCluster);
+        }
+
+        private void invalidateTableMetadata() {
+            updateCluster(
+                    getCluster()
+                            .invalidPhysicalTableBucketMeta(
+                                    Collections.singleton(PhysicalTablePath.of(DATA1_TABLE_PATH))));
+        }
+
+        private boolean awaitMetadataUpdateStarted() throws InterruptedException {
+            return metadataUpdateStarted.await(30, TimeUnit.SECONDS);
+        }
+
+        private void continueMetadataUpdate() {
+            continueMetadataUpdate.countDown();
         }
     }
 

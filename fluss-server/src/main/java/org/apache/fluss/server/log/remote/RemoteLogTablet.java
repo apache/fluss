@@ -26,7 +26,6 @@ import org.apache.fluss.remote.RemoteLogManifest;
 import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.server.metrics.group.BucketMetricGroup;
 
-import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.util.ArrayList;
@@ -53,20 +52,13 @@ public class RemoteLogTablet {
     private static final long INIT_REMOTE_LOG_START_OFFSET = Long.MAX_VALUE;
     private static final long INIT_REMOTE_LOG_END_OFFSET = -1L;
 
-    private final TableBucket tableBucket;
-
-    private final PhysicalTablePath physicalTablePath;
-
     /**
      * It contains all the segment-id to {@link RemoteLogSegment} mappings which did not delete in
      * remote storage.
      */
     private final Map<UUID, RemoteLogSegment> idToRemoteLogSegment = new HashMap<>();
 
-    /**
-     * It contains segment remote log start offset to segment ids mapping which the segment did not
-     * delete in remote storage.
-     */
+    /** It contains logical start offset to segment ids mapping for the current manifest view. */
     private final NavigableMap<Long, UUID> offsetToRemoteLogSegmentId = new TreeMap<>();
 
     /**
@@ -78,8 +70,6 @@ public class RemoteLogTablet {
 
     /** The lock to protect the remote log segment list. */
     private final ReadWriteLock lock = new ReentrantReadWriteLock();
-
-    private final long ttlMs;
 
     /** The registered metrics for remote log. */
     private volatile MetricGroup remoteLogMetrics;
@@ -102,11 +92,7 @@ public class RemoteLogTablet {
 
     private volatile boolean closed = false;
 
-    public RemoteLogTablet(
-            PhysicalTablePath physicalTablePath, TableBucket tableBucket, long ttlMs) {
-        this.tableBucket = tableBucket;
-        this.physicalTablePath = physicalTablePath;
-        this.ttlMs = ttlMs;
+    public RemoteLogTablet(PhysicalTablePath physicalTablePath, TableBucket tableBucket) {
         this.currentManifest =
                 new RemoteLogManifest(physicalTablePath, tableBucket, new ArrayList<>());
         reset();
@@ -153,7 +139,8 @@ public class RemoteLogTablet {
 
     /** Get all remote log segment metadata. */
     public List<RemoteLogSegment> allRemoteLogSegments() {
-        return inReadLock(lock, () -> currentManifest.getRemoteLogSegmentList());
+        // lock-free, the currentManifest is volatile and the list is immutable.
+        return currentManifest.getRemoteLogSegmentList();
     }
 
     /**
@@ -166,11 +153,12 @@ public class RemoteLogTablet {
      * @param currentTimeMs the current time in milliseconds
      * @param lakeLogEndOffset the log end offset that has been synced to lake, null if data lake is
      *     disabled
+     * @param ttlMs the current table log TTL in milliseconds
      * @return list of expired segments that can be safely deleted
      */
     public List<RemoteLogSegment> expiredRemoteLogSegments(
-            long currentTimeMs, Long lakeLogEndOffset) {
-        if (!logExpireEnable()) {
+            long currentTimeMs, Long lakeLogEndOffset, long ttlMs) {
+        if (ttlMs <= 0) {
             return Collections.emptyList();
         }
         return inReadLock(
@@ -204,31 +192,38 @@ public class RemoteLogTablet {
     }
 
     /**
-     * Get the remote log segment by timestamp. The segment is the first segment whose maxTimestamp
-     * bigger than or equal to the input timestamp. If there are multiple segments with the same
-     * timestamp, the segment with minimum remoteLogStartOffset will be returned.
+     * Returns the remote log segment candidates for a timestamp lookup, ordered by logical start
+     * offset.
+     *
+     * <p>A segment whose logical end is clipped retains the max timestamp of its complete physical
+     * file. That timestamp may belong to the hidden suffix, so the next timestamp entry must also
+     * be considered. Candidate collection stops after reaching an entry containing an unclipped
+     * segment because its max timestamp is authoritative for its complete logical range.
      */
-    public @Nullable RemoteLogSegment findSegmentByTimestamp(long timestamp) {
+    public List<RemoteLogSegment> findSegmentsByTimestamp(long timestamp) {
         return inReadLock(
                 lock,
                 () -> {
-                    Long ceilingKey = timestampToRemoteLogSegmentId.ceilingKey(timestamp);
-                    if (ceilingKey != null) {
-                        Set<UUID> segmentIds = timestampToRemoteLogSegmentId.get(ceilingKey);
-                        RemoteLogSegment segmentWithMinimumOffset = null;
-                        long miniOffset = Long.MAX_VALUE;
-                        for (UUID id : segmentIds) {
-                            RemoteLogSegment remoteLogSegment = idToRemoteLogSegment.get(id);
-                            long startOffset = remoteLogSegment.remoteLogStartOffset();
-                            if (startOffset < miniOffset) {
-                                segmentWithMinimumOffset = remoteLogSegment;
-                                miniOffset = startOffset;
+                    List<RemoteLogSegment> candidates = new ArrayList<>();
+                    for (Map.Entry<Long, Set<UUID>> entry :
+                            timestampToRemoteLogSegmentId.tailMap(timestamp, true).entrySet()) {
+                        boolean containsUnclippedSegment = false;
+                        for (UUID id : entry.getValue()) {
+                            RemoteLogSegment segment = idToRemoteLogSegment.get(id);
+                            candidates.add(segment);
+                            if (!segment.isEndOffsetClipped()) {
+                                containsUnclippedSegment = true;
                             }
                         }
-                        return segmentWithMinimumOffset;
-                    } else {
-                        return null;
+                        if (containsUnclippedSegment) {
+                            break;
+                        }
                     }
+                    candidates.sort(
+                            (left, right) ->
+                                    Long.compare(
+                                            left.logicalStartOffset(), right.logicalStartOffset()));
+                    return candidates;
                 });
     }
 
@@ -241,20 +236,48 @@ public class RemoteLogTablet {
         return inReadLock(
                 lock,
                 () -> {
-                    Long floorKey = offsetToRemoteLogSegmentId.floorKey(offset);
+                    Map.Entry<Long, UUID> floorEntry =
+                            offsetToRemoteLogSegmentId.floorEntry(offset);
+                    if (floorEntry == null) {
+                        return Collections.emptyList();
+                    }
+                    RemoteLogSegment floorSegment = idToRemoteLogSegment.get(floorEntry.getValue());
+                    if (offset >= floorSegment.logicalEndOffset()) {
+                        return Collections.emptyList();
+                    }
                     Collection<UUID> segmentIds =
-                            offsetToRemoteLogSegmentId
-                                    .tailMap(floorKey == null ? 0L : floorKey, true)
-                                    .values();
+                            offsetToRemoteLogSegmentId.tailMap(floorEntry.getKey(), true).values();
                     List<RemoteLogSegment> remoteLogSegmentList = new ArrayList<>();
                     for (UUID id : segmentIds) {
                         RemoteLogSegment remoteLogSegment = idToRemoteLogSegment.get(id);
-                        if (offset < remoteLogSegment.remoteLogEndOffset()) {
+                        if (offset < remoteLogSegment.logicalEndOffset()) {
                             remoteLogSegmentList.add(remoteLogSegment);
                         }
                     }
                     return remoteLogSegmentList;
                 });
+    }
+
+    /**
+     * Returns the maximal physically contiguous prefix safe for one FetchLog v0 response. A
+     * physical overlap is resumed by the client's next fetch from its advanced offset.
+     */
+    public List<RemoteLogSegment> relevantRemoteLogSegmentsForFetchV0(long offset) {
+        List<RemoteLogSegment> relevantSegments = relevantRemoteLogSegments(offset);
+        if (relevantSegments.size() <= 1) {
+            return relevantSegments;
+        }
+        List<RemoteLogSegment> contiguousPrefix = new ArrayList<>();
+        long previousPhysicalEndOffset = -1L;
+        for (RemoteLogSegment segment : relevantSegments) {
+            if (!contiguousPrefix.isEmpty()
+                    && segment.remoteLogStartOffset() != previousPhysicalEndOffset) {
+                break;
+            }
+            contiguousPrefix.add(segment);
+            previousPhysicalEndOffset = segment.remoteLogEndOffset();
+        }
+        return contiguousPrefix;
     }
 
     public long getRemoteLogStartOffset() {
@@ -267,12 +290,19 @@ public class RemoteLogTablet {
                 : OptionalLong.of(remoteLogEndOffset);
     }
 
+    /** Returns the highest exclusive offset successfully copied to remote storage. */
+    public long getHighestCopiedEndOffset() {
+        // lock-free, the currentManifest is volatile and the offset is immutable.
+        return currentManifest.getHighestCopiedEndOffset();
+    }
+
     /**
      * Gets the snapshot of current remote log segment manifest. The snapshot including the exists
      * remoteLogSegment already committed.
      */
     public RemoteLogManifest currentManifest() {
-        return inReadLock(lock, () -> currentManifest);
+        // lock-free, the currentManifest is volatile
+        return currentManifest;
     }
 
     public void loadRemoteLogManifest(RemoteLogManifest manifestSnapshot) {
@@ -280,90 +310,27 @@ public class RemoteLogTablet {
                 lock,
                 () -> {
                     reset();
-                    addAndDeleteLogSegments(
-                            manifestSnapshot.getRemoteLogSegmentList(), Collections.emptyList());
+                    for (RemoteLogSegment segment : manifestSnapshot.getRemoteLogSegmentList()) {
+                        addSegment(segment);
+                    }
+                    remoteSizeInBytes = manifestSnapshot.getRemoteLogSize();
+                    numRemoteLogSegments = manifestSnapshot.getRemoteLogSegmentList().size();
+                    remoteLogStartOffset = manifestSnapshot.getRemoteLogStartOffset();
+                    remoteLogEndOffset = manifestSnapshot.getRemoteLogEndOffset();
+                    currentManifest = manifestSnapshot;
                 });
     }
 
-    public void addAndDeleteLogSegments(
-            List<RemoteLogSegment> addedSegments, List<RemoteLogSegment> deletedSegments) {
-        if (deletedSegments.isEmpty() && addedSegments.isEmpty()) {
-            return;
+    private void addSegment(RemoteLogSegment remoteLogSegment) {
+        UUID remoteLogSegmentId = remoteLogSegment.remoteLogSegmentId();
+        RemoteLogSegment previous = idToRemoteLogSegment.put(remoteLogSegmentId, remoteLogSegment);
+        if (previous != null) {
+            offsetToRemoteLogSegmentId.remove(previous.logicalStartOffset());
         }
-        inWriteLock(
-                lock,
-                () -> {
-                    long newSizeInBytes = remoteSizeInBytes;
-
-                    // put new segments into list
-                    for (RemoteLogSegment remoteLogSegment : addedSegments) {
-                        UUID remoteLogSegmentId = remoteLogSegment.remoteLogSegmentId();
-
-                        // TODO maybe need to check the leader epoch.
-
-                        idToRemoteLogSegment.put(remoteLogSegmentId, remoteLogSegment);
-                        offsetToRemoteLogSegmentId.put(
-                                remoteLogSegment.remoteLogStartOffset(), remoteLogSegmentId);
-                        timestampToRemoteLogSegmentId
-                                .computeIfAbsent(
-                                        remoteLogSegment.maxTimestamp(), k -> new HashSet<>())
-                                .add(remoteLogSegmentId);
-
-                        // update remote log end offset.
-                        if (remoteLogSegment.remoteLogEndOffset() > remoteLogEndOffset) {
-                            remoteLogEndOffset = remoteLogSegment.remoteLogEndOffset();
-                        }
-
-                        newSizeInBytes += remoteLogSegment.segmentSizeInBytes();
-                    }
-
-                    // remove expired segments from list
-                    for (RemoteLogSegment remoteLogSegment : deletedSegments) {
-                        UUID remoteLogSegmentId = remoteLogSegment.remoteLogSegmentId();
-
-                        // TODO maybe need to check the leader epoch.
-
-                        RemoteLogSegment removeSegment =
-                                idToRemoteLogSegment.remove(remoteLogSegmentId);
-                        offsetToRemoteLogSegmentId.remove(remoteLogSegment.remoteLogStartOffset());
-
-                        // remove k,v mapping if the set is empty.
-                        timestampToRemoteLogSegmentId.compute(
-                                remoteLogSegment.maxTimestamp(),
-                                (k, v) -> {
-                                    if (v != null) {
-                                        v.remove(remoteLogSegmentId);
-                                        if (v.isEmpty()) {
-                                            return null;
-                                        }
-                                    }
-                                    return v;
-                                });
-                        if (removeSegment != null) {
-                            newSizeInBytes -= removeSegment.segmentSizeInBytes();
-                        }
-                    }
-
-                    remoteSizeInBytes = newSizeInBytes;
-                    numRemoteLogSegments = idToRemoteLogSegment.size();
-
-                    if (numRemoteLogSegments == 0) {
-                        // reset to default values if no segments exist after expiration.
-                        reset();
-                    } else {
-                        remoteLogStartOffset = offsetToRemoteLogSegmentId.firstKey();
-                    }
-
-                    currentManifest =
-                            new RemoteLogManifest(
-                                    physicalTablePath,
-                                    tableBucket,
-                                    new ArrayList<>(idToRemoteLogSegment.values()));
-                });
-    }
-
-    private boolean logExpireEnable() {
-        return ttlMs > 0;
+        offsetToRemoteLogSegmentId.put(remoteLogSegment.logicalStartOffset(), remoteLogSegmentId);
+        timestampToRemoteLogSegmentId
+                .computeIfAbsent(remoteLogSegment.maxTimestamp(), k -> new HashSet<>())
+                .add(remoteLogSegmentId);
     }
 
     private void reset() {

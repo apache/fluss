@@ -21,6 +21,8 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.messages.LookupRequest;
 import org.apache.fluss.rpc.protocol.ApiError;
 
+import javax.annotation.Nullable;
+
 import java.util.List;
 
 /** Result of {@link LookupRequest} for each table bucket. */
@@ -28,20 +30,37 @@ public class LookupResultForBucket extends ResultForBucket {
 
     private final List<byte[]> values;
 
+    /** Identifies the original partition for historical lookup; null for normal lookup. */
+    private final @Nullable String originalPartitionName;
+
     public LookupResultForBucket(TableBucket tableBucket, List<byte[]> values) {
-        this(tableBucket, values, ApiError.NONE);
+        this(tableBucket, values, null, ApiError.NONE);
     }
 
     public LookupResultForBucket(TableBucket tableBucket, ApiError error) {
-        this(tableBucket, null, error);
+        this(tableBucket, null, null, error);
     }
 
-    public LookupResultForBucket(TableBucket tableBucket, List<byte[]> values, ApiError error) {
+    /**
+     * Creates a lookup result with the original partition name used to identify a historical lookup
+     * response.
+     */
+    public LookupResultForBucket(
+            TableBucket tableBucket,
+            List<byte[]> values,
+            @Nullable String originalPartitionName,
+            ApiError error) {
         super(tableBucket, error);
         this.values = values;
+        this.originalPartitionName = originalPartitionName;
     }
 
     public List<byte[]> lookupValues() {
         return values;
+    }
+
+    /** Returns the original partition name for historical lookup, or null for normal lookup. */
+    public @Nullable String originalPartitionName() {
+        return originalPartitionName;
     }
 }

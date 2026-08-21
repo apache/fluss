@@ -30,6 +30,7 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.log.FetchIsolation;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.replica.Replica;
+import org.apache.fluss.testutils.common.MultiVersionTest;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.ExceptionUtils;
 
@@ -74,6 +75,7 @@ abstract class TieringITCase extends FlinkTieringTestBase {
     }
 
     @Test
+    @MultiVersionTest
     void testTieringReachMaxDuration() throws Exception {
         TablePath logTablePath = TablePath.of("fluss", "logtable");
         createTable(logTablePath, false);

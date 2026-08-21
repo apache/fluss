@@ -36,7 +36,6 @@ import org.junit.jupiter.params.provider.ValueSource;
 import java.io.File;
 import java.io.InputStream;
 import java.nio.file.StandardCopyOption;
-import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -141,7 +140,11 @@ class DefaultRemoteLogStorageTest extends RemoteLogTestBase {
         // do snapshot.
         RemoteLogTablet remoteLogTablet = buildRemoteLogTablet(logTablet);
         List<RemoteLogSegment> remoteLogSegmentList = createRemoteLogSegmentList(logTablet);
-        remoteLogTablet.addAndDeleteLogSegments(remoteLogSegmentList, Collections.emptyList());
+        remoteLogTablet.loadRemoteLogManifest(
+                new RemoteLogManifest(
+                        logTablet.getPhysicalTablePath(),
+                        logTablet.getTableBucket(),
+                        remoteLogSegmentList));
         assertThat(remoteLogTablet.getIdToRemoteLogSegmentMap())
                 .hasSize(remoteLogSegmentList.size());
         RemoteLogManifest manifestSnapshot = remoteLogTablet.currentManifest();

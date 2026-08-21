@@ -52,6 +52,7 @@ defmodule Fluss.Config do
             writer_bucket_no_key_assigner: nil,
             writer_buffer_memory_size: nil,
             writer_buffer_wait_timeout_ms: nil,
+            writer_kv_backpressure_max_throttle_ms: nil,
             writer_dynamic_batch_size_enabled: nil,
             writer_dynamic_batch_size_min: nil,
             writer_enable_idempotence: nil,
@@ -80,6 +81,7 @@ defmodule Fluss.Config do
           writer_bucket_no_key_assigner: :sticky | :round_robin | nil,
           writer_buffer_memory_size: non_neg_integer() | nil,
           writer_buffer_wait_timeout_ms: non_neg_integer() | nil,
+          writer_kv_backpressure_max_throttle_ms: non_neg_integer() | nil,
           writer_dynamic_batch_size_enabled: boolean() | nil,
           writer_dynamic_batch_size_min: non_neg_integer() | nil,
           writer_enable_idempotence: boolean() | nil,
@@ -185,6 +187,11 @@ defmodule Fluss.Config do
   @spec set_writer_buffer_wait_timeout_ms(t(), non_neg_integer()) :: t()
   def set_writer_buffer_wait_timeout_ms(%__MODULE__{} = config, ms) when is_non_neg_integer(ms),
     do: %{config | writer_buffer_wait_timeout_ms: ms}
+
+  @spec set_writer_kv_backpressure_max_throttle_ms(t(), non_neg_integer()) :: t()
+  def set_writer_kv_backpressure_max_throttle_ms(%__MODULE__{} = config, ms)
+      when is_non_neg_integer(ms),
+      do: %{config | writer_kv_backpressure_max_throttle_ms: ms}
 
   @spec set_writer_dynamic_batch_size_enabled(t(), boolean()) :: t()
   def set_writer_dynamic_batch_size_enabled(%__MODULE__{} = config, enabled)

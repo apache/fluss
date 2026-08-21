@@ -1261,24 +1261,45 @@ public class ZooKeeperClient implements AutoCloseable {
                 partitionId == null
                         ? BucketIdsZNode.pathOfTable(tableId)
                         : BucketIdsZNode.pathOfPartition(partitionId);
-        // iterate all buckets
+        Map<String, TableBucket> snapshotPathToTableBucket = new HashMap<>();
         for (String bucketIdStr : getChildren(bucketIdsPath)) {
-            // get the bucket id
             int bucketId = Integer.parseInt(bucketIdStr);
+            snapshots.put(bucketId, Optional.empty());
             TableBucket tableBucket = new TableBucket(tableId, partitionId, bucketId);
-            // get the snapshot node for the bucket
-            String bucketSnapshotPath = BucketSnapshotsZNode.path(tableBucket);
-            // get all the snapshots for the bucket
-            List<String> bucketSnapshots = getChildren(bucketSnapshotPath);
+            snapshotPathToTableBucket.put(BucketSnapshotsZNode.path(tableBucket), tableBucket);
+        }
 
-            Optional<Long> optLatestSnapshotId =
-                    bucketSnapshots.stream().map(Long::parseLong).reduce(Math::max);
-            Optional<BucketSnapshot> optTableBucketSnapshot = Optional.empty();
-            if (optLatestSnapshotId.isPresent()) {
-                optTableBucketSnapshot =
-                        getTableBucketSnapshot(tableBucket, optLatestSnapshotId.get());
+        List<ZkGetChildrenResponse> childrenResponses =
+                getChildrenInBackground(snapshotPathToTableBucket.keySet());
+        Map<String, Integer> snapshotDataPathToBucketId = new HashMap<>();
+        for (ZkGetChildrenResponse response : childrenResponses) {
+            if (response.getResultCode() == KeeperException.Code.NONODE) {
+                continue;
             }
-            snapshots.put(bucketId, optTableBucketSnapshot);
+            response.maybeThrow();
+
+            OptionalLong latestSnapshotId =
+                    response.getChildren().stream().mapToLong(Long::parseLong).max();
+            if (latestSnapshotId.isPresent()) {
+                TableBucket tableBucket =
+                        checkNotNull(snapshotPathToTableBucket.get(response.getPath()));
+                snapshotDataPathToBucketId.put(
+                        BucketSnapshotIdZNode.path(tableBucket, latestSnapshotId.getAsLong()),
+                        tableBucket.getBucket());
+            }
+        }
+
+        List<ZkGetDataResponse> dataResponses =
+                getDataInBackground(snapshotDataPathToBucketId.keySet());
+        for (ZkGetDataResponse response : dataResponses) {
+            if (response.getResultCode() == KeeperException.Code.NONODE) {
+                // The snapshot may be deleted between listing the children and reading its data.
+                continue;
+            }
+            response.maybeThrow();
+
+            int bucketId = checkNotNull(snapshotDataPathToBucketId.get(response.getPath()));
+            snapshots.put(bucketId, Optional.of(BucketSnapshotIdZNode.decode(response.getData())));
         }
         return snapshots;
     }
@@ -1893,7 +1914,8 @@ public class ZooKeeperClient implements AutoCloseable {
      * @return list of async responses for each path
      * @throws Exception if there is an error during the operation
      */
-    private List<ZkGetDataResponse> getDataInBackground(Collection<String> paths) throws Exception {
+    @VisibleForTesting
+    List<ZkGetDataResponse> getDataInBackground(Collection<String> paths) throws Exception {
         List<ZkGetDataRequest> requests =
                 paths.stream().map(ZkGetDataRequest::new).collect(Collectors.toList());
         return handleRequestInBackground(requests, ZkGetDataResponse::create);

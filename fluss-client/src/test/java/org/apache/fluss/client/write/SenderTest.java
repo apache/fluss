@@ -24,6 +24,8 @@ import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
+import org.apache.fluss.exception.AuthorizationException;
+import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.exception.TimeoutException;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -39,6 +41,7 @@ import org.apache.fluss.rpc.entity.PutKvResultForBucket;
 import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
+import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.PutKvResponse;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.tablet.TestTabletServerGateway;
@@ -60,10 +63,10 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
-import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO;
@@ -508,12 +511,14 @@ final class SenderTest {
                     assertThat(idempotenceManager.hasInflightBatches(tb1)).isFalse();
                     assertThat(
                                     accumulator.getReadyDeque(
-                                            DATA1_PHYSICAL_TABLE_PATH, tb1.getBucket()))
+                                            PhysicalTablePath.of(DATA1_TABLE_PATH),
+                                            tb1.getBucket()))
                             .hasSize(1);
                     assertThat(
                                     accumulator
                                             .getReadyDeque(
-                                                    DATA1_PHYSICAL_TABLE_PATH, tb1.getBucket())
+                                                    PhysicalTablePath.of(DATA1_TABLE_PATH),
+                                                    tb1.getBucket())
                                             .peek()
                                             .batchSequence())
                             .isEqualTo(0);
@@ -559,7 +564,7 @@ final class SenderTest {
 
         sender1.runOnce(); // receive response 1.
         Deque<WriteBatch> queuedBatches =
-                accumulator.getReadyDeque(DATA1_PHYSICAL_TABLE_PATH, tb1.getBucket());
+                accumulator.getReadyDeque(PhysicalTablePath.of(DATA1_TABLE_PATH), tb1.getBucket());
 
         // Make sure that we are queueing the second batch first.
         assertThat(queuedBatches.size()).isEqualTo(1);
@@ -629,7 +634,7 @@ final class SenderTest {
         assertThat(future2.get()).isNull();
         assertThat(future1.isDone()).isFalse();
         Deque<WriteBatch> queuedBatches =
-                accumulator.getReadyDeque(DATA1_PHYSICAL_TABLE_PATH, tb1.getBucket());
+                accumulator.getReadyDeque(PhysicalTablePath.of(DATA1_TABLE_PATH), tb1.getBucket());
 
         assertThat(queuedBatches.size()).isEqualTo(0);
         assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isEqualTo(Optional.of(1));
@@ -852,6 +857,52 @@ final class SenderTest {
     }
 
     @Test
+    void testProduceLogRpcFailureOnlyFailsOwnedTableBatches() throws Exception {
+        TablePath secondTablePath = TablePath.of("test_db_2", "test_log_table_2");
+        TableInfo secondTableInfo =
+                TableInfo.of(
+                        secondTablePath,
+                        DATA2_TABLE_ID,
+                        1,
+                        DATA1_TABLE_DESCRIPTOR,
+                        DEFAULT_REMOTE_DATA_DIR,
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis());
+        resetTableInfosWith(secondTableInfo);
+
+        TableBucket secondTableBucket = new TableBucket(DATA2_TABLE_ID, 0);
+        CompletableFuture<Exception> firstFuture = new CompletableFuture<>();
+        CompletableFuture<Exception> secondFuture = new CompletableFuture<>();
+        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> firstFuture.complete(e));
+        appendToAccumulator(
+                secondTableInfo,
+                secondTableBucket,
+                row(2, "b"),
+                (tb, leo, e) -> secondFuture.complete(e));
+
+        sender.runOnce();
+        assertThat(pendingWriteRequestTableIds(tb1))
+                .containsExactlyInAnyOrder(DATA1_TABLE_ID, DATA2_TABLE_ID);
+
+        failRequest(
+                tb1,
+                findRequestIndex(tb1, DATA1_TABLE_ID),
+                new AuthorizationException("first table is not authorized"));
+
+        assertThat(firstFuture.get()).isInstanceOf(AuthorizationException.class);
+        assertThat(secondFuture.isDone()).isFalse();
+        assertThat(sender.numOfInFlightBatches(secondTableBucket)).isEqualTo(1);
+        assertThat(pendingWriteRequestTableIds(tb1)).containsExactly(DATA2_TABLE_ID);
+
+        finishRequest(
+                tb1,
+                findRequestIndex(tb1, DATA2_TABLE_ID),
+                createProduceLogResponse(secondTableBucket, 0L, 1L));
+        assertThat(secondFuture.get()).isNull();
+        assertThat(sender.numOfInFlightBatches(secondTableBucket)).isEqualTo(0);
+    }
+
+    @Test
     void testRetryPutKeyWithSchemaNotExistException() throws Exception {
         TableBucket tableBucket = new TableBucket(DATA1_TABLE_ID_PK, 0);
 
@@ -958,6 +1009,73 @@ final class SenderTest {
     }
 
     @Test
+    void testPutKvRpcFailuresRetryOnlyOwnedTableBatches() throws Exception {
+        TablePath secondTablePath = TablePath.of("test_db_2", "test_pk_table_2");
+        TableInfo secondTableInfo =
+                TableInfo.of(
+                        secondTablePath,
+                        DATA2_TABLE_ID,
+                        1,
+                        DATA1_TABLE_DESCRIPTOR_PK,
+                        DEFAULT_REMOTE_DATA_DIR,
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis());
+        resetTableInfosWith(secondTableInfo);
+
+        TableBucket firstTableBucket = new TableBucket(DATA1_TABLE_ID_PK, 0);
+        TableBucket secondTableBucket = new TableBucket(DATA2_TABLE_ID, 0);
+        CompletableFuture<Exception> firstFuture = new CompletableFuture<>();
+        CompletableFuture<Exception> secondFuture = new CompletableFuture<>();
+        appendKvToAccumulator(
+                firstTableBucket,
+                compactedRow(DATA1_ROW_TYPE, new Object[] {1, "a"}),
+                (tb, leo, e) -> firstFuture.complete(e));
+        appendKvToAccumulator(
+                secondTableInfo,
+                secondTableBucket,
+                compactedRow(DATA1_ROW_TYPE, new Object[] {2, "b"}),
+                (tb, leo, e) -> secondFuture.complete(e));
+
+        sender.runOnce();
+        assertThat(pendingWriteRequestTableIds(tb1))
+                .containsExactlyInAnyOrder(DATA1_TABLE_ID_PK, DATA2_TABLE_ID);
+        Cluster clusterBeforeFailures = metadataUpdater.getCluster();
+
+        failRequest(
+                tb1,
+                findRequestIndex(tb1, DATA1_TABLE_ID_PK),
+                new NetworkException("first table request failed"));
+        assertThat(writerMetricGroup.recordsRetryTotal().getCount()).isEqualTo(1L);
+        assertThat(sender.numOfInFlightBatches(firstTableBucket)).isEqualTo(0);
+        assertThat(sender.numOfInFlightBatches(secondTableBucket)).isEqualTo(1);
+
+        failRequest(
+                tb1,
+                findRequestIndex(tb1, DATA2_TABLE_ID),
+                new NetworkException("second table request failed"));
+        assertThat(firstFuture.isDone()).isFalse();
+        assertThat(secondFuture.isDone()).isFalse();
+        assertThat(writerMetricGroup.recordsRetryTotal().getCount()).isEqualTo(2L);
+        assertThat(sender.numOfInFlightBatches(secondTableBucket)).isEqualTo(0);
+
+        metadataUpdater.updateCluster(clusterBeforeFailures);
+        sender.runOnce();
+        assertThat(pendingWriteRequestTableIds(tb1))
+                .containsExactlyInAnyOrder(DATA1_TABLE_ID_PK, DATA2_TABLE_ID);
+
+        finishRequest(
+                tb1,
+                findRequestIndex(tb1, DATA1_TABLE_ID_PK),
+                createPutKvResponse(firstTableBucket, 1L));
+        finishRequest(
+                tb1,
+                findRequestIndex(tb1, DATA2_TABLE_ID),
+                createPutKvResponse(secondTableBucket, 1L));
+        assertThat(firstFuture.get()).isNull();
+        assertThat(secondFuture.get()).isNull();
+    }
+
+    @Test
     void testSendWhenTableIdChanges() throws Exception {
         CompletableFuture<Exception> future1 = new CompletableFuture<>();
         appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future1.complete(e));
@@ -998,6 +1116,14 @@ final class SenderTest {
         return new TestingMetadataUpdater(tableInfos);
     }
 
+    private void resetTableInfosWith(TableInfo tableInfo) {
+        Map<TablePath, TableInfo> tableInfos = new HashMap<>();
+        tableInfos.put(DATA1_TABLE_PATH, DATA1_TABLE_INFO);
+        tableInfos.put(DATA1_TABLE_PATH_PK, DATA1_TABLE_INFO_PK);
+        tableInfos.put(tableInfo.getTablePath(), tableInfo);
+        metadataUpdater.updateTableInfos(tableInfos);
+    }
+
     private void appendToAccumulator(TableBucket tb, GenericRow row, WriteCallback writeCallback)
             throws Exception {
         appendToAccumulator(DATA1_TABLE_INFO, tb, row, writeCallback);
@@ -1007,7 +1133,8 @@ final class SenderTest {
             TableInfo tableInfo, TableBucket tb, GenericRow row, WriteCallback writeCallback)
             throws Exception {
         accumulator.append(
-                WriteRecord.forArrowAppend(tableInfo, DATA1_PHYSICAL_TABLE_PATH, row, null),
+                WriteRecord.forArrowAppend(
+                        tableInfo, PhysicalTablePath.of(tableInfo.getTablePath()), row, null),
                 writeCallback,
                 metadataUpdater.getCluster(),
                 tb.getBucket(),
@@ -1016,12 +1143,21 @@ final class SenderTest {
 
     private void appendKvToAccumulator(
             TableBucket tableBucket, BinaryRow row, WriteCallback writeCallback) throws Exception {
+        appendKvToAccumulator(DATA1_TABLE_INFO_PK, tableBucket, row, writeCallback);
+    }
+
+    private void appendKvToAccumulator(
+            TableInfo tableInfo,
+            TableBucket tableBucket,
+            BinaryRow row,
+            WriteCallback writeCallback)
+            throws Exception {
         int[] pkIndex = DATA1_SCHEMA_PK.getPrimaryKeyIndexes();
         byte[] key = new CompactedKeyEncoder(DATA1_ROW_TYPE, pkIndex).encodeKey(row);
         accumulator.append(
                 WriteRecord.forUpsert(
-                        DATA1_TABLE_INFO_PK,
-                        PhysicalTablePath.of(DATA1_TABLE_PATH_PK),
+                        tableInfo,
+                        PhysicalTablePath.of(tableInfo.getTablePath()),
                         row,
                         key,
                         key,
@@ -1055,6 +1191,44 @@ final class SenderTest {
                         metadataUpdater.newTabletServerClientForNode(
                                 metadataUpdater.leaderFor(DATA1_TABLE_PATH, tb));
         return gateway.pendingRequestSize();
+    }
+
+    private int findRequestIndex(TableBucket referenceBucket, long tableId) {
+        int requestCount = pendingRequestSize(referenceBucket);
+        for (int index = 0; index < requestCount; index++) {
+            if (getWriteRequestTableId(getRequest(referenceBucket, index)) == tableId) {
+                return index;
+            }
+        }
+        throw new IllegalStateException("No pending write request for table " + tableId);
+    }
+
+    private List<Long> pendingWriteRequestTableIds(TableBucket referenceBucket) {
+        List<Long> tableIds = new ArrayList<>();
+        int requestCount = pendingRequestSize(referenceBucket);
+        for (int index = 0; index < requestCount; index++) {
+            tableIds.add(getWriteRequestTableId(getRequest(referenceBucket, index)));
+        }
+        return tableIds;
+    }
+
+    private static long getWriteRequestTableId(ApiMessage request) {
+        if (request instanceof ProduceLogRequest) {
+            return ((ProduceLogRequest) request).getTableId();
+        }
+        if (request instanceof PutKvRequest) {
+            return ((PutKvRequest) request).getTableId();
+        }
+        throw new IllegalArgumentException(
+                "Expected a write request but found " + request.getClass().getName());
+    }
+
+    private void failRequest(TableBucket referenceBucket, int index, Throwable throwable) {
+        TestTabletServerGateway gateway =
+                (TestTabletServerGateway)
+                        metadataUpdater.newTabletServerClientForNode(
+                                metadataUpdater.leaderFor(DATA1_TABLE_PATH, referenceBucket));
+        gateway.failRequest(index, throwable);
     }
 
     private void finishIdempotentProduceLogRequest(
