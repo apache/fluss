@@ -26,12 +26,14 @@ on:
       - 'website/**'
       - 'helm/**'
       - 'fluss-rust/**'
+      - 'devkit/**'
       - '**/*.md'
   pull_request:
     paths-ignore:
       - 'website/**'
       - 'helm/**'
       - 'fluss-rust/**'
+      - 'devkit/**'
       - '**/*.md'
 
 concurrency:
