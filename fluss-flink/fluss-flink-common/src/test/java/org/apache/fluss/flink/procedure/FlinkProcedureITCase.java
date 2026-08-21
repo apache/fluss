@@ -807,13 +807,29 @@ public abstract class FlinkProcedureITCase {
                                     .collect()) {
                         List<Row> listProgressResult = CollectionUtil.iteratorToList(rows);
                         Row row = listProgressResult.get(0);
-                        assertThat(row.getArity()).isEqualTo(4);
+                        assertThat(row.getArity()).isEqualTo(6);
                         assertThat(row.getField(0)).isEqualTo(progress.rebalanceId());
                         assertThat(row.getField(1)).isEqualTo(RebalanceStatus.COMPLETED.toString());
                         assertThat((String) row.getField(2)).endsWith("%");
                         assertThat((String) row.getField(3)).startsWith("{\"rebalance_id\":");
+                        assertThat(row.getField(4)).isNotNull();
+                        assertThat(row.getField(5)).isNotNull();
                     }
                 });
+
+        try (CloseableIterator<Row> rows =
+                tEnv.executeSql(String.format("Call %s.sys.list_rebalance()", CATALOG_NAME))
+                        .collect()) {
+            List<Row> listResult = CollectionUtil.iteratorToList(rows);
+            assertThat(listResult).isNotEmpty();
+            Row row = listResult.get(0);
+            assertThat(row.getArity()).isEqualTo(6);
+            assertThat(row.getField(0)).isEqualTo(progress.rebalanceId());
+            assertThat(row.getField(1)).isEqualTo(RebalanceStatus.COMPLETED.toString());
+            assertThat((String) row.getField(3)).startsWith("{\"rebalance_id\":");
+            assertThat(row.getField(4)).isNotNull();
+            assertThat(row.getField(5)).isNotNull();
+        }
     }
 
     @Test

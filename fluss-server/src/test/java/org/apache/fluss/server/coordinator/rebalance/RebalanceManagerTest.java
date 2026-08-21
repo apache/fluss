@@ -17,11 +17,13 @@
 
 package org.apache.fluss.server.coordinator.rebalance;
 
+import org.apache.fluss.cluster.rebalance.RebalanceInfo;
 import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
 import org.apache.fluss.cluster.rebalance.RebalanceResultForBucket;
 import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.coordinator.AutoPartitionManager;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
@@ -43,6 +45,8 @@ import org.apache.fluss.server.zk.ZkEpoch;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.RebalanceTask;
+import org.apache.fluss.server.zk.data.ZkData.RebalanceHistoryTaskZNode;
+import org.apache.fluss.server.zk.data.ZkData.RebalanceHistoryZNode;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.utils.clock.ManualClock;
 import org.apache.fluss.utils.clock.SystemClock;
@@ -59,6 +63,7 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -69,6 +74,9 @@ import static org.apache.fluss.cluster.rebalance.RebalanceStatus.COMPLETED;
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.NOT_STARTED;
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.TIMEOUT;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /** Test for {@link RebalanceManager}. */
 public class RebalanceManagerTest {
@@ -149,6 +157,9 @@ public class RebalanceManagerTest {
             scheduler.shutdown();
         }
         zookeeperClient.deleteRebalanceTask();
+        for (String rebalanceId : zookeeperClient.getChildren(RebalanceHistoryZNode.path())) {
+            zookeeperClient.deletePath(RebalanceHistoryTaskZNode.path(rebalanceId));
+        }
         metadataManager =
                 new MetadataManager(
                         zookeeperClient,
@@ -162,19 +173,273 @@ public class RebalanceManagerTest {
         assertThat(rebalanceManager.getRebalanceStatus()).isNull();
 
         String rebalanceId = "test-rebalance-id";
-        RebalanceTask rebalanceTask = new RebalanceTask(rebalanceId, NOT_STARTED, new HashMap<>());
+        RebalanceTask rebalanceTask =
+                new RebalanceTask(rebalanceId, NOT_STARTED, new HashMap<>(), -1, -1);
         zookeeperClient.registerRebalanceTask(rebalanceTask);
         assertThat(zookeeperClient.getRebalanceTask()).hasValue(rebalanceTask);
 
         // register a rebalance task with empty plan.
+        long beforeRegister = System.currentTimeMillis();
         rebalanceManager.registerRebalance(rebalanceId, new HashMap<>(), NOT_STARTED);
+        long afterRegister = System.currentTimeMillis();
 
         assertThat(rebalanceManager.getRebalanceId()).isEqualTo(rebalanceId);
         RebalanceStatus status = rebalanceManager.getRebalanceStatus();
         assertThat(status).isNotNull();
         assertThat(status).isEqualTo(COMPLETED);
+
+        // An empty plan completes immediately, so started/completed are both stamped with
+        // "now" (real clock, since this test's rebalanceManager uses SystemClock).
+        RebalanceTask finalTask = zookeeperClient.getRebalanceTask().get();
+        assertThat(finalTask.getRebalanceId()).isEqualTo(rebalanceId);
+        assertThat(finalTask.getRebalanceStatus()).isEqualTo(COMPLETED);
+        assertThat(finalTask.getExecutePlan()).isEmpty();
+        assertThat(finalTask.getStartedAtMs()).isBetween(beforeRegister, afterRegister);
+        assertThat(finalTask.getCompletedAtMs()).isBetween(beforeRegister, afterRegister);
+    }
+
+    @Test
+    void testGenerateRebalanceTaskStampsStartedAtMs() throws Exception {
+        ManualClock clock = new ManualClock(12_345L);
+        RecordingEventManager eventManager = new RecordingEventManager();
+        NoOpScheduledExecutor executor = new NoOpScheduledExecutor();
+        CoordinatorEventProcessor eventProcessor =
+                buildCoordinatorEventProcessor(new Configuration());
+
+        RebalanceManager manager =
+                new RebalanceManager(
+                        eventProcessor, zookeeperClient, eventManager, clock, executor);
+        manager.startup();
+
+        RebalanceTask task = manager.generateRebalanceTask(Collections.emptyList());
+
+        assertThat(task.getStartedAtMs()).isEqualTo(12_345L);
+        assertThat(task.getCompletedAtMs()).isEqualTo(-1L);
+
+        manager.close();
+    }
+
+    @Test
+    void testInitializeRestoresTimestampsOnFailover() throws Exception {
+        TableBucket tb1 = new TableBucket(1L, 0);
+        Map<TableBucket, RebalancePlanForBucket> plan = new HashMap<>();
+        plan.put(
+                tb1,
+                new RebalancePlanForBucket(
+                        tb1, 0, 0, Arrays.asList(0, 1, 2), Arrays.asList(0, 1, 2)));
+
+        // Simulate a task left behind by a previous coordinator, with a real startedAtMs.
+        zookeeperClient.registerRebalanceTask(
+                new RebalanceTask("failover-test", NOT_STARTED, plan, 5_000L, -1));
+
+        ManualClock clock = new ManualClock(20_000L);
+        RecordingEventManager eventManager = new RecordingEventManager();
+        NoOpScheduledExecutor executor = new NoOpScheduledExecutor();
+        CoordinatorEventProcessor eventProcessor =
+                buildCoordinatorEventProcessor(new Configuration());
+        RebalanceManager manager =
+                new RebalanceManager(
+                        eventProcessor, zookeeperClient, eventManager, clock, executor);
+
+        // startup() -> initialize() restores the task and its timestamps from ZooKeeper.
+        manager.startup();
+
+        assertThat(manager.getCurrentStartedAtMs()).isEqualTo(5_000L);
+        assertThat(manager.getCurrentCompletedAtMs()).isEqualTo(-1L);
+
+        // Completing the restored task must keep the original startedAtMs.
+        manager.finishRebalanceTask(tb1, COMPLETED);
+
+        assertThat(manager.getCurrentStartedAtMs()).isEqualTo(5_000L);
+        assertThat(manager.getCurrentCompletedAtMs()).isEqualTo(20_000L);
         assertThat(zookeeperClient.getRebalanceTask())
-                .hasValue(new RebalanceTask(rebalanceId, COMPLETED, new HashMap<>()));
+                .hasValue(new RebalanceTask("failover-test", COMPLETED, plan, 5_000L, 20_000L));
+
+        manager.close();
+    }
+
+    @Test
+    void testInitializeRestoresTaskWithoutTimestamps() throws Exception {
+        TableBucket tb1 = new TableBucket(1L, 0);
+        Map<TableBucket, RebalancePlanForBucket> plan = new HashMap<>();
+        plan.put(
+                tb1,
+                new RebalancePlanForBucket(
+                        tb1, 0, 0, Arrays.asList(0, 1, 2), Arrays.asList(0, 1, 2)));
+
+        // A version-1 znode has no timestamp fields, so the deserializer yields -1. Completing
+        // such a restored task must leave startedAtMs unset rather than back-date it to the
+        // failover clock.
+        zookeeperClient.registerRebalanceTask(
+                new RebalanceTask("failover-v1-test", NOT_STARTED, plan, -1, -1));
+
+        ManualClock clock = new ManualClock(20_000L);
+        RecordingEventManager eventManager = new RecordingEventManager();
+        NoOpScheduledExecutor executor = new NoOpScheduledExecutor();
+        CoordinatorEventProcessor eventProcessor =
+                buildCoordinatorEventProcessor(new Configuration());
+        RebalanceManager manager =
+                new RebalanceManager(
+                        eventProcessor, zookeeperClient, eventManager, clock, executor);
+
+        manager.startup();
+        assertThat(manager.getCurrentStartedAtMs()).isEqualTo(-1L);
+
+        manager.finishRebalanceTask(tb1, COMPLETED);
+
+        assertThat(manager.getCurrentStartedAtMs()).isEqualTo(-1L);
+        assertThat(manager.getCurrentCompletedAtMs()).isEqualTo(20_000L);
+        assertThat(zookeeperClient.getRebalanceTask())
+                .hasValue(new RebalanceTask("failover-v1-test", COMPLETED, plan, -1, 20_000L));
+
+        manager.close();
+    }
+
+    @Test
+    void testInitializeDoesNotReCompleteRestoredFinalEmptyPlanTask() throws Exception {
+        // Simulate an empty-plan rebalance that already reached COMPLETED before the coordinator
+        // failed over, including its already-written history entry.
+        Map<TableBucket, RebalancePlanForBucket> emptyPlan = new HashMap<>();
+        RebalanceTask alreadyCompletedTask =
+                new RebalanceTask("failover-empty-plan-test", COMPLETED, emptyPlan, 5_000L, 8_000L);
+        zookeeperClient.registerRebalanceTask(alreadyCompletedTask);
+        zookeeperClient.registerRebalanceHistory(alreadyCompletedTask, 10);
+
+        ManualClock clock = new ManualClock(50_000L);
+        RecordingEventManager eventManager = new RecordingEventManager();
+        NoOpScheduledExecutor executor = new NoOpScheduledExecutor();
+        CoordinatorEventProcessor eventProcessor =
+                buildCoordinatorEventProcessor(new Configuration());
+        RebalanceManager manager =
+                new RebalanceManager(
+                        eventProcessor, zookeeperClient, eventManager, clock, executor);
+
+        // startup() -> initialize() restores the already-final task; it must not be re-completed
+        // with the (much later) failover clock time.
+        manager.startup();
+
+        assertThat(manager.getCurrentStartedAtMs()).isEqualTo(5_000L);
+        assertThat(manager.getCurrentCompletedAtMs()).isEqualTo(8_000L);
+        assertThat(zookeeperClient.getRebalanceTask()).hasValue(alreadyCompletedTask);
+        assertThat(zookeeperClient.getRebalanceHistory()).containsExactly(alreadyCompletedTask);
+        assertThat(manager.listRebalances())
+                .containsExactly(
+                        new RebalanceInfo("failover-empty-plan-test", COMPLETED, 5_000L, 8_000L));
+
+        manager.close();
+    }
+
+    @Test
+    void testInitializeKeepsStatusOfRestoredCanceledEmptyPlanTask() throws Exception {
+        // A restored final empty-plan task must keep its own status: re-running completion on
+        // failover would coerce CANCELED to COMPLETED and rewrite the znode and history.
+        Map<TableBucket, RebalancePlanForBucket> emptyPlan = new HashMap<>();
+        RebalanceTask canceledTask =
+                new RebalanceTask(
+                        "failover-canceled-empty-plan-test",
+                        RebalanceStatus.CANCELED,
+                        emptyPlan,
+                        5_000L,
+                        8_000L);
+        zookeeperClient.registerRebalanceTask(canceledTask);
+        zookeeperClient.registerRebalanceHistory(canceledTask, 10);
+
+        ManualClock clock = new ManualClock(50_000L);
+        RecordingEventManager eventManager = new RecordingEventManager();
+        NoOpScheduledExecutor executor = new NoOpScheduledExecutor();
+        CoordinatorEventProcessor eventProcessor =
+                buildCoordinatorEventProcessor(new Configuration());
+        RebalanceManager manager =
+                new RebalanceManager(
+                        eventProcessor, zookeeperClient, eventManager, clock, executor);
+
+        manager.startup();
+
+        assertThat(manager.getRebalanceStatus()).isEqualTo(RebalanceStatus.CANCELED);
+        assertThat(manager.getCurrentStartedAtMs()).isEqualTo(5_000L);
+        assertThat(manager.getCurrentCompletedAtMs()).isEqualTo(8_000L);
+        assertThat(zookeeperClient.getRebalanceTask()).hasValue(canceledTask);
+        assertThat(zookeeperClient.getRebalanceHistory()).containsExactly(canceledTask);
+        assertThat(manager.listRebalances())
+                .containsExactly(
+                        new RebalanceInfo(
+                                "failover-canceled-empty-plan-test",
+                                RebalanceStatus.CANCELED,
+                                5_000L,
+                                8_000L));
+
+        manager.close();
+    }
+
+    @Test
+    void testCompleteRebalanceStampsCompletedAtMsAndWritesHistory() throws Exception {
+        ManualClock clock = new ManualClock(1_000L);
+        RecordingEventManager eventManager = new RecordingEventManager();
+        NoOpScheduledExecutor executor = new NoOpScheduledExecutor();
+        CoordinatorEventProcessor eventProcessor =
+                buildCoordinatorEventProcessor(new Configuration());
+        RebalanceManager manager =
+                new RebalanceManager(
+                        eventProcessor, zookeeperClient, eventManager, clock, executor);
+        manager.startup();
+
+        TableBucket tb1 = new TableBucket(1L, 0);
+        Map<TableBucket, RebalancePlanForBucket> plan = new HashMap<>();
+        plan.put(
+                tb1,
+                new RebalancePlanForBucket(
+                        tb1, 0, 0, Arrays.asList(0, 1, 2), Arrays.asList(0, 1, 2)));
+
+        zookeeperClient.registerRebalanceTask(
+                new RebalanceTask("complete-ts-test", NOT_STARTED, plan, 1_000L, -1));
+        manager.registerRebalance("complete-ts-test", plan, NOT_STARTED, 1_000L, -1);
+
+        clock.advanceTime(Duration.ofMillis(5_000));
+        manager.finishRebalanceTask(tb1, COMPLETED);
+
+        assertThat(manager.getCurrentStartedAtMs()).isEqualTo(1_000L);
+        assertThat(manager.getCurrentCompletedAtMs()).isEqualTo(6_000L);
+        assertThat(zookeeperClient.getRebalanceTask())
+                .hasValue(new RebalanceTask("complete-ts-test", COMPLETED, plan, 1_000L, 6_000L));
+        assertThat(zookeeperClient.getRebalanceHistory())
+                .contains(new RebalanceTask("complete-ts-test", COMPLETED, plan, 1_000L, 6_000L));
+
+        manager.close();
+    }
+
+    @Test
+    void testCancelRebalanceStampsCompletedAtMsAndWritesHistory() throws Exception {
+        ManualClock clock = new ManualClock(1_000L);
+        RecordingEventManager eventManager = new RecordingEventManager();
+        NoOpScheduledExecutor executor = new NoOpScheduledExecutor();
+        CoordinatorEventProcessor eventProcessor =
+                buildCoordinatorEventProcessor(new Configuration());
+        RebalanceManager manager =
+                new RebalanceManager(
+                        eventProcessor, zookeeperClient, eventManager, clock, executor);
+        manager.startup();
+
+        TableBucket tb1 = new TableBucket(1L, 0);
+        Map<TableBucket, RebalancePlanForBucket> plan = new HashMap<>();
+        plan.put(
+                tb1,
+                new RebalancePlanForBucket(
+                        tb1, 0, 0, Arrays.asList(0, 1, 2), Arrays.asList(0, 1, 2)));
+
+        zookeeperClient.registerRebalanceTask(
+                new RebalanceTask("cancel-ts-test", NOT_STARTED, plan, 1_000L, -1));
+        manager.registerRebalance("cancel-ts-test", plan, NOT_STARTED, 1_000L, -1);
+
+        clock.advanceTime(Duration.ofMillis(3_000));
+        manager.cancelRebalance("cancel-ts-test");
+
+        assertThat(manager.getCurrentCompletedAtMs()).isEqualTo(4_000L);
+        RebalanceTask canceledTask =
+                new RebalanceTask("cancel-ts-test", RebalanceStatus.CANCELED, plan, 1_000L, 4_000L);
+        assertThat(zookeeperClient.getRebalanceTask()).hasValue(canceledTask);
+        assertThat(zookeeperClient.getRebalanceHistory()).contains(canceledTask);
+
+        manager.close();
     }
 
     @Test
@@ -202,7 +467,8 @@ public class RebalanceManagerTest {
                 new RebalancePlanForBucket(
                         tb2, 0, 0, Arrays.asList(0, 1, 2), Arrays.asList(0, 1, 2)));
 
-        zookeeperClient.registerRebalanceTask(new RebalanceTask("timeout-test", NOT_STARTED, plan));
+        zookeeperClient.registerRebalanceTask(
+                new RebalanceTask("timeout-test", NOT_STARTED, plan, -1, -1));
         manager.registerRebalance("timeout-test", plan, NOT_STARTED);
 
         // Not yet timed out.
@@ -250,7 +516,7 @@ public class RebalanceManagerTest {
                         tb1, 0, 0, Arrays.asList(0, 1, 2), Arrays.asList(0, 1, 2)));
 
         zookeeperClient.registerRebalanceTask(
-                new RebalanceTask("completion-test", NOT_STARTED, plan));
+                new RebalanceTask("completion-test", NOT_STARTED, plan, -1, -1));
         manager.registerRebalance("completion-test", plan, NOT_STARTED);
 
         // The task completes normally before timeout.
@@ -292,7 +558,7 @@ public class RebalanceManagerTest {
                         tb2, 0, 0, Arrays.asList(0, 1, 2), Arrays.asList(0, 1, 2)));
 
         zookeeperClient.registerRebalanceTask(
-                new RebalanceTask("completed-test", NOT_STARTED, plan));
+                new RebalanceTask("completed-test", NOT_STARTED, plan, -1, -1));
         manager.registerRebalance("completed-test", plan, NOT_STARTED);
 
         // Timeout fires.
@@ -310,6 +576,86 @@ public class RebalanceManagerTest {
         RebalanceResultForBucket result =
                 manager.listRebalanceProgress(null).progressForBucketMap().get(tb1);
         assertThat(result.status()).isEqualTo(TIMEOUT);
+
+        manager.close();
+    }
+
+    @Test
+    void testListRebalancesEmptyWhenNoRebalanceEverRun() {
+        assertThat(rebalanceManager.listRebalances()).isEmpty();
+    }
+
+    @Test
+    void testListRebalancesPropagatesZooKeeperReadFailure() throws Exception {
+        ZooKeeperClient failingZkClient = mock(ZooKeeperClient.class);
+        when(failingZkClient.getRebalanceHistory())
+                .thenThrow(new RuntimeException("zk read failed"));
+        RecordingEventManager eventManager = new RecordingEventManager();
+        NoOpScheduledExecutor executor = new NoOpScheduledExecutor();
+        CoordinatorEventProcessor eventProcessor =
+                buildCoordinatorEventProcessor(new Configuration());
+        RebalanceManager manager =
+                new RebalanceManager(
+                        eventProcessor,
+                        failingZkClient,
+                        eventManager,
+                        SystemClock.getInstance(),
+                        executor);
+        manager.startup();
+
+        assertThatThrownBy(manager::listRebalances).isInstanceOf(FlussRuntimeException.class);
+
+        manager.close();
+    }
+
+    @Test
+    void testListRebalancesCurrentFirstThenHistoryNewestFirstDeduped() throws Exception {
+        ManualClock clock = new ManualClock(1_000L);
+        RecordingEventManager eventManager = new RecordingEventManager();
+        NoOpScheduledExecutor executor = new NoOpScheduledExecutor();
+        CoordinatorEventProcessor eventProcessor =
+                buildCoordinatorEventProcessor(new Configuration());
+        RebalanceManager manager =
+                new RebalanceManager(
+                        eventProcessor, zookeeperClient, eventManager, clock, executor);
+        manager.startup();
+
+        TableBucket tb1 = new TableBucket(1L, 0);
+        Map<TableBucket, RebalancePlanForBucket> plan = new HashMap<>();
+        plan.put(
+                tb1,
+                new RebalancePlanForBucket(
+                        tb1, 0, 0, Arrays.asList(0, 1, 2), Arrays.asList(0, 1, 2)));
+
+        // First rebalance completes and lands in history.
+        zookeeperClient.registerRebalanceTask(
+                new RebalanceTask("rebalance-1", NOT_STARTED, plan, 1_000L, -1));
+        manager.registerRebalance("rebalance-1", plan, NOT_STARTED, 1_000L, -1);
+        clock.advanceTime(Duration.ofMillis(1_000));
+        manager.finishRebalanceTask(tb1, COMPLETED);
+
+        // Second rebalance completes later, also lands in history.
+        clock.advanceTime(Duration.ofMillis(1_000));
+        zookeeperClient.registerRebalanceTask(
+                new RebalanceTask("rebalance-2", NOT_STARTED, plan, clock.milliseconds(), -1));
+        manager.registerRebalance("rebalance-2", plan, NOT_STARTED, clock.milliseconds(), -1);
+        clock.advanceTime(Duration.ofMillis(1_000));
+        manager.finishRebalanceTask(tb1, COMPLETED);
+
+        // Third rebalance is still in progress (current).
+        clock.advanceTime(Duration.ofMillis(1_000));
+        zookeeperClient.registerRebalanceTask(
+                new RebalanceTask("rebalance-3", NOT_STARTED, plan, clock.milliseconds(), -1));
+        manager.registerRebalance("rebalance-3", plan, NOT_STARTED, clock.milliseconds(), -1);
+
+        List<RebalanceInfo> rebalanceInfos = manager.listRebalances();
+
+        // Current rebalance first, then history newest first; the current one must not be
+        // duplicated even though it will eventually also be written to history.
+        assertThat(rebalanceInfos).hasSize(3);
+        assertThat(rebalanceInfos.get(0).rebalanceId()).isEqualTo("rebalance-3");
+        assertThat(rebalanceInfos.get(1).rebalanceId()).isEqualTo("rebalance-2");
+        assertThat(rebalanceInfos.get(2).rebalanceId()).isEqualTo("rebalance-1");
 
         manager.close();
     }

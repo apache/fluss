@@ -18,11 +18,13 @@
 package org.apache.fluss.server.coordinator.rebalance;
 
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.cluster.rebalance.RebalanceInfo;
 import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
 import org.apache.fluss.cluster.rebalance.RebalanceProgress;
 import org.apache.fluss.cluster.rebalance.RebalanceResultForBucket;
 import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.cluster.rebalance.ServerTag;
+import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.NoRebalanceInProgressException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
@@ -48,6 +50,7 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -84,6 +87,9 @@ public class RebalanceManager {
     /** Hardcoded interval for the periodic timeout check: 30 seconds. */
     private static final long TIMEOUT_CHECK_INTERVAL_MS = 30 * 1000L;
 
+    /** Hardcoded bound on the number of completed rebalance tasks retained in ZK history. */
+    private static final int HISTORY_RETENTION_COUNT = 10;
+
     private final ZooKeeperClient zkClient;
     private final CoordinatorEventProcessor eventProcessor;
     private final EventManager eventManager;
@@ -105,6 +111,12 @@ public class RebalanceManager {
     private volatile long registerTime;
     private volatile @Nullable RebalanceStatus rebalanceStatus;
     private volatile @Nullable String currentRebalanceId;
+
+    /** The started/completed timestamps of {@link #currentRebalanceId}, or -1 if unset. */
+    private volatile long currentStartedAtMs = -1;
+
+    private volatile long currentCompletedAtMs = -1;
+
     private volatile boolean isClosed = false;
 
     /**
@@ -182,7 +194,9 @@ public class RebalanceManager {
                                     registerRebalance(
                                             rebalancePlan.getRebalanceId(),
                                             rebalancePlan.getExecutePlan(),
-                                            rebalancePlan.getRebalanceStatus()));
+                                            rebalancePlan.getRebalanceStatus(),
+                                            rebalancePlan.getStartedAtMs(),
+                                            rebalancePlan.getCompletedAtMs()));
         } catch (Exception e) {
             LOG.error(
                     "Failed to get rebalance plan from zookeeper, it will be treated as no"
@@ -195,6 +209,16 @@ public class RebalanceManager {
             String rebalanceId,
             Map<TableBucket, RebalancePlanForBucket> rebalancePlan,
             RebalanceStatus newStatus) {
+        registerRebalance(rebalanceId, rebalancePlan, newStatus, clock.milliseconds(), -1);
+    }
+
+    /** Registers a rebalance task, retaining its started/completed timestamps. */
+    public void registerRebalance(
+            String rebalanceId,
+            Map<TableBucket, RebalancePlanForBucket> rebalancePlan,
+            RebalanceStatus newStatus,
+            long startedAtMs,
+            long completedAtMs) {
         checkNotClosed();
         registerTime = System.currentTimeMillis();
         // first clear all exists tasks.
@@ -206,7 +230,17 @@ public class RebalanceManager {
         inflightTaskStartMs = -1;
 
         currentRebalanceId = rebalanceId;
+        currentStartedAtMs = startedAtMs;
+        currentCompletedAtMs = completedAtMs;
         if (rebalancePlan.isEmpty()) {
+            if (FINAL_STATUSES.contains(newStatus)) {
+                // Restoring an already-final empty-plan task on failover (see initialize()): the
+                // timestamps above already came from the restored task, so just adopt its status
+                // rather than re-running completion (which would re-stamp completedAtMs and
+                // rewrite history).
+                rebalanceStatus = newStatus;
+                return;
+            }
             completeRebalance();
             return;
         }
@@ -284,7 +318,71 @@ public class RebalanceManager {
         progressForBucketMap.putAll(finishedRebalanceTasks);
         // the progress will be set at client.
         return new RebalanceProgress(
-                currentRebalanceId, rebalanceStatus, 0.0, progressForBucketMap);
+                currentRebalanceId,
+                rebalanceStatus,
+                0.0,
+                progressForBucketMap,
+                currentStartedAtMs,
+                currentCompletedAtMs);
+    }
+
+    /**
+     * Returns a summary of the current rebalance, or {@code null} if there is none.
+     *
+     * <p>Must be called from the coordinator event thread so the id/status/timestamp fields form a
+     * consistent snapshot.
+     */
+    public @Nullable RebalanceInfo currentRebalanceInfo() {
+        checkNotClosed();
+        if (currentRebalanceId == null) {
+            return null;
+        }
+        return new RebalanceInfo(
+                currentRebalanceId, rebalanceStatus, currentStartedAtMs, currentCompletedAtMs);
+    }
+
+    /** Event-thread convenience overload of {@link #listRebalances(RebalanceInfo)}. */
+    @VisibleForTesting
+    List<RebalanceInfo> listRebalances() {
+        return listRebalances(currentRebalanceInfo());
+    }
+
+    /**
+     * Returns the given current-rebalance summary (if any) followed by the ZooKeeper history,
+     * newest first.
+     *
+     * <p>A finished rebalance stays current while also appearing in history, so the matching
+     * history entry is skipped to avoid a duplicate.
+     *
+     * <p>Reads only ZooKeeper and the {@code currentRebalance}, so it may run off the coordinator
+     * event thread.
+     */
+    public List<RebalanceInfo> listRebalances(@Nullable RebalanceInfo currentRebalance) {
+        checkNotClosed();
+        List<RebalanceInfo> rebalanceInfos = new ArrayList<>();
+        String currentId = currentRebalance == null ? null : currentRebalance.rebalanceId();
+        if (currentRebalance != null) {
+            rebalanceInfos.add(currentRebalance);
+        }
+
+        List<RebalanceTask> history;
+        try {
+            history = zkClient.getRebalanceHistory();
+        } catch (Exception e) {
+            throw new FlussRuntimeException("Failed to get rebalance history from zookeeper.", e);
+        }
+        for (RebalanceTask historyTask : history) {
+            if (historyTask.getRebalanceId().equals(currentId)) {
+                continue;
+            }
+            rebalanceInfos.add(
+                    new RebalanceInfo(
+                            historyTask.getRebalanceId(),
+                            historyTask.getRebalanceStatus(),
+                            historyTask.getStartedAtMs(),
+                            historyTask.getCompletedAtMs()));
+        }
+        return rebalanceInfos;
     }
 
     public void cancelRebalance(@Nullable String rebalanceId) {
@@ -308,20 +406,34 @@ public class RebalanceManager {
             return;
         }
 
+        long completedAtMs = clock.milliseconds();
         try {
             Optional<RebalanceTask> rebalanceTaskOpt = zkClient.getRebalanceTask();
             if (rebalanceTaskOpt.isPresent()) {
                 RebalanceTask rebalanceTask = rebalanceTaskOpt.get();
-                zkClient.registerRebalanceTask(
+                long startedAtMs = resolveStartedAtMs(rebalanceTask);
+                RebalanceTask finalTask =
                         new RebalanceTask(
                                 rebalanceTask.getRebalanceId(),
                                 CANCELED,
-                                rebalanceTask.getExecutePlan()));
+                                rebalanceTask.getExecutePlan(),
+                                startedAtMs,
+                                completedAtMs);
+                zkClient.registerRebalanceTask(finalTask);
+                try {
+                    zkClient.registerRebalanceHistory(finalTask, HISTORY_RETENTION_COUNT);
+                } catch (Exception e) {
+                    LOG.error(
+                            "Error when writing rebalance task {} to history.",
+                            finalTask.getRebalanceId(),
+                            e);
+                }
             }
         } catch (Exception e) {
             LOG.error("Error when delete rebalance plan from zookeeper.", e);
         }
 
+        currentCompletedAtMs = completedAtMs;
         rebalanceStatus = CANCELED;
         inProgressRebalanceTasksQueue.clear();
         inProgressRebalanceTasks.clear();
@@ -392,23 +504,40 @@ public class RebalanceManager {
 
     private void completeRebalance() {
         checkNotClosed();
+        long completedAtMs = clock.milliseconds();
         try {
             Optional<RebalanceTask> rebalanceTaskOpt = zkClient.getRebalanceTask();
             Map<TableBucket, RebalancePlanForBucket> bucketPlan;
+            // When the read below finds no task at all, keep the in-memory startedAtMs.
+            long startedAtMs = currentStartedAtMs;
             if (rebalanceTaskOpt.isPresent()) {
-                bucketPlan = rebalanceTaskOpt.get().getExecutePlan();
+                RebalanceTask rebalanceTask = rebalanceTaskOpt.get();
+                bucketPlan = rebalanceTask.getExecutePlan();
+                startedAtMs = resolveStartedAtMs(rebalanceTask);
             } else {
                 LOG.warn(
                         "Rebalance task is empty in zk when complete rebalance. "
                                 + "It will be treated as no rebalance tasks.");
                 bucketPlan = new HashMap<>();
             }
-            zkClient.registerRebalanceTask(
-                    new RebalanceTask(currentRebalanceId, COMPLETED, bucketPlan));
+            RebalanceTask finalTask =
+                    new RebalanceTask(
+                            currentRebalanceId, COMPLETED, bucketPlan, startedAtMs, completedAtMs);
+            zkClient.registerRebalanceTask(finalTask);
+            // Only record history once the current-task znode carries the final status; a
+            // COMPLETED history entry next to a non-final current task would re-execute the
+            // finished rebalance on failover.
+            try {
+                zkClient.registerRebalanceHistory(finalTask, HISTORY_RETENTION_COUNT);
+            } catch (Exception e) {
+                LOG.error(
+                        "Error when writing rebalance task {} to history.", currentRebalanceId, e);
+            }
         } catch (Exception e) {
             LOG.error("Error when update rebalance plan from zookeeper.", e);
         }
 
+        currentCompletedAtMs = completedAtMs;
         rebalanceStatus = COMPLETED;
         inProgressRebalanceTasks.clear();
         inProgressRebalanceTasksQueue.clear();
@@ -417,6 +546,16 @@ public class RebalanceManager {
         // listRebalanceProgress. It will be cleared when next register.
 
         LOG.info("Rebalance complete with {} ms.", System.currentTimeMillis() - registerTime);
+    }
+
+    /**
+     * Prefers the just-read task's startedAtMs; falls back to the in-memory value when the znode
+     * predates the timestamp fields (version 1), where both are -1.
+     */
+    private long resolveStartedAtMs(RebalanceTask rebalanceTask) {
+        return rebalanceTask.getStartedAtMs() >= 0
+                ? rebalanceTask.getStartedAtMs()
+                : currentStartedAtMs;
     }
 
     private ClusterModel buildClusterModel(CoordinatorContext coordinatorContext) {
@@ -469,7 +608,7 @@ public class RebalanceManager {
         for (RebalancePlanForBucket rebalancePlanForBucket : rebalancePlanForBuckets) {
             bucketPlan.put(rebalancePlanForBucket.getTableBucket(), rebalancePlanForBucket);
         }
-        return new RebalanceTask(rebalanceId, NOT_STARTED, bucketPlan);
+        return new RebalanceTask(rebalanceId, NOT_STARTED, bucketPlan, clock.milliseconds(), -1);
     }
 
     private boolean isOfflineTagged(ServerTag serverTag) {
@@ -532,5 +671,15 @@ public class RebalanceManager {
     @Nullable
     RebalanceStatus getRebalanceStatus() {
         return rebalanceStatus;
+    }
+
+    @VisibleForTesting
+    long getCurrentStartedAtMs() {
+        return currentStartedAtMs;
+    }
+
+    @VisibleForTesting
+    long getCurrentCompletedAtMs() {
+        return currentCompletedAtMs;
     }
 }

@@ -43,6 +43,8 @@ import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
 import org.apache.fluss.server.zk.data.ZkData.BucketIdZNode;
+import org.apache.fluss.server.zk.data.ZkData.RebalanceHistoryTaskZNode;
+import org.apache.fluss.server.zk.data.ZkData.RebalanceHistoryZNode;
 import org.apache.fluss.server.zk.data.lease.KvSnapshotLeaseMetadata;
 import org.apache.fluss.shaded.curator5.org.apache.curator.CuratorZookeeperClient;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
@@ -62,6 +64,7 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -77,6 +80,7 @@ import static org.apache.fluss.cluster.rebalance.RebalanceStatus.NOT_STARTED;
 import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
 import static org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.common.ZKConfig.JUTE_MAXBUFFER;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.Mockito.doAnswer;
@@ -810,9 +814,9 @@ class ZooKeeperClientTest {
                         Arrays.asList(0, 1, 2),
                         Arrays.asList(1, 2, 3)));
         zookeeperClient.registerRebalanceTask(
-                new RebalanceTask("rebalance-task-1", NOT_STARTED, bucketPlan));
+                new RebalanceTask("rebalance-task-1", NOT_STARTED, bucketPlan, -1, -1));
         assertThat(zookeeperClient.getRebalanceTask())
-                .hasValue(new RebalanceTask("rebalance-task-1", NOT_STARTED, bucketPlan));
+                .hasValue(new RebalanceTask("rebalance-task-1", NOT_STARTED, bucketPlan, -1, -1));
 
         bucketPlan = new HashMap<>();
         bucketPlan.put(
@@ -824,14 +828,192 @@ class ZooKeeperClientTest {
                         Arrays.asList(0, 1, 2),
                         Arrays.asList(3, 4, 5)));
         zookeeperClient.registerRebalanceTask(
-                new RebalanceTask("rebalance-task-2", NOT_STARTED, bucketPlan));
+                new RebalanceTask("rebalance-task-2", NOT_STARTED, bucketPlan, -1, -1));
         assertThat(zookeeperClient.getRebalanceTask())
-                .hasValue(new RebalanceTask("rebalance-task-2", NOT_STARTED, bucketPlan));
+                .hasValue(new RebalanceTask("rebalance-task-2", NOT_STARTED, bucketPlan, -1, -1));
 
         zookeeperClient.registerRebalanceTask(
-                new RebalanceTask("rebalance-task-2", COMPLETED, bucketPlan));
+                new RebalanceTask("rebalance-task-2", COMPLETED, bucketPlan, -1, -1));
         assertThat(zookeeperClient.getRebalanceTask())
-                .hasValue(new RebalanceTask("rebalance-task-2", COMPLETED, bucketPlan));
+                .hasValue(new RebalanceTask("rebalance-task-2", COMPLETED, bucketPlan, -1, -1));
+    }
+
+    @Test
+    void testRebalanceHistory() throws Exception {
+        Map<TableBucket, RebalancePlanForBucket> bucketPlan = new HashMap<>();
+        bucketPlan.put(
+                new TableBucket(0L, 0),
+                new RebalancePlanForBucket(
+                        new TableBucket(0L, 0),
+                        0,
+                        1,
+                        Arrays.asList(0, 1, 2),
+                        Arrays.asList(1, 2, 0)));
+
+        // register 12 completed rebalance tasks with retention count of 10, newest last.
+        for (int i = 0; i < 12; i++) {
+            zookeeperClient.registerRebalanceHistory(
+                    new RebalanceTask("history-task-" + i, COMPLETED, bucketPlan, i, 100 + i), 10);
+        }
+
+        List<RebalanceTask> history = zookeeperClient.getRebalanceHistory();
+        assertThat(history).hasSize(10);
+        // newest first, i.e. history-task-11 (completedAtMs=111) down to history-task-2
+        // (completedAtMs=102); history-task-0 and history-task-1 were trimmed.
+        List<String> rebalanceIds = new ArrayList<>();
+        for (RebalanceTask task : history) {
+            rebalanceIds.add(task.getRebalanceId());
+        }
+        assertThat(rebalanceIds)
+                .containsExactly(
+                        "history-task-11",
+                        "history-task-10",
+                        "history-task-9",
+                        "history-task-8",
+                        "history-task-7",
+                        "history-task-6",
+                        "history-task-5",
+                        "history-task-4",
+                        "history-task-3",
+                        "history-task-2");
+    }
+
+    @Test
+    void testRebalanceHistoryIsIdempotent() throws Exception {
+        Map<TableBucket, RebalancePlanForBucket> bucketPlan = new HashMap<>();
+        bucketPlan.put(
+                new TableBucket(0L, 0),
+                new RebalancePlanForBucket(
+                        new TableBucket(0L, 0),
+                        0,
+                        1,
+                        Arrays.asList(0, 1, 2),
+                        Arrays.asList(1, 2, 0)));
+
+        RebalanceTask original =
+                new RebalanceTask("idempotent-history-task", COMPLETED, bucketPlan, 0, 100);
+        zookeeperClient.registerRebalanceHistory(original, 10);
+        assertThat(zookeeperClient.getRebalanceHistory()).containsExactly(original);
+
+        // A second write for the same rebalance id must overwrite the entry in place rather than
+        // fail on the existing znode (which would also skip the retention trim that follows it).
+        RebalanceTask updated =
+                new RebalanceTask("idempotent-history-task", COMPLETED, bucketPlan, 0, 200);
+        assertThatCode(() -> zookeeperClient.registerRebalanceHistory(updated, 10))
+                .doesNotThrowAnyException();
+        assertThat(zookeeperClient.getRebalanceHistory()).containsExactly(updated);
+
+        // Retention trimming still runs after the idempotent write: push past the retention
+        // bound with fresh ids and confirm the oldest entry (the one just re-written) is trimmed.
+        for (int i = 0; i < 10; i++) {
+            zookeeperClient.registerRebalanceHistory(
+                    new RebalanceTask(
+                            "idempotent-history-task-" + i, COMPLETED, bucketPlan, i, 300 + i),
+                    10);
+        }
+
+        List<RebalanceTask> history = zookeeperClient.getRebalanceHistory();
+        assertThat(history).hasSize(10);
+        List<String> rebalanceIds =
+                history.stream().map(RebalanceTask::getRebalanceId).collect(Collectors.toList());
+        assertThat(rebalanceIds).doesNotContain("idempotent-history-task");
+    }
+
+    @Test
+    void testRebalanceHistorySkipsCorruptEntries() throws Exception {
+        Map<TableBucket, RebalancePlanForBucket> bucketPlan = new HashMap<>();
+        bucketPlan.put(
+                new TableBucket(0L, 0),
+                new RebalancePlanForBucket(
+                        new TableBucket(0L, 0),
+                        0,
+                        1,
+                        Arrays.asList(0, 1, 2),
+                        Arrays.asList(1, 2, 0)));
+
+        RebalanceTask good = new RebalanceTask("good-history-task", COMPLETED, bucketPlan, 0, 100);
+        zookeeperClient.registerRebalanceHistory(good, 10);
+
+        // Malformed JSON: not decodable at all.
+        zookeeperClient
+                .getCuratorClient()
+                .create()
+                .creatingParentsIfNeeded()
+                .forPath(
+                        RebalanceHistoryTaskZNode.path("malformed-history-task"),
+                        "not-json".getBytes(StandardCharsets.UTF_8));
+
+        // Decodable JSON, but with an unknown rebalance_status code (e.g. written by a newer
+        // coordinator, then read after a downgrade).
+        String unknownStatusJson =
+                "{\"version\":2,\"rebalance_id\":\"unknown-status-history-task\","
+                        + "\"rebalance_status\":99,\"started_at_ms\":1,\"completed_at_ms\":200,"
+                        + "\"rebalance_plan\":[]}";
+        zookeeperClient
+                .getCuratorClient()
+                .create()
+                .creatingParentsIfNeeded()
+                .forPath(
+                        RebalanceHistoryTaskZNode.path("unknown-status-history-task"),
+                        unknownStatusJson.getBytes(StandardCharsets.UTF_8));
+
+        // Neither corrupt entry aborts the listing; only the good one is returned.
+        assertThat(zookeeperClient.getRebalanceHistory()).containsExactly(good);
+
+        // Corrupt entries are not trimmed (they don't sort), but registering more history past
+        // the retention bound still trims the decodable entries correctly.
+        for (int i = 0; i < 10; i++) {
+            zookeeperClient.registerRebalanceHistory(
+                    new RebalanceTask("more-history-task-" + i, COMPLETED, bucketPlan, i, 300 + i),
+                    10);
+        }
+        List<RebalanceTask> history = zookeeperClient.getRebalanceHistory();
+        assertThat(history).hasSize(10);
+        assertThat(history).doesNotContain(good);
+        assertThat(zookeeperClient.getChildren(RebalanceHistoryZNode.path()))
+                .contains("malformed-history-task", "unknown-status-history-task");
+    }
+
+    @Test
+    void testRebalanceHistoryTiesBrokenByRebalanceId() throws Exception {
+        Map<TableBucket, RebalancePlanForBucket> bucketPlan = new HashMap<>();
+        bucketPlan.put(
+                new TableBucket(0L, 0),
+                new RebalancePlanForBucket(
+                        new TableBucket(0L, 0),
+                        0,
+                        1,
+                        Arrays.asList(0, 1, 2),
+                        Arrays.asList(1, 2, 0)));
+
+        RebalanceTask taskB = new RebalanceTask("tie-task-b", COMPLETED, bucketPlan, 0, 500);
+        RebalanceTask taskA = new RebalanceTask("tie-task-a", COMPLETED, bucketPlan, 0, 500);
+        zookeeperClient.registerRebalanceHistory(taskB, 10);
+        zookeeperClient.registerRebalanceHistory(taskA, 10);
+
+        assertThat(zookeeperClient.getRebalanceHistory()).containsExactly(taskA, taskB);
+    }
+
+    @Test
+    void testDeleteRebalanceTaskDoesNotAffectSiblingHistory() throws Exception {
+        Map<TableBucket, RebalancePlanForBucket> bucketPlan = new HashMap<>();
+        bucketPlan.put(
+                new TableBucket(0L, 0),
+                new RebalancePlanForBucket(
+                        new TableBucket(0L, 0),
+                        0,
+                        1,
+                        Arrays.asList(0, 1, 2),
+                        Arrays.asList(1, 2, 0)));
+
+        zookeeperClient.registerRebalanceTask(
+                new RebalanceTask("sibling-task", NOT_STARTED, bucketPlan, -1, -1));
+        RebalanceTask history =
+                new RebalanceTask("sibling-history-task", COMPLETED, bucketPlan, 0, 100);
+        zookeeperClient.registerRebalanceHistory(history, 10);
+
+        assertThatCode(() -> zookeeperClient.deleteRebalanceTask()).doesNotThrowAnyException();
+        assertThat(zookeeperClient.getRebalanceHistory()).containsExactly(history);
     }
 
     @Test

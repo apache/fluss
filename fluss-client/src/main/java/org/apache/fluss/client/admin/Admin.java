@@ -25,6 +25,7 @@ import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.client.metadata.RemoteLogManifestInfo;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.rebalance.GoalType;
+import org.apache.fluss.cluster.rebalance.RebalanceInfo;
 import org.apache.fluss.cluster.rebalance.RebalanceProgress;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
@@ -711,6 +712,19 @@ public interface Admin extends AutoCloseable {
      *     NoRebalanceInProgressException} will be thrown.
      */
     CompletableFuture<Void> cancelRebalance(@Nullable String rebalanceId);
+
+    /**
+     * List a summary of all known rebalance tasks. The currently running rebalance, if any, is
+     * listed first. Past tasks follow, ordered from most recent to oldest.
+     *
+     * <ul>
+     *   <li>{@link AuthorizationException} If the authenticated user doesn't have cluster
+     *       permissions.
+     * </ul>
+     *
+     * @return the rebalance summaries.
+     */
+    CompletableFuture<List<RebalanceInfo>> listRebalances();
 
     // ==================================================================================
     // Producer Offset Management APIs (for Exactly-Once Semantics)

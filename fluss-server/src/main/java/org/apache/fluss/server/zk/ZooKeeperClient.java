@@ -77,6 +77,8 @@ import org.apache.fluss.server.zk.data.ZkData.PartitionZNode;
 import org.apache.fluss.server.zk.data.ZkData.PartitionsZNode;
 import org.apache.fluss.server.zk.data.ZkData.ProducerIdZNode;
 import org.apache.fluss.server.zk.data.ZkData.ProducersZNode;
+import org.apache.fluss.server.zk.data.ZkData.RebalanceHistoryTaskZNode;
+import org.apache.fluss.server.zk.data.ZkData.RebalanceHistoryZNode;
 import org.apache.fluss.server.zk.data.ZkData.RebalanceZNode;
 import org.apache.fluss.server.zk.data.ZkData.ResourceAclNode;
 import org.apache.fluss.server.zk.data.ZkData.SchemaZNode;
@@ -114,6 +116,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -1675,6 +1678,70 @@ public class ZooKeeperClient implements AutoCloseable {
     @VisibleForTesting
     public void deleteRebalanceTask() throws Exception {
         deletePath(RebalanceZNode.path());
+    }
+
+    /**
+     * Writes a finished rebalance task to the bounded ZooKeeper-backed history, then trims the
+     * oldest entries beyond {@code retentionCount} (ordered by {@link
+     * RebalanceTask#getCompletedAtMs()}).
+     */
+    public void registerRebalanceHistory(RebalanceTask rebalanceTask, int retentionCount)
+            throws Exception {
+        String path = RebalanceHistoryTaskZNode.path(rebalanceTask.getRebalanceId());
+        try {
+            zkClient.create()
+                    .creatingParentsIfNeeded()
+                    .withMode(CreateMode.PERSISTENT)
+                    .forPath(path, RebalanceHistoryTaskZNode.encode(rebalanceTask));
+        } catch (KeeperException.NodeExistsException e) {
+            zkClient.setData().forPath(path, RebalanceHistoryTaskZNode.encode(rebalanceTask));
+        }
+
+        List<RebalanceTask> history = getRebalanceHistory();
+        for (RebalanceTask expired :
+                history.subList(Math.min(retentionCount, history.size()), history.size())) {
+            deletePath(RebalanceHistoryTaskZNode.path(expired.getRebalanceId()));
+        }
+    }
+
+    /**
+     * Returns the bounded rebalance history, newest first (by {@code completed_at_ms}, ties broken
+     * by rebalance id).
+     *
+     * <p>A child znode that fails to decode, or decodes with a null status, is logged and skipped
+     * rather than failing the whole listing; such an entry is therefore also excluded from the
+     * retention trim performed by {@link #registerRebalanceHistory}.
+     */
+    public List<RebalanceTask> getRebalanceHistory() throws Exception {
+        List<RebalanceTask> history = new ArrayList<>();
+        for (String rebalanceId : getChildren(RebalanceHistoryZNode.path())) {
+            Optional<byte[]> data = getOrEmpty(RebalanceHistoryTaskZNode.path(rebalanceId));
+            if (!data.isPresent()) {
+                continue;
+            }
+            RebalanceTask task;
+            try {
+                task = RebalanceHistoryTaskZNode.decode(data.get());
+            } catch (Exception e) {
+                LOG.warn(
+                        "Failed to decode rebalance history entry {}, skipping it.",
+                        rebalanceId,
+                        e);
+                continue;
+            }
+            if (task.getRebalanceStatus() == null) {
+                LOG.warn(
+                        "Rebalance history entry {} has an unknown status, skipping it.",
+                        rebalanceId);
+                continue;
+            }
+            history.add(task);
+        }
+        history.sort(
+                Comparator.comparingLong(RebalanceTask::getCompletedAtMs)
+                        .reversed()
+                        .thenComparing(RebalanceTask::getRebalanceId));
+        return history;
     }
 
     // --------------------------------------------------------------------------------------------
