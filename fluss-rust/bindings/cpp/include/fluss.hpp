@@ -261,6 +261,112 @@ struct Timestamp {
     }
 };
 
+/// Scalar literal used by a log-scan predicate.
+///
+/// Integer literals are coerced to the scanned column's integer type by the
+/// Rust client, with range checks. Decimal and timestamp literals use the
+/// explicit factories below to preserve their Fluss logical type.
+class PredicateLiteral {
+   public:
+    PredicateLiteral(bool value);
+    PredicateLiteral(int32_t value);
+    PredicateLiteral(int64_t value);
+    PredicateLiteral(float value);
+    PredicateLiteral(double value);
+    PredicateLiteral(const char* value);
+    PredicateLiteral(std::string value);
+    PredicateLiteral(std::vector<uint8_t> value);
+    PredicateLiteral(Date value);
+    PredicateLiteral(Time value);
+
+    static PredicateLiteral Null();
+    static PredicateLiteral Decimal(std::string value);
+    static PredicateLiteral TimestampNtz(Timestamp value);
+    static PredicateLiteral TimestampLtz(Timestamp value);
+
+   private:
+    enum class Kind : int32_t {
+        Null = 0,
+        Boolean = 1,
+        Int32 = 2,
+        Int64 = 3,
+        Float32 = 4,
+        Float64 = 5,
+        String = 6,
+        Bytes = 7,
+        Decimal = 8,
+        Date = 9,
+        Time = 10,
+        TimestampNtz = 11,
+        TimestampLtz = 12,
+    };
+
+    explicit PredicateLiteral(Kind kind);
+
+    Kind kind_;
+    bool boolean_value_{false};
+    int64_t integer_value_{0};
+    double floating_value_{0};
+    std::string string_value_;
+    std::vector<uint8_t> bytes_value_;
+    Timestamp timestamp_value_;
+
+    friend class Predicate;
+    friend class TableScan;
+};
+
+/// Filter expression for server-side Arrow log RecordBatch pruning.
+///
+/// Filter pushdown is conservative: a returned RecordBatch may still
+/// contain non-matching rows, so callers must evaluate the predicate again.
+class Predicate {
+   public:
+    Predicate(const Predicate&) = default;
+    Predicate& operator=(const Predicate&) = default;
+    Predicate(Predicate&&) noexcept = default;
+    Predicate& operator=(Predicate&&) noexcept = default;
+
+    Predicate And(Predicate other) const;
+    Predicate Or(Predicate other) const;
+
+   private:
+    struct Node;
+
+    explicit Predicate(std::shared_ptr<const Node> root);
+
+    std::shared_ptr<const Node> root_;
+
+    friend class ColumnRef;
+    friend class TableScan;
+};
+
+/// Column reference used to build a Predicate.
+class ColumnRef {
+   public:
+    explicit ColumnRef(std::string name) : name_(std::move(name)) {}
+
+    Predicate Equal(PredicateLiteral value) const;
+    Predicate NotEqual(PredicateLiteral value) const;
+    Predicate LessThan(PredicateLiteral value) const;
+    Predicate LessOrEqual(PredicateLiteral value) const;
+    Predicate GreaterThan(PredicateLiteral value) const;
+    Predicate GreaterOrEqual(PredicateLiteral value) const;
+    Predicate IsNull() const;
+    Predicate IsNotNull() const;
+    Predicate StartsWith(std::string prefix) const;
+    Predicate Contains(std::string infix) const;
+    Predicate EndsWith(std::string suffix) const;
+    Predicate In(std::vector<PredicateLiteral> values) const;
+    Predicate NotIn(std::vector<PredicateLiteral> values) const;
+
+   private:
+    Predicate Leaf(int32_t function, std::vector<PredicateLiteral> literals) const;
+
+    std::string name_;
+};
+
+inline ColumnRef Col(std::string name) { return ColumnRef(std::move(name)); }
+
 enum class ChangeType {
     AppendOnly = 0,
     Insert = 1,
@@ -1620,6 +1726,12 @@ class TableScan {
     TableScan& ProjectByIndex(std::vector<size_t> column_indices);
     TableScan& ProjectByName(std::vector<std::string> column_names);
 
+    /// Pushes a predicate down for conservative server-side RecordBatch pruning.
+    ///
+    /// Only Arrow log scans support this. Returned batches may contain
+    /// non-matching rows and must be filtered again by the caller.
+    TableScan& Filter(Predicate predicate);
+
     TableScan& Limit(int32_t row_number);
 
     /// Creates a record-mode log scanner, polled for individual `ScanRecord`s.
@@ -1651,6 +1763,7 @@ class TableScan {
     ffi::Table* table_{nullptr};
     std::vector<size_t> projection_;
     std::vector<std::string> name_projection_;
+    std::optional<Predicate> predicate_;
     std::optional<int32_t> limit_;
 };
 

@@ -21,6 +21,7 @@
 
 #include <cassert>
 #include <ctime>
+#include <functional>
 
 #include "ffi_converter.hpp"
 #include "fluss.hpp"
@@ -80,6 +81,182 @@ int Date::Day() const {
     std::time_t epoch_seconds = static_cast<std::time_t>(days_since_epoch) * kSecondsPerDay;
     std::tm tm = gmtime_utc(epoch_seconds);
     return tm.tm_mday;
+}
+
+PredicateLiteral::PredicateLiteral(bool value) : kind_(Kind::Boolean), boolean_value_(value) {}
+
+PredicateLiteral::PredicateLiteral(int32_t value) : kind_(Kind::Int32), integer_value_(value) {}
+
+PredicateLiteral::PredicateLiteral(int64_t value) : kind_(Kind::Int64), integer_value_(value) {}
+
+PredicateLiteral::PredicateLiteral(float value) : kind_(Kind::Float32), floating_value_(value) {}
+
+PredicateLiteral::PredicateLiteral(double value) : kind_(Kind::Float64), floating_value_(value) {}
+
+PredicateLiteral::PredicateLiteral(const char* value) : PredicateLiteral(std::string(value)) {}
+
+PredicateLiteral::PredicateLiteral(std::string value)
+    : kind_(Kind::String), string_value_(std::move(value)) {}
+
+PredicateLiteral::PredicateLiteral(std::vector<uint8_t> value)
+    : kind_(Kind::Bytes), bytes_value_(std::move(value)) {}
+
+PredicateLiteral::PredicateLiteral(Date value)
+    : kind_(Kind::Date), integer_value_(value.days_since_epoch) {}
+
+PredicateLiteral::PredicateLiteral(Time value)
+    : kind_(Kind::Time), integer_value_(value.millis_since_midnight) {}
+
+PredicateLiteral::PredicateLiteral(Kind kind) : kind_(kind) {}
+
+PredicateLiteral PredicateLiteral::Null() { return PredicateLiteral(Kind::Null); }
+
+PredicateLiteral PredicateLiteral::Decimal(std::string value) {
+    PredicateLiteral literal(Kind::Decimal);
+    literal.string_value_ = std::move(value);
+    return literal;
+}
+
+PredicateLiteral PredicateLiteral::TimestampNtz(Timestamp value) {
+    PredicateLiteral literal(Kind::TimestampNtz);
+    literal.timestamp_value_ = value;
+    return literal;
+}
+
+PredicateLiteral PredicateLiteral::TimestampLtz(Timestamp value) {
+    PredicateLiteral literal(Kind::TimestampLtz);
+    literal.timestamp_value_ = value;
+    return literal;
+}
+
+namespace {
+
+enum class PredicateLeafFunction : int32_t {
+    Equal = 0,
+    NotEqual = 1,
+    LessThan = 2,
+    LessOrEqual = 3,
+    GreaterThan = 4,
+    GreaterOrEqual = 5,
+    IsNull = 6,
+    IsNotNull = 7,
+    StartsWith = 8,
+    Contains = 9,
+    EndsWith = 10,
+    In = 11,
+    NotIn = 12,
+};
+
+enum class PredicateCompoundFunction : int32_t {
+    And = 0,
+    Or = 1,
+};
+
+}  // namespace
+
+struct Predicate::Node {
+    enum class Type : int32_t {
+        Leaf = 0,
+        Compound = 1,
+    };
+
+    Type type;
+    int32_t function;
+    std::string field;
+    std::vector<PredicateLiteral> literals;
+    std::vector<std::shared_ptr<const Node>> children;
+};
+
+Predicate::Predicate(std::shared_ptr<const Node> root) : root_(std::move(root)) {}
+
+Predicate Predicate::And(Predicate other) const {
+    auto node = std::make_shared<Node>();
+    node->type = Node::Type::Compound;
+    node->function = static_cast<int32_t>(PredicateCompoundFunction::And);
+    if (root_->type == Node::Type::Compound && root_->function == node->function) {
+        node->children = root_->children;
+    } else {
+        node->children.push_back(root_);
+    }
+    node->children.push_back(std::move(other.root_));
+    return Predicate(std::move(node));
+}
+
+Predicate Predicate::Or(Predicate other) const {
+    auto node = std::make_shared<Node>();
+    node->type = Node::Type::Compound;
+    node->function = static_cast<int32_t>(PredicateCompoundFunction::Or);
+    if (root_->type == Node::Type::Compound && root_->function == node->function) {
+        node->children = root_->children;
+    } else {
+        node->children.push_back(root_);
+    }
+    node->children.push_back(std::move(other.root_));
+    return Predicate(std::move(node));
+}
+
+Predicate ColumnRef::Leaf(int32_t function, std::vector<PredicateLiteral> literals) const {
+    auto node = std::make_shared<Predicate::Node>();
+    node->type = Predicate::Node::Type::Leaf;
+    node->function = function;
+    node->field = name_;
+    node->literals = std::move(literals);
+    return Predicate(std::move(node));
+}
+
+Predicate ColumnRef::Equal(PredicateLiteral value) const {
+    return Leaf(static_cast<int32_t>(PredicateLeafFunction::Equal), {std::move(value)});
+}
+
+Predicate ColumnRef::NotEqual(PredicateLiteral value) const {
+    return Leaf(static_cast<int32_t>(PredicateLeafFunction::NotEqual), {std::move(value)});
+}
+
+Predicate ColumnRef::LessThan(PredicateLiteral value) const {
+    return Leaf(static_cast<int32_t>(PredicateLeafFunction::LessThan), {std::move(value)});
+}
+
+Predicate ColumnRef::LessOrEqual(PredicateLiteral value) const {
+    return Leaf(static_cast<int32_t>(PredicateLeafFunction::LessOrEqual), {std::move(value)});
+}
+
+Predicate ColumnRef::GreaterThan(PredicateLiteral value) const {
+    return Leaf(static_cast<int32_t>(PredicateLeafFunction::GreaterThan), {std::move(value)});
+}
+
+Predicate ColumnRef::GreaterOrEqual(PredicateLiteral value) const {
+    return Leaf(static_cast<int32_t>(PredicateLeafFunction::GreaterOrEqual), {std::move(value)});
+}
+
+Predicate ColumnRef::IsNull() const {
+    return Leaf(static_cast<int32_t>(PredicateLeafFunction::IsNull), {});
+}
+
+Predicate ColumnRef::IsNotNull() const {
+    return Leaf(static_cast<int32_t>(PredicateLeafFunction::IsNotNull), {});
+}
+
+Predicate ColumnRef::StartsWith(std::string prefix) const {
+    return Leaf(static_cast<int32_t>(PredicateLeafFunction::StartsWith),
+                {PredicateLiteral(std::move(prefix))});
+}
+
+Predicate ColumnRef::Contains(std::string infix) const {
+    return Leaf(static_cast<int32_t>(PredicateLeafFunction::Contains),
+                {PredicateLiteral(std::move(infix))});
+}
+
+Predicate ColumnRef::EndsWith(std::string suffix) const {
+    return Leaf(static_cast<int32_t>(PredicateLeafFunction::EndsWith),
+                {PredicateLiteral(std::move(suffix))});
+}
+
+Predicate ColumnRef::In(std::vector<PredicateLiteral> values) const {
+    return Leaf(static_cast<int32_t>(PredicateLeafFunction::In), std::move(values));
+}
+
+Predicate ColumnRef::NotIn(std::vector<PredicateLiteral> values) const {
+    return Leaf(static_cast<int32_t>(PredicateLeafFunction::NotIn), std::move(values));
 }
 
 // NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
@@ -1222,6 +1399,11 @@ TableScan& TableScan::ProjectByName(std::vector<std::string> column_names) {
     return *this;
 }
 
+TableScan& TableScan::Filter(Predicate predicate) {
+    predicate_ = std::move(predicate);
+    return *this;
+}
+
 std::vector<size_t> TableScan::ResolveNameProjection() const {
     auto ffi_info = table_->get_table_info_from_table();
     const auto& columns = ffi_info.schema.columns;
@@ -1264,7 +1446,42 @@ Result TableScan::DoCreateScanner(LogScanner& out, bool is_record_batch) {
         for (size_t idx : resolved_indices) {
             rust_indices.push_back(idx);
         }
-        auto ffi_result = table_->create_scanner(std::move(rust_indices), is_record_batch);
+
+        rust::Vec<ffi::FfiPredicateNode> rust_predicate;
+        if (predicate_.has_value()) {
+            std::function<void(const std::shared_ptr<const Predicate::Node>&)> append_node;
+            append_node = [&](const std::shared_ptr<const Predicate::Node>& node) {
+                ffi::FfiPredicateNode ffi_node;
+                ffi_node.node_type = static_cast<int32_t>(node->type);
+                ffi_node.function = node->function;
+                ffi_node.field = rust::String(node->field);
+                ffi_node.child_count = static_cast<uint32_t>(node->children.size());
+
+                for (const auto& literal : node->literals) {
+                    ffi::FfiPredicateLiteral ffi_literal;
+                    ffi_literal.literal_type = static_cast<int32_t>(literal.kind_);
+                    ffi_literal.boolean_value = literal.boolean_value_;
+                    ffi_literal.integer_value = literal.integer_value_;
+                    ffi_literal.floating_value = literal.floating_value_;
+                    ffi_literal.string_value = rust::String(literal.string_value_);
+                    for (uint8_t value : literal.bytes_value_) {
+                        ffi_literal.bytes_value.push_back(value);
+                    }
+                    ffi_literal.timestamp_millis = literal.timestamp_value_.epoch_millis;
+                    ffi_literal.timestamp_nanos = literal.timestamp_value_.nano_of_millisecond;
+                    ffi_node.literals.push_back(std::move(ffi_literal));
+                }
+
+                rust_predicate.push_back(std::move(ffi_node));
+                for (const auto& child : node->children) {
+                    append_node(child);
+                }
+            };
+            append_node(predicate_->root_);
+        }
+
+        auto ffi_result = table_->create_scanner(std::move(rust_indices), std::move(rust_predicate),
+                                                 is_record_batch);
         auto result = utils::from_ffi_result(ffi_result.result);
         if (result.Ok()) {
             out.scanner_ = utils::ptr_from_ffi<ffi::LogScanner>(ffi_result);
@@ -1284,6 +1501,9 @@ TableScan& TableScan::Limit(int32_t row_number) {
 Result TableScan::CreateBucketBatchScanner(const TableBucket& bucket, BatchScanner& out) {
     if (table_ == nullptr) {
         return utils::make_client_error("Table not available");
+    }
+    if (predicate_.has_value()) {
+        return utils::make_client_error("CreateBucketBatchScanner doesn't support filter pushdown");
     }
     if (!limit_.has_value()) {
         return utils::make_client_error(
