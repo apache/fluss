@@ -139,11 +139,9 @@ import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
-import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -155,7 +153,6 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -189,10 +186,7 @@ public class ReplicaManager implements ServerReconfigurable {
 
     private static final ExponentialBackoff MIN_RETAIN_OFFSET_RESTORE_BACKOFF =
             new ExponentialBackoff(1_000L, 2, 30_000L, 0.2);
-    @VisibleForTesting static final int MIN_RETAIN_OFFSET_RESTORE_BATCH_SIZE = 32;
     private static final long MIN_RETAIN_OFFSET_RESTORE_INITIAL_JITTER_MS = 1_000L;
-    private static final long MIN_RETAIN_OFFSET_RESTORE_BATCH_DELAY_MS = 50L;
-    private static final long MIN_RETAIN_OFFSET_RESTORE_BATCH_JITTER_MS = 100L;
 
     private final Configuration conf;
     private final Scheduler scheduler;
@@ -212,9 +206,15 @@ public class ReplicaManager implements ServerReconfigurable {
     private final ProjectionPushdownCache projectionsCache = new ProjectionPushdownCache();
     private final Lock replicaStateChangeLock = new ReentrantLock();
     private final AtomicBoolean shuttingDown = new AtomicBoolean(false);
-    private final AtomicBoolean minRetainOffsetRestoreReadInProgress = new AtomicBoolean(false);
-    private final Set<MinRetainOffsetRestoreOperation> minRetainOffsetRestoreOperations =
-            ConcurrentHashMap.newKeySet();
+
+    @GuardedBy("replicaStateChangeLock")
+    private final Map<TableBucket, Replica> pendingMinRetainOffsetRestores = new LinkedHashMap<>();
+
+    @GuardedBy("replicaStateChangeLock")
+    private boolean minRetainOffsetRestoreScheduledOrInProgress;
+
+    @GuardedBy("replicaStateChangeLock")
+    private long minRetainOffsetRestoreFailedAttempts;
 
     /**
      * delayed write operation manager is used to manage the delayed write operation, which is
@@ -613,7 +613,6 @@ public class ReplicaManager implements ServerReconfigurable {
 
                     makeLeaders(replicasToBeLeader, result);
                     makeFollowers(replicasToBeFollower, result);
-                    restoreFollowerMinRetainOffsets(replicasToBeFollower);
 
                     // We initialize highWatermark thread after the first LeaderAndIsr request. This
                     // ensures that all the replicas have been completely populated before starting
@@ -625,34 +624,17 @@ public class ReplicaManager implements ServerReconfigurable {
         responseCallback.accept(new ArrayList<>(result.values()));
     }
 
-    private void restoreFollowerMinRetainOffsets(
-            List<NotifyLeaderAndIsrData> replicasToBeFollower) {
-        if (shuttingDown.get()) {
+    private void restoreFollowerMinRetainOffsets(List<Replica> kvFollowers) {
+        if (shuttingDown.get() || kvFollowers.isEmpty()) {
             return;
         }
 
-        Map<TableBucket, Replica> replicasToRestore = new LinkedHashMap<>();
-        for (NotifyLeaderAndIsrData data : replicasToBeFollower) {
-            TableBucket tableBucket = data.getTableBucket();
-            HostedReplica hostedReplica = getReplica(tableBucket);
-            if (!(hostedReplica instanceof OnlineReplica)) {
-                continue;
-            }
-
-            Replica replica = ((OnlineReplica) hostedReplica).getReplica();
-            if (!replica.isLeader() && replica.tryStartMinRetainOffsetRestore()) {
-                replicasToRestore.put(tableBucket, replica);
-            }
+        for (Replica replica : kvFollowers) {
+            pendingMinRetainOffsetRestores.put(replica.getTableBucket(), replica);
         }
-
-        if (replicasToRestore.isEmpty()) {
-            return;
-        }
-
-        MinRetainOffsetRestoreOperation operation =
-                new MinRetainOffsetRestoreOperation(replicasToRestore);
-        minRetainOffsetRestoreOperations.add(operation);
-        operation.scheduleInitialRead();
+        scheduleMinRetainOffsetRestore(
+                ThreadLocalRandom.current()
+                        .nextLong(MIN_RETAIN_OFFSET_RESTORE_INITIAL_JITTER_MS + 1));
     }
 
     @VisibleForTesting
@@ -661,266 +643,152 @@ public class ReplicaManager implements ServerReconfigurable {
         return zkClient.getTableBucketsLatestSnapshot(tableBuckets);
     }
 
-    private final class MinRetainOffsetRestoreOperation {
-        private final Map<TableBucket, Replica> replicasToRestore;
-        private final Deque<TableBucket> pendingReads;
-        private final Deque<TableBucket> unresolvedReads = new ArrayDeque<>();
-        private final AtomicBoolean finished = new AtomicBoolean(false);
-        private long failedAttempts;
-        private @Nullable Exception lastReadFailure;
-        private volatile @Nullable ScheduledFuture<?> retryTask;
-
-        private MinRetainOffsetRestoreOperation(Map<TableBucket, Replica> replicasToRestore) {
-            this.replicasToRestore = replicasToRestore;
-            this.pendingReads = new ArrayDeque<>(replicasToRestore.keySet());
+    private void scheduleMinRetainOffsetRestore(long delayMs) {
+        if (shuttingDown.get()
+                || pendingMinRetainOffsetRestores.isEmpty()
+                || minRetainOffsetRestoreScheduledOrInProgress) {
+            return;
         }
 
-        private void scheduleInitialRead() {
-            scheduleRead(
-                    ThreadLocalRandom.current()
-                            .nextLong(MIN_RETAIN_OFFSET_RESTORE_INITIAL_JITTER_MS + 1));
+        minRetainOffsetRestoreScheduledOrInProgress = true;
+        try {
+            scheduler.scheduleOnce(
+                    "restore-follower-min-retain-offset",
+                    this::submitMinRetainOffsetRestore,
+                    delayMs);
+        } catch (RuntimeException e) {
+            minRetainOffsetRestoreScheduledOrInProgress = false;
+            LOG.warn(
+                    "Failed to schedule min retain offset restoration for {} follower replicas.",
+                    pendingMinRetainOffsetRestores.size(),
+                    e);
+        }
+    }
+
+    private void submitMinRetainOffsetRestore() {
+        Map<TableBucket, Replica> replicasToRestore =
+                inLock(
+                        replicaStateChangeLock,
+                        () -> {
+                            removeStaleMinRetainOffsetRestores();
+                            if (shuttingDown.get() || pendingMinRetainOffsetRestores.isEmpty()) {
+                                minRetainOffsetRestoreScheduledOrInProgress = false;
+                                return Collections.emptyMap();
+                            }
+                            return new LinkedHashMap<>(pendingMinRetainOffsetRestores);
+                        });
+        if (replicasToRestore.isEmpty()) {
+            return;
         }
 
-        private void submitRead() {
-            List<TableBucket> batch =
-                    inLock(
-                            replicaStateChangeLock,
-                            () -> {
-                                if (finished.get() || shuttingDown.get()) {
-                                    finish();
-                                    return Collections.emptyList();
-                                }
+        try {
+            ioExecutor.execute(() -> readAndRestoreMinRetainOffsets(replicasToRestore));
+        } catch (RuntimeException e) {
+            applyMinRetainOffsetRestoreResult(replicasToRestore, Collections.emptyMap(), e);
+        }
+    }
 
-                                // A snapshot notification or role change may have resolved the
-                                // replica while this retry was waiting. Drop those replicas before
-                                // issuing another ZooKeeper request.
-                                removeStaleReplicas();
-                                if (replicasToRestore.isEmpty()) {
-                                    finish();
-                                    return Collections.emptyList();
-                                }
-
-                                if (!minRetainOffsetRestoreReadInProgress.compareAndSet(
-                                        false, true)) {
-                                    scheduleNextBatch();
-                                    return Collections.emptyList();
-                                }
-
-                                List<TableBucket> nextBatch = takeNextBatch();
-                                if (nextBatch.isEmpty()) {
-                                    minRetainOffsetRestoreReadInProgress.set(false);
-                                    finish();
-                                }
-                                return nextBatch;
-                            });
-            if (batch.isEmpty()) {
-                return;
-            }
-
+    private void readAndRestoreMinRetainOffsets(Map<TableBucket, Replica> replicasToRestore) {
+        Map<TableBucket, Optional<BucketSnapshot>> latestSnapshots = Collections.emptyMap();
+        Exception readFailure = null;
+        if (!shuttingDown.get()) {
             try {
-                ioExecutor.execute(() -> readAndRestore(batch));
-            } catch (RuntimeException e) {
-                minRetainOffsetRestoreReadInProgress.set(false);
-                applyBatchResult(batch, Collections.emptyMap(), e);
-            }
-        }
-
-        private List<TableBucket> takeNextBatch() {
-            List<TableBucket> batch = new ArrayList<>(MIN_RETAIN_OFFSET_RESTORE_BATCH_SIZE);
-            while (!pendingReads.isEmpty() && batch.size() < MIN_RETAIN_OFFSET_RESTORE_BATCH_SIZE) {
-                TableBucket tableBucket = pendingReads.removeFirst();
-                if (replicasToRestore.containsKey(tableBucket)) {
-                    batch.add(tableBucket);
-                }
-            }
-            return batch;
-        }
-
-        private void readAndRestore(List<TableBucket> batch) {
-            if (finished.get() || shuttingDown.get()) {
-                minRetainOffsetRestoreReadInProgress.set(false);
-                return;
-            }
-
-            Map<TableBucket, Optional<BucketSnapshot>> latestSnapshots = Collections.emptyMap();
-            Exception readFailure = null;
-            try {
-                latestSnapshots = readLatestSnapshotsForFollowerRestore(batch);
+                latestSnapshots = readLatestSnapshotsForFollowerRestore(replicasToRestore.keySet());
             } catch (Exception e) {
                 readFailure = e;
-            } finally {
-                minRetainOffsetRestoreReadInProgress.set(false);
             }
-            applyBatchResult(batch, latestSnapshots, readFailure);
         }
+        applyMinRetainOffsetRestoreResult(replicasToRestore, latestSnapshots, readFailure);
+    }
 
-        private void applyBatchResult(
-                List<TableBucket> batch,
-                Map<TableBucket, Optional<BucketSnapshot>> latestSnapshots,
-                @Nullable Exception readFailure) {
-            inLock(
-                    replicaStateChangeLock,
-                    () -> {
-                        if (finished.get() || shuttingDown.get()) {
-                            finish();
-                            return;
+    private void applyMinRetainOffsetRestoreResult(
+            Map<TableBucket, Replica> replicasToRestore,
+            Map<TableBucket, Optional<BucketSnapshot>> latestSnapshots,
+            @Nullable Exception readFailure) {
+        inLock(
+                replicaStateChangeLock,
+                () -> {
+                    if (shuttingDown.get()) {
+                        pendingMinRetainOffsetRestores.clear();
+                        minRetainOffsetRestoreScheduledOrInProgress = false;
+                        return;
+                    }
+
+                    boolean hasUnresolvedSnapshot = false;
+                    for (Map.Entry<TableBucket, Replica> entry : replicasToRestore.entrySet()) {
+                        TableBucket tableBucket = entry.getKey();
+                        Replica expectedReplica = entry.getValue();
+                        if (pendingMinRetainOffsetRestores.get(tableBucket) != expectedReplica) {
+                            continue;
                         }
 
-                        if (readFailure != null) {
-                            lastReadFailure = readFailure;
-                        }
-
-                        for (TableBucket tableBucket : batch) {
-                            Replica expectedReplica = replicasToRestore.get(tableBucket);
-                            if (expectedReplica == null) {
-                                continue;
-                            }
-                            if (!isExpectedFollower(tableBucket, expectedReplica)
-                                    || expectedReplica.isMinRetainOffsetRestored()) {
-                                expectedReplica.cancelMinRetainOffsetRestore();
-                                replicasToRestore.remove(tableBucket);
-                            } else if (readFailure == null
-                                    && latestSnapshots.containsKey(tableBucket)) {
-                                Optional<Long> snapshotOffset =
-                                        latestSnapshots
-                                                .get(tableBucket)
-                                                .map(BucketSnapshot::getLogOffset);
-                                expectedReplica.completeMinRetainOffsetRestore(snapshotOffset);
-                                replicasToRestore.remove(tableBucket);
-                            } else {
-                                unresolvedReads.addLast(tableBucket);
-                            }
-                        }
-
-                        if (replicasToRestore.isEmpty()) {
-                            finish();
-                        } else if (hasPendingReads()) {
-                            scheduleNextBatch();
+                        if (!isExpectedFollower(tableBucket, expectedReplica)) {
+                            pendingMinRetainOffsetRestores.remove(tableBucket);
+                        } else if (readFailure == null
+                                && latestSnapshots.containsKey(tableBucket)) {
+                            latestSnapshots
+                                    .get(tableBucket)
+                                    .map(BucketSnapshot::getLogOffset)
+                                    .ifPresent(
+                                            expectedReplica.getLogTablet()::updateMinRetainOffset);
+                            pendingMinRetainOffsetRestores.remove(tableBucket);
                         } else {
-                            startNextRetryRound();
+                            hasUnresolvedSnapshot = true;
                         }
-                    });
-        }
+                    }
 
-        private boolean hasPendingReads() {
-            discardResolvedBuckets(pendingReads);
-            return !pendingReads.isEmpty();
-        }
+                    minRetainOffsetRestoreScheduledOrInProgress = false;
+                    if (pendingMinRetainOffsetRestores.isEmpty()) {
+                        minRetainOffsetRestoreFailedAttempts = 0;
+                    } else if (readFailure != null || hasUnresolvedSnapshot) {
+                        scheduleMinRetainOffsetRestoreRetry(readFailure);
+                    } else {
+                        // New followers may have been enqueued while this ZooKeeper read was in
+                        // progress. Start their restore with a fresh jitter.
+                        minRetainOffsetRestoreFailedAttempts = 0;
+                        scheduleMinRetainOffsetRestore(
+                                ThreadLocalRandom.current()
+                                        .nextLong(MIN_RETAIN_OFFSET_RESTORE_INITIAL_JITTER_MS + 1));
+                    }
+                });
+    }
 
-        private void startNextRetryRound() {
-            removeStaleReplicas();
-            if (replicasToRestore.isEmpty()) {
-                finish();
-                return;
-            }
-
-            discardResolvedBuckets(unresolvedReads);
-            if (unresolvedReads.isEmpty()) {
-                // This should only be possible if a notification or role change resolved the
-                // remaining replicas after the last stale-replica check.
-                removeStaleReplicas();
-                if (replicasToRestore.isEmpty()) {
-                    finish();
-                    return;
-                }
-                unresolvedReads.addAll(replicasToRestore.keySet());
-            }
-
-            pendingReads.addAll(unresolvedReads);
-            unresolvedReads.clear();
-            Exception readFailure = lastReadFailure;
-            lastReadFailure = null;
-            scheduleRetry(readFailure);
-        }
-
-        private void discardResolvedBuckets(Deque<TableBucket> buckets) {
-            Iterator<TableBucket> iterator = buckets.iterator();
-            while (iterator.hasNext()) {
-                if (!replicasToRestore.containsKey(iterator.next())) {
-                    iterator.remove();
-                }
+    private void removeStaleMinRetainOffsetRestores() {
+        Iterator<Map.Entry<TableBucket, Replica>> iterator =
+                pendingMinRetainOffsetRestores.entrySet().iterator();
+        while (iterator.hasNext()) {
+            Map.Entry<TableBucket, Replica> entry = iterator.next();
+            if (!isExpectedFollower(entry.getKey(), entry.getValue())) {
+                iterator.remove();
             }
         }
+    }
 
-        private void removeStaleReplicas() {
-            Iterator<Map.Entry<TableBucket, Replica>> iterator =
-                    replicasToRestore.entrySet().iterator();
-            while (iterator.hasNext()) {
-                Map.Entry<TableBucket, Replica> entry = iterator.next();
-                Replica expectedReplica = entry.getValue();
-                if (!isExpectedFollower(entry.getKey(), expectedReplica)
-                        || expectedReplica.isMinRetainOffsetRestored()) {
-                    expectedReplica.cancelMinRetainOffsetRestore();
-                    iterator.remove();
-                }
-            }
+    private boolean isExpectedFollower(TableBucket tableBucket, Replica expectedReplica) {
+        HostedReplica hostedReplica = getReplica(tableBucket);
+        return hostedReplica instanceof OnlineReplica
+                && ((OnlineReplica) hostedReplica).getReplica() == expectedReplica
+                && !expectedReplica.isLeader();
+    }
+
+    private void scheduleMinRetainOffsetRestoreRetry(@Nullable Exception cause) {
+        long delayMs =
+                MIN_RETAIN_OFFSET_RESTORE_BACKOFF.backoff(minRetainOffsetRestoreFailedAttempts++);
+        if (cause == null) {
+            LOG.warn(
+                    "Latest snapshots for {} follower replicas were not fully resolved. "
+                            + "Retrying in {} ms.",
+                    pendingMinRetainOffsetRestores.size(),
+                    delayMs);
+        } else {
+            LOG.warn(
+                    "Failed to restore min retain offsets for {} follower replicas. "
+                            + "Retrying in {} ms.",
+                    pendingMinRetainOffsetRestores.size(),
+                    delayMs,
+                    cause);
         }
-
-        private boolean isExpectedFollower(TableBucket tableBucket, Replica expectedReplica) {
-            HostedReplica hostedReplica = getReplica(tableBucket);
-            return hostedReplica instanceof OnlineReplica
-                    && ((OnlineReplica) hostedReplica).getReplica() == expectedReplica
-                    && !expectedReplica.isLeader();
-        }
-
-        private void scheduleRetry(@Nullable Exception cause) {
-            long delayMs = MIN_RETAIN_OFFSET_RESTORE_BACKOFF.backoff(failedAttempts++);
-            if (cause == null) {
-                LOG.warn(
-                        "Latest snapshots for {} follower replicas were not fully resolved. "
-                                + "Retrying in {} ms.",
-                        replicasToRestore.size(),
-                        delayMs);
-            } else {
-                LOG.warn(
-                        "Failed to restore min retain offsets for {} follower replicas. "
-                                + "Retrying in {} ms.",
-                        replicasToRestore.size(),
-                        delayMs,
-                        cause);
-            }
-
-            scheduleRead(delayMs);
-        }
-
-        private void scheduleNextBatch() {
-            long delayMs =
-                    MIN_RETAIN_OFFSET_RESTORE_BATCH_DELAY_MS
-                            + ThreadLocalRandom.current()
-                                    .nextLong(MIN_RETAIN_OFFSET_RESTORE_BATCH_JITTER_MS + 1);
-            scheduleRead(delayMs);
-        }
-
-        private void scheduleRead(long delayMs) {
-            try {
-                retryTask =
-                        scheduler.scheduleOnce(
-                                "restore-follower-min-retain-offset",
-                                () -> {
-                                    retryTask = null;
-                                    submitRead();
-                                },
-                                delayMs);
-            } catch (RuntimeException e) {
-                LOG.warn(
-                        "Failed to schedule min retain offset restoration for {} follower "
-                                + "replicas.",
-                        replicasToRestore.size(),
-                        e);
-                finish();
-            }
-        }
-
-        private void finish() {
-            if (finished.compareAndSet(false, true)) {
-                ScheduledFuture<?> task = retryTask;
-                if (task != null) {
-                    task.cancel(false);
-                }
-                replicasToRestore.values().forEach(Replica::cancelMinRetainOffsetRestore);
-                minRetainOffsetRestoreOperations.remove(this);
-            }
-        }
+        scheduleMinRetainOffsetRestore(delayMs);
     }
 
     public void maybeUpdateMetadataCache(int coordinatorEpoch, ClusterMetadata clusterMetadata) {
@@ -1560,9 +1428,10 @@ public class ReplicaManager implements ServerReconfigurable {
                             "notifyKvSnapshotOffset");
                     // update the snapshot offset.
                     TableBucket tb = notifyKvSnapshotOffsetData.getTableBucket();
-                    Replica replica = getReplicaOrException(tb);
-                    replica.completeMinRetainOffsetRestore(
-                            Optional.of(notifyKvSnapshotOffsetData.getMinRetainOffset()));
+                    LogTablet logTablet = getReplicaOrException(tb).getLogTablet();
+                    logTablet.updateMinRetainOffset(
+                            notifyKvSnapshotOffsetData.getMinRetainOffset());
+                    pendingMinRetainOffsetRestores.remove(tb);
                     responseCallback.accept(new NotifyKvSnapshotOffsetResponse());
                 });
     }
@@ -1686,6 +1555,7 @@ public class ReplicaManager implements ServerReconfigurable {
             return;
         }
         List<Replica> replicasBecomeFollower = new ArrayList<>();
+        List<Replica> kvFollowers = new ArrayList<>();
         for (NotifyLeaderAndIsrData data : replicasToBeFollower) {
             TableBucket tb = data.getTableBucket();
             try {
@@ -1696,6 +1566,9 @@ public class ReplicaManager implements ServerReconfigurable {
                 }
                 // stop the remote log tiering tasks for followers
                 remoteLogManager.stopLogTiering(replica);
+                if (replica.isKvTable()) {
+                    kvFollowers.add(replica);
+                }
                 result.put(tb, new NotifyLeaderAndIsrResultForBucket(tb));
             } catch (Exception e) {
                 LOG.error("Error make replica {} to follower", tb, e);
@@ -1726,6 +1599,11 @@ public class ReplicaManager implements ServerReconfigurable {
 
         // add fetcher for those follower replicas.
         addFetcherForReplicas(replicasBecomeFollower, result);
+
+        // Followers don't initialize a KV tablet, so restore the log retention state from the
+        // latest committed KV snapshot. The ZooKeeper read is scheduled asynchronously because
+        // this method runs while holding the replica state-change lock.
+        restoreFollowerMinRetainOffsets(kvFollowers);
     }
 
     private void addFetcherForReplicas(
@@ -2774,8 +2652,8 @@ public class ReplicaManager implements ServerReconfigurable {
                 replicaStateChangeLock,
                 () -> {
                     shuttingDown.set(true);
-                    new ArrayList<>(minRetainOffsetRestoreOperations)
-                            .forEach(MinRetainOffsetRestoreOperation::finish);
+                    pendingMinRetainOffsetRestores.clear();
+                    minRetainOffsetRestoreScheduledOrInProgress = false;
                 });
 
         // Close the resources for snapshot kv

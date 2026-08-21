@@ -106,7 +106,6 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -1785,8 +1784,8 @@ class ReplicaManagerTest extends ReplicaTestBase {
     }
 
     @Test
-    void testFollowerMinRetainOffsetRestoreIsBatched() throws Exception {
-        int bucketCount = ReplicaManager.MIN_RETAIN_OFFSET_RESTORE_BATCH_SIZE + 1;
+    void testFollowerMinRetainOffsetRestoreForManyBuckets() throws Exception {
+        int bucketCount = 33;
         Map<TableBucket, BucketSnapshot> snapshots = new HashMap<>();
         List<NotifyLeaderAndIsrData> leaderAndIsrData = new ArrayList<>();
         for (int bucketId = 0; bucketId < bucketCount; bucketId++) {
@@ -1809,19 +1808,6 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                     INITIAL_BUCKET_EPOCH)));
         }
 
-        AtomicInteger batchCalls = new AtomicInteger();
-        AtomicInteger maxBatchSize = new AtomicInteger();
-        replicaManager = spy(replicaManager);
-        doAnswer(
-                        invocation -> {
-                            Collection<TableBucket> tableBuckets = invocation.getArgument(0);
-                            batchCalls.incrementAndGet();
-                            maxBatchSize.accumulateAndGet(tableBuckets.size(), Math::max);
-                            return invocation.callRealMethod();
-                        })
-                .when(replicaManager)
-                .readLatestSnapshotsForFollowerRestore(anyCollection());
-
         CompletableFuture<List<NotifyLeaderAndIsrResultForBucket>> future =
                 new CompletableFuture<>();
         replicaManager.becomeLeaderOrFollower(
@@ -1840,10 +1826,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                                                 .getMinRetainOffset()
                                                         == entry.getValue().getLogOffset()),
                 Duration.ofSeconds(30),
-                "Follower min retain offsets were not restored in batches.");
-        assertThat(batchCalls).hasValueGreaterThan(1);
-        assertThat(maxBatchSize)
-                .hasValueLessThanOrEqualTo(ReplicaManager.MIN_RETAIN_OFFSET_RESTORE_BATCH_SIZE);
+                "Follower min retain offsets were not restored.");
     }
 
     @Test
