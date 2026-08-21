@@ -270,7 +270,6 @@ impl RecordAccumulator {
 
     fn append_new_batch(
         &self,
-        cluster: &Cluster,
         record: &WriteRecord,
         dq: &mut VecDeque<WriteBatch>,
         permit: MemoryPermit,
@@ -278,8 +277,7 @@ impl RecordAccumulator {
         compression_ratio_estimator: Arc<ArrowCompressionRatioEstimator>,
     ) -> Result<RecordAppendResult> {
         let physical_table_path = &record.physical_table_path;
-        let table_path = physical_table_path.get_table_path();
-        let table_info = cluster.get_table(table_path)?;
+        let table_info = &record.table_info;
         let arrow_compression_info = table_info.get_table_config().get_arrow_compression_info()?;
         let row_type = &table_info.row_type;
 
@@ -336,8 +334,7 @@ impl RecordAccumulator {
         abort_if_batch_full: bool,
     ) -> Result<RecordAppendResult> {
         let physical_table_path = &record.physical_table_path;
-        let table_path = physical_table_path.get_table_path();
-        let table_info = cluster.get_table(table_path)?;
+        let table_info = &record.table_info;
         let is_partitioned_table = table_info.is_partitioned();
 
         let partition_id = if is_partitioned_table {
@@ -403,7 +400,6 @@ impl RecordAccumulator {
         }
 
         self.append_new_batch(
-            cluster,
             record,
             &mut dq_guard,
             permit,

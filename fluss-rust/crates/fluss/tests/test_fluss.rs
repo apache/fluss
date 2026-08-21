@@ -26,6 +26,7 @@ mod integration {
     mod kv_changelog;
     mod kv_table;
     mod log_table;
+    mod multi_table_writer;
     mod record_batch_log_reader;
     mod sasl_auth;
 

@@ -239,6 +239,7 @@ impl WriteBatch {
 pub struct ArrowLogWriteBatch {
     pub write_batch: InnerWriteBatch,
     pub arrow_builder: MemoryLogRecordsArrowBuilder,
+    schema_id: i32,
     built_records: Option<Bytes>,
 }
 
@@ -266,6 +267,7 @@ impl ArrowLogWriteBatch {
                 write_limit,
                 compression_ratio_estimator,
             )?,
+            schema_id,
             built_records: None,
         })
     }
@@ -275,6 +277,9 @@ impl ArrowLogWriteBatch {
     }
 
     pub fn try_append(&mut self, write_record: &WriteRecord) -> Result<Option<ResultHandle>> {
+        if self.schema_id != write_record.schema_id {
+            return Ok(None);
+        }
         if self.arrow_builder.is_closed() || self.arrow_builder.is_full() {
             Ok(None)
         } else {
@@ -366,13 +371,7 @@ impl KvWriteBatch {
         let key = kv_write_record.key.as_ref();
 
         if self.schema_id != write_record.schema_id {
-            return Err(Error::UnexpectedError {
-                message: format!(
-                    "schema id {} of the write record to append is not the same as the current schema id {} in the batch.",
-                    write_record.schema_id, self.schema_id
-                ),
-                source: None,
-            });
+            return Ok(None);
         };
 
         if self.target_columns != kv_write_record.target_columns {
@@ -561,6 +560,61 @@ mod tests {
             batch.try_append(&record).unwrap();
         }
         assert_eq!(batch.record_count(), 3);
+    }
+
+    #[test]
+    fn schema_change_requires_new_arrow_and_kv_batches() {
+        use crate::compression::{ArrowCompressionType, DEFAULT_NON_ZSTD_COMPRESSION_LEVEL};
+        use crate::metadata::{DataField, DataTypes, KvFormat};
+        use crate::row::GenericRow;
+
+        let table_path = TablePath::new("db", "tbl");
+        let table_info = Arc::new(build_table_info(table_path.clone(), 1, 1));
+        let physical_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path)));
+        let row = GenericRow::from_data(vec![1_i32]);
+        let record =
+            WriteRecord::for_append(Arc::clone(&table_info), Arc::clone(&physical_path), 2, &row);
+        let mut batch = WriteBatch::ArrowLog(
+            ArrowLogWriteBatch::new(
+                1,
+                Arc::clone(&physical_path),
+                1,
+                ArrowCompressionInfo {
+                    compression_type: ArrowCompressionType::None,
+                    compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
+                },
+                &RowType::new(vec![DataField::new("id", DataTypes::int(), None)]),
+                0,
+                false,
+                1024,
+                Arc::new(ArrowCompressionRatioEstimator::default()),
+            )
+            .expect("batch"),
+        );
+
+        assert!(batch.try_append(&record).expect("append check").is_none());
+
+        let record = WriteRecord::for_upsert(
+            table_info,
+            Arc::clone(&physical_path),
+            2,
+            Bytes::from_static(b"key"),
+            None,
+            WriteFormat::CompactedKv,
+            None,
+            Some(RowBytes::Owned(Bytes::from_static(b"value"))),
+        );
+        let mut batch = WriteBatch::Kv(KvWriteBatch::new(
+            2,
+            physical_path,
+            1,
+            1024,
+            KvFormat::COMPACTED,
+            None,
+            0,
+        ));
+
+        assert!(batch.try_append(&record).expect("upsert check").is_none());
     }
 
     #[test]
