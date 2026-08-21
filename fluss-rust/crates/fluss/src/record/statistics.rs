@@ -315,11 +315,17 @@ fn column_bounds(column: &dyn Array, data_type: &DataType) -> Result<Option<Colu
                 .as_any()
                 .downcast_ref::<PrimitiveArray<Decimal128Type>>()
                 .ok_or_else(|| unexpected_array(column, data_type))?;
+            // The array stores raw unscaled integers and keeps its scale in its
+            // own type, which an appended batch can declare differently from the
+            // column. Rescale from the array's as `column_vector` does.
+            let ArrowType::Decimal128(_, arrow_scale) = column.data_type() else {
+                return Err(unexpected_array(column, data_type));
+            };
             let (precision, scale) = (decimal_type.precision(), decimal_type.scale());
             match (aggregate::min(array), aggregate::max(array)) {
                 (Some(min), Some(max)) => Ok(Some(ColumnBounds::Decimal(
-                    decimal_from_i128(min, precision, scale)?,
-                    decimal_from_i128(max, precision, scale)?,
+                    Decimal::from_arrow_decimal128(min, *arrow_scale as i64, precision, scale)?,
+                    Decimal::from_arrow_decimal128(max, *arrow_scale as i64, precision, scale)?,
                 ))),
                 _ => Ok(None),
             }
@@ -414,14 +420,6 @@ fn timestamp_bounds(
             ))
         }
         _ => Err(unexpected_array(column, data_type)),
-    }
-}
-
-fn decimal_from_i128(value: i128, precision: u32, scale: u32) -> Result<Decimal> {
-    if Decimal::is_compact_precision(precision) {
-        Decimal::from_unscaled_long(value as i64, precision, scale)
-    } else {
-        Decimal::from_unscaled_bytes(&value.to_be_bytes(), precision, scale)
     }
 }
 
@@ -826,6 +824,24 @@ mod tests {
         );
         assert_eq!(split_timestamp(&min), (1_000, 654_321));
         assert_eq!(split_timestamp(&max), (2_000, 456_789));
+    }
+
+    /// An appended batch can declare a different scale from the column, and the
+    /// raw integers alone cannot tell the two apart.
+    #[test]
+    fn rescales_a_decimal_from_the_arrays_own_scale() {
+        // 1234 at the array's scale 2 is 12.34, which the column stores at
+        // scale 3 as 12340 to keep it as 12.34.
+        let array = Decimal128Array::from(vec![Some(1_234_i128), Some(500_i128)])
+            .with_precision_and_scale(10, 2)
+            .expect("decimal array");
+        let (min, max) = single_column_rows(
+            DataTypes::decimal(10, 3),
+            ArrowType::Decimal128(10, 2),
+            Arc::new(array),
+        );
+        assert_eq!(i64::from_le_bytes(min[8..16].try_into().unwrap()), 5_000);
+        assert_eq!(i64::from_le_bytes(max[8..16].try_into().unwrap()), 12_340);
     }
 
     #[test]
