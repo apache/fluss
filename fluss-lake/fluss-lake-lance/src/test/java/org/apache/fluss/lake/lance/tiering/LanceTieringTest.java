@@ -45,6 +45,7 @@ import org.apache.fluss.utils.types.Tuple2;
 
 import com.lancedb.lance.Dataset;
 import com.lancedb.lance.WriteParams;
+import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.VarCharVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
@@ -52,6 +53,7 @@ import org.apache.arrow.vector.complex.FixedSizeListVector;
 import org.apache.arrow.vector.ipc.ArrowReader;
 import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -89,6 +91,100 @@ class LanceTieringTest {
 
     private static Stream<Arguments> tieringWriteArgs() {
         return Stream.of(Arguments.of(false), Arguments.of(true));
+    }
+
+    @Test
+    void testEmptyCommitCreatesSnapshot() throws Exception {
+        TablePath tablePath = TablePath.of("lance", "empty_commit_table");
+        Map<String, String> customProperties = new HashMap<>();
+        customProperties.put(
+                "embedding" + LanceArrowUtils.FIXED_SIZE_LIST_SIZE_SUFFIX,
+                String.valueOf(EMBEDDING_LIST_SIZE));
+        LanceConfig config =
+                LanceConfig.from(
+                        configuration.toMap(),
+                        customProperties,
+                        tablePath.getDatabaseName(),
+                        tablePath.getTableName());
+        Schema schema = createTable(config, customProperties);
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .distributedBy(1)
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .customProperties(customProperties)
+                        .build();
+        TableInfo tableInfo =
+                TableInfo.of(tablePath, 0, 1, descriptor, DEFAULT_REMOTE_DATA_DIR, 1L, 1L);
+
+        // the first commit on a fresh dataset is an empty commit (version 1 is the creation)
+        commitEmpty(tablePath, tableInfo, "offsets-1", 2);
+
+        // normal append continues after the empty commit as version 3
+        List<LogRecord> expectRecords;
+        try (LakeWriter<LanceWriteResult> lakeWriter =
+                createLakeWriter(tablePath, 0, null, tableInfo)) {
+            Tuple2<List<LogRecord>, List<LogRecord>> writeAndExpectRecords =
+                    genLogTableRecords(null, 0, 10);
+            for (LogRecord logRecord : writeAndExpectRecords.f0) {
+                lakeWriter.write(logRecord);
+            }
+            expectRecords = writeAndExpectRecords.f1;
+            try (LakeCommitter<LanceWriteResult, LanceCommittable> lakeCommitter =
+                    createLakeCommitter(tablePath, tableInfo)) {
+                long snapshotId =
+                        lakeCommitter
+                                .commit(
+                                        lakeCommitter.toCommittable(
+                                                Collections.singletonList(lakeWriter.complete())),
+                                        Collections.singletonMap(
+                                                FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, "offsets"))
+                                .getCommittedSnapshotId();
+                assertThat(snapshotId).isEqualTo(3);
+            }
+        }
+
+        // another empty commit as version 4 keeps the appended data untouched
+        commitEmpty(tablePath, tableInfo, "offsets-2", 4);
+        try (BufferAllocator allocator = new RootAllocator();
+                Dataset dataset =
+                        Dataset.open(
+                                allocator,
+                                config.getDatasetUri(),
+                                LanceConfig.genReadOptionFromConfig(config));
+                ArrowReader reader = dataset.newScan().scanBatches()) {
+            VectorSchemaRoot readerRoot = reader.getVectorSchemaRoot();
+            reader.loadNextBatch();
+            verifyLogTableRecords(readerRoot, expectRecords);
+            assertThat(reader.loadNextBatch()).isFalse();
+        }
+
+        // recovery sees the latest empty commit
+        try (LakeCommitter<LanceWriteResult, LanceCommittable> lakeCommitter =
+                createLakeCommitter(tablePath, tableInfo)) {
+            CommittedLakeSnapshot committedLakeSnapshot = lakeCommitter.getMissingLakeSnapshot(3L);
+            assertThat(committedLakeSnapshot).isNotNull();
+            assertThat(committedLakeSnapshot.getLakeSnapshotId()).isEqualTo(4);
+            assertThat(committedLakeSnapshot.getSnapshotProperties())
+                    .containsEntry(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, "offsets-2");
+        }
+    }
+
+    private void commitEmpty(
+            TablePath tablePath, TableInfo tableInfo, String offsets, long expectedSnapshotId)
+            throws Exception {
+        try (LakeCommitter<LanceWriteResult, LanceCommittable> lakeCommitter =
+                createLakeCommitter(tablePath, tableInfo)) {
+            LanceCommittable committable = lakeCommitter.toCommittable(Collections.emptyList());
+            long snapshotId =
+                    lakeCommitter
+                            .commit(
+                                    committable,
+                                    Collections.singletonMap(
+                                            FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, offsets))
+                            .getCommittedSnapshotId();
+            assertThat(snapshotId).isEqualTo(expectedSnapshotId);
+        }
     }
 
     @ParameterizedTest
