@@ -327,6 +327,11 @@ public class TestAdminAdapter implements Admin {
     }
 
     @Override
+    public CompletableFuture<String> getClusterVersion() {
+        throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
+    }
+
+    @Override
     public CompletableFuture<List<RemoteLogManifestInfo>> listRemoteLogManifests(
             long tableId, @Nullable Long partitionId) {
         throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");

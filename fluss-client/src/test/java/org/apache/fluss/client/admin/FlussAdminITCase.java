@@ -89,6 +89,7 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.ServerTags;
 import org.apache.fluss.types.DataTypeChecks;
 import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.utils.VersionInfo;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -2994,5 +2995,14 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         assertThat(afterRecovery.getNumReplicas()).isEqualTo(afterRecovery.getInSyncReplicas());
         assertThat(afterRecovery.getNumLeaderReplicas())
                 .isEqualTo(afterRecovery.getActiveLeaderReplicas());
+    }
+
+    @Test
+    void testGetClusterVersion() throws Exception {
+        String version = admin.getClusterVersion().get();
+        assertThat(version)
+                .isEqualTo(VersionInfo.getVersion())
+                .isNotEqualTo("unknown")
+                .matches("^\\d+\\.\\d+.*");
     }
 }
