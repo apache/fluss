@@ -166,15 +166,15 @@ main() {
         "508255883b984483a45ca48d5af6365d4f013bb8" \
         "hadoop-apache-3.3.5-2"
     download_jar \
-        "https://repo1.maven.org/maven2/org/apache/paimon/paimon-flink-1.20/1.3.1/paimon-flink-1.20-1.3.1.jar" \
-        "./paimon/paimon-flink-1.20-1.3.1.jar" \
+        "https://repo1.maven.org/maven2/org/apache/paimon/paimon-flink-1.20/1.4.2/paimon-flink-1.20-1.4.2.jar" \
+        "./paimon/paimon-flink-1.20-1.4.2.jar" \
         "" \
-        "paimon-flink-1.20-1.3.1"
+        "paimon-flink-1.20-1.4.2"
     download_jar \
-        "https://repo.maven.apache.org/maven2/org/apache/paimon/paimon-s3/1.3.1/paimon-s3-1.3.1.jar" \
-        "./paimon/paimon-s3-1.3.1.jar" \
+        "https://repo.maven.apache.org/maven2/org/apache/paimon/paimon-s3/1.4.2/paimon-s3-1.4.2.jar" \
+        "./paimon/paimon-s3-1.4.2.jar" \
         "" \
-        "paimon-s3-1.3.1"
+        "paimon-s3-1.4.2"
 
     # Iceberg-specific dependencies. These stay outside /opt/flink/lib by
     # default and are activated by init_iceberg.sh only when needed.
@@ -231,8 +231,8 @@ verify_jars() {
     local paimon_jars=(
         "fluss-lake-paimon-*.jar"
         "hadoop-apache-3.3.5-2.jar"
-        "paimon-flink-1.20-1.3.1.jar"
-        "paimon-s3-1.3.1.jar"
+        "paimon-flink-1.20-1.4.2.jar"
+        "paimon-s3-1.4.2.jar"
     )
 
     local iceberg_jars=(
@@ -309,8 +309,8 @@ show_summary() {
     echo "  - Base: Fluss S3 filesystem plugin"
     echo "  - Base: Flink Faker (v0.5.3)"
     echo "  - Paimon only: Fluss Lake Paimon connector"
-    echo "  - Paimon only: Paimon Flink 1.20 (v1.3.1)"
-    echo "  - Paimon only: Paimon S3 (v1.3.1)"
+    echo "  - Paimon only: Paimon Flink 1.20 (v1.4.2)"
+    echo "  - Paimon only: Paimon S3 (v1.4.2)"
     echo "  - Paimon only: Hadoop Apache (v3.3.5-2)"
     echo "  - Iceberg only: Fluss Lake Iceberg connector"
     echo "  - Iceberg only: Iceberg Flink runtime 1.20 (v1.10.1)"

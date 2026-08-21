@@ -493,6 +493,11 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
         }
 
         @Override
+        public String pickTempDir() {
+            return delegate.pickTempDir();
+        }
+
+        @Override
         public FileIOChannel.Enumerator createChannelEnumerator() {
             return delegate.createChannelEnumerator();
         }
