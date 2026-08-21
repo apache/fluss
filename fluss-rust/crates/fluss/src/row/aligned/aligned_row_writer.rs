@@ -19,6 +19,9 @@
 //! values of a V1 log record batch's statistics.
 
 use crate::row::binary::BinaryWriter;
+use crate::row::binary::encoding::{
+    append_non_compact_decimal, append_non_compact_timestamp, pack_or_append_bytes,
+};
 use crate::row::datum::{TimestampLtz, TimestampNtz};
 use crate::row::{Decimal, FlussArray, FlussMap};
 use bytes::Bytes;
@@ -26,10 +29,6 @@ use bytes::Bytes;
 /// Bits reserved ahead of the null bitset, matching Java's
 /// `AlignedRow.HEADER_SIZE_IN_BITS`.
 const HEADER_SIZE_IN_BITS: usize = 8;
-
-/// Longest payload that still fits inside an 8-byte field slot alongside its
-/// length marker.
-const MAX_FIX_PART_DATA_SIZE: usize = 7;
 
 /// Builds Java's `AlignedRow` byte for byte: a fixed part of null bits plus one
 /// 8-byte slot per field, then an 8-byte-aligned variable-length part.
@@ -107,80 +106,16 @@ impl AlignedRowWriter {
         self.buffer[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
     }
 
-    /// Packs `(offset << 32) | size` into the field slot, how the reader finds a
-    /// value that lives in the variable-length part.
-    ///
-    /// Timestamps pass the nano-of-millisecond as `size`, since their payload is
-    /// always 8 bytes and the low half would otherwise go to waste.
-    fn set_offset_and_size(&mut self, pos: usize, offset: usize, size: u64) {
-        let packed = ((offset as i64) << 32) | (size as i64);
-        let field_offset = self.field_offset(pos);
-        self.put_long_le(field_offset, packed);
-    }
-
-    /// Inlines a payload of at most 7 bytes into the field slot, with
-    /// `len | 0x80` in the slot's high byte as Java's `writeBytesToFixLenPart`.
-    fn write_bytes_to_fix_len_part(&mut self, pos: usize, bytes: &[u8]) {
-        let len = bytes.len();
-        debug_assert!(len <= MAX_FIX_PART_DATA_SIZE);
-        let field_offset = self.field_offset(pos);
-        self.put_long_le(field_offset, 0);
-        self.buffer[field_offset..field_offset + len].copy_from_slice(bytes);
-        self.buffer[field_offset + 7] = (len as u8) | 0x80;
-    }
-
-    fn ensure_capacity(&mut self, needed_size: usize) {
-        let length = self.cursor + needed_size;
-        if self.buffer.len() < length {
-            let old_capacity = self.buffer.len();
-            let new_capacity = (old_capacity + (old_capacity >> 1)).max(length);
-            self.buffer.resize(new_capacity, 0);
-        }
-    }
-
-    /// Zeroes the tail of the word a value only partly fills, so the padding is
-    /// deterministic rather than whatever the buffer last held.
-    fn zero_out_padding_bytes(&mut self, num_bytes: usize) {
-        if (num_bytes & 0x07) > 0 {
-            let off = self.cursor + ((num_bytes >> 3) << 3);
-            for b in &mut self.buffer[off..off + 8] {
-                *b = 0;
-            }
-        }
-    }
-
-    fn write_bytes_to_var_len_part(&mut self, pos: usize, bytes: &[u8]) {
-        let len = bytes.len();
-        let rounded_size = round_number_of_bytes_to_nearest_word(len);
-
-        self.ensure_capacity(rounded_size);
-        self.zero_out_padding_bytes(len);
-        self.buffer[self.cursor..self.cursor + len].copy_from_slice(bytes);
-        self.set_offset_and_size(pos, self.cursor, len as u64);
-        self.cursor += rounded_size;
-    }
-
     fn write_bytes_internal(&mut self, pos: usize, bytes: &[u8]) {
-        if bytes.len() <= MAX_FIX_PART_DATA_SIZE {
-            self.write_bytes_to_fix_len_part(pos, bytes);
-        } else {
-            self.write_bytes_to_var_len_part(pos, bytes);
-        }
+        let slot = pack_or_append_bytes(&mut self.buffer, &mut self.cursor, bytes);
+        let field_offset = self.field_offset(pos);
+        self.put_long_le(field_offset, slot);
     }
 }
 
 /// Null bits are padded to whole 8-byte words, after the reserved header bits.
 fn calculate_bit_set_width_in_bytes(arity: usize) -> usize {
     ((arity + 63 + HEADER_SIZE_IN_BITS) / 64) * 8
-}
-
-fn round_number_of_bytes_to_nearest_word(num_bytes: usize) -> usize {
-    let remainder = num_bytes & 0x07;
-    if remainder == 0 {
-        num_bytes
-    } else {
-        num_bytes + (8 - remainder)
-    }
 }
 
 impl BinaryWriter for AlignedRowWriter {
@@ -283,16 +218,13 @@ impl BinaryWriter for AlignedRowWriter {
             let off = self.field_offset(pos);
             self.put_long_le(off, unscaled);
         } else {
-            // Java always reserves 16 bytes here, whatever the unscaled length.
-            self.ensure_capacity(16);
-            for b in &mut self.buffer[self.cursor..self.cursor + 16] {
-                *b = 0;
-            }
-            let bytes = value.to_unscaled_bytes();
-            debug_assert!(bytes.len() <= 16, "decimal unscaled bytes exceed 16");
-            self.buffer[self.cursor..self.cursor + bytes.len()].copy_from_slice(&bytes);
-            self.set_offset_and_size(pos, self.cursor, bytes.len() as u64);
-            self.cursor += 16;
+            let slot = append_non_compact_decimal(
+                &mut self.buffer,
+                &mut self.cursor,
+                &value.to_unscaled_bytes(),
+            );
+            let field_offset = self.field_offset(pos);
+            self.put_long_le(field_offset, slot);
         }
         self.current_pos = pos + 1;
     }
@@ -307,10 +239,14 @@ impl BinaryWriter for AlignedRowWriter {
             let off = self.field_offset(pos);
             self.put_long_le(off, value.get_millisecond());
         } else {
-            self.ensure_capacity(8);
-            self.put_long_le(self.cursor, value.get_millisecond());
-            self.set_offset_and_size(pos, self.cursor, value.get_nano_of_millisecond() as u64);
-            self.cursor += 8;
+            let slot = append_non_compact_timestamp(
+                &mut self.buffer,
+                &mut self.cursor,
+                value.get_millisecond(),
+                value.get_nano_of_millisecond(),
+            );
+            let field_offset = self.field_offset(pos);
+            self.put_long_le(field_offset, slot);
         }
         self.current_pos = pos + 1;
     }
@@ -321,10 +257,14 @@ impl BinaryWriter for AlignedRowWriter {
             let off = self.field_offset(pos);
             self.put_long_le(off, value.get_epoch_millisecond());
         } else {
-            self.ensure_capacity(8);
-            self.put_long_le(self.cursor, value.get_epoch_millisecond());
-            self.set_offset_and_size(pos, self.cursor, value.get_nano_of_millisecond() as u64);
-            self.cursor += 8;
+            let slot = append_non_compact_timestamp(
+                &mut self.buffer,
+                &mut self.cursor,
+                value.get_epoch_millisecond(),
+                value.get_nano_of_millisecond(),
+            );
+            let field_offset = self.field_offset(pos);
+            self.put_long_le(field_offset, slot);
         }
         self.current_pos = pos + 1;
     }
@@ -486,7 +426,8 @@ mod tests {
         writer.write_decimal(&decimal, precision);
         let bytes = writer.to_bytes();
 
-        // Java always reserves 16 tail bytes here, whatever the unscaled length.
+        // Java always reserves 16 tail bytes here, whatever the unscaled length,
+        // so the stride does not depend on how many the value needed.
         assert_eq!(bytes.len(), 16 + 16);
         let (offset, size) = packed_slot(&bytes, 8, 0);
         assert_eq!(offset, 16);

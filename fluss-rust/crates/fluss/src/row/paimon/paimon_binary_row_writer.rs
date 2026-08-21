@@ -19,15 +19,15 @@ use bytes::Bytes;
 
 use crate::error::{Error, Result};
 use crate::metadata::DataType;
+use crate::row::binary::encoding::{
+    append_non_compact_decimal, append_non_compact_timestamp, pack_or_append_bytes,
+};
 use crate::row::binary::{BinaryWriter, ValueWriter};
 use crate::row::datum::{TimestampLtz, TimestampNtz};
 use crate::row::{Decimal, FlussArray, FlussMap};
 
 /// Header size in bits (for the ChangeType byte at the front of the null bitset).
 const HEADER_SIZE_IN_BITS: usize = 8;
-/// Maximum number of bytes that can be packed inline into a fixed 8-byte field slot
-/// (Paimon's variable-length inline-encoding optimisation).
-const MAX_FIX_PART_DATA_SIZE: usize = 7;
 
 /// A Rust port of Java's
 /// `org.apache.fluss.row.encode.paimon.PaimonBinaryRowWriter`, encoding a Fluss
@@ -137,78 +137,10 @@ impl PaimonBinaryRowWriter {
         self.buffer[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
     }
 
-    /// Set `(offset << 32) | size` as a little-endian i64 at the field slot.
-    fn set_offset_and_size(&mut self, pos: usize, offset: usize, size: u64) {
-        let packed = ((offset as i64) << 32) | (size as i64);
-        let field_offset = self.field_offset(pos);
-        self.put_long_le(field_offset, packed);
-    }
-
-    /// Inline ≤ 7-byte payload into the 8-byte fixed slot using Paimon's layout
-    /// (`firstByte = len | 0x80` in the high byte, data bytes packed
-    /// little-endian into the low bytes).
-    fn write_bytes_to_fix_len_part(&mut self, pos: usize, bytes: &[u8]) {
-        let len = bytes.len();
-        debug_assert!(len <= MAX_FIX_PART_DATA_SIZE);
-        let field_offset = self.field_offset(pos);
-        // Zero the slot first (in case we're reusing buffer positions on reset).
-        for b in &mut self.buffer[field_offset..field_offset + 8] {
-            *b = 0;
-        }
-        // Data bytes occupy the low-order positions; first byte (len|0x80)
-        // sits at the high-order byte (index 7) thanks to little-endian layout.
-        self.buffer[field_offset..field_offset + len].copy_from_slice(bytes);
-        self.buffer[field_offset + 7] = (len as u8) | 0x80;
-    }
-
-    fn ensure_capacity(&mut self, needed_size: usize) {
-        let length = self.cursor + needed_size;
-        if self.buffer.len() < length {
-            self.grow(length);
-        }
-    }
-
-    fn grow(&mut self, min_capacity: usize) {
-        let old_capacity = self.buffer.len();
-        let mut new_capacity = old_capacity + (old_capacity >> 1);
-        if new_capacity < min_capacity {
-            new_capacity = min_capacity;
-        }
-        self.buffer.resize(new_capacity, 0);
-    }
-
-    /// Zero out the padding region between `numBytes` and the next 8-byte
-    /// boundary at the current cursor (matches Java's `zeroOutPaddingBytes`).
-    fn zero_out_padding_bytes(&mut self, num_bytes: usize) {
-        if (num_bytes & 0x07) > 0 {
-            let aligned = (num_bytes >> 3) << 3;
-            // 8 bytes starting at cursor + aligned.
-            let off = self.cursor + aligned;
-            for b in &mut self.buffer[off..off + 8] {
-                *b = 0;
-            }
-        }
-    }
-
-    fn write_bytes_to_var_len_part(&mut self, pos: usize, bytes: &[u8]) {
-        let len = bytes.len();
-        let rounded_size = round_number_of_bytes_to_nearest_word(len);
-
-        self.ensure_capacity(rounded_size);
-        self.zero_out_padding_bytes(len);
-
-        self.buffer[self.cursor..self.cursor + len].copy_from_slice(bytes);
-
-        self.set_offset_and_size(pos, self.cursor, len as u64);
-        self.cursor += rounded_size;
-    }
-
     fn write_bytes_internal(&mut self, pos: usize, bytes: &[u8]) {
-        if bytes.len() <= MAX_FIX_PART_DATA_SIZE {
-            self.write_bytes_to_fix_len_part(pos, bytes);
-        } else {
-            self.write_bytes_to_var_len_part(pos, bytes);
-        }
+        let slot = pack_or_append_bytes(&mut self.buffer, &mut self.cursor, bytes);
+        let field_offset = self.field_offset(pos);
+        self.put_long_le(field_offset, slot);
     }
 }
 
@@ -220,15 +152,6 @@ fn calculate_bit_set_width_in_bytes(arity: usize) -> usize {
 
 fn get_fixed_length_part_size(null_bits_size_in_bytes: usize, arity: usize) -> usize {
     null_bits_size_in_bytes + 8 * arity
-}
-
-fn round_number_of_bytes_to_nearest_word(num_bytes: usize) -> usize {
-    let remainder = num_bytes & 0x07;
-    if remainder == 0 {
-        num_bytes
-    } else {
-        num_bytes + (8 - remainder)
-    }
 }
 
 impl BinaryWriter for PaimonBinaryRowWriter {
@@ -341,17 +264,13 @@ impl BinaryWriter for PaimonBinaryRowWriter {
             let off = self.field_offset(pos);
             self.put_long_le(off, unscaled);
         } else {
-            // Non-compact: 16 bytes in variable region, set offset+size in slot.
-            self.ensure_capacity(16);
-            // Zero the 16 bytes.
-            for b in &mut self.buffer[self.cursor..self.cursor + 16] {
-                *b = 0;
-            }
-            let bytes = value.to_unscaled_bytes();
-            debug_assert!(bytes.len() <= 16, "decimal unscaled bytes exceed 16");
-            self.buffer[self.cursor..self.cursor + bytes.len()].copy_from_slice(&bytes);
-            self.set_offset_and_size(pos, self.cursor, bytes.len() as u64);
-            self.cursor += 16;
+            let slot = append_non_compact_decimal(
+                &mut self.buffer,
+                &mut self.cursor,
+                &value.to_unscaled_bytes(),
+            );
+            let field_offset = self.field_offset(pos);
+            self.put_long_le(field_offset, slot);
         }
         self.current_pos = pos + 1;
     }
@@ -367,10 +286,14 @@ impl BinaryWriter for PaimonBinaryRowWriter {
             let off = self.field_offset(pos);
             self.put_long_le(off, value.get_millisecond());
         } else {
-            self.ensure_capacity(8);
-            self.put_long_le(self.cursor, value.get_millisecond());
-            self.set_offset_and_size(pos, self.cursor, value.get_nano_of_millisecond() as u64);
-            self.cursor += 8;
+            let slot = append_non_compact_timestamp(
+                &mut self.buffer,
+                &mut self.cursor,
+                value.get_millisecond(),
+                value.get_nano_of_millisecond(),
+            );
+            let field_offset = self.field_offset(pos);
+            self.put_long_le(field_offset, slot);
         }
         self.current_pos = pos + 1;
     }
@@ -381,10 +304,14 @@ impl BinaryWriter for PaimonBinaryRowWriter {
             let off = self.field_offset(pos);
             self.put_long_le(off, value.get_epoch_millisecond());
         } else {
-            self.ensure_capacity(8);
-            self.put_long_le(self.cursor, value.get_epoch_millisecond());
-            self.set_offset_and_size(pos, self.cursor, value.get_nano_of_millisecond() as u64);
-            self.cursor += 8;
+            let slot = append_non_compact_timestamp(
+                &mut self.buffer,
+                &mut self.cursor,
+                value.get_epoch_millisecond(),
+                value.get_nano_of_millisecond(),
+            );
+            let field_offset = self.field_offset(pos);
+            self.put_long_le(field_offset, slot);
         }
         self.current_pos = pos + 1;
     }
