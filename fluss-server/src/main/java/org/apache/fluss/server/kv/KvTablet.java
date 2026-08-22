@@ -96,8 +96,11 @@ import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.Executor;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
@@ -638,18 +641,28 @@ public final class KvTablet {
         KvRecordBatch.ReadContext readContext =
                 KvRecordReadContext.createReadContext(kvFormat, schemaGetter);
         ValueDecoder valueDecoder = new ValueDecoder(schemaGetter, kvFormat);
+        List<PendingKvRecord> pendingRecords = new ArrayList<>(kvRecords.getRecordCount());
 
         for (KvRecord kvRecord : kvRecords.records(readContext)) {
             byte[] keyBytes = BytesUtils.toArray(kvRecord.getKey());
             KvPreWriteBuffer.Key key = KvPreWriteBuffer.Key.of(keyBytes);
             BinaryRow row = kvRecord.getRow();
             BinaryValue currentValue = row == null ? null : new BinaryValue(schemaIdOfNewData, row);
+            pendingRecords.add(new PendingKvRecord(key, currentValue));
+        }
 
+        Map<KvPreWriteBuffer.Key, byte[]> rocksDbOldValues =
+                bulkLoadOldValues(pendingRecords, currentMerger, autoIncrementUpdater);
+
+        for (PendingKvRecord pendingRecord : pendingRecords) {
+            KvPreWriteBuffer.Key key = pendingRecord.key;
+            BinaryValue currentValue = pendingRecord.currentValue;
             if (currentValue == null) {
                 logOffset =
                         processDeletion(
                                 key,
                                 currentMerger,
+                                rocksDbOldValues,
                                 valueDecoder,
                                 walBuilder,
                                 latestSchemaRow,
@@ -661,6 +674,7 @@ public final class KvTablet {
                                 currentValue,
                                 currentMerger,
                                 autoIncrementUpdater,
+                                rocksDbOldValues,
                                 valueDecoder,
                                 walBuilder,
                                 latestSchemaRow,
@@ -669,9 +683,72 @@ public final class KvTablet {
         }
     }
 
+    /**
+     * Loads the initial old values needed to process one KV record batch.
+     *
+     * <p>This method runs while {@code putAsLeader} holds the tablet write lock. It first checks
+     * the pre-write buffer, whose entries are newer than RocksDB, and sends only the remaining
+     * distinct keys through one RocksDB multi-get. A {@code null} value in the returned map means
+     * that RocksDB did not contain the key; map absence means that no RocksDB lookup was needed.
+     *
+     * <p>Records are still applied one by one in their original order. Before using an initial
+     * RocksDB value, {@link #getFromBufferOrOldValues} checks the pre-write buffer again so that a
+     * repeated key observes an earlier mutation from the same batch.
+     */
+    private Map<KvPreWriteBuffer.Key, byte[]> bulkLoadOldValues(
+            List<PendingKvRecord> pendingRecords,
+            RowMerger currentMerger,
+            AutoIncrementUpdater autoIncrementUpdater)
+            throws IOException {
+        Set<KvPreWriteBuffer.Key> keysRequiringOldValue = new LinkedHashSet<>();
+        for (PendingKvRecord pendingRecord : pendingRecords) {
+            if (requiresOldValue(pendingRecord, currentMerger, autoIncrementUpdater)) {
+                keysRequiringOldValue.add(pendingRecord.key);
+            }
+        }
+
+        List<KvPreWriteBuffer.Key> rocksDbKeys = new ArrayList<>();
+        List<byte[]> rocksDbKeyBytes = new ArrayList<>();
+        for (KvPreWriteBuffer.Key key : keysRequiringOldValue) {
+            if (kvPreWriteBuffer.get(key) == null) {
+                rocksDbKeys.add(key);
+                rocksDbKeyBytes.add(key.get());
+            }
+        }
+
+        Map<KvPreWriteBuffer.Key, byte[]> oldValues = new HashMap<>();
+        if (rocksDbKeys.isEmpty()) {
+            return oldValues;
+        }
+
+        List<byte[]> values = rocksDBKv.multiGet(rocksDbKeyBytes);
+        checkState(
+                values.size() == rocksDbKeys.size(),
+                "RocksDB multi-get returned %s values for %s keys.",
+                values.size(),
+                rocksDbKeys.size());
+        for (int i = 0; i < rocksDbKeys.size(); i++) {
+            oldValues.put(rocksDbKeys.get(i), values.get(i));
+        }
+        return oldValues;
+    }
+
+    private boolean requiresOldValue(
+            PendingKvRecord pendingRecord,
+            RowMerger currentMerger,
+            AutoIncrementUpdater autoIncrementUpdater) {
+        if (pendingRecord.currentValue == null) {
+            return currentMerger.deleteBehavior() == DeleteBehavior.ALLOW;
+        }
+        return changelogImage != ChangelogImage.WAL
+                || autoIncrementUpdater.hasAutoIncrement()
+                || !(currentMerger instanceof DefaultRowMerger);
+    }
+
     private long processDeletion(
             KvPreWriteBuffer.Key key,
             RowMerger currentMerger,
+            Map<KvPreWriteBuffer.Key, byte[]> rocksDbOldValues,
             ValueDecoder valueDecoder,
             WalBuilder walBuilder,
             PaddingRow latestSchemaRow,
@@ -687,7 +764,7 @@ public final class KvTablet {
                             + "The table.delete.behavior is set to 'disable'.");
         }
 
-        byte[] oldValueBytes = getFromBufferOrKv(key);
+        byte[] oldValueBytes = getFromBufferOrOldValues(key, rocksDbOldValues);
         if (oldValueBytes == null) {
             LOG.debug(
                     "The specific key can't be found in kv tablet although the kv record is for deletion, "
@@ -711,6 +788,7 @@ public final class KvTablet {
             BinaryValue currentValue,
             RowMerger currentMerger,
             AutoIncrementUpdater autoIncrementUpdater,
+            Map<KvPreWriteBuffer.Key, byte[]> rocksDbOldValues,
             ValueDecoder valueDecoder,
             WalBuilder walBuilder,
             PaddingRow latestSchemaRow,
@@ -726,7 +804,7 @@ public final class KvTablet {
             return applyUpdate(key, null, currentValue, walBuilder, latestSchemaRow, logOffset);
         }
 
-        byte[] oldValueBytes = getFromBufferOrKv(key);
+        byte[] oldValueBytes = getFromBufferOrOldValues(key, rocksDbOldValues);
         if (oldValueBytes == null) {
             BinaryValue valueToInsert = currentMerger.merge(null, currentValue);
             return applyInsert(
@@ -1155,6 +1233,26 @@ public final class KvTablet {
             return rocksDBKv.get(key.get());
         }
         return value.get();
+    }
+
+    private byte[] getFromBufferOrOldValues(
+            KvPreWriteBuffer.Key key, Map<KvPreWriteBuffer.Key, byte[]> rocksDbOldValues) {
+        KvPreWriteBuffer.Value value = kvPreWriteBuffer.get(key);
+        if (value != null) {
+            return value.get();
+        }
+        checkState(rocksDbOldValues.containsKey(key), "Old value was not loaded for key %s.", key);
+        return rocksDbOldValues.get(key);
+    }
+
+    private static final class PendingKvRecord {
+        private final KvPreWriteBuffer.Key key;
+        private final @Nullable BinaryValue currentValue;
+
+        private PendingKvRecord(KvPreWriteBuffer.Key key, @Nullable BinaryValue currentValue) {
+            this.key = key;
+            this.currentValue = currentValue;
+        }
     }
 
     public List<byte[]> multiGet(List<byte[]> keys) throws IOException {

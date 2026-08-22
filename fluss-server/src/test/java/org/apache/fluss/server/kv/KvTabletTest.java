@@ -124,6 +124,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Fail.fail;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 /** Test for {@link KvTablet}. */
 class KvTabletTest {
@@ -576,6 +582,46 @@ class KvTabletTest {
                                         new Object[] {1, "v1", null},
                                         new Object[] {1, "v1", "c1"})));
         checkEqual(actualLogRecords, expectedLogs, rowType);
+    }
+
+    @Test
+    void testBatchOldValueLookupUsesSingleDeduplicatedRocksDbMultiGet() throws Exception {
+        initLogTabletAndKvTablet(DATA2_SCHEMA, new HashMap<>());
+        KvRecordTestUtils.KvRecordFactory recordFactory =
+                KvRecordTestUtils.KvRecordFactory.of(DATA2_ROW_TYPE);
+
+        kvTablet.putAsLeader(
+                kvRecordBatchFactory.ofRecords(
+                        recordFactory.ofRecord("k1", new Object[] {1, "v1", null}),
+                        recordFactory.ofRecord("k2", new Object[] {2, "v2", null})),
+                null);
+        flushAndWait(kvTablet, Long.MAX_VALUE);
+
+        // Keep k3 in the pre-write buffer. Its old value must not be loaded from RocksDB.
+        kvTablet.putAsLeader(
+                kvRecordBatchFactory.ofRecords(
+                        recordFactory.ofRecord("k3", new Object[] {3, "v3", null})),
+                null);
+
+        RocksDBKv rocksDBKv = spy(kvTablet.getRocksDBKv());
+        Field rocksDBKvField = KvTablet.class.getDeclaredField("rocksDBKv");
+        rocksDBKvField.setAccessible(true);
+        rocksDBKvField.set(kvTablet, rocksDBKv);
+
+        kvTablet.putAsLeader(
+                kvRecordBatchFactory.ofRecords(
+                        recordFactory.ofRecord("k1", new Object[] {1, "v11", null}),
+                        recordFactory.ofRecord("k1", new Object[] {1, "v12", null}),
+                        recordFactory.ofRecord("k2", new Object[] {2, "v22", null}),
+                        recordFactory.ofRecord("k3", new Object[] {3, "v33", null})),
+                new int[] {0, 1});
+
+        verify(rocksDBKv, times(1)).multiGet(argThat(keys -> keys.size() == 2));
+        verify(rocksDBKv, never()).get(any(byte[].class));
+        assertThat(kvTablet.getKvPreWriteBuffer().get(Key.of("k1".getBytes())))
+                .isEqualTo(valueOf(compactedRow(DATA2_ROW_TYPE, new Object[] {1, "v12", null})));
+        assertThat(kvTablet.getKvPreWriteBuffer().get(Key.of("k3".getBytes())))
+                .isEqualTo(valueOf(compactedRow(DATA2_ROW_TYPE, new Object[] {3, "v33", null})));
     }
 
     @Test
