@@ -219,6 +219,202 @@ mod table_test {
         );
     }
 
+    /// A null nested value in a NOT NULL ARRAY/MAP/ROW column is rejected
+    /// client-side; a populated nested value is accepted and round-trips.
+    #[tokio::test]
+    async fn append_arrow_batch_nested_not_null_columns() {
+        use arrow::array::{
+            Array, ArrayRef, Int32Array, ListArray, MapArray, RecordBatch, StringArray, StructArray,
+        };
+        use arrow::buffer::{NullBuffer, OffsetBuffer};
+        use arrow::datatypes::{DataType as ArrowDataType, Field, Schema as ArrowSchema};
+        use std::sync::Arc;
+
+        fn reject_null(err: impl std::fmt::Display) {
+            let text = err.to_string();
+            assert!(
+                text.contains("declared as non-nullable but contains null values"),
+                "unexpected error: {text}"
+            );
+        }
+
+        fn nested_batch(tags: ArrayRef, attrs: ArrayRef, nested: ArrayRef) -> RecordBatch {
+            RecordBatch::try_new(
+                Arc::new(ArrowSchema::new(vec![
+                    Field::new("tags", tags.data_type().clone(), true),
+                    Field::new("attrs", attrs.data_type().clone(), true),
+                    Field::new("nested", nested.data_type().clone(), true),
+                ])),
+                vec![tags, attrs, nested],
+            )
+            .expect("nested batch")
+        }
+
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss", "test_append_arrow_batch_nested_not_null");
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("tags", DataTypes::array(DataTypes::int()).as_non_nullable())
+                    .column(
+                        "attrs",
+                        DataTypes::map(DataTypes::string(), DataTypes::int()).as_non_nullable(),
+                    )
+                    .column(
+                        "nested",
+                        DataTypes::row(vec![
+                            DataField::new("seq", DataTypes::int(), None),
+                            DataField::new("label", DataTypes::string(), None),
+                        ])
+                        .as_non_nullable(),
+                    )
+                    .build()
+                    .expect("schema"),
+            )
+            .build()
+            .expect("table descriptor");
+        create_table(&admin, &table_path, &table_descriptor).await;
+
+        let table = connection.get_table(&table_path).await.expect("table");
+        let writer = table
+            .new_append()
+            .expect("append")
+            .create_writer()
+            .expect("writer");
+
+        let item_field = Arc::new(Field::new("item", ArrowDataType::Int32, true));
+        let ok_list: ArrayRef = Arc::new(ListArray::new(
+            Arc::clone(&item_field),
+            OffsetBuffer::new(vec![0_i32, 2].into()),
+            Arc::new(Int32Array::from(vec![10, 20])),
+            None,
+        ));
+        let null_list: ArrayRef = Arc::new(ListArray::new(
+            item_field,
+            OffsetBuffer::new(vec![0_i32, 0].into()),
+            Arc::new(Int32Array::from(Vec::<i32>::new())),
+            Some(NullBuffer::from(vec![false])),
+        ));
+
+        let key_field = Arc::new(Field::new("key", ArrowDataType::Utf8, false));
+        let value_field = Arc::new(Field::new("value", ArrowDataType::Int32, true));
+        let ok_entries = StructArray::from(vec![
+            (
+                Arc::clone(&key_field),
+                Arc::new(StringArray::from(vec!["x", "y"])) as ArrayRef,
+            ),
+            (
+                Arc::clone(&value_field),
+                Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef,
+            ),
+        ]);
+        let ok_map: ArrayRef = Arc::new(MapArray::new(
+            Arc::new(Field::new("entries", ok_entries.data_type().clone(), false)),
+            OffsetBuffer::new(vec![0_i32, 2].into()),
+            ok_entries,
+            None,
+            false,
+        ));
+        let empty_entries = StructArray::from(vec![
+            (
+                key_field,
+                Arc::new(StringArray::from(Vec::<&str>::new())) as ArrayRef,
+            ),
+            (
+                value_field,
+                Arc::new(Int32Array::from(Vec::<i32>::new())) as ArrayRef,
+            ),
+        ]);
+        let null_map: ArrayRef = Arc::new(MapArray::new(
+            Arc::new(Field::new(
+                "entries",
+                empty_entries.data_type().clone(),
+                false,
+            )),
+            OffsetBuffer::new(vec![0_i32, 0].into()),
+            empty_entries,
+            Some(NullBuffer::from(vec![false])),
+            false,
+        ));
+
+        let row_fields = arrow::datatypes::Fields::from(vec![
+            Field::new("seq", ArrowDataType::Int32, true),
+            Field::new("label", ArrowDataType::Utf8, true),
+        ]);
+        let ok_struct: ArrayRef = Arc::new(StructArray::new(
+            row_fields.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![42])) as ArrayRef,
+                Arc::new(StringArray::from(vec!["hello"])) as ArrayRef,
+            ],
+            None,
+        ));
+        let null_struct: ArrayRef = Arc::new(StructArray::new(
+            row_fields,
+            vec![
+                Arc::new(Int32Array::from(vec![None])) as ArrayRef,
+                Arc::new(StringArray::from(vec![None::<&str>])) as ArrayRef,
+            ],
+            Some(NullBuffer::from(vec![false])),
+        ));
+
+        reject_null(
+            writer
+                .append_arrow_batch(nested_batch(
+                    Arc::clone(&null_list),
+                    Arc::clone(&ok_map),
+                    Arc::clone(&ok_struct),
+                ))
+                .expect_err("null ARRAY value in NOT NULL column"),
+        );
+        reject_null(
+            writer
+                .append_arrow_batch(nested_batch(
+                    Arc::clone(&ok_list),
+                    Arc::clone(&null_map),
+                    Arc::clone(&ok_struct),
+                ))
+                .expect_err("null MAP value in NOT NULL column"),
+        );
+        reject_null(
+            writer
+                .append_arrow_batch(nested_batch(
+                    Arc::clone(&ok_list),
+                    Arc::clone(&ok_map),
+                    Arc::clone(&null_struct),
+                ))
+                .expect_err("null ROW value in NOT NULL column"),
+        );
+
+        writer
+            .append_arrow_batch(nested_batch(ok_list, ok_map, ok_struct))
+            .expect("populated nested values must be accepted");
+        writer.flush().await.expect("flush");
+
+        let records = scan_table(&table, |scan| scan).await;
+        assert_eq!(records.len(), 1);
+        let row = records[0].row();
+
+        let tags = row.get_array(0).expect("tags");
+        assert_eq!(tags.size(), 2);
+        assert_eq!(tags.get_int(0).unwrap(), 10);
+        assert_eq!(tags.get_int(1).unwrap(), 20);
+
+        let attrs = row.get_map(1).expect("attrs");
+        assert_eq!(attrs.size(), 2);
+        assert_eq!(attrs.key_array().get_string(0).unwrap(), "x");
+        assert_eq!(attrs.value_array().get_int(0).unwrap(), 1);
+        assert_eq!(attrs.key_array().get_string(1).unwrap(), "y");
+        assert_eq!(attrs.value_array().get_int(1).unwrap(), 2);
+
+        let nested = row.get_row(2).expect("nested");
+        assert_eq!(nested.get_int(0).unwrap(), 42);
+        assert_eq!(nested.get_string(1).unwrap(), "hello");
+    }
+
     #[tokio::test]
     async fn list_offsets() {
         let cluster = get_shared_cluster();
