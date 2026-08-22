@@ -1,0 +1,114 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements. See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership. The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+x-flink-common: &flink-common
+  image: ${FLUSS_DEVKIT_FLINK_IMAGE:-flink:1.20.3-scala_2.12-java17}
+  entrypoint:
+    - /bin/bash
+    - -c
+    - |
+      cp /opt/devkit-jars/lib/*.jar /opt/flink/lib/
+      chmod a+r /opt/flink/lib/*.jar
+      exec /docker-entrypoint.sh "$$@"
+    - --
+  volumes:
+    - ./.deps/flink/active:/opt/devkit-jars:ro
+    - ${FLUSS_DEVKIT_CONFIG:-./profiles/core/server.yaml}:/opt/devkit-config/server.yaml:ro
+    - ./tests:/opt/devkit-tests:ro
+    - shared-data:/tmp/fluss
+
+services:
+  jobmanager:
+    <<: *flink-common
+    profiles: [flink]
+    command: ["jobmanager"]
+    depends_on:
+      coordinator-server:
+        condition: service_healthy
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: jobmanager
+        jobmanager.memory.process.size: 1024m
+        parallelism.default: 1
+        rest.address: jobmanager
+    ports:
+      - "${FLINK_REST_PORT:-8083}:8081"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8081/overview >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 10s
+
+  taskmanager:
+    <<: *flink-common
+    profiles: [flink]
+    command: ["taskmanager"]
+    depends_on:
+      jobmanager:
+        condition: service_healthy
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: jobmanager
+        taskmanager.memory.process.size: 1536m
+        taskmanager.numberOfTaskSlots: 4
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl -fsS http://jobmanager:8081/taskmanagers | grep -q '"id"'
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 10s
+
+  tiering-submit:
+    <<: *flink-common
+    profiles: [tiering]
+    restart: "no"
+    depends_on:
+      taskmanager:
+        condition: service_healthy
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: jobmanager
+        rest.address: jobmanager
+    command:
+      - /bin/bash
+      - -c
+      - |
+        ARGS=()
+        HAS_BOOTSTRAP=false
+        while IFS= read -r LINE || [ -n "$$LINE" ]; do
+          LINE="$${LINE%%#*}"
+          [[ "$$LINE" == *": "* ]] || continue
+          KEY="$${LINE%%: *}"
+          VALUE="$${LINE#*: }"
+          KEY="$${KEY#"$${KEY%%[![:space:]]*}"}"
+          KEY="$${KEY%"$${KEY##*[![:space:]]}"}"
+          VALUE="$${VALUE#"$${VALUE%%[![:space:]]*}"}"
+          VALUE="$${VALUE%"$${VALUE##*[![:space:]]}"}"
+          case "$$KEY" in
+            datalake.*|lake.tiering.*|config.providers*|fluss.*)
+              ARGS+=("--$$KEY" "$$VALUE")
+              [ "$$KEY" = "fluss.bootstrap.servers" ] && HAS_BOOTSTRAP=true
+              ;;
+          esac
+        done < /opt/devkit-config/server.yaml
+        if [ "$$HAS_BOOTSTRAP" = false ]; then
+          ARGS+=(--fluss.bootstrap.servers coordinator-server:19123)
+        fi
+        exec /opt/flink/bin/flink run -d \
+          /opt/devkit-jars/jobs/fluss-flink-tiering.jar "$${ARGS[@]}"
