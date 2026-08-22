@@ -84,12 +84,15 @@ public class Flink23DeltaJoinITCase extends FlinkTestBase {
                 .set(
                         OptimizerConfigOptions.TABLE_OPTIMIZER_DELTA_JOIN_STRATEGY,
                         OptimizerConfigOptions.DeltaJoinStrategy.FORCE);
-        // Flink 2.3 introduces ExecutionConfigOptions.TABLE_EXEC_SINK_REQUIRE_ON_CONFLICT
-        // (default true), which makes FlinkChangelogModeInferenceProgram throw a
-        // "upsert key differs from primary key" ValidationException before the
-        // StreamPhysicalDeltaJoinForceValidator runs. Disable it here so the existing
-        // delta-join "doesn't support to do delta join optimization" error remains
-        // reachable from these tests.
+    }
+
+    /**
+     * Disables {@link ExecutionConfigOptions#TABLE_EXEC_SINK_REQUIRE_ON_CONFLICT} so the {@code
+     * FlinkChangelogModeInferenceProgram} does not reject plans whose inferred upsert key differs
+     * from the sink PK before the {@code StreamPhysicalDeltaJoinForceValidator} has a chance to
+     * run.
+     */
+    private void disableSinkRequireOnConflict() {
         tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_SINK_REQUIRE_ON_CONFLICT, false);
     }
 
@@ -784,6 +787,7 @@ public class Flink23DeltaJoinITCase extends FlinkTestBase {
 
     @Test
     void testDeltaJoinWithJoinKeyExceedsPrimaryKey() {
+        disableSinkRequireOnConflict();
         String leftTableName = "left_table_exceed_pk";
         createSource(
                 leftTableName,
@@ -878,6 +882,7 @@ public class Flink23DeltaJoinITCase extends FlinkTestBase {
 
     @Test
     void testDeltaJoinFailsWhenJoinKeyNotContainIndex() {
+        disableSinkRequireOnConflict();
         String leftTableName = "left_table_no_idx_force";
         createSource(
                 leftTableName,
@@ -914,6 +919,7 @@ public class Flink23DeltaJoinITCase extends FlinkTestBase {
 
     @Test
     void testDeltaJoinFailsWithOuterJoin() {
+        disableSinkRequireOnConflict();
         String leftTableName = "left_table_outer_fail";
         createSource(
                 leftTableName,
@@ -968,6 +974,7 @@ public class Flink23DeltaJoinITCase extends FlinkTestBase {
 
     @Test
     void testDeltaJoinFailsWithCascadeJoin() {
+        disableSinkRequireOnConflict();
         String table1 = "cascade_table1";
         createSource(
                 table1,
@@ -1016,6 +1023,7 @@ public class Flink23DeltaJoinITCase extends FlinkTestBase {
 
     @Test
     void testDeltaJoinFailsWithSinkMaterializer() {
+        disableSinkRequireOnConflict();
         // With CDC sources, when sink PK doesn't match upstream update key,
         // Flink would insert SinkUpsertMaterializer which prevents delta join
         String leftTableName = "left_table_materializer";
@@ -1057,6 +1065,7 @@ public class Flink23DeltaJoinITCase extends FlinkTestBase {
 
     @Test
     void testDeltaJoinFailsWithNonDeterministicFunctions() {
+        disableSinkRequireOnConflict();
         String leftTableName = "left_table_nondeterministic";
         createSource(
                 leftTableName,
