@@ -50,13 +50,13 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.concurrent.AbstractExecutorService;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -169,6 +169,116 @@ class HistoricalLakeLookupManagerTest {
         assertThat(second).isNotDone();
         assertThat(executor.numQueuedTasks()).isEqualTo(2);
         assertThat(third.getError().error()).isEqualTo(Errors.HISTORICAL_PARTITION_THROTTLED);
+    }
+
+    @Test
+    void testReconfiguresMaxQueuedHistoricalRequests() throws Exception {
+        ManualExecutor executor = new ManualExecutor();
+        HistoricalLakeLookupManager manager = createManager(1, executor);
+
+        CompletableFuture<LookupResultForBucket> first =
+                manager.lookup(
+                        lookupData(new TableBucket(PARTITION_TABLE_ID, 1L, 0)),
+                        PARTITION_TABLE_INFO,
+                        PARTITION_TABLE_INFO.getSchemaInfo(),
+                        NO_OP_LOOKUP_METRIC_RECORDER);
+
+        manager.reconfigure(conf(2));
+        CompletableFuture<LookupResultForBucket> second =
+                manager.lookup(
+                        lookupData(new TableBucket(PARTITION_TABLE_ID, 2L, 0)),
+                        PARTITION_TABLE_INFO,
+                        PARTITION_TABLE_INFO.getSchemaInfo(),
+                        NO_OP_LOOKUP_METRIC_RECORDER);
+        LookupResultForBucket third =
+                manager.lookup(
+                                lookupData(new TableBucket(PARTITION_TABLE_ID, 3L, 0)),
+                                PARTITION_TABLE_INFO,
+                                PARTITION_TABLE_INFO.getSchemaInfo(),
+                                NO_OP_LOOKUP_METRIC_RECORDER)
+                        .get(1, TimeUnit.SECONDS);
+
+        assertThat(first).isNotDone();
+        assertThat(second).isNotDone();
+        assertThat(manager.numInflightRequests()).isEqualTo(2);
+        assertThat(third.getError().error()).isEqualTo(Errors.HISTORICAL_PARTITION_THROTTLED);
+
+        executor.runNext();
+        executor.runNext();
+        assertThat(first).isDone();
+        assertThat(second).isDone();
+        assertThat(manager.numInflightRequests()).isZero();
+    }
+
+    @Test
+    void testReducesMaxQueuedHistoricalRequestsWhileLookupsAreInflight() throws Exception {
+        ManualExecutor executor = new ManualExecutor();
+        HistoricalLakeLookupManager manager = createManager(2, executor);
+
+        CompletableFuture<LookupResultForBucket> first =
+                manager.lookup(
+                        lookupData(new TableBucket(PARTITION_TABLE_ID, 1L, 0)),
+                        PARTITION_TABLE_INFO,
+                        PARTITION_TABLE_INFO.getSchemaInfo(),
+                        NO_OP_LOOKUP_METRIC_RECORDER);
+        CompletableFuture<LookupResultForBucket> second =
+                manager.lookup(
+                        lookupData(new TableBucket(PARTITION_TABLE_ID, 2L, 0)),
+                        PARTITION_TABLE_INFO,
+                        PARTITION_TABLE_INFO.getSchemaInfo(),
+                        NO_OP_LOOKUP_METRIC_RECORDER);
+
+        manager.reconfigure(conf(1));
+        LookupResultForBucket third =
+                manager.lookup(
+                                lookupData(new TableBucket(PARTITION_TABLE_ID, 3L, 0)),
+                                PARTITION_TABLE_INFO,
+                                PARTITION_TABLE_INFO.getSchemaInfo(),
+                                NO_OP_LOOKUP_METRIC_RECORDER)
+                        .get(1, TimeUnit.SECONDS);
+
+        assertThat(first).isNotDone();
+        assertThat(second).isNotDone();
+        assertThat(manager.numInflightRequests()).isEqualTo(2);
+        assertThat(third.getError().error()).isEqualTo(Errors.HISTORICAL_PARTITION_THROTTLED);
+
+        executor.runNext();
+        executor.runNext();
+        assertThat(first).isDone();
+        assertThat(second).isDone();
+        assertThat(manager.numInflightRequests()).isZero();
+    }
+
+    @Test
+    void testReconfiguresHistoricalPartitionThreadPoolMaxSize() throws Exception {
+        Configuration initialConf = conf(1);
+        initialConf.set(ConfigOptions.SERVER_HISTORICAL_PARTITION_THREAD_POOL_MAX_SIZE, 1);
+        ThreadPoolExecutor executor =
+                new ThreadPoolExecutor(1, 1, 1L, TimeUnit.MINUTES, new LinkedBlockingQueue<>());
+        HistoricalLakeLookupManager manager =
+                new HistoricalLakeLookupManager(
+                        initialConf,
+                        null,
+                        executor,
+                        ioTmpDir,
+                        DATA_DIR_VOLUME_BYTES,
+                        Ticker.systemTicker(),
+                        Scheduler.disabledScheduler(),
+                        NO_OP_DISK_WRITE_GUARD);
+
+        Configuration largerConf = new Configuration(initialConf);
+        largerConf.set(ConfigOptions.SERVER_HISTORICAL_PARTITION_THREAD_POOL_MAX_SIZE, 3);
+        manager.reconfigure(largerConf);
+        assertThat(executor.getCorePoolSize()).isEqualTo(3);
+        assertThat(executor.getMaximumPoolSize()).isEqualTo(3);
+
+        Configuration smallerConf = new Configuration(largerConf);
+        smallerConf.set(ConfigOptions.SERVER_HISTORICAL_PARTITION_THREAD_POOL_MAX_SIZE, 1);
+        manager.reconfigure(smallerConf);
+        assertThat(executor.getCorePoolSize()).isEqualTo(1);
+        assertThat(executor.getMaximumPoolSize()).isEqualTo(1);
+
+        manager.close();
     }
 
     @Test
@@ -672,9 +782,13 @@ class HistoricalLakeLookupManagerTest {
         }
     }
 
-    private static final class ManualExecutor extends AbstractExecutorService {
+    private static final class ManualExecutor extends ThreadPoolExecutor {
         private final BlockingQueue<Runnable> tasks = new LinkedBlockingQueue<>();
         private volatile boolean shutdown;
+
+        private ManualExecutor() {
+            super(0, Integer.MAX_VALUE, 0L, TimeUnit.MILLISECONDS, new LinkedBlockingQueue<>());
+        }
 
         @Override
         public void shutdown() {

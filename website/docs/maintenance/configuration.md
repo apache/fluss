@@ -21,8 +21,8 @@ auto-partition.check.interval: 5min
 ```
 
 Server configuration refers to a set of configurations used to specify the running parameters of a server.
-These settings can only be configured at the time of cluster startup and do not support dynamic modification
-during the Fluss cluster working.
+Most settings can only be configured at cluster startup. The configurations explicitly marked as dynamic
+below can be modified while the Fluss cluster is running.
 
 ## Common
 
@@ -101,6 +101,7 @@ The logging-related environment options (`env.log.dir`, `env.log.level`, `env.lo
 | server.data-disk.write-limit-ratio               | Double     | 0.85             | Reject writes when the tablet server data disk usage reaches this ratio. Writes resume when the usage reaches or drops below `server.data-disk.write-recover-ratio`. The monitor reports the maximum usage across all distinct file stores so that a single nearly-full disk is never masked by other low-usage disks. Set to `1.0` to disable the disk-usage protection entirely. The valid range is `(server.data-disk.write-recover-ratio, 1.0]`. When lowering both ratios dynamically, update them in the same request or lower `server.data-disk.write-recover-ratio` first. This configuration can be updated dynamically without server restart. |
 | server.data-disk.write-recover-ratio             | Double     | 0.80             | Resume writes when the tablet server data disk usage reaches or drops below this ratio. The valid range is `(0.0, server.data-disk.write-limit-ratio)`. This configuration can be updated dynamically without server restart.                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | server.data-disk.check-interval                  | Duration   | 30s              | The interval at which the tablet server samples the local data disk usage for the write-protection state machine. A shorter interval narrows the time window during which writes can still flow in after the disk crosses the limit ratio, at the cost of slightly more frequent `statvfs` calls (which are in-memory and cheap). The default 30s is suitable for typical write workloads.                                                                                                                                                                                                                                                               |
+| server.historical-partition.thread-pool.max-size  | Integer    | 10               | The maximum number of threads used for historical partition operations, such as lake lookups and writes. This configuration can be updated dynamically without server restart. |
 
 ## Zookeeper
 
@@ -124,6 +125,7 @@ The logging-related environment options (`env.log.dir`, `env.log.level`, `env.lo
 | netty.server.num-network-threads | Integer    | 3       | The number of threads that the server uses for receiving requests from the network and sending responses to the network.                                                                                      |
 | netty.server.num-worker-threads  | Integer    | 8       | The number of threads that the server uses for processing requests, which may include disk and remote I/O.                                                                                                    |
 | netty.server.max-queued-requests | Integer    | 500     | The number of queued requests allowed for worker threads, before blocking the I/O threads.                                                                                                                    |
+| netty.server.max-queued-historical-requests | Integer    | 50      | The number of historical lookup requests allowed to wait for lake lookup processing before throttling them. This configuration can be updated dynamically without server restart. |
 | netty.server.max-request-size    | MemorySize | 100mb   | The maximum size of a single request that the server can receive. This limits the maximum frame length at the Netty pipeline level to protect the server from malicious clients sending oversized requests that could exhaust server memory. |
 | netty.connection.max-idle-time   | Duration   | 10min   | Close idle connections after the given time specified by this config.                                                                                                                                         |
 | netty.client.num-network-threads | Integer    | 4       | The number of threads that the client uses for sending requests to the network and receiving responses from network. The default value is 4.                                                                  |

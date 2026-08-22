@@ -21,6 +21,8 @@ Currently, the supported dynamically updatable server configurations include:
 - `datalake.format`: Specify the lakehouse format, e.g., `paimon`, `iceberg`. When enabling lakehouse storage explicitly, use it together with `datalake.enabled = true`.
 - Options with prefix `datalake.${datalake.format}`
 - `kv.rocksdb.shared-rate-limiter.bytes-per-sec`: Control RocksDB flush and compaction write rate shared across all RocksDB instances on the TabletServer. The rate limiter is always enabled. Set to a lower value (e.g., 100MB) to limit the rate, or a very high value to effectively disable rate limiting.
+- `server.historical-partition.thread-pool.max-size`: Change the maximum number of threads used for historical partition operations.
+- `netty.server.max-queued-historical-requests`: Change the maximum number of historical lookup requests admitted before throttling.
 
 
 You can update the configuration of a cluster with [Java client](#using-java-client) or [Flink SQL](#using-flink-sql).

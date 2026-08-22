@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.TableConfig;
+import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.HistoricalPartitionThrottledException;
 import org.apache.fluss.exception.InvalidPartitionException;
@@ -71,7 +72,6 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -131,12 +131,13 @@ class HistoricalLakeLookupManager implements AutoCloseable {
     private volatile long lakeConfigVersion;
     private final @Nullable PluginManager pluginManager;
     private final Counter capacityEvictions;
-    private final int maxQueuedHistoricalRequests;
-    private final Semaphore lookupPermits;
+    private volatile int maxQueuedHistoricalRequests;
+    private final AdjustableSemaphore lookupPermits;
     // Accepted lookup futures tracked so close() can cancel tasks left after executor shutdown.
     private final Set<CompletableFuture<LookupResultForBucket>> pendingLookups;
     private final Cache<Long, CachedLakeTableLookuper> lakeTableLookupers;
-    private final ExecutorService historicalPartitionExecutor;
+    private final ThreadPoolExecutor historicalPartitionExecutor;
+    private volatile int maxThreadPoolSize;
     private final File historicalLookupCacheRootDir;
     private final long dataDirVolumeBytes;
     // TODO: Introduce a minimum lookup cache disk ratio (default 0.01). When disk usage is high,
@@ -173,7 +174,7 @@ class HistoricalLakeLookupManager implements AutoCloseable {
     HistoricalLakeLookupManager(
             Configuration conf,
             @Nullable PluginManager pluginManager,
-            @Nullable ExecutorService historicalPartitionExecutor,
+            @Nullable ThreadPoolExecutor historicalPartitionExecutor,
             File dataDir,
             long dataDirVolumeBytes,
             Ticker ticker,
@@ -209,6 +210,7 @@ class HistoricalLakeLookupManager implements AutoCloseable {
                 historicalPartitionExecutor == null
                         ? createHistoricalPartitionExecutor(maxThreadPoolSize)
                         : historicalPartitionExecutor;
+        this.maxThreadPoolSize = maxThreadPoolSize;
         this.lakeTableLookupers =
                 Caffeine.newBuilder()
                         .maximumSize(MAX_CACHED_TABLES)
@@ -221,7 +223,7 @@ class HistoricalLakeLookupManager implements AutoCloseable {
                         .executor(Runnable::run)
                         .removalListener(this::onLookuperRemoved)
                         .build();
-        this.lookupPermits = new Semaphore(maxQueuedHistoricalRequests);
+        this.lookupPermits = new AdjustableSemaphore(maxQueuedHistoricalRequests);
         this.pendingLookups = ConcurrentHashMap.newKeySet();
     }
 
@@ -341,7 +343,7 @@ class HistoricalLakeLookupManager implements AutoCloseable {
         return future;
     }
 
-    private ExecutorService createHistoricalPartitionExecutor(int maxThreadPoolSize) {
+    private ThreadPoolExecutor createHistoricalPartitionExecutor(int maxThreadPoolSize) {
         ThreadPoolExecutor executor =
                 new ThreadPoolExecutor(
                         maxThreadPoolSize,
@@ -352,6 +354,18 @@ class HistoricalLakeLookupManager implements AutoCloseable {
                         new ExecutorThreadFactory(HISTORICAL_PARTITION_THREAD_NAME_PREFIX));
         executor.allowCoreThreadTimeOut(true);
         return executor;
+    }
+
+    private static final class AdjustableSemaphore extends Semaphore {
+        private static final long serialVersionUID = 1L;
+
+        private AdjustableSemaphore(int permits) {
+            super(permits);
+        }
+
+        private void decreasePermits(int reduction) {
+            super.reducePermits(reduction);
+        }
     }
 
     /** Invalidates the cached lake lookuper for the given table. */
@@ -369,17 +383,26 @@ class HistoricalLakeLookupManager implements AutoCloseable {
         return capacityEvictions;
     }
 
-    /** Returns the number of accepted historical lookup requests that have not completed. */
+    /**
+     * Returns the number of accepted historical lookup requests that have not completed.
+     *
+     * <p>This value is intended for monitoring and may be transient while requests complete or the
+     * request limit is reconfigured.
+     */
     int numInflightRequests() {
         return maxQueuedHistoricalRequests - lookupPermits.availablePermits();
     }
 
     /** Applies dynamic historical lookup configuration changes. */
-    void reconfigure(Configuration newConf) {
+    void reconfigure(Configuration newConf) throws ConfigException {
         checkNotNull(newConf, "newConf must not be null.");
         boolean lakeConfigChanged;
         boolean cacheLimitChanged;
         boolean expirationChanged;
+        int newMaxQueuedHistoricalRequests =
+                newConf.get(ConfigOptions.NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS);
+        int newMaxThreadPoolSize =
+                newConf.get(ConfigOptions.SERVER_HISTORICAL_PARTITION_THREAD_POOL_MAX_SIZE);
         Duration newExpiration =
                 newConf.get(
                         ConfigOptions
@@ -391,8 +414,28 @@ class HistoricalLakeLookupManager implements AutoCloseable {
                                     ConfigOptions
                                             .SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO));
             cacheLimitChanged = newMaxBytesPerTable != lookupCacheMaxDiskBytesPerTable;
-            lookupCacheMaxDiskBytesPerTable = newMaxBytesPerTable;
 
+            if (newMaxThreadPoolSize != maxThreadPoolSize) {
+                resizeHistoricalPartitionThreadPool(newMaxThreadPoolSize);
+                LOG.info(
+                        "{} reconfigured: {} -> {}",
+                        ConfigOptions.SERVER_HISTORICAL_PARTITION_THREAD_POOL_MAX_SIZE.key(),
+                        maxThreadPoolSize,
+                        newMaxThreadPoolSize);
+                maxThreadPoolSize = newMaxThreadPoolSize;
+            }
+
+            if (newMaxQueuedHistoricalRequests != maxQueuedHistoricalRequests) {
+                adjustLookupPermits(newMaxQueuedHistoricalRequests);
+                LOG.info(
+                        "{} reconfigured: {} -> {}",
+                        ConfigOptions.NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS.key(),
+                        maxQueuedHistoricalRequests,
+                        newMaxQueuedHistoricalRequests);
+                maxQueuedHistoricalRequests = newMaxQueuedHistoricalRequests;
+            }
+
+            lookupCacheMaxDiskBytesPerTable = newMaxBytesPerTable;
             lakeConfigChanged = hasLakeConfigChanged(conf, newConf);
             expirationChanged =
                     !newExpiration.equals(
@@ -421,6 +464,26 @@ class HistoricalLakeLookupManager implements AutoCloseable {
             // with the updated per-table limit.
             lakeTableLookupers.invalidateAll();
             lakeTableLookupers.cleanUp();
+        }
+    }
+
+    private void resizeHistoricalPartitionThreadPool(int newMaxThreadPoolSize) {
+        int currentMaxThreadPoolSize = historicalPartitionExecutor.getMaximumPoolSize();
+        if (newMaxThreadPoolSize > currentMaxThreadPoolSize) {
+            historicalPartitionExecutor.setMaximumPoolSize(newMaxThreadPoolSize);
+            historicalPartitionExecutor.setCorePoolSize(newMaxThreadPoolSize);
+        } else if (newMaxThreadPoolSize < currentMaxThreadPoolSize) {
+            historicalPartitionExecutor.setCorePoolSize(newMaxThreadPoolSize);
+            historicalPartitionExecutor.setMaximumPoolSize(newMaxThreadPoolSize);
+        }
+    }
+
+    private void adjustLookupPermits(int newMaxQueuedHistoricalRequests) {
+        int permitDelta = newMaxQueuedHistoricalRequests - maxQueuedHistoricalRequests;
+        if (permitDelta > 0) {
+            lookupPermits.release(permitDelta);
+        } else if (permitDelta < 0) {
+            lookupPermits.decreasePermits(-permitDelta);
         }
     }
 
