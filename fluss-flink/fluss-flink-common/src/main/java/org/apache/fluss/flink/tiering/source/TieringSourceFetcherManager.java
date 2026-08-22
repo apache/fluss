@@ -55,34 +55,57 @@ public class TieringSourceFetcherManager<WriteResult>
     }
 
     public void markTableReachTieringMaxDuration(long tableId) {
+        LOG.info("Enqueueing handleTableReachTieringMaxDuration task for table {}", tableId);
+        enqueueTaskForTable(
+                tableId,
+                reader -> {
+                    LOG.debug(
+                            "Executing handleTableReachTieringMaxDuration in split reader for table {}",
+                            tableId);
+                    reader.handleTableReachTieringMaxDuration(tableId);
+                },
+                "handleTableReachTieringMaxDuration");
+    }
+
+    public void markTableDropped(long tableId) {
+        LOG.info("Enqueueing handleTableDropped task for table {}", tableId);
+        enqueueTaskForTable(
+                tableId,
+                reader -> {
+                    LOG.debug("Executing handleTableDropped in split reader for table {}", tableId);
+                    reader.handleTableDropped(tableId);
+                },
+                "handleTableDropped");
+    }
+
+    private void enqueueTaskForTable(
+            long tableId, Consumer<TieringSplitReader<WriteResult>> action, String actionDesc) {
         if (!fetchers.isEmpty()) {
             // The fetcher thread is still running. This should be the majority of the cases.
-            LOG.info("fetchers is not empty, marking tiering max duration for table {}", tableId);
-            fetchers.values()
-                    .forEach(
-                            splitFetcher ->
-                                    enqueueMarkTableReachTieringMaxDurationTask(
-                                            splitFetcher, tableId));
+            LOG.info("Fetchers are active, enqueueing {} task for table {}", actionDesc, tableId);
+            fetchers.values().forEach(f -> enqueueReaderTask(f, action));
         } else {
-            SplitFetcher<TableBucketWriteResult<WriteResult>, TieringSplit> splitFetcher =
-                    createSplitFetcher();
+            SplitFetcher<TableBucketWriteResult<WriteResult>, TieringSplit> splitFetcher;
             LOG.info(
-                    "fetchers is empty, enqueue marking tiering max duration for table {}",
+                    "No active fetchers, creating new fetcher and enqueueing {} task for table {}",
+                    actionDesc,
                     tableId);
-            enqueueMarkTableReachTieringMaxDurationTask(splitFetcher, tableId);
+            splitFetcher = createSplitFetcher();
+            enqueueReaderTask(splitFetcher, action);
             startFetcher(splitFetcher);
         }
     }
 
-    private void enqueueMarkTableReachTieringMaxDurationTask(
+    @SuppressWarnings("unchecked")
+    private void enqueueReaderTask(
             SplitFetcher<TableBucketWriteResult<WriteResult>, TieringSplit> splitFetcher,
-            long reachTieringDeadlineTable) {
+            Consumer<TieringSplitReader<WriteResult>> action) {
         splitFetcher.enqueueTask(
                 new SplitFetcherTask() {
                     @Override
                     public boolean run() {
-                        ((TieringSplitReader<WriteResult>) splitFetcher.getSplitReader())
-                                .handleTableReachTieringMaxDuration(reachTieringDeadlineTable);
+                        action.accept(
+                                (TieringSplitReader<WriteResult>) splitFetcher.getSplitReader());
                         return true;
                     }
 

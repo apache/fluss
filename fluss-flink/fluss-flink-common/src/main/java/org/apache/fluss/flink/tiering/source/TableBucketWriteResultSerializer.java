@@ -91,6 +91,9 @@ public class TableBucketWriteResultSerializer<WriteResult>
         // serialize number of write results
         out.writeInt(tableBucketWriteResult.numberOfWriteResults());
 
+        // serialize tableDropped flag
+        out.writeBoolean(tableBucketWriteResult.isTableDropped());
+
         final byte[] result = out.getCopyOfBuffer();
         out.clear();
         return result;
@@ -125,7 +128,9 @@ public class TableBucketWriteResultSerializer<WriteResult>
         if (writeResultLength >= 0) {
             byte[] writeResultBytes = new byte[writeResultLength];
             in.readFully(writeResultBytes);
-            writeResult = writeResultSerializer.deserialize(version, writeResultBytes);
+            writeResult =
+                    writeResultSerializer.deserialize(
+                            writeResultSerializer.getVersion(), writeResultBytes);
         } else {
             writeResult = null;
         }
@@ -136,6 +141,10 @@ public class TableBucketWriteResultSerializer<WriteResult>
         long maxTimestamp = in.readLong();
         // deserialize number of write results
         int numberOfWriteResults = in.readInt();
+
+        // deserialize tableDropped flag
+        boolean tableDropped = in.readBoolean();
+
         return new TableBucketWriteResult<>(
                 tablePath,
                 tableBucket,
@@ -143,6 +152,7 @@ public class TableBucketWriteResultSerializer<WriteResult>
                 writeResult,
                 logEndOffset,
                 maxTimestamp,
-                numberOfWriteResults);
+                numberOfWriteResults,
+                tableDropped);
     }
 }
