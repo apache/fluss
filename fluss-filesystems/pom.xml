@@ -38,6 +38,7 @@
         <module>fluss-fs-obs</module>
         <module>fluss-fs-cos</module>
         <module>fluss-fs-hdfs</module>
+        <module>fluss-fs-juicefs</module>
     </modules>
     <packaging>pom</packaging>
 

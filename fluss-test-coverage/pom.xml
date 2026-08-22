@@ -467,6 +467,7 @@
                                         <exclude>org.apache.fluss.fs.cos.*</exclude>
                                         <exclude>org.apache.fluss.fs.s3.*</exclude>
                                         <exclude>org.apache.fluss.fs.obs.*</exclude>
+                                        <exclude>org.apache.fluss.fs.juicefs.*</exclude>
                                         <exclude>com.amazonaws.services.s3.model.transform.XmlResponsesSaxParser*
                                         </exclude>
                                         <exclude>org.apache.fluss.rocksdb.RocksIteratorWrapper
