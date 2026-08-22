@@ -33,6 +33,11 @@ import static org.apache.fluss.record.LogRecordBatchFormat.NO_BATCH_SEQUENCE;
 public class WriterAppendInfo {
     private static final Logger LOG = LoggerFactory.getLogger(WriterAppendInfo.class);
 
+    enum SequenceValidation {
+        ENFORCE,
+        WARN_AND_ACCEPT
+    }
+
     private final long writerId;
     private final TableBucket tableBucket;
     private final WriterStateEntry currentEntry;
@@ -51,6 +56,14 @@ public class WriterAppendInfo {
 
     public void append(
             LogRecordBatch batch, boolean isWriterInBatchExpired, boolean isAppendAsLeader) {
+        append(batch, isWriterInBatchExpired, isAppendAsLeader, SequenceValidation.ENFORCE);
+    }
+
+    void append(
+            LogRecordBatch batch,
+            boolean isWriterInBatchExpired,
+            boolean isAppendAsLeader,
+            SequenceValidation sequenceValidation) {
         LogOffsetMetadata firstOffsetMetadata = new LogOffsetMetadata(batch.baseLogOffset());
         appendDataBatch(
                 batch.batchSequence(),
@@ -58,27 +71,8 @@ public class WriterAppendInfo {
                 batch.lastLogOffset(),
                 isWriterInBatchExpired,
                 isAppendAsLeader,
-                batch.commitTimestamp());
-    }
-
-    void appendForRecovery(LogRecordBatch batch) {
-        int currentLastSeq = currentLastBatchSequence();
-        if (!inSequence(currentLastSeq, batch.batchSequence(), false, false)) {
-            LOG.warn(
-                    "Detected discontinuous batch sequence while recovering writer {} at offset {} "
-                            + "in table-bucket {}: incoming sequence {}, current sequence {}. "
-                            + "Accepting the persisted batch.",
-                    writerId,
-                    batch.lastLogOffset(),
-                    tableBucket,
-                    batch.batchSequence(),
-                    currentLastSeq);
-        }
-        appendDataBatch(
-                batch.batchSequence(),
-                new LogOffsetMetadata(batch.baseLogOffset()),
-                batch.lastLogOffset(),
-                batch.commitTimestamp());
+                batch.commitTimestamp(),
+                sequenceValidation);
     }
 
     public void appendDataBatch(
@@ -88,7 +82,30 @@ public class WriterAppendInfo {
             boolean isWriterInBatchExpired,
             boolean isAppendAsLeader,
             long batchTimestamp) {
-        maybeValidateDataBatch(batchSequence, isWriterInBatchExpired, lastOffset, isAppendAsLeader);
+        appendDataBatch(
+                batchSequence,
+                firstOffsetMetadata,
+                lastOffset,
+                isWriterInBatchExpired,
+                isAppendAsLeader,
+                batchTimestamp,
+                SequenceValidation.ENFORCE);
+    }
+
+    private void appendDataBatch(
+            int batchSequence,
+            LogOffsetMetadata firstOffsetMetadata,
+            long lastOffset,
+            boolean isWriterInBatchExpired,
+            boolean isAppendAsLeader,
+            long batchTimestamp,
+            SequenceValidation sequenceValidation) {
+        maybeValidateDataBatch(
+                batchSequence,
+                isWriterInBatchExpired,
+                lastOffset,
+                isAppendAsLeader,
+                sequenceValidation);
         appendDataBatch(batchSequence, firstOffsetMetadata, lastOffset, batchTimestamp);
     }
 
@@ -108,15 +125,21 @@ public class WriterAppendInfo {
             int appendFirstSeq,
             boolean isWriterInBatchExpired,
             long lastOffset,
-            boolean isAppendAsLeader) {
+            boolean isAppendAsLeader,
+            SequenceValidation sequenceValidation) {
         int currentLastSeq = currentLastBatchSequence();
         // must be in sequence, even for the first batch should start from 0
         if (!inSequence(currentLastSeq, appendFirstSeq, isWriterInBatchExpired, isAppendAsLeader)) {
-            throw new OutOfOrderSequenceException(
+            String message =
                     String.format(
                             "Out of order batch sequence for writer %s at offset %s in "
                                     + "table-bucket %s : %s (incoming batch seq.), %s (current batch seq.)",
-                            writerId, lastOffset, tableBucket, appendFirstSeq, currentLastSeq));
+                            writerId, lastOffset, tableBucket, appendFirstSeq, currentLastSeq);
+            if (sequenceValidation == SequenceValidation.WARN_AND_ACCEPT) {
+                LOG.warn("{}. Accepting the persisted batch.", message);
+                return;
+            }
+            throw new OutOfOrderSequenceException(message);
         }
     }
 

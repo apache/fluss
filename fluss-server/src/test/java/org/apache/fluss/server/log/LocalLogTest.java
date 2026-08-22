@@ -32,6 +32,7 @@ import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.server.log.LocalLog.SegmentDeletionReason;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.utils.CloseableIterator;
+import org.apache.fluss.utils.FlussPaths;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -300,6 +301,39 @@ final class LocalLogTest extends LogTestBase {
                         newOffset,
                         localLog.getSegments().activeSegment().getSizeInBytes());
         assertThat(read.getRecords().sizeInBytes()).isEqualTo(0);
+    }
+
+    @Test
+    void testCreateAndDeleteSegmentWithSameOffset() throws Exception {
+        LogSegment oldActiveSegment = localLog.getSegments().activeSegment();
+        oldActiveSegment.offsetIndex();
+        oldActiveSegment.timeIndex();
+        long baseOffset = oldActiveSegment.getBaseOffset();
+        File oldLogFile = oldActiveSegment.getFileLogRecords().file();
+        File oldOffsetIndexFile = oldActiveSegment.getLazyOffsetIndex().file();
+        File oldTimeIndexFile = oldActiveSegment.timeIndexFile();
+        assertThat(oldLogFile).exists();
+        assertThat(oldOffsetIndexFile).exists();
+        assertThat(oldTimeIndexFile).exists();
+
+        LogSegment newActiveSegment =
+                localLog.createAndDeleteSegment(
+                        baseOffset, oldActiveSegment, SegmentDeletionReason.LOG_ROLL);
+
+        assertThat(localLog.getSegments().activeSegment()).isEqualTo(newActiveSegment);
+        assertThat(newActiveSegment.getFileLogRecords().file()).isEqualTo(oldLogFile);
+        assertThat(newActiveSegment.getLazyOffsetIndex().file()).isEqualTo(oldOffsetIndexFile);
+        assertThat(newActiveSegment.timeIndexFile()).isEqualTo(oldTimeIndexFile);
+        assertThat(oldActiveSegment.getFileLogRecords().file().getName())
+                .endsWith(FlussPaths.DELETED_FILE_SUFFIX);
+        assertThat(oldActiveSegment.getLazyOffsetIndex().file().getName())
+                .endsWith(FlussPaths.DELETED_FILE_SUFFIX);
+        assertThat(oldActiveSegment.timeIndexFile().getName())
+                .endsWith(FlussPaths.DELETED_FILE_SUFFIX);
+        assertThat(oldActiveSegment.deleted()).isTrue();
+        assertThat(newActiveSegment.getFileLogRecords().file()).exists();
+        assertThat(newActiveSegment.offsetIndex().file()).exists();
+        assertThat(newActiveSegment.timeIndex().file()).exists();
     }
 
     @Test
