@@ -34,6 +34,7 @@ import org.apache.fluss.record.ValueRecordReadContext;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.ProjectedRow;
+import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.LimitScanRequest;
 import org.apache.fluss.rpc.messages.LimitScanResponse;
@@ -57,6 +58,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
+import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_2;
+
 /** A {@link BatchScanner} implementation that scans a limited number of records from a table. */
 public class LimitBatchScanner implements BatchScanner {
 
@@ -67,6 +70,7 @@ public class LimitBatchScanner implements BatchScanner {
     private final CompletableFuture<LimitScanResponse> scanFuture;
     private final SchemaGetter schemaGetter;
     private final KvFormat kvFormat;
+    private final KvValueLayout kvValueLayout;
     private final int targetSchemaId;
     /** The chunked allocation manager factory to reuse memory for arrow log write batch. */
     private final ChunkedAllocationManager.ChunkedFactory chunkedFactory;
@@ -119,6 +123,12 @@ public class LimitBatchScanner implements BatchScanner {
         this.scanFuture = gateway.limitScan(limitScanRequest);
 
         this.kvFormat = tableInfo.getTableConfig().getKvFormat();
+        this.kvValueLayout =
+                KvValueLayout.forKvFormatVersion(
+                        tableInfo
+                                .getTableConfig()
+                                .getKvFormatVersion()
+                                .orElse(KV_FORMAT_VERSION_2));
         this.endOfInput = false;
         this.chunkedFactory = new ChunkedAllocationManager.ChunkedFactory();
     }
@@ -163,7 +173,7 @@ public class LimitBatchScanner implements BatchScanner {
             DefaultValueRecordBatch valueRecords =
                     DefaultValueRecordBatch.pointToByteBuffer(recordsBuffer);
             ValueRecordReadContext readContext =
-                    ValueRecordReadContext.createReadContext(schemaGetter, kvFormat);
+                    ValueRecordReadContext.createReadContext(schemaGetter, kvFormat, kvValueLayout);
             for (ValueRecord record : valueRecords.records(readContext)) {
                 InternalRow row = record.getRow();
                 if (targetSchemaId != record.schemaId()) {

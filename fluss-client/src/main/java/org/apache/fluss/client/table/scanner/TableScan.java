@@ -228,6 +228,10 @@ public class TableScan implements Scan {
                 snapshotMeta.getSnapshotFiles(),
                 projectedColumns,
                 scannerTmpDir,
+                tableInfo
+                        .getTableConfig()
+                        .getKvFormatVersion()
+                        .orElse(ConfigOptions.KV_FORMAT_VERSION_2),
                 tableInfo.getTableConfig().getKvFormat(),
                 conn.getOrCreateRemoteFileDownloader());
     }

@@ -30,6 +30,7 @@ import org.apache.fluss.record.ValueRecord;
 import org.apache.fluss.record.ValueRecordReadContext;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.ProjectedRow;
+import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.PbScanReqForBucket;
 import org.apache.fluss.rpc.messages.ScanKvRequest;
@@ -55,6 +56,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+
+import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_2;
 
 /**
  * A {@link BatchScanner} that streams every live row of a single primary-key bucket from the tablet
@@ -109,7 +112,13 @@ public final class KvBatchScanner implements BatchScanner {
         this.projectedColumns = projectedColumns;
         this.readContext =
                 ValueRecordReadContext.createReadContext(
-                        schemaGetter, tableInfo.getTableConfig().getKvFormat());
+                        schemaGetter,
+                        tableInfo.getTableConfig().getKvFormat(),
+                        KvValueLayout.forKvFormatVersion(
+                                tableInfo
+                                        .getTableConfig()
+                                        .getKvFormatVersion()
+                                        .orElse(KV_FORMAT_VERSION_2)));
     }
 
     @Nullable
