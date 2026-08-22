@@ -393,20 +393,28 @@ public class Sender implements Runnable {
         } else {
             writeBatchByTable.forEach(
                     (tableId, writeBatches) -> {
-                        if (isLogBatches(writeBatches)) {
-                            sendProduceLogRequestAndHandleResponse(
-                                    gateway,
-                                    makeProduceLogRequest(
-                                            tableId, acks, maxRequestTimeoutMs, writeBatches),
-                                    tableId,
-                                    writeBatches);
-                        } else {
-                            sendPutKvRequestAndHandleResponse(
-                                    gateway,
-                                    makePutKvRequest(
-                                            tableId, acks, maxRequestTimeoutMs, writeBatches),
-                                    tableId,
-                                    writeBatches);
+                        try {
+                            if (isLogBatches(writeBatches)) {
+                                sendProduceLogRequestAndHandleResponse(
+                                        gateway,
+                                        makeProduceLogRequest(
+                                                tableId, acks, maxRequestTimeoutMs, writeBatches),
+                                        tableId,
+                                        writeBatches);
+                            } else {
+                                sendPutKvRequestAndHandleResponse(
+                                        gateway,
+                                        makePutKvRequest(
+                                                tableId, acks, maxRequestTimeoutMs, writeBatches),
+                                        tableId,
+                                        writeBatches);
+                            }
+                        } catch (Throwable t) {
+                            // A gateway may throw before returning a future, for example when RPC
+                            // encoding runs out of direct memory. No callback is registered in that
+                            // case, so complete the drained batches to release their buffer pages
+                            // and in-flight state.
+                            handleWriteRequestException(t, writeBatches);
                         }
                     });
         }

@@ -129,6 +129,42 @@ final class SenderTest {
     }
 
     @Test
+    void testSynchronousGatewayErrorReleasesDrainedKvBatch() throws Exception {
+        sender.destroyResources();
+
+        Map<TablePath, TableInfo> tableInfos = new HashMap<>();
+        tableInfos.put(DATA1_TABLE_PATH, DATA1_TABLE_INFO);
+        tableInfos.put(DATA1_TABLE_PATH_PK, DATA1_TABLE_INFO_PK);
+        TestTabletServerGateway failingGateway =
+                new TestTabletServerGateway(false, Collections.emptySet()) {
+                    @Override
+                    public CompletableFuture<PutKvResponse> putKv(PutKvRequest request) {
+                        throw new OutOfMemoryError("Direct buffer memory");
+                    }
+                };
+        metadataUpdater =
+                TestingMetadataUpdater.builder(tableInfos)
+                        .withTabletServerGateway(TestingMetadataUpdater.NODE1.id(), failingGateway)
+                        .build();
+        writerMetricGroup = TestingWriterMetricGroup.newInstance();
+        sender = setupWithIdempotenceState();
+
+        TableBucket kvBucket = new TableBucket(DATA1_TABLE_ID_PK, 0);
+        CompletableFuture<Exception> future = new CompletableFuture<>();
+        appendKvToAccumulator(
+                kvBucket,
+                compactedRow(DATA1_ROW_TYPE, new Object[] {1, "a"}),
+                (tb, leo, e) -> future.complete(e));
+
+        sender.runOnce();
+
+        assertThat(future).isCompleted();
+        assertThat(future.get()).hasMessageContaining("Direct buffer memory");
+        assertThat(sender.numOfInFlightBatches(kvBucket)).isZero();
+        assertThat(accumulator.hasIncomplete()).isFalse();
+    }
+
+    @Test
     void testRetries() throws Exception {
         // create a sender with retries = 1.
         int maxRetries = 1;
