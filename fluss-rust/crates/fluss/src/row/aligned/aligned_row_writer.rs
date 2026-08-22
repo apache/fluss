@@ -118,6 +118,11 @@ fn calculate_bit_set_width_in_bytes(arity: usize) -> usize {
     ((arity + 63 + HEADER_SIZE_IN_BITS) / 64) * 8
 }
 
+/// Mirrors Java's `AlignedRow.calculateFixPartSizeInBytes`.
+pub(crate) fn calculate_fix_part_size_in_bytes(arity: usize) -> usize {
+    calculate_bit_set_width_in_bytes(arity) + 8 * arity
+}
+
 impl BinaryWriter for AlignedRowWriter {
     fn reset(&mut self) {
         self.cursor = self.fixed_size;

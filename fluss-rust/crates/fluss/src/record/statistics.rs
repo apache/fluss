@@ -47,7 +47,7 @@
 
 use crate::error::{Error, Result};
 use crate::metadata::{DataType, RowType};
-use crate::row::aligned::AlignedRowWriter;
+use crate::row::aligned::{AlignedRowWriter, calculate_fix_part_size_in_bytes};
 use crate::row::binary::BinaryWriter;
 use crate::row::{Decimal, TimestampLtz, TimestampNtz};
 use arrow::array::{Array, RecordBatch};
@@ -61,6 +61,52 @@ use arrow::datatypes::{
 /// Version byte leading the statistics block, matching Java's
 /// `LogRecordBatchFormat.STATISTICS_VERSION`.
 const STATISTICS_VERSION: u8 = 1;
+
+/// Matches Java's `LogRecordBatchStatisticsWriter.VARIABLE_LENGTH_FIELD_ESTIMATE`.
+const VARIABLE_LENGTH_FIELD_ESTIMATE: usize = 16;
+
+/// Rough serialized statistics size for `mapping`, mirroring Java's
+/// `LogRecordBatchStatisticsWriter.estimatedSizeInBytes` with both bound rows
+/// assumed present.
+pub(crate) fn estimated_serialized_size(row_type: &RowType, mapping: &[usize]) -> usize {
+    // Version, column count, indexes and null counts, then the two
+    // length-prefixed bound rows.
+    let header = 3 + mapping.len() * (2 + 4);
+    header + 2 * (4 + estimated_row_size(row_type, mapping))
+}
+
+/// Mirrors Java's `LogRecordBatchStatisticsWriter.getRowSizeEstimate`.
+fn estimated_row_size(row_type: &RowType, mapping: &[usize]) -> usize {
+    let mut estimate = calculate_fix_part_size_in_bytes(mapping.len());
+    for &index in mapping {
+        if !is_in_fixed_length_part(row_type.fields()[index].data_type()) {
+            estimate += VARIABLE_LENGTH_FIELD_ESTIMATE;
+        }
+    }
+    estimate
+}
+
+/// Whether an aligned row stores this type inline in its 8-byte slot,
+/// mirroring Java's `AlignedRow.isInFixedLengthPart`.
+fn is_in_fixed_length_part(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Boolean(_)
+        | DataType::TinyInt(_)
+        | DataType::SmallInt(_)
+        | DataType::Int(_)
+        | DataType::BigInt(_)
+        | DataType::Float(_)
+        | DataType::Double(_)
+        | DataType::Date(_)
+        | DataType::Time(_) => true,
+        DataType::Decimal(decimal_type) => Decimal::is_compact_precision(decimal_type.precision()),
+        DataType::Timestamp(timestamp_type) => TimestampNtz::is_compact(timestamp_type.precision()),
+        DataType::TimestampLTz(timestamp_type) => {
+            TimestampLtz::is_compact(timestamp_type.precision())
+        }
+        _ => false,
+    }
+}
 
 /// Whether statistics can be collected for `data_type`, mirroring Java's
 /// `DataTypeChecks.isSupportedStatisticsType`.
@@ -920,5 +966,114 @@ mod tests {
         );
         assert_eq!(i64::from_le_bytes(min[8..16].try_into().unwrap()), 1_000);
         assert_eq!(i64::from_le_bytes(max[8..16].try_into().unwrap()), 2_000);
+    }
+
+    // Java reference from LogRecordBatchStatisticsCompatibilityTest, checked in
+    // at fluss-common/src/test/resources/encoding/statistics_block.hex.
+    const JAVA_STATISTICS_BLOCK_HEX: &str = "01110000000100020003000400050006000700080009000a000b000c000d000e000f0010000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003000000b000000000000001000000000000000000000000fd00000000000000ceff0000000000000a0000000000000030f8ffffffffffff000020c000000000000000000000f43f6170706c65000085851a0000000000000200000090000000504600000000000040771b000000000000806e8774010000e8030000a000000000806e8774010000e8030000a8000000000000000000000004d2000000000000000000000000000000806e877401000000806e8774010000b0000000000000010000000001000000000000000700000000000000c8000000000000001e00000000000000b80b0000000000000000c03f000000000000000000802340636865727279008650c30000000000000800000090000000204e00000000000000dd6d0000000000e7535c18a3010000583e0f00a0000000e7535c18a3010000583e0f00a80000000000000000000000016345785d89ffff0000000000000000e7535c18a3010000e7535c18a3010000";
+
+    #[test]
+    fn matches_the_java_writer_byte_for_byte() {
+        // CHAR is excluded because Java's collector records no CHAR bounds.
+        let row_type = RowType::new(vec![
+            DataField::new("bool", DataTypes::boolean(), None),
+            DataField::new("i8", DataTypes::tinyint(), None),
+            DataField::new("i16", DataTypes::smallint(), None),
+            DataField::new("i32", DataTypes::int(), None),
+            DataField::new("i64", DataTypes::bigint(), None),
+            DataField::new("f32", DataTypes::float(), None),
+            DataField::new("f64", DataTypes::double(), None),
+            DataField::new("str", DataTypes::string(), None),
+            DataField::new("dec5", DataTypes::decimal(5, 2), None),
+            DataField::new("dec20", DataTypes::decimal(20, 3), None),
+            DataField::new("date", DataTypes::date(), None),
+            DataField::new("time", DataTypes::time(), None),
+            DataField::new("ts3", DataTypes::timestamp_with_precision(3), None),
+            DataField::new("ts6", DataTypes::timestamp_with_precision(6), None),
+            DataField::new("ltz3", DataTypes::timestamp_ltz_with_precision(3), None),
+            DataField::new("ltz6", DataTypes::timestamp_ltz_with_precision(6), None),
+            DataField::new("strnull", DataTypes::string(), None),
+        ]);
+        let millis = ArrowType::Timestamp(arrow::datatypes::TimeUnit::Millisecond, None);
+        let micros = ArrowType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None);
+        let schema = Schema::new(vec![
+            Field::new("bool", ArrowType::Boolean, true),
+            Field::new("i8", ArrowType::Int8, true),
+            Field::new("i16", ArrowType::Int16, true),
+            Field::new("i32", ArrowType::Int32, true),
+            Field::new("i64", ArrowType::Int64, true),
+            Field::new("f32", ArrowType::Float32, true),
+            Field::new("f64", ArrowType::Float64, true),
+            Field::new("str", ArrowType::Utf8, true),
+            Field::new("dec5", ArrowType::Decimal128(5, 2), true),
+            Field::new("dec20", ArrowType::Decimal128(20, 3), true),
+            Field::new("date", ArrowType::Date32, true),
+            Field::new(
+                "time",
+                ArrowType::Time32(arrow::datatypes::TimeUnit::Millisecond),
+                true,
+            ),
+            Field::new("ts3", millis.clone(), true),
+            Field::new("ts6", micros.clone(), true),
+            Field::new("ltz3", millis, true),
+            Field::new("ltz6", micros, true),
+            Field::new("strnull", ArrowType::Utf8, true),
+        ]);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![
+                Arc::new(BooleanArray::from(vec![true, false, true])),
+                Arc::new(Int8Array::from(vec![1, -3, 7])),
+                Arc::new(Int16Array::from(vec![100, 200, -50])),
+                Arc::new(Int32Array::from(vec![Some(10), None, Some(30)])),
+                Arc::new(Int64Array::from(vec![1000, -2000, 3000])),
+                Arc::new(Float32Array::from(vec![1.5, -2.5, 0.5])),
+                Arc::new(Float64Array::from(vec![3.25, 1.25, 9.75])),
+                Arc::new(StringArray::from(vec!["banana", "apple", "cherry"])),
+                Arc::new(
+                    Decimal128Array::from(vec![12345_i128, 6789, 50000])
+                        .with_precision_and_scale(5, 2)
+                        .expect("dec5"),
+                ),
+                Arc::new(
+                    Decimal128Array::from(vec![12345678901_i128, 1234, 99999999999999999])
+                        .with_precision_and_scale(20, 3)
+                        .expect("dec20"),
+                ),
+                Arc::new(Date32Array::from(vec![19000, 18000, 20000])),
+                Arc::new(Time32MillisecondArray::from(vec![
+                    3600000, 7200000, 1800000,
+                ])),
+                Arc::new(TimestampMillisecondArray::from(vec![
+                    1700000000123,
+                    1600000000000,
+                    1800000000999,
+                ])),
+                Arc::new(TimestampMicrosecondArray::from(vec![
+                    1700000000123456,
+                    1600000000000001,
+                    1800000000999999,
+                ])),
+                Arc::new(TimestampMillisecondArray::from(vec![
+                    1700000000123,
+                    1600000000000,
+                    1800000000999,
+                ])),
+                Arc::new(TimestampMicrosecondArray::from(vec![
+                    1700000000123456,
+                    1600000000000001,
+                    1800000000999999,
+                ])),
+                Arc::new(StringArray::from(vec![None::<&str>, None, None])),
+            ],
+        )
+        .expect("batch");
+
+        let mapping: Vec<usize> = (0..17).collect();
+        let bytes = serialize_statistics(&batch, &row_type, &mapping)
+            .expect("serialize")
+            .expect("statistics");
+        let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(hex, JAVA_STATISTICS_BLOCK_HEX);
     }
 }
