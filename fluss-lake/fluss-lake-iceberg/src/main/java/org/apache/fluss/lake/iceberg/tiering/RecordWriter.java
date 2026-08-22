@@ -17,6 +17,7 @@
 
 package org.apache.fluss.lake.iceberg.tiering;
 
+import org.apache.fluss.lake.iceberg.utils.IcebergUtils;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.types.RowType;
@@ -44,7 +45,10 @@ public abstract class RecordWriter implements AutoCloseable {
         this.bucket = tableBucket.getBucket();
         this.flussRecordAsIcebergRecord =
                 new FlussRecordAsIcebergRecord(
-                        tableBucket.getBucket(), icebergSchema.asStruct(), flussRowType);
+                        tableBucket.getBucket(),
+                        icebergSchema.asStruct(),
+                        flussRowType,
+                        IcebergUtils.isLegacyTable(icebergSchema));
     }
 
     public abstract void write(LogRecord record) throws Exception;

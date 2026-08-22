@@ -28,7 +28,7 @@ import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 
-import static org.apache.fluss.lake.iceberg.IcebergSchemaUtils.SYSTEM_COLUMNS;
+import static org.apache.fluss.lake.iceberg.IcebergSchemaUtils.LEGACY_SYSTEM_COLUMNS;
 import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
@@ -42,33 +42,40 @@ import static org.apache.fluss.utils.Preconditions.checkState;
  */
 public class FlussRecordAsIcebergRecord extends FlussRowAsIcebergRecord {
 
-    // Lake table for iceberg will append three system columns: __bucket, __offset,__timestamp
-    private static final int LAKE_ICEBERG_SYSTEM_COLUMNS = SYSTEM_COLUMNS.size();
-
     private LogRecord logRecord;
     private final int bucket;
+    private final boolean isLegacy;
 
-    // the origin row fields in fluss, excluding the system columns in iceberg
-    private int originRowFieldCount;
+    // the count of user (business) columns; system columns (if any) start at this index
+    private final int businessFieldCount;
 
     public FlussRecordAsIcebergRecord(
-            int bucket, Types.StructType structType, RowType flussRowType) {
+            int bucket, Types.StructType structType, RowType flussRowType, boolean isLegacy) {
         super(structType, flussRowType);
         this.bucket = bucket;
+        this.isLegacy = isLegacy;
+        this.businessFieldCount =
+                isLegacy
+                        ? structType.fields().size() - LEGACY_SYSTEM_COLUMNS.size()
+                        : structType.fields().size();
     }
 
     public void setFlussRecord(LogRecord logRecord) {
         this.logRecord = logRecord;
         this.internalRow = logRecord.getRow();
-        this.originRowFieldCount = internalRow.getFieldCount();
+        // Guard against a schema/record mismatch surfacing later as a bare
+        // ArrayIndexOutOfBoundsException inside the Iceberg appender. The Fluss row carries only
+        // business columns; system columns (if any) are supplied by this wrapper.
         checkState(
-                originRowFieldCount == structType.fields().size() - LAKE_ICEBERG_SYSTEM_COLUMNS,
-                "The Iceberg table fields count must equals to LogRecord's fields count.");
+                internalRow.getFieldCount() == businessFieldCount,
+                "The Fluss record's field count (%s) must equal the business field count (%s).",
+                internalRow.getFieldCount(),
+                businessFieldCount);
     }
 
     @Override
     public Object getField(String name) {
-        if (SYSTEM_COLUMNS.containsKey(name)) {
+        if (isLegacy && LEGACY_SYSTEM_COLUMNS.containsKey(name)) {
             switch (name) {
                 case BUCKET_COLUMN_NAME:
                     return bucket;
@@ -85,16 +92,14 @@ public class FlussRecordAsIcebergRecord extends FlussRowAsIcebergRecord {
 
     @Override
     public Object get(int pos) {
-        // firstly, for system columns
-        if (pos == originRowFieldCount) {
-            // bucket column
-            return bucket;
-        } else if (pos == originRowFieldCount + 1) {
-            // log offset column
-            return logRecord.logOffset();
-        } else if (pos == originRowFieldCount + 2) {
-            // timestamp column
-            return toIcebergTimestampLtz(logRecord.timestamp());
+        if (isLegacy) {
+            if (pos == businessFieldCount) {
+                return bucket;
+            } else if (pos == businessFieldCount + 1) {
+                return logRecord.logOffset();
+            } else if (pos == businessFieldCount + 2) {
+                return toIcebergTimestampLtz(logRecord.timestamp());
+            }
         }
         return super.get(pos);
     }

@@ -60,6 +60,30 @@ class IcebergConversionsTest {
         assertThat(partitionKey.toPath()).isEqualTo("country=china/region=region1/__bucket=2");
     }
 
+    @Test
+    void testToPartitionReturnsNullForUnpartitionedTable(@TempDir File tempWarehouseDir) {
+        Catalog catalog = getIcebergCatalog(tempWarehouseDir);
+
+        // FIP-27: a clean bucket-unaware table is unpartitioned. toPartition must return null so
+        // the
+        // writer uses Iceberg's canonical unpartitioned path instead of a non-null empty key.
+        TablePath tablePath = TablePath.of("default", "fluss_clean_unpartitioned_table");
+        Schema schema =
+                new Schema(
+                        required(1, "id", Types.LongType.get()),
+                        optional(2, "name", Types.StringType.get()));
+        TableIdentifier tableIdentifier = toIceberg(tablePath);
+        try {
+            ((SupportsNamespaces) catalog).createNamespace(tableIdentifier.namespace());
+        } catch (AlreadyExistsException ignore) {
+            // ignore
+        }
+        catalog.createTable(tableIdentifier, schema, PartitionSpec.unpartitioned());
+        Table table = catalog.loadTable(tableIdentifier);
+
+        assertThat(IcebergConversions.toPartition(table, null, 1)).isNull();
+    }
+
     private Catalog getIcebergCatalog(File tempWarehouseDir) {
         Configuration configuration = new Configuration();
         configuration.setString("warehouse", tempWarehouseDir.toURI().toString());

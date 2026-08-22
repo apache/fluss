@@ -41,34 +41,58 @@ import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
 @Internal
 public final class IcebergSchemaUtils {
 
-    /** The Iceberg-only system columns appended to every Fluss-managed Iceberg table. */
-    public static final Map<String, Type> SYSTEM_COLUMNS;
+    /**
+     * System columns that legacy Iceberg tables (created before FIP-27) carry as trailing fields.
+     * Under FIP-27 these columns are no longer added to newly created (clean) tables.
+     */
+    public static final Map<String, Type> LEGACY_SYSTEM_COLUMNS;
 
     static {
         LinkedHashMap<String, Type> systemColumns = new LinkedHashMap<>();
         systemColumns.put(BUCKET_COLUMN_NAME, Types.IntegerType.get());
         systemColumns.put(OFFSET_COLUMN_NAME, Types.LongType.get());
         systemColumns.put(TIMESTAMP_COLUMN_NAME, Types.TimestampType.withZone());
-        SYSTEM_COLUMNS = Collections.unmodifiableMap(systemColumns);
+        LEGACY_SYSTEM_COLUMNS = Collections.unmodifiableMap(systemColumns);
     }
 
     private IcebergSchemaUtils() {}
 
-    /** Creates the Iceberg schema managed by Fluss from a Fluss table descriptor. */
+    /**
+     * Creates a clean Iceberg schema from a Fluss table descriptor.
+     *
+     * <p>FIP-27: newly created tables contain only user columns; no system columns are appended.
+     */
     public static Schema createIcebergSchema(
             TableDescriptor tableDescriptor, boolean isPrimaryKeyTable) {
+        return buildIcebergSchema(tableDescriptor, isPrimaryKeyTable, false);
+    }
+
+    /**
+     * Creates a legacy Iceberg schema from a Fluss table descriptor, appending the three system
+     * columns (__bucket, __offset, __timestamp) after the user columns.
+     *
+     * <p>Used only for compatibility checks against existing legacy tables (FIP-27 pre-existing).
+     */
+    public static Schema createLegacyIcebergSchema(
+            TableDescriptor tableDescriptor, boolean isPrimaryKeyTable) {
+        return buildIcebergSchema(tableDescriptor, isPrimaryKeyTable, true);
+    }
+
+    private static Schema buildIcebergSchema(
+            TableDescriptor tableDescriptor, boolean isPrimaryKeyTable, boolean includeSystemCols) {
         List<Types.NestedField> fields = new ArrayList<>();
         int fieldId = 0;
 
+        int userColCount = tableDescriptor.getSchema().getColumns().size();
         int totalTopLevelFields =
-                tableDescriptor.getSchema().getColumns().size() + SYSTEM_COLUMNS.size();
+                includeSystemCols ? userColCount + LEGACY_SYSTEM_COLUMNS.size() : userColCount;
         FlussDataTypeToIcebergDataType converter =
                 new FlussDataTypeToIcebergDataType(totalTopLevelFields);
 
         for (org.apache.fluss.metadata.Schema.Column column :
                 tableDescriptor.getSchema().getColumns()) {
             String columnName = column.getName();
-            if (SYSTEM_COLUMNS.containsKey(columnName)) {
+            if (LEGACY_SYSTEM_COLUMNS.containsKey(columnName)) {
                 throw new IllegalArgumentException(
                         "Column '"
                                 + columnName
@@ -93,10 +117,12 @@ public final class IcebergSchemaUtils {
             fields.add(field);
         }
 
-        for (Map.Entry<String, Type> systemColumn : SYSTEM_COLUMNS.entrySet()) {
-            fields.add(
-                    Types.NestedField.required(
-                            fieldId++, systemColumn.getKey(), systemColumn.getValue()));
+        if (includeSystemCols) {
+            for (Map.Entry<String, Type> systemColumn : LEGACY_SYSTEM_COLUMNS.entrySet()) {
+                fields.add(
+                        Types.NestedField.required(
+                                fieldId++, systemColumn.getKey(), systemColumn.getValue()));
+            }
         }
 
         if (isPrimaryKeyTable) {

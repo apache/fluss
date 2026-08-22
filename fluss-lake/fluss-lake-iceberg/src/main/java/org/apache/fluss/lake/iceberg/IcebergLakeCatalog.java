@@ -20,10 +20,12 @@ package org.apache.fluss.lake.iceberg;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidAlterTableException;
+import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.lake.iceberg.utils.IcebergCatalogUtils;
 import org.apache.fluss.lake.iceberg.utils.IcebergPartitionSpecUtils;
+import org.apache.fluss.lake.iceberg.utils.IcebergUtils;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -60,7 +62,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import static org.apache.fluss.lake.iceberg.IcebergSchemaUtils.SYSTEM_COLUMNS;
+import static org.apache.fluss.lake.iceberg.IcebergSchemaUtils.LEGACY_SYSTEM_COLUMNS;
 import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
@@ -116,6 +118,8 @@ public class IcebergLakeCatalog implements LakeCatalog {
             createTable(
                     tablePath,
                     tableBuilder,
+                    tableDescriptor,
+                    isPkTable,
                     icebergSchema,
                     partitionSpec,
                     sortOrder,
@@ -127,6 +131,8 @@ public class IcebergLakeCatalog implements LakeCatalog {
                 createTable(
                         tablePath,
                         tableBuilder,
+                        tableDescriptor,
+                        isPkTable,
                         icebergSchema,
                         partitionSpec,
                         sortOrder,
@@ -223,7 +229,8 @@ public class IcebergLakeCatalog implements LakeCatalog {
         }
 
         UpdateSchema updateSchema = table.updateSchema();
-        String firstSystemColumnName = SYSTEM_COLUMNS.keySet().iterator().next();
+        boolean isLegacyTable = IcebergUtils.isLegacyTable(currentIcebergSchema);
+        String firstSystemColumnName = LEGACY_SYSTEM_COLUMNS.keySet().iterator().next();
         boolean hasChanges = false;
 
         for (TableChange tableChange : schemaChanges) {
@@ -232,6 +239,13 @@ public class IcebergLakeCatalog implements LakeCatalog {
                     continue;
                 }
                 TableChange.AddColumn addColumn = (TableChange.AddColumn) tableChange;
+
+                if (LEGACY_SYSTEM_COLUMNS.containsKey(addColumn.getName())) {
+                    throw new InvalidTableException(
+                            "Column '"
+                                    + addColumn.getName()
+                                    + "' conflicts with a reserved system column name.");
+                }
 
                 if (!(addColumn.getPosition() instanceof TableChange.Last)) {
                     throw new UnsupportedOperationException(
@@ -246,7 +260,12 @@ public class IcebergLakeCatalog implements LakeCatalog {
 
                 Type icebergType = flussDataType.accept(new FlussDataTypeToIcebergDataType());
                 updateSchema.addColumn(addColumn.getName(), icebergType, addColumn.getComment());
-                updateSchema.moveBefore(addColumn.getName(), firstSystemColumnName);
+                if (isLegacyTable) {
+                    // Legacy tables keep the three system columns as the trailing columns, so a new
+                    // business column must be inserted right before the first system column. Clean
+                    // tables have no system columns, so the new column is simply appended last.
+                    updateSchema.moveBefore(addColumn.getName(), firstSystemColumnName);
+                }
                 hasChanges = true;
             } else {
                 throw new UnsupportedOperationException(
@@ -273,8 +292,13 @@ public class IcebergLakeCatalog implements LakeCatalog {
         if (flussTableDescriptor == null) {
             return false;
         }
-        // Identifier fields don't affect the comparison.
-        Schema expectedSchema = IcebergSchemaUtils.createIcebergSchema(flussTableDescriptor, false);
+        // FIP-27: newly created tables are clean (no system columns). Legacy tables still carry the
+        // three trailing system columns. To handle re-enabling lake tiering on a legacy table, we
+        // build the expected schema to match what the physical table actually has.
+        Schema expectedSchema =
+                IcebergUtils.isLegacyTable(icebergSchema)
+                        ? IcebergSchemaUtils.createLegacyIcebergSchema(flussTableDescriptor, false)
+                        : IcebergSchemaUtils.createIcebergSchema(flussTableDescriptor, false);
         return IcebergSchemaUtils.compatibleWith(icebergSchema, expectedSchema);
     }
 
@@ -285,6 +309,8 @@ public class IcebergLakeCatalog implements LakeCatalog {
     private void createTable(
             TablePath tablePath,
             Catalog.TableBuilder tableBuilder,
+            TableDescriptor tableDescriptor,
+            boolean isPkTable,
             Schema newIcebergSchema,
             PartitionSpec expectedSpec,
             SortOrder expectedSortOrder,
@@ -297,6 +323,22 @@ public class IcebergLakeCatalog implements LakeCatalog {
             TableIdentifier icebergId = toIcebergTableIdentifier(tablePath);
             Table existingTable = icebergCatalog.loadTable(icebergId);
             Schema existingSchema = existingTable.schema();
+
+            // FIP-27: re-enabling tiering on a legacy table (created before FIP-27) hits this path.
+            // The expectations above were built for the clean layout, so rebuild the expected
+            // schema/spec/sort-order in the legacy layout to match what the physical table actually
+            // has; otherwise the compatibility checks below would spuriously reject the legacy
+            // table.
+            boolean existingIsLegacy = IcebergUtils.isLegacyTable(existingSchema);
+            if (existingIsLegacy) {
+                newIcebergSchema =
+                        IcebergSchemaUtils.createLegacyIcebergSchema(tableDescriptor, isPkTable);
+                expectedSpec =
+                        IcebergPartitionSpecUtils.createPartitionSpec(
+                                tableDescriptor, newIcebergSchema);
+                expectedSortOrder = createSortOrder(newIcebergSchema);
+            }
+
             if (!isIcebergSchemaCompatibleWithSchema(existingSchema, newIcebergSchema)) {
                 throw new TableAlreadyExistException(
                         String.format(
@@ -323,17 +365,23 @@ public class IcebergLakeCatalog implements LakeCatalog {
                     existingSchema,
                     expectedSortOrder,
                     newIcebergSchema)) {
+                // Legacy tables expect ASC(__offset); clean tables (no __offset) expect unsorted().
+                String sortOrderGuidance =
+                        existingIsLegacy
+                                ? String.format(
+                                        "or with ASC(%s) set explicitly, ", OFFSET_COLUMN_NAME)
+                                : "";
                 throw new TableAlreadyExistException(
                         String.format(
                                 "The table %s already exists in Iceberg catalog, but the sort order is not compatible. "
                                         + "Existing sort order: %s, new sort order: %s. "
                                         + "Please first drop the table in Iceberg catalog, or pre-create the "
-                                        + "Iceberg table without a custom sort order, or with ASC(%s) set explicitly, "
+                                        + "Iceberg table without a custom sort order, %s"
                                         + "or use a new table name.",
                                 tablePath,
                                 existingTable.sortOrder(),
                                 expectedSortOrder,
-                                OFFSET_COLUMN_NAME),
+                                sortOrderGuidance),
                         e);
             }
 
@@ -508,7 +556,11 @@ public class IcebergLakeCatalog implements LakeCatalog {
     }
 
     private SortOrder createSortOrder(Schema icebergSchema) {
-        // Sort by __offset system column for deterministic ordering
+        if (icebergSchema.findField(OFFSET_COLUMN_NAME) == null) {
+            // Clean tables (FIP-27) have no __offset system column; no sort order is needed.
+            return SortOrder.unsorted();
+        }
+        // Legacy tables: sort by __offset for deterministic ordering
         SortOrder.Builder builder = SortOrder.builderFor(icebergSchema);
         builder.asc(OFFSET_COLUMN_NAME);
         return builder.build();

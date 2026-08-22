@@ -28,6 +28,7 @@ import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.utils.BytesUtils;
 
 import org.apache.iceberg.data.Record;
+import org.apache.iceberg.types.Types;
 
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
@@ -38,27 +39,51 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 
-import static org.apache.fluss.lake.iceberg.IcebergSchemaUtils.SYSTEM_COLUMNS;
+import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
+import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
+import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
 
 /** Adapter for Iceberg Record as fluss row. */
 public class IcebergRecordAsFlussRow implements InternalRow {
 
     private Record icebergRecord;
+    // cached business field count, recomputed when the record changes
+    private int businessFieldCount;
 
     public IcebergRecordAsFlussRow() {}
 
     public IcebergRecordAsFlussRow(Record icebergRecord) {
         this.icebergRecord = icebergRecord;
+        this.businessFieldCount = computeBusinessFieldCount(icebergRecord);
     }
 
     public IcebergRecordAsFlussRow replaceIcebergRecord(Record icebergRecord) {
         this.icebergRecord = icebergRecord;
+        this.businessFieldCount = computeBusinessFieldCount(icebergRecord);
         return this;
+    }
+
+    private static int computeBusinessFieldCount(Record record) {
+        // Subtract the system columns that are actually present in this record's struct rather than
+        // a fixed count: a projected legacy record may carry only a subset (e.g. __offset and
+        // __timestamp but not __bucket), and a clean record carries none.
+        Types.StructType struct = record.struct();
+        int systemColumns = 0;
+        if (struct.field(BUCKET_COLUMN_NAME) != null) {
+            systemColumns++;
+        }
+        if (struct.field(OFFSET_COLUMN_NAME) != null) {
+            systemColumns++;
+        }
+        if (struct.field(TIMESTAMP_COLUMN_NAME) != null) {
+            systemColumns++;
+        }
+        return struct.fields().size() - systemColumns;
     }
 
     @Override
     public int getFieldCount() {
-        return icebergRecord.struct().fields().size() - SYSTEM_COLUMNS.size();
+        return businessFieldCount;
     }
 
     @Override
