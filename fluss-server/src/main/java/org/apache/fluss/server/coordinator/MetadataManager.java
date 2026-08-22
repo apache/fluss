@@ -39,6 +39,7 @@ import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
 import org.apache.fluss.metadata.DatabaseSummary;
+import org.apache.fluss.metadata.LakeTableUtil;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaInfo;
@@ -446,6 +447,7 @@ public class MetadataManager {
                 LakeCatalog.Context lakeCatalogContext =
                         new CoordinatorService.DefaultLakeCatalogContext(
                                 false,
+                                table.getLakeTablePath(),
                                 flussPrincipal,
                                 tableDescriptor,
                                 TableDescriptor.builder(tableDescriptor).schema(newSchema).build());
@@ -495,7 +497,7 @@ public class MetadataManager {
         }
 
         try {
-            lakeCatalog.alterTable(tablePath, schemaChanges, lakeCatalogContext);
+            lakeCatalog.alterTable(tableInfo.getLakeTablePath(), schemaChanges, lakeCatalogContext);
         } catch (TableNotExistException e) {
             throw new FlussRuntimeException(
                     "Lake table doesn't exist for lake-enabled table "
@@ -590,9 +592,16 @@ public class MetadataManager {
             TableDescriptor newDescriptor,
             List<TableChange> tableChanges,
             FlussPrincipal flussPrincipal) {
+        TablePath currentLakeTablePath =
+                LakeTableUtil.resolveLakeTablePath(
+                        tablePath, Configuration.fromMap(tableDescriptor.getProperties()));
         LakeCatalog.Context lakeCatalogContext =
                 new CoordinatorService.DefaultLakeCatalogContext(
-                        false, flussPrincipal, tableDescriptor, newDescriptor);
+                        false,
+                        currentLakeTablePath,
+                        flussPrincipal,
+                        tableDescriptor,
+                        newDescriptor);
         LakeCatalog lakeCatalog =
                 lakeCatalogDynamicLoader.getLakeCatalogContainer().getLakeCatalog();
 
@@ -607,11 +616,18 @@ public class MetadataManager {
             // to enable lake table
             if (!isDataLakeEnabled(tableDescriptor)) {
                 // before create table in fluss, we may create in lake
+                TablePath lakeTablePath =
+                        LakeTableUtil.resolveLakeTablePath(
+                                tablePath, Configuration.fromMap(newDescriptor.getProperties()));
                 try {
-                    lakeCatalog.createTable(tablePath, newDescriptor, lakeCatalogContext);
+                    lakeCatalog.createTable(lakeTablePath, newDescriptor, lakeCatalogContext);
                 } catch (TableAlreadyExistException e) {
                     throw new LakeTableAlreadyExistException(e.getMessage(), e);
                 }
+
+                // The lake table was created or verified against the complete new descriptor, so
+                // applying the same changes again is unnecessary.
+                return;
             }
         }
 
@@ -624,8 +640,11 @@ public class MetadataManager {
                 && tableDescriptor
                         .getProperties()
                         .containsKey(ConfigOptions.TABLE_DATALAKE_ENABLED.key())) {
+            TablePath lakeTablePath =
+                    LakeTableUtil.resolveLakeTablePath(
+                            tablePath, Configuration.fromMap(tableDescriptor.getProperties()));
             try {
-                lakeCatalog.alterTable(tablePath, tableChanges, lakeCatalogContext);
+                lakeCatalog.alterTable(lakeTablePath, tableChanges, lakeCatalogContext);
             } catch (TableNotExistException e) {
                 // only throw TableNotExistException if datalake is enabled
                 if (isDataLakeEnabled(newDescriptor)) {

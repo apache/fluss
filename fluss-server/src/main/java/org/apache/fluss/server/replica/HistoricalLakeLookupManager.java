@@ -529,7 +529,7 @@ class HistoricalLakeLookupManager implements AutoCloseable {
                     "Historical lookup request must carry the original partition name.");
         }
 
-        TablePath tablePath = tableInfo.getTablePath();
+        TablePath tablePath = tableInfo.getLakeTablePath();
 
         ResolvedPartitionSpec originalPartitionSpec;
         try {
