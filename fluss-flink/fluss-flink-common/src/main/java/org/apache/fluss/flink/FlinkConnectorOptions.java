@@ -137,6 +137,42 @@ public class FlinkConnectorOptions {
                                     + "The format is 'timestamp' or 'yyyy-MM-dd HH:mm:ss'. "
                                     + "Like '1678883047356' or '2023-12-09 23:09:12'.");
 
+    public static final ConfigOption<ScanBoundedMode> SCAN_BOUNDED_MODE =
+            ConfigOptions.key("scan.bounded.mode")
+                    .enumType(ScanBoundedMode.class)
+                    .defaultValue(ScanBoundedMode.UNBOUNDED)
+                    .withDescription(
+                            String.format(
+                                    "Bounded mode for the Fluss source. Default is '%s'. In batch "
+                                            + "execution mode, '%s' behaves the same as '%s': the "
+                                            + "source reads up to the latest log offsets captured "
+                                            + "at startup. In streaming execution mode, a bounded "
+                                            + "mode other than '%s' makes the source stop at the "
+                                            + "given stopping offsets and then the job finishes "
+                                            + "(a bounded streaming read). Bounded modes other "
+                                            + "than '%s' are supported for log tables and the "
+                                            + "changelog of primary key tables (earliest/latest/"
+                                            + "timestamp startup mode), but not for the full "
+                                            + "startup mode of primary key tables or the datalake "
+                                            + "union read.",
+                                    ScanBoundedMode.UNBOUNDED.value,
+                                    ScanBoundedMode.UNBOUNDED.value,
+                                    ScanBoundedMode.LATEST_OFFSET.value,
+                                    ScanBoundedMode.UNBOUNDED.value,
+                                    ScanBoundedMode.UNBOUNDED.value));
+
+    public static final ConfigOption<String> SCAN_BOUNDED_TIMESTAMP =
+            ConfigOptions.key("scan.bounded.timestamp")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Optional timestamp for Fluss source in case of bounded mode is timestamp. "
+                                    + "The source stops before the first record batch whose commit "
+                                    + "timestamp is greater than or equal to the given timestamp, i.e. "
+                                    + "only records with a commit timestamp smaller than the given "
+                                    + "timestamp are read. The format is 'timestamp' or "
+                                    + "'yyyy-MM-dd HH:mm:ss'. Like '1678883047356' or '2023-12-09 23:09:12'.");
+
     public static final ConfigOption<Duration> SCAN_PARTITION_DISCOVERY_INTERVAL =
             ConfigOptions.key("scan.partition.discovery.interval")
                     .durationType()
@@ -319,6 +355,43 @@ public class FlinkConnectorOptions {
         private final InlineElement description;
 
         ScanStartupMode(String value, InlineElement description) {
+            this.value = value;
+            this.description = description;
+        }
+
+        @Override
+        public String toString() {
+            return value;
+        }
+
+        @Override
+        public InlineElement getDescription() {
+            return description;
+        }
+    }
+
+    /** Bounded mode for the fluss scanner, see {@link #SCAN_BOUNDED_MODE}. */
+    public enum ScanBoundedMode implements DescribedEnum {
+        UNBOUNDED(
+                "unbounded",
+                text(
+                        "In streaming execution mode, the source never stops. In batch execution "
+                                + "mode, the source reads up to the latest log offsets captured "
+                                + "at startup.")),
+        LATEST_OFFSET(
+                "latest-offset",
+                text("Bounded by the latest log offsets captured when the source starts.")),
+        TIMESTAMP(
+                "timestamp",
+                text(
+                        "Bounded by a user-supplied timestamp. The source stops before the first "
+                                + "record batch whose commit timestamp is greater than or equal "
+                                + "to the given timestamp."));
+
+        private final String value;
+        private final InlineElement description;
+
+        ScanBoundedMode(String value, InlineElement description) {
             this.value = value;
             this.description = description;
         }

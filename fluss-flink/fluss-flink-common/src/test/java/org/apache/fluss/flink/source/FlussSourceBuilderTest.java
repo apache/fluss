@@ -26,6 +26,7 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.types.RowType;
 
 import org.apache.flink.api.common.typeinfo.TypeInformation;
+import org.apache.flink.api.connector.source.Boundedness;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.function.Executable;
@@ -60,6 +61,54 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
 
         // Then
         assertThat(source).isNotNull();
+        assertThat(source.getBoundedness()).isEqualTo(Boundedness.CONTINUOUS_UNBOUNDED);
+    }
+
+    @Test
+    public void testRejectUnsupportedStoppingOffsetsInitializer() {
+        FlussSourceBuilder<TestRecord> builder = FlussSource.builder();
+
+        assertThatThrownBy(() -> builder.setBounded(OffsetsInitializer.earliest()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(
+                        "Only OffsetsInitializer.latest() and "
+                                + "OffsetsInitializer.timestamp(...) are supported");
+        assertThatThrownBy(() -> builder.setBounded(OffsetsInitializer.full()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(
+                        "Only OffsetsInitializer.latest() and "
+                                + "OffsetsInitializer.timestamp(...) are supported");
+
+        assertThat(builder.setBounded(OffsetsInitializer.timestamp(1L))).isSameAs(builder);
+    }
+
+    @Test
+    public void testBuildBoundedStreamingSource() {
+        FlussSource<TestRecord> source =
+                FlussSource.<TestRecord>builder()
+                        .setBootstrapServers(bootstrapServers)
+                        .setDatabase(DEFAULT_DB)
+                        .setTable(DEFAULT_TABLE_PATH.getTableName())
+                        .setStartingOffsets(OffsetsInitializer.earliest())
+                        .setBounded(OffsetsInitializer.latest())
+                        .setDeserializationSchema(new TestDeserializationSchema())
+                        .build();
+
+        assertThat(source.getBoundedness()).isEqualTo(Boundedness.BOUNDED);
+    }
+
+    @Test
+    public void testBuildLegacyBoundedSource() {
+        FlussSource<TestRecord> source =
+                FlussSource.<TestRecord>builder()
+                        .setBootstrapServers(bootstrapServers)
+                        .setDatabase(DEFAULT_DB)
+                        .setTable(DEFAULT_TABLE_PATH.getTableName())
+                        .setBounded()
+                        .setDeserializationSchema(new TestDeserializationSchema())
+                        .build();
+
+        assertThat(source.getBoundedness()).isEqualTo(Boundedness.BOUNDED);
     }
 
     @Test

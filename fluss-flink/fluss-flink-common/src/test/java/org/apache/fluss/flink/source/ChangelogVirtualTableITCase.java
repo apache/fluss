@@ -444,6 +444,35 @@ abstract class ChangelogVirtualTableITCase {
     }
 
     @Test
+    public void testChangelogBoundedRead() throws Exception {
+        tEnv.executeSql(
+                "CREATE TABLE bounded_changelog_test ("
+                        + "  id INT NOT NULL,"
+                        + "  name STRING,"
+                        + "  PRIMARY KEY (id) NOT ENFORCED"
+                        + ") WITH ('bucket.num' = '1')");
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "bounded_changelog_test");
+
+        CLOCK.advanceTime(Duration.ofMillis(1000));
+        writeRows(conn, tablePath, Arrays.asList(row(1, "Alice"), row(2, "Bob")), false);
+        writeRows(conn, tablePath, Arrays.asList(row(1, "Alice-2")), false);
+
+        // the bounded changelog read stops at the latest offsets captured at startup and then
+        // the job finishes
+        String query =
+                "SELECT _change_type, id, name FROM bounded_changelog_test$changelog "
+                        + "/*+ OPTIONS('scan.bounded.mode' = 'latest-offset') */";
+        try (CloseableIterator<Row> rowIter = tEnv.executeSql(query).collect()) {
+            assertThat(collectBatchRows(rowIter))
+                    .containsExactly(
+                            "+I[insert, 1, Alice]",
+                            "+I[insert, 2, Bob]",
+                            "+I[update_before, 1, Alice]",
+                            "+I[update_after, 1, Alice-2]");
+        }
+    }
+
+    @Test
     public void testProjectionOnChangelogTable() throws Exception {
         // Create a primary key table with 1 bucket and extra columns to test projection
         tEnv.executeSql(

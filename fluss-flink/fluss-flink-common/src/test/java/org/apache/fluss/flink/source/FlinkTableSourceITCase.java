@@ -75,6 +75,7 @@ import java.util.stream.Stream;
 
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertQueryResultExactOrder;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsIgnoreOrder;
+import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.collectBatchRows;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.collectRowsWithTimeout;
 import static org.apache.fluss.flink.utils.FlinkTestBase.waitUntilPartitions;
 import static org.apache.fluss.flink.utils.FlinkTestBase.writeRows;
@@ -693,6 +694,88 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
         expectedRowValues =
                 writeRowsToPartition(conn, tablePath, Arrays.asList(partition1, partition2));
         assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
+    }
+
+    @Test
+    void testLogTableBoundedReadLatestOffset() throws Exception {
+        tEnv.executeSql("create table bounded_latest_log_table (a int, b varchar)");
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "bounded_latest_log_table");
+        writeRows(conn, tablePath, Arrays.asList(row(1, "v1"), row(2, "v2"), row(3, "v3")), true);
+
+        // in streaming execution mode, the bounded source stops at the latest offsets captured
+        // at startup and then the job finishes
+        try (CloseableIterator<Row> rowIter =
+                tEnv.executeSql(
+                                "select * from bounded_latest_log_table "
+                                        + "/*+ OPTIONS('scan.bounded.mode' = 'latest-offset') */")
+                        .collect()) {
+            assertThat(collectBatchRows(rowIter))
+                    .containsExactlyInAnyOrder("+I[1, v1]", "+I[2, v2]", "+I[3, v3]");
+        }
+    }
+
+    @Test
+    void testLogTableBoundedReadTimestampRange() throws Exception {
+        tEnv.executeSql("create table bounded_ts_range_log_table (a int, b varchar)");
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "bounded_ts_range_log_table");
+
+        writeRows(conn, tablePath, Arrays.asList(row(1, "v1"), row(2, "v2")), true);
+        CLOCK.advanceTime(Duration.ofMillis(100));
+        long startTimestamp = CLOCK.milliseconds();
+        writeRows(conn, tablePath, Arrays.asList(row(3, "v3"), row(4, "v4")), true);
+        CLOCK.advanceTime(Duration.ofMillis(100));
+        long stopTimestamp = CLOCK.milliseconds();
+        writeRows(conn, tablePath, Arrays.asList(row(5, "v5"), row(6, "v6")), true);
+
+        // replay only the records committed in the time range [startTimestamp, stopTimestamp)
+        String options =
+                String.format(
+                        " /*+ OPTIONS('scan.startup.mode' = 'timestamp', "
+                                + "'scan.startup.timestamp' = '%d', "
+                                + "'scan.bounded.mode' = 'timestamp', "
+                                + "'scan.bounded.timestamp' = '%d') */",
+                        startTimestamp, stopTimestamp);
+        try (CloseableIterator<Row> rowIter =
+                tEnv.executeSql("select * from bounded_ts_range_log_table" + options).collect()) {
+            assertThat(collectBatchRows(rowIter))
+                    .containsExactlyInAnyOrder("+I[3, v3]", "+I[4, v4]");
+        }
+    }
+
+    @Test
+    void testPrimaryKeyTableChangelogBoundedRead() throws Exception {
+        tEnv.executeSql(
+                "create table bounded_pk_changelog_table (a int not null primary key not enforced,"
+                        + " b varchar) with ('bucket.num' = '1')");
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "bounded_pk_changelog_table");
+        writeRows(conn, tablePath, Arrays.asList(row(1, "v1"), row(2, "v2")), false);
+        writeRows(conn, tablePath, Arrays.asList(row(1, "v11")), false);
+
+        // read the changelog of the primary key table from the earliest offset up to the latest
+        // offsets captured at startup, then the job finishes
+        try (CloseableIterator<Row> rowIter =
+                tEnv.executeSql(
+                                "select * from bounded_pk_changelog_table "
+                                        + "/*+ OPTIONS('scan.startup.mode' = 'earliest', "
+                                        + "'scan.bounded.mode' = 'latest-offset') */")
+                        .collect()) {
+            assertThat(collectBatchRows(rowIter))
+                    .containsExactly("+I[1, v1]", "+I[2, v2]", "-U[1, v1]", "+U[1, v11]");
+        }
+    }
+
+    @Test
+    void testPrimaryKeyTableFullStartupBoundedReadThrows() {
+        tEnv.executeSql(
+                "create table bounded_pk_full_table "
+                        + "(a int not null primary key not enforced, b varchar)");
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                        "select * from bounded_pk_full_table "
+                                                + "/*+ OPTIONS('scan.bounded.mode' = 'latest-offset') */"))
+                .hasStackTraceContaining(
+                        "'scan.bounded.mode' is not supported for primary key tables in 'full' startup mode");
     }
 
     @Test

@@ -130,6 +130,7 @@ public class FlinkTableSource
     private final int[] partitionKeyIndexes;
     private final boolean streaming;
     private final FlinkConnectorOptionsUtils.StartupOptions startupOptions;
+    private final FlinkConnectorOptionsUtils.BoundedOptions boundedOptions;
 
     // options for lookup source
     private final boolean lookupAsync;
@@ -221,6 +222,7 @@ public class FlinkTableSource
             int[] partitionKeyIndexes,
             boolean streaming,
             FlinkConnectorOptionsUtils.StartupOptions startupOptions,
+            FlinkConnectorOptionsUtils.BoundedOptions boundedOptions,
             boolean lookupAsync,
             boolean insertIfNotExists,
             @Nullable LookupCache cache,
@@ -239,6 +241,7 @@ public class FlinkTableSource
         this.partitionKeyIndexes = partitionKeyIndexes;
         this.streaming = streaming;
         this.startupOptions = checkNotNull(startupOptions, "startupOptions must not be null");
+        this.boundedOptions = checkNotNull(boundedOptions, "boundedOptions must not be null");
 
         this.lookupAsync = lookupAsync;
         this.insertIfNotExists = insertIfNotExists;
@@ -262,6 +265,47 @@ public class FlinkTableSource
         RowType flussRowType = FlinkConversions.toFlussRowType(tableOutputType);
         this.availableStatsColumns =
                 PushdownUtils.computeAvailableStatsColumns(flussRowType, tableConfig);
+    }
+
+    public FlinkTableSource(
+            TablePath tablePath,
+            Configuration flussConfig,
+            TableConfig tableConfig,
+            org.apache.flink.table.types.logical.RowType tableOutputType,
+            int[] primaryKeyIndexes,
+            int[] bucketKeyIndexes,
+            int[] partitionKeyIndexes,
+            boolean streaming,
+            FlinkConnectorOptionsUtils.StartupOptions startupOptions,
+            boolean lookupAsync,
+            boolean insertIfNotExists,
+            @Nullable LookupCache cache,
+            long scanPartitionDiscoveryIntervalMs,
+            int splitPerAssignmentBatchSize,
+            boolean isDataLakeEnabled,
+            @Nullable MergeEngineType mergeEngineType,
+            Map<String, String> tableOptions,
+            LeaseContext leaseContext) {
+        this(
+                tablePath,
+                flussConfig,
+                tableConfig,
+                tableOutputType,
+                primaryKeyIndexes,
+                bucketKeyIndexes,
+                partitionKeyIndexes,
+                streaming,
+                startupOptions,
+                FlinkConnectorOptionsUtils.BoundedOptions.unbounded(),
+                lookupAsync,
+                insertIfNotExists,
+                cache,
+                scanPartitionDiscoveryIntervalMs,
+                splitPerAssignmentBatchSize,
+                isDataLakeEnabled,
+                mergeEngineType,
+                tableOptions,
+                leaseContext);
     }
 
     @Override
@@ -397,6 +441,8 @@ public class FlinkTableSource
                         "Unsupported startup mode: " + startupOptions.startupMode);
         }
 
+        OffsetsInitializer stoppingOffsetsInitializer = createStoppingOffsetsInitializer();
+
         FlinkSource<RowData> source =
                 new FlinkSource<>(
                         flussConfig,
@@ -407,6 +453,8 @@ public class FlinkTableSource
                         projectedFields,
                         logRecordBatchFilter,
                         offsetsInitializer,
+                        stoppingOffsetsInitializer,
+                        FlinkConnectorOptionsUtils.toBoundedness(streaming, boundedOptions),
                         scanPartitionDiscoveryIntervalMs,
                         splitPerAssignmentBatchSize,
                         new RowDataDeserializationSchema(),
@@ -455,6 +503,46 @@ public class FlinkTableSource
                     return source.getBoundedness() == Boundedness.BOUNDED;
                 }
             };
+        }
+    }
+
+    /** Creates the stopping offsets initializer from the configured bounded options. */
+    private OffsetsInitializer createStoppingOffsetsInitializer() {
+        if (boundedOptions.boundedMode != FlinkConnectorOptions.ScanBoundedMode.UNBOUNDED) {
+            validateBoundedModeSupported();
+        }
+        return FlinkConnectorOptionsUtils.toStoppingOffsetsInitializer(streaming, boundedOptions);
+    }
+
+    private void validateBoundedModeSupported() {
+        if (hasPrimaryKey()) {
+            if (!streaming) {
+                throw new UnsupportedOperationException(
+                        String.format(
+                                "'%s' is not supported for primary key tables in batch execution mode.",
+                                FlinkConnectorOptions.SCAN_BOUNDED_MODE.key()));
+            }
+            if (startupOptions.startupMode == FlinkConnectorOptions.ScanStartupMode.FULL) {
+                throw new UnsupportedOperationException(
+                        String.format(
+                                "'%s' is not supported for primary key tables in '%s' startup mode, "
+                                        + "because the snapshot reading phase has no bounded end. "
+                                        + "Use 'earliest', 'latest' or 'timestamp' startup mode to "
+                                        + "read the changelog of a primary key table with a bounded end.",
+                                FlinkConnectorOptions.SCAN_BOUNDED_MODE.key(),
+                                FlinkConnectorOptions.ScanStartupMode.FULL));
+            }
+        }
+        if (isDataLakeEnabled
+                && startupOptions.startupMode == FlinkConnectorOptions.ScanStartupMode.FULL) {
+            throw new UnsupportedOperationException(
+                    String.format(
+                            "'%s' is not supported for the datalake union read, i.e. '%s' startup "
+                                    + "mode on a datalake-enabled table. Use 'earliest', 'latest' "
+                                    + "or 'timestamp' startup mode to read only the Fluss log with "
+                                    + "a bounded end.",
+                            FlinkConnectorOptions.SCAN_BOUNDED_MODE.key(),
+                            FlinkConnectorOptions.ScanStartupMode.FULL));
         }
     }
 
@@ -512,6 +600,7 @@ public class FlinkTableSource
                         partitionKeyIndexes,
                         streaming,
                         startupOptions,
+                        boundedOptions,
                         lookupAsync,
                         insertIfNotExists,
                         cache,

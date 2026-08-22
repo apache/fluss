@@ -105,6 +105,22 @@ abstract class FlinkTableFactoryTest {
                 FlinkConnectorOptions.SCAN_STARTUP_TIMESTAMP.key(), "2023-12-09 23:09:12");
         createTableSource(schema, scanModeProperties);
 
+        // test scan bounded mode options
+        Map<String, String> boundedModeProperties = getBasicOptions();
+        boundedModeProperties.put(FlinkConnectorOptions.SCAN_BOUNDED_MODE.key(), "timestamp");
+        assertThatThrownBy(() -> createTableSource(schema, boundedModeProperties))
+                .isInstanceOf(ValidationException.class)
+                .hasMessageContaining(
+                        "'scan.bounded.timestamp' is required in 'timestamp' bounded mode but missing.");
+        boundedModeProperties.put(
+                FlinkConnectorOptions.SCAN_BOUNDED_TIMESTAMP.key(), "1678883047356");
+        createTableSource(schema, boundedModeProperties);
+        boundedModeProperties.put(
+                FlinkConnectorOptions.SCAN_BOUNDED_TIMESTAMP.key(), "2023-12-09 23:09:12");
+        createTableSource(schema, boundedModeProperties);
+        boundedModeProperties.put(FlinkConnectorOptions.SCAN_BOUNDED_MODE.key(), "latest-offset");
+        createTableSource(schema, boundedModeProperties);
+
         // test split assignment batch size
         Map<String, String> splitAssignmentBatchProperties = getBasicOptions();
         splitAssignmentBatchProperties.put(

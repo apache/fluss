@@ -97,6 +97,7 @@ The `FlussSourceBuilder` provides several methods for configuring the source con
 * **setFilter(Predicate filter):** Sets a predicate for server-side record batch filtering
 * **setScanPartitionDiscoveryIntervalMs(long intervalMs):** Sets the interval for discovering new partitions (default: from configuration)
 * **setStartingOffsets(OffsetsInitializer initializer):** Sets the strategy for determining starting offsets (default: `OffsetsInitializer.full()`)
+* **setBounded(OffsetsInitializer stoppingOffsetsInitializer):** Makes the source bounded: it stops once it reaches the given stopping offsets and then finishes, even in streaming execution mode (see [Bounded Reads](#bounded-reads))
 * **setFlussConfig(Configuration flussConf):** Sets custom Fluss configuration properties
 
 ### Offset Initializers
@@ -126,6 +127,28 @@ FlussSource<Order> source = FlussSource.<Order>builder()
 // Start reading from a specific timestamp
 FlussSource<Order> source = FlussSource.<Order>builder()
     .setStartingOffsets(OffsetsInitializer.timestamp(System.currentTimeMillis() - 3600 * 1000))
+    // other configuration...
+    .build();
+```
+
+### Bounded Reads
+By default, the source is unbounded and keeps reading new records. Calling `setBounded(OffsetsInitializer)` makes the source stop once it reaches the given stopping offsets and then finish, even in streaming execution mode (a bounded streaming read). Typical usages are replaying a bounded time range of the log, backfilling and archiving. Supported stopping offsets initializers are `OffsetsInitializer.latest()` and `OffsetsInitializer.timestamp(long)`.
+
+Bounded reads are supported for log tables and the changelog of primary key tables (earliest/latest/timestamp starting offsets), but not for the full startup mode of primary key tables or the datalake union read.
+
+**Example:**
+```java
+// Replay a bounded time range of the log: from one hour ago up to now
+FlussSource<Order> timeRangeSource = FlussSource.<Order>builder()
+    .setStartingOffsets(OffsetsInitializer.timestamp(System.currentTimeMillis() - 3600 * 1000))
+    .setBounded(OffsetsInitializer.timestamp(System.currentTimeMillis()))
+    // other configuration...
+    .build();
+
+// Read up to the latest offsets captured at startup and then finish
+FlussSource<Order> latestSource = FlussSource.<Order>builder()
+    .setStartingOffsets(OffsetsInitializer.earliest())
+    .setBounded(OffsetsInitializer.latest())
     // other configuration...
     .build();
 ```
