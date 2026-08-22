@@ -21,7 +21,9 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.config.Password;
+import org.apache.fluss.flink.adapter.CatalogMaterializedTableAdapter;
 import org.apache.fluss.flink.adapter.CatalogTableAdapter;
+import org.apache.fluss.flink.adapter.IntervalFreshnessAdapter;
 import org.apache.fluss.flink.catalog.FlinkCatalogFactory;
 import org.apache.fluss.metadata.AggFunction;
 import org.apache.fluss.metadata.DatabaseDescriptor;
@@ -77,9 +79,11 @@ import static org.apache.fluss.flink.FlinkConnectorOptions.AUTO_INCREMENT_FIELDS
 import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_KEY;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_NUMBER;
 import static org.apache.fluss.flink.FlinkConnectorOptions.MATERIALIZED_TABLE_DEFINITION_QUERY;
+import static org.apache.fluss.flink.FlinkConnectorOptions.MATERIALIZED_TABLE_EXPANDED_QUERY;
 import static org.apache.fluss.flink.FlinkConnectorOptions.MATERIALIZED_TABLE_INTERVAL_FRESHNESS;
 import static org.apache.fluss.flink.FlinkConnectorOptions.MATERIALIZED_TABLE_INTERVAL_FRESHNESS_TIME_UNIT;
 import static org.apache.fluss.flink.FlinkConnectorOptions.MATERIALIZED_TABLE_LOGICAL_REFRESH_MODE;
+import static org.apache.fluss.flink.FlinkConnectorOptions.MATERIALIZED_TABLE_ORIGINAL_QUERY;
 import static org.apache.fluss.flink.FlinkConnectorOptions.MATERIALIZED_TABLE_PREFIX;
 import static org.apache.fluss.flink.FlinkConnectorOptions.MATERIALIZED_TABLE_REFRESH_HANDLER_BYTES;
 import static org.apache.fluss.flink.FlinkConnectorOptions.MATERIALIZED_TABLE_REFRESH_HANDLER_DESCRIPTION;
@@ -597,12 +601,23 @@ public class FlinkConversions {
             CatalogMaterializedTable mt, Map<String, String> customProperties) {
         // Serialize core materialized table properties
         customProperties.put(MATERIALIZED_TABLE_DEFINITION_QUERY.key(), mt.getDefinitionQuery());
+        // Only persist original/expanded queries when the active Flink version actually exposes
+        // them (Flink 2.3+). Older versions' adapter returns null; persisting a null would
+        // break downstream readers that route customProperties through Configuration.setString.
+        String originalQuery = CatalogMaterializedTableAdapter.getOriginalQuery(mt);
+        if (originalQuery != null) {
+            customProperties.put(MATERIALIZED_TABLE_ORIGINAL_QUERY.key(), originalQuery);
+        }
+        String expandedQuery = CatalogMaterializedTableAdapter.getExpandedQuery(mt);
+        if (expandedQuery != null) {
+            customProperties.put(MATERIALIZED_TABLE_EXPANDED_QUERY.key(), expandedQuery);
+        }
         // Serialize freshness configuration
         IntervalFreshness freshness = mt.getDefinitionFreshness();
         customProperties.put(MATERIALIZED_TABLE_INTERVAL_FRESHNESS.key(), freshness.getInterval());
         customProperties.put(
                 MATERIALIZED_TABLE_INTERVAL_FRESHNESS_TIME_UNIT.key(),
-                freshness.getTimeUnit().name());
+                IntervalFreshnessAdapter.getTimeUnitName(freshness));
         // Serialize refresh configuration
         customProperties.put(
                 MATERIALIZED_TABLE_LOGICAL_REFRESH_MODE.key(), mt.getLogicalRefreshMode().name());
@@ -643,6 +658,8 @@ public class FlinkConversions {
             Map<String, String> options) {
         // Validate required materialized table options first
         String definitionQuery = options.get(MATERIALIZED_TABLE_DEFINITION_QUERY.key());
+        String originalQuery = options.get(MATERIALIZED_TABLE_ORIGINAL_QUERY.key());
+        String expandedQuery = options.get(MATERIALIZED_TABLE_EXPANDED_QUERY.key());
         String intervalFreshness = options.get(MATERIALIZED_TABLE_INTERVAL_FRESHNESS.key());
         String timeUnitStr = options.get(MATERIALIZED_TABLE_INTERVAL_FRESHNESS_TIME_UNIT.key());
         String logicalRefreshModeStr = options.get(MATERIALIZED_TABLE_LOGICAL_REFRESH_MODE.key());
@@ -663,9 +680,21 @@ public class FlinkConversions {
         checkNotNull(refreshModeStr, "Materialized table refresh mode is required but missing");
         checkNotNull(refreshStatusStr, "Materialized table refresh status is required but missing");
 
+        // Compatibility: materialized tables persisted before Flink 2.3 only stored the
+        // definition-query. Flink 2.3's DefaultCatalogMaterializedTable rejects null
+        // original/expanded queries, so fall back to definition-query when those keys are
+        // absent — the closest approximation we can recover from a legacy payload.
+        if (originalQuery == null) {
+            originalQuery = definitionQuery;
+        }
+        if (expandedQuery == null) {
+            expandedQuery = definitionQuery;
+        }
+
         // Parse validated values
-        IntervalFreshness.TimeUnit timeUnit = IntervalFreshness.TimeUnit.valueOf(timeUnitStr);
-        IntervalFreshness freshness = IntervalFreshness.of(intervalFreshness, timeUnit);
+        IntervalFreshnessAdapter.TimeUnitAdapter timeUnit =
+                IntervalFreshnessAdapter.timeUnit(timeUnitStr);
+        IntervalFreshness freshness = IntervalFreshnessAdapter.of(intervalFreshness, timeUnit);
         CatalogMaterializedTable.LogicalRefreshMode logicalRefreshMode =
                 CatalogMaterializedTable.LogicalRefreshMode.valueOf(logicalRefreshModeStr);
         CatalogMaterializedTable.RefreshMode refreshMode =
@@ -685,12 +714,14 @@ public class FlinkConversions {
                         ? null
                         : decodeBase64ToBytes(refreshHandlerStringBytes);
 
-        CatalogMaterializedTable.Builder builder = CatalogMaterializedTable.newBuilder();
+        CatalogMaterializedTableAdapter builder = CatalogMaterializedTableAdapter.newAdapter();
         builder.schema(schema)
                 .comment(comment)
                 .partitionKeys(partitionKeys)
                 .options(excludeByPrefix(options, MATERIALIZED_TABLE_PREFIX))
                 .definitionQuery(definitionQuery)
+                .originalQuery(originalQuery)
+                .expandedQuery(expandedQuery)
                 .freshness(freshness)
                 .logicalRefreshMode(logicalRefreshMode)
                 .refreshMode(refreshMode)

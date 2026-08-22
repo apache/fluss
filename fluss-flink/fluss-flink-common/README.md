@@ -28,12 +28,13 @@ classes and regular unit test classes.
 
 ## Execution Model
 
-| Flink module | Tests that run |
-| --- | --- |
+| Flink module       | Tests that run |
+|--------------------| --- |
 | `fluss-flink-1.20` | All tests |
 | `fluss-flink-1.18` | Only tests marked with `@MultiVersionTest` |
 | `fluss-flink-1.19` | Only tests marked with `@MultiVersionTest` |
-| `fluss-flink-2.2` | Only tests marked with `@MultiVersionTest` |
+| `fluss-flink-2.2`  | Only tests marked with `@MultiVersionTest` |
+| `fluss-flink-2.3`  | Only tests marked with `@MultiVersionTest` |
 
 The non-default modules enable JUnit extension auto-detection and multi-version filtering in their
 `src/test/resources/junit-platform.properties` files:
@@ -178,7 +179,7 @@ Run all filtered compatibility suites:
 
 ```bash
 ./mvnw verify \
-  -pl fluss-flink/fluss-flink-1.18,fluss-flink/fluss-flink-1.19,fluss-flink/fluss-flink-2.2 \
+  -pl fluss-flink/fluss-flink-1.18,fluss-flink/fluss-flink-1.19,fluss-flink/fluss-flink-2.2,fluss-flink/fluss-flink-2.3 \
   -am
 ```
 

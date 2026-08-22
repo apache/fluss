@@ -26,7 +26,6 @@ import org.apache.flink.configuration.ConfigOptions;
 import org.apache.flink.configuration.DescribedEnum;
 import org.apache.flink.configuration.description.InlineElement;
 import org.apache.flink.table.catalog.CatalogMaterializedTable;
-import org.apache.flink.table.catalog.IntervalFreshness;
 
 import java.time.Duration;
 import java.util.Arrays;
@@ -249,18 +248,29 @@ public class FlinkConnectorOptions {
                     .noDefaultValue()
                     .withDescription(
                             "The definition query text of materialized table, text is expanded in contrast to the original SQL.");
+    public static final ConfigOption<String> MATERIALIZED_TABLE_ORIGINAL_QUERY =
+            ConfigOptions.key("materialized-table.original-query")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Original text of the materialized table definition that preserves the original formatting.");
+    public static final ConfigOption<String> MATERIALIZED_TABLE_EXPANDED_QUERY =
+            ConfigOptions.key("materialized-table.expanded-query")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Expanded text of the original materialized table definition with resolved identifiers.");
     public static final ConfigOption<String> MATERIALIZED_TABLE_INTERVAL_FRESHNESS =
             ConfigOptions.key("materialized-table.interval-freshness")
                     .stringType()
                     .noDefaultValue()
                     .withDescription(
                             "The freshness interval of materialized table which is used to determine the physical refresh mode.");
-    public static final ConfigOption<IntervalFreshness.TimeUnit>
-            MATERIALIZED_TABLE_INTERVAL_FRESHNESS_TIME_UNIT =
-                    ConfigOptions.key("materialized-table.interval-freshness.time-unit")
-                            .enumType(IntervalFreshness.TimeUnit.class)
-                            .noDefaultValue()
-                            .withDescription("The time unit of freshness interval.");
+    public static final ConfigOption<String> MATERIALIZED_TABLE_INTERVAL_FRESHNESS_TIME_UNIT =
+            ConfigOptions.key("materialized-table.interval-freshness.time-unit")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription("The time unit of freshness interval.");
     public static final ConfigOption<CatalogMaterializedTable.LogicalRefreshMode>
             MATERIALIZED_TABLE_LOGICAL_REFRESH_MODE =
                     ConfigOptions.key("materialized-table.logical-refresh-mode")
