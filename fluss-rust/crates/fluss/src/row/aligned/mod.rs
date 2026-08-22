@@ -18,3 +18,4 @@
 mod aligned_row_writer;
 
 pub use aligned_row_writer::AlignedRowWriter;
+pub(crate) use aligned_row_writer::calculate_fix_part_size_in_bytes;

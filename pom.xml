@@ -676,6 +676,8 @@
                         <exclude>tools/releasing/release/**</exclude>
                         <!-- Configuration Files. -->
                         <exclude>**/fluss-bin/conf/servers</exclude>
+                        <!-- Cross-language encoding fixtures. -->
+                        <exclude>**/src/test/resources/encoding/*.hex</exclude>
                         <!-- Website Files. -->
                         <exclude>website/**/_category_.json</exclude>
                         <exclude>website/package.json</exclude>

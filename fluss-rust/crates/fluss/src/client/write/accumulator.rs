@@ -285,6 +285,18 @@ impl RecordAccumulator {
 
         let schema_id = table_info.schema_id;
 
+        // A malformed `table.statistics.columns` fails the write here rather
+        // than being silently dropped.
+        let stats_index_mapping = if table_info
+            .get_table_config()
+            .get_statistics_columns()
+            .is_enabled()
+        {
+            Some(table_info.get_stats_index_mapping()?.to_vec())
+        } else {
+            None
+        };
+
         let mut batch: WriteBatch = match record.record() {
             Record::Log(_) => ArrowLog(ArrowLogWriteBatch::new(
                 self.batch_id.fetch_add(1, Ordering::Relaxed),
@@ -292,6 +304,7 @@ impl RecordAccumulator {
                 schema_id,
                 arrow_compression_info,
                 row_type,
+                stats_index_mapping,
                 current_time_ms(),
                 matches!(&record.record, Record::Log(LogWriteRecord::RecordBatch(_))),
                 alloc_size,

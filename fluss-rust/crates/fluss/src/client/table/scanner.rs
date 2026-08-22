@@ -2570,6 +2570,7 @@ mod tests {
         let mut builder = MemoryLogRecordsArrowBuilder::new(
             1,
             table_info.get_row_type(),
+            None,
             false,
             ArrowCompressionInfo {
                 compression_type: ArrowCompressionType::None,
