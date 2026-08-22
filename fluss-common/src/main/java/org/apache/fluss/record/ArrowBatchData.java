@@ -21,7 +21,14 @@ import org.apache.fluss.annotation.Internal;
 
 import org.apache.arrow.memory.ArrowBuf;
 import org.apache.arrow.vector.FieldVector;
+import org.apache.arrow.vector.TimeStampMicroVector;
+import org.apache.arrow.vector.TimeStampMilliVector;
+import org.apache.arrow.vector.TimeStampNanoVector;
+import org.apache.arrow.vector.TimeStampSecVector;
+import org.apache.arrow.vector.TimeStampVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
+
+import javax.annotation.Nullable;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -84,6 +91,53 @@ public class ArrowBatchData implements AutoCloseable {
             }
         }
         return size;
+    }
+
+    /**
+     * Returns the maximum non-null timestamp value of the given field in epoch milliseconds, or
+     * {@code null} if the field is not a timestamp field or all values are null.
+     */
+    @Nullable
+    public Long getMaxTimestampMillis(int fieldIndex) {
+        if (fieldIndex < 0 || fieldIndex >= vectorSchemaRoot.getFieldVectors().size()) {
+            return null;
+        }
+        FieldVector vector = vectorSchemaRoot.getVector(fieldIndex);
+        if (!(vector instanceof TimeStampVector)) {
+            return null;
+        }
+
+        Long maxTimestampMillis = null;
+        int rowCount = getRecordCount();
+        for (int rowId = 0; rowId < rowCount; rowId++) {
+            if (vector.isNull(rowId)) {
+                continue;
+            }
+            Long timestampMillis = getTimestampMillis((TimeStampVector) vector, rowId);
+            if (timestampMillis == null) {
+                return null;
+            }
+            maxTimestampMillis =
+                    maxTimestampMillis == null
+                            ? timestampMillis
+                            : Math.max(maxTimestampMillis, timestampMillis);
+        }
+        return maxTimestampMillis;
+    }
+
+    @Nullable
+    private static Long getTimestampMillis(TimeStampVector vector, int rowId) {
+        if (vector instanceof TimeStampSecVector) {
+            return vector.get(rowId) * 1000;
+        } else if (vector instanceof TimeStampMilliVector) {
+            return vector.get(rowId);
+        } else if (vector instanceof TimeStampMicroVector) {
+            return vector.get(rowId) / 1000;
+        } else if (vector instanceof TimeStampNanoVector) {
+            return vector.get(rowId) / 1_000_000;
+        } else {
+            return null;
+        }
     }
 
     /**

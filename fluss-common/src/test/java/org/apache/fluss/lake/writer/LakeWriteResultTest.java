@@ -15,36 +15,19 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.flink.tiering;
+package org.apache.fluss.lake.writer;
 
-import org.apache.fluss.lake.writer.LakeWriteResult;
+import org.junit.jupiter.api.Test;
 
-import javax.annotation.Nullable;
+import static org.assertj.core.api.Assertions.assertThat;
 
-/** A WriteResult for testing purpose. */
-public class TestingWriteResult implements LakeWriteResult {
+/** Tests for default methods of {@link LakeWriteResult}. */
+class LakeWriteResultTest {
 
-    private static final long serialVersionUID = 1L;
+    @Test
+    void testDefaultWatermark() {
+        LakeWriteResult writeResult = new LakeWriteResult() {};
 
-    private final int writeResult;
-    @Nullable private final Long watermark;
-
-    public TestingWriteResult(int writeResult) {
-        this(writeResult, null);
-    }
-
-    public TestingWriteResult(int writeResult, @Nullable Long watermark) {
-        this.writeResult = writeResult;
-        this.watermark = watermark;
-    }
-
-    public int getWriteResult() {
-        return writeResult;
-    }
-
-    @Override
-    @Nullable
-    public Long getWatermark() {
-        return watermark;
+        assertThat(writeResult.getWatermark()).isNull();
     }
 }

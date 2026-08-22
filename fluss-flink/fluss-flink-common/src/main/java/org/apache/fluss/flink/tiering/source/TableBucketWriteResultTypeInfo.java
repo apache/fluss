@@ -19,6 +19,7 @@ package org.apache.fluss.flink.tiering.source;
 
 import org.apache.fluss.flink.adapter.TypeInformationAdapter;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
+import org.apache.fluss.lake.writer.LakeWriteResult;
 
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
@@ -26,7 +27,7 @@ import org.apache.flink.core.io.SimpleVersionedSerializerTypeSerializerProxy;
 import org.apache.flink.util.function.SerializableSupplier;
 
 /** A {@link TypeInformation} for {@link TableBucketWriteResult} . */
-public class TableBucketWriteResultTypeInfo<WriteResult>
+public class TableBucketWriteResultTypeInfo<WriteResult extends LakeWriteResult>
         extends TypeInformationAdapter<TableBucketWriteResult<WriteResult>> {
 
     private final SerializableSupplier<SimpleVersionedSerializer<WriteResult>>
@@ -38,9 +39,10 @@ public class TableBucketWriteResultTypeInfo<WriteResult>
         this.writeResultSerializerFactory = writeResultSerializerFactory;
     }
 
-    public static <WriteResult> TypeInformation<TableBucketWriteResult<WriteResult>> of(
-            SerializableSupplier<SimpleVersionedSerializer<WriteResult>>
-                    writeResultSerializerFactory) {
+    public static <WriteResult extends LakeWriteResult>
+            TypeInformation<TableBucketWriteResult<WriteResult>> of(
+                    SerializableSupplier<SimpleVersionedSerializer<WriteResult>>
+                            writeResultSerializerFactory) {
         return new TableBucketWriteResultTypeInfo<>(writeResultSerializerFactory);
     }
 

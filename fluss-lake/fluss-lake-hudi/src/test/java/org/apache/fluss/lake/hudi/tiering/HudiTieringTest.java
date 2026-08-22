@@ -25,6 +25,7 @@ import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.lake.hudi.HudiLakeCatalog;
 import org.apache.fluss.lake.hudi.utils.meta.CkpMetadata;
 import org.apache.fluss.lake.lakestorage.TestingLakeCatalogContext;
+import org.apache.fluss.lake.watermark.WatermarkExtractor;
 import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.lake.writer.WriterInitContext;
 import org.apache.fluss.metadata.Schema;
@@ -444,6 +445,12 @@ class HudiTieringTest {
         @Override
         public long tieringRoundTimestamp() {
             return tieringRoundTimestamp;
+        }
+
+        @Nullable
+        @Override
+        public WatermarkExtractor watermarkExtractor() {
+            return null;
         }
     }
 

@@ -17,22 +17,32 @@
 
 package org.apache.fluss.lake.paimon.tiering;
 
+import org.apache.fluss.lake.writer.LakeWriteResult;
+
 import org.apache.paimon.table.sink.CommitMessage;
 
-import java.io.Serializable;
+import javax.annotation.Nullable;
 
 /** The write result of Paimon lake writer to pass to committer to commit. */
-public class PaimonWriteResult implements Serializable {
+public class PaimonWriteResult implements LakeWriteResult {
 
-    private static final long serialVersionUID = 1L;
+    private static final long serialVersionUID = 2L;
 
     private final CommitMessage commitMessage;
+    @Nullable private final Long maxWatermark;
 
-    public PaimonWriteResult(CommitMessage commitMessage) {
+    public PaimonWriteResult(CommitMessage commitMessage, @Nullable Long maxWatermark) {
         this.commitMessage = commitMessage;
+        this.maxWatermark = maxWatermark;
     }
 
     public CommitMessage commitMessage() {
         return commitMessage;
+    }
+
+    @Nullable
+    @Override
+    public Long getWatermark() {
+        return maxWatermark;
     }
 }
