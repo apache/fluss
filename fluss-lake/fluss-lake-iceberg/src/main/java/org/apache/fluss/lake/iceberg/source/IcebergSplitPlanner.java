@@ -181,8 +181,9 @@ public class IcebergSplitPlanner implements Planner<IcebergSplit> {
                             .collect(Collectors.toList());
             return task ->
                     partitionFieldIndices.stream()
-                            // since currently, only string partition is supported
-                            .map(index -> task.partition().get(index, String.class))
+                            // Convert partition value to string representation
+                            // (Fluss represents all partition values as strings)
+                            .map(index -> String.valueOf(task.partition().get(index, Object.class)))
                             .collect(Collectors.toList());
         }
     }

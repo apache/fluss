@@ -20,7 +20,6 @@ package org.apache.fluss.lake.iceberg;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidAlterTableException;
-import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.lake.iceberg.utils.IcebergCatalogUtils;
@@ -63,7 +62,6 @@ import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
-import static org.apache.iceberg.types.Type.TypeID.STRING;
 
 /** An Iceberg implementation of {@link LakeCatalog}. */
 public class IcebergLakeCatalog implements LakeCatalog {
@@ -379,13 +377,6 @@ public class IcebergLakeCatalog implements LakeCatalog {
         List<String> partitionKeys = tableDescriptor.getPartitionKeys();
         // always set identity partition with partition key
         for (String partitionKey : partitionKeys) {
-            if (!icebergSchema.findType(partitionKey).typeId().equals(STRING)) {
-                // TODO: Support other types of partition keys
-                throw new InvalidTableException(
-                        String.format(
-                                "Partition key only support string type for iceberg currently. Column `%s` is not string type.",
-                                partitionKey));
-            }
             builder.identity(partitionKey);
         }
 

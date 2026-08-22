@@ -20,7 +20,6 @@ package org.apache.fluss.lake.iceberg;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidAlterTableException;
-import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.lake.lakestorage.TestingLakeCatalogContext;
 import org.apache.fluss.metadata.Schema;
@@ -38,7 +37,6 @@ import org.apache.iceberg.Table;
 import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.types.Types;
-import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -426,13 +424,13 @@ class IcebergLakeCatalogTest {
 
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
-    void testIllegalPartitionKeyType(boolean isPrimaryKeyTable) throws Exception {
+    void testNonStringPartitionKeyType(boolean isPrimaryKeyTable) throws Exception {
         TablePath t1 =
                 TablePath.of(
                         "test_db",
                         isPrimaryKeyTable
-                                ? "pkIllegalPartitionKeyType"
-                                : "logIllegalPartitionKeyType");
+                                ? "pkNonStringPartitionKeyType"
+                                : "logNonStringPartitionKeyType");
         Schema.Builder builder =
                 Schema.newBuilder()
                         .column("c0", DataTypes.STRING())
@@ -449,15 +447,9 @@ class IcebergLakeCatalogTest {
                         .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500));
         tableDescriptor.partitionedBy(partitionKeys);
 
-        Assertions.assertThatThrownBy(
-                        () ->
-                                flussIcebergCatalog.createTable(
-                                        t1,
-                                        tableDescriptor.build(),
-                                        new TestingLakeCatalogContext()))
-                .isInstanceOf(InvalidTableException.class)
-                .hasMessage(
-                        "Partition key only support string type for iceberg currently. Column `c1` is not string type.");
+        // Non-string partition keys should now be supported via identity transform
+        flussIcebergCatalog.createTable(
+                t1, tableDescriptor.build(), new TestingLakeCatalogContext());
     }
 
     @Test
