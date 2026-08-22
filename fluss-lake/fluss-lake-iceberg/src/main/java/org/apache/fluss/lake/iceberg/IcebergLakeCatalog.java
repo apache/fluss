@@ -369,12 +369,6 @@ public class IcebergLakeCatalog implements LakeCatalog {
                                         new IllegalArgumentException(
                                                 "Bucket count (bucket.num) must be set"));
 
-        // Only support one bucket key for now
-        if (bucketKeys.size() > 1) {
-            throw new UnsupportedOperationException(
-                    "Only one bucket key is supported for Iceberg at the moment");
-        }
-
         // pk table must have bucket key
         if (bucketKeys.isEmpty() && isPkTable) {
             throw new IllegalArgumentException(
@@ -396,13 +390,22 @@ public class IcebergLakeCatalog implements LakeCatalog {
         }
 
         if (isPkTable) {
-            builder.bucket(bucketKeys.get(0), bucketCount);
+            if (bucketKeys.size() == 1) {
+                builder.bucket(bucketKeys.get(0), bucketCount);
+            } else {
+                // Multiple bucket keys: Fluss computes the composite hash and stores it in
+                // __bucket. Use identity partitioning on the pre-computed bucket column.
+                builder.identity(BUCKET_COLUMN_NAME);
+            }
         } else {
             // if there is no bucket keys, use identity(__bucket)
             if (bucketKeys.isEmpty()) {
                 builder.identity(BUCKET_COLUMN_NAME);
-            } else {
+            } else if (bucketKeys.size() == 1) {
                 builder.bucket(bucketKeys.get(0), bucketCount);
+            } else {
+                // Multiple bucket keys for log table: use identity(__bucket)
+                builder.identity(BUCKET_COLUMN_NAME);
             }
         }
 

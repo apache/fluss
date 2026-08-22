@@ -273,14 +273,9 @@ class IcebergLakeCatalogTest {
 
         TablePath tablePath = TablePath.of(database, tableName);
 
-        assertThatThrownBy(
-                        () ->
-                                flussIcebergCatalog.createTable(
-                                        tablePath,
-                                        tableDescriptor,
-                                        new TestingLakeCatalogContext()))
-                .isInstanceOf(UnsupportedOperationException.class)
-                .hasMessageContaining("Only one bucket key is supported for Iceberg");
+        // Multi-bucket-key tables should now create successfully using identity(__bucket)
+        flussIcebergCatalog.createTable(
+                tablePath, tableDescriptor, new TestingLakeCatalogContext());
     }
 
     @Test
@@ -424,15 +419,9 @@ class IcebergLakeCatalogTest {
 
         TablePath tablePath = TablePath.of(database, tableName);
 
-        // Do not allow multiple bucket keys for log table
-        assertThatThrownBy(
-                        () ->
-                                flussIcebergCatalog.createTable(
-                                        tablePath,
-                                        tableDescriptor,
-                                        new TestingLakeCatalogContext()))
-                .isInstanceOf(UnsupportedOperationException.class)
-                .hasMessageContaining("Only one bucket key is supported for Iceberg");
+        // Multi-bucket-key log tables should now create successfully using identity(__bucket)
+        flussIcebergCatalog.createTable(
+                tablePath, tableDescriptor, new TestingLakeCatalogContext());
     }
 
     @ParameterizedTest
