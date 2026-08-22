@@ -538,29 +538,24 @@ public class FlinkConversionsTest {
     }
 
     /**
-     * Verifies that {@link FlinkConversions#toFlinkTable} reads the definition-, original- and
-     * expanded-query from their own materialized-table option keys. Prior to adapting to Flink 2.3
-     * the deserialization re-used {@code definitionQuery} for both the original and expanded query.
-     * The test asserts the three queries are read independently and stripped from the resulting
-     * flink table's {@code getOptions()} (consumed by the materialized-table prefix).
+     * Verifies that {@link FlinkConversions#toFlinkTable} can read a materialized-table payload
+     * that only carries {@code definition-query} — the shape persisted by Fluss before Flink 2.3
+     * introduced {@code original-query}/{@code expanded-query}. The deserialization must not fail,
+     * the definition-query must survive, and the three query keys must be consumed from the
+     * resulting options map.
      *
-     * <p>This test runs against the {@code fluss-flink-common} test classpath, where the {@code
-     * CatalogMaterializedTableAdapter} for Flink 1.20/2.2 treats original/expanded as no-ops, so
-     * the assertion deliberately targets only what the common adapter exposes: the consumed keys
-     * are absent from {@code getOptions()} and the {@code definitionQuery} matches the input.
-     * Verifying distinct original/expanded values survive a roundtrip is left to the Flink 2.3
-     * module where the adapter actually preserves those fields.
+     * <p>The {@code fluss-flink-common} test classpath uses the Flink 1.20/2.2 adapter, where the
+     * {@code originalQuery}/{@code expandedQuery} setters are no-ops, so this test only asserts the
+     * public surface: definition-query is preserved, and the three query keys are not leaked into
+     * {@code getOptions()}. Verifying that the Flink 2.3 adapter actually populates the new fields
+     * with the fallback value is covered by the dedicated test in {@code Flink23CatalogTest}.
      */
     @Test
-    void testMaterializedTableReadsSeparateQueriesFromCustomProperties() {
+    void testMaterializedTableFallsBackToDefinitionQueryForLegacyData() {
         String definitionQuery = "SELECT order_id FROM t";
-        String originalQuery = "select order_id from t";
-        String expandedQuery = "SELECT `t`.`order_id` FROM `mydb`.`t` AS `t`";
 
         Map<String, String> customProperties = new HashMap<>();
         customProperties.put(MATERIALIZED_TABLE_DEFINITION_QUERY.key(), definitionQuery);
-        customProperties.put(MATERIALIZED_TABLE_ORIGINAL_QUERY.key(), originalQuery);
-        customProperties.put(MATERIALIZED_TABLE_EXPANDED_QUERY.key(), expandedQuery);
         customProperties.put(MATERIALIZED_TABLE_INTERVAL_FRESHNESS.key(), "5");
         customProperties.put(
                 MATERIALIZED_TABLE_INTERVAL_FRESHNESS_TIME_UNIT.key(),
@@ -574,6 +569,8 @@ public class FlinkConversionsTest {
         customProperties.put(
                 MATERIALIZED_TABLE_REFRESH_STATUS.key(),
                 CatalogMaterializedTable.RefreshStatus.INITIALIZING.name());
+        // Intentionally NO materialized-table.original-query / expanded-query entries —
+        // simulates a legacy persisted payload from before Flink 2.3.
 
         org.apache.fluss.metadata.Schema flussSchema =
                 org.apache.fluss.metadata.Schema.newBuilder()
@@ -601,12 +598,10 @@ public class FlinkConversionsTest {
         CatalogMaterializedTable flinkTable =
                 (CatalogMaterializedTable) FlinkConversions.toFlinkTable(tableInfo);
 
-        // The definitionQuery is exposed by flink's CatalogMaterializedTable on every supported
-        // version, so it is the only query value we can directly assert on from common tests.
+        // Legacy payload: deserialization must succeed and definition-query must round-trip.
         assertThat(flinkTable.getDefinitionQuery()).isEqualTo(definitionQuery);
-
-        // All three materialized-table query options are consumed during deserialization
-        // (excluded by the materialized-table prefix), so they must not leak into getOptions().
+        // All three materialized-table query keys are consumed by the prefix-strip step,
+        // so they must not leak into getOptions().
         assertThat(flinkTable.getOptions())
                 .doesNotContainKey(MATERIALIZED_TABLE_DEFINITION_QUERY.key())
                 .doesNotContainKey(MATERIALIZED_TABLE_ORIGINAL_QUERY.key())

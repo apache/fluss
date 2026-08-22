@@ -680,6 +680,17 @@ public class FlinkConversions {
         checkNotNull(refreshModeStr, "Materialized table refresh mode is required but missing");
         checkNotNull(refreshStatusStr, "Materialized table refresh status is required but missing");
 
+        // Compatibility: materialized tables persisted before Flink 2.3 only stored the
+        // definition-query. Flink 2.3's DefaultCatalogMaterializedTable rejects null
+        // original/expanded queries, so fall back to definition-query when those keys are
+        // absent — the closest approximation we can recover from a legacy payload.
+        if (originalQuery == null) {
+            originalQuery = definitionQuery;
+        }
+        if (expandedQuery == null) {
+            expandedQuery = definitionQuery;
+        }
+
         // Parse validated values
         IntervalFreshnessAdapter.TimeUnitAdapter timeUnit =
                 IntervalFreshnessAdapter.timeUnit(timeUnitStr);
