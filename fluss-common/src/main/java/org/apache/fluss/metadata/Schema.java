@@ -812,6 +812,17 @@ public final class Schema implements Serializable {
                         "The data type of auto increment column must be INT or BIGINT.");
             }
 
+            // VECTOR columns cannot be primary keys: equality comparisons on dense vectors are
+            // not supported (floating-point precision issues; semantically users want similarity
+            // distance, not bit-exact equality). See VECTOR design decision in the type system.
+            if (pkSet.contains(column.getName()) && column.getDataType().is(DataTypeRoot.VECTOR)) {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Column '%s' of type VECTOR cannot be used as a primary key. "
+                                        + "VECTOR columns do not support equality comparisons.",
+                                column.getName()));
+            }
+
             // primary key and auto increment column should not nullable
             if (pkSet.contains(column.getName()) && column.getDataType().isNullable()) {
                 newColumns.add(
