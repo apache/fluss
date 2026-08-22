@@ -121,4 +121,19 @@ public class AddressBookTest {
         assertThat(parsed.getPersonAt(1).getPhoneAt(0).getNumber()).isEqualTo("xxx-zzz-2222");
         assertThat(parsed.getPersonAt(1).getPhoneAt(0).getType()).isEqualTo(Person.PhoneType.HOME);
     }
+
+    @Test
+    public void testToString() {
+        AddressBook ab = new AddressBook();
+        Person p1 = ab.addPerson().setName("name 1").setEmail("name1@example.com").setId(5);
+        p1.addPhone().setNumber("xxx-zzz-1111").setType(Person.PhoneType.HOME);
+        p1.addPhone().setNumber("xxx-zzz-2222").setType(Person.PhoneType.MOBILE);
+
+        Person p2 = ab.addPerson().setName("name 2").setEmail("name2@example.com").setId(6);
+        p2.addPhone().setNumber("xxx-zzz-2222").setType(Person.PhoneType.HOME);
+
+        assertThat(ab.toString())
+                .isEqualTo(
+                        "AddressBook{persons=[Person{name=name 1, id=5, email=name1@example.com, phones=[PhoneNumber{number=xxx-zzz-1111, type=HOME}, PhoneNumber{number=xxx-zzz-2222, type=MOBILE}]}, Person{name=name 2, id=6, email=name2@example.com, phones=[PhoneNumber{number=xxx-zzz-2222, type=HOME}]}]}");
+    }
 }

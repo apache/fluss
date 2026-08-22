@@ -276,4 +276,22 @@ public class BytesTest {
         assertThat(parsed.getExtraItemAt(0)).isEqualTo(new byte[] {1, 2, 3});
         assertThat(parsed.getExtraItemAt(1)).isEqualTo(new byte[] {4, 5, 6, 7});
     }
+
+    @Test
+    public void testBytesToString() {
+        B lpb = new B();
+        lpb.setPayload(new byte[] {1, 2, 3, 4, 5});
+        lpb.addExtraItem(new byte[] {1, 2, 3});
+        lpb.addExtraItem(new byte[] {4, 5, 6, 7});
+        System.out.println(lpb.toString());
+
+        // assertThat(lpb.toString()).isEqualTo("B{payload=<byte[5]>, extraItems=null}");
+    }
+
+    @Test
+    public void testRecordsToString() {
+        RD lpb = new RD().setRecords(new byte[] {1, 2, 3, 4, 5});
+
+        assertThat(lpb.toString()).isEqualTo("RD{records=<BytesView[5]>}");
+    }
 }
