@@ -250,10 +250,63 @@ public class FlinkIcebergTieringTestBase {
                 Duration.ofMinutes(1),
                 () -> {
                     Replica replica = getLeaderReplica(tb);
+                    long snapshotId = replica.getLogTablet().getLakeTableSnapshotId();
+                    long actualLakeLogEndOffset = replica.getLakeLogEndOffset();
+
                     // datalake snapshot id should be updated
-                    assertThat(replica.getLogTablet().getLakeTableSnapshotId())
-                            .isGreaterThanOrEqualTo(0);
-                    assertThat(replica.getLakeLogEndOffset()).isEqualTo(expectedLogEndOffset);
+                    assertThat(snapshotId).isGreaterThanOrEqualTo(0);
+                    assertThat(actualLakeLogEndOffset).isEqualTo(expectedLogEndOffset);
+                });
+    }
+
+    /**
+     * Waits for the Iceberg table to have a snapshot containing the expected log end offset for the
+     * given bucket. This verifies the tiering commit succeeded at the source of truth (Iceberg),
+     * independent of the async notification to tablet servers.
+     */
+    protected void waitForIcebergSnapshotOffset(
+            TablePath tablePath, TableBucket tableBucket, long expectedLogEndOffset) {
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    try {
+                        org.apache.iceberg.Table table =
+                                icebergCatalog.loadTable(toIceberg(tablePath));
+                        table.refresh();
+                        Snapshot snapshot = table.currentSnapshot();
+
+                        if (snapshot == null) {
+                            throw new AssertionError("No Iceberg snapshot exists yet");
+                        }
+
+                        String offsetFile =
+                                snapshot.summary().get(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY);
+                        if (offsetFile == null) {
+                            throw new AssertionError("Snapshot has no offset file property");
+                        }
+
+                        Map<TableBucket, Long> recordedOffsets =
+                                new LakeTable(
+                                                new LakeTable.LakeSnapshotMetadata(
+                                                        snapshot.snapshotId(),
+                                                        new FsPath(offsetFile),
+                                                        null))
+                                        .getOrReadLatestTableSnapshot()
+                                        .getBucketLogEndOffset();
+
+                        Long actualOffset = recordedOffsets.get(tableBucket);
+                        assertThat(actualOffset)
+                                .as(
+                                        "Iceberg snapshot should contain expected offset for bucket %s",
+                                        tableBucket)
+                                .isNotNull()
+                                .isGreaterThanOrEqualTo(expectedLogEndOffset);
+                    } catch (AssertionError e) {
+                        throw e;
+                    } catch (Exception e) {
+                        throw new AssertionError(
+                                "Failed to read Iceberg snapshot: " + e.getMessage(), e);
+                    }
                 });
     }
 
