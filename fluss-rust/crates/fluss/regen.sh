@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -15,24 +17,11 @@
 # specific language governing permissions and limitations
 # under the License.
 
-module(name = "fluss_cpp_consumer_build")
+# Regenerates src/proto/fluss.rs and the vendored proto/FlussApi.proto copy
+# from the canonical fluss-rpc/src/main/proto/FlussApi.proto.
+# Requires protoc on PATH (or the PROTOC env var pointing at a protoc binary).
 
-bazel_dep(name = "rules_cc", version = "0.2.14")
-bazel_dep(name = "fluss-cpp", version = "0.1.0")
+set -euo pipefail
 
-# Local override for repository-local validation only.
-local_path_override(
-    module_name = "fluss-cpp",
-    # Repository root path (the directory containing `bindings/cpp`).
-    path = "../../../../../",
-)
-
-fluss_cpp = use_extension("@fluss-cpp//bindings/cpp/bazel/cpp:deps.bzl", "cpp_sdk")
-fluss_cpp.config(
-    mode = "build",
-    arrow_cpp_version = "19.0.1",
-    ep_cmake_ranlib = "/usr/bin/ranlib",
-    ep_cmake_ar = "/usr/bin/ar",
-    ep_cmake_nm = "/usr/bin/nm",
-)
-use_repo(fluss_cpp, "apache_arrow_cpp")
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+cd "$SCRIPT_DIR" && cargo run --manifest-path gen/Cargo.toml

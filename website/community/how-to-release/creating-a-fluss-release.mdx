@@ -521,7 +521,7 @@ fluss-rust/scripts/bump-version.sh <previous_version> ${RELEASE_VERSION}
 Pushing the **RC tag** (`v${RELEASE_VERSION}-rc${RC_NUM}`) triggers the client workflows:
 
 - `python-release.yml` builds the wheels + sdist and publishes them to **TestPyPI**.
-- `rust-release.yml` runs `cargo publish --dry-run` to validate the crate. The canonical proto is vendored into the crate automatically (`fluss-rust/scripts/vendor-proto.sh`), because `build.rs` reads it from the in-repo `fluss-rpc`.
+- `rust-release.yml` runs `cargo publish --dry-run` to validate the crate. The generated protobuf code and the proto it came from are checked in under `fluss-rust/crates/fluss/`, so the crate publishes standalone with no extra preparation.
 
 The final publish to **crates.io** and **PyPI** happens when the release tag is pushed (see the **Git tag** step under [Finalize the release](#finalize-the-release)). Publishing uses the CI secrets `CARGO_REGISTRY_TOKEN`, `PYPI_API_TOKEN`, and `TEST_PYPI_API_TOKEN`.
 

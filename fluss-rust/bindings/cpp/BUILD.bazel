@@ -34,7 +34,7 @@ config_setting(
     values = {"compilation_mode": "opt"},
 )
 
-_PROTOC_SETUP_SNIPPET = """
+_CARGO_SETUP_SNIPPET = """
         set -e
         if [ -n "$${CARGO:-}" ]; then
             if [ ! -x "$$CARGO" ]; then
@@ -48,20 +48,6 @@ _PROTOC_SETUP_SNIPPET = """
                 echo "Error: cargo not found in PATH and CARGO is not set" >&2
                 exit 1
             fi
-        fi
-        if [ -n "$${PROTOC:-}" ]; then
-            if [ ! -x "$$PROTOC" ]; then
-                echo "Error: PROTOC is set but not executable: $$PROTOC" >&2
-                exit 1
-            fi
-            export PROTOC
-        else
-            PROTOC_BIN=$$(command -v protoc || true)
-            if [ -z "$$PROTOC_BIN" ]; then
-                echo "Error: protoc not found in PATH and PROTOC is not set" >&2
-                exit 1
-            fi
-            export PROTOC="$$PROTOC_BIN"
         fi
 """
 
@@ -78,7 +64,7 @@ genrule(
         "src/lib.rs_debug.h",
         "cxxbridge/rust/cxx_debug.h",
     ],
-    cmd = _PROTOC_SETUP_SNIPPET + """
+    cmd = _CARGO_SETUP_SNIPPET + """
         EXECROOT=$$(pwd)
         OUTPUT_LIB=$(location rust_lib_debug.a)
         OUTPUT_CC=$(location rust_bridge_cc_debug.cc)
@@ -144,7 +130,7 @@ genrule(
         "src/lib.rs_release.h",
         "cxxbridge/rust/cxx_release.h",
     ],
-    cmd = _PROTOC_SETUP_SNIPPET + """
+    cmd = _CARGO_SETUP_SNIPPET + """
         EXECROOT=$$(pwd)
         OUTPUT_LIB=$(location rust_lib_release.a)
         OUTPUT_CC=$(location rust_bridge_cc_release.cc)

@@ -64,11 +64,9 @@ equivalent@1.0.2	X									X
 errno@0.3.14	X									X
 fastrand@2.5.0	X									X
 find-msvc-tools@0.1.11	X									X
-fixedbitset@0.5.7	X									X
 flatbuffers@25.12.19	X
 fluss-gateway@1.0.0	X
 fluss-rs@1.0.0	X
-foldhash@0.1.5													X
 foldhash@0.2.0													X
 form_urlencoded@1.2.2	X									X
 funty@2.0.0										X
@@ -88,7 +86,6 @@ getrandom@0.4.3	X									X
 gloo-timers@0.3.0	X									X
 half@2.7.1	X									X
 hashbrown@0.14.5	X									X
-hashbrown@0.15.5	X									X
 hashbrown@0.16.1	X									X
 hashbrown@0.17.1	X									X
 heck@0.5.0	X									X
@@ -144,7 +141,6 @@ metrics-exporter-prometheus@0.17.2										X
 metrics-util@0.20.4										X
 mime@0.3.17	X									X
 mio@1.2.2										X
-multimap@0.10.1	X									X
 num-bigint@0.4.8	X									X
 num-bigint@0.5.1	X									X
 num-complex@0.4.6	X									X
@@ -160,19 +156,15 @@ parse-display@0.10.0	X									X
 parse-display-derive@0.10.0	X									X
 paste@1.0.15	X									X
 percent-encoding@2.3.2	X									X
-petgraph@0.8.3	X									X
 pin-project-lite@0.2.17	X									X
 pkg-config@0.3.34	X									X
 portable-atomic@1.15.0	X									X
 portable-atomic-util@0.2.7	X									X
 potential_utf@0.1.5											X
 ppv-lite86@0.2.21	X									X
-prettyplease@0.2.37	X									X
 proc-macro2@1.0.107	X									X
 prost@0.14.4	X
-prost-build@0.14.4	X
 prost-derive@0.14.4	X
-prost-types@0.14.4	X
 quanta@0.12.6										X
 quick-xml@0.38.4										X
 quote@1.0.47	X									X
