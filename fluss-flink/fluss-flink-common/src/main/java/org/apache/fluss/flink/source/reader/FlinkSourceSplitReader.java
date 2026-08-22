@@ -584,19 +584,28 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
     }
 
     private FlinkRecordsWithSplitIds finishCurrentBoundedSplit() throws IOException {
-        Set<String> finishedSplits =
-                (currentBoundedSplit instanceof HybridSnapshotLogSplit
-                                        && !((HybridSnapshotLogSplit) currentBoundedSplit)
-                                                .isBatch())
-                                || (currentBoundedSplit instanceof LakeSnapshotAndFlussLogSplit
-                                        && ((LakeSnapshotAndFlussLogSplit) currentBoundedSplit)
-                                                .isStreaming())
-                        // is hybrid split, or is lakeAndFlussLog split in streaming mode,
-                        // not to finish this split
-                        // since it remains log to read
-                        ? Collections.emptySet()
-                        : Collections.singleton(currentBoundedSplit.splitId());
-        final FlinkRecordsWithSplitIds finishRecords = new FlinkRecordsWithSplitIds(finishedSplits);
+        boolean isStreamingHybridSplit =
+                currentBoundedSplit instanceof HybridSnapshotLogSplit
+                        && !((HybridSnapshotLogSplit) currentBoundedSplit).isBatch();
+        boolean isStreamingLakeSplit =
+                currentBoundedSplit instanceof LakeSnapshotAndFlussLogSplit
+                        && ((LakeSnapshotAndFlussLogSplit) currentBoundedSplit).isStreaming();
+        final FlinkRecordsWithSplitIds finishRecords;
+        if (isStreamingHybridSplit || isStreamingLakeSplit) {
+            // is hybrid split, or is lakeAndFlussLog split in streaming mode, send an internal
+            // record
+            // to set snapshot phase finished in split state
+            finishRecords =
+                    forBoundedSplitRecords(
+                            currentBoundedSplit,
+                            CloseableIterator.wrap(
+                                    Collections.singleton(RecordAndPos.snapshotPhaseFinished())
+                                            .iterator()));
+        } else {
+            finishRecords =
+                    new FlinkRecordsWithSplitIds(
+                            Collections.singleton(currentBoundedSplit.splitId()));
+        }
         closeCurrentBoundedSplit();
         return finishRecords;
     }
