@@ -137,13 +137,15 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
                     } else {
                         long earliestSnapshotIdToKeep =
                                 readableSnapshotResult.getEarliestSnapshotIdToKeep();
-                        if (earliestSnapshotIdToKeep >= 0) {
-                            LOG.info(
-                                    "earliest snapshot ID to keep for table {} is {}. "
-                                            + "Snapshots before this ID can be safely deleted from Fluss.",
-                                    tablePath,
-                                    earliestSnapshotIdToKeep);
-                        }
+                        LOG.info(
+                                "Computed DV readable snapshot for table {}: committed snapshot {}, "
+                                        + "readable snapshot {}, earliest snapshot to keep {}, "
+                                        + "readable bucket count {}.",
+                                tablePath,
+                                committedSnapshotId,
+                                readableSnapshotResult.getReadableSnapshotId(),
+                                earliestSnapshotIdToKeep,
+                                readableSnapshotResult.getReadableOffsets().size());
                         return LakeCommitResult.withReadableSnapshot(
                                 committedSnapshotId,
                                 readableSnapshotResult.getReadableSnapshotId(),
