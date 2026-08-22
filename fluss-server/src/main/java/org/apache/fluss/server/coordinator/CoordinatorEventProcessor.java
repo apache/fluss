@@ -2035,6 +2035,30 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 throw new InvalidUpdateVersionException(
                         "The request bucket epoch in adjust isr request is lower than current bucket epoch in coordinator.");
             } else {
+                if (newLeaderAndIsr.leader() != currentLeaderAndIsr.leader()) {
+                    String errorMsg =
+                            String.format(
+                                    "Rejecting adjustIsr request for table bucket %s because request leader %s "
+                                            + "does not match current leader %s",
+                                    tableBucket,
+                                    newLeaderAndIsr.leader(),
+                                    currentLeaderAndIsr.leader());
+                    LOG.error(errorMsg);
+                    throw new FencedLeaderEpochException(errorMsg);
+                }
+
+                if (!newLeaderAndIsr.isr().contains(currentLeaderAndIsr.leader())) {
+                    String errorMsg =
+                            String.format(
+                                    "Rejecting adjustIsr request for table bucket %s because leader %s "
+                                            + "is not in the new ISR %s",
+                                    tableBucket,
+                                    currentLeaderAndIsr.leader(),
+                                    newLeaderAndIsr.isr());
+                    LOG.error(errorMsg);
+                    throw new IneligibleReplicaException(errorMsg);
+                }
+
                 // Check if the new ISR are all ineligible replicas (doesn't contain any shutting
                 // down tabletServers).
                 Set<Integer> ineligibleReplicas = new HashSet<>(newLeaderAndIsr.isr());

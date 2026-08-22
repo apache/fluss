@@ -47,6 +47,12 @@ class FlussAppendPartitionReader(
   // The latest offset of fluss is -2
   private var currentOffset: Long = flussPartition.startOffset.max(0L)
 
+  private val timeRange: Option[FlussTimeRange] = flussPartition.timeRange
+
+  // Set once a record at or after the end of the requested window is seen; commit timestamps are
+  // non-decreasing within a bucket, so no later record can belong to the window either.
+  private var reachedWindowEnd = false
+
   // initialize log scanner
   initialize()
 
@@ -60,26 +66,28 @@ class FlussAppendPartitionReader(
   }
 
   override def next0(): Boolean = {
-    if (closed || currentOffset >= flussPartition.stopOffset) {
-      return false
-    }
+    while (!closed && !reachedWindowEnd && currentOffset < flussPartition.stopOffset) {
+      if (!currentRecords.hasNext) {
+        pollMoreRecords()
+      }
+      if (!currentRecords.hasNext) {
+        throw new IllegalStateException(s"No more data from fluss server," +
+          s" but current offset $currentOffset not reach the stop offset ${flussPartition.stopOffset}")
+      }
 
-    if (!currentRecords.hasNext) {
-      pollMoreRecords()
-    }
-
-    // If we have records in current batch, return next one
-    if (currentRecords.hasNext) {
       val scanRecord = currentRecords.next()
-      currentRow = convertToSparkRow(scanRecord)
       currentOffset = scanRecord.logOffset() + 1
-      true
-    } else if (currentOffset < flussPartition.stopOffset) {
-      throw new IllegalStateException(s"No more data from fluss server," +
-        s" but current offset $currentOffset not reach the stop offset ${flussPartition.stopOffset}")
-    } else {
-      false
+      timeRange match {
+        case Some(range) if range.isAfter(scanRecord.timestamp()) => reachedWindowEnd = true
+        // The record precedes the requested window: the start offset resolved from the start
+        // timestamp is only time-index accurate on tiered segments, so it can undershoot.
+        case Some(range) if !range.contains(scanRecord.timestamp()) => // skip
+        case _ =>
+          currentRow = convertToSparkRow(scanRecord)
+          return true
+      }
     }
+    false
   }
 
   override def close0(): Unit = {

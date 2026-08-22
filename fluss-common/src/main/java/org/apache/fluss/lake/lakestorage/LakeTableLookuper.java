@@ -33,6 +33,19 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 @PublicEvolving
 public interface LakeTableLookuper extends AutoCloseable {
 
+    /** Records metrics for a lake table point lookup. */
+    @FunctionalInterface
+    interface LookupMetricRecorder {
+
+        /**
+         * Records a completed lake table point lookup.
+         *
+         * @param lookupTimeNanos time spent on the lake table point lookup, in nanoseconds
+         * @param lookupFileDownloaded whether the lookup downloaded a lookup file
+         */
+        void recordLookup(long lookupTimeNanos, boolean lookupFileDownloaded);
+    }
+
     /**
      * Looks up one key from the lake table.
      *
@@ -52,6 +65,7 @@ public interface LakeTableLookuper extends AutoCloseable {
         private final int bucketId;
         private final short schemaId;
         private final RowType valueRowType;
+        private final LookupMetricRecorder lookupMetricRecorder;
 
         /**
          * Creates a lookup context.
@@ -60,16 +74,20 @@ public interface LakeTableLookuper extends AutoCloseable {
          * @param bucketId target bucket id in the lake table
          * @param schemaId schema id to encode the returned Fluss value with
          * @param valueRowType row type to encode the returned Fluss value with
+         * @param lookupMetricRecorder recorder for lake table point lookup metrics
          */
         public LookupContext(
                 ResolvedPartitionSpec partitionSpec,
                 int bucketId,
                 short schemaId,
-                RowType valueRowType) {
+                RowType valueRowType,
+                LookupMetricRecorder lookupMetricRecorder) {
             this.partitionSpec = checkNotNull(partitionSpec, "partitionSpec must not be null.");
             this.bucketId = bucketId;
             this.schemaId = schemaId;
             this.valueRowType = checkNotNull(valueRowType, "valueRowType must not be null.");
+            this.lookupMetricRecorder =
+                    checkNotNull(lookupMetricRecorder, "lookupMetricRecorder must not be null.");
         }
 
         /** Returns the resolved Fluss partition spec for the lookup. */
@@ -90,6 +108,11 @@ public interface LakeTableLookuper extends AutoCloseable {
         /** Returns the row type to encode the returned Fluss value with. */
         public RowType valueRowType() {
             return valueRowType;
+        }
+
+        /** Returns the recorder for lake table point lookup metrics. */
+        public LookupMetricRecorder lookupMetricRecorder() {
+            return lookupMetricRecorder;
         }
     }
 }

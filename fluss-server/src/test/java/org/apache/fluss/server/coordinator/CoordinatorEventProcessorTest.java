@@ -1274,6 +1274,70 @@ class CoordinatorEventProcessorTest {
     }
 
     @Test
+    void testProcessAdjustIsrRejectsRequestFromNonLeader() throws Exception {
+        Map.Entry<TableBucket, LeaderAndIsr> entry =
+                createTableAndGetLeaderAndIsr("adjust_isr_from_non_leader");
+        TableBucket tableBucket = entry.getKey();
+        LeaderAndIsr currentLeaderAndIsr = entry.getValue();
+        int nonLeader =
+                currentLeaderAndIsr.isr().stream()
+                        .filter(replica -> replica != currentLeaderAndIsr.leader())
+                        .findFirst()
+                        .get();
+        LeaderAndIsr invalidLeaderAndIsr =
+                new LeaderAndIsr(
+                        nonLeader,
+                        currentLeaderAndIsr.leaderEpoch(),
+                        currentLeaderAndIsr.isr(),
+                        currentLeaderAndIsr.standbyReplicas(),
+                        currentLeaderAndIsr.coordinatorEpoch(),
+                        currentLeaderAndIsr.bucketEpoch());
+
+        AdjustIsrResultForBucket invalidResult = submitAdjustIsr(tableBucket, invalidLeaderAndIsr);
+
+        assertThat(invalidResult.getError().error())
+                .isEqualTo(Errors.FENCED_LEADER_EPOCH_EXCEPTION);
+        assertThat(invalidResult.getErrorMessage())
+                .contains(
+                        String.format(
+                                "request leader %s does not match current leader %s",
+                                nonLeader, currentLeaderAndIsr.leader()));
+        Optional<LeaderAndIsr> storedLeaderAndIsr =
+                fromCtx(ctx -> ctx.getBucketLeaderAndIsr(tableBucket));
+        assertThat(storedLeaderAndIsr).contains(currentLeaderAndIsr);
+    }
+
+    @Test
+    void testProcessAdjustIsrRejectsIsrWithoutCurrentLeader() throws Exception {
+        Map.Entry<TableBucket, LeaderAndIsr> entry =
+                createTableAndGetLeaderAndIsr("adjust_isr_without_current_leader");
+        TableBucket tableBucket = entry.getKey();
+        LeaderAndIsr currentLeaderAndIsr = entry.getValue();
+        List<Integer> isrWithoutLeader =
+                currentLeaderAndIsr.isr().stream()
+                        .filter(replica -> replica != currentLeaderAndIsr.leader())
+                        .collect(Collectors.toList());
+        LeaderAndIsr invalidLeaderAndIsr =
+                new LeaderAndIsr(
+                        currentLeaderAndIsr.leader(),
+                        currentLeaderAndIsr.leaderEpoch(),
+                        isrWithoutLeader,
+                        currentLeaderAndIsr.standbyReplicas(),
+                        currentLeaderAndIsr.coordinatorEpoch(),
+                        currentLeaderAndIsr.bucketEpoch());
+
+        AdjustIsrResultForBucket invalidResult = submitAdjustIsr(tableBucket, invalidLeaderAndIsr);
+        assertThat(invalidResult.getError().error()).isEqualTo(Errors.INELIGIBLE_REPLICA_EXCEPTION);
+        assertThat(invalidResult.getErrorMessage())
+                .contains(
+                        String.format(
+                                "leader %s is not in the new ISR", currentLeaderAndIsr.leader()));
+        Optional<LeaderAndIsr> storedLeaderAndIsr =
+                fromCtx(ctx -> ctx.getBucketLeaderAndIsr(tableBucket));
+        assertThat(storedLeaderAndIsr).contains(currentLeaderAndIsr);
+    }
+
+    @Test
     void testDiskWriteLockedNotifyLeaderResponseMarksReplicaOffline() throws Exception {
         initCoordinatorChannel();
         TablePath tablePath =
@@ -2495,6 +2559,47 @@ class CoordinatorEventProcessorTest {
         AccessContextEvent<T> event = new AccessContextEvent<>(retrieveFunction);
         eventProcessor.getCoordinatorEventManager().put(event);
         return event.getResultFuture().get(30, TimeUnit.SECONDS);
+    }
+
+    private Map.Entry<TableBucket, LeaderAndIsr> createTableAndGetLeaderAndIsr(String tableName)
+            throws Exception {
+        initCoordinatorChannel();
+        TableAssignment tableAssignment =
+                generateAssignment(
+                        N_BUCKETS,
+                        REPLICATION_FACTOR,
+                        new TabletServerInfo[] {
+                            new TabletServerInfo(0, "rack0"),
+                            new TabletServerInfo(1, "rack1"),
+                            new TabletServerInfo(2, "rack2")
+                        });
+        long tableId =
+                metadataManager.createTable(
+                        TablePath.of(defaultDatabase, tableName),
+                        remoteDataDir,
+                        TEST_TABLE,
+                        tableAssignment,
+                        false);
+        verifyTableCreated(tableId, tableAssignment, N_BUCKETS, REPLICATION_FACTOR);
+
+        Map<TableBucket, LeaderAndIsr> bucketLeaderAndIsrMap =
+                new HashMap<>(
+                        waitValue(
+                                () -> fromCtx(ctx -> Optional.of(ctx.bucketLeaderAndIsr())),
+                                Duration.ofMinutes(1),
+                                "leader not elected"));
+        return bucketLeaderAndIsrMap.entrySet().iterator().next();
+    }
+
+    private AdjustIsrResultForBucket submitAdjustIsr(
+            TableBucket tableBucket, LeaderAndIsr newLeaderAndIsr) throws Exception {
+        CompletableFuture<AdjustIsrResponse> response = new CompletableFuture<>();
+        eventProcessor
+                .getCoordinatorEventManager()
+                .put(
+                        new AdjustIsrReceivedEvent(
+                                Collections.singletonMap(tableBucket, newLeaderAndIsr), response));
+        return getAdjustIsrResponseData(response.get()).get(tableBucket);
     }
 
     private long createTable(TablePath tablePath, TabletServerInfo[] servers) {

@@ -27,8 +27,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Unit tests for {@link org.apache.fluss.flink.source.split.SourceSplitSerializer} of serializing
- * {@link org.apache.fluss.flink.source.split.SnapshotSplit} and {@link
- * org.apache.fluss.flink.source.split.LogSplit}.
+ * {@link org.apache.fluss.flink.source.split.SnapshotSplit}, {@link
+ * org.apache.fluss.flink.source.split.LogSplit} and {@link
+ * org.apache.fluss.flink.source.split.KvBatchSplit}.
  */
 class SourceSplitSerializerTest {
 
@@ -139,5 +140,20 @@ class SourceSplitSerializerTest {
                                 false));
         assertThat(deserializedSplit.asHybridSnapshotLogSplit().isBatch()).isFalse();
         assertThat(deserializedSplit.asHybridSnapshotLogSplit().getLogStoppingOffset()).isEmpty();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testKvBatchSplitSerde(boolean isPartitioned) throws Exception {
+        TableBucket bucket = isPartitioned ? partitionedTableBucket : tableBucket;
+        String partitionName = isPartitioned ? "2024" : null;
+        KvBatchSplit split = new KvBatchSplit(bucket, partitionName);
+
+        byte[] serialized = serializer.serialize(split);
+        SourceSplitBase deserializedSplit =
+                serializer.deserialize(serializer.getVersion(), serialized);
+        assertThat(deserializedSplit).isEqualTo(split);
+        assertThat(deserializedSplit.isKvBatchSplit()).isTrue();
+        assertThat(deserializedSplit.asKvBatchSplit().splitId()).isEqualTo(split.splitId());
     }
 }

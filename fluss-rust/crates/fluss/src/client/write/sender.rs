@@ -517,6 +517,9 @@ impl Sender {
                 bucket_resp.partition_id(),
                 bucket_resp.bucket_id(),
             );
+            if let Some(pressure) = bucket_resp.pressure() {
+                self.accumulator.update_throttle(&tb, pressure);
+            }
             let Some(ready_batch) = records_by_bucket.remove(&tb) else {
                 panic!("Missing ready batch for table bucket {tb}");
             };
@@ -654,6 +657,11 @@ impl Sender {
         message: String,
     ) -> Result<Option<Arc<PhysicalTablePath>>> {
         let physical_table_path = Arc::clone(ready_write_batch.write_batch.physical_table_path());
+
+        if error == FlussError::StorageBackpressureException {
+            self.accumulator
+                .update_throttle(&ready_write_batch.table_bucket, 1.0);
+        }
 
         if error == FlussError::DuplicateSequenceException {
             warn!(
@@ -841,6 +849,7 @@ impl Sender {
                 | FlussError::LogStorageException
                 | FlussError::KvStorageException
                 | FlussError::StorageException
+                | FlussError::StorageBackpressureException
                 | FlussError::RequestTimeOut
                 | FlussError::NotEnoughReplicasAfterAppendException
                 | FlussError::NotEnoughReplicasException
@@ -1012,6 +1021,11 @@ trait BucketResponse {
     fn error_message(&self) -> Option<&String>;
 
     fn partition_id(&self) -> Option<PartitionId>;
+
+    /// Backpressure signal carried by PutKv responses.
+    fn pressure(&self) -> Option<f32> {
+        None
+    }
 }
 
 impl BucketResponse for PbProduceLogRespForBucket {
@@ -1043,6 +1057,10 @@ impl BucketResponse for PbPutKvRespForBucket {
 
     fn partition_id(&self) -> Option<PartitionId> {
         self.partition_id
+    }
+
+    fn pressure(&self) -> Option<f32> {
+        self.pressure
     }
 }
 
@@ -1151,6 +1169,78 @@ mod tests {
         let mut batches = accumulator.drain(cluster, &nodes, 1024 * 1024)?;
         let mut drained = batches.remove(&1).expect("drained batches");
         let batch = drained.pop().expect("batch");
+        assert_eq!(batch.write_batch.attempts(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn kv_backpressure_throttles_pressure_and_hard_rejection() -> Result<()> {
+        let table_path = Arc::new(TablePath::new("db".to_string(), "tbl".to_string()));
+        let cluster = build_cluster_arc(table_path.as_ref(), 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster.clone()));
+        let idempotence = disabled_idempotence();
+        let accumulator = Arc::new(RecordAccumulator::new(
+            Config::default(),
+            Arc::clone(&idempotence),
+        ));
+        let sender = Sender::new(
+            metadata,
+            accumulator.clone(),
+            1024 * 1024,
+            1000,
+            1,
+            1,
+            idempotence,
+            Arc::new(crate::metrics::WriterMetrics::new()),
+        );
+
+        let (batch, _handle) =
+            build_ready_batch(accumulator.as_ref(), cluster.clone(), table_path.clone())?;
+        let tb = batch.table_bucket.clone();
+        let mut records_by_bucket = HashMap::new();
+        records_by_bucket.insert(tb.clone(), batch);
+        let request_buckets = vec![tb.clone()];
+
+        let response = PutKvResponse {
+            buckets_resp: vec![PbPutKvRespForBucket {
+                partition_id: None,
+                bucket_id: tb.bucket_id(),
+                error_code: None,
+                error_message: None,
+                log_end_offset: None,
+                pressure: Some(0.5),
+            }],
+        };
+        sender
+            .handle_write_response(
+                tb.table_id(),
+                &request_buckets,
+                &mut records_by_bucket,
+                response,
+            )
+            .await?;
+
+        assert!(accumulator.is_throttled(&tb));
+        accumulator.update_throttle(&tb, 0.0);
+
+        let (batch, _handle) =
+            build_ready_batch(accumulator.as_ref(), cluster.clone(), table_path)?;
+
+        sender.handle_write_batch_error(
+            batch,
+            FlussError::StorageBackpressureException,
+            "backpressure".to_string(),
+        )?;
+
+        assert!(accumulator.is_throttled(&tb));
+        let server = cluster.get_tablet_server(1).expect("server");
+        let nodes = HashSet::from([server.clone()]);
+        let batches = accumulator.drain(cluster.clone(), &nodes, 1024 * 1024)?;
+        assert!(batches.is_empty());
+
+        accumulator.update_throttle(&tb, 0.0);
+        let mut batches = accumulator.drain(cluster, &nodes, 1024 * 1024)?;
+        let batch = batches.remove(&1).expect("drained").pop().expect("batch");
         assert_eq!(batch.write_batch.attempts(), 1);
         Ok(())
     }

@@ -382,12 +382,154 @@ public class RemoteLogITCase {
                 });
     }
 
+    @Test
+    void testAlterTableLogTtlEndToEnd() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "test_alter_table_log_ttl_e2e");
+
+        // Keep enough local segments so that only TTL cleanup can advance local-log start offsets.
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(DATA1_SCHEMA)
+                        .distributedBy(1)
+                        .property(ConfigOptions.TABLE_LOG_TTL, Duration.ofDays(30))
+                        .property(ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS, 100)
+                        .build();
+
+        long tableId = createTable(FLUSS_CLUSTER_EXTENSION, tablePath, tableDescriptor);
+        TableBucket tb = new TableBucket(tableId, 0);
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
+
+        int leaderId = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
+        TabletServerGateway leaderGateway =
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leaderId);
+
+        // Produce the old segment cohort and wait for it to be copied to remote storage.
+        produceRecordsAndWaitRemoteLogCopy(leaderGateway, tb);
+
+        TabletServer leaderServer = FLUSS_CLUSTER_EXTENSION.getTabletServerById(leaderId);
+        RemoteLogManager remoteLogManager = leaderServer.getReplicaManager().getRemoteLogManager();
+        RemoteLogTablet remoteLogTablet = remoteLogManager.remoteLogTablet(tb);
+        List<String> oldRemoteSegmentIds =
+                remoteLogTablet.allRemoteLogSegments().stream()
+                        .map(segment -> segment.remoteLogSegmentId().toString())
+                        .collect(Collectors.toList());
+        assertThat(oldRemoteSegmentIds).isNotEmpty();
+
+        Replica leaderReplica = FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(tb);
+        LogTablet leaderLogTablet = leaderReplica.getLogTablet();
+        long firstBatchEndOffset = leaderLogTablet.localLogEndOffset();
+
+        int followerId = (leaderId + 1) % 3;
+        Replica followerReplica = FLUSS_CLUSTER_EXTENSION.waitAndGetFollowerReplica(tb, followerId);
+        LogTablet followerLogTablet = followerReplica.getLogTablet();
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(followerLogTablet.localLogEndOffset())
+                                .isEqualTo(firstBatchEndOffset));
+
+        long initialLeaderLocalStartOffset = leaderLogTablet.localLogStartOffset();
+        long initialFollowerLocalStartOffset = followerLogTablet.localLogStartOffset();
+
+        // Shorten the TTL through the real ALTER path.
+        long newTtlMs = Duration.ofHours(1).toMillis();
+        CoordinatorGateway coordinatorGateway = FLUSS_CLUSTER_EXTENSION.newCoordinatorClient();
+        coordinatorGateway
+                .alterTable(
+                        newAlterTableRequest(
+                                tablePath,
+                                Collections.singletonMap(ConfigOptions.TABLE_LOG_TTL.key(), "1h"),
+                                Collections.emptyList(),
+                                Collections.emptyList(),
+                                false))
+                .get();
+
+        // Wait until the new TableInfo reaches the leader and follower. Both local and remote
+        // retention read the TTL from this metadata snapshot.
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    assertThat(leaderReplica.getTableInfo().getTableConfig().getLogTTLMs())
+                            .isEqualTo(newTtlMs);
+                    assertThat(leaderLogTablet.getEffectiveLocalLogTtlMs()).isEqualTo(newTtlMs);
+                    assertThat(followerReplica.getTableInfo().getTableConfig().getLogTTLMs())
+                            .isEqualTo(newTtlMs);
+                    assertThat(followerLogTablet.getEffectiveLocalLogTtlMs()).isEqualTo(newTtlMs);
+                });
+
+        // Expire the old cohort, then append a new cohort that must remain available.
+        MANUAL_CLOCK.advanceTime(Duration.ofHours(1).plusMinutes(30));
+        produceRecordsAndWaitRemoteLogCopy(leaderGateway, tb, firstBatchEndOffset);
+
+        // The old remote segments must be removed while newly uploaded segments remain.
+        retry(
+                Duration.ofMinutes(2),
+                () -> {
+                    List<RemoteLogSegment> remainingSegments =
+                            remoteLogTablet.allRemoteLogSegments();
+                    assertThat(remainingSegments).isNotEmpty();
+                    assertThat(remainingSegments)
+                            .extracting(segment -> segment.remoteLogSegmentId().toString())
+                            .doesNotContainAnyElementsOf(oldRemoteSegmentIds);
+                    assertThat(remainingSegments)
+                            .allMatch(
+                                    segment -> segment.remoteLogEndOffset() > firstBatchEndOffset);
+                });
+
+        // Wait for the second cohort to reach the follower and for LogManager's retention task to
+        // automatically discard the expired local prefix on both replicas.
+        retry(
+                Duration.ofMinutes(2),
+                () -> {
+                    assertThat(followerLogTablet.localLogEndOffset())
+                            .isGreaterThan(firstBatchEndOffset);
+                    assertThat(leaderLogTablet.localLogStartOffset())
+                            .isGreaterThan(initialLeaderLocalStartOffset);
+                    assertThat(followerLogTablet.localLogStartOffset())
+                            .isGreaterThan(initialFollowerLocalStartOffset);
+                });
+
+        // Verify the follower preserves the latest TableInfo through leader promotion.
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(followerReplica.getTableInfo().getTableConfig().getLogTTLMs())
+                                .isEqualTo(newTtlMs));
+
+        // --- Failover: stop leader, wait for new leader ---
+        FLUSS_CLUSTER_EXTENSION.stopTabletServer(leaderId);
+        try {
+            int newLeaderId = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
+            assertThat(newLeaderId).isNotEqualTo(leaderId);
+
+            // The promoted follower must retain the altered TableInfo and resume remote tiering.
+            TabletServer newLeaderServer = FLUSS_CLUSTER_EXTENSION.getTabletServerById(newLeaderId);
+            RemoteLogManager newRemoteLogManager =
+                    newLeaderServer.getReplicaManager().getRemoteLogManager();
+            retry(
+                    Duration.ofMinutes(2),
+                    () -> {
+                        RemoteLogTablet newRemoteLogTablet =
+                                newRemoteLogManager.remoteLogTablet(tb);
+                        Replica newLeaderReplica =
+                                newLeaderServer.getReplicaManager().getReplicaOrException(tb);
+                        assertThat(newLeaderReplica.getTableInfo().getTableConfig().getLogTTLMs())
+                                .isEqualTo(newTtlMs);
+                        assertThat(newRemoteLogTablet.allRemoteLogSegments()).isNotEmpty();
+                    });
+        } finally {
+            // Restart the stopped server so other tests are not affected.
+            FLUSS_CLUSTER_EXTENSION.startTabletServer(leaderId);
+        }
+    }
+
     private static Configuration initConfig() {
         Configuration conf = new Configuration();
         conf.setInt(ConfigOptions.DEFAULT_BUCKET_NUMBER, 1);
         conf.setInt(ConfigOptions.DEFAULT_REPLICATION_FACTOR, 3);
         // set a shorter interval for testing purpose
         conf.set(ConfigOptions.REMOTE_LOG_TASK_INTERVAL_DURATION, Duration.ofSeconds(1));
+        conf.set(ConfigOptions.LOG_RETENTION_CHECK_INTERVAL, Duration.ofSeconds(1));
         conf.set(ConfigOptions.LOG_SEGMENT_FILE_SIZE, MemorySize.parse("1kb"));
 
         // set a shorter max log time to allow replica shrink from isr. Don't be too low, otherwise

@@ -182,6 +182,14 @@ defmodule Fluss.ConfigTest do
     assert config.writer_buffer_wait_timeout_ms == 5_000
   end
 
+  test "set_writer_kv_backpressure_max_throttle_ms/2 sets the throttle" do
+    config =
+      Fluss.Config.new("localhost:9123")
+      |> Fluss.Config.set_writer_kv_backpressure_max_throttle_ms(1_500)
+
+    assert config.writer_kv_backpressure_max_throttle_ms == 1_500
+  end
+
   test "set_writer_enable_idempotence/2 sets the idempotence flag" do
     config =
       Fluss.Config.new("localhost:9123")

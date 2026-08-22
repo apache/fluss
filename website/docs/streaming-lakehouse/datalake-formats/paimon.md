@@ -32,10 +32,10 @@ Verify downloaded JARs using the [verification instructions](/downloads#verifyin
 
 ## Version Compatibility
 
-| Use Case        | Required/Tested Versions                           |
-|-----------------|----------------------------------------------------|
-| Tiering Service | Paimon **1.3** (required)                          |
-| Union Read      | Paimon 1.1, 1.2, 1.3 (tested and verified to work) |
+| Use Case        | Required/Tested Versions                                |
+|-----------------|---------------------------------------------------------|
+| Tiering Service | Paimon **1.4** (required)                               |
+| Union Read      | Paimon 1.1, 1.2, 1.3, 1.4 (tested and verified to work) |
 
 ## Configure Paimon as LakeHouse Storage
 

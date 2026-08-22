@@ -171,6 +171,8 @@ pub enum FlussError {
     InvalidAlterTableException = 56,
     /// Deletion operations are disabled on this table.
     DeletionDisabledException = 57,
+    /// The KV storage engine rejected a write due to backpressure.
+    StorageBackpressureException = 72,
 }
 
 impl FlussError {
@@ -195,6 +197,7 @@ impl FlussError {
                 | FlussError::NotEnoughReplicasAfterAppendException
                 | FlussError::NotEnoughReplicasException
                 | FlussError::LeaderNotAvailableException
+                | FlussError::StorageBackpressureException
         )
     }
 
@@ -298,6 +301,9 @@ impl FlussError {
             FlussError::DeletionDisabledException => {
                 "Deletion operations are disabled on this table."
             }
+            FlussError::StorageBackpressureException => {
+                "The tablet server has rejected the write because the KV storage engine has reached its write-pressure threshold."
+            }
         }
     }
 
@@ -372,6 +378,7 @@ impl FlussError {
             55 => FlussError::IneligibleReplicaException,
             56 => FlussError::InvalidAlterTableException,
             57 => FlussError::DeletionDisabledException,
+            72 => FlussError::StorageBackpressureException,
             _ => FlussError::UnknownServerError,
         }
     }
@@ -409,6 +416,10 @@ mod tests {
         assert_eq!(
             FlussError::for_code(FlussError::AuthorizationException.code()),
             FlussError::AuthorizationException
+        );
+        assert_eq!(
+            FlussError::for_code(72),
+            FlussError::StorageBackpressureException
         );
         assert_eq!(FlussError::for_code(9999), FlussError::UnknownServerError);
     }
@@ -473,6 +484,7 @@ mod tests {
             FlussError::NotEnoughReplicasAfterAppendException,
             FlussError::NotEnoughReplicasException,
             FlussError::LeaderNotAvailableException,
+            FlussError::StorageBackpressureException,
         ];
         for err in &retriable {
             assert!(err.is_retriable(), "{err:?} should be retriable");

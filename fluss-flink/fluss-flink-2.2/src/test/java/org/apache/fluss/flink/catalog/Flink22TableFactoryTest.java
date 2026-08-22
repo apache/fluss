@@ -15,21 +15,15 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.flink.adapter;
+package org.apache.fluss.flink.catalog;
 
-import org.apache.flink.table.catalog.CatalogBaseTable;
-import org.junit.jupiter.api.Test;
+import org.apache.flink.table.connector.source.LookupTableSource;
+import org.apache.flink.table.runtime.connector.source.LookupRuntimeProviderContext;
 
-import static org.assertj.core.api.Assertions.assertThat;
-
-/** Test for {@link CatalogTableAdapter} in flink 1.18. */
-public class Flink118CatalogTableTest extends FlinkCatalogTableTest {
-
-    @Test
-    public void testIsMaterializedTable() {
-        assertThat(CatalogTableAdapter.isMaterializedTable(CatalogBaseTable.TableKind.VIEW))
-                .isEqualTo(false);
-        assertThat(CatalogTableAdapter.isMaterializedTable(CatalogBaseTable.TableKind.TABLE))
-                .isEqualTo(false);
+/** Test for {@link FlinkTableFactory} in Flink 2.2. */
+public class Flink22TableFactoryTest extends FlinkTableFactoryTest {
+    @Override
+    protected LookupTableSource.LookupContext createLookupContext(int[][] lookupKeys) {
+        return new LookupRuntimeProviderContext(lookupKeys, false);
     }
 }

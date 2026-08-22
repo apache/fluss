@@ -923,9 +923,9 @@ message PbFetchLogRespForBucket {
   optional int64 log_start_offset = 6; // TODO now we don't introduce log start offset, but remain it in protobuf
   optional PbRemoteLogFetchInfo remote_log_fetch_info = 7;
   optional bytes records = 8;
-  // The next fetch offset when all batches in this bucket are filtered out by server-side
-  // filter. When set (>= 0), the records field MUST be empty — the two fields are mutually
-  // exclusive. The client should use this offset as the starting offset for the next fetch.
+  // The offset the server scanned up to while filtering out batches, which may accompany a
+  // non-empty records field when only trailing batches were filtered. The client should start
+  // its next fetch from the later of this offset and the end of the records it received.
   optional int64 filtered_end_offset = 9;
 }
 

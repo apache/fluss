@@ -63,6 +63,10 @@ public class RecoveryOffsetManagerTest {
     // ==================== Test Data Helpers ====================
 
     private static TableInfo createTableInfo(int numBuckets, boolean isPartitioned) {
+        return createTableInfo(TABLE_ID, numBuckets, isPartitioned);
+    }
+
+    private static TableInfo createTableInfo(long tableId, int numBuckets, boolean isPartitioned) {
         Schema schema =
                 Schema.newBuilder()
                         .column("id", DataTypes.INT())
@@ -75,7 +79,7 @@ public class RecoveryOffsetManagerTest {
 
         return new TableInfo(
                 TABLE_PATH,
-                TABLE_ID,
+                tableId,
                 0, // schemaId
                 schema,
                 Collections.emptyList(), // bucketKeys
@@ -89,6 +93,12 @@ public class RecoveryOffsetManagerTest {
                 System.currentTimeMillis());
     }
 
+    private static RecoveryOffsetManager createManager(
+            RecoveryTestAdmin admin, int subtaskIndex, int parallelism, TableInfo tableInfo) {
+        return new RecoveryOffsetManager(
+                admin, PRODUCER_ID, subtaskIndex, parallelism, 10L, 5000L, TABLE_PATH, tableInfo);
+    }
+
     private static PartitionInfo createPartitionInfo(long partitionId, String partitionName) {
         ResolvedPartitionSpec spec = ResolvedPartitionSpec.fromPartitionValue("pt", partitionName);
         return new PartitionInfo(partitionId, spec, DEFAULT_REMOTE_DATA_DIR);
@@ -97,31 +107,24 @@ public class RecoveryOffsetManagerTest {
     // ==================== FRESH_START Tests ====================
 
     @Test
-    void testFreshStartWithEmptyCheckpoint() throws Exception {
-        // Setup: current offsets are all 0 (no data written)
+    void testEmptyRestoredStateIsRejectedBecauseCompletenessIsUnknown() {
         Map<TableBucket, Long> currentOffsets = new HashMap<>();
         currentOffsets.put(new TableBucket(TABLE_ID, 0), 0L);
         currentOffsets.put(new TableBucket(TABLE_ID, 1), 0L);
 
         RecoveryTestAdmin admin = new RecoveryTestAdmin(currentOffsets);
         TableInfo tableInfo = createTableInfo(2, false);
-        RecoveryOffsetManager manager =
-                new RecoveryOffsetManager(
-                        admin, PRODUCER_ID, 0, 1, 10L, 5000L, TABLE_PATH, tableInfo);
+        RecoveryOffsetManager manager = createManager(admin, 0, 1, tableInfo);
 
-        // Execute: empty checkpoint (checkpoint exists but no data written)
-        RecoveryOffsetManager.RecoveryDecision decision =
-                manager.determineRecoveryStrategy(new ArrayList<>());
-
-        // Verify
-        assertThat(decision.getStrategy())
-                .isEqualTo(RecoveryOffsetManager.RecoveryStrategy.FRESH_START);
-        assertThat(decision.needsUndoRecovery()).isFalse();
-        assertThat(decision.getRecoveryOffsets()).isNull();
+        assertThatThrownBy(() -> manager.determineRecoveryStrategy(new ArrayList<>()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("restored")
+                .hasMessageContaining("no state fragments");
+        assertThat(admin.wasRegisterCalled()).isFalse();
     }
 
     @Test
-    void testFreshStartWhenOffsetsMatch() throws Exception {
+    void testNoUndoWhenCheckpointOffsetsMatchCurrent() throws Exception {
         // Setup: checkpoint offsets match current offsets
         Map<TableBucket, Long> currentOffsets = new HashMap<>();
         currentOffsets.put(new TableBucket(TABLE_ID, 0), 100L);
@@ -129,13 +132,11 @@ public class RecoveryOffsetManagerTest {
 
         RecoveryTestAdmin admin = new RecoveryTestAdmin(currentOffsets);
         TableInfo tableInfo = createTableInfo(2, false);
-        RecoveryOffsetManager manager =
-                new RecoveryOffsetManager(
-                        admin, PRODUCER_ID, 0, 1, 10L, 5000L, TABLE_PATH, tableInfo);
+        RecoveryOffsetManager manager = createManager(admin, 0, 1, tableInfo);
 
         // Checkpoint offsets match current
         Map<TableBucket, Long> checkpointOffsets = new HashMap<>(currentOffsets);
-        WriterState state = new WriterState(checkpointOffsets);
+        WriterState state = WriterState.complete(TABLE_ID, checkpointOffsets);
 
         // Execute
         RecoveryOffsetManager.RecoveryDecision decision =
@@ -145,13 +146,14 @@ public class RecoveryOffsetManagerTest {
         assertThat(decision.getStrategy())
                 .isEqualTo(RecoveryOffsetManager.RecoveryStrategy.FRESH_START);
         assertThat(decision.needsUndoRecovery()).isFalse();
-        assertThat(decision.getRecoveryOffsets()).isNull();
+        assertThat(decision.getRecoveryOffsets())
+                .containsExactlyInAnyOrderEntriesOf(checkpointOffsets);
     }
 
     // ==================== CHECKPOINT_RECOVERY Tests ====================
 
     @Test
-    void testCheckpointRecoveryWithChangedOffsets() throws Exception {
+    void testCheckpointOffsetsBehindCurrentRequireUndo() throws Exception {
         // Setup: current offsets are ahead of checkpoint
         Map<TableBucket, Long> currentOffsets = new HashMap<>();
         currentOffsets.put(new TableBucket(TABLE_ID, 0), 150L);
@@ -159,15 +161,13 @@ public class RecoveryOffsetManagerTest {
 
         RecoveryTestAdmin admin = new RecoveryTestAdmin(currentOffsets);
         TableInfo tableInfo = createTableInfo(2, false);
-        RecoveryOffsetManager manager =
-                new RecoveryOffsetManager(
-                        admin, PRODUCER_ID, 0, 1, 10L, 5000L, TABLE_PATH, tableInfo);
+        RecoveryOffsetManager manager = createManager(admin, 0, 1, tableInfo);
 
         // Checkpoint offsets are behind current
         Map<TableBucket, Long> checkpointOffsets = new HashMap<>();
         checkpointOffsets.put(new TableBucket(TABLE_ID, 0), 100L);
         checkpointOffsets.put(new TableBucket(TABLE_ID, 1), 200L);
-        WriterState state = new WriterState(checkpointOffsets);
+        WriterState state = WriterState.complete(TABLE_ID, checkpointOffsets);
 
         // Execute
         RecoveryOffsetManager.RecoveryDecision decision =
@@ -183,7 +183,7 @@ public class RecoveryOffsetManagerTest {
     }
 
     @Test
-    void testCheckpointRecoveryWithRescaling() throws Exception {
+    void testUnionStateIsFilteredBySubtaskAssignment() throws Exception {
         // Simulates rescaling from parallelism=4 to parallelism=4 with state redistribution.
         // Previously each subtask had one unique bucket. After rescaling, Flink may redistribute
         // all 4 states to subtask 0. The manager should filter by bucket assignment and only
@@ -199,26 +199,24 @@ public class RecoveryOffsetManagerTest {
         RecoveryTestAdmin admin = new RecoveryTestAdmin(currentOffsets);
         TableInfo tableInfo = createTableInfo(4, false);
         // subtaskIndex=0, parallelism=4: only bucket 0 assigned (0 % 4 = 0)
-        RecoveryOffsetManager manager =
-                new RecoveryOffsetManager(
-                        admin, PRODUCER_ID, 0, 4, 10L, 5000L, TABLE_PATH, tableInfo);
+        RecoveryOffsetManager manager = createManager(admin, 0, 4, tableInfo);
 
         // 4 distinct states from previous subtasks, each with a unique bucket
         Map<TableBucket, Long> offsets0 = new HashMap<>();
         offsets0.put(new TableBucket(TABLE_ID, 0), 100L);
-        WriterState state0 = new WriterState(offsets0);
+        WriterState state0 = WriterState.complete(TABLE_ID, offsets0);
 
         Map<TableBucket, Long> offsets1 = new HashMap<>();
         offsets1.put(new TableBucket(TABLE_ID, 1), 150L);
-        WriterState state1 = new WriterState(offsets1);
+        WriterState state1 = WriterState.complete(TABLE_ID, offsets1);
 
         Map<TableBucket, Long> offsets2 = new HashMap<>();
         offsets2.put(new TableBucket(TABLE_ID, 2), 200L);
-        WriterState state2 = new WriterState(offsets2);
+        WriterState state2 = WriterState.complete(TABLE_ID, offsets2);
 
         Map<TableBucket, Long> offsets3 = new HashMap<>();
         offsets3.put(new TableBucket(TABLE_ID, 3), 250L);
-        WriterState state3 = new WriterState(offsets3);
+        WriterState state3 = WriterState.complete(TABLE_ID, offsets3);
 
         // Execute: subtask 0 receives all 4 states after rescaling
         RecoveryOffsetManager.RecoveryDecision decision =
@@ -234,7 +232,7 @@ public class RecoveryOffsetManagerTest {
     }
 
     @Test
-    void testNewBucketUsesZeroAsRecoveryOffset() throws Exception {
+    void testV2MissingLiveBucketUsesZeroBaseline() throws Exception {
         // Setup: bucket 1 has data but not in checkpoint
         Map<TableBucket, Long> currentOffsets = new HashMap<>();
         currentOffsets.put(new TableBucket(TABLE_ID, 0), 100L);
@@ -242,14 +240,12 @@ public class RecoveryOffsetManagerTest {
 
         RecoveryTestAdmin admin = new RecoveryTestAdmin(currentOffsets);
         TableInfo tableInfo = createTableInfo(2, false);
-        RecoveryOffsetManager manager =
-                new RecoveryOffsetManager(
-                        admin, PRODUCER_ID, 0, 1, 10L, 5000L, TABLE_PATH, tableInfo);
+        RecoveryOffsetManager manager = createManager(admin, 0, 1, tableInfo);
 
         // Checkpoint only has bucket 0
         Map<TableBucket, Long> checkpointOffsets = new HashMap<>();
         checkpointOffsets.put(new TableBucket(TABLE_ID, 0), 100L);
-        WriterState state = new WriterState(checkpointOffsets);
+        WriterState state = WriterState.complete(TABLE_ID, checkpointOffsets);
 
         // Execute
         RecoveryOffsetManager.RecoveryDecision decision =
@@ -259,8 +255,12 @@ public class RecoveryOffsetManagerTest {
         assertThat(decision.getStrategy())
                 .isEqualTo(RecoveryOffsetManager.RecoveryStrategy.CHECKPOINT_RECOVERY);
         assertThat(decision.needsUndoRecovery()).isTrue();
-        assertThat(decision.getRecoveryOffsets()).hasSize(1);
-        assertThat(decision.getRecoveryOffsets().get(new TableBucket(TABLE_ID, 1))).isEqualTo(0L);
+        assertThat(decision.getRecoveryOffsets()).containsOnlyKeys(new TableBucket(TABLE_ID, 0));
+        assertThat(
+                        decision.getUndoOffsets()
+                                .get(new TableBucket(TABLE_ID, 1))
+                                .getCheckpointOffset())
+                .isZero();
     }
 
     // ==================== PRODUCER_OFFSET_RECOVERY Tests ====================
@@ -278,9 +278,7 @@ public class RecoveryOffsetManagerTest {
         admin.setInitialOffsetsForRegistration(initialOffsets);
 
         TableInfo tableInfo = createTableInfo(1, false);
-        RecoveryOffsetManager manager =
-                new RecoveryOffsetManager(
-                        admin, PRODUCER_ID, 0, 1, 10L, 5000L, TABLE_PATH, tableInfo);
+        RecoveryOffsetManager manager = createManager(admin, 0, 1, tableInfo);
 
         // Execute: null means no checkpoint
         RecoveryOffsetManager.RecoveryDecision decision = manager.determineRecoveryStrategy(null);
@@ -313,9 +311,7 @@ public class RecoveryOffsetManagerTest {
 
         TableInfo tableInfo = createTableInfo(2, false);
         // subtaskIndex=1, parallelism=2: bucket 1 assigned
-        RecoveryOffsetManager manager =
-                new RecoveryOffsetManager(
-                        admin, PRODUCER_ID, 1, 2, 10L, 5000L, TABLE_PATH, tableInfo);
+        RecoveryOffsetManager manager = createManager(admin, 1, 2, tableInfo);
 
         // Execute
         RecoveryOffsetManager.RecoveryDecision decision = manager.determineRecoveryStrategy(null);
@@ -331,18 +327,17 @@ public class RecoveryOffsetManagerTest {
     }
 
     @Test
-    void testNoUndoNeededWhenProducerOffsetsMatchCurrent() throws Exception {
+    void testProducerOffsetsAreRetainedWhenNoUndoIsNeeded() throws Exception {
         // Setup: registered offsets match current (no writes after registration)
         Map<TableBucket, Long> currentOffsets = new HashMap<>();
         currentOffsets.put(new TableBucket(TABLE_ID, 0), 100L);
+        currentOffsets.put(new TableBucket(TABLE_ID, 1), 200L);
 
         RecoveryTestAdmin admin = new RecoveryTestAdmin(currentOffsets);
         admin.setInitialOffsetsForRegistration(currentOffsets);
 
-        TableInfo tableInfo = createTableInfo(1, false);
-        RecoveryOffsetManager manager =
-                new RecoveryOffsetManager(
-                        admin, PRODUCER_ID, 0, 1, 10L, 5000L, TABLE_PATH, tableInfo);
+        TableInfo tableInfo = createTableInfo(2, false);
+        RecoveryOffsetManager manager = createManager(admin, 0, 1, tableInfo);
 
         // Execute
         RecoveryOffsetManager.RecoveryDecision decision = manager.determineRecoveryStrategy(null);
@@ -351,12 +346,160 @@ public class RecoveryOffsetManagerTest {
         assertThat(decision.getStrategy())
                 .isEqualTo(RecoveryOffsetManager.RecoveryStrategy.FRESH_START);
         assertThat(decision.needsUndoRecovery()).isFalse();
+        assertThat(decision.getRecoveryOffsets())
+                .as("the complete producer baseline must survive even when no Undo is needed")
+                .containsExactlyInAnyOrderEntriesOf(currentOffsets);
+    }
+
+    @Test
+    void testRecoveryOffsetsRetainBucketsOutsideUndoWorkSet() throws Exception {
+        TableBucket unchangedBucket = new TableBucket(TABLE_ID, 0);
+        TableBucket changedBucket = new TableBucket(TABLE_ID, 1);
+
+        Map<TableBucket, Long> checkpointOffsets = new HashMap<>();
+        checkpointOffsets.put(unchangedBucket, 100L);
+        checkpointOffsets.put(changedBucket, 200L);
+
+        Map<TableBucket, Long> currentOffsets = new HashMap<>();
+        currentOffsets.put(unchangedBucket, 100L);
+        currentOffsets.put(changedBucket, 260L);
+
+        RecoveryTestAdmin admin = new RecoveryTestAdmin(currentOffsets);
+        RecoveryOffsetManager manager = createManager(admin, 0, 1, createTableInfo(2, false));
+
+        RecoveryOffsetManager.RecoveryDecision decision =
+                manager.determineRecoveryStrategy(
+                        Collections.singletonList(
+                                WriterState.complete(TABLE_ID, checkpointOffsets)));
+
+        assertThat(decision.getRecoveryOffsets())
+                .as("the next checkpoint baseline must retain changed and unchanged buckets")
+                .containsExactlyInAnyOrderEntriesOf(checkpointOffsets);
+        assertThat(decision.getUndoOffsets()).containsOnlyKeys(changedBucket);
+        assertThat(decision.getUndoOffsets().get(changedBucket).getCheckpointOffset())
+                .isEqualTo(200L);
+        assertThat(decision.getUndoOffsets().get(changedBucket).getLogEndOffset()).isEqualTo(260L);
+    }
+
+    @Test
+    void testSparseV1StateUsesZeroForMissingBucket() throws Exception {
+        TableBucket missingBucket = new TableBucket(TABLE_ID, 0);
+        TableBucket knownBucket = new TableBucket(TABLE_ID, 1);
+
+        Map<TableBucket, Long> currentOffsets = new HashMap<>();
+        currentOffsets.put(missingBucket, 1_000_000L);
+        currentOffsets.put(knownBucket, 260L);
+
+        RecoveryTestAdmin admin = new RecoveryTestAdmin(currentOffsets);
+        RecoveryOffsetManager manager = createManager(admin, 0, 1, createTableInfo(2, false));
+
+        RecoveryOffsetManager.RecoveryDecision decision =
+                manager.determineRecoveryStrategy(
+                        Collections.singletonList(
+                                new WriterState(Collections.singletonMap(knownBucket, 260L))));
+
+        assertThat(decision.getRecoveryOffsets()).containsOnlyKeys(knownBucket);
+        assertThat(decision.getRecoveryOffsets().get(knownBucket)).isEqualTo(260L);
+        assertThat(decision.getUndoOffsets()).containsOnlyKeys(missingBucket);
+        assertThat(decision.getUndoOffsets().get(missingBucket).getCheckpointOffset()).isZero();
+        assertThat(decision.getUndoOffsets().get(missingBucket).getLogEndOffset())
+                .isEqualTo(1_000_000L);
+        assertThat(admin.wasRegisterCalled()).isFalse();
+    }
+
+    @Test
+    void testV1OffsetsAreRetainedWhenNoUndoIsNeeded() throws Exception {
+        TableBucket bucket = new TableBucket(TABLE_ID, 0);
+        Map<TableBucket, Long> offsets = Collections.singletonMap(bucket, 260L);
+        RecoveryTestAdmin admin = new RecoveryTestAdmin(offsets);
+        RecoveryOffsetManager manager = createManager(admin, 0, 1, createTableInfo(1, false));
+
+        RecoveryOffsetManager.RecoveryDecision decision =
+                manager.determineRecoveryStrategy(
+                        Collections.singletonList(new WriterState(offsets)));
+
+        assertThat(decision.getRecoveryOffsets()).containsOnlyKeys(bucket);
+        assertThat(decision.getRecoveryOffsets().get(bucket)).isEqualTo(260L);
+        assertThat(decision.needsUndoRecovery()).isFalse();
+    }
+
+    @Test
+    void testMixedV1AndV2FragmentsFail() {
+        TableBucket bucket = new TableBucket(TABLE_ID, 0);
+        Map<TableBucket, Long> offsets = Collections.singletonMap(bucket, 10L);
+        RecoveryTestAdmin admin = new RecoveryTestAdmin(offsets);
+        RecoveryOffsetManager manager = createManager(admin, 0, 1, createTableInfo(1, false));
+
+        assertThatThrownBy(
+                        () ->
+                                manager.determineRecoveryStrategy(
+                                        Arrays.asList(
+                                                new WriterState(offsets),
+                                                WriterState.complete(TABLE_ID, offsets))))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("mixed")
+                .hasMessageContaining("V1")
+                .hasMessageContaining("V2");
+    }
+
+    @Test
+    void testConflictingFragmentOffsetsFail() {
+        TableBucket bucket = new TableBucket(TABLE_ID, 0);
+        Map<TableBucket, Long> first = Collections.singletonMap(bucket, 10L);
+        Map<TableBucket, Long> second = Collections.singletonMap(bucket, 20L);
+        RecoveryTestAdmin admin = new RecoveryTestAdmin(second);
+        RecoveryOffsetManager manager = createManager(admin, 0, 1, createTableInfo(1, false));
+
+        assertThatThrownBy(
+                        () ->
+                                manager.determineRecoveryStrategy(
+                                        Arrays.asList(
+                                                WriterState.complete(TABLE_ID, first),
+                                                WriterState.complete(TABLE_ID, second))))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Conflicting")
+                .hasMessageContaining(bucket.toString())
+                .hasMessageContaining("10")
+                .hasMessageContaining("20");
+    }
+
+    @Test
+    void testV2EmptyMarkerWithMismatchedTableIdFails() {
+        TableBucket bucket = new TableBucket(TABLE_ID, 0);
+        RecoveryTestAdmin admin = new RecoveryTestAdmin(Collections.singletonMap(bucket, 0L));
+        RecoveryOffsetManager manager = createManager(admin, 0, 1, createTableInfo(1, false));
+
+        assertThatThrownBy(
+                        () ->
+                                manager.determineRecoveryStrategy(
+                                        Collections.singletonList(
+                                                WriterState.complete(
+                                                        TABLE_ID + 1, Collections.emptyMap()))))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("table ID")
+                .hasMessageContaining(String.valueOf(TABLE_ID + 1));
+    }
+
+    @Test
+    void testMissingLatestOffsetFailsRecovery() {
+        RecoveryTestAdmin admin = new RecoveryTestAdmin(new HashMap<>());
+        RecoveryOffsetManager manager = createManager(admin, 0, 1, createTableInfo(1, false));
+
+        assertThatThrownBy(
+                        () ->
+                                manager.determineRecoveryStrategy(
+                                        Collections.singletonList(
+                                                WriterState.complete(
+                                                        TABLE_ID, Collections.emptyMap()))))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("latest offset")
+                .hasMessageContaining("missing");
     }
 
     // ==================== Sharding Tests ====================
 
     @Test
-    void testShardingFiltersBuckets() throws Exception {
+    void testRecoveryOffsetsAreFilteredBySubtaskAssignment() throws Exception {
         // Setup: 3 buckets, parallelism 3
         Map<TableBucket, Long> currentOffsets = new HashMap<>();
         currentOffsets.put(new TableBucket(TABLE_ID, 0), 150L);
@@ -366,15 +509,13 @@ public class RecoveryOffsetManagerTest {
         RecoveryTestAdmin admin = new RecoveryTestAdmin(currentOffsets);
         TableInfo tableInfo = createTableInfo(3, false);
         // subtask 0 with parallelism 3: only bucket 0 assigned (0 % 3 = 0)
-        RecoveryOffsetManager manager =
-                new RecoveryOffsetManager(
-                        admin, PRODUCER_ID, 0, 3, 10L, 5000L, TABLE_PATH, tableInfo);
+        RecoveryOffsetManager manager = createManager(admin, 0, 3, tableInfo);
 
         Map<TableBucket, Long> checkpointOffsets = new HashMap<>();
         checkpointOffsets.put(new TableBucket(TABLE_ID, 0), 100L);
         checkpointOffsets.put(new TableBucket(TABLE_ID, 1), 200L);
         checkpointOffsets.put(new TableBucket(TABLE_ID, 2), 300L);
-        WriterState state = new WriterState(checkpointOffsets);
+        WriterState state = WriterState.complete(TABLE_ID, checkpointOffsets);
 
         // Execute
         RecoveryOffsetManager.RecoveryDecision decision =
@@ -390,7 +531,7 @@ public class RecoveryOffsetManagerTest {
     }
 
     @Test
-    void testSubtaskWithNoBuckets() throws Exception {
+    void testSubtaskWithNoAssignedBucketsReturnsEmptyDecision() throws Exception {
         // Setup: 2 buckets, parallelism 4 -> subtask 2 and 3 have no buckets
         Map<TableBucket, Long> currentOffsets = new HashMap<>();
         currentOffsets.put(new TableBucket(TABLE_ID, 0), 100L);
@@ -399,14 +540,12 @@ public class RecoveryOffsetManagerTest {
         RecoveryTestAdmin admin = new RecoveryTestAdmin(currentOffsets);
         TableInfo tableInfo = createTableInfo(2, false);
         // subtask 2 with parallelism 4: no buckets assigned
-        RecoveryOffsetManager manager =
-                new RecoveryOffsetManager(
-                        admin, PRODUCER_ID, 2, 4, 10L, 5000L, TABLE_PATH, tableInfo);
+        RecoveryOffsetManager manager = createManager(admin, 2, 4, tableInfo);
 
         Map<TableBucket, Long> checkpointOffsets = new HashMap<>();
         checkpointOffsets.put(new TableBucket(TABLE_ID, 0), 50L);
         checkpointOffsets.put(new TableBucket(TABLE_ID, 1), 100L);
-        WriterState state = new WriterState(checkpointOffsets);
+        WriterState state = WriterState.complete(TABLE_ID, checkpointOffsets);
 
         // Execute
         RecoveryOffsetManager.RecoveryDecision decision =
@@ -416,13 +555,13 @@ public class RecoveryOffsetManagerTest {
         assertThat(decision.getStrategy())
                 .isEqualTo(RecoveryOffsetManager.RecoveryStrategy.FRESH_START);
         assertThat(decision.needsUndoRecovery()).isFalse();
-        assertThat(decision.getRecoveryOffsets()).isNull();
+        assertThat(decision.getRecoveryOffsets()).isEmpty();
     }
 
     // ==================== Partitioned Table Tests ====================
 
     @Test
-    void testPartitionedTableRecovery() throws Exception {
+    void testPartitionedRecoveryRetainsOffsetsForLivePartitions() throws Exception {
         // Setup: partitioned table with 2 partitions
         Map<TableBucket, Long> currentOffsets = new HashMap<>();
         currentOffsets.put(new TableBucket(TABLE_ID, 1L, 0), 150L);
@@ -435,14 +574,12 @@ public class RecoveryOffsetManagerTest {
         admin.setPartitions(partitions);
 
         TableInfo tableInfo = createTableInfo(1, true);
-        RecoveryOffsetManager manager =
-                new RecoveryOffsetManager(
-                        admin, PRODUCER_ID, 0, 1, 10L, 5000L, TABLE_PATH, tableInfo);
+        RecoveryOffsetManager manager = createManager(admin, 0, 1, tableInfo);
 
         Map<TableBucket, Long> checkpointOffsets = new HashMap<>();
         checkpointOffsets.put(new TableBucket(TABLE_ID, 1L, 0), 100L);
         checkpointOffsets.put(new TableBucket(TABLE_ID, 2L, 0), 200L);
-        WriterState state = new WriterState(checkpointOffsets);
+        WriterState state = WriterState.complete(TABLE_ID, checkpointOffsets);
 
         // Execute
         RecoveryOffsetManager.RecoveryDecision decision =
@@ -473,14 +610,12 @@ public class RecoveryOffsetManagerTest {
         admin.setPartitions(partitions);
 
         TableInfo tableInfo = createTableInfo(1, true);
-        RecoveryOffsetManager manager =
-                new RecoveryOffsetManager(
-                        admin, PRODUCER_ID, 0, 1, 10L, 5000L, TABLE_PATH, tableInfo);
+        RecoveryOffsetManager manager = createManager(admin, 0, 1, tableInfo);
 
         // Checkpoint only has partition 1
         Map<TableBucket, Long> checkpointOffsets = new HashMap<>();
         checkpointOffsets.put(new TableBucket(TABLE_ID, 1L, 0), 100L);
-        WriterState state = new WriterState(checkpointOffsets);
+        WriterState state = WriterState.complete(TABLE_ID, checkpointOffsets);
 
         // Execute
         RecoveryOffsetManager.RecoveryDecision decision =
@@ -490,9 +625,13 @@ public class RecoveryOffsetManagerTest {
         assertThat(decision.getStrategy())
                 .isEqualTo(RecoveryOffsetManager.RecoveryStrategy.CHECKPOINT_RECOVERY);
         assertThat(decision.needsUndoRecovery()).isTrue();
-        assertThat(decision.getRecoveryOffsets()).hasSize(1);
-        assertThat(decision.getRecoveryOffsets().get(new TableBucket(TABLE_ID, 2L, 0)))
-                .isEqualTo(0L);
+        assertThat(decision.getRecoveryOffsets())
+                .containsOnlyKeys(new TableBucket(TABLE_ID, 1L, 0));
+        assertThat(
+                        decision.getUndoOffsets()
+                                .get(new TableBucket(TABLE_ID, 2L, 0))
+                                .getCheckpointOffset())
+                .isZero();
     }
 
     @Test
@@ -515,9 +654,7 @@ public class RecoveryOffsetManagerTest {
         admin.setInitialOffsetsForRegistration(initialOffsets);
 
         TableInfo tableInfo = createTableInfo(1, true);
-        RecoveryOffsetManager manager =
-                new RecoveryOffsetManager(
-                        admin, PRODUCER_ID, 0, 1, 10L, 5000L, TABLE_PATH, tableInfo);
+        RecoveryOffsetManager manager = createManager(admin, 0, 1, tableInfo);
 
         // Execute: null means no checkpoint (producer offset recovery)
         RecoveryOffsetManager.RecoveryDecision decision = manager.determineRecoveryStrategy(null);
@@ -539,7 +676,7 @@ public class RecoveryOffsetManagerTest {
     // ==================== Error Handling Tests ====================
 
     @Test
-    void testTableRecreatedThrowsException() throws Exception {
+    void testCheckpointFromRecreatedTableIsRejected() throws Exception {
         // Simulates: savepoint → drop table → re-create table → restore from savepoint.
         // The checkpoint state contains buckets with the old table ID (TABLE_ID=1),
         // but the re-created table has a new table ID (NEW_TABLE_ID=999).
@@ -553,38 +690,35 @@ public class RecoveryOffsetManagerTest {
         RecoveryTestAdmin admin = new RecoveryTestAdmin(currentOffsets);
         // Use the package-private constructor to set the new tableId directly
         RecoveryOffsetManager manager =
-                new RecoveryOffsetManager(
-                        admin, PRODUCER_ID, 0, 1, 10L, 5000L, TABLE_PATH, newTableId, 1, false);
+                createManager(admin, 0, 1, createTableInfo(newTableId, 1, false));
 
         // Checkpoint state from before table was dropped (old tableId)
         Map<TableBucket, Long> checkpointOffsets = new HashMap<>();
         checkpointOffsets.put(new TableBucket(oldTableId, 0), 100L);
-        WriterState state = new WriterState(checkpointOffsets);
+        WriterState state = WriterState.complete(oldTableId, checkpointOffsets);
 
         // Execute & Verify: should detect table re-creation and throw
         assertThatThrownBy(
                         () -> manager.determineRecoveryStrategy(Collections.singletonList(state)))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("re-created")
+                .hasMessageContaining("table ID")
                 .hasMessageContaining(String.valueOf(oldTableId))
                 .hasMessageContaining(String.valueOf(newTableId));
     }
 
     @Test
-    void testDataInconsistencyThrowsException() throws Exception {
+    void testRecoveryOffsetAheadOfCurrentOffsetFails() throws Exception {
         // Setup: checkpoint offset > current offset (data loss)
         Map<TableBucket, Long> currentOffsets = new HashMap<>();
         currentOffsets.put(new TableBucket(TABLE_ID, 0), 50L); // current < checkpoint
 
         RecoveryTestAdmin admin = new RecoveryTestAdmin(currentOffsets);
         TableInfo tableInfo = createTableInfo(1, false);
-        RecoveryOffsetManager manager =
-                new RecoveryOffsetManager(
-                        admin, PRODUCER_ID, 0, 1, 10L, 5000L, TABLE_PATH, tableInfo);
+        RecoveryOffsetManager manager = createManager(admin, 0, 1, tableInfo);
 
         Map<TableBucket, Long> checkpointOffsets = new HashMap<>();
         checkpointOffsets.put(new TableBucket(TABLE_ID, 0), 100L); // checkpoint > current
-        WriterState state = new WriterState(checkpointOffsets);
+        WriterState state = WriterState.complete(TABLE_ID, checkpointOffsets);
 
         // Execute & Verify
         assertThatThrownBy(
@@ -600,13 +734,11 @@ public class RecoveryOffsetManagerTest {
         admin.setListOffsetsFailure(new RuntimeException("Connection failed"));
 
         TableInfo tableInfo = createTableInfo(1, false);
-        RecoveryOffsetManager manager =
-                new RecoveryOffsetManager(
-                        admin, PRODUCER_ID, 0, 1, 10L, 5000L, TABLE_PATH, tableInfo);
+        RecoveryOffsetManager manager = createManager(admin, 0, 1, tableInfo);
 
         Map<TableBucket, Long> checkpointOffsets = new HashMap<>();
         checkpointOffsets.put(new TableBucket(TABLE_ID, 0), 100L);
-        WriterState state = new WriterState(checkpointOffsets);
+        WriterState state = WriterState.complete(TABLE_ID, checkpointOffsets);
 
         // Execute & Verify
         assertThatThrownBy(
@@ -626,13 +758,11 @@ public class RecoveryOffsetManagerTest {
         admin.setListPartitionInfosFailure(new RuntimeException("Partition lookup failed"));
 
         TableInfo tableInfo = createTableInfo(1, true);
-        RecoveryOffsetManager manager =
-                new RecoveryOffsetManager(
-                        admin, PRODUCER_ID, 0, 1, 10L, 5000L, TABLE_PATH, tableInfo);
+        RecoveryOffsetManager manager = createManager(admin, 0, 1, tableInfo);
 
         Map<TableBucket, Long> checkpointOffsets = new HashMap<>();
         checkpointOffsets.put(new TableBucket(TABLE_ID, 1L, 0), 50L);
-        WriterState state = new WriterState(checkpointOffsets);
+        WriterState state = WriterState.complete(TABLE_ID, checkpointOffsets);
 
         // Execute & Verify
         assertThatThrownBy(
@@ -649,9 +779,7 @@ public class RecoveryOffsetManagerTest {
         // Setup
         RecoveryTestAdmin admin = new RecoveryTestAdmin(new HashMap<>());
         TableInfo tableInfo = createTableInfo(1, false);
-        RecoveryOffsetManager manager =
-                new RecoveryOffsetManager(
-                        admin, PRODUCER_ID, 0, 1, 10L, 5000L, TABLE_PATH, tableInfo);
+        RecoveryOffsetManager manager = createManager(admin, 0, 1, tableInfo);
 
         // Execute
         manager.cleanupOffsets();
@@ -667,9 +795,7 @@ public class RecoveryOffsetManagerTest {
         RecoveryTestAdmin admin = new RecoveryTestAdmin(new HashMap<>());
         TableInfo tableInfo = createTableInfo(1, false);
         // subtaskIndex=1 (non-Task0)
-        RecoveryOffsetManager manager =
-                new RecoveryOffsetManager(
-                        admin, PRODUCER_ID, 1, 2, 10L, 5000L, TABLE_PATH, tableInfo);
+        RecoveryOffsetManager manager = createManager(admin, 1, 2, tableInfo);
 
         // Execute
         manager.cleanupOffsets();
@@ -786,8 +912,10 @@ public class RecoveryOffsetManagerTest {
                         partitionId != null
                                 ? new TableBucket(TABLE_ID, partitionId, bucketId)
                                 : new TableBucket(TABLE_ID, bucketId);
-                long offset = currentOffsets.getOrDefault(tb, 0L);
-                futures.put(bucketId, CompletableFuture.completedFuture(offset));
+                if (currentOffsets.containsKey(tb)) {
+                    futures.put(
+                            bucketId, CompletableFuture.completedFuture(currentOffsets.get(tb)));
+                }
             }
             return new ListOffsetsResult(futures);
         }

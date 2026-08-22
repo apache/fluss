@@ -428,6 +428,24 @@ public class ConfigOptions {
                             "The maximum number of threads used for historical partition operations, such as lake lookups and writes. "
                                     + "Threads are started lazily and released after the keep-alive timeout when idle.");
 
+    public static final ConfigOption<Double>
+            SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO =
+                    key("server.historical-partition.lookup-cache.max-disk-ratio")
+                            .doubleType()
+                            .defaultValue(0.10)
+                            .withDescription(
+                                    "The maximum fraction of the total capacity of the volume containing the first available data directory allocated to historical partition lookup caches on a TabletServer. "
+                                            + "Up to ten table lookupers are cached, and each receives one tenth of this capacity. Historical lookup cache files are stored under that data directory; additional data volumes are not used. "
+                                            + "The valid range is (0.0, 1.0].");
+
+    public static final ConfigOption<Duration>
+            SERVER_HISTORICAL_PARTITION_LOOKUPER_CACHE_EXPIRE_AFTER_ACCESS =
+                    key("server.historical-partition.lookuper-cache.expire-after-access")
+                            .durationType()
+                            .defaultValue(Duration.ofHours(3))
+                            .withDescription(
+                                    "The duration after which an idle historical partition table lookuper is removed from the cache.");
+
     public static final ConfigOption<Double> SERVER_DATA_DISK_WRITE_LIMIT_RATIO =
             key("server.data-disk.write-limit-ratio")
                     .doubleType()
@@ -1525,6 +1543,22 @@ public class ConfigOptions {
                                     + KV_SCANNER_MAX_BATCH_SIZE.key()
                                     + "'.");
 
+    public static final ConfigOption<KvBatchStrategy> CLIENT_SCANNER_KV_BATCH_STRATEGY =
+            key("client.scanner.kv.batch-strategy")
+                    .enumType(KvBatchStrategy.class)
+                    .defaultValue(KvBatchStrategy.SNAPSHOT_MERGE)
+                    .withDescription(
+                            "The strategy used for bounded reads of primary-key tables. "
+                                    + "'snapshot-merge' (default) merges the latest kv snapshot with the "
+                                    + "bounded changelog range that follows it; the scan is resumable and "
+                                    + "reflects a single point in time. 'server-scan' scans the live kv state "
+                                    + "on the tablet server instead, which avoids downloading snapshot files "
+                                    + "and replaying the changelog, but the scan is not resumable and each "
+                                    + "bucket is read at the point in time its scanner was opened. "
+                                    + "This option has no effect when a lake snapshot already exists: the "
+                                    + "bounded read then performs the lake + Fluss-log union read. "
+                                    + "Currently only the Flink connector honours this option.");
+
     public static final ConfigOption<Integer> CLIENT_LOOKUP_QUEUE_SIZE =
             key("client.lookup.queue-size")
                     .intType()
@@ -1823,9 +1857,12 @@ public class ConfigOptions {
                     .durationType()
                     .defaultValue(Duration.ofDays(7))
                     .withDescription(
-                            "The time to live for log segments. The configuration controls the maximum time "
-                                    + "we will retain a log before we will delete old segments to free up "
-                                    + "space. If set to -1, the log will not be deleted.");
+                            "The time to live for log segments. The configuration controls the "
+                                    + "maximum time log segments are retained before they become "
+                                    + "eligible for deletion. When remote log tiering is enabled, "
+                                    + "this value controls the retention of remote log segments. "
+                                    + "Setting the value to '0ms' disables TTL-based deletion. "
+                                    + "The default value is 7 days.");
 
     public static final ConfigOption<Integer> TABLE_TIERED_LOG_LOCAL_SEGMENTS =
             key("table.log.tiered.local-segments")
@@ -1834,6 +1871,20 @@ public class ConfigOptions {
                     .withDescription(
                             "The number of log segments to retain in local for each table when log tiered storage is enabled. "
                                     + "It must be greater that 0. The default is 2.");
+
+    public static final ConfigOption<Duration> TABLE_LOG_LOCAL_TTL =
+            key("table.log.local-ttl")
+                    .durationType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The time to live for local log segments. The configuration controls the "
+                                    + "maximum time local log segments are retained before they become "
+                                    + "eligible for deletion. When remote log tiering is enabled, an "
+                                    + "expired local segment is deleted only after it has been copied "
+                                    + "to remote storage. Setting the value to '0ms' disables TTL-based "
+                                    + "deletion. If not configured, the value inherits `table.log.ttl`. "
+                                    + "When both values are positive, it must be less than or equal to "
+                                    + "`table.log.ttl`.");
 
     public static final ConfigOption<Boolean> TABLE_DATALAKE_ENABLED =
             key("table.datalake.enabled")

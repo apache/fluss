@@ -49,7 +49,8 @@ public abstract class RecordWriter<T> implements AutoCloseable {
             TableBucket tableBucket,
             @Nullable String partition,
             List<String> partitionKeys,
-            org.apache.fluss.types.RowType flussRowType) {
+            org.apache.fluss.types.RowType flussRowType,
+            boolean paimonIncludingSystemColumns) {
         this.tableWrite = tableWrite;
         this.tableRowType = tableRowType;
         this.bucket = tableBucket.getBucket();
@@ -62,7 +63,8 @@ public abstract class RecordWriter<T> implements AutoCloseable {
             this.partition = resolvePartition(partition, partitionKeys, flussRowType);
         }
         this.flussRecordAsPaimonRow =
-                new FlussRecordAsPaimonRow(tableBucket.getBucket(), tableRowType);
+                new FlussRecordAsPaimonRow(
+                        tableBucket.getBucket(), tableRowType, paimonIncludingSystemColumns);
     }
 
     public abstract void write(LogRecord record) throws Exception;

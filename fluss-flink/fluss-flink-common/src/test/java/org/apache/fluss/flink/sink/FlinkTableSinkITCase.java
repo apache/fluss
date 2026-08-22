@@ -29,6 +29,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.testutils.common.MultiVersionTest;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.apache.flink.api.common.RuntimeExecutionMode;
@@ -139,6 +140,7 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     }
 
     @ParameterizedTest
+    @MultiVersionTest
     @ValueSource(booleans = {true, false})
     void testAppendLog(boolean compressed) throws Exception {
         String compressedProperties =
@@ -528,6 +530,7 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     }
 
     @Test
+    @MultiVersionTest
     void testPartialUpsert() throws Exception {
         tEnv.executeSql(
                 "create table sink_test (a int not null primary key not enforced, b bigint, c string) with('bucket.num' = '3')");

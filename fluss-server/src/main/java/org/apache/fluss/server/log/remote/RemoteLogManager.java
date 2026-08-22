@@ -152,8 +152,7 @@ public class RemoteLogManager implements Closeable {
         TableBucket tableBucket = replica.getTableBucket();
         PhysicalTablePath physicalTablePath = replica.getPhysicalTablePath();
         LogTablet log = replica.getLogTablet();
-        RemoteLogTablet remoteLog =
-                new RemoteLogTablet(physicalTablePath, tableBucket, replica.getLogTTLMs());
+        RemoteLogTablet remoteLog = new RemoteLogTablet(physicalTablePath, tableBucket);
         Optional<RemoteLogManifestHandle> remoteLogManifestHandleOpt =
                 zkClient.getRemoteLogManifestHandle(tableBucket);
         if (remoteLogManifestHandleOpt.isPresent()) {

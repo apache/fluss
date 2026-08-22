@@ -354,6 +354,9 @@ impl PendingFetch for CompletedPendingFetch {
     }
 }
 
+/// Sentinel for a fetch whose response carried no `filtered_end_offset`.
+pub(crate) const NO_FILTERED_END_OFFSET: i64 = -1;
+
 /// Default implementation of CompletedFetch for in-memory log records
 /// Used for local fetches from tablet server
 pub struct DefaultCompletedFetch {
@@ -365,6 +368,9 @@ pub struct DefaultCompletedFetch {
     resolver: Arc<ReadContextResolver>,
     is_remote: bool,
     next_fetch_offset: i64,
+    /// Offset the server scanned up to while pruning batches by their
+    /// statistics, or [`NO_FILTERED_END_OFFSET`] when it sent no filtered range.
+    filtered_end_offset: i64,
     high_watermark: i64,
     size_in_bytes: usize,
     consumed: bool,
@@ -405,6 +411,7 @@ impl DefaultCompletedFetch {
             resolver,
             is_remote,
             next_fetch_offset: fetch_offset,
+            filtered_end_offset: NO_FILTERED_END_OFFSET,
             high_watermark,
             size_in_bytes,
             consumed: false,
@@ -435,6 +442,7 @@ impl DefaultCompletedFetch {
             resolver,
             is_remote: false,
             next_fetch_offset: fetch_offset,
+            filtered_end_offset: NO_FILTERED_END_OFFSET,
             high_watermark: -1,
             size_in_bytes: 0,
             consumed: false,
@@ -466,6 +474,7 @@ impl DefaultCompletedFetch {
             resolver,
             is_remote: false,
             next_fetch_offset: fetch_offset,
+            filtered_end_offset: NO_FILTERED_END_OFFSET,
             high_watermark: -1,
             size_in_bytes: 0,
             consumed: false,
@@ -479,6 +488,23 @@ impl DefaultCompletedFetch {
             cached_record_error: None,
             corrupt_last_record: false,
         }
+    }
+
+    /// Records how far the server scanned while pruning batches, which it
+    /// reports both for a fetch it emptied and for one whose tail it pruned.
+    ///
+    /// `next_fetch_offset` is left alone so the fetch still passes the
+    /// next-in-line check; it jumps past the range once drained.
+    pub(crate) fn with_filtered_end_offset(mut self, filtered_end_offset: i64) -> Self {
+        debug_assert!(
+            filtered_end_offset == NO_FILTERED_END_OFFSET
+                || filtered_end_offset >= self.next_fetch_offset,
+            "filtered_end_offset ({filtered_end_offset}) must be >= fetch offset ({}) for bucket {}",
+            self.next_fetch_offset,
+            self.table_bucket
+        );
+        self.filtered_end_offset = filtered_end_offset;
+        self
     }
 
     /// Get the next fetched record, handling batch iteration and record skipping
@@ -498,6 +524,7 @@ impl DefaultCompletedFetch {
                         if let Some(batch) = self.current_record_batch.take() {
                             self.next_fetch_offset = batch.next_log_offset();
                         }
+                        self.skip_filtered_range();
                         self.drain();
                         return Ok(FetchStep::End);
                     };
@@ -588,6 +615,7 @@ impl DefaultCompletedFetch {
         loop {
             if self.pending_record_batch.is_none() {
                 let Some(log_batch_result) = self.log_record_batch.next() else {
+                    self.skip_filtered_range();
                     self.drain();
                     return Ok(FetchStep::End);
                 };
@@ -630,6 +658,14 @@ impl DefaultCompletedFetch {
             self.next_fetch_offset = log_batch.next_log_offset();
             self.records_read += record_batch.num_rows();
             return Ok(FetchStep::InProgress((record_batch, effective_base_offset)));
+        }
+    }
+
+    /// Advances past the range the server scanned and pruned, guarding on the
+    /// sentinel since an unfetched bucket sits at `EARLIEST_OFFSET` (-2) < -1.
+    fn skip_filtered_range(&mut self) {
+        if self.filtered_end_offset != NO_FILTERED_END_OFFSET {
+            self.next_fetch_offset = self.next_fetch_offset.max(self.filtered_end_offset);
         }
     }
 
@@ -978,8 +1014,8 @@ impl PendingFetch for RemotePendingFetch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::client::WriteRecord;
     use crate::client::table::read_context_resolver::ReadContextResolver;
+    use crate::client::{EARLIEST_OFFSET, WriteRecord};
     use crate::compression::{
         ArrowCompressionInfo, ArrowCompressionRatioEstimator, ArrowCompressionType,
         DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
@@ -1234,6 +1270,151 @@ mod tests {
         let empty = expect_data(fetch.fetch_records(10)?);
         assert!(empty.is_empty());
 
+        Ok(())
+    }
+
+    /// An empty fetch carrying only a filtered range, as the server sends when
+    /// it prunes every batch it scanned.
+    fn filtered_empty_fetch(
+        fetch_offset: i64,
+        filtered_end_offset: i64,
+    ) -> Result<DefaultCompletedFetch> {
+        Ok(DefaultCompletedFetch::new(
+            TableBucket::new(1, 0),
+            LogRecordsBatches::new(Vec::new()),
+            0,
+            test_resolver()?,
+            false,
+            fetch_offset,
+            9,
+        )
+        .with_filtered_end_offset(filtered_end_offset))
+    }
+
+    #[test]
+    fn filtered_empty_fetch_advances_past_the_filtered_range() -> Result<()> {
+        let mut fetch = filtered_empty_fetch(4, 7)?;
+
+        // Stays put until drained so the fetch still passes the next-in-line check.
+        assert_eq!(fetch.next_fetch_offset(), 4);
+        assert_eq!(fetch.high_watermark(), 9);
+
+        let records = expect_data(fetch.fetch_records(10)?);
+        assert!(records.is_empty());
+        assert_eq!(fetch.next_fetch_offset(), 7);
+        assert!(fetch.is_consumed());
+        assert_eq!(fetch.records_read(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn filtered_empty_fetch_advances_the_batch_path_too() -> Result<()> {
+        let mut fetch = filtered_empty_fetch(4, 7)?;
+
+        let batches = expect_data(fetch.fetch_batches(10)?);
+        assert!(batches.is_empty());
+        assert_eq!(fetch.next_fetch_offset(), 7);
+        assert!(fetch.is_consumed());
+        Ok(())
+    }
+
+    /// The server also reports a filtered range alongside records when it prunes
+    /// only the tail of what it scanned.
+    #[test]
+    fn fetch_with_records_still_skips_a_pruned_tail() -> Result<()> {
+        let row_type = RowType::new(vec![
+            DataField::new("id", DataTypes::int(), None),
+            DataField::new("name", DataTypes::string(), None),
+        ]);
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = Arc::new(build_table_info(table_path.clone(), 1, 1));
+        let physical_table_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path)));
+
+        let mut builder = MemoryLogRecordsArrowBuilder::new(
+            1,
+            &row_type,
+            false,
+            ArrowCompressionInfo {
+                compression_type: ArrowCompressionType::None,
+                compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
+            },
+            usize::MAX,
+            Arc::new(ArrowCompressionRatioEstimator::default()),
+        )?;
+        let mut row = GenericRow::new(2);
+        row.set_field(0, 1_i32);
+        row.set_field(1, "alice");
+        builder.append(&WriteRecord::for_append(
+            table_info,
+            physical_table_path,
+            1,
+            &row,
+        ))?;
+        let data = builder.build()?;
+
+        let arrow_schema = to_arrow_schema(&row_type)?;
+        let row_type_arc = Arc::new(row_type);
+        let local_ctx = Arc::new(ReadContext::new(
+            arrow_schema.clone(),
+            row_type_arc.clone(),
+            false,
+        ));
+        let remote_ctx = Arc::new(ReadContext::new(arrow_schema, row_type_arc, true));
+        let resolver = Arc::new(ReadContextResolver::new(1, local_ctx, remote_ctx, None));
+        let mut fetch = DefaultCompletedFetch::new(
+            TableBucket::new(1, 0),
+            LogRecordsBatches::new(data.clone()),
+            data.len(),
+            resolver,
+            false,
+            0,
+            9,
+        )
+        .with_filtered_end_offset(5);
+
+        let records = expect_data(fetch.fetch_records(10)?);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].offset(), 0);
+        // The record ends at offset 1, but the server already scanned through 5.
+        assert_eq!(fetch.next_fetch_offset(), 5);
+        Ok(())
+    }
+
+    #[test]
+    fn fetch_without_a_filtered_range_keeps_its_offset() -> Result<()> {
+        let mut fetch = DefaultCompletedFetch::new(
+            TableBucket::new(1, 0),
+            LogRecordsBatches::new(Vec::new()),
+            0,
+            test_resolver()?,
+            false,
+            4,
+            9,
+        );
+
+        let records = expect_data(fetch.fetch_records(10)?);
+        assert!(records.is_empty());
+        assert_eq!(fetch.next_fetch_offset(), 4);
+        Ok(())
+    }
+
+    /// A bucket subscribed at [`EARLIEST_OFFSET`] (-2) still holds that sentinel
+    /// when its first fetch is drained, and -1 must not outrank it.
+    #[test]
+    fn fetch_without_a_filtered_range_keeps_a_sentinel_offset() -> Result<()> {
+        let mut fetch = DefaultCompletedFetch::new(
+            TableBucket::new(1, 0),
+            LogRecordsBatches::new(Vec::new()),
+            0,
+            test_resolver()?,
+            false,
+            EARLIEST_OFFSET,
+            9,
+        );
+
+        let records = expect_data(fetch.fetch_records(10)?);
+        assert!(records.is_empty());
+        assert_eq!(fetch.next_fetch_offset(), EARLIEST_OFFSET);
         Ok(())
     }
 

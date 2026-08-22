@@ -463,7 +463,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </thead>
   <tbody>
     <tr>
-      <th rowspan="33"><strong>tabletserver</strong></th>
+      <th rowspan="37"><strong>tabletserver</strong></th>
       <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="25">-</td>
       <td>messagesInPerSecond</td>
       <td>The number of messages written per second to this server.</td>
@@ -590,6 +590,27 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>Meter</td>
     </tr>
     <tr>
+      <td rowspan="4">historical</td>
+      <td>inflightRequests</td>
+      <td>The number of accepted historical requests that have not completed.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>lookupCacheDiskSize</td>
+      <td>The current historical lookup cache footprint on local disk, in bytes.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>lookupCacheTableCount</td>
+      <td>The number of table lookupers currently retained in the historical lookup cache.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>lookupCacheCapacityEvictions</td>
+      <td>The cumulative number of cached table lookupers evicted because the cache retains at most ten tables.</td>
+      <td>Counter</td>
+    </tr>
+    <tr>
       <td rowspan="2">logicalStorage</td>
       <td>logSize</td>
       <td>The logical storage size of log managed by this TabletServer.</td>
@@ -679,6 +700,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
           request_produceLog
           request_putKv
           request_lookup
+          request_historicalLookup
           request_prefixLookup
           request_metadata
           request_fetchLogClient
@@ -767,7 +789,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </thead>
   <tbody>
     <tr>
-      <th rowspan="33"><strong>tabletserver</strong></th>
+      <th rowspan="37"><strong>tabletserver</strong></th>
       <td rowspan="20">table</td>
       <td>messagesInPerSecond</td>
       <td>The number of messages written per second to this table.</td>
@@ -868,6 +890,27 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>The number of failed delete remote log requests to delete remote log after log ttl per second.</td>
       <td>Meter</td>
     </tr>
+    <tr>
+      <td rowspan="4">table_historical</td>
+      <td>totalLookupRequestsPerSecond</td>
+      <td>The number of historical lookup requests to this table per second.</td>
+      <td>Meter</td>
+    </tr>
+    <tr>
+      <td>failedLookupRequestsPerSecond</td>
+      <td>The number of historical lookup requests that failed unexpectedly for this table per second.</td>
+      <td>Meter</td>
+    </tr>
+    <tr>
+      <td>lakeLookupsPerSecond</td>
+      <td>The number of historical lake point lookups performed for this table per second, labeled with <code>lookup_file_downloaded</code>.</td>
+      <td>Meter</td>
+    </tr>
+    <tr>
+      <td>lakeLookupTimeMs</td>
+      <td>The time spent on a historical lake point lookup, in milliseconds, labeled with <code>lookup_file_downloaded</code>.</td>
+      <td>Histogram</td>
+    </tr>
      <tr>
       <td rowspan="3">table_bucket_log</td>
       <td>numSegments</td>
@@ -940,6 +983,10 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
     </tr>
   </tbody>
 </table>
+
+For <code>lakeLookupsPerSecond</code> and <code>lakeLookupTimeMs</code>,
+<code>lookup_file_downloaded="true"</code> means that the lookup downloaded at least one local
+lookup file; <code>false</code> means that it did not download a local lookup file.
 
 ### RocksDB
 

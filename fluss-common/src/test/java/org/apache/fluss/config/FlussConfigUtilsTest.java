@@ -216,6 +216,34 @@ class FlussConfigUtilsTest {
     }
 
     @Test
+    void testValidateHistoricalLookupCacheConfigs() {
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.REMOTE_DATA_DIR, "s3://bucket/path");
+        conf.set(ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO, 0.0);
+
+        assertThatThrownBy(() -> validateCoordinatorConfigs(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining(
+                        ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO.key())
+                .hasMessageContaining("within (0.0, 1.0]");
+
+        conf.set(ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO, 1.01);
+        assertThatThrownBy(() -> validateCoordinatorConfigs(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining("within (0.0, 1.0]");
+
+        conf.set(ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO, 0.1);
+        conf.set(
+                ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUPER_CACHE_EXPIRE_AFTER_ACCESS,
+                Duration.ZERO);
+        assertThatThrownBy(() -> validateCoordinatorConfigs(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining(
+                        ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUPER_CACHE_EXPIRE_AFTER_ACCESS
+                                .key());
+    }
+
+    @Test
     void testValidateClientConfigs() {
         // valid defaults should pass
         Configuration validConf = new Configuration();

@@ -66,7 +66,11 @@ class PaimonConversionsTest {
                 w -> w.writeInt(0, milliOfDay),
                 milliOfDay,
                 DataTypeRoot.TIME_WITHOUT_TIME_ZONE);
-        assertMatches(DataTypes.BYTES(), w -> w.writeBinary(0, bytes), bytes, DataTypeRoot.BYTES);
+        assertMatches(
+                DataTypes.BYTES(),
+                w -> w.writeBinary(0, bytes, 0, bytes.length),
+                bytes,
+                DataTypeRoot.BYTES);
         assertMatches(
                 DataTypes.TIMESTAMP(6),
                 w -> w.writeTimestamp(0, Timestamp.fromEpochMillis(ms, nanos), 6),

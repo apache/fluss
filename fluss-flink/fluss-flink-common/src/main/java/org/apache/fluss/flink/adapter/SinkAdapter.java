@@ -34,15 +34,20 @@ public abstract class SinkAdapter<InputT> implements Sink<InputT> {
 
     @Override
     public SinkWriter<InputT> createWriter(InitContext initContext) throws IOException {
-        return createWriter(initContext.getMailboxExecutor(), initContext.metricGroup());
+        return createWriter(
+                initContext.getMailboxExecutor(),
+                initContext.metricGroup(),
+                initContext.getSubtaskId());
     }
 
     @Override
     public SinkWriter<InputT> createWriter(WriterInitContext writerInitContext) throws IOException {
         return createWriter(
-                writerInitContext.getMailboxExecutor(), writerInitContext.metricGroup());
+                writerInitContext.getMailboxExecutor(),
+                writerInitContext.metricGroup(),
+                writerInitContext.getSubtaskId());
     }
 
     protected abstract SinkWriter<InputT> createWriter(
-            MailboxExecutor mailboxExecutor, SinkWriterMetricGroup metricGroup);
+            MailboxExecutor mailboxExecutor, SinkWriterMetricGroup metricGroup, int subtaskIndex);
 }

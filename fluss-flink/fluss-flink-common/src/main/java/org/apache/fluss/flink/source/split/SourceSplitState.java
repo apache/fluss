@@ -46,6 +46,16 @@ public abstract class SourceSplitState {
         return (LogSplitState) this;
     }
 
+    /** Checks whether this split state is a {@link KvBatchSplitState}. */
+    public final boolean isKvBatchSplitState() {
+        return getClass() == KvBatchSplitState.class;
+    }
+
+    /** Casts this split state into a {@link KvBatchSplitState}. */
+    public final KvBatchSplitState asKvBatchSplitState() {
+        return (KvBatchSplitState) this;
+    }
+
     public abstract SourceSplitBase toSourceSplit();
 
     public boolean isLakeSplit() {

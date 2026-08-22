@@ -1123,6 +1123,10 @@ public class ServerRpcMessageUtils {
         long tableId = lookupRequest.getTableId();
         Map<TableBucket, List<byte[]>> lookupEntryData = new HashMap<>();
         for (PbLookupReqForBucket lookupReqForBucket : lookupRequest.getBucketsReqsList()) {
+            if (lookupReqForBucket.hasOriginalPartitionName()) {
+                throw new IllegalArgumentException(
+                        "Normal and historical lookups cannot be mixed in the same request.");
+            }
             TableBucket tb =
                     new TableBucket(
                             tableId,

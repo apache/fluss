@@ -1420,9 +1420,10 @@ class ReplicaManagerTest extends ReplicaTestBase {
 
         // first, send one batch kv.
         CompletableFuture<List<PutKvResultForBucket>> future1 = new CompletableFuture<>();
+        // Limit scan reads from RocksDB, so wait for the asynchronous KV flush to complete.
         replicaManager.putRecordsToKv(
                 20000,
-                1,
+                -1,
                 Collections.singletonMap(tb, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)),
                 null,
                 MergeMode.DEFAULT,

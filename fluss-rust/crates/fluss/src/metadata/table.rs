@@ -22,6 +22,7 @@ use crate::metadata::DataLakeFormat;
 use crate::metadata::datatype::{
     DataField, DataType, RowType, UNASSIGNED_FIELD_ID, reassign_field_ids,
 };
+use crate::record::is_supported_statistics_type;
 use crate::{BucketId, PartitionId, SnapshotId, TableId};
 use core::fmt;
 use serde::{Deserialize, Serialize};
@@ -32,6 +33,10 @@ use strum_macros::EnumString;
 
 /// Sentinel for a column whose stable id has not yet been assigned.
 pub const UNKNOWN_COLUMN_ID: i32 = -1;
+
+/// Table property selecting the columns that written batches collect statistics
+/// for, either `*` or a comma-separated list.
+pub const TABLE_STATISTICS_COLUMNS: &str = "table.statistics.columns";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Column {
@@ -1044,6 +1049,38 @@ impl Display for PhysicalTablePath {
     }
 }
 
+/// Resolves `table.statistics.columns` against `row_type`, keeping any failure
+/// as a message so that it can be surfaced later without breaking construction.
+fn resolve_stats_index_mapping(
+    table_config: &TableConfig,
+    row_type: &RowType,
+) -> std::result::Result<Vec<usize>, String> {
+    let names = match table_config.get_statistics_columns() {
+        StatisticsColumns::Disabled => return Ok(Vec::new()),
+        StatisticsColumns::All => {
+            return Ok(row_type
+                .fields()
+                .iter()
+                .enumerate()
+                .filter(|(_, field)| is_supported_statistics_type(field.data_type()))
+                .map(|(index, _)| index)
+                .collect());
+        }
+        StatisticsColumns::Specified(names) => names,
+    };
+
+    names
+        .iter()
+        .map(|name| {
+            row_type
+                .fields()
+                .iter()
+                .position(|field| field.name() == name)
+                .ok_or_else(|| format!("Statistics column '{name}' not found in table schema"))
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone)]
 pub struct TableInfo {
     pub table_path: TablePath,
@@ -1062,6 +1099,9 @@ pub struct TableInfo {
     pub comment: Option<String>,
     pub created_time: i64,
     pub modified_time: i64,
+    /// Resolved once at construction. The failure is held rather than raised so
+    /// that a malformed property only breaks writers, not metadata loading.
+    stats_index_mapping: std::result::Result<Vec<usize>, String>,
 }
 
 impl TableInfo {
@@ -1199,6 +1239,41 @@ impl TableConfig {
     pub fn get_auto_partition_strategy(&self) -> AutoPartitionStrategy {
         AutoPartitionStrategy::from(&self.properties)
     }
+
+    /// Reads `table.statistics.columns`, which decides whether written batches
+    /// carry the statistics the server prunes by.
+    pub fn get_statistics_columns(&self) -> StatisticsColumns {
+        match self.properties.get(TABLE_STATISTICS_COLUMNS) {
+            None => StatisticsColumns::Disabled,
+            Some(value) if value == "*" => StatisticsColumns::All,
+            Some(value) => StatisticsColumns::Specified(
+                value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .map(str::to_string)
+                    .collect(),
+            ),
+        }
+    }
+}
+
+/// Which columns a table collects statistics for, mirroring Java's
+/// `StatisticsColumnsConfig`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StatisticsColumns {
+    /// The property is unset, so batches stay in the V0 format.
+    Disabled,
+    /// `*`, meaning every column whose type supports statistics.
+    All,
+    /// An explicit column list, taken as given.
+    Specified(Vec<String>),
+}
+
+impl StatisticsColumns {
+    pub fn is_enabled(&self) -> bool {
+        !matches!(self, StatisticsColumns::Disabled)
+    }
 }
 
 impl TableInfo {
@@ -1262,6 +1337,7 @@ impl TableInfo {
         let physical_primary_keys =
             Self::generate_physical_primary_key(&primary_keys, &partition_keys);
         let table_config = TableConfig::from_properties(properties.clone());
+        let stats_index_mapping = resolve_stats_index_mapping(&table_config, &row_type);
 
         TableInfo {
             table_path,
@@ -1280,6 +1356,7 @@ impl TableInfo {
             comment,
             created_time,
             modified_time,
+            stats_index_mapping,
         }
     }
 
@@ -1353,6 +1430,24 @@ impl TableInfo {
 
     pub fn get_properties(&self) -> &HashMap<String, String> {
         &self.properties
+    }
+
+    /// Column indices, in order, that written batches collect statistics for.
+    ///
+    /// Empty when the table has not enabled statistics. `*` keeps only the
+    /// columns whose type supports statistics, while an explicit list is taken
+    /// as given: the server already rejects an unsupported type when the table
+    /// is created or altered, so the client trusts it as Java's does.
+    ///
+    /// # Errors
+    /// Returns an error if a named column is absent from the table schema.
+    pub fn get_stats_index_mapping(&self) -> Result<&[usize]> {
+        match &self.stats_index_mapping {
+            Ok(mapping) => Ok(mapping),
+            Err(message) => Err(IllegalArgument {
+                message: message.clone(),
+            }),
+        }
     }
 
     pub fn get_table_config(&self) -> &TableConfig {
@@ -1671,5 +1766,75 @@ mod tests {
             0,
         );
         assert!(table_info.is_auto_partitioned());
+    }
+
+    fn stats_table(property: Option<&str>) -> TableInfo {
+        let schema = Schema::builder()
+            .column("id", DataTypes::int())
+            .column("name", DataTypes::string())
+            .column("payload", DataTypes::bytes())
+            .build()
+            .expect("schema");
+        let mut descriptor = TableDescriptor::builder()
+            .schema(schema)
+            .distributed_by(Some(1), vec![]);
+        if let Some(value) = property {
+            descriptor = descriptor.property(TABLE_STATISTICS_COLUMNS, value);
+        }
+        TableInfo::of(
+            TablePath::new("db", "tbl"),
+            1,
+            1,
+            descriptor.build().expect("descriptor"),
+            0,
+            0,
+        )
+    }
+
+    #[test]
+    fn statistics_are_disabled_without_the_property() {
+        let table = stats_table(None);
+        assert_eq!(
+            table.get_table_config().get_statistics_columns(),
+            StatisticsColumns::Disabled
+        );
+        assert!(table.get_stats_index_mapping().expect("mapping").is_empty());
+    }
+
+    #[test]
+    fn star_keeps_only_columns_whose_type_supports_statistics() {
+        let table = stats_table(Some("*"));
+        assert_eq!(
+            table.get_table_config().get_statistics_columns(),
+            StatisticsColumns::All
+        );
+        // BYTES has no statistics support, so the payload column drops out.
+        assert_eq!(
+            table.get_stats_index_mapping().expect("mapping"),
+            vec![0, 1]
+        );
+    }
+
+    #[test]
+    fn a_named_list_is_taken_as_given_and_trimmed() {
+        let table = stats_table(Some(" name , id "));
+        assert_eq!(
+            table.get_table_config().get_statistics_columns(),
+            StatisticsColumns::Specified(vec!["name".to_string(), "id".to_string()])
+        );
+        // Order follows the property, not the schema.
+        assert_eq!(
+            table.get_stats_index_mapping().expect("mapping"),
+            vec![1, 0]
+        );
+    }
+
+    #[test]
+    fn an_unknown_statistics_column_is_rejected() {
+        let table = stats_table(Some("nope"));
+        assert!(matches!(
+            table.get_stats_index_mapping(),
+            Err(Error::IllegalArgument { .. })
+        ));
     }
 }

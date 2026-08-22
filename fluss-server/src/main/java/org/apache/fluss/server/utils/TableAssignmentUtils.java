@@ -21,7 +21,6 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.TabletServerInfo;
 import org.apache.fluss.exception.InvalidBucketsException;
 import org.apache.fluss.exception.InvalidReplicationFactorException;
-import org.apache.fluss.exception.InvalidServerRackInfoException;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.TableAssignment;
 
@@ -62,7 +61,7 @@ public class TableAssignmentUtils {
                             replicationFactor, servers.length));
         }
 
-        if (Arrays.stream(servers).noneMatch(tsInfo -> tsInfo.getRack() != null)) {
+        if (Arrays.stream(servers).anyMatch(tsInfo -> tsInfo.getRack() == null)) {
             return generateRackUnawareAssignment(
                     nBuckets,
                     replicationFactor,
@@ -70,13 +69,8 @@ public class TableAssignmentUtils {
                     startIndex,
                     nextReplicaShift);
         } else {
-            if (Arrays.stream(servers).anyMatch(tsInfo -> tsInfo.getRack() == null)) {
-                throw new InvalidServerRackInfoException(
-                        "Not all tabletServers have rack information for replica rack aware assignment.");
-            } else {
-                return generateRackAwareAssignment(
-                        nBuckets, replicationFactor, servers, startIndex, nextReplicaShift);
-            }
+            return generateRackAwareAssignment(
+                    nBuckets, replicationFactor, servers, startIndex, nextReplicaShift);
         }
     }
 
@@ -88,7 +82,8 @@ public class TableAssignmentUtils {
      *   <li>For buckets assigned to a particular tabletServer, their other replicas are spread over
      *       the other tabletServers.
      *   <li>If all tabletServers have rack information, assign the replicas for each bucket to
-     *       different racks if possible
+     *       different racks if possible. If any tabletServer has no rack information, fall back to
+     *       rack-unaware assignment to support rolling rack configuration updates.
      * </ol>
      *
      * <p>To achieve this goal for replica assignment, we:

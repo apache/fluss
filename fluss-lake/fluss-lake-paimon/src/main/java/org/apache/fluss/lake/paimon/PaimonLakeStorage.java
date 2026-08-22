@@ -57,6 +57,11 @@ public class PaimonLakeStorage implements LakeStorage {
     @Override
     public LakeTableLookuper createLakeTableLookuper(TablePath tablePath, LookuperContext context) {
         return new PaimonLakeTableLookuper(
-                paimonConfig, tablePath, context.ioTmpDir(), context.tableConfig());
+                paimonConfig,
+                tablePath,
+                context.ioTmpDir(),
+                context.tableConfig(),
+                context.lookupCacheMaxDiskBytes(),
+                context.diskWriteGuard());
     }
 }

@@ -100,6 +100,7 @@ rustler::atoms! {
     ineligible_replica_exception,
     invalid_alter_table_exception,
     deletion_disabled_exception,
+    storage_backpressure_exception,
     client_error,
 }
 
@@ -212,6 +213,7 @@ fn api_error_atom(code: i32) -> Atom {
         FlussError::IneligibleReplicaException => ineligible_replica_exception(),
         FlussError::InvalidAlterTableException => invalid_alter_table_exception(),
         FlussError::DeletionDisabledException => deletion_disabled_exception(),
+        FlussError::StorageBackpressureException => storage_backpressure_exception(),
     }
 }
 

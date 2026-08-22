@@ -153,8 +153,16 @@ class RemoteLogManifestOverlapTest {
 
         assertThat(result.getRemoteLogSegmentList())
                 .containsExactly(replacement.withLogicalRange(10L, 25L));
-        assertThat(result.getRemoteLogStartOffset()).isEqualTo(5L);
+        assertThat(result.getRemoteLogStartOffset()).isEqualTo(10L);
         assertThat(result.getRemoteLogEndOffset()).isEqualTo(25L);
+    }
+
+    @Test
+    void testRemoteLogOffsetsUseLogicalRange() {
+        RemoteLogManifest result = manifest(segment(5L, 25L).withLogicalRange(10L, 20L));
+
+        assertThat(result.getRemoteLogStartOffset()).isEqualTo(10L);
+        assertThat(result.getRemoteLogEndOffset()).isEqualTo(20L);
     }
 
     @Test

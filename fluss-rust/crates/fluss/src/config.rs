@@ -38,6 +38,7 @@ const DEFAULT_SCANNER_LOG_FETCH_MAX_BYTES_FOR_BUCKET: i32 = 1024 * 1024;
 const DEFAULT_WRITER_MAX_INFLIGHT_REQUESTS_PER_BUCKET: usize = 5;
 const DEFAULT_WRITER_BUFFER_MEMORY_SIZE: usize = 64 * 1024 * 1024; // 64MB, matching Java
 const DEFAULT_WRITER_BUFFER_WAIT_TIMEOUT_MS: u64 = u64::MAX;
+const DEFAULT_WRITER_KV_BACKPRESSURE_MAX_THROTTLE_MS: u64 = 3000;
 
 const MAX_IN_FLIGHT_REQUESTS_PER_BUCKET_FOR_IDEMPOTENCE: usize = 5;
 const DEFAULT_ACKS: &str = "all";
@@ -162,6 +163,12 @@ pub struct Config {
     #[arg(long, default_value_t = DEFAULT_WRITER_BUFFER_WAIT_TIMEOUT_MS)]
     pub writer_buffer_wait_timeout_ms: u64,
 
+    /// Maximum KV backpressure throttle in milliseconds. A pressure `p` delays the bucket by
+    /// `max_throttle * p²`; a hard rejection uses the full window.
+    /// Default: 3000 (matching Java `client.writer.kv-backpressure.max-throttle`)
+    #[arg(long, default_value_t = DEFAULT_WRITER_KV_BACKPRESSURE_MAX_THROTTLE_MS)]
+    pub writer_kv_backpressure_max_throttle_ms: u64,
+
     /// Connect timeout in milliseconds for TCP transport connect.
     /// Default: 120000 (120 seconds).
     #[arg(long, default_value_t = DEFAULT_CONNECT_TIMEOUT_MS)]
@@ -264,6 +271,10 @@ impl std::fmt::Debug for Config {
                 "writer_buffer_wait_timeout_ms",
                 &self.writer_buffer_wait_timeout_ms,
             )
+            .field(
+                "writer_kv_backpressure_max_throttle_ms",
+                &self.writer_kv_backpressure_max_throttle_ms,
+            )
             .field("connect_timeout_ms", &self.connect_timeout_ms)
             .field("security_protocol", &self.security_protocol)
             .field("security_sasl_mechanism", &self.security_sasl_mechanism)
@@ -306,6 +317,7 @@ impl Default for Config {
                 DEFAULT_WRITER_MAX_INFLIGHT_REQUESTS_PER_BUCKET,
             writer_buffer_memory_size: DEFAULT_WRITER_BUFFER_MEMORY_SIZE,
             writer_buffer_wait_timeout_ms: DEFAULT_WRITER_BUFFER_WAIT_TIMEOUT_MS,
+            writer_kv_backpressure_max_throttle_ms: DEFAULT_WRITER_KV_BACKPRESSURE_MAX_THROTTLE_MS,
             connect_timeout_ms: DEFAULT_CONNECT_TIMEOUT_MS,
             security_protocol: String::from(DEFAULT_SECURITY_PROTOCOL),
             security_sasl_mechanism: String::from(DEFAULT_SASL_MECHANISM),

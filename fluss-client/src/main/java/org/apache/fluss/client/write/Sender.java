@@ -376,24 +376,20 @@ public class Sender implements Runnable {
         }
 
         // group record batch by table id.
-        final Map<TableBucket, ReadyWriteBatch> recordsByBucket = new HashMap<>();
         Map<Long, List<ReadyWriteBatch>> writeBatchByTable = new HashMap<>();
         batches.forEach(
-                batch -> {
-                    // keep the batch before ack.
-                    recordsByBucket.put(batch.tableBucket(), batch);
-                    writeBatchByTable
-                            .computeIfAbsent(
-                                    batch.tableBucket().getTableId(), k -> new ArrayList<>())
-                            .add(batch);
-                });
+                batch ->
+                        writeBatchByTable
+                                .computeIfAbsent(
+                                        batch.tableBucket().getTableId(), k -> new ArrayList<>())
+                                .add(batch));
 
         TabletServerGateway gateway = metadataUpdater.newTabletServerClientForNode(destination);
         if (gateway == null) {
             handleWriteRequestException(
                     new LeaderNotAvailableException(
                             "Server " + destination + " is not found in metadata cache."),
-                    recordsByBucket);
+                    batches);
         } else {
             writeBatchByTable.forEach(
                     (tableId, writeBatches) -> {
@@ -403,14 +399,14 @@ public class Sender implements Runnable {
                                     makeProduceLogRequest(
                                             tableId, acks, maxRequestTimeoutMs, writeBatches),
                                     tableId,
-                                    recordsByBucket);
+                                    writeBatches);
                         } else {
                             sendPutKvRequestAndHandleResponse(
                                     gateway,
                                     makePutKvRequest(
                                             tableId, acks, maxRequestTimeoutMs, writeBatches),
                                     tableId,
-                                    recordsByBucket);
+                                    writeBatches);
                         }
                     });
         }
@@ -433,7 +429,9 @@ public class Sender implements Runnable {
             TabletServerGateway gateway,
             ProduceLogRequest request,
             long tableId,
-            Map<TableBucket, ReadyWriteBatch> recordsByBucket) {
+            List<ReadyWriteBatch> writeBatches) {
+        Map<TableBucket, ReadyWriteBatch> recordsByBucket = new HashMap<>();
+        writeBatches.forEach(batch -> recordsByBucket.put(batch.tableBucket(), batch));
         long startTime = System.currentTimeMillis();
         gateway.produceLog(request)
                 .whenComplete(
@@ -441,7 +439,7 @@ public class Sender implements Runnable {
                             writerMetricGroup.setSendLatencyInMs(
                                     System.currentTimeMillis() - startTime);
                             if (e != null) {
-                                handleWriteRequestException(e, recordsByBucket);
+                                handleWriteRequestException(e, writeBatches);
                             } else {
                                 handleProduceLogResponse(
                                         produceLogResponse, tableId, recordsByBucket);
@@ -453,7 +451,9 @@ public class Sender implements Runnable {
             TabletServerGateway gateway,
             PutKvRequest request,
             long tableId,
-            Map<TableBucket, ReadyWriteBatch> recordsByBucket) {
+            List<ReadyWriteBatch> writeBatches) {
+        Map<TableBucket, ReadyWriteBatch> recordsByBucket = new HashMap<>();
+        writeBatches.forEach(batch -> recordsByBucket.put(batch.tableBucket(), batch));
         long startTime = System.currentTimeMillis();
         gateway.putKv(request)
                 .whenComplete(
@@ -461,7 +461,7 @@ public class Sender implements Runnable {
                             writerMetricGroup.setSendLatencyInMs(
                                     System.currentTimeMillis() - startTime);
                             if (e != null) {
-                                handleWriteRequestException(e, recordsByBucket);
+                                handleWriteRequestException(e, writeBatches);
                             } else {
                                 handlePutKvResponse(putKvResponse, tableId, recordsByBucket);
                             }
@@ -530,14 +530,13 @@ public class Sender implements Runnable {
         metadataUpdater.invalidPhysicalTableBucketMeta(invalidMetadataTablesSet);
     }
 
-    private void handleWriteRequestException(
-            Throwable t, Map<TableBucket, ReadyWriteBatch> recordsByBucket) {
+    private void handleWriteRequestException(Throwable t, List<ReadyWriteBatch> writeBatches) {
         ApiError error = ApiError.fromThrowable(t);
 
         // if batch failed because of retrievable exception, we need to retry send all those
         // batches.
         Set<PhysicalTablePath> invalidMetadataTablesSet = new HashSet<>();
-        for (ReadyWriteBatch batch : recordsByBucket.values()) {
+        for (ReadyWriteBatch batch : writeBatches) {
             Set<PhysicalTablePath> invalidMetadataTables = handleWriteBatchException(batch, error);
             invalidMetadataTablesSet.addAll(invalidMetadataTables);
         }

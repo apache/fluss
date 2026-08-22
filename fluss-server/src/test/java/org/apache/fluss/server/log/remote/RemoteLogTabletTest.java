@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.log.remote;
 
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.remote.RemoteLogManifest;
 import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.server.log.LogTablet;
@@ -26,6 +27,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
 
@@ -146,6 +148,32 @@ class RemoteLogTabletTest extends RemoteLogTestBase {
                         logTablet.getPhysicalTablePath(),
                         logTablet.getTableBucket(),
                         remoteLogSegments));
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testExpireSegmentsWithCurrentTtl(boolean partitionTable) throws Exception {
+        LogTablet logTablet = makeLogTabletAndAddSegments(partitionTable);
+        RemoteLogTablet remoteLogTablet = buildRemoteLogTablet(logTablet);
+
+        // The current table TTL is supplied by the tiering task for each expiration pass.
+        long defaultTtlMs = conf.get(ConfigOptions.TABLE_LOG_TTL).toMillis();
+
+        // add 1 segment with maxTimestamp = 0
+        RemoteLogSegment segment = createLogSegmentWithMaxTimestamp(logTablet, 0L, 0L, 10L);
+        loadRemoteLogSegments(remoteLogTablet, logTablet, Collections.singletonList(segment));
+
+        // currentTime = 1 hour. (1h - 0) < 7d, so the segment is NOT expired.
+        long oneHourMs = java.time.Duration.ofHours(1).toMillis();
+        assertThat(remoteLogTablet.expiredRemoteLogSegments(oneHourMs, null, defaultTtlMs))
+                .isEmpty();
+
+        // With a 1 ms TTL, the same segment is expired.
+        assertThat(remoteLogTablet.expiredRemoteLogSegments(oneHourMs, null, 1L))
+                .containsExactly(segment);
+
+        // A non-positive current TTL disables expiration.
+        assertThat(remoteLogTablet.expiredRemoteLogSegments(oneHourMs, null, -1L)).isEmpty();
     }
 
     RemoteLogSegment createLogSegmentWithMaxTimestamp(

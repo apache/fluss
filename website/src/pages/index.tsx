@@ -109,7 +109,7 @@ function useHeroVisibilityClass(ref: React.RefObject<HTMLElement>) {
 }
 
 const SLACK_INVITE =
-    'https://join.slack.com/t/apache-fluss/shared_invite/zt-33wlna581-QAooAiCmnYboJS8D_JUcYw';
+    'https://join.slack.com/t/apache-fluss/shared_invite/zt-473vgmvjr-cmIma~_iAA4cN02o5u2pDQ';
 
 function HeroDiagram() {
     // Inline SVG: a four-column architectural map of the Fluss data plane.

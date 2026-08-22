@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.log.remote;
 
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
@@ -25,6 +26,7 @@ import org.apache.fluss.server.entity.FetchReqInfo;
 import org.apache.fluss.server.log.FetchParams;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.log.remote.RemoteLogIndexCache.Entry;
+import org.apache.fluss.server.replica.Replica;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -57,9 +59,10 @@ final class RemoteLogTTLTest extends RemoteLogTestBase {
         }
         // Need to make leader by ReplicaManager.
         makeLogTableAsLeader(tb, partitionTable);
-        LogTablet logTablet = replicaManager.getReplicaOrException(tb).getLogTablet();
+        Replica replica = replicaManager.getReplicaOrException(tb);
+        LogTablet logTablet = replica.getLogTablet();
         // enable data lake
-        logTablet.updateIsDataLakeEnabled(true);
+        updateTableConfig(replica, ConfigOptions.TABLE_DATALAKE_ENABLED, "true");
         // add 5 segments, so 4 segments will be uploaded to remote (exclude active segment)
         // segment offsets: [0,10), [10,20), [20,30), [30,40), [40,50) active
         addMultiSegmentsToLogTablet(logTablet, 5);

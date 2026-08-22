@@ -22,7 +22,7 @@ defmodule Fluss.Error do
   Fields:
 
     * `:code` — stable atom for pattern matching.
-    * `:error_code` — raw integer code. Protocol codes `0..57`, `-1` for
+    * `:error_code` — raw integer code. Protocol codes are non-negative; `-1` for
       `:unknown_server_error`, `-2` for `:client_error`.
     * `:message` — human-readable description.
 
@@ -96,6 +96,7 @@ defmodule Fluss.Error do
           | :ineligible_replica_exception
           | :invalid_alter_table_exception
           | :deletion_disabled_exception
+          | :storage_backpressure_exception
           | :client_error
 
   @type t :: %__MODULE__{code: code(), error_code: integer(), message: String.t()}
@@ -113,7 +114,8 @@ defmodule Fluss.Error do
     :storage_exception,
     :not_enough_replicas_after_append_exception,
     :not_enough_replicas_exception,
-    :leader_not_available_exception
+    :leader_not_available_exception,
+    :storage_backpressure_exception
   ]
 
   @impl true

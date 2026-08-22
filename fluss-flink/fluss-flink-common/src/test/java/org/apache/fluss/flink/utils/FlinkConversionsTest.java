@@ -372,6 +372,15 @@ public class FlinkConversionsTest {
                                 .withDescription(
                                         ConfigOptions.CLIENT_REQUEST_TIMEOUT.description()));
 
+        flinkOption = FlinkConversions.toFlinkOption(ConfigOptions.TABLE_LOG_LOCAL_TTL);
+        assertThat(flinkOption)
+                .isEqualTo(
+                        org.apache.flink.configuration.ConfigOptions.key(
+                                        ConfigOptions.TABLE_LOG_LOCAL_TTL.key())
+                                .stringType()
+                                .noDefaultValue()
+                                .withDescription(ConfigOptions.TABLE_LOG_LOCAL_TTL.description()));
+
         flinkOption =
                 FlinkConversions.toFlinkOption(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE);
         assertThat(flinkOption)

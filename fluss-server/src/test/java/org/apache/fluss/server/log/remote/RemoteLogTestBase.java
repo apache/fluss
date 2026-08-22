@@ -133,10 +133,7 @@ public class RemoteLogTestBase extends ReplicaTestBase {
     }
 
     protected RemoteLogTablet buildRemoteLogTablet(LogTablet logTablet) {
-        return new RemoteLogTablet(
-                logTablet.getPhysicalTablePath(),
-                logTablet.getTableBucket(),
-                conf.get(ConfigOptions.TABLE_LOG_TTL).toMillis());
+        return new RemoteLogTablet(logTablet.getPhysicalTablePath(), logTablet.getTableBucket());
     }
 
     protected static List<RemoteLogSegment> createRemoteLogSegmentList(LogTablet logTablet) {

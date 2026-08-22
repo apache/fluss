@@ -23,6 +23,7 @@ import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.metadata.TablePath;
 
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /**
@@ -71,16 +72,28 @@ public interface LakeStorage {
     final class LookuperContext {
         private final String ioTmpDir;
         private final TableConfig tableConfig;
+        private final long lookupCacheMaxDiskBytes;
+        private final Runnable diskWriteGuard;
 
         /**
          * Creates a lookuper context.
          *
          * @param ioTmpDir local directory for temporary files used by the lookuper
          * @param tableConfig configuration of the Fluss table
+         * @param lookupCacheMaxDiskBytes maximum local lookup cache size in bytes
+         * @param diskWriteGuard guard invoked before creating a local lookup cache file
          */
-        public LookuperContext(String ioTmpDir, TableConfig tableConfig) {
+        public LookuperContext(
+                String ioTmpDir,
+                TableConfig tableConfig,
+                long lookupCacheMaxDiskBytes,
+                Runnable diskWriteGuard) {
             this.ioTmpDir = checkNotNull(ioTmpDir, "ioTmpDir must not be null.");
             this.tableConfig = checkNotNull(tableConfig, "tableConfig must not be null.");
+            checkArgument(
+                    lookupCacheMaxDiskBytes > 0, "lookupCacheMaxDiskBytes must be greater than 0.");
+            this.lookupCacheMaxDiskBytes = lookupCacheMaxDiskBytes;
+            this.diskWriteGuard = checkNotNull(diskWriteGuard, "diskWriteGuard must not be null.");
         }
 
         /** Returns the local directory for temporary files used by the lookuper. */
@@ -91,6 +104,16 @@ public interface LakeStorage {
         /** Returns the configuration of the Fluss table. */
         public TableConfig tableConfig() {
             return tableConfig;
+        }
+
+        /** Returns the maximum local lookup cache size in bytes. */
+        public long lookupCacheMaxDiskBytes() {
+            return lookupCacheMaxDiskBytes;
+        }
+
+        /** Returns the guard invoked before creating a local lookup cache file. */
+        public Runnable diskWriteGuard() {
+            return diskWriteGuard;
         }
     }
 }

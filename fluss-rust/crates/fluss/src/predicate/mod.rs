@@ -31,12 +31,8 @@
 //! Setting a predicate on a scan is only supported on log scans over tables
 //! with the ARROW log format.
 
-// Everything below is reachable only once `TableScan::filter` threads a
-// predicate into the log fetcher.
-#[allow(dead_code, reason = "consumed by the scan plumbing")]
 mod pb;
 
-#[allow(unused_imports, reason = "consumed by the scan plumbing")]
 pub(crate) use pb::to_pb_predicate;
 
 use crate::row::{Decimal, TimestampLtz, TimestampNtz};

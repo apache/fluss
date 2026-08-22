@@ -71,8 +71,6 @@ public class RemoteLogTablet {
     /** The lock to protect the remote log segment list. */
     private final ReadWriteLock lock = new ReentrantReadWriteLock();
 
-    private final long ttlMs;
-
     /** The registered metrics for remote log. */
     private volatile MetricGroup remoteLogMetrics;
 
@@ -94,9 +92,7 @@ public class RemoteLogTablet {
 
     private volatile boolean closed = false;
 
-    public RemoteLogTablet(
-            PhysicalTablePath physicalTablePath, TableBucket tableBucket, long ttlMs) {
-        this.ttlMs = ttlMs;
+    public RemoteLogTablet(PhysicalTablePath physicalTablePath, TableBucket tableBucket) {
         this.currentManifest =
                 new RemoteLogManifest(physicalTablePath, tableBucket, new ArrayList<>());
         reset();
@@ -157,11 +153,12 @@ public class RemoteLogTablet {
      * @param currentTimeMs the current time in milliseconds
      * @param lakeLogEndOffset the log end offset that has been synced to lake, null if data lake is
      *     disabled
+     * @param ttlMs the current table log TTL in milliseconds
      * @return list of expired segments that can be safely deleted
      */
     public List<RemoteLogSegment> expiredRemoteLogSegments(
-            long currentTimeMs, Long lakeLogEndOffset) {
-        if (!logExpireEnable()) {
+            long currentTimeMs, Long lakeLogEndOffset, long ttlMs) {
+        if (ttlMs <= 0) {
             return Collections.emptyList();
         }
         return inReadLock(
@@ -334,10 +331,6 @@ public class RemoteLogTablet {
         timestampToRemoteLogSegmentId
                 .computeIfAbsent(remoteLogSegment.maxTimestamp(), k -> new HashSet<>())
                 .add(remoteLogSegmentId);
-    }
-
-    private boolean logExpireEnable() {
-        return ttlMs > 0;
     }
 
     private void reset() {

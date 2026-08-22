@@ -765,7 +765,7 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         assertThat(logTablet.getSegments()).hasSize(2);
 
         // 3. Directly update config via Replica (simulating metadata propagation)
-        replica.updateTieredLogLocalSegments(5);
+        updateTableConfig(replica, ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS, "5");
 
         // Verify LogTablet internal state has been updated
         assertThat(logTablet.getTieredLogLocalSegments()).isEqualTo(5);
@@ -778,7 +778,7 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         assertThat(logTablet.getSegments()).hasSize(5);
 
         // 5. Modify config to 3 again, verify multiple modifications work
-        replica.updateTieredLogLocalSegments(3);
+        updateTableConfig(replica, ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS, "3");
 
         // Verify LogTablet internal state updated again
         assertThat(logTablet.getTieredLogLocalSegments()).isEqualTo(3);
@@ -789,6 +789,36 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
 
         // Should retain 3 local segments
         assertThat(logTablet.getSegments()).hasSize(3);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testUpdateTableInfo(boolean partitionedTable) throws Exception {
+        long tableId =
+                registerTableInZkClient(
+                        DATA1_TABLE_PATH,
+                        DATA1_SCHEMA,
+                        201L,
+                        Collections.emptyList(),
+                        Collections.emptyMap());
+        TableBucket tb = makeTableBucket(tableId, partitionedTable);
+        makeLogTableAsLeader(tb, partitionedTable);
+
+        Replica replica = replicaManager.getReplicaOrException(tb);
+
+        // Verify initial ttl matches the configured default.
+        long defaultTtlMs = ConfigOptions.TABLE_LOG_TTL.defaultValue().toMillis();
+        assertThat(replica.getTableInfo().getTableConfig().getLogTTLMs()).isEqualTo(defaultTtlMs);
+
+        // Update the complete TableInfo and verify all config consumers see the new value.
+        long newTtlMs = Duration.ofDays(1).toMillis();
+        updateTableConfig(replica, ConfigOptions.TABLE_LOG_TTL, "1d");
+        assertThat(replica.getTableInfo().getTableConfig().getLogTTLMs()).isEqualTo(newTtlMs);
+        assertThat(replica.getLogTablet().getEffectiveLocalLogTtlMs()).isEqualTo(newTtlMs);
+
+        // no-op: same value must not break anything.
+        updateTableConfig(replica, ConfigOptions.TABLE_LOG_TTL, "1d");
+        assertThat(replica.getTableInfo().getTableConfig().getLogTTLMs()).isEqualTo(newTtlMs);
     }
 
     @ParameterizedTest

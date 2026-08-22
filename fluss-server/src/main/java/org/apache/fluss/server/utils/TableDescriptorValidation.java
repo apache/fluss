@@ -46,6 +46,7 @@ import org.apache.fluss.utils.StringUtils;
 
 import javax.annotation.Nullable;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -137,6 +138,7 @@ public class TableDescriptorValidation {
     /** Validates the schema after altering table columns. */
     @Internal
     public static void validateAlterTableSchema(TableInfo table, Schema newSchema) {
+        checkSystemColumns(newSchema.getRowType());
         if (table.getTableConfig()
                 .getMergeEngineType()
                 .map(MergeEngineType.AGGREGATION::equals)
@@ -514,6 +516,23 @@ public class TableDescriptorValidation {
                     String.format(
                             "'%s' must be greater than 0.",
                             ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS.key()));
+        }
+
+        Optional<Duration> localTtl = tableConf.getOptional(ConfigOptions.TABLE_LOG_LOCAL_TTL);
+        if (!localTtl.isPresent()) {
+            return;
+        }
+        Duration logTtl = tableConf.get(ConfigOptions.TABLE_LOG_TTL);
+        if (!localTtl.get().isZero()
+                && !localTtl.get().isNegative()
+                && !logTtl.isZero()
+                && !logTtl.isNegative()
+                && localTtl.get().compareTo(logTtl) > 0) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "'%s' must be less than or equal to '%s'.",
+                            ConfigOptions.TABLE_LOG_LOCAL_TTL.key(),
+                            ConfigOptions.TABLE_LOG_TTL.key()));
         }
     }
 

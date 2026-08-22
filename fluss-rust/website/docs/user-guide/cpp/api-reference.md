@@ -25,6 +25,7 @@ Complete API reference for the Fluss C++ client.
 | `writer_dynamic_batch_size_enabled`   | `bool`        | `true`               | Enable per-table dynamic batch sizing: target grows 10% above 80% fill, shrinks 5% below 50% |
 | `writer_dynamic_batch_size_min`       | `int32_t`     | `262144` (256 KB)    | Lower bound for the dynamic batch size estimator (ignored when disabled)                 |
 | `writer_batch_timeout_ms`             | `int64_t`     | `100`                | Maximum time in ms to wait for a writer batch to fill up before sending                  |
+| `writer_kv_backpressure_max_throttle_ms` | `uint64_t`  | `3000`               | Maximum per-bucket KV backpressure throttle in milliseconds                             |
 | `writer_bucket_no_key_assigner`       | `std::string` | `"sticky"`           | Bucket assignment strategy for tables without bucket keys: `"sticky"` or `"round_robin"` |
 | `scanner_remote_log_prefetch_num`     | `size_t`      | `4`                  | Number of remote log segments to prefetch                                                |
 | `remote_file_download_thread_num`     | `size_t`      | `3`                  | Number of threads for remote log downloads                                               |

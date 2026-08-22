@@ -174,6 +174,14 @@ impl Config {
                                 ))
                             })?;
                     }
+                    "writer.kv-backpressure.max-throttle-ms" => {
+                        config.writer_kv_backpressure_max_throttle_ms =
+                            value.parse::<u64>().map_err(|e| {
+                                FlussError::new_err(format!(
+                                    "Invalid value '{value}' for '{key}': {e}"
+                                ))
+                            })?;
+                    }
                     "writer.bucket.no-key-assigner" => {
                         config.writer_bucket_no_key_assigner =
                             value.parse::<fcore::config::NoKeyAssigner>().map_err(|e| {
@@ -417,6 +425,18 @@ impl Config {
     #[setter]
     fn set_writer_buffer_wait_timeout_ms(&mut self, timeout: u64) {
         self.inner.writer_buffer_wait_timeout_ms = timeout;
+    }
+
+    /// Get the maximum KV backpressure throttle in milliseconds
+    #[getter]
+    fn writer_kv_backpressure_max_throttle_ms(&self) -> u64 {
+        self.inner.writer_kv_backpressure_max_throttle_ms
+    }
+
+    /// Set the maximum KV backpressure throttle in milliseconds
+    #[setter]
+    fn set_writer_kv_backpressure_max_throttle_ms(&mut self, timeout: u64) {
+        self.inner.writer_kv_backpressure_max_throttle_ms = timeout;
     }
 
     /// Get the connect timeout in milliseconds

@@ -34,6 +34,7 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.ServerTags;
+import org.apache.fluss.testutils.common.MultiVersionTest;
 
 import org.apache.flink.table.api.EnvironmentSettings;
 import org.apache.flink.table.api.TableEnvironment;
@@ -129,6 +130,7 @@ public abstract class FlinkProcedureITCase {
     }
 
     @Test
+    @MultiVersionTest
     void testShowProcedures() throws Exception {
         try (CloseableIterator<Row> showProceduresIterator =
                 tEnv.executeSql("show procedures").collect()) {
@@ -172,6 +174,7 @@ public abstract class FlinkProcedureITCase {
                 .hasMessageContaining("No match found for function signature generate_n");
     }
 
+    @MultiVersionTest
     @Test
     void testIndexArgument() throws Exception {
         tEnv.executeSql(
@@ -401,13 +404,16 @@ public abstract class FlinkProcedureITCase {
         try (CloseableIterator<Row> resultIterator =
                 tEnv.executeSql(
                                 String.format(
-                                        "Call %s.sys.set_cluster_configs('%s', '300MB', '%s', 'paimon')",
+                                        "Call %s.sys.set_cluster_configs('%s', '300MB', '%s', 'paimon', '%s', '0.12')",
                                         CATALOG_NAME,
                                         ConfigOptions.KV_SHARED_RATE_LIMITER_BYTES_PER_SEC.key(),
-                                        ConfigOptions.DATALAKE_FORMAT.key()))
+                                        ConfigOptions.DATALAKE_FORMAT.key(),
+                                        ConfigOptions
+                                                .SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO
+                                                .key()))
                         .collect()) {
             List<Row> results = CollectionUtil.iteratorToList(resultIterator);
-            assertThat(results).hasSize(2);
+            assertThat(results).hasSize(3);
             assertThat(results.get(0).getField(0))
                     .asString()
                     .contains("Successfully set to '300MB'")
@@ -417,6 +423,13 @@ public abstract class FlinkProcedureITCase {
                     .asString()
                     .contains("Successfully set to 'paimon'")
                     .contains(ConfigOptions.DATALAKE_FORMAT.key());
+
+            assertThat(results.get(2).getField(0))
+                    .asString()
+                    .contains("Successfully set to '0.12'")
+                    .contains(
+                            ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO
+                                    .key());
         }
 
         // Verify the config was actually set
@@ -432,13 +445,30 @@ public abstract class FlinkProcedureITCase {
             assertThat(results.get(0).getField(1)).isEqualTo("300MB");
         }
 
+        try (CloseableIterator<Row> resultIterator =
+                tEnv.executeSql(
+                                String.format(
+                                        "Call %s.sys.get_cluster_configs('%s')",
+                                        CATALOG_NAME,
+                                        ConfigOptions
+                                                .SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO
+                                                .key()))
+                        .collect()) {
+            List<Row> results = CollectionUtil.iteratorToList(resultIterator);
+            assertThat(results).hasSize(1);
+            assertThat(results.get(0).getField(1)).isEqualTo("0.12");
+        }
+
         // reset cluster configs.
         tEnv.executeSql(
                         String.format(
-                                "Call %s.sys.reset_cluster_configs('%s', '%s')",
+                                "Call %s.sys.reset_cluster_configs('%s', '%s', '%s')",
                                 CATALOG_NAME,
                                 ConfigOptions.KV_SHARED_RATE_LIMITER_BYTES_PER_SEC.key(),
-                                ConfigOptions.DATALAKE_FORMAT.key()))
+                                ConfigOptions.DATALAKE_FORMAT.key(),
+                                ConfigOptions
+                                        .SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO
+                                        .key()))
                 .await();
     }
 

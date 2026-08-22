@@ -49,8 +49,16 @@ public class MergeTreeWriter extends RecordWriter<KeyValue> {
             TableBucket tableBucket,
             @Nullable String partition,
             List<String> partitionKeys,
-            RowType flussRowType) {
-        this(fileStoreTable, tableBucket, partition, partitionKeys, flussRowType, (String[]) null);
+            RowType flussRowType,
+            boolean paimonIncludingSystemColumns) {
+        this(
+                fileStoreTable,
+                tableBucket,
+                partition,
+                partitionKeys,
+                flussRowType,
+                (String[]) null,
+                paimonIncludingSystemColumns);
     }
 
     public MergeTreeWriter(
@@ -59,14 +67,16 @@ public class MergeTreeWriter extends RecordWriter<KeyValue> {
             @Nullable String partition,
             List<String> partitionKeys,
             RowType flussRowType,
-            @Nullable String[] ioTmpDirs) {
+            @Nullable String[] ioTmpDirs,
+            boolean paimonIncludingSystemColumns) {
         this(
                 fileStoreTable,
                 createIOManager(ioTmpDirs),
                 tableBucket,
                 partition,
                 partitionKeys,
-                flussRowType);
+                flussRowType,
+                paimonIncludingSystemColumns);
     }
 
     MergeTreeWriter(
@@ -75,14 +85,16 @@ public class MergeTreeWriter extends RecordWriter<KeyValue> {
             TableBucket tableBucket,
             @Nullable String partition,
             List<String> partitionKeys,
-            RowType flussRowType) {
+            RowType flussRowType,
+            boolean paimonIncludingSystemColumns) {
         super(
                 createTableWrite(fileStoreTable, ioManager),
                 fileStoreTable.rowType(),
                 tableBucket,
                 partition,
                 partitionKeys,
-                flussRowType);
+                flussRowType,
+                paimonIncludingSystemColumns);
         this.rowKeyExtractor = fileStoreTable.createRowKeyExtractor();
         this.ioManager = ioManager;
     }

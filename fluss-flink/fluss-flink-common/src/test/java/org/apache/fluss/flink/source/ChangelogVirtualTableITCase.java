@@ -27,6 +27,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.testutils.common.MultiVersionTest;
 import org.apache.fluss.utils.clock.ManualClock;
 
 import org.apache.flink.api.common.JobID;
@@ -59,12 +60,12 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
+import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.collectBatchRows;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.collectRowsWithTimeout;
 import static org.apache.fluss.flink.utils.FlinkTestBase.writeRows;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Integration test for $changelog virtual table functionality. */
 abstract class ChangelogVirtualTableITCase {
@@ -175,6 +176,7 @@ abstract class ChangelogVirtualTableITCase {
     }
 
     @Test
+    @MultiVersionTest
     public void testDescribeChangelogTable() throws Exception {
         // Create a table with various data types to test complex schema
         tEnv.executeSql(
@@ -249,7 +251,7 @@ abstract class ChangelogVirtualTableITCase {
     }
 
     @Test
-    public void testBatchReadChangelogTableFailsFast() throws Exception {
+    public void testBatchReadChangelogTable() throws Exception {
         tEnv.executeSql(
                 "CREATE TABLE batch_changelog_test ("
                         + "  id INT NOT NULL,"
@@ -257,11 +259,151 @@ abstract class ChangelogVirtualTableITCase {
                         + "  PRIMARY KEY (id) NOT ENFORCED"
                         + ") WITH ('bucket.num' = '1')");
 
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "batch_changelog_test");
+        CLOCK.advanceTime(Duration.ofMillis(1000));
+        writeRows(conn, tablePath, Arrays.asList(row(1, "Alice"), row(2, "Bob")), false);
+        CLOCK.advanceTime(Duration.ofMillis(1000));
+        writeRows(conn, tablePath, Arrays.asList(row(1, "Alice-updated")), false);
+        CLOCK.advanceTime(Duration.ofMillis(1000));
+        deleteRows(conn, tablePath, Arrays.asList(row(2, "Bob")));
+
         tEnv = initBatchTableEnvironment();
 
-        assertThatThrownBy(() -> tEnv.explainSql("SELECT * FROM batch_changelog_test$changelog"))
-                .hasRootCauseInstanceOf(UnsupportedOperationException.class)
-                .hasRootCauseMessage("$changelog virtual tables only support streaming mode.");
+        // The default FULL startup mode maps to the earliest log offset for virtual tables. The
+        // batch source captures the latest offsets as stopping offsets and terminates after
+        // replaying the bounded changelog.
+        List<String> allChanges =
+                collectBatchRows(
+                        tEnv.executeSql(
+                                        "SELECT _change_type, _log_offset, id, name "
+                                                + "FROM batch_changelog_test$changelog "
+                                                + "ORDER BY _log_offset")
+                                .collect());
+        assertThat(allChanges)
+                .containsExactly(
+                        "+I[insert, 0, 1, Alice]",
+                        "+I[insert, 1, 2, Bob]",
+                        "+I[update_before, 2, 1, Alice]",
+                        "+I[update_after, 3, 1, Alice-updated]",
+                        "+I[delete, 4, 2, Bob]");
+
+        List<String> primaryKeyFilteredAndLimited =
+                collectBatchRows(
+                        tEnv.executeSql(
+                                        "SELECT _change_type, _log_offset, id, name "
+                                                + "FROM batch_changelog_test$changelog "
+                                                + "WHERE id = 1 "
+                                                + "ORDER BY _log_offset LIMIT 2")
+                                .collect());
+        assertThat(primaryKeyFilteredAndLimited)
+                .containsExactly("+I[insert, 0, 1, Alice]", "+I[update_before, 2, 1, Alice]");
+
+        // Filters on _commit_timestamp are covered by
+        // testBatchReadChangelogTableWithCommitTimestampFilter, which is disabled on Flink 1.18
+        // (FLINK-35318).
+        List<String> metadataFiltered =
+                collectBatchRows(
+                        tEnv.executeSql(
+                                        "SELECT _change_type, _log_offset, id "
+                                                + "FROM batch_changelog_test$changelog "
+                                                + "WHERE _change_type = 'delete' "
+                                                + "AND _log_offset = 4")
+                                .collect());
+        assertThat(metadataFiltered).containsExactly("+I[delete, 4, 2]");
+
+        List<String> timestampStartup =
+                collectBatchRows(
+                        tEnv.executeSql(
+                                        "SELECT _change_type, _log_offset "
+                                                + "FROM batch_changelog_test$changelog "
+                                                + "/*+ OPTIONS("
+                                                + "'scan.startup.mode' = 'timestamp', "
+                                                + "'scan.startup.timestamp' = '1500') */ "
+                                                + "ORDER BY _log_offset")
+                                .collect());
+        assertThat(timestampStartup)
+                .containsExactly("+I[update_before, 2]", "+I[update_after, 3]", "+I[delete, 4]");
+
+        tEnv.executeSql(
+                "CREATE TABLE partitioned_batch_changelog_test ("
+                        + "  id INT NOT NULL,"
+                        + "  name STRING,"
+                        + "  region STRING NOT NULL,"
+                        + "  PRIMARY KEY (id, region) NOT ENFORCED"
+                        + ") PARTITIONED BY (region) WITH ('bucket.num' = '1')");
+        CLOCK.advanceTime(Duration.ofMillis(1000));
+        tEnv.executeSql(
+                        "INSERT INTO partitioned_batch_changelog_test VALUES "
+                                + "(1, 'Item-1', 'us'), "
+                                + "(2, 'Item-2', 'us'), "
+                                + "(3, 'Item-3', 'eu')")
+                .await();
+
+        List<String> partitionedChanges =
+                collectBatchRows(
+                        tEnv.executeSql(
+                                        "SELECT _change_type, id, name, region "
+                                                + "FROM partitioned_batch_changelog_test$changelog "
+                                                + "ORDER BY region, id")
+                                .collect());
+        assertThat(partitionedChanges)
+                .containsExactly(
+                        "+I[insert, 3, Item-3, eu]",
+                        "+I[insert, 1, Item-1, us]",
+                        "+I[insert, 2, Item-2, us]");
+    }
+
+    /**
+     * Bounded reads with a predicate on the {@code _commit_timestamp} metadata column.
+     *
+     * <p>This is kept apart from {@code testBatchReadChangelogTable} because Flink 1.18 rebuilds
+     * the remaining TIMESTAMP_LTZ filter using the session time zone instead of UTC after {@code
+     * applyFilters()} (FLINK-35318, fixed in Flink 1.19.2 and 1.20.0), which shifts the literal and
+     * drops all rows in non-UTC environments. The Flink 1.18 subclass therefore disables this test
+     * only, keeping the rest of the batch coverage.
+     */
+    @Test
+    public void testBatchReadChangelogTableWithCommitTimestampFilter() throws Exception {
+        tEnv.executeSql(
+                "CREATE TABLE batch_changelog_ts_test ("
+                        + "  id INT NOT NULL,"
+                        + "  name STRING,"
+                        + "  PRIMARY KEY (id) NOT ENFORCED"
+                        + ") WITH ('bucket.num' = '1')");
+
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "batch_changelog_ts_test");
+        CLOCK.advanceTime(Duration.ofMillis(1000));
+        writeRows(conn, tablePath, Arrays.asList(row(1, "Alice"), row(2, "Bob")), false);
+        CLOCK.advanceTime(Duration.ofMillis(1000));
+        writeRows(conn, tablePath, Arrays.asList(row(1, "Alice-updated")), false);
+        CLOCK.advanceTime(Duration.ofMillis(1000));
+        deleteRows(conn, tablePath, Arrays.asList(row(2, "Bob")));
+
+        tEnv = initBatchTableEnvironment();
+
+        List<String> timestampRangeFiltered =
+                collectBatchRows(
+                        tEnv.executeSql(
+                                        "SELECT _change_type, _log_offset, id, name "
+                                                + "FROM batch_changelog_ts_test$changelog "
+                                                + "WHERE _commit_timestamp >= TO_TIMESTAMP_LTZ(2000, 3) "
+                                                + "AND _commit_timestamp < TO_TIMESTAMP_LTZ(3000, 3) "
+                                                + "ORDER BY _log_offset")
+                                .collect());
+        assertThat(timestampRangeFiltered)
+                .containsExactly(
+                        "+I[update_before, 2, 1, Alice]", "+I[update_after, 3, 1, Alice-updated]");
+
+        List<String> metadataFiltered =
+                collectBatchRows(
+                        tEnv.executeSql(
+                                        "SELECT _change_type, _log_offset, id "
+                                                + "FROM batch_changelog_ts_test$changelog "
+                                                + "WHERE _change_type = 'delete' "
+                                                + "AND _log_offset = 4 "
+                                                + "AND _commit_timestamp = TO_TIMESTAMP_LTZ(3000, 3)")
+                                .collect());
+        assertThat(metadataFiltered).containsExactly("+I[delete, 4, 2]");
     }
 
     @Test

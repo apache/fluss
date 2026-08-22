@@ -188,6 +188,8 @@ struct ErrorCode {
     static constexpr int INVALID_ALTER_TABLE_EXCEPTION = 56;
     /// Deletion operations are disabled on this table.
     static constexpr int DELETION_DISABLED_EXCEPTION = 57;
+    /// The server rejected a write due to storage backpressure.
+    static constexpr int STORAGE_BACKPRESSURE_EXCEPTION = 72;
 
     /// Returns true if retrying the request may succeed. Mirrors Java's RetriableException hierarchy.
     static constexpr bool IsRetriable(int32_t code) {
@@ -198,7 +200,8 @@ struct ErrorCode {
                code == UNKNOWN_TABLE_OR_BUCKET_EXCEPTION || code == REQUEST_TIME_OUT ||
                code == STORAGE_EXCEPTION ||
                code == NOT_ENOUGH_REPLICAS_AFTER_APPEND_EXCEPTION ||
-               code == NOT_ENOUGH_REPLICAS_EXCEPTION || code == LEADER_NOT_AVAILABLE_EXCEPTION;
+               code == NOT_ENOUGH_REPLICAS_EXCEPTION || code == LEADER_NOT_AVAILABLE_EXCEPTION ||
+               code == STORAGE_BACKPRESSURE_EXCEPTION;
     }
 };
 
@@ -1388,6 +1391,8 @@ struct Configuration {
     size_t writer_buffer_memory_size{64 * 1024 * 1024};
     // Maximum time in milliseconds to block waiting for buffer memory
     uint64_t writer_buffer_wait_timeout_ms{std::numeric_limits<uint64_t>::max()};
+    // Maximum KV backpressure throttle in milliseconds
+    uint64_t writer_kv_backpressure_max_throttle_ms{3000};
     // Connect timeout in milliseconds for TCP transport connect
     uint64_t connect_timeout_ms{120000};
     // Security protocol: "PLAINTEXT" (default, no auth) or "sasl" (SASL auth)

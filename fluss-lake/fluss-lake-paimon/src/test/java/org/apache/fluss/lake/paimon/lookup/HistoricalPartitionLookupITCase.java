@@ -34,6 +34,7 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.types.DataTypes;
 
 import org.apache.flink.core.execution.JobClient;
@@ -46,6 +47,7 @@ import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
 import static org.apache.fluss.testutils.DataTestUtils.row;
@@ -98,13 +100,12 @@ class HistoricalPartitionLookupITCase extends FlinkPaimonTieringTestBase {
                         false)
                 .get();
         // The ALTER RPC must not complete until the required system partition is persisted.
-        assertThat(
-                        FLUSS_CLUSTER_EXTENSION
-                                .getZooKeeperClient()
-                                .getPartition(tablePath, HISTORICAL_PARTITION_VALUE))
-                .isPresent();
-        waitUntilPartitionCreated(tablePath, HISTORICAL_PARTITION_VALUE);
-        long historicalPartitionId = getPartitionId(tablePath, HISTORICAL_PARTITION_VALUE);
+        Optional<PartitionRegistration> historicalPartition =
+                FLUSS_CLUSTER_EXTENSION
+                        .getZooKeeperClient()
+                        .getPartition(tablePath, HISTORICAL_PARTITION_VALUE);
+        assertThat(historicalPartition).isPresent();
+        long historicalPartitionId = historicalPartition.get().getPartitionId();
         FLUSS_CLUSTER_EXTENSION.waitUntilTablePartitionReady(tableId, historicalPartitionId);
 
         // Keep the initial retention wide enough so this old partition can be created and written
@@ -346,13 +347,5 @@ class HistoricalPartitionLookupITCase extends FlinkPaimonTieringTestBase {
                 () ->
                         assertThat(admin.listPartitionInfos(tablePath).get())
                                 .noneMatch(p -> partitionName.equals(p.getPartitionName())));
-    }
-
-    private static void waitUntilPartitionCreated(TablePath tablePath, String partitionName) {
-        retry(
-                Duration.ofMinutes(1),
-                () ->
-                        assertThat(admin.listPartitionInfos(tablePath).get())
-                                .anyMatch(p -> partitionName.equals(p.getPartitionName())));
     }
 }

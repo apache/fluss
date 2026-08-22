@@ -142,21 +142,35 @@ public class RemoteLogManifest {
                 physicalTablePath, tableBucket, newSegments, newHighestCopiedEndOffset);
     }
 
+    /**
+     * Returns the inclusive logical start offset exposed by this manifest, or {@link
+     * Long#MAX_VALUE} if this manifest is empty.
+     *
+     * <p>The returned value is the start of the logical range visible through the manifest, not
+     * necessarily the physical start offset of its first persisted segment.
+     */
     public long getRemoteLogStartOffset() {
         long startOffset = Long.MAX_VALUE;
         for (RemoteLogSegment remoteLogSegment : remoteLogSegmentList) {
-            if (remoteLogSegment.remoteLogStartOffset() < startOffset) {
-                startOffset = remoteLogSegment.remoteLogStartOffset();
+            if (remoteLogSegment.logicalStartOffset() < startOffset) {
+                startOffset = remoteLogSegment.logicalStartOffset();
             }
         }
         return startOffset;
     }
 
+    /**
+     * Returns the exclusive logical end offset exposed by this manifest, or {@code -1} if this
+     * manifest is empty.
+     *
+     * <p>The returned value is the end of the logical range visible through the manifest, rather
+     * than a physical segment boundary.
+     */
     public long getRemoteLogEndOffset() {
         long endOffset = -1;
         for (RemoteLogSegment remoteLogSegment : remoteLogSegmentList) {
-            if (endOffset == -1 || remoteLogSegment.remoteLogEndOffset() > endOffset) {
-                endOffset = remoteLogSegment.remoteLogEndOffset();
+            if (endOffset == -1 || remoteLogSegment.logicalEndOffset() > endOffset) {
+                endOffset = remoteLogSegment.logicalEndOffset();
             }
         }
         return endOffset;

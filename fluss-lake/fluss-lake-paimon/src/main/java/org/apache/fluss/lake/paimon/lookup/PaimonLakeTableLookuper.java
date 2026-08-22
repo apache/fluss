@@ -18,7 +18,9 @@
 package org.apache.fluss.lake.paimon.lookup;
 
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.config.TableConfig;
+import org.apache.fluss.exception.DiskWriteLockedException;
 import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.lake.lakestorage.LakeTableLookuper;
 import org.apache.fluss.lake.paimon.utils.PaimonPartitionBucket;
@@ -32,16 +34,19 @@ import org.apache.fluss.row.encode.RowEncoder;
 import org.apache.fluss.row.encode.ValueEncoder;
 import org.apache.fluss.row.encode.paimon.PaimonKeyEncoder;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.IOUtils;
 
 import org.apache.paimon.CoreOptions;
 import org.apache.paimon.catalog.Catalog;
 import org.apache.paimon.catalog.CatalogContext;
 import org.apache.paimon.catalog.CatalogFactory;
+import org.apache.paimon.disk.BufferFileReader;
+import org.apache.paimon.disk.BufferFileWriter;
+import org.apache.paimon.disk.FileIOChannel;
 import org.apache.paimon.disk.IOManager;
 import org.apache.paimon.io.DataFileMeta;
 import org.apache.paimon.memory.MemorySegment;
-import org.apache.paimon.options.MemorySize;
 import org.apache.paimon.options.Options;
 import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.table.query.LocalTableQuery;
@@ -54,6 +59,7 @@ import org.apache.paimon.types.DataField;
 import javax.annotation.Nullable;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -62,9 +68,10 @@ import java.util.List;
 import java.util.Set;
 
 import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_2;
-import static org.apache.fluss.lake.paimon.PaimonLakeCatalog.SYSTEM_COLUMNS;
+import static org.apache.fluss.lake.paimon.PaimonLakeCatalog.LEGACY_SYSTEM_COLUMNS;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimonPartition;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /**
@@ -86,17 +93,12 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  */
 public class PaimonLakeTableLookuper implements LakeTableLookuper {
 
-    // Each TabletServer caches at most ten table lookupers, bounding their retained lookup cache
-    // capacity to 20GB. See HistoricalLakeLookupManager for the follow-up to make this configurable
-    // and use a global Paimon IOManager limit.
-    private static final String LOOKUP_CACHE_MAX_DISK_SIZE = "2gb";
-    private static final MemorySize LOOKUP_CACHE_MAX_DISK_MEMORY_SIZE =
-            MemorySize.parse(LOOKUP_CACHE_MAX_DISK_SIZE);
-
     private final Configuration paimonConfig;
     private final TablePath tablePath;
     private final String ioTmpDir;
     private final TableConfig tableConfig;
+    private final long lookupCacheMaxDiskBytes;
+    private final Runnable diskWriteGuard;
 
     private final Set<PaimonPartitionBucket> initializedBuckets;
 
@@ -106,6 +108,7 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
     private @Nullable LocalTableQuery localTableQuery;
     private @Nullable RowPartitionKeyExtractor partitionKeyExtractor;
     private int primaryKeyFieldCount;
+    private long lookupFileDownloadCount;
 
     // Both encoders are initialized only for a kv-format-v2 table whose bucket key differs from
     // its physical primary key. They remain null when the incoming Fluss key already uses Paimon's
@@ -118,15 +121,22 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
     private @Nullable InternalRow.FieldGetter[] cachedValueFieldGetters;
     private boolean closed;
 
+    /** Creates a lookuper with the specified local lookup cache limit. */
     public PaimonLakeTableLookuper(
             Configuration paimonConfig,
             TablePath tablePath,
             String ioTmpDir,
-            TableConfig tableConfig) {
+            TableConfig tableConfig,
+            long lookupCacheMaxDiskBytes,
+            Runnable diskWriteGuard) {
         this.paimonConfig = checkNotNull(paimonConfig, "paimonConfig must not be null.");
         this.tablePath = checkNotNull(tablePath, "tablePath must not be null.");
         this.ioTmpDir = checkNotNull(ioTmpDir, "ioTmpDir must not be null.");
         this.tableConfig = checkNotNull(tableConfig, "tableConfig must not be null.");
+        checkArgument(
+                lookupCacheMaxDiskBytes > 0, "lookupCacheMaxDiskBytes must be greater than 0.");
+        this.lookupCacheMaxDiskBytes = lookupCacheMaxDiskBytes;
+        this.diskWriteGuard = checkNotNull(diskWriteGuard, "diskWriteGuard must not be null.");
         this.initializedBuckets = new HashSet<>();
     }
 
@@ -143,9 +153,28 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
         org.apache.paimon.data.BinaryRow keyRow = toPaimonLookupKey(key);
         initializeFilesIfNeeded(partition, context.bucketId());
 
-        org.apache.paimon.data.InternalRow paimonRow =
-                lookupWithFileRefresh(
-                        partition, context.bucketId(), keyRow, context.valueRowType());
+        long downloadCountBeforeLookup = lookupFileDownloadCount;
+        long lookupStartNanos = System.nanoTime();
+        org.apache.paimon.data.InternalRow paimonRow;
+        try {
+            paimonRow =
+                    lookupWithFileRefresh(
+                            partition, context.bucketId(), keyRow, context.valueRowType());
+        } catch (Exception e) {
+            DiskWriteLockedException diskWriteLockedException =
+                    ExceptionUtils.findThrowable(e, DiskWriteLockedException.class).orElse(null);
+            if (diskWriteLockedException != null) {
+                throw diskWriteLockedException;
+            }
+            throw e;
+        } finally {
+            context.lookupMetricRecorder()
+                    .recordLookup(
+                            System.nanoTime() - lookupStartNanos,
+                            // An increase means this lookup downloaded at least one lookup file
+                            // through the tracking IO manager.
+                            lookupFileDownloadCount > downloadCountBeforeLookup);
+        }
         if (paimonRow == null) {
             return null;
         }
@@ -239,25 +268,19 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
 
     private FileStoreTable withLookupCacheOptions(FileStoreTable table) {
         String key = CoreOptions.LOOKUP_CACHE_MAX_DISK_SIZE.key();
-        String configuredMaxDiskSize = table.options().get(key);
-        if (configuredMaxDiskSize != null
-                && MemorySize.parse(configuredMaxDiskSize)
-                                .compareTo(LOOKUP_CACHE_MAX_DISK_MEMORY_SIZE)
-                        <= 0) {
-            return table;
-        }
-        return table.copy(Collections.singletonMap(key, LOOKUP_CACHE_MAX_DISK_SIZE));
+        String maxDiskSize = new MemorySize(lookupCacheMaxDiskBytes).toString();
+        return table.copy(Collections.singletonMap(key, maxDiskSize));
     }
 
-    private static IOManager createIOManager(String ioTmpDir) {
-        return IOManager.create(ioTmpDir);
+    private IOManager createIOManager(String ioTmpDir) {
+        return new TrackingIOManager(IOManager.create(ioTmpDir));
     }
 
     private static int[] businessFieldProjection(FileStoreTable fileStoreTable) {
         List<DataField> fields = fileStoreTable.schema().logicalRowType().getFields();
         List<Integer> projectedFields = new ArrayList<>();
         for (int i = 0; i < fields.size(); i++) {
-            if (!SYSTEM_COLUMNS.containsKey(fields.get(i).name())) {
+            if (!LEGACY_SYSTEM_COLUMNS.containsKey(fields.get(i).name())) {
                 projectedFields.add(i);
             }
         }
@@ -304,7 +327,6 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
             return;
         }
 
-        LinkedHashMap<String, DataFileMeta> beforeFilesByName = new LinkedHashMap<>();
         LinkedHashMap<String, DataFileMeta> dataFilesByName = new LinkedHashMap<>();
 
         InnerTableScan tableScan =
@@ -317,7 +339,6 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
                 continue;
             }
             DataSplit dataSplit = (DataSplit) split;
-            addFilesByName(beforeFilesByName, dataSplit.beforeFiles());
             addFilesByName(dataFilesByName, dataSplit.dataFiles());
         }
 
@@ -326,11 +347,13 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
         // been dropped. This PR does not support writes to expired partitions, so no new rows are
         // expected and initializing the file set once is sufficient. Compaction-related missing
         // files are handled by the IOException refresh path below.
+        // This partition-bucket has no registered lookup levels yet, so there are no old files to
+        // remove when building its lookup state from the active data files.
         localTableQuery()
                 .refreshFiles(
                         partition,
                         bucketId,
-                        new ArrayList<>(beforeFilesByName.values()),
+                        Collections.emptyList(),
                         new ArrayList<>(dataFilesByName.values()));
         initializedBuckets.add(partitionBucket);
     }
@@ -435,5 +458,65 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
 
     private RowPartitionKeyExtractor partitionKeyExtractor() {
         return checkNotNull(partitionKeyExtractor, "partitionKeyExtractor must be initialized.");
+    }
+
+    /** Tracks creation of Paimon lookup files while delegating all local I/O operations. */
+    private final class TrackingIOManager implements IOManager {
+
+        private final IOManager delegate;
+
+        private TrackingIOManager(IOManager delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public FileIOChannel.ID createChannel() {
+            return delegate.createChannel();
+        }
+
+        @Override
+        public FileIOChannel.ID createChannel(String prefix) {
+            try {
+                diskWriteGuard.run();
+            } catch (DiskWriteLockedException e) {
+                // IOManager does not allow createChannel to declare IOException. Preserve the
+                // I/O boundary here and unwrap the retriable Fluss exception in lookup().
+                throw new UncheckedIOException(new IOException(e));
+            }
+            lookupFileDownloadCount++;
+            return delegate.createChannel(prefix);
+        }
+
+        @Override
+        public String[] tempDirs() {
+            return delegate.tempDirs();
+        }
+
+        @Override
+        public String pickTempDir() {
+            return delegate.pickTempDir();
+        }
+
+        @Override
+        public FileIOChannel.Enumerator createChannelEnumerator() {
+            return delegate.createChannelEnumerator();
+        }
+
+        @Override
+        public BufferFileWriter createBufferFileWriter(FileIOChannel.ID channelID)
+                throws IOException {
+            return delegate.createBufferFileWriter(channelID);
+        }
+
+        @Override
+        public BufferFileReader createBufferFileReader(FileIOChannel.ID channelID)
+                throws IOException {
+            return delegate.createBufferFileReader(channelID);
+        }
+
+        @Override
+        public void close() throws Exception {
+            delegate.close();
+        }
     }
 }

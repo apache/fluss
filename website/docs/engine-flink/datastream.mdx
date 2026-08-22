@@ -10,6 +10,7 @@ The Fluss DataStream Connector for Apache Flink provides a Flink DataStream sour
 Key features of the Fluss DataStream Connector include:
 * Reading from both primary key tables and log tables
 * Support for projection pushdown to select specific fields
+* Support for filter pushdown on Arrow log tables
 * Flexible offset initialization strategies
 * Custom de/serialization schemas for converting between Fluss records and your data types
 * Writing to both primary key tables and log tables
@@ -93,6 +94,7 @@ The `FlussSourceBuilder` provides several methods for configuring the source con
 
 #### Optional Parameters
 * **setProjectedFields(String... projectedFieldNames):** Sets the fields to project from the table (if not specified, all fields are included)
+* **setFilter(Predicate filter):** Sets a predicate for server-side record batch filtering
 * **setScanPartitionDiscoveryIntervalMs(long intervalMs):** Sets the interval for discovering new partitions (default: from configuration)
 * **setStartingOffsets(OffsetsInitializer initializer):** Sets the strategy for determining starting offsets (default: `OffsetsInitializer.full()`)
 * **setFlussConfig(Configuration flussConf):** Sets custom Fluss configuration properties
@@ -237,6 +239,36 @@ DataStreamSource<OrderPartial> stream = env.fromSource(
 ```
 
 In this example, `OrderPartial` is a class that only contains the `orderId` and `amount` fields, and `OrderPartialDeserializationSchema` is a deserialization schema that knows how to convert the projected fields to `OrderPartial` objects.
+
+#### Using Filter Pushdown
+Filter pushdown uses column statistics to skip record batches that cannot contain matching rows.
+Build a Fluss predicate from the table's `RowType` and pass it to `FlussSourceBuilder#setFilter`:
+
+```java
+PredicateBuilder predicateBuilder = new PredicateBuilder(orderRowType);
+int amountIndex = predicateBuilder.indexOf("amount");
+Predicate predicate = predicateBuilder.greaterOrEqual(amountIndex, 100);
+
+FlussSource<Order> flussSource = FlussSource.<Order>builder()
+    .setBootstrapServers("localhost:9123")
+    .setDatabase("mydb")
+    .setTable("orders_log")
+    .setFilter(predicate)
+    .setDeserializationSchema(new OrderDeserializationSchema())
+    .build();
+
+DataStream<Order> orders = env.fromSource(
+        flussSource,
+        WatermarkStrategy.noWatermarks(),
+        "Filtered Fluss Source")
+    // Batch-level pushdown can produce false positives, so retain the exact filter.
+    .filter(order -> order.getAmount() >= 100);
+```
+
+In this example, `orderRowType` is the Fluss table's `RowType`. Filter pushdown is available only
+for Log Tables using the Arrow log format, and every filtered column must be configured in the
+table's `table.statistics.columns` property. See
+[Filter Pushdown](reads.md#filter-pushdown) for the supported predicates and configuration details.
 
 ## DataStream Sink
 

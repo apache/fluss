@@ -1,0 +1,97 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# The gateway is its own Cargo workspace and deliberately stays out of the
+# workspace rooted at ../fluss-rust so that gateway dependencies never touch
+# that workspace's lock file or its generated dependency inventories.
+[workspace]
+resolver = "3"
+
+[package]
+name = "fluss-gateway"
+edition = "2024"
+version = "1.0.0"
+license = "Apache-2.0"
+# The shipped dependency set only needs 1.85; the declared floor stays at 1.88 to match fluss-rust,
+# which the gateway depends on once the FlussBackend capability lands.
+rust-version = "1.88"
+authors = ["Apache Fluss <dev@fluss.apache.org>"]
+repository = "https://github.com/apache/fluss"
+# The gateway ships as an executable, not a library on crates.io, so `rust-release.yml` does not
+# apply to it.
+# TODO: add a release path for the gateway's own artifacts (Linux binary, container image) and the
+# dependency inventory that goes with them; no workflow publishes them today.
+publish = false
+description = "Stateless REST gateway for Apache Fluss"
+
+[[bin]]
+name = "fluss-gateway"
+path = "src/main.rs"
+
+# Internal testability boundary for the executable; this is not a published or supported Rust SDK.
+[lib]
+name = "fluss_gateway"
+
+[dependencies]
+axum = { version = "0.8", default-features = false, features = ["http1", "matched-path", "tokio"] }
+clap = { version = "4.5.37", features = ["derive"] }
+# Only FutureExt/join_all are used; avoid the larger futures facade crate.
+futures-util = "0.3"
+# Build the native connection settings owned by the Gateway from the typed per-cluster configuration.
+fluss = { package = "fluss-rs", path = "../fluss-rust/crates/fluss" }
+# The listeners follow axum's official serve-with-hyper example: axum::serve does not expose the
+# hyper builder that the header read timeout lives on. The plain http1 builder (not auto) has no
+# HTTP/2 preface sniffing, so the header timer covers a connection from its first byte.
+hyper = { version = "1", default-features = false, features = ["http1", "server"] }
+# GracefulShutdown and the tower-to-hyper service adapter for the serve loop above. `http1` gates
+# the `GracefulConnection` impl `graceful.watch` needs, so it is requested rather than inherited.
+hyper-util = { version = "0.1", default-features = false, features = ["http1", "server-graceful", "service", "tokio"] }
+# Process CPU/RSS/fd sampling for the FIP-49 process_* metric families.
+libc = "0.2"
+log = "0.4"
+metrics = "0.24"
+# The recorder and the `/metrics` route need no default feature, and those would reach the whole
+# graph through `hyper-util/server-auto`; `deny.toml` guards the consequence.
+metrics-exporter-prometheus = { version = "0.17", default-features = false }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+# Preserves the nested typed field path after file, env, and CLI values are merged.
+serde_path_to_error = "0.1"
+# The gateway.yaml configuration file is YAML with flat dotted keys (FIP-49).
+# serde_yaml_ng is the maintained, API-compatible fork of the archived serde_yaml crate.
+serde_yaml_ng = "0.10"
+# Runtime capabilities used by the server; test-only I/O/time controls are enabled below.
+tokio = { version = "1.44.2", features = ["macros", "net", "rt-multi-thread", "signal", "time"] }
+# Only `sync::CancellationToken` is used, which needs no feature of its own.
+tokio-util = { version = "0.7", default-features = false }
+utoipa = { version = "5", features = ["axum_extras"] }
+utoipa-axum = "0.2"
+uuid = { version = "1.10", features = ["v4"] }
+
+[dev-dependencies]
+http-body-util = "0.1"
+# No `blocking`: every suite is async, and the blocking client panics when dropped inside a tokio context.
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+tempfile = "3"
+tokio = { version = "1.44.2", features = ["io-util", "test-util"] }
+tower = { version = "0.5", features = ["util"] }
+
+[[test]]
+name = "http_api"
+
+[[test]]
+name = "process"

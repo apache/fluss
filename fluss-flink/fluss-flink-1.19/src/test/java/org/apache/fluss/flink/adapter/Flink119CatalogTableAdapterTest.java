@@ -22,15 +22,11 @@ import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Test for {@link CatalogTableAdapter}. */
-public class FlinkCatalogTableTest {
+/** Test for {@link CatalogTableAdapter} in flink 1.19. */
+public class Flink119CatalogTableAdapterTest extends FlinkCatalogTableAdapterTest {
 
     @Test
     public void testIsMaterializedTable() {
-        assertThat(
-                        CatalogTableAdapter.isMaterializedTable(
-                                CatalogBaseTable.TableKind.MATERIALIZED_TABLE))
-                .isEqualTo(true);
         assertThat(CatalogTableAdapter.isMaterializedTable(CatalogBaseTable.TableKind.VIEW))
                 .isEqualTo(false);
         assertThat(CatalogTableAdapter.isMaterializedTable(CatalogBaseTable.TableKind.TABLE))

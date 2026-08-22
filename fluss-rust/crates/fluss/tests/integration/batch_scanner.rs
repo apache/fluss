@@ -18,9 +18,12 @@
 
 #[cfg(test)]
 mod batch_scanner_test {
-    use crate::integration::utils::{create_table, get_shared_cluster};
-    use arrow::array::{Int32Array, Int64Array, StringArray, record_batch};
-    use fluss::metadata::{DataTypes, LogFormat, Schema, TableBucket, TableDescriptor, TablePath};
+    use crate::integration::utils::{create_table, get_shared_cluster, wait_for_table_ready};
+    use arrow::array::{Array, Int32Array, Int64Array, StringArray, record_batch};
+    use fluss::metadata::{
+        AddColumn, AlterTableChanges, ColumnPositionType, DataTypes, JsonSerde, LogFormat, Schema,
+        TableBucket, TableDescriptor, TablePath,
+    };
     use fluss::row::GenericRow;
     use futures::TryStreamExt;
     use std::collections::HashMap;
@@ -241,6 +244,108 @@ mod batch_scanner_test {
                 c3.value(i)
             );
         }
+    }
+
+    #[tokio::test]
+    async fn batch_scanner_reads_old_arrow_batches_after_add_column() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("admin");
+
+        let table_path = TablePath::new("fluss", "test_batch_scanner_add_column");
+        let descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("name", DataTypes::string())
+                    .build()
+                    .expect("schema"),
+            )
+            .distributed_by(Some(1), vec!["id".to_string()])
+            .build()
+            .expect("descriptor");
+        create_table(&admin, &table_path, &descriptor).await;
+        wait_for_table_ready(&admin, &table_path).await;
+
+        let table = connection.get_table(&table_path).await.expect("table");
+        let writer = table
+            .new_append()
+            .expect("append")
+            .create_writer()
+            .expect("writer");
+        writer
+            .append_arrow_batch(
+                record_batch!(("id", Int32, [1, 2]), ("name", Utf8, ["alice", "bob"]))
+                    .expect("old-schema batch"),
+            )
+            .expect("append old-schema batch");
+        writer.flush().await.expect("flush");
+
+        let age_type_json = serde_json::to_vec(
+            &DataTypes::int()
+                .serialize_json()
+                .expect("serialize INT type"),
+        )
+        .expect("serialize data type JSON");
+        admin
+            .alter_table(
+                &table_path,
+                false,
+                AlterTableChanges {
+                    add_columns: vec![AddColumn {
+                        column_name: "age".to_string(),
+                        data_type_json: age_type_json,
+                        comment: None,
+                        position: ColumnPositionType::Last,
+                    }],
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("add age column");
+
+        let current_table = connection
+            .get_table(&table_path)
+            .await
+            .expect("updated table");
+        let table_info = current_table.get_table_info();
+        let mut scanner = current_table
+            .new_scan()
+            .limit(10)
+            .expect("limit")
+            .create_bucket_batch_scanner(TableBucket::new(table_info.table_id, 0))
+            .expect("create batch scanner");
+
+        let scan_batch = scanner
+            .next_batch()
+            .await
+            .expect("scan old-schema batch")
+            .expect("batch");
+        let batch = scan_batch.batch();
+        assert_eq!(batch.num_rows(), 2);
+        assert_eq!(batch.num_columns(), 3);
+        assert_eq!(batch.schema().field(2).name(), "age");
+        assert_eq!(batch.column(2).null_count(), 2);
+        let ids = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("id column");
+        let names = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("name column");
+        let ages = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("age column");
+        assert_eq!(ids.values(), &[1, 2]);
+        assert_eq!(names.value(0), "alice");
+        assert_eq!(names.value(1), "bob");
+        assert!(ages.is_null(0));
+        assert!(ages.is_null(1));
     }
 
     /// Limit scan on a primary-key table: decodes the value-record batch and
