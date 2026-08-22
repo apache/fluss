@@ -17,8 +17,9 @@
 
 package org.apache.fluss.flink.tiering.source.state;
 
-import org.apache.fluss.flink.tiering.source.split.TieringLogSplit;
-import org.apache.fluss.flink.tiering.source.split.TieringSnapshotSplit;
+import org.apache.fluss.client.tiering.TieringLogSplit;
+import org.apache.fluss.client.tiering.TieringSnapshotSplit;
+import org.apache.fluss.flink.tiering.source.split.FlinkTieringSplit;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 
@@ -39,9 +40,10 @@ class TieringSplitStateTest {
                 new TieringSnapshotSplit(
                         tablePath, tableBucket, "partition1", 0L, 200L, 10, 0, 1000L);
         tieringSnapshotSplit.skipCurrentRound();
-        TieringSplitState tieringSnapshotSplitState = new TieringSplitState(tieringSnapshotSplit);
-        TieringSnapshotSplit restoredSplit =
-                (TieringSnapshotSplit) tieringSnapshotSplitState.toSourceSplit();
+        FlinkTieringSplit flinkSplit = new FlinkTieringSplit(tieringSnapshotSplit);
+        TieringSplitState tieringSnapshotSplitState = new TieringSplitState(flinkSplit);
+        FlinkTieringSplit restoredFlinkSplit = tieringSnapshotSplitState.toSourceSplit();
+        TieringSnapshotSplit restoredSplit = restoredFlinkSplit.asTieringSnapshotSplit();
         assertThat(restoredSplit).isEqualTo(tieringSnapshotSplit);
         assertThat(restoredSplit.shouldSkipCurrentRound()).isTrue();
         assertThat(restoredSplit.getSplitIndex()).isZero();
@@ -57,8 +59,10 @@ class TieringSplitStateTest {
         TieringLogSplit tieringLogSplit =
                 new TieringLogSplit(tablePath, tableBucket, "partition1", 100L, 200L, 20, 1, 2000L);
         tieringLogSplit.skipCurrentRound();
-        TieringSplitState tieringLogSplitState = new TieringSplitState(tieringLogSplit);
-        TieringLogSplit restoredSplit = (TieringLogSplit) tieringLogSplitState.toSourceSplit();
+        FlinkTieringSplit flinkSplit = new FlinkTieringSplit(tieringLogSplit);
+        TieringSplitState tieringLogSplitState = new TieringSplitState(flinkSplit);
+        FlinkTieringSplit restoredFlinkSplit = tieringLogSplitState.toSourceSplit();
+        TieringLogSplit restoredSplit = restoredFlinkSplit.asTieringLogSplit();
         assertThat(restoredSplit).isEqualTo(tieringLogSplit);
         assertThat(restoredSplit.shouldSkipCurrentRound()).isTrue();
         assertThat(restoredSplit.getSplitIndex()).isEqualTo(1);

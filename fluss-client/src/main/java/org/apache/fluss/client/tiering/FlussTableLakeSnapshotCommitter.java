@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.flink.tiering.committer;
+package org.apache.fluss.client.tiering;
 
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.metadata.MetadataUpdater;
@@ -197,7 +197,7 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
         }
     }
 
-    void commit(
+    public void commit(
             long tableId,
             long snapshotId,
             String lakeBucketTieredOffsetsPath,
@@ -233,14 +233,6 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
         }
     }
 
-    /**
-     * Converts the prepare commit parameters to a {@link PrepareLakeTableSnapshotRequest}.
-     *
-     * @param tableId the table ID
-     * @param tablePath the table path
-     * @param logEndOffsets the log end offsets for each bucket
-     * @return the prepared commit request
-     */
     private PrepareLakeTableSnapshotRequest toPrepareLakeTableSnapshotRequest(
             long tableId, TablePath tablePath, Map<TableBucket, Long> logEndOffsets) {
         PrepareLakeTableSnapshotRequest prepareLakeTableSnapshotRequest =
@@ -264,29 +256,6 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
         return prepareLakeTableSnapshotRequest;
     }
 
-    /**
-     * Converts the commit parameters to a {@link CommitLakeTableSnapshotRequest}.
-     *
-     * <p>This method creates a request that includes:
-     *
-     * <ul>
-     *   <li>Lake table snapshot metadata (snapshot ID, table ID, file paths)
-     *   <li>PbLakeTableSnapshotInfo for metrics reporting (log end offsets and max tiered
-     *       timestamps)
-     * </ul>
-     *
-     * @param tableId the table ID
-     * @param snapshotId the lake snapshot ID
-     * @param tieredBucketOffsetsPath the file path where the tiered bucket offsets is stored
-     * @param readableBucketTieredOffsetsPath the file path where the readable bucket offsets is
-     *     stored
-     * @param logEndOffsets the log end offsets for each bucket
-     * @param logMaxTieredTimestamps the max tiered timestamps for each bucket
-     * @param earliestSnapshotIDToKeep the earliest snapshot ID to keep. Null means keep only the
-     *     latest (discard all previous). -1 ({@link LakeCommitResult#KEEP_ALL_PREVIOUS}) means keep
-     *     all previous snapshots (infinite retention).
-     * @return the commit request
-     */
     private CommitLakeTableSnapshotRequest toCommitLakeTableSnapshotRequest(
             long tableId,
             long snapshotId,
@@ -298,12 +267,10 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
         CommitLakeTableSnapshotRequest commitLakeTableSnapshotRequest =
                 new CommitLakeTableSnapshotRequest();
 
-        // Add lake table snapshot metadata
         PbLakeTableSnapshotMetadata pbLakeTableSnapshotMetadata =
                 commitLakeTableSnapshotRequest.addLakeTableSnapshotMetadata();
         pbLakeTableSnapshotMetadata.setSnapshotId(snapshotId);
         pbLakeTableSnapshotMetadata.setTableId(tableId);
-        // tiered snapshot file path is equal to readable snapshot currently
         pbLakeTableSnapshotMetadata.setTieredBucketOffsetsFilePath(tieredBucketOffsetsPath);
         if (readableBucketTieredOffsetsPath != null) {
             pbLakeTableSnapshotMetadata.setReadableBucketOffsetsFilePath(
@@ -313,8 +280,6 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
             pbLakeTableSnapshotMetadata.setEarliestSnapshotIdToKeep(earliestSnapshotIDToKeep);
         }
 
-        // Add PbLakeTableSnapshotInfo for metrics reporting (to notify tablet servers about
-        // synchronized log end offsets and max timestamps)
         if (!logEndOffsets.isEmpty()) {
             commitLakeTableSnapshotRequest =
                     addLogEndOffsets(
@@ -328,7 +293,7 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
     }
 
     @VisibleForTesting
-    protected CommitLakeTableSnapshotRequest addLogEndOffsets(
+    public CommitLakeTableSnapshotRequest addLogEndOffsets(
             CommitLakeTableSnapshotRequest commitLakeTableSnapshotRequest,
             long tableId,
             long snapshotId,
@@ -358,7 +323,7 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
     }
 
     @VisibleForTesting
-    CoordinatorGateway getCoordinatorGateway() {
+    public CoordinatorGateway getCoordinatorGateway() {
         return coordinatorGateway;
     }
 
