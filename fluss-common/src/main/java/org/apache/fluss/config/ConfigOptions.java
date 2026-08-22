@@ -402,6 +402,40 @@ public class ConfigOptions {
     public static final ConfigOption<List<String>> SERVER_SASL_ENABLED_MECHANISMS_CONFIG =
             key("security.sasl.enabled.mechanisms").stringType().asList().noDefaultValue();
 
+    public static final ConfigOption<String> SERVER_SASL_OAUTHBEARER_JWKS_ENDPOINT =
+            key("security.sasl.oauthbearer.jwks.endpoint")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription("The HTTP(S) endpoint used to retrieve OAuth2 JWKS keys.");
+
+    public static final ConfigOption<String> SERVER_SASL_OAUTHBEARER_EXPECTED_ISSUER =
+            key("security.sasl.oauthbearer.expected-issuer")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription("The issuer expected in OAuth2 JWT access tokens.");
+
+    public static final ConfigOption<List<String>> SERVER_SASL_OAUTHBEARER_EXPECTED_AUDIENCES =
+            key("security.sasl.oauthbearer.expected-audiences")
+                    .stringType()
+                    .asList()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Audiences accepted in OAuth2 JWT access tokens. At least one configured audience must match.");
+
+    public static final ConfigOption<Duration> SERVER_SASL_OAUTHBEARER_JWKS_REQUEST_TIMEOUT =
+            key("security.sasl.oauthbearer.jwks.request-timeout")
+                    .durationType()
+                    .defaultValue(Duration.ofSeconds(5))
+                    .withDescription(
+                            "Timeout for connecting to and reading from the JWKS endpoint.");
+
+    public static final ConfigOption<Duration> SERVER_SASL_OAUTHBEARER_JWKS_REFRESH_MIN_INTERVAL =
+            key("security.sasl.oauthbearer.jwks.refresh-min-interval")
+                    .durationType()
+                    .defaultValue(Duration.ofSeconds(30))
+                    .withDescription(
+                            "Minimum reprieve before refreshing non-empty cached JWKS keys again for an unknown key ID.");
+
     public static final ConfigOption<Integer> SERVER_IO_POOL_SIZE =
             key("server.io-pool.size")
                     .intType()
@@ -1653,7 +1687,39 @@ public class ConfigOptions {
                     .stringType()
                     .defaultValue("PLAIN")
                     .withDescription(
-                            "SASL mechanism to use for authentication.Currently, we only support plain.");
+                            "SASL mechanism to use for authentication. Supported values are PLAIN and OAUTHBEARER.");
+
+    public static final ConfigOption<String> CLIENT_SASL_OAUTHBEARER_TOKEN_ENDPOINT =
+            key("client.security.sasl.oauthbearer.token.endpoint")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The HTTP(S) token endpoint used with the OAuth2 client credentials grant.");
+
+    public static final ConfigOption<String> CLIENT_SASL_OAUTHBEARER_CLIENT_ID =
+            key("client.security.sasl.oauthbearer.client-id")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription("The OAuth2 client ID.");
+
+    public static final ConfigOption<Password> CLIENT_SASL_OAUTHBEARER_CLIENT_SECRET =
+            key("client.security.sasl.oauthbearer.client-secret")
+                    .passwordType()
+                    .noDefaultValue()
+                    .withDescription("The OAuth2 client secret. The value is redacted in logs.");
+
+    public static final ConfigOption<String> CLIENT_SASL_OAUTHBEARER_SCOPE =
+            key("client.security.sasl.oauthbearer.scope")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription("Optional OAuth2 scope sent to the token endpoint.");
+
+    public static final ConfigOption<Duration> CLIENT_SASL_OAUTHBEARER_REQUEST_TIMEOUT =
+            key("client.security.sasl.oauthbearer.request-timeout")
+                    .durationType()
+                    .defaultValue(Duration.ofSeconds(10))
+                    .withDescription(
+                            "Timeout for connecting to and reading from the token endpoint.");
 
     public static final ConfigOption<String> CLIENT_SASL_JAAS_CONFIG =
             key("client.security.sasl.jaas.config")
