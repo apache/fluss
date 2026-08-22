@@ -66,6 +66,7 @@ import java.util.Map;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
+import static org.apache.flink.table.api.config.OptimizerConfigOptions.TABLE_OPTIMIZER_REUSE_SOURCE_ENABLED;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsExactOrder;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertRowResultsIgnoreOrder;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.collectBatchRows;
@@ -962,6 +963,93 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
         // cancel jobs
         insertResult.getJobClient().get().cancel().get();
         jobClient.cancel().get();
+    }
+
+    @Test
+    void testDifferentPushDownFiltersWithSourceReuse() throws Exception {
+        boolean originalReuseSource =
+                streamTEnv.getConfig().get(TABLE_OPTIMIZER_REUSE_SOURCE_ENABLED);
+        JobClient tieringJob = null;
+        String tableName = "stream_union_different_pushdown_filters";
+        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+        Map<TableBucket, Long> bucketLogEndOffset = new HashMap<>();
+
+        try {
+            streamTEnv.getConfig().set(TABLE_OPTIMIZER_REUSE_SOURCE_ENABLED, true);
+            tieringJob = buildTieringJob(execEnv);
+            long tableId =
+                    preparePKTableFullType(
+                            tablePath, DEFAULT_BUCKET_NUM, false, bucketLogEndOffset);
+            waitUntilBucketSynced(tablePath, tableId, DEFAULT_BUCKET_NUM, false);
+            assertReplicaStatus(bucketLogEndOffset);
+            tieringJob.cancel().get();
+            tieringJob = null;
+
+            String query =
+                    "SELECT c8 FROM "
+                            + tableName
+                            + " /*+ OPTIONS('scan.startup.mode' = 'full') */"
+                            + " WHERE c8 = 'string' UNION ALL "
+                            + "SELECT CAST(c5 AS STRING) FROM "
+                            + tableName
+                            + " /*+ OPTIONS('scan.startup.mode' = 'full') */"
+                            + " WHERE c5 = 40";
+            CloseableIterator<Row> iterator = streamTEnv.executeSql(query).collect();
+            List<String> actual = collectRowsWithTimeout(iterator, 2, true);
+            assertThat(actual).containsExactlyInAnyOrder("+I[string]", "+I[40]");
+        } finally {
+            streamTEnv.getConfig().set(TABLE_OPTIMIZER_REUSE_SOURCE_ENABLED, originalReuseSource);
+            if (tieringJob != null) {
+                tieringJob.cancel().get();
+            }
+        }
+    }
+
+    @Test
+    void testDifferentProjectionsWithAndWithoutSourceReuse() throws Exception {
+        boolean originalReuseSource =
+                streamTEnv.getConfig().get(TABLE_OPTIMIZER_REUSE_SOURCE_ENABLED);
+        JobClient tieringJob = null;
+        String tableName = "stream_union_different_projections";
+        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+        Map<TableBucket, Long> bucketLogEndOffset = new HashMap<>();
+
+        try {
+            streamTEnv.getConfig().set(TABLE_OPTIMIZER_REUSE_SOURCE_ENABLED, false);
+            tieringJob = buildTieringJob(execEnv);
+            long tableId =
+                    preparePKTableFullType(
+                            tablePath, DEFAULT_BUCKET_NUM, false, bucketLogEndOffset);
+            waitUntilBucketSynced(tablePath, tableId, DEFAULT_BUCKET_NUM, false);
+            assertReplicaStatus(bucketLogEndOffset);
+            tieringJob.cancel().get();
+            tieringJob = null;
+
+            String query =
+                    "SELECT c8 FROM "
+                            + tableName
+                            + " /*+ OPTIONS('scan.startup.mode' = 'full') */"
+                            + " UNION ALL SELECT CAST(c5 AS STRING) FROM "
+                            + tableName
+                            + " /*+ OPTIONS('scan.startup.mode' = 'full') */";
+            CloseableIterator<Row> iterator = streamTEnv.executeSql(query).collect();
+            List<String> actual = collectRowsWithTimeout(iterator, 4, true);
+            assertThat(actual)
+                    .containsExactlyInAnyOrder(
+                            "+I[string]", "+I[another_string]", "+I[4]", "+I[40]");
+
+            streamTEnv.getConfig().set(TABLE_OPTIMIZER_REUSE_SOURCE_ENABLED, true);
+            iterator = streamTEnv.executeSql(query).collect();
+            actual = collectRowsWithTimeout(iterator, 4, true);
+            assertThat(actual)
+                    .containsExactlyInAnyOrder(
+                            "+I[string]", "+I[another_string]", "+I[4]", "+I[40]");
+        } finally {
+            streamTEnv.getConfig().set(TABLE_OPTIMIZER_REUSE_SOURCE_ENABLED, originalReuseSource);
+            if (tieringJob != null) {
+                tieringJob.cancel().get();
+            }
+        }
     }
 
     @Test

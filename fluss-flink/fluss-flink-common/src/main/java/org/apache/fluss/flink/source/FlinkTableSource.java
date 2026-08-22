@@ -264,6 +264,38 @@ public class FlinkTableSource
                 PushdownUtils.computeAvailableStatsColumns(flussRowType, tableConfig);
     }
 
+    private FlinkTableSource(FlinkTableSource source) {
+        this.tablePath = source.tablePath;
+        this.flussConfig = new Configuration(source.flussConfig);
+        this.tableOutputType = source.tableOutputType;
+        this.primaryKeyIndexes = source.primaryKeyIndexes.clone();
+        this.bucketKeyIndexes = source.bucketKeyIndexes.clone();
+        this.partitionKeyIndexes = source.partitionKeyIndexes.clone();
+        this.streaming = source.streaming;
+        this.startupOptions = copyStartupOptions(source.startupOptions);
+        this.lookupAsync = source.lookupAsync;
+        this.insertIfNotExists = source.insertIfNotExists;
+        this.cache = source.cache;
+        this.scanPartitionDiscoveryIntervalMs = source.scanPartitionDiscoveryIntervalMs;
+        this.splitPerAssignmentBatchSize = source.splitPerAssignmentBatchSize;
+        this.isDataLakeEnabled = source.isDataLakeEnabled;
+        this.leaseContext = source.leaseContext;
+        this.mergeEngineType = source.mergeEngineType;
+        this.tableConfig = source.tableConfig;
+        this.availableStatsColumns = new HashSet<>(source.availableStatsColumns);
+        this.producedDataType = source.producedDataType;
+        this.projectedFields =
+                source.projectedFields == null ? null : source.projectedFields.clone();
+        this.singleRowFilter = copyGenericRowData(source.singleRowFilter);
+        this.selectRowCount = source.selectRowCount;
+        this.limit = source.limit;
+        this.partitionFilters = source.partitionFilters;
+        this.tableOptions = new HashMap<>(source.tableOptions);
+        this.lakeSource = source.lakeSource == null ? null : source.lakeSource.copy();
+        this.logRecordBatchFilter = source.logRecordBatchFilter;
+        this.watermarkStrategy = source.watermarkStrategy;
+    }
+
     @Override
     public ChangelogMode getChangelogMode() {
         if (!streaming) {
@@ -501,35 +533,7 @@ public class FlinkTableSource
 
     @Override
     public DynamicTableSource copy() {
-        FlinkTableSource source =
-                new FlinkTableSource(
-                        tablePath,
-                        flussConfig,
-                        tableConfig,
-                        tableOutputType,
-                        primaryKeyIndexes,
-                        bucketKeyIndexes,
-                        partitionKeyIndexes,
-                        streaming,
-                        startupOptions,
-                        lookupAsync,
-                        insertIfNotExists,
-                        cache,
-                        scanPartitionDiscoveryIntervalMs,
-                        splitPerAssignmentBatchSize,
-                        isDataLakeEnabled,
-                        mergeEngineType,
-                        tableOptions,
-                        leaseContext);
-        source.producedDataType = producedDataType;
-        source.projectedFields = projectedFields;
-        source.singleRowFilter = singleRowFilter;
-        source.partitionFilters = partitionFilters;
-        source.lakeSource = lakeSource;
-        source.logRecordBatchFilter = logRecordBatchFilter;
-        source.watermarkStrategy = watermarkStrategy;
-        // Note: availableStatsColumns is already computed in the constructor
-        return source;
+        return new FlinkTableSource(this);
     }
 
     @Override
@@ -709,6 +713,7 @@ public class FlinkTableSource
         }
 
         if (lakePredicates.isEmpty()) {
+            checkNotNull(lakeSource).withFilters(Collections.emptyList());
             return;
         }
 
@@ -792,6 +797,29 @@ public class FlinkTableSource
             pkTypes.put(index, tableOutputType.getTypeAt(index));
         }
         return pkTypes;
+    }
+
+    private static FlinkConnectorOptionsUtils.StartupOptions copyStartupOptions(
+            FlinkConnectorOptionsUtils.StartupOptions startupOptions) {
+        FlinkConnectorOptionsUtils.StartupOptions copy =
+                new FlinkConnectorOptionsUtils.StartupOptions();
+        copy.startupMode = startupOptions.startupMode;
+        copy.startupTimestampMs = startupOptions.startupTimestampMs;
+        return copy;
+    }
+
+    @Nullable
+    private static GenericRowData copyGenericRowData(@Nullable GenericRowData rowData) {
+        if (rowData == null) {
+            return null;
+        }
+
+        GenericRowData copy = new GenericRowData(rowData.getRowKind(), rowData.getArity());
+        for (int i = 0; i < rowData.getArity(); i++) {
+            Object field = rowData.getField(i);
+            copy.setField(i, field instanceof byte[] ? ((byte[]) field).clone() : field);
+        }
+        return copy;
     }
 
     // projection from pk_field_index to index_in_pk
