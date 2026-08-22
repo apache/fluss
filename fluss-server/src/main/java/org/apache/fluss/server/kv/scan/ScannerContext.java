@@ -41,7 +41,17 @@ import java.util.concurrent.atomic.AtomicBoolean;
  *
  * <p>Cursor methods ({@link #advance()}, {@link #isValid()}, {@link #currentValue()}) are
  * single-threaded; callers must hold the {@link #tryAcquireForUse()} flag while mutating cursor or
- * sequence-id state. {@link #close()} is thread-safe and fences on that flag.
+ * sequence-id state. {@link #close()} is thread-safe: it immediately rejects new users and defers
+ * native-resource cleanup until the current user releases the cursor.
+ *
+ * <p>The lease is required even though point lookups are protected from RocksDB close by {@code
+ * KvTablet}'s state lock: a scanner and its native snapshot/iterator live across multiple RPCs and
+ * therefore outlive any one state-lock acquisition. Closing follows a two-phase protocol. First,
+ * {@code closed} prevents another RPC from acquiring the cursor. Second, the thread that observes
+ * both {@code closed} and {@code inUse == false} closes the native resources exactly once. This may
+ * be the closing thread, the current RPC in {@link #releaseAfterUse()}, or an acquire racing with
+ * close. The protocol never force-clears {@code inUse}, because doing so could release the lease
+ * and close an iterator while JNI is still using it.
  */
 @NotThreadSafe
 public class ScannerContext implements Closeable {
@@ -66,9 +76,14 @@ public class ScannerContext implements Closeable {
     /** Last-access wall-clock (ms); volatile for the TTL evictor. */
     private volatile long lastAccessTime;
 
+    /** Set when closure is requested; prevents every subsequent cursor acquisition. */
     private final AtomicBoolean closed = new AtomicBoolean(false);
 
+    /** Exclusive ownership of the native iterator by one RPC continuation. */
     private final AtomicBoolean inUse = new AtomicBoolean(false);
+
+    /** Makes deferred native-resource cleanup idempotent across all close/release races. */
+    private final AtomicBoolean resourcesClosed = new AtomicBoolean(false);
 
     public ScannerContext(
             String scannerId,
@@ -171,7 +186,8 @@ public class ScannerContext implements Closeable {
     /**
      * Tries to claim exclusive use of the cursor. Returns {@code false} if another thread already
      * holds it, or if {@link #close()} has been initiated. Every successful acquire MUST be paired
-     * with {@link #releaseAfterUse()} in a {@code finally}, otherwise {@code close()} blocks.
+     * with {@link #releaseAfterUse()} in a {@code finally}, otherwise native-resource cleanup is
+     * deferred indefinitely after {@code close()}.
      */
     public boolean tryAcquireForUse() {
         if (closed.get()) {
@@ -180,28 +196,41 @@ public class ScannerContext implements Closeable {
         if (!inUse.compareAndSet(false, true)) {
             return false;
         }
-        // Re-check after the CAS in case close() flipped `closed` in between; let close() proceed.
+        // Re-check after the CAS in case close() flipped `closed` in between. close() may have
+        // observed inUse=true and deferred cleanup, so this path must finish it after releasing.
         if (closed.get()) {
             inUse.set(false);
+            closeResources();
             return false;
         }
         return true;
     }
 
     /**
-     * Releases the flag obtained via {@link #tryAcquireForUse()}. MUST be called BEFORE any path
-     * that may trigger {@link #close()} on the same thread, otherwise {@code close()} self-
-     * deadlocks on its inUse fence.
+     * Releases the flag obtained via {@link #tryAcquireForUse()}. If close was requested while this
+     * RPC owned the cursor, this method also performs the deferred native-resource cleanup.
      */
     public void releaseAfterUse() {
         inUse.set(false);
+        if (closed.get()) {
+            closeResources();
+        }
     }
 
+    /**
+     * Prevents new cursor users immediately and closes resources when no RPC currently owns the
+     * cursor. This method does not block waiting for an in-flight RPC; that RPC completes cleanup
+     * from {@link #releaseAfterUse()}.
+     */
     @Override
     public void close() {
-        if (closed.compareAndSet(false, true)) {
-            // force close the inUse fence so any racing tryAcquireForUse() calls
-            inUse.set(false);
+        if (closed.compareAndSet(false, true) && !inUse.get()) {
+            closeResources();
+        }
+    }
+
+    private void closeResources() {
+        if (resourcesClosed.compareAndSet(false, true)) {
             IOUtils.closeQuietly(iterator);
             IOUtils.closeQuietly(readOptions);
             IOUtils.closeQuietly(() -> rocksDBKv.getDb().releaseSnapshot(snapshot));

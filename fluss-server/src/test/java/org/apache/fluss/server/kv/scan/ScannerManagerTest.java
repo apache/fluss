@@ -53,7 +53,11 @@ import java.io.File;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
@@ -470,23 +474,35 @@ class ScannerManagerTest {
         }
     }
 
-    /** close() force-clears inUse and completes immediately even if inUse=true. */
     @Test
-    void testClose_notWaitForInUse() throws Exception {
+    void testCloseDefersResourcesUntilInFlightUseIsReleased() throws Exception {
         putAndFlush(3);
         try (ScannerManager manager = createManager()) {
             ScannerContext ctx = openAndRegister(manager);
             assertThat(ctx).isNotNull();
 
             assertThat(ctx.tryAcquireForUse()).isTrue();
-
-            // close() should complete immediately despite inUse=true
             ctx.close();
-
-            // after close, tryAcquireForUse must be rejected
             assertThat(ctx.tryAcquireForUse()).isFalse();
 
-            manager.removeScanner(ctx);
+            ExecutorService executor = Executors.newSingleThreadExecutor();
+            Future<?> guardClose =
+                    executor.submit(
+                            () -> {
+                                kvTablet.getRocksDBKv().getResourceGuard().close();
+                                return null;
+                            });
+            try {
+                assertThatThrownBy(() -> guardClose.get(200, TimeUnit.MILLISECONDS))
+                        .isInstanceOf(TimeoutException.class);
+
+                ctx.releaseAfterUse();
+                guardClose.get(10, TimeUnit.SECONDS);
+            } finally {
+                ctx.releaseAfterUse();
+                executor.shutdownNow();
+                manager.removeScanner(ctx);
+            }
         }
     }
 }
