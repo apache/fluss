@@ -196,7 +196,7 @@ Apache Fluss follows a layered Maven module architecture: `fluss-common` (founda
 
 **`fluss-dist`** - Binary distribution with `bin/` scripts and `conf/` templates
 
-**`devkit/`** - Contributor-local Docker Compose and `just` toolkit for validating local `build-target` distributions and profiles
+**`devkit/`** - Starts source-built Fluss clusters for local development and lakehouse testing without rebuilding Docker images
 
 **`fluss-protogen`** - Protocol Buffer code generation
 
