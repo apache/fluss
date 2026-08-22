@@ -906,6 +906,17 @@
                                     'META-INF/versions/11/META-INF/maven/'.
                                      -->
                                 <exclude>**/META-INF/maven/?*/?*/**</exclude>
+                                <!-- Exclude unshaded Multi-Release Jar (MRJ) entries from
+                                     fluss-shaded-jackson. The shade relocation only handles
+                                     base-path classes; MRJ entries under META-INF/versions/*/
+                                     remain at their original com.fasterxml.jackson path and
+                                     leak into the uber-jar, shadowing downstream apps' own
+                                     jackson-core (e.g. NoSuchMethodError: JsonToken._updateToken
+                                     added in 2.16 but leaked 2.15.x wins class-load race).
+                                     The base FastDoubleParser implementation (at the relocated
+                                     path) is sufficient for all Java versions; the MRJ entries
+                                     are only performance optimizations. -->
+                                <exclude>META-INF/versions/**/com/fasterxml/**</exclude>
                             </excludes>
                         </filter>
                     </filters>
