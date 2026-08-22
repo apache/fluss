@@ -52,21 +52,11 @@ fluss = { path = "/path/to/fluss/fluss-rust/crates/fluss", package = "fluss-rs" 
 
 ## Building from Source
 
-**Prerequisites:** Rust 1.85+, Protobuf compiler (`protoc`)
+**Prerequisites:** Rust 1.85+
 
 ```bash
 git clone https://github.com/apache/fluss.git
 cd fluss/fluss-rust
-```
-
-Install `protoc`:
-
-```bash
-# macOS
-brew install protobuf
-
-# Ubuntu/Debian
-sudo apt-get install protobuf-compiler
 ```
 
 Build:

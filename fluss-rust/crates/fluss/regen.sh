@@ -17,8 +17,8 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# Regenerates src/proto/fluss.rs from the canonical FlussApi.proto
-# (fluss-rpc/src/main/proto, or the vendored proto/ copy when present).
+# Regenerates src/proto/fluss.rs and the vendored proto/FlussApi.proto copy
+# from the canonical fluss-rpc/src/main/proto/FlussApi.proto.
 # Requires protoc on PATH (or the PROTOC env var pointing at a protoc binary).
 
 set -euo pipefail

@@ -47,15 +47,22 @@ fn main() -> Result<(), Box<dyn Error>> {
         .parent()
         .ok_or("the gen crate must live inside crates/fluss")?;
 
-    // Published crates vendor the proto under proto/ (scripts/vendor-proto.sh);
-    // monorepo regeneration reads the canonical proto directly from fluss-rpc.
-    let vendored_dir = fluss_dir.join("proto");
-    let include_dir = if vendored_dir.join("FlussApi.proto").exists() {
-        vendored_dir
-    } else {
-        fluss_dir.join("../../../fluss-rpc/src/main/proto")
-    };
+    // The canonical proto lives in fluss-rpc and is shared with the Java server.
+    // Regeneration always reads it and refreshes the copy vendored under proto/,
+    // so the published crate ships the schema next to the generated code.
+    let include_dir = fluss_dir.join("../../../fluss-rpc/src/main/proto");
     let proto = include_dir.join("FlussApi.proto");
+    if !proto.exists() {
+        return Err(format!(
+            "canonical proto not found at {}; regeneration must run from the Fluss monorepo",
+            proto.display()
+        )
+        .into());
+    }
+
+    let vendored_dir = fluss_dir.join("proto");
+    fs::create_dir_all(&vendored_dir)?;
+    fs::copy(&proto, vendored_dir.join("FlussApi.proto"))?;
 
     let mut config = prost_build::Config::new();
     config.bytes([
