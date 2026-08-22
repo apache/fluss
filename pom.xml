@@ -960,9 +960,7 @@
                     </execution>
                 </executions>
             </plugin>
-
         </plugins>
-
         <pluginManagement>
             <plugins>
                 <plugin>
