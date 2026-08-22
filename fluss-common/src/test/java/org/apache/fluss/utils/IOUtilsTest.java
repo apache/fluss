@@ -22,6 +22,7 @@ import org.junit.jupiter.api.Test;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.util.Arrays;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -75,6 +76,17 @@ class IOUtilsTest {
     }
 
     @Test
+    void testCopyBytesClosesInputWhenOutputCloseFails() {
+        TrackingInputStream in = new TrackingInputStream("hello".getBytes());
+        OutputStream out = new CloseFailingOutputStream();
+
+        assertThatThrownBy(() -> IOUtils.copyBytes(in, out, true))
+                .isInstanceOf(IOException.class)
+                .hasMessage("Fail to close output");
+        assertThat(in.closed).isTrue();
+    }
+
+    @Test
     void testReadFully() throws IOException {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         out.write("hello".getBytes());
@@ -106,6 +118,32 @@ class IOUtilsTest {
         public void close() throws Exception {
             // don't throw exception
             closed = true;
+        }
+    }
+
+    private static class TrackingInputStream extends ByteArrayInputStream {
+
+        private boolean closed;
+
+        private TrackingInputStream(byte[] buf) {
+            super(buf);
+        }
+
+        @Override
+        public void close() throws IOException {
+            closed = true;
+            super.close();
+        }
+    }
+
+    private static class CloseFailingOutputStream extends OutputStream {
+
+        @Override
+        public void write(int b) {}
+
+        @Override
+        public void close() throws IOException {
+            throw new IOException("Fail to close output");
         }
     }
 }
