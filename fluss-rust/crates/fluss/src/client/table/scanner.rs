@@ -2514,10 +2514,6 @@ mod tests {
     use crate::client::admin::FlussAdmin;
     use crate::client::metadata::Metadata;
     use crate::client::table::read_context_resolver::ReadContextResolver;
-    use crate::compression::{
-        ArrowCompressionInfo, ArrowCompressionRatioEstimator, ArrowCompressionType,
-        DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
-    };
     use crate::metadata::{DataTypes, PhysicalTablePath, Schema, TableInfo, TablePath};
     use crate::proto::{PbFetchLogRespForBucket, PbFetchLogRespForTable};
     use crate::record::MemoryLogRecordsArrowBuilder;
@@ -2525,6 +2521,7 @@ mod tests {
     use crate::rpc::FlussError;
     use crate::test_utils::{
         assert_scanner_entries_labeled, build_cluster_arc, build_table_info, test_scanner_metrics,
+        uncompressed_arrow_batch_config,
     };
 
     fn test_admin(metadata: &Arc<Metadata>) -> Arc<FlussAdmin> {
@@ -2568,15 +2565,8 @@ mod tests {
 
     fn build_records(table_info: &TableInfo, table_path: Arc<TablePath>) -> Result<Vec<u8>> {
         let mut builder = MemoryLogRecordsArrowBuilder::new(
-            1,
-            table_info.get_row_type(),
+            uncompressed_arrow_batch_config(1, table_info.get_row_type(), usize::MAX),
             false,
-            ArrowCompressionInfo {
-                compression_type: ArrowCompressionType::None,
-                compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
-            },
-            usize::MAX,
-            Arc::new(ArrowCompressionRatioEstimator::default()),
         )?;
         let physical_table_path = Arc::new(PhysicalTablePath::of(table_path));
         let row = GenericRow {

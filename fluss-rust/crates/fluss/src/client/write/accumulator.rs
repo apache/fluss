@@ -26,7 +26,7 @@ use crate::compression::ArrowCompressionRatioEstimator;
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::metadata::{PhysicalTablePath, TableBucket};
-use crate::record::{NO_BATCH_SEQUENCE, NO_WRITER_ID};
+use crate::record::{ArrowBatchConfig, NO_BATCH_SEQUENCE, NO_WRITER_ID};
 use crate::util::current_time_ms;
 use crate::{BucketId, PartitionId, TableId};
 use dashmap::DashMap;
@@ -285,17 +285,30 @@ impl RecordAccumulator {
 
         let schema_id = table_info.schema_id;
 
+        let stats_index_mapping = if table_info
+            .get_table_config()
+            .get_statistics_columns()
+            .is_enabled()
+        {
+            Some(table_info.get_stats_index_mapping()?.to_vec())
+        } else {
+            None
+        };
+
         let mut batch: WriteBatch = match record.record() {
             Record::Log(_) => ArrowLog(ArrowLogWriteBatch::new(
                 self.batch_id.fetch_add(1, Ordering::Relaxed),
                 Arc::clone(physical_table_path),
-                schema_id,
-                arrow_compression_info,
-                row_type,
+                ArrowBatchConfig {
+                    schema_id,
+                    row_type: row_type.clone(),
+                    stats_index_mapping,
+                    compression: arrow_compression_info,
+                    write_limit: alloc_size,
+                    compression_ratio_estimator,
+                },
                 current_time_ms(),
                 matches!(&record.record, Record::Log(LogWriteRecord::RecordBatch(_))),
-                alloc_size,
-                compression_ratio_estimator,
             )?),
             Record::Kv(kv_record) => Kv(KvWriteBatch::new(
                 self.batch_id.fetch_add(1, Ordering::Relaxed),

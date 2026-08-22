@@ -17,11 +17,10 @@
 
 use crate::client::broadcast::{BatchWriteResult, BroadcastOnce};
 use crate::client::{Record, ResultHandle, WriteRecord};
-use crate::compression::{ArrowCompressionInfo, ArrowCompressionRatioEstimator};
 use crate::error::{Error, Result};
-use crate::metadata::{KvFormat, PhysicalTablePath, RowType};
-use crate::record::MemoryLogRecordsArrowBuilder;
+use crate::metadata::{KvFormat, PhysicalTablePath};
 use crate::record::kv::KvRecordBatchBuilder;
+use crate::record::{ArrowBatchConfig, MemoryLogRecordsArrowBuilder};
 use crate::record::{NO_BATCH_SEQUENCE, NO_WRITER_ID};
 use bytes::Bytes;
 use std::cmp::max;
@@ -243,29 +242,17 @@ pub struct ArrowLogWriteBatch {
 }
 
 impl ArrowLogWriteBatch {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         batch_id: i64,
         physical_table_path: Arc<PhysicalTablePath>,
-        schema_id: i32,
-        arrow_compression_info: ArrowCompressionInfo,
-        row_type: &RowType,
+        config: ArrowBatchConfig,
         create_ms: i64,
         to_append_record_batch: bool,
-        write_limit: usize,
-        compression_ratio_estimator: Arc<ArrowCompressionRatioEstimator>,
     ) -> Result<Self> {
         let base = InnerWriteBatch::new(batch_id, physical_table_path, create_ms);
         Ok(Self {
             write_batch: base,
-            arrow_builder: MemoryLogRecordsArrowBuilder::new(
-                schema_id,
-                row_type,
-                to_append_record_batch,
-                arrow_compression_info,
-                write_limit,
-                compression_ratio_estimator,
-            )?,
+            arrow_builder: MemoryLogRecordsArrowBuilder::new(config, to_append_record_batch)?,
             built_records: None,
         })
     }
@@ -441,8 +428,13 @@ impl KvWriteBatch {
 mod tests {
     use super::*;
     use crate::client::{RowBytes, WriteFormat};
-    use crate::metadata::TablePath;
+    use crate::metadata::{RowType, TablePath};
     use crate::test_utils::build_table_info;
+
+    /// An uncompressed [`ArrowBatchConfig`] for schema 1.
+    fn uncompressed_config(row_type: &RowType, write_limit: usize) -> ArrowBatchConfig {
+        crate::test_utils::uncompressed_arrow_batch_config(1, row_type, write_limit)
+    }
 
     #[test]
     fn complete_only_once() {
@@ -480,9 +472,6 @@ mod tests {
     #[test]
     fn record_count_reflects_appended_rows() {
         use crate::client::WriteRecord;
-        use crate::compression::{
-            ArrowCompressionInfo, ArrowCompressionType, DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
-        };
         use crate::metadata::{DataField, DataTypes, RowType};
         use crate::row::GenericRow;
 
@@ -498,16 +487,9 @@ mod tests {
         let arrow_batch = ArrowLogWriteBatch::new(
             1,
             Arc::clone(&physical_table_path),
-            1,
-            ArrowCompressionInfo {
-                compression_type: ArrowCompressionType::None,
-                compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
-            },
-            &row_type,
+            uncompressed_config(&row_type, 2 * 1024 * 1024),
             0,
             false,
-            2 * 1024 * 1024,
-            Arc::new(ArrowCompressionRatioEstimator::default()),
         )
         .unwrap();
         let mut batch = WriteBatch::ArrowLog(arrow_batch);
@@ -566,9 +548,6 @@ mod tests {
     #[test]
     fn test_arrow_log_write_batch_estimated_size() {
         use crate::client::WriteRecord;
-        use crate::compression::{
-            ArrowCompressionInfo, ArrowCompressionType, DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
-        };
         use crate::metadata::{DataField, DataTypes, RowType};
         use crate::row::GenericRow;
         use arrow::array::{Int32Array, RecordBatch, StringArray};
@@ -587,16 +566,9 @@ mod tests {
             let mut batch = ArrowLogWriteBatch::new(
                 1,
                 Arc::clone(&physical_table_path),
-                1,
-                ArrowCompressionInfo {
-                    compression_type: ArrowCompressionType::None,
-                    compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
-                },
-                &row_type,
+                uncompressed_config(&row_type, 2 * 1024 * 1024),
                 0,
                 false,
-                2 * 1024 * 1024,
-                Arc::new(ArrowCompressionRatioEstimator::default()),
             )
             .unwrap();
 
@@ -633,16 +605,9 @@ mod tests {
             let mut batch = ArrowLogWriteBatch::new(
                 1,
                 physical_table_path.clone(),
-                1,
-                ArrowCompressionInfo {
-                    compression_type: ArrowCompressionType::None,
-                    compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
-                },
-                &row_type,
+                uncompressed_config(&row_type, 2 * 1024 * 1024),
                 0,
                 true,
-                2 * 1024 * 1024,
-                Arc::new(ArrowCompressionRatioEstimator::default()),
             )
             .unwrap();
 
@@ -733,7 +698,6 @@ mod tests {
         use crate::client::WriteRecord;
         use crate::compression::{
             ArrowCompressionInfo, ArrowCompressionRatioEstimator, ArrowCompressionType,
-            DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
         };
         use crate::metadata::{DataField, DataTypes, RowType};
         use crate::row::GenericRow;
@@ -752,16 +716,9 @@ mod tests {
         let mut batch = ArrowLogWriteBatch::new(
             1,
             Arc::clone(&physical_table_path),
-            1,
-            ArrowCompressionInfo {
-                compression_type: ArrowCompressionType::None,
-                compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
-            },
-            &row_type,
+            uncompressed_config(&row_type, write_limit),
             0,
             false,
-            write_limit,
-            Arc::new(ArrowCompressionRatioEstimator::default()),
         )
         .unwrap();
 
@@ -802,16 +759,9 @@ mod tests {
         let mut batch = ArrowLogWriteBatch::new(
             2,
             Arc::clone(&physical_table_path),
-            1,
-            ArrowCompressionInfo {
-                compression_type: ArrowCompressionType::None,
-                compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
-            },
-            &row_type_small,
+            uncompressed_config(&row_type_small, 2 * 1024 * 1024),
             0,
             false,
-            2 * 1024 * 1024,
-            Arc::new(ArrowCompressionRatioEstimator::default()),
         )
         .unwrap();
 
@@ -846,13 +796,16 @@ mod tests {
         let mut batch1 = ArrowLogWriteBatch::new(
             3,
             Arc::clone(&physical_table_path),
-            1,
-            compression.clone(),
-            &row_type,
+            ArrowBatchConfig {
+                schema_id: 1,
+                row_type: row_type.clone(),
+                stats_index_mapping: None,
+                compression: compression.clone(),
+                write_limit,
+                compression_ratio_estimator: Arc::clone(&estimator),
+            },
             0,
             false,
-            write_limit,
-            Arc::clone(&estimator),
         )
         .unwrap();
 
@@ -883,13 +836,16 @@ mod tests {
         let mut batch2 = ArrowLogWriteBatch::new(
             4,
             Arc::clone(&physical_table_path),
-            1,
-            compression,
-            &row_type,
+            ArrowBatchConfig {
+                schema_id: 1,
+                row_type: row_type.clone(),
+                stats_index_mapping: None,
+                compression,
+                write_limit,
+                compression_ratio_estimator: Arc::clone(&estimator),
+            },
             0,
             false,
-            write_limit,
-            Arc::clone(&estimator),
         )
         .unwrap();
 

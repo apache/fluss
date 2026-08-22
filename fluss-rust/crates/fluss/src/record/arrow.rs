@@ -21,7 +21,7 @@ use crate::compression::{
 };
 use crate::error::{Error, Result};
 use crate::metadata::{DataField, DataType, RowType, UNEXIST_MAPPING};
-use crate::record::{ChangeType, ScanRecord};
+use crate::record::ScanRecord;
 use crate::row::column_vector::TypedBatch;
 use crate::row::column_writer::{ColumnWriter, round_up_to_8};
 use crate::row::{ColumnarRow, InternalRow};
@@ -41,117 +41,18 @@ use arrow_schema::SchemaRef;
 use arrow_schema::{DataType as ArrowDataType, Field};
 use byteorder::WriteBytesExt;
 use byteorder::{ByteOrder, LittleEndian};
-use bytes::Bytes;
 use crc32c::crc32c;
 use std::{
     cell::Cell,
     collections::HashMap,
-    fs::File,
-    io::{Cursor, Read, Seek, SeekFrom, Write},
-    path::PathBuf,
+    io::{Cursor, Write},
     sync::Arc,
 };
 
+use super::log_record_batch::*;
 use crate::error::Error::IllegalArgument;
+use crate::record::statistics::{estimated_serialized_size, serialize_statistics};
 use arrow::ipc::writer::IpcWriteOptions;
-/// const for record batch
-pub const BASE_OFFSET_LENGTH: usize = 8;
-pub const LENGTH_LENGTH: usize = 4;
-pub const MAGIC_LENGTH: usize = 1;
-pub const COMMIT_TIMESTAMP_LENGTH: usize = 8;
-pub const CRC_LENGTH: usize = 4;
-pub const SCHEMA_ID_LENGTH: usize = 2;
-pub const ATTRIBUTE_LENGTH: usize = 1;
-pub const LAST_OFFSET_DELTA_LENGTH: usize = 4;
-pub const WRITE_CLIENT_ID_LENGTH: usize = 8;
-pub const BATCH_SEQUENCE_LENGTH: usize = 4;
-pub const RECORDS_COUNT_LENGTH: usize = 4;
-
-pub const BASE_OFFSET_OFFSET: usize = 0;
-pub const LENGTH_OFFSET: usize = BASE_OFFSET_OFFSET + BASE_OFFSET_LENGTH;
-pub const MAGIC_OFFSET: usize = LENGTH_OFFSET + LENGTH_LENGTH;
-pub const COMMIT_TIMESTAMP_OFFSET: usize = MAGIC_OFFSET + MAGIC_LENGTH;
-pub const CRC_OFFSET: usize = COMMIT_TIMESTAMP_OFFSET + COMMIT_TIMESTAMP_LENGTH;
-pub const SCHEMA_ID_OFFSET: usize = CRC_OFFSET + CRC_LENGTH;
-pub const ATTRIBUTES_OFFSET: usize = SCHEMA_ID_OFFSET + SCHEMA_ID_LENGTH;
-pub const LAST_OFFSET_DELTA_OFFSET: usize = ATTRIBUTES_OFFSET + ATTRIBUTE_LENGTH;
-pub const WRITE_CLIENT_ID_OFFSET: usize = LAST_OFFSET_DELTA_OFFSET + LAST_OFFSET_DELTA_LENGTH;
-pub const BATCH_SEQUENCE_OFFSET: usize = WRITE_CLIENT_ID_OFFSET + WRITE_CLIENT_ID_LENGTH;
-pub const RECORDS_COUNT_OFFSET: usize = BATCH_SEQUENCE_OFFSET + BATCH_SEQUENCE_LENGTH;
-pub const RECORDS_OFFSET: usize = RECORDS_COUNT_OFFSET + RECORDS_COUNT_LENGTH;
-
-pub const RECORD_BATCH_HEADER_SIZE: usize = RECORDS_OFFSET;
-pub const ARROW_CHANGETYPE_OFFSET: usize = RECORD_BATCH_HEADER_SIZE;
-pub const LOG_OVERHEAD: usize = LENGTH_OFFSET + LENGTH_LENGTH;
-
-/// Bit 0 of the attributes byte. When set, the batch is append-only and carries
-/// no change-type vector; when clear, a `record_count`-byte change-type vector
-/// precedes the Arrow IPC payload (the changelog of a primary-key table). Shares
-/// the wire layout of the Java client's `DefaultLogRecordBatch`.
-pub const APPEND_ONLY_FLAG_MASK: u8 = 0x01;
-
-/// Maximum batch size matches Java's Integer.MAX_VALUE limit.
-/// Java uses int type for batch size, so max value is 2^31 - 1 = 2,147,483,647 bytes (~2GB).
-/// This is the implicit limit in FileLogRecords.java and other Java components.
-pub const MAX_BATCH_SIZE: usize = i32::MAX as usize; // 2,147,483,647 bytes (~2GB)
-
-/// const for record
-/// The "magic" values.
-#[derive(Debug, Clone, Copy)]
-pub enum LogMagicValue {
-    V0 = 0,
-}
-
-/// Safely convert batch size from i32 to usize with validation.
-///
-/// Validates that:
-/// - batch_size_bytes is non-negative
-/// - batch_size_bytes + LOG_OVERHEAD doesn't overflow
-/// - Result is within reasonable bounds
-fn validate_batch_size(batch_size_bytes: i32) -> Result<usize> {
-    // Check for negative size (corrupted data)
-    if batch_size_bytes < 0 {
-        return Err(Error::UnexpectedError {
-            message: format!("Invalid negative batch size: {batch_size_bytes}"),
-            source: None,
-        });
-    }
-
-    let batch_size_u = batch_size_bytes as usize;
-
-    // Check for overflow when adding LOG_OVERHEAD
-    let total_size =
-        batch_size_u
-            .checked_add(LOG_OVERHEAD)
-            .ok_or_else(|| Error::UnexpectedError {
-                message: format!(
-                    "Batch size {batch_size_u} + LOG_OVERHEAD {LOG_OVERHEAD} would overflow"
-                ),
-                source: None,
-            })?;
-
-    // Sanity check: reject unreasonably large batches
-    if total_size > MAX_BATCH_SIZE {
-        return Err(Error::UnexpectedError {
-            message: format!(
-                "Batch size {total_size} exceeds maximum allowed size {MAX_BATCH_SIZE}"
-            ),
-            source: None,
-        });
-    }
-
-    Ok(total_size)
-}
-
-// NOTE: Rust layout/offsets currently match Java only for V0.
-// TODO: Add V1 layout/offsets to keep parity with Java's V1 format.
-pub const CURRENT_LOG_MAGIC_VALUE: u8 = LogMagicValue::V0 as u8;
-
-/// Value used if writer ID is not available or non-idempotent.
-pub const NO_WRITER_ID: i64 = -1;
-
-/// Value used if batch sequence is not available.
-pub const NO_BATCH_SEQUENCE: i32 = -1;
 
 pub const BUILDER_DEFAULT_OFFSET: i64 = 0;
 
@@ -188,6 +89,22 @@ pub struct MemoryLogRecordsArrowBuilder {
     /// Matching Java's `ArrowWriter.estimatedCompressionRatio` which is
     /// cached per batch and only refreshed on `reset()`.
     estimated_compression_ratio: f32,
+    /// Statistics columns with their row type; `Some` upgrades the batch to V1.
+    statistics: Option<(RowType, Vec<usize>)>,
+    /// Per-schema estimate of the serialized statistics size.
+    estimated_statistics_size: usize,
+}
+
+/// Table-level configuration for building Arrow log batches, shared by
+/// `ArrowLogWriteBatch` and `MemoryLogRecordsArrowBuilder`.
+pub struct ArrowBatchConfig {
+    pub schema_id: i32,
+    pub row_type: RowType,
+    /// Statistics column mapping; `Some` upgrades batches to V1.
+    pub stats_index_mapping: Option<Vec<usize>>,
+    pub compression: ArrowCompressionInfo,
+    pub write_limit: usize,
+    pub compression_ratio_estimator: Arc<ArrowCompressionRatioEstimator>,
 }
 
 pub trait ArrowRecordBatchInnerBuilder: Send {
@@ -363,30 +280,54 @@ impl ArrowRecordBatchInnerBuilder for RowAppendRecordBatchBuilder {
 // the previous batch (recordsCount / 2) for a warm start, avoiding the first-record
 // size check on every new batch.
 impl MemoryLogRecordsArrowBuilder {
-    pub fn new(
-        schema_id: i32,
-        row_type: &RowType,
-        to_append_record_batch: bool,
-        arrow_compression_info: ArrowCompressionInfo,
-        write_limit: usize,
-        compression_ratio_estimator: Arc<ArrowCompressionRatioEstimator>,
-    ) -> Result<Self> {
+    pub fn new(config: ArrowBatchConfig, to_append_record_batch: bool) -> Result<Self> {
+        let ArrowBatchConfig {
+            schema_id,
+            row_type,
+            stats_index_mapping,
+            compression: arrow_compression_info,
+            write_limit,
+            compression_ratio_estimator,
+        } = config;
         let arrow_batch_builder: Box<dyn ArrowRecordBatchInnerBuilder> = {
             if to_append_record_batch {
                 Box::new(PrebuiltRecordBatchBuilder::default())
             } else {
-                Box::new(RowAppendRecordBatchBuilder::new(row_type)?)
+                Box::new(RowAppendRecordBatchBuilder::new(&row_type)?)
             }
         };
-        let schema = to_arrow_schema(row_type)?;
+        let schema = to_arrow_schema(&row_type)?;
         let ipc_overhead =
             estimate_arrow_ipc_overhead(&schema, arrow_compression_info.get_compression_type())?;
         let effective_limit = (write_limit as f32 * BUFFER_USAGE_RATIO) as usize;
         let estimated_compression_ratio = compression_ratio_estimator.estimation();
+
+        // Validate the mapping as Java does when building the collector's
+        // stats row type.
+        let field_count = row_type.fields().len();
+        if let Some(mapping) = &stats_index_mapping {
+            if let Some(&index) = mapping.iter().find(|&&index| index >= field_count) {
+                return Err(IllegalArgument {
+                    message: format!(
+                        "Statistics column index {index} is out of range for {field_count} fields"
+                    ),
+                });
+            }
+        }
+        let magic = if stats_index_mapping.is_some() {
+            LOG_MAGIC_VALUE_V1
+        } else {
+            LOG_MAGIC_VALUE_V0
+        };
+        let estimated_statistics_size = stats_index_mapping
+            .as_ref()
+            .map_or(0, |mapping| estimated_serialized_size(&row_type, mapping));
+        let statistics = stats_index_mapping.map(|mapping| (row_type, mapping));
+
         Ok(MemoryLogRecordsArrowBuilder {
             base_log_offset: BUILDER_DEFAULT_OFFSET,
             schema_id,
-            magic: CURRENT_LOG_MAGIC_VALUE,
+            magic,
             writer_id: NO_WRITER_ID,
             batch_sequence: NO_BATCH_SEQUENCE,
             is_closed: false,
@@ -397,7 +338,17 @@ impl MemoryLogRecordsArrowBuilder {
             estimated_max_records_count: Cell::new(-1),
             compression_ratio_estimator,
             estimated_compression_ratio,
+            statistics,
+            estimated_statistics_size,
         })
+    }
+
+    fn header_size(&self) -> usize {
+        if self.magic >= LOG_MAGIC_VALUE_V1 {
+            V1_RECORD_BATCH_HEADER_SIZE
+        } else {
+            RECORD_BATCH_HEADER_SIZE
+        }
     }
 
     pub fn append(&mut self, record: &WriteRecord) -> Result<bool> {
@@ -508,14 +459,35 @@ impl MemoryLogRecordsArrowBuilder {
                 .update_estimation(actual_ratio);
         }
 
-        // now, write batch header and arrow batch
-        let mut batch_bytes = vec![0u8; RECORD_BATCH_HEADER_SIZE + real_arrow_batch_bytes.len()];
-        // write batch header
-        self.write_batch_header(&mut batch_bytes[..])?;
+        let statistics_bytes = match &self.statistics {
+            Some((row_type, mapping)) => {
+                match serialize_statistics(record_batch.as_ref(), row_type, mapping) {
+                    Ok(Some(bytes)) => bytes,
+                    // Unlike Java's 27-byte empty block, an empty mapping
+                    // writes length 0, which both parsers read as no statistics.
+                    Ok(None) => Vec::new(),
+                    // A failure degrades to an empty section rather than
+                    // failing the batch, matching Java's builder.
+                    Err(error) => {
+                        log::error!("Failed to serialize statistics for record batch: {error}");
+                        Vec::new()
+                    }
+                }
+            }
+            None => Vec::new(),
+        };
 
-        // write arrow batch bytes
+        // now, write batch header, statistics and arrow batch
+        let header_size = self.header_size();
+        let mut batch_bytes =
+            vec![0u8; header_size + statistics_bytes.len() + real_arrow_batch_bytes.len()];
+        // write batch header
+        self.write_batch_header(&mut batch_bytes[..], statistics_bytes.len())?;
+
+        // write statistics and arrow batch bytes
         let mut cursor = Cursor::new(&mut batch_bytes[..]);
-        cursor.set_position(RECORD_BATCH_HEADER_SIZE as u64);
+        cursor.set_position(header_size as u64);
+        cursor.write_all(&statistics_bytes)?;
         cursor.write_all(real_arrow_batch_bytes)?;
 
         let calcute_crc_bytes = &cursor.get_ref()[SCHEMA_ID_OFFSET..];
@@ -527,7 +499,7 @@ impl MemoryLogRecordsArrowBuilder {
         Ok(batch_bytes.to_vec())
     }
 
-    fn write_batch_header(&self, buffer: &mut [u8]) -> Result<()> {
+    fn write_batch_header(&self, buffer: &mut [u8], statistics_length: usize) -> Result<()> {
         let total_len = buffer.len();
         let mut cursor = Cursor::new(buffer);
         cursor.write_i64::<LittleEndian>(self.base_log_offset)?;
@@ -551,6 +523,10 @@ impl MemoryLogRecordsArrowBuilder {
         cursor.write_i64::<LittleEndian>(self.writer_id)?;
         cursor.write_i32::<LittleEndian>(self.batch_sequence)?;
         cursor.write_i32::<LittleEndian>(record_count)?;
+
+        if self.magic >= LOG_MAGIC_VALUE_V1 {
+            cursor.write_i32::<LittleEndian>(statistics_length as i32)?;
+        }
         Ok(())
     }
 
@@ -559,13 +535,12 @@ impl MemoryLogRecordsArrowBuilder {
         self.batch_sequence = batch_base_sequence;
     }
 
-    /// Get an estimate of the number of bytes written to the underlying buffer.
-    /// Includes Fluss record batch header + Arrow IPC metadata + estimated
-    /// compressed body size.
+    /// Estimated bytes written: header, statistics estimate (V1), Arrow IPC
+    /// metadata and estimated compressed body.
     pub fn estimated_size_in_bytes(&self) -> usize {
         let body = self.arrow_record_batch_builder.estimated_size_in_bytes();
         let estimated_body = self.estimated_compressed_size(body);
-        RECORD_BATCH_HEADER_SIZE + self.ipc_overhead + estimated_body
+        self.header_size() + self.estimated_statistics_size + self.ipc_overhead + estimated_body
     }
 
     /// Number of records appended so far. Used for writer throughput metrics.
@@ -633,487 +608,6 @@ fn estimate_arrow_ipc_overhead(
 
 pub trait ToArrow {
     fn append_to(&self, builder: &mut dyn ArrayBuilder) -> Result<()>;
-}
-
-/// In-memory log record source.
-/// Used for local tablet server fetches (existing path).
-struct MemorySource {
-    data: Bytes,
-}
-
-impl MemorySource {
-    fn new(data: Vec<u8>) -> Self {
-        Self {
-            data: Bytes::from(data),
-        }
-    }
-
-    fn read_batch_header(&mut self, pos: usize) -> Result<(i64, usize)> {
-        if pos + LOG_OVERHEAD > self.data.len() {
-            return Err(Error::UnexpectedError {
-                message: format!(
-                    "Position {} + LOG_OVERHEAD {} exceeds data size {}",
-                    pos,
-                    LOG_OVERHEAD,
-                    self.data.len()
-                ),
-                source: None,
-            });
-        }
-
-        let base_offset = LittleEndian::read_i64(&self.data[pos + BASE_OFFSET_OFFSET..]);
-        let batch_size_bytes = LittleEndian::read_i32(&self.data[pos + LENGTH_OFFSET..]);
-
-        // Validate batch size to prevent integer overflow and corruption
-        let batch_size = validate_batch_size(batch_size_bytes)?;
-
-        Ok((base_offset, batch_size))
-    }
-
-    fn read_batch_data(&mut self, pos: usize, size: usize) -> Result<Bytes> {
-        if pos + size > self.data.len() {
-            return Err(Error::UnexpectedError {
-                message: format!(
-                    "Read beyond data size: {} + {} > {}",
-                    pos,
-                    size,
-                    self.data.len()
-                ),
-                source: None,
-            });
-        }
-        // Zero-copy slice (Bytes is Arc-based)
-        Ok(self.data.slice(pos..pos + size))
-    }
-
-    fn total_size(&self) -> usize {
-        self.data.len()
-    }
-}
-
-/// RAII guard that deletes a file when dropped.
-/// Used to ensure file deletion happens AFTER the file handle is closed.
-struct FileCleanupGuard {
-    file_path: PathBuf,
-}
-
-impl Drop for FileCleanupGuard {
-    fn drop(&mut self) {
-        // File handle is already closed (this guard drops after the file field)
-        if let Err(e) = std::fs::remove_file(&self.file_path) {
-            log::warn!(
-                "Failed to delete remote log file {}: {}",
-                self.file_path.display(),
-                e
-            );
-        } else {
-            log::debug!("Deleted remote log file: {}", self.file_path.display());
-        }
-    }
-}
-
-/// File-backed log record source.
-/// Used for remote log segments downloaded to local disk.
-/// Streams data on-demand instead of loading entire file into memory.
-///
-/// Uses seek + read_exact for cross-platform compatibility.
-/// Access pattern is sequential iteration (single consumer).
-struct FileSource {
-    file: File,
-    file_size: usize,
-    base_offset: usize,
-    _cleanup: Option<FileCleanupGuard>, // Drops AFTER file (field order matters!)
-}
-
-impl FileSource {
-    /// Create a new FileSource.
-    ///
-    /// The file at `file_path` will be deleted when this FileSource is dropped.
-    fn new(file: File, base_offset: usize, file_path: PathBuf) -> Result<Self> {
-        let file_size = file.metadata()?.len() as usize;
-
-        // Validate base_offset to prevent underflow in total_size()
-        if base_offset > file_size {
-            return Err(Error::UnexpectedError {
-                message: format!("base_offset ({base_offset}) exceeds file_size ({file_size})"),
-                source: None,
-            });
-        }
-
-        Ok(Self {
-            file,
-            file_size,
-            base_offset,
-            _cleanup: Some(FileCleanupGuard { file_path }),
-        })
-    }
-
-    /// Read data at a specific position using seek + read_exact.
-    /// This is cross-platform and adequate for sequential access patterns.
-    fn read_at(&mut self, pos: u64, buf: &mut [u8]) -> Result<()> {
-        self.file.seek(SeekFrom::Start(pos))?;
-        self.file.read_exact(buf)?;
-        Ok(())
-    }
-
-    fn read_batch_header(&mut self, pos: usize) -> Result<(i64, usize)> {
-        let actual_pos = self.base_offset + pos;
-        if actual_pos + LOG_OVERHEAD > self.file_size {
-            return Err(Error::UnexpectedError {
-                message: format!(
-                    "Position {} exceeds file size {}",
-                    actual_pos, self.file_size
-                ),
-                source: None,
-            });
-        }
-
-        // Read only the header to extract base_offset and batch_size
-        let mut header_buf = vec![0u8; LOG_OVERHEAD];
-        self.read_at(actual_pos as u64, &mut header_buf)?;
-
-        let base_offset = LittleEndian::read_i64(&header_buf[BASE_OFFSET_OFFSET..]);
-        let batch_size_bytes = LittleEndian::read_i32(&header_buf[LENGTH_OFFSET..]);
-
-        // Validate batch size to prevent integer overflow and corruption
-        let batch_size = validate_batch_size(batch_size_bytes)?;
-
-        Ok((base_offset, batch_size))
-    }
-
-    fn read_batch_data(&mut self, pos: usize, size: usize) -> Result<Bytes> {
-        let actual_pos = self.base_offset + pos;
-        if actual_pos + size > self.file_size {
-            return Err(Error::UnexpectedError {
-                message: format!(
-                    "Read beyond file size: {} + {} > {}",
-                    actual_pos, size, self.file_size
-                ),
-                source: None,
-            });
-        }
-
-        // Read the full batch data
-        let mut batch_buf = vec![0u8; size];
-        self.read_at(actual_pos as u64, &mut batch_buf)?;
-
-        Ok(Bytes::from(batch_buf))
-    }
-
-    fn total_size(&self) -> usize {
-        self.file_size - self.base_offset
-    }
-}
-
-/// Enum for different log record sources.
-enum LogRecordsSource {
-    Memory(MemorySource),
-    File(FileSource),
-}
-
-impl LogRecordsSource {
-    fn read_batch_header(&mut self, pos: usize) -> Result<(i64, usize)> {
-        match self {
-            Self::Memory(s) => s.read_batch_header(pos),
-            Self::File(s) => s.read_batch_header(pos),
-        }
-    }
-
-    fn read_batch_data(&mut self, pos: usize, size: usize) -> Result<Bytes> {
-        match self {
-            Self::Memory(s) => s.read_batch_data(pos, size),
-            Self::File(s) => s.read_batch_data(pos, size),
-        }
-    }
-
-    fn total_size(&self) -> usize {
-        match self {
-            Self::Memory(s) => s.total_size(),
-            Self::File(s) => s.total_size(),
-        }
-    }
-}
-
-pub struct LogRecordsBatches {
-    source: LogRecordsSource,
-    current_pos: usize,
-    remaining_bytes: usize,
-}
-
-impl LogRecordsBatches {
-    /// Create from in-memory Vec (existing path - backward compatible).
-    pub fn new(data: Vec<u8>) -> Self {
-        let source = LogRecordsSource::Memory(MemorySource::new(data));
-        let remaining_bytes = source.total_size();
-        Self {
-            source,
-            current_pos: 0,
-            remaining_bytes,
-        }
-    }
-
-    /// Create from file.
-    /// Enables streaming without loading entire file into memory.
-    ///
-    /// The file at `file_path` will be deleted when dropped.
-    /// This ensures the file is closed before deletion.
-    pub fn from_file(file: File, base_offset: usize, file_path: PathBuf) -> Result<Self> {
-        let source = FileSource::new(file, base_offset, file_path)?;
-        let remaining_bytes = source.total_size();
-        Ok(Self {
-            source: LogRecordsSource::File(source),
-            current_pos: 0,
-            remaining_bytes,
-        })
-    }
-
-    /// Try to get the size of the next batch.
-    fn next_batch_size(&mut self) -> Result<Option<usize>> {
-        if self.remaining_bytes < LOG_OVERHEAD {
-            return Ok(None);
-        }
-
-        // Read only header to get size
-        match self.source.read_batch_header(self.current_pos) {
-            Ok((_base_offset, batch_size)) => {
-                if batch_size > self.remaining_bytes {
-                    Ok(None)
-                } else {
-                    Ok(Some(batch_size))
-                }
-            }
-            Err(e) => Err(e),
-        }
-    }
-}
-
-impl Iterator for LogRecordsBatches {
-    type Item = Result<LogRecordBatch>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self.next_batch_size() {
-            Ok(Some(batch_size)) => {
-                // Read full batch data on-demand
-                match self.source.read_batch_data(self.current_pos, batch_size) {
-                    Ok(data) => {
-                        let record_batch = LogRecordBatch::new(data);
-                        self.current_pos += batch_size;
-                        self.remaining_bytes -= batch_size;
-                        Some(Ok(record_batch))
-                    }
-                    Err(e) => Some(Err(e)),
-                }
-            }
-            Ok(None) => None,
-            Err(e) => Some(Err(e)),
-        }
-    }
-}
-
-pub struct LogRecordBatch {
-    data: Bytes,
-}
-
-#[allow(dead_code)]
-impl LogRecordBatch {
-    pub fn new(data: Bytes) -> Self {
-        LogRecordBatch { data }
-    }
-
-    pub fn magic(&self) -> u8 {
-        self.data[MAGIC_OFFSET]
-    }
-
-    pub fn commit_timestamp(&self) -> i64 {
-        let offset = COMMIT_TIMESTAMP_OFFSET;
-        LittleEndian::read_i64(&self.data[offset..offset + COMMIT_TIMESTAMP_LENGTH])
-    }
-
-    pub fn writer_id(&self) -> i64 {
-        let offset = WRITE_CLIENT_ID_OFFSET;
-        LittleEndian::read_i64(&self.data[offset..offset + WRITE_CLIENT_ID_LENGTH])
-    }
-
-    pub fn batch_sequence(&self) -> i32 {
-        let offset = BATCH_SEQUENCE_OFFSET;
-        LittleEndian::read_i32(&self.data[offset..offset + BATCH_SEQUENCE_LENGTH])
-    }
-
-    pub fn ensure_valid(&self) -> Result<()> {
-        // TODO enable validation once checksum handling is corrected.
-        Ok(())
-    }
-
-    pub fn is_valid(&self) -> bool {
-        self.size_in_bytes() >= RECORD_BATCH_HEADER_SIZE
-            && self.checksum() == self.compute_checksum()
-    }
-
-    fn compute_checksum(&self) -> u32 {
-        let start = SCHEMA_ID_OFFSET;
-        crc32c(&self.data[start..])
-    }
-
-    fn attributes(&self) -> u8 {
-        self.data[ATTRIBUTES_OFFSET]
-    }
-
-    /// Whether this batch is append-only (see [`APPEND_ONLY_FLAG_MASK`]).
-    fn is_append_only(&self) -> bool {
-        self.attributes() & APPEND_ONLY_FLAG_MASK != 0
-    }
-
-    pub fn next_log_offset(&self) -> i64 {
-        self.last_log_offset() + 1
-    }
-
-    pub fn checksum(&self) -> u32 {
-        let offset = CRC_OFFSET;
-        LittleEndian::read_u32(&self.data[offset..offset + CRC_LENGTH])
-    }
-
-    pub fn schema_id(&self) -> i16 {
-        let offset = SCHEMA_ID_OFFSET;
-        LittleEndian::read_i16(&self.data[offset..offset + SCHEMA_ID_LENGTH])
-    }
-
-    pub fn base_log_offset(&self) -> i64 {
-        let offset = BASE_OFFSET_OFFSET;
-        LittleEndian::read_i64(&self.data[offset..offset + BASE_OFFSET_LENGTH])
-    }
-
-    pub fn last_log_offset(&self) -> i64 {
-        self.base_log_offset() + self.last_offset_delta() as i64
-    }
-
-    fn last_offset_delta(&self) -> i32 {
-        let offset = LAST_OFFSET_DELTA_OFFSET;
-        LittleEndian::read_i32(&self.data[offset..offset + LAST_OFFSET_DELTA_LENGTH])
-    }
-
-    pub fn size_in_bytes(&self) -> usize {
-        let offset = LENGTH_OFFSET;
-        LittleEndian::read_i32(&self.data[offset..offset + LENGTH_LENGTH]) as usize + LOG_OVERHEAD
-    }
-
-    pub fn record_count(&self) -> i32 {
-        let offset = RECORDS_COUNT_OFFSET;
-        LittleEndian::read_i32(&self.data[offset..offset + RECORDS_COUNT_LENGTH])
-    }
-
-    /// Splits the batch body into its per-record change types and the trailing
-    /// Arrow IPC payload (see [`APPEND_ONLY_FLAG_MASK`] for the layout).
-    fn decode_change_types(&self) -> Result<(BatchChangeTypes, &[u8])> {
-        let body = self
-            .data
-            .get(RECORDS_OFFSET..)
-            .ok_or_else(|| Error::UnexpectedError {
-                message: format!(
-                    "Corrupt log record batch: data length {} is less than RECORDS_OFFSET {}",
-                    self.data.len(),
-                    RECORDS_OFFSET
-                ),
-                source: None,
-            })?;
-
-        if self.is_append_only() {
-            return Ok((BatchChangeTypes::Uniform(ChangeType::AppendOnly), body));
-        }
-
-        let record_count = self.record_count();
-        if record_count < 0 {
-            return Err(Error::UnexpectedError {
-                message: format!("Corrupt changelog batch: negative record count {record_count}"),
-                source: None,
-            });
-        }
-        let record_count = record_count as usize;
-        let (change_type_bytes, arrow_data) =
-            body.split_at_checked(record_count)
-                .ok_or_else(|| Error::UnexpectedError {
-                    message: format!(
-                        "Corrupt changelog batch: body length {} is smaller than its \
-                         {record_count}-record change-type vector",
-                        body.len()
-                    ),
-                    source: None,
-                })?;
-
-        let mut change_types = Vec::with_capacity(record_count);
-        for &byte in change_type_bytes {
-            let change_type =
-                ChangeType::from_byte_value(byte).map_err(|message| Error::UnexpectedError {
-                    message,
-                    source: None,
-                })?;
-            change_types.push(change_type);
-        }
-
-        Ok((BatchChangeTypes::PerRecord(change_types), arrow_data))
-    }
-
-    pub fn records(&self, read_context: &ReadContext) -> Result<LogRecordIterator> {
-        if self.record_count() == 0 {
-            return Ok(LogRecordIterator::empty());
-        }
-
-        let (change_types, arrow_data) = self.decode_change_types()?;
-        let record_batch = read_context.record_batch(arrow_data)?;
-        let arrow_reader = ArrowReader::new_with_fluss_row_type(
-            Arc::new(record_batch),
-            read_context.row_type.clone(),
-            read_context.fluss_row_type().cloned(),
-        )?;
-        let iterator = ArrowLogRecordIterator::new(
-            arrow_reader,
-            self.base_log_offset(),
-            self.commit_timestamp(),
-            change_types,
-        )?;
-
-        Ok(LogRecordIterator::Arrow(iterator))
-    }
-
-    pub fn records_for_remote_log(&self, read_context: &ReadContext) -> Result<LogRecordIterator> {
-        if self.record_count() == 0 {
-            return Ok(LogRecordIterator::empty());
-        }
-
-        let (change_types, arrow_data) = self.decode_change_types()?;
-        let record_batch = read_context.record_batch_for_remote_log(arrow_data)?;
-        let log_record_iterator = match record_batch {
-            None => LogRecordIterator::empty(),
-            Some(record_batch) => {
-                let arrow_reader = ArrowReader::new_with_fluss_row_type(
-                    Arc::new(record_batch),
-                    read_context.row_type.clone(),
-                    read_context.fluss_row_type().cloned(),
-                )?;
-                let iterator = ArrowLogRecordIterator::new(
-                    arrow_reader,
-                    self.base_log_offset(),
-                    self.commit_timestamp(),
-                    change_types,
-                )?;
-                LogRecordIterator::Arrow(iterator)
-            }
-        };
-        Ok(log_record_iterator)
-    }
-
-    /// Returns the record batch directly without creating an iterator.
-    /// This is more efficient when you need the entire batch rather than
-    /// iterating row-by-row.
-    pub fn record_batch(&self, read_context: &ReadContext) -> Result<RecordBatch> {
-        if self.record_count() == 0 {
-            // Return empty batch with correct schema
-            return Ok(RecordBatch::new_empty(read_context.target_schema.clone()));
-        }
-
-        // Batch access drops the change-type vector; use `records()` for CDC.
-        let (_, arrow_data) = self.decode_change_types()?;
-        read_context.record_batch(arrow_data)
-    }
 }
 
 /// Parse an Arrow IPC message from a byte slice.
@@ -1758,50 +1252,6 @@ fn align_record_batch_to_schema(
     Ok(RecordBatch::try_new(target_schema, columns)?)
 }
 
-pub enum LogRecordIterator {
-    Empty,
-    Arrow(ArrowLogRecordIterator),
-}
-
-impl LogRecordIterator {
-    pub fn empty() -> Self {
-        LogRecordIterator::Empty
-    }
-}
-
-impl Iterator for LogRecordIterator {
-    type Item = ScanRecord;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self {
-            LogRecordIterator::Empty => None,
-            LogRecordIterator::Arrow(iter) => iter.next(),
-        }
-    }
-}
-
-/// Per-record change types decoded from a log batch.
-///
-/// Append-only batches carry no change-type vector on the wire, so a single
-/// `AppendOnly` value covers every record without allocating. Changelog batches
-/// (the CDC stream of a primary-key table) decode one change type per record,
-/// in record order.
-enum BatchChangeTypes {
-    /// Every record shares this change type (append-only batches).
-    Uniform(ChangeType),
-    /// One change type per record, indexed by row id (changelog batches).
-    PerRecord(Vec<ChangeType>),
-}
-
-impl BatchChangeTypes {
-    fn get(&self, row_id: usize) -> ChangeType {
-        match self {
-            BatchChangeTypes::Uniform(change_type) => *change_type,
-            BatchChangeTypes::PerRecord(change_types) => change_types[row_id],
-        }
-    }
-}
-
 pub struct ArrowLogRecordIterator {
     reader: ArrowReader,
     base_offset: i64,
@@ -1811,7 +1261,7 @@ pub struct ArrowLogRecordIterator {
 }
 
 impl ArrowLogRecordIterator {
-    fn new(
+    pub(crate) fn new(
         reader: ArrowReader,
         base_offset: i64,
         timestamp: i64,
@@ -1895,12 +1345,12 @@ pub struct MyVec<T>(pub StreamReader<T>);
 mod tests {
     use super::*;
     use crate::client::WriteRecord;
-    use crate::compression::{
-        ArrowCompressionInfo, ArrowCompressionType, DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
-    };
     use crate::metadata::{DataField, DataTypes, PhysicalTablePath, RowType, TablePath};
     use crate::row::{DataGetters, GenericRow};
-    use crate::test_utils::build_table_info;
+    use crate::test_utils::{
+        build_append_only_batch, build_table_info, uncompressed_arrow_batch_config,
+    };
+    use bytes::Bytes;
 
     #[test]
     fn nonnullable_append_builder_roundtrips_for_both_append_modes() {
@@ -1915,15 +1365,8 @@ mod tests {
 
         for to_append_record_batch in [false, true] {
             let mut builder = MemoryLogRecordsArrowBuilder::new(
-                1,
-                &row_type,
+                uncompressed_arrow_batch_config(1, &row_type, usize::MAX),
                 to_append_record_batch,
-                ArrowCompressionInfo {
-                    compression_type: ArrowCompressionType::None,
-                    compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
-                },
-                usize::MAX,
-                Arc::new(ArrowCompressionRatioEstimator::default()),
             )
             .expect("NOT NULL builder should construct");
 
@@ -2276,27 +1719,6 @@ mod tests {
         assert!(matches!(result, Err(IllegalArgument { .. })));
     }
 
-    #[test]
-    fn checksum_and_schema_id_read_minimum_header() {
-        // Header-only batches with record_count == 0 are valid; this covers the minimal bytes
-        // needed for checksum/schema_id access.
-        let mut data = vec![0u8; SCHEMA_ID_OFFSET + SCHEMA_ID_LENGTH];
-        let crc = 0xA1B2C3D4u32;
-        let schema_id = 42i16;
-        LittleEndian::write_u32(&mut data[CRC_OFFSET..CRC_OFFSET + CRC_LENGTH], crc);
-        LittleEndian::write_i16(
-            &mut data[SCHEMA_ID_OFFSET..SCHEMA_ID_OFFSET + SCHEMA_ID_LENGTH],
-            schema_id,
-        );
-
-        let batch = LogRecordBatch::new(Bytes::from(data));
-        assert_eq!(batch.checksum(), crc);
-        assert_eq!(batch.schema_id(), schema_id);
-
-        let expected = crc32c(&batch.data[SCHEMA_ID_OFFSET..]);
-        assert_eq!(batch.compute_checksum(), expected);
-    }
-
     fn le_bytes(vals: &[u32]) -> Vec<u8> {
         let mut out = Vec::with_capacity(vals.len() * 4);
         for &v in vals {
@@ -2378,49 +1800,6 @@ mod tests {
                 .to_string()
                 .contains("precision overflow")
         );
-
-        Ok(())
-    }
-
-    // Tests for file-backed streaming
-
-    #[test]
-    fn test_file_source_streaming() -> Result<()> {
-        use tempfile::NamedTempFile;
-
-        // Test 1: Basic file reads work
-        let test_data = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
-        let mut tmp_file = NamedTempFile::new()?;
-        tmp_file.write_all(&test_data)?;
-        tmp_file.flush()?;
-
-        let file_path = tmp_file.path().to_path_buf();
-        let file = File::open(&file_path)?;
-        let mut source = FileSource::new(file, 0, file_path)?;
-
-        // Read full data
-        let data = source.read_batch_data(0, 10)?;
-        assert_eq!(data.to_vec(), test_data);
-
-        // Read partial data
-        let partial = source.read_batch_data(2, 5)?;
-        assert_eq!(partial.to_vec(), vec![3, 4, 5, 6, 7]);
-
-        // Test 2: base_offset works (critical for remote logs with pos_in_log_segment)
-        let prefix = vec![0xFF; 100];
-        let actual_data = vec![1, 2, 3, 4, 5];
-        let mut tmp_file2 = NamedTempFile::new()?;
-        tmp_file2.write_all(&prefix)?;
-        tmp_file2.write_all(&actual_data)?;
-        tmp_file2.flush()?;
-
-        let file_path2 = tmp_file2.path().to_path_buf();
-        let file2 = File::open(&file_path2)?;
-        let mut source2 = FileSource::new(file2, 100, file_path2)?; // Skip first 100 bytes
-
-        assert_eq!(source2.total_size(), 5); // Only counts data after offset
-        let data2 = source2.read_batch_data(0, 5)?;
-        assert_eq!(data2.to_vec(), actual_data);
 
         Ok(())
     }
@@ -2561,17 +1940,24 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_log_records_batches_from_file() -> Result<()> {
-        use crate::client::WriteRecord;
-        use crate::compression::{
-            ArrowCompressionInfo, ArrowCompressionType, DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
-        };
-        use crate::metadata::{PhysicalTablePath, TablePath};
-        use crate::row::GenericRow;
-        use tempfile::NamedTempFile;
+    /// An `(id INT, name STRING)` builder collecting statistics for `mapping`.
+    fn builder_with_statistics(
+        row_type: &RowType,
+        mapping: Option<Vec<usize>>,
+        to_append_record_batch: bool,
+    ) -> MemoryLogRecordsArrowBuilder {
+        MemoryLogRecordsArrowBuilder::new(
+            ArrowBatchConfig {
+                stats_index_mapping: mapping,
+                ..uncompressed_arrow_batch_config(1, row_type, usize::MAX)
+            },
+            to_append_record_batch,
+        )
+        .expect("builder should construct")
+    }
 
-        // Integration test: Real log record batch streamed from file
+    #[test]
+    fn statistics_upgrade_the_batch_to_v1() -> Result<()> {
         let row_type = RowType::new(vec![
             DataField::new("id".to_string(), DataTypes::int(), None),
             DataField::new("name".to_string(), DataTypes::string(), None),
@@ -2580,213 +1966,140 @@ mod tests {
         let table_info = Arc::new(build_table_info(table_path.clone(), 1, 1));
         let physical_table_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path)));
 
-        let mut builder = MemoryLogRecordsArrowBuilder::new(
-            1,
-            &row_type,
-            false,
-            ArrowCompressionInfo {
-                compression_type: ArrowCompressionType::None,
-                compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
-            },
-            usize::MAX,
-            Arc::new(ArrowCompressionRatioEstimator::default()),
+        // The block the batch must carry, derived independently of the writer.
+        let expected_batch = RecordBatch::try_new(
+            to_arrow_schema(&row_type)?,
+            vec![
+                Arc::new(arrow::array::Int32Array::from(vec![1, 2])) as ArrayRef,
+                Arc::new(arrow::array::StringArray::from(vec!["alice", "bob"])) as ArrayRef,
+            ],
         )?;
+        let expected_statistics = serialize_statistics(&expected_batch, &row_type, &[0, 1])?
+            .expect("two rows must produce statistics");
 
+        for to_append_record_batch in [false, true] {
+            let mut builder =
+                builder_with_statistics(&row_type, Some(vec![0, 1]), to_append_record_batch);
+            if to_append_record_batch {
+                let record = WriteRecord::for_append_record_batch(
+                    Arc::clone(&table_info),
+                    physical_table_path.clone(),
+                    1,
+                    expected_batch.clone(),
+                );
+                builder.append(&record)?;
+            } else {
+                for (id, name) in [(1, "alice"), (2, "bob")] {
+                    let mut row = GenericRow::new(2);
+                    row.set_field(0, id);
+                    row.set_field(1, name);
+                    let record = WriteRecord::for_append(
+                        Arc::clone(&table_info),
+                        physical_table_path.clone(),
+                        1,
+                        &row,
+                    );
+                    builder.append(&record)?;
+                }
+            }
+
+            let bytes = builder.build()?;
+            let batch = LogRecordBatch::new(Bytes::from(bytes.clone()));
+            assert_eq!(batch.magic(), LOG_MAGIC_VALUE_V1);
+            assert!(batch.is_valid(), "the CRC must cover the statistics");
+
+            let statistics_length = LittleEndian::read_i32(
+                &bytes[V1_STATISTICS_LENGTH_OFFSET..V1_STATISTICS_DATA_OFFSET],
+            ) as usize;
+            assert_eq!(statistics_length, expected_statistics.len());
+            assert_eq!(
+                &bytes[V1_STATISTICS_DATA_OFFSET..V1_STATISTICS_DATA_OFFSET + statistics_length],
+                &expected_statistics[..]
+            );
+
+            let read_context = ReadContext::new(
+                to_arrow_schema(&row_type)?,
+                Arc::new(row_type.clone()),
+                false,
+            );
+            let records: Vec<_> = batch.records(&read_context)?.collect();
+            let mut ids = Vec::new();
+            for record in &records {
+                ids.push(record.row().get_int(0)?);
+            }
+            assert_eq!(ids, vec![1, 2]);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn no_statistics_mapping_keeps_the_v0_format() {
+        let (_, append_only) = build_append_only_batch(&[(1, "alice")]);
+        let batch = LogRecordBatch::new(Bytes::from(append_only));
+        assert_eq!(batch.magic(), LOG_MAGIC_VALUE_V0);
+    }
+
+    #[test]
+    fn empty_statistics_mapping_writes_a_v1_batch_with_no_statistics() -> Result<()> {
+        // A table can enable statistics while no column supports them.
+        let row_type = RowType::new(vec![
+            DataField::new("id".to_string(), DataTypes::int(), None),
+            DataField::new("name".to_string(), DataTypes::string(), None),
+        ]);
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = Arc::new(build_table_info(table_path.clone(), 1, 1));
+        let physical_table_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path)));
+
+        let mut builder = builder_with_statistics(&row_type, Some(Vec::new()), false);
         let mut row = GenericRow::new(2);
         row.set_field(0, 1_i32);
         row.set_field(1, "alice");
-        let record = WriteRecord::for_append(
-            Arc::clone(&table_info),
-            physical_table_path.clone(),
-            1,
-            &row,
-        );
+        let record = WriteRecord::for_append(table_info, physical_table_path, 1, &row);
         builder.append(&record)?;
 
-        let mut row2 = GenericRow::new(2);
-        row2.set_field(0, 2_i32);
-        row2.set_field(1, "bob");
-        let record2 =
-            WriteRecord::for_append(Arc::clone(&table_info), physical_table_path, 2, &row2);
-        builder.append(&record2)?;
+        let bytes = builder.build()?;
+        let batch = LogRecordBatch::new(Bytes::from(bytes.clone()));
+        assert_eq!(batch.magic(), LOG_MAGIC_VALUE_V1);
+        let statistics_length =
+            LittleEndian::read_i32(&bytes[V1_STATISTICS_LENGTH_OFFSET..V1_STATISTICS_DATA_OFFSET]);
+        assert_eq!(statistics_length, 0);
 
-        let data = builder.build()?;
-
-        // Write to file
-        let mut tmp_file = NamedTempFile::new()?;
-        tmp_file.write_all(&data)?;
-        tmp_file.flush()?;
-
-        // Create file-backed LogRecordsBatches (should stream, not load all into memory)
-        let file_path = tmp_file.path().to_path_buf();
-        let file = File::open(&file_path)?;
-        let mut batches = LogRecordsBatches::from_file(file, 0, file_path)?;
-
-        // Iterate through batches (should work just like in-memory)
-        let batch = batches.next().expect("Should have at least one batch")?;
-        assert!(batch.size_in_bytes() > 0);
-        assert_eq!(batch.record_count(), 2);
-
+        let read_context = ReadContext::new(to_arrow_schema(&row_type)?, Arc::new(row_type), false);
+        assert_eq!(batch.record_batch(&read_context)?.num_rows(), 1);
         Ok(())
     }
 
-    /// Builds an append-only `(id INT, name STRING)` Arrow log batch from `rows`.
-    /// The writer always emits append-only batches, so changelog tests derive
-    /// their bytes from this with [`splice_change_type_vector`].
-    fn build_append_only_batch(rows: &[(i32, &str)]) -> (RowType, Vec<u8>) {
+    #[test]
+    fn estimated_size_reserves_room_for_the_statistics() {
         let row_type = RowType::new(vec![
             DataField::new("id".to_string(), DataTypes::int(), None),
             DataField::new("name".to_string(), DataTypes::string(), None),
         ]);
-        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
-        let table_info = Arc::new(build_table_info(table_path.clone(), 1, 1));
-        let physical_table_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path)));
+        let with_statistics = builder_with_statistics(&row_type, Some(vec![0, 1]), false);
+        let without_statistics = builder_with_statistics(&row_type, None, false);
+        assert_eq!(
+            with_statistics.estimated_size_in_bytes()
+                - without_statistics.estimated_size_in_bytes(),
+            STATISTICS_LENGTH_LENGTH + estimated_serialized_size(&row_type, &[0, 1])
+        );
+    }
 
-        let mut builder = MemoryLogRecordsArrowBuilder::new(
-            1,
-            &row_type,
-            false,
-            ArrowCompressionInfo {
-                compression_type: ArrowCompressionType::None,
-                compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
+    #[test]
+    fn builder_rejects_an_out_of_range_statistics_index() {
+        let row_type = RowType::new(vec![DataField::new(
+            "id".to_string(),
+            DataTypes::int(),
+            None,
+        )]);
+        let err = MemoryLogRecordsArrowBuilder::new(
+            ArrowBatchConfig {
+                stats_index_mapping: Some(vec![5]),
+                ..uncompressed_arrow_batch_config(1, &row_type, usize::MAX)
             },
-            usize::MAX,
-            Arc::new(ArrowCompressionRatioEstimator::default()),
+            false,
         )
-        .unwrap();
-
-        for (id, name) in rows {
-            let mut row = GenericRow::new(2);
-            row.set_field(0, *id);
-            row.set_field(1, *name);
-            let record = WriteRecord::for_append(
-                Arc::clone(&table_info),
-                physical_table_path.clone(),
-                1,
-                &row,
-            );
-            builder.append(&record).unwrap();
-        }
-
-        (row_type, builder.build().unwrap())
-    }
-
-    /// Turns an append-only batch into a wire-valid changelog batch: clears the
-    /// append-only flag, splices one change-type byte per record between the
-    /// header and the Arrow payload, then fixes up the length field and CRC.
-    fn splice_change_type_vector(append_only: &[u8], change_types: &[ChangeType]) -> Vec<u8> {
-        let mut data = append_only.to_vec();
-        data[ATTRIBUTES_OFFSET] &= !APPEND_ONLY_FLAG_MASK;
-        let change_bytes = change_types.iter().map(|ct| ct.to_byte_value());
-        data.splice(RECORDS_OFFSET..RECORDS_OFFSET, change_bytes);
-
-        let new_length = (data.len() - LOG_OVERHEAD) as i32;
-        data[LENGTH_OFFSET..LENGTH_OFFSET + LENGTH_LENGTH]
-            .copy_from_slice(&new_length.to_le_bytes());
-
-        let crc = crc32c(&data[SCHEMA_ID_OFFSET..]);
-        data[CRC_OFFSET..CRC_OFFSET + CRC_LENGTH].copy_from_slice(&crc.to_le_bytes());
-        data
-    }
-
-    #[test]
-    fn decode_changelog_batch_applies_per_record_change_types() -> Result<()> {
-        let (row_type, append_only) =
-            build_append_only_batch(&[(1, "alice"), (2, "bob"), (3, "carol")]);
-        let read_context = ReadContext::new(to_arrow_schema(&row_type)?, Arc::new(row_type), false);
-
-        // Append-only batch: every record decodes as AppendOnly (regression guard).
-        let batch = LogRecordsBatches::new(append_only.clone())
-            .next()
-            .expect("append-only batch")?;
-        assert!(batch.is_append_only());
-        let records: Vec<_> = batch.records(&read_context)?.collect();
-        assert_eq!(records.len(), 3);
-        assert!(
-            records
-                .iter()
-                .all(|r| *r.change_type() == ChangeType::AppendOnly)
-        );
-
-        // Changelog variant: the spliced change-type vector drives per-record types.
-        let change_types = [
-            ChangeType::Insert,
-            ChangeType::UpdateAfter,
-            ChangeType::Delete,
-        ];
-        let changelog = splice_change_type_vector(&append_only, &change_types);
-        let batch = LogRecordsBatches::new(changelog)
-            .next()
-            .expect("changelog batch")?;
-        assert!(!batch.is_append_only());
-        assert_eq!(batch.record_count(), 3);
-
-        let records: Vec<_> = batch.records(&read_context)?.collect();
-        let got: Vec<ChangeType> = records.iter().map(|r| *r.change_type()).collect();
-        assert_eq!(got, change_types.to_vec());
-
-        // The row payload and offsets survive the splice unchanged.
-        let mut ids = Vec::new();
-        for record in &records {
-            ids.push(record.row().get_int(0)?);
-        }
-        assert_eq!(ids, vec![1, 2, 3]);
-        let offsets: Vec<i64> = records.iter().map(|r| r.offset()).collect();
-        assert_eq!(offsets, vec![0, 1, 2]);
-
-        // Batch-level access skips the change-type vector and still decodes rows.
-        let batch = LogRecordsBatches::new(splice_change_type_vector(&append_only, &change_types))
-            .next()
-            .expect("changelog batch")?;
-        assert_eq!(batch.record_batch(&read_context)?.num_rows(), 3);
-
-        Ok(())
-    }
-
-    #[test]
-    fn decode_changelog_batch_rejects_invalid_change_type_byte() {
-        let (row_type, append_only) = build_append_only_batch(&[(1, "a"), (2, "b")]);
-        let read_context = ReadContext::new(
-            to_arrow_schema(&row_type).unwrap(),
-            Arc::new(row_type),
-            false,
-        );
-
-        let mut changelog =
-            splice_change_type_vector(&append_only, &[ChangeType::Insert, ChangeType::Insert]);
-        // Corrupt the second change-type byte to an out-of-range value.
-        changelog[RECORDS_OFFSET + 1] = 99;
-
-        let batch = LogRecordBatch::new(Bytes::from(changelog));
-        let err = batch
-            .records(&read_context)
-            .err()
-            .expect("expected decode to reject an invalid change-type byte");
-        assert!(matches!(err, Error::UnexpectedError { .. }));
-        assert!(err.to_string().contains("change type"));
-    }
-
-    #[test]
-    fn decode_changelog_batch_rejects_truncated_change_type_vector() {
-        let (row_type, append_only) = build_append_only_batch(&[(1, "a"), (2, "b")]);
-        let read_context = ReadContext::new(
-            to_arrow_schema(&row_type).unwrap(),
-            Arc::new(row_type),
-            false,
-        );
-
-        // Clear the append-only flag, then cut the body shorter than the
-        // record_count change-type bytes the decoder now expects.
-        let mut data = append_only;
-        data[ATTRIBUTES_OFFSET] &= !APPEND_ONLY_FLAG_MASK;
-        data.truncate(RECORDS_OFFSET + 1);
-
-        let batch = LogRecordBatch::new(Bytes::from(data));
-        assert_eq!(batch.record_count(), 2);
-        let err = batch
-            .records(&read_context)
-            .err()
-            .expect("expected decode to reject a truncated change-type vector");
-        assert!(matches!(err, Error::UnexpectedError { .. }));
+        .err()
+        .expect("an out-of-range statistics index must be rejected");
+        assert!(err.to_string().contains("out of range"));
     }
 }

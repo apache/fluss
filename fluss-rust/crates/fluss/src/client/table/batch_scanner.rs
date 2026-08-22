@@ -459,10 +459,6 @@ fn project_batch(
 mod tests {
     use super::*;
     use crate::client::WriteRecord;
-    use crate::compression::{
-        ArrowCompressionInfo, ArrowCompressionRatioEstimator, ArrowCompressionType,
-        DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
-    };
     use crate::metadata::{
         Column, DataField, DataType, DataTypes, PhysicalTablePath, Schema, TableInfo, TablePath,
     };
@@ -470,7 +466,7 @@ mod tests {
     use crate::row::GenericRow;
     use crate::row::binary::BinaryWriter;
     use crate::row::compacted::CompactedRowWriter;
-    use crate::test_utils::build_table_info_with_columns;
+    use crate::test_utils::{build_table_info_with_columns, uncompressed_arrow_batch_config};
     use arrow::array::{Array, Int32Array, Int64Array, StringArray};
 
     fn build_two_col_table_info() -> TableInfo {
@@ -499,15 +495,8 @@ mod tests {
             table_info.table_path.clone(),
         )));
         let mut builder = MemoryLogRecordsArrowBuilder::new(
-            schema_id,
-            table_info.get_row_type(),
+            uncompressed_arrow_batch_config(schema_id, table_info.get_row_type(), usize::MAX),
             false,
-            ArrowCompressionInfo {
-                compression_type: ArrowCompressionType::None,
-                compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
-            },
-            usize::MAX,
-            Arc::new(ArrowCompressionRatioEstimator::default()),
         )
         .expect("builder");
         for (i, row) in rows.iter().enumerate() {
