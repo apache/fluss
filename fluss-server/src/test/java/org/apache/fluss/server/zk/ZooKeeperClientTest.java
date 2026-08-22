@@ -31,6 +31,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.entity.RegisterTableBucketLeadAndIsrInfo;
+import org.apache.fluss.server.zk.ZkAsyncResponse.ZkGetDataResponse;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.CoordinatorAddress;
@@ -43,6 +44,7 @@ import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
 import org.apache.fluss.server.zk.data.ZkData.BucketIdZNode;
+import org.apache.fluss.server.zk.data.ZkData.BucketSnapshotIdZNode;
 import org.apache.fluss.server.zk.data.lease.KvSnapshotLeaseMetadata;
 import org.apache.fluss.shaded.curator5.org.apache.curator.CuratorZookeeperClient;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
@@ -64,12 +66,14 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.COMPLETED;
@@ -78,6 +82,7 @@ import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignm
 import static org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.common.ZKConfig.JUTE_MAXBUFFER;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.entry;
 import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.spy;
@@ -585,6 +590,17 @@ class ZooKeeperClientTest {
         assertThat(zookeeperClient.getTableLatestBucketSnapshot(tableId))
                 .isEqualTo(expectedSnapshots);
 
+        assertThat(
+                        zookeeperClient.getTableBucketsLatestSnapshot(
+                                Arrays.asList(
+                                        bucketWithSnapshots,
+                                        bucketWithoutPath,
+                                        unassignedBucketWithoutSnapshotsPath)))
+                .containsOnly(
+                        entry(bucketWithSnapshots, Optional.of(latestSnapshot)),
+                        entry(bucketWithoutPath, Optional.empty()),
+                        entry(unassignedBucketWithoutSnapshotsPath, Optional.empty()));
+
         long partitionId = 2L;
         Map<Integer, BucketAssignment> partitionBucketAssignments =
                 Collections.singletonMap(0, BucketAssignment.of(0));
@@ -609,10 +625,13 @@ class ZooKeeperClientTest {
         int bucketCount = ConfigOptions.ZOOKEEPER_MAX_INFLIGHT_REQUESTS.defaultValue() + 1;
         TableAssignment.Builder assignmentBuilder = TableAssignment.builder();
         Map<Integer, Optional<BucketSnapshot>> expectedSnapshots = new HashMap<>();
+        Map<TableBucket, Optional<BucketSnapshot>> expectedSnapshotsByTableBucket = new HashMap<>();
         for (int bucketId = 0; bucketId < bucketCount; bucketId++) {
             assignmentBuilder.add(bucketId, BucketAssignment.of(0));
             BucketSnapshot snapshot = new BucketSnapshot(1L, bucketId, "oss://test/cp-" + bucketId);
             expectedSnapshots.put(bucketId, Optional.of(snapshot));
+            expectedSnapshotsByTableBucket.put(
+                    new TableBucket(tableId, bucketId), Optional.of(snapshot));
         }
         zookeeperClient.registerTableAssignment(tableId, assignmentBuilder.build());
 
@@ -623,6 +642,26 @@ class ZooKeeperClientTest {
 
         assertThat(zookeeperClient.getTableLatestBucketSnapshot(tableId))
                 .isEqualTo(expectedSnapshots);
+
+        AtomicInteger batchCalls = new AtomicInteger();
+        AtomicInteger maxBatchSize = new AtomicInteger();
+        ZooKeeperClient batchingClient = spy(zookeeperClient);
+        doAnswer(
+                        invocation -> {
+                            Collection<String> paths = invocation.getArgument(0);
+                            batchCalls.incrementAndGet();
+                            maxBatchSize.accumulateAndGet(paths.size(), Math::max);
+                            return invocation.callRealMethod();
+                        })
+                .when(batchingClient)
+                .getDataInBackground(anyCollection());
+        assertThat(
+                        batchingClient.getTableBucketsLatestSnapshot(
+                                expectedSnapshotsByTableBucket.keySet()))
+                .isEqualTo(expectedSnapshotsByTableBucket);
+        assertThat(batchCalls).hasValueGreaterThan(1);
+        assertThat(maxBatchSize)
+                .hasValueLessThanOrEqualTo(ZooKeeperClient.TABLE_BUCKET_SNAPSHOT_READ_BATCH_SIZE);
     }
 
     @Test
@@ -636,6 +675,7 @@ class ZooKeeperClientTest {
                         .build());
         BucketSnapshot olderSnapshot = new BucketSnapshot(1L, 10L, "oss://test/cp1");
         BucketSnapshot latestSnapshot = new BucketSnapshot(2L, 20L, "oss://test/cp2");
+        BucketSnapshot replacementSnapshot = new BucketSnapshot(3L, 30L, "oss://test/cp3");
         zookeeperClient.registerTableBucketSnapshot(tableBucket, olderSnapshot);
         zookeeperClient.registerTableBucketSnapshot(tableBucket, latestSnapshot);
 
@@ -644,13 +684,60 @@ class ZooKeeperClientTest {
                         invocation -> {
                             zookeeperClient.deleteTableBucketSnapshot(
                                     tableBucket, latestSnapshot.getSnapshotId());
+                            zookeeperClient.registerTableBucketSnapshot(
+                                    tableBucket, replacementSnapshot);
                             return invocation.callRealMethod();
                         })
                 .when(raceTestingClient)
                 .getDataInBackground(anyCollection());
 
-        assertThat(raceTestingClient.getTableLatestBucketSnapshot(tableId))
-                .containsEntry(tableBucket.getBucket(), Optional.empty());
+        assertThat(
+                        raceTestingClient.getTableBucketsLatestSnapshot(
+                                Collections.singleton(tableBucket)))
+                .doesNotContainKey(tableBucket);
+        assertThat(
+                        zookeeperClient.getTableBucketsLatestSnapshot(
+                                Collections.singleton(tableBucket)))
+                .containsEntry(tableBucket, Optional.of(replacementSnapshot));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void testOneBucketSnapshotReadFailureDoesNotFailBatch() throws Exception {
+        TableBucket failedBucket = new TableBucket(1L, 0);
+        TableBucket successfulBucket = new TableBucket(1L, 1);
+        BucketSnapshot failedSnapshot = new BucketSnapshot(1L, 10L, "oss://test/cp1");
+        BucketSnapshot successfulSnapshot = new BucketSnapshot(1L, 20L, "oss://test/cp2");
+        zookeeperClient.registerTableBucketSnapshot(failedBucket, failedSnapshot);
+        zookeeperClient.registerTableBucketSnapshot(successfulBucket, successfulSnapshot);
+
+        String failedSnapshotPath =
+                BucketSnapshotIdZNode.path(failedBucket, failedSnapshot.getSnapshotId());
+        ZooKeeperClient partiallyFailingClient = spy(zookeeperClient);
+        doAnswer(
+                        invocation -> {
+                            List<ZkGetDataResponse> responses =
+                                    (List<ZkGetDataResponse>) invocation.callRealMethod();
+                            return responses.stream()
+                                    .map(
+                                            response ->
+                                                    response.getPath().equals(failedSnapshotPath)
+                                                            ? new ZkGetDataResponse(
+                                                                    response.getPath(),
+                                                                    KeeperException.Code
+                                                                            .CONNECTIONLOSS,
+                                                                    null)
+                                                            : response)
+                                    .collect(Collectors.toList());
+                        })
+                .when(partiallyFailingClient)
+                .getDataInBackground(anyCollection());
+
+        assertThat(
+                        partiallyFailingClient.getTableBucketsLatestSnapshot(
+                                Arrays.asList(failedBucket, successfulBucket)))
+                .containsEntry(successfulBucket, Optional.of(successfulSnapshot))
+                .doesNotContainKey(failedBucket);
     }
 
     @Test

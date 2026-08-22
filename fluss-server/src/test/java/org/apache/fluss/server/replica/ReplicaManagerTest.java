@@ -81,9 +81,11 @@ import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.testutils.KvTestUtils;
 import org.apache.fluss.server.testutils.ServerTestTags;
+import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.lake.LakeTable;
+import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.fluss.testutils.DataTestUtils;
 import org.apache.fluss.types.DataField;
 import org.apache.fluss.types.DataTypes;
@@ -117,6 +119,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_2;
 import static org.apache.fluss.record.LogRecordReadContext.createArrowReadContext;
@@ -164,6 +167,9 @@ import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyCollection;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.spy;
 
 /** Test for {@link ReplicaManager}. */
 class ReplicaManagerTest extends ReplicaTestBase {
@@ -1728,6 +1734,100 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                                 + "TableBucket{tableId=150001, bucket=1}")));
         assertReplicaEpochEquals(
                 replicaManager.getReplicaOrException(tb), true, 1, INITIAL_BUCKET_EPOCH);
+    }
+
+    @Test
+    void testFollowerRestoresMinRetainOffsetFromLatestKvSnapshot() throws Exception {
+        TableBucket tableBucket = new TableBucket(DATA1_TABLE_ID_PK, 1);
+        BucketSnapshot olderSnapshot = new BucketSnapshot(1L, 10L, "oss://test/cp1");
+        BucketSnapshot latestSnapshot = new BucketSnapshot(2L, 20L, "oss://test/cp2");
+        zkClient.registerTableBucketSnapshot(tableBucket, olderSnapshot);
+        zkClient.registerTableBucketSnapshot(tableBucket, latestSnapshot);
+
+        AtomicInteger restoreAttempts = new AtomicInteger();
+        replicaManager = spy(replicaManager);
+        doAnswer(
+                        invocation -> {
+                            if (restoreAttempts.getAndIncrement() == 0) {
+                                throw new KeeperException.ConnectionLossException();
+                            }
+                            return invocation.callRealMethod();
+                        })
+                .when(replicaManager)
+                .readLatestSnapshotsForFollowerRestore(anyCollection());
+
+        CompletableFuture<List<NotifyLeaderAndIsrResultForBucket>> future =
+                new CompletableFuture<>();
+        replicaManager.becomeLeaderOrFollower(
+                INITIAL_COORDINATOR_EPOCH,
+                Collections.singletonList(
+                        new NotifyLeaderAndIsrData(
+                                PhysicalTablePath.of(DATA1_TABLE_PATH_PK),
+                                tableBucket,
+                                Arrays.asList(TABLET_SERVER_ID, TABLET_SERVER_ID + 1),
+                                new LeaderAndIsr(
+                                        TABLET_SERVER_ID + 1,
+                                        INITIAL_LEADER_EPOCH,
+                                        Arrays.asList(TABLET_SERVER_ID, TABLET_SERVER_ID + 1),
+                                        Collections.emptyList(),
+                                        INITIAL_COORDINATOR_EPOCH,
+                                        INITIAL_BUCKET_EPOCH))),
+                future::complete);
+
+        assertThat(future.get()).containsOnly(new NotifyLeaderAndIsrResultForBucket(tableBucket));
+        Replica follower = replicaManager.getReplicaOrException(tableBucket);
+        assertThat(follower.isLeader()).isFalse();
+        waitUntil(
+                () -> follower.getLogTablet().getMinRetainOffset() == latestSnapshot.getLogOffset(),
+                Duration.ofSeconds(30),
+                "Follower min retain offset was not restored from the latest KV snapshot.");
+        assertThat(restoreAttempts).hasValueGreaterThanOrEqualTo(2);
+    }
+
+    @Test
+    void testFollowerMinRetainOffsetRestoreForManyBuckets() throws Exception {
+        int bucketCount = 33;
+        Map<TableBucket, BucketSnapshot> snapshots = new HashMap<>();
+        List<NotifyLeaderAndIsrData> leaderAndIsrData = new ArrayList<>();
+        for (int bucketId = 0; bucketId < bucketCount; bucketId++) {
+            TableBucket tableBucket = new TableBucket(DATA1_TABLE_ID_PK, bucketId);
+            BucketSnapshot snapshot =
+                    new BucketSnapshot(1L, 100L + bucketId, "oss://test/cp-" + bucketId);
+            snapshots.put(tableBucket, snapshot);
+            zkClient.registerTableBucketSnapshot(tableBucket, snapshot);
+            leaderAndIsrData.add(
+                    new NotifyLeaderAndIsrData(
+                            PhysicalTablePath.of(DATA1_TABLE_PATH_PK),
+                            tableBucket,
+                            Arrays.asList(TABLET_SERVER_ID, TABLET_SERVER_ID + 1),
+                            new LeaderAndIsr(
+                                    TABLET_SERVER_ID + 1,
+                                    INITIAL_LEADER_EPOCH,
+                                    Arrays.asList(TABLET_SERVER_ID, TABLET_SERVER_ID + 1),
+                                    Collections.emptyList(),
+                                    INITIAL_COORDINATOR_EPOCH,
+                                    INITIAL_BUCKET_EPOCH)));
+        }
+
+        CompletableFuture<List<NotifyLeaderAndIsrResultForBucket>> future =
+                new CompletableFuture<>();
+        replicaManager.becomeLeaderOrFollower(
+                INITIAL_COORDINATOR_EPOCH, leaderAndIsrData, future::complete);
+
+        assertThat(future.get()).hasSize(bucketCount);
+        waitUntil(
+                () ->
+                        snapshots.entrySet().stream()
+                                .allMatch(
+                                        entry ->
+                                                replicaManager
+                                                                .getReplicaOrException(
+                                                                        entry.getKey())
+                                                                .getLogTablet()
+                                                                .getMinRetainOffset()
+                                                        == entry.getValue().getLogOffset()),
+                Duration.ofSeconds(30),
+                "Follower min retain offsets were not restored.");
     }
 
     @Test
