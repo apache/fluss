@@ -47,6 +47,20 @@ public class MetricNames {
     public static final String KV_LEADER_REPLICA_CAPACITY = "kvLeaderReplicaCapacity";
     public static final String REPLICAS_TO_DELETE_COUNT = "replicasToDeleteCount";
     public static final String PENDING_LEADER_ACTIVATION_COUNT = "pendingLeaderActivationCount";
+    public static final String TABLES_TO_DELETE_COUNT = "tablesToDeleteCount";
+    public static final String PARTITIONS_TO_DELETE_COUNT = "partitionsToDeleteCount";
+    public static final String TABLES_INELIGIBLE_TO_DELETE_COUNT = "tablesIneligibleToDeleteCount";
+    public static final String PARTITIONS_INELIGIBLE_TO_DELETE_COUNT =
+            "partitionsIneligibleToDeleteCount";
+    public static final String REPLICAS_INELIGIBLE_TO_DELETE_COUNT =
+            "replicasIneligibleToDeleteCount";
+
+    // for coordinator sender (per-tablet-server control request sender threads)
+    public static final String SENDER_QUEUE_SIZE = "senderQueueSize";
+    public static final String SENDER_QUEUE_TIME_MS = "senderQueueTimeMs";
+    public static final String SENDER_RETRY_COUNT = "senderRetryCount";
+    public static final String SENDER_STALE_DROP_COUNT = "senderStaleDropCount";
+    public static final String SENDER_ALIVE = "senderAlive";
 
     // for coordinator event processor
     public static final String EVENT_QUEUE_SIZE = "eventQueueSize";
