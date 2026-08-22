@@ -1190,8 +1190,6 @@ fn parse_ipc_message(
     Ok((batch_metadata, body_buffer, message.version()))
 }
 
-/// Validates a caller-supplied Arrow [`RecordBatch`] against the table's
-/// [`RowType`] before the prebuilt append path serializes it.
 pub(crate) fn validate_append_record_batch(batch: &RecordBatch, row_type: &RowType) -> Result<()> {
     TypedBatch::build(batch, row_type)?;
 
@@ -1199,9 +1197,6 @@ pub(crate) fn validate_append_record_batch(batch: &RecordBatch, row_type: &RowTy
         if field.data_type().is_nullable() {
             continue;
         }
-        // Top-level null_count covers NOT NULL ARRAY/MAP/ROW columns (a null
-        // nested value). Element and nested-field nullability is a separate
-        // type attribute, not implied by the column's NOT NULL flag.
         let column = batch.column(i);
         if column.null_count() > 0 {
             return Err(IllegalArgument {
@@ -2024,38 +2019,19 @@ mod tests {
         )]);
 
         // Caller marks the Arrow field nullable (common from pyarrow) and includes a null.
-        let batch_schema = Arc::new(arrow_schema::Schema::new(vec![Field::new(
+        let poison = single_col_batch(
             "id",
-            arrow_schema::DataType::Int64,
-            true,
-        )]));
-        let poison = RecordBatch::try_new(
-            batch_schema.clone(),
-            vec![Arc::new(arrow::array::Int64Array::from(vec![
+            Arc::new(arrow::array::Int64Array::from(vec![
                 Some(1_i64),
                 None,
                 Some(3_i64),
-            ])) as arrow::array::ArrayRef],
-        )
-        .expect("nullable arrow batch with nulls");
-
-        let err = validate_append_record_batch(&poison, &row_type)
-            .expect_err("null in NOT NULL column must be rejected");
-        assert!(
-            err.to_string()
-                .contains("declared as non-nullable but contains null values"),
-            "unexpected error: {err}"
+            ])),
         );
-
-        // Same nullable Arrow metadata but no null values is accepted.
-        let ok_batch = RecordBatch::try_new(
-            batch_schema,
-            vec![Arc::new(arrow::array::Int64Array::from(vec![1_i64, 2_i64]))
-                as arrow::array::ArrayRef],
-        )
-        .expect("nullable arrow batch without nulls");
-        validate_append_record_batch(&ok_batch, &row_type)
-            .expect("nullable metadata alone must not reject a null-free batch");
+        let ok_batch = single_col_batch(
+            "id",
+            Arc::new(arrow::array::Int64Array::from(vec![1_i64, 2_i64])),
+        );
+        assert_rejects_null_in_not_null(&row_type, &poison, &ok_batch);
     }
 
     #[test]
@@ -2101,22 +2077,27 @@ mod tests {
             1,
             poison,
         );
-        let err = builder
-            .append(&record)
-            .expect_err("prebuilt append must reject null in NOT NULL");
-        assert!(
-            err.to_string()
-                .contains("declared as non-nullable but contains null values"),
-            "unexpected error: {err}"
+        assert_not_null_violation(
+            builder
+                .append(&record)
+                .expect_err("prebuilt append must reject null in NOT NULL"),
         );
     }
 
-    fn single_col_batch(name: &str, array: ArrayRef, nullable: bool) -> RecordBatch {
+    fn assert_not_null_violation(err: impl std::fmt::Display) {
+        let text = err.to_string();
+        assert!(
+            text.contains("declared as non-nullable but contains null values"),
+            "unexpected error: {text}"
+        );
+    }
+
+    fn single_col_batch(name: &str, array: ArrayRef) -> RecordBatch {
         RecordBatch::try_new(
             Arc::new(arrow_schema::Schema::new(vec![Field::new(
                 name,
                 array.data_type().clone(),
-                nullable,
+                true,
             )])),
             vec![array],
         )
@@ -2124,12 +2105,9 @@ mod tests {
     }
 
     fn assert_rejects_null_in_not_null(row_type: &RowType, poison: &RecordBatch, ok: &RecordBatch) {
-        let err = validate_append_record_batch(poison, row_type)
-            .expect_err("null in NOT NULL nested column must be rejected");
-        assert!(
-            err.to_string()
-                .contains("declared as non-nullable but contains null values"),
-            "unexpected error: {err}"
+        assert_not_null_violation(
+            validate_append_record_batch(poison, row_type)
+                .expect_err("null in NOT NULL nested column must be rejected"),
         );
         validate_append_record_batch(ok, row_type)
             .expect("null-free nested batch must be accepted");
@@ -2225,7 +2203,6 @@ mod tests {
 
     #[test]
     fn validate_append_record_batch_rejects_nulls_in_not_null_nested_columns() {
-        // ARRAY<INT> NOT NULL: a null array value is rejected; a populated list is not.
         let array_type = RowType::new(vec![DataField::new(
             "tags",
             DataTypes::array(DataTypes::int()).as_non_nullable(),
@@ -2240,16 +2217,13 @@ mod tests {
                     vec![0, 2, 2],
                     Some(vec![true, false]),
                 ),
-                true,
             ),
             &single_col_batch(
                 "tags",
                 list_int_array(vec![Some(1), Some(2), Some(3)], vec![0, 2, 3], None),
-                true,
             ),
         );
 
-        // MAP<STRING, INT> NOT NULL
         let map_type = RowType::new(vec![DataField::new(
             "attrs",
             DataTypes::map(DataTypes::string(), DataTypes::int()).as_non_nullable(),
@@ -2260,16 +2234,13 @@ mod tests {
             &single_col_batch(
                 "attrs",
                 map_string_int_array(vec!["a"], vec![1], vec![0, 1, 1], Some(vec![true, false])),
-                true,
             ),
             &single_col_batch(
                 "attrs",
                 map_string_int_array(vec!["a", "b"], vec![1, 2], vec![0, 1, 2], None),
-                true,
             ),
         );
 
-        // ROW<seq INT, label STRING> NOT NULL
         let row_col_type = RowType::new(vec![DataField::new(
             "nested",
             DataTypes::row(vec![
@@ -2288,16 +2259,13 @@ mod tests {
                     vec![Some("x"), None],
                     Some(vec![true, false]),
                 ),
-                true,
             ),
             &single_col_batch(
                 "nested",
                 struct_int_string_array(vec![Some(1), Some(2)], vec![Some("x"), Some("y")], None),
-                true,
             ),
         );
 
-        // ARRAY<ARRAY<INT>> NOT NULL
         let nested_array_type = RowType::new(vec![DataField::new(
             "grid",
             DataTypes::array(DataTypes::array(DataTypes::int())).as_non_nullable(),
@@ -2313,7 +2281,6 @@ mod tests {
                     vec![0, 1, 1],
                     Some(vec![true, false]),
                 ),
-                true,
             ),
             &single_col_batch(
                 "grid",
@@ -2323,15 +2290,12 @@ mod tests {
                     vec![0, 1, 2],
                     None,
                 ),
-                true,
             ),
         );
     }
 
     #[test]
     fn validate_append_record_batch_allows_null_elements_in_not_null_array() {
-        // Column NOT NULL rejects a null array, not null elements. Element
-        // nullability is owned by ARRAY<INT> (nullable ints), not the column flag.
         let row_type = RowType::new(vec![DataField::new(
             "tags",
             DataTypes::array(DataTypes::int()).as_non_nullable(),
@@ -2340,7 +2304,6 @@ mod tests {
         let batch = single_col_batch(
             "tags",
             list_int_array(vec![Some(1), None, Some(3)], vec![0, 3], None),
-            true,
         );
         validate_append_record_batch(&batch, &row_type)
             .expect("null elements in a non-null ARRAY value must be accepted");

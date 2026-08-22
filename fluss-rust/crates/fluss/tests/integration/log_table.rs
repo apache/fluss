@@ -77,16 +77,13 @@ mod table_test {
             .create_writer()
             .expect("Failed to create writer");
 
-        // A null in the NOT NULL column c3 must be rejected client-side, before the
-        // bucket split enqueues part of the batch. The exact record count asserted
-        // below proves the rejected batch never partially reached any bucket.
         {
             use arrow::array::{Int32Array, Int64Array, StringArray};
             use arrow::datatypes::{DataType as ArrowDataType, Field, Schema as ArrowSchema};
             use std::sync::Arc;
 
-            // Arrow metadata marks c3 nullable (as pyarrow often does) and carries a
-            // null; distinct c1 values hash across multiple buckets.
+            // Distinct c1 values hash across buckets; a null in NOT NULL c3
+            // must not enqueue any of them.
             let poison_schema = Arc::new(ArrowSchema::new(vec![
                 Field::new("c1", ArrowDataType::Int32, true),
                 Field::new("c2", ArrowDataType::Utf8, true),
@@ -128,8 +125,6 @@ mod table_test {
             .append_arrow_batch(batch1)
             .expect("Failed to append batch with mixed nullability");
 
-        // Arrow schema metadata marks all fields nullable (pyarrow-style), but
-        // null-free values for NOT NULL c3 should still be accepted.
         let batch2_schema = std::sync::Arc::new(arrow::datatypes::Schema::new(vec![
             arrow::datatypes::Field::new("c1", arrow::datatypes::DataType::Int32, true),
             arrow::datatypes::Field::new("c2", arrow::datatypes::DataType::Utf8, true),
@@ -219,8 +214,6 @@ mod table_test {
         );
     }
 
-    /// A null nested value in a NOT NULL ARRAY/MAP/ROW column is rejected
-    /// client-side; a populated nested value is accepted and round-trips.
     #[tokio::test]
     async fn append_arrow_batch_nested_not_null_columns() {
         use arrow::array::{
