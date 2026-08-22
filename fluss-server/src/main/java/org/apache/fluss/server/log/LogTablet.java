@@ -1301,7 +1301,12 @@ public final class LogTablet {
                 }
 
                 // update write append info.
-                updateWriterAppendInfo(writerStateManager, batch, updatedWriters, isAppendAsLeader);
+                updateWriterAppendInfo(
+                        writerStateManager,
+                        batch,
+                        updatedWriters,
+                        isAppendAsLeader,
+                        WriterAppendInfo.SequenceValidation.ENFORCE);
             }
         }
 
@@ -1439,7 +1444,8 @@ public final class LogTablet {
             WriterStateManager writerStateManager,
             LogRecordBatch batch,
             Map<Long, WriterAppendInfo> writers,
-            boolean isAppendAsLeader) {
+            boolean isAppendAsLeader,
+            WriterAppendInfo.SequenceValidation sequenceValidation) {
         long writerId = batch.writerId();
         // update writers.
         WriterAppendInfo appendInfo =
@@ -1447,7 +1453,8 @@ public final class LogTablet {
         appendInfo.append(
                 batch,
                 writerStateManager.isWriterInBatchExpired(System.currentTimeMillis(), batch),
-                isAppendAsLeader);
+                isAppendAsLeader,
+                sequenceValidation);
     }
 
     static void rebuildWriterState(
@@ -1565,7 +1572,14 @@ public final class LogTablet {
         Map<Long, WriterAppendInfo> loadedWriters = new HashMap<>();
         for (LogRecordBatch batch : records.batches()) {
             if (batch.hasWriterId()) {
-                updateWriterAppendInfo(writerStateManager, batch, loadedWriters, false);
+                // The records have already been accepted and persisted. Recovery rebuilds writer
+                // state without applying online client sequence validation.
+                updateWriterAppendInfo(
+                        writerStateManager,
+                        batch,
+                        loadedWriters,
+                        false,
+                        WriterAppendInfo.SequenceValidation.WARN_AND_ACCEPT);
             }
         }
         loadedWriters.values().forEach(writerStateManager::update);
