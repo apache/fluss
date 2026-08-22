@@ -17,15 +17,20 @@
 
 package org.apache.fluss.lake.iceberg.tiering;
 
+import org.apache.fluss.lake.batch.ArrowRecordBatch;
+import org.apache.fluss.lake.batch.RecordBatch;
 import org.apache.fluss.lake.iceberg.maintenance.IcebergRewriteDataFiles;
 import org.apache.fluss.lake.iceberg.maintenance.RewriteDataFileResult;
 import org.apache.fluss.lake.iceberg.tiering.writer.AppendOnlyTaskWriter;
 import org.apache.fluss.lake.iceberg.tiering.writer.DeltaTaskWriter;
+import org.apache.fluss.lake.iceberg.tiering.writer.IcebergArrowBatchHelper;
 import org.apache.fluss.lake.iceberg.tiering.writer.TaskWriterFactory;
 import org.apache.fluss.lake.writer.LakeWriter;
+import org.apache.fluss.lake.writer.SupportsRecordBatchWrite;
 import org.apache.fluss.lake.writer.WriterInitContext;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.LogRecord;
+import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 
 import org.apache.iceberg.Table;
@@ -52,14 +57,17 @@ import java.util.concurrent.TimeUnit;
 import static org.apache.fluss.lake.iceberg.utils.IcebergConversions.toIceberg;
 
 /** Implementation of {@link LakeWriter} for Iceberg. */
-public class IcebergLakeWriter implements LakeWriter<IcebergWriteResult> {
+public class IcebergLakeWriter implements LakeWriter<IcebergWriteResult>, SupportsRecordBatchWrite {
 
     protected static final Logger LOG = LoggerFactory.getLogger(IcebergLakeWriter.class);
 
     private final Catalog icebergCatalog;
     private final Table icebergTable;
     private final RecordWriter recordWriter;
+    private final boolean isAppendOnly;
+    private final RowType flussRowType;
 
+    @Nullable private AutoCloseable arrowBatchHelper;
     @Nullable private final ExecutorService compactionExecutor;
     @Nullable private CompletableFuture<RewriteDataFileResult> compactionFuture;
 
@@ -72,6 +80,11 @@ public class IcebergLakeWriter implements LakeWriter<IcebergWriteResult> {
 
         // Create a record writer
         this.recordWriter = createRecordWriter(writerInitContext);
+        this.flussRowType = writerInitContext.tableInfo().getRowType();
+
+        List<Integer> equalityFieldIds =
+                new ArrayList<>(icebergTable.schema().identifierFieldIds());
+        this.isAppendOnly = equalityFieldIds.isEmpty();
 
         if (writerInitContext.tableInfo().getTableConfig().isDataLakeAutoCompaction()) {
             this.compactionExecutor =
@@ -109,6 +122,36 @@ public class IcebergLakeWriter implements LakeWriter<IcebergWriteResult> {
     }
 
     @Override
+    public void write(RecordBatch recordBatch) throws IOException {
+        if (!(recordBatch instanceof ArrowRecordBatch)) {
+            throw new IllegalArgumentException(
+                    "IcebergLakeWriter only supports ArrowRecordBatch, but got "
+                            + recordBatch.getClass().getSimpleName());
+        }
+        if (!isAppendOnly) {
+            throw new IllegalStateException(
+                    "Arrow record batch writing is only supported for append-only tables.");
+        }
+        try {
+            IcebergArrowBatchHelper helper;
+            if (arrowBatchHelper == null) {
+                helper =
+                        new IcebergArrowBatchHelper(
+                                recordWriter.taskWriter,
+                                icebergTable.schema(),
+                                flussRowType,
+                                recordWriter.bucket);
+                arrowBatchHelper = helper;
+            } else {
+                helper = (IcebergArrowBatchHelper) arrowBatchHelper;
+            }
+            helper.writeArrowBatch(((ArrowRecordBatch) recordBatch).getArrowBatchData());
+        } catch (Exception e) {
+            throw new IOException("Failed to write Arrow record batch to Iceberg.", e);
+        }
+    }
+
+    @Override
     public IcebergWriteResult complete() throws IOException {
         try {
             WriteResult writeResult = recordWriter.complete();
@@ -135,6 +178,11 @@ public class IcebergLakeWriter implements LakeWriter<IcebergWriteResult> {
                 if (!compactionExecutor.awaitTermination(30, TimeUnit.SECONDS)) {
                     LOG.warn("Fail to close compactionExecutor.");
                 }
+            }
+
+            if (arrowBatchHelper != null) {
+                arrowBatchHelper.close();
+                arrowBatchHelper = null;
             }
 
             if (recordWriter != null) {

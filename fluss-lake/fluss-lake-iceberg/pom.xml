@@ -82,6 +82,24 @@
             <scope>provided</scope>
         </dependency>
 
+        <!-- Arrow dependencies are provided because they are only needed
+             at runtime when the tiering service writes Arrow record batches to Iceberg.
+             The Flink tiering plugin bundles these jars; fluss-lake-iceberg itself is a
+             lightweight module that should not pull them transitively. -->
+        <dependency>
+            <groupId>org.apache.arrow</groupId>
+            <artifactId>arrow-vector</artifactId>
+            <version>${arrow.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.arrow</groupId>
+            <artifactId>arrow-memory-netty</artifactId>
+            <version>${arrow.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
         <!-- test dependency -->
         <dependency>
             <groupId>org.apache.fluss</groupId>
