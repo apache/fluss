@@ -97,7 +97,7 @@ class IcebergSchemaEvolutionITCase extends FlinkIcebergTieringTestBase {
         try {
             // Wait until initial data is tiered
             assertReplicaStatus(bucket, 3);
-            checkDataInIcebergAppendOnlyTable(tablePath, initialRows, 0);
+            checkDataInIcebergAppendOnlyTable(tablePath, initialRows);
 
             // Verify initial Iceberg schema has no extra columns
             org.apache.iceberg.Table icebergTable = icebergCatalog.loadTable(toIceberg(tablePath));
@@ -172,7 +172,7 @@ class IcebergSchemaEvolutionITCase extends FlinkIcebergTieringTestBase {
         try {
             assertReplicaStatus(bucket, 3);
             // Initial tiered data is still clean at this point.
-            checkDataInIcebergAppendOnlyTable(tablePath, initialRows, 0);
+            checkDataInIcebergAppendOnlyTable(tablePath, initialRows);
 
             // Convert the tiered table into a legacy table (system columns + identity(__bucket) +
             // asc(__offset)), simulating a table created before FIP-27.

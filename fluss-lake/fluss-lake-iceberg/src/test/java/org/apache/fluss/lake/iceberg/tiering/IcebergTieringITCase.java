@@ -292,8 +292,7 @@ class IcebergTieringITCase extends FlinkIcebergTieringTestBase {
         JobClient jobClient = buildTieringJob(execEnv);
         try {
             assertReplicaStatus(tBucket, 30);
-            // The legacy table keeps the system columns, and the tiered __offset must be correct.
-            checkDataInIcebergLegacyAppendOnlyTable(t, flussRows, 0);
+            checkDataInIcebergAppendOnlyTable(t, flussRows);
         } finally {
             jobClient.cancel().get();
         }
@@ -384,7 +383,7 @@ class IcebergTieringITCase extends FlinkIcebergTieringTestBase {
         assertReplicaStatus(t2Bucket, 30);
 
         // check data in iceberg
-        checkDataInIcebergAppendOnlyTable(t2, flussRows, 0);
+        checkDataInIcebergAppendOnlyTable(t2, flussRows);
     }
 
     private void testPartitionedTableTiering() throws Exception {
@@ -416,8 +415,7 @@ class IcebergTieringITCase extends FlinkIcebergTieringTestBase {
             checkDataInIcebergAppendOnlyPartitionedTable(
                     partitionedTablePath,
                     Collections.singletonMap(partitionCol, partitionName),
-                    writtenRowsByPartition.get(partitionName),
-                    0);
+                    writtenRowsByPartition.get(partitionName));
         }
 
         checkFlussOffsetsInSnapshot(partitionedTablePath, expectedOffsets);
