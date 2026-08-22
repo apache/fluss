@@ -886,6 +886,11 @@
                                 <exclude>log4j2.properties</exclude>
                                 <exclude>log4j-test.properties</exclude>
                                 <exclude>log4j2-test.properties</exclude>
+                                <!-- Do not copy module-info.class from shaded dependencies.
+                                     Otherwise, the shaded uber-JAR will inherit a third-party module descriptor (e.g. from commons-lang3)
+                                     which breaks JPMS modular consumption. -->
+                                <exclude>module-info.class</exclude>
+                                <exclude>META-INF/versions/**/module-info.class</exclude>
                                 <!-- Do not copy the signatures in the META-INF folder.
                                 Otherwise, this might cause SecurityExceptions when using the JAR. -->
                                 <exclude>META-INF/*.SF</exclude>
