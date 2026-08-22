@@ -20,14 +20,14 @@ package org.apache.fluss.exception;
 import org.apache.fluss.annotation.PublicEvolving;
 
 /**
- * Thrown by a tablet server to reject writes when the underlying KV storage is close to, or already
- * under, RocksDB write pressure.
+ * Thrown by a tablet server to reject writes when a KV write-pressure source reaches its defensive
+ * limit, such as RocksDB write pressure or the TabletServer-wide KV pre-write-buffer memory limit.
  *
  * <p>This is the second tier of the cooperative backpressure model: the first tier is the proactive
- * client-side throttle (driven by per-bucket pressure piggybacked on responses); once the storage
- * engine itself is about to enter internal write delay or rejects a no-slowdown write, the server
- * short-circuits the write and returns this retriable exception so that request processing threads
- * are not blocked by the storage engine's internal sleep.
+ * client-side throttle (driven by pressure piggybacked on responses); once a hard limit is reached,
+ * the server short-circuits the write and returns this retriable exception. This prevents request
+ * processing threads from blocking on the storage engine and provides a last line of defense
+ * against memory exhaustion.
  *
  * <p>Clients should retry after a backoff equal to the configured throttle ceiling.
  *
