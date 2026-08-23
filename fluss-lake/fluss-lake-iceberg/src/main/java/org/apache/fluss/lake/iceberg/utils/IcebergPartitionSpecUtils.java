@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.metadata.TableDescriptor;
 
+import org.apache.iceberg.PartitionField;
 import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.Schema;
 
@@ -93,5 +94,24 @@ public final class IcebergPartitionSpecUtils {
             builder.bucket(bucketKeys.get(0), bucketCount);
         }
         return builder.build();
+    }
+
+    /** Returns whether the partition field uses an Iceberg bucket transform. */
+    public static boolean isBucketTransform(PartitionField partitionField) {
+        return partitionField.transform().toString().startsWith("bucket[");
+    }
+
+    /**
+     * Returns whether the partition field is the trailing physical bucket field maintained by
+     * Fluss.
+     *
+     * <p>For bucket-aware tables, this is {@code bucket(bucketKey)}. For legacy bucket-unaware
+     * tables, this is {@code identity(__bucket)}.
+     */
+    public static boolean isFlussBucketField(Schema icebergSchema, PartitionField partitionField) {
+        return isBucketTransform(partitionField)
+                || (partitionField.transform().isIdentity()
+                        && BUCKET_COLUMN_NAME.equals(
+                                icebergSchema.findColumnName(partitionField.sourceId())));
     }
 }

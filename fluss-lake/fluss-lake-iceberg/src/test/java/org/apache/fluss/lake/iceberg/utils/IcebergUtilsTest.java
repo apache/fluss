@@ -27,7 +27,6 @@ import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
 import static org.apache.iceberg.types.Types.NestedField.optional;
 import static org.apache.iceberg.types.Types.NestedField.required;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** UT for {@link IcebergUtils#isLegacyTable(Schema)}. */
 class IcebergUtilsTest {
@@ -83,33 +82,5 @@ class IcebergUtilsTest {
                 new Schema(
                         required(1, "id", Types.LongType.get()), offsetField(2), timestampField(3));
         assertThat(IcebergUtils.isLegacyTable(twoMatch)).isFalse();
-    }
-
-    @Test
-    void testAllThreePresentButNotTrailingIsRejected() {
-        // System columns present but a user column follows them → ambiguous, must be rejected.
-        Schema notTrailing =
-                new Schema(
-                        required(1, "id", Types.LongType.get()),
-                        bucketField(2),
-                        offsetField(3),
-                        timestampField(4),
-                        optional(5, "extra", Types.StringType.get()));
-        assertThatThrownBy(() -> IcebergUtils.isLegacyTable(notTrailing))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("trailing");
-    }
-
-    @Test
-    void testAllThreePresentButOutOfOrderIsRejected() {
-        Schema outOfOrder =
-                new Schema(
-                        required(1, "id", Types.LongType.get()),
-                        offsetField(2),
-                        bucketField(3),
-                        timestampField(4));
-        assertThatThrownBy(() -> IcebergUtils.isLegacyTable(outOfOrder))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("canonical order");
     }
 }

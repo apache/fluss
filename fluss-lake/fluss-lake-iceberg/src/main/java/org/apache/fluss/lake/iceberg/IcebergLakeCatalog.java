@@ -109,7 +109,9 @@ public class IcebergLakeCatalog implements LakeCatalog {
 
         PartitionSpec partitionSpec =
                 IcebergPartitionSpecUtils.createPartitionSpec(tableDescriptor, icebergSchema);
-        SortOrder sortOrder = createSortOrder(icebergSchema);
+        // FIP-27: newly created tables are clean and carry no __offset column, so they need no
+        // sort order. (Legacy tables keep ASC(__offset), but those are never created here.)
+        SortOrder sortOrder = SortOrder.unsorted();
         Map<String, String> expectedProperties = buildTableProperties(tableDescriptor, isPkTable);
         tableBuilder.withProperties(expectedProperties);
         tableBuilder.withPartitionSpec(partitionSpec);
@@ -336,7 +338,8 @@ public class IcebergLakeCatalog implements LakeCatalog {
                 expectedSpec =
                         IcebergPartitionSpecUtils.createPartitionSpec(
                                 tableDescriptor, newIcebergSchema);
-                expectedSortOrder = createSortOrder(newIcebergSchema);
+                expectedSortOrder =
+                        SortOrder.builderFor(newIcebergSchema).asc(OFFSET_COLUMN_NAME).build();
             }
 
             if (!isIcebergSchemaCompatibleWithSchema(existingSchema, newIcebergSchema)) {
@@ -553,17 +556,6 @@ public class IcebergLakeCatalog implements LakeCatalog {
             throw new UnsupportedOperationException(
                     "The underlying Iceberg catalog does not support namespace operations.");
         }
-    }
-
-    private SortOrder createSortOrder(Schema icebergSchema) {
-        if (icebergSchema.findField(OFFSET_COLUMN_NAME) == null) {
-            // Clean tables (FIP-27) have no __offset system column; no sort order is needed.
-            return SortOrder.unsorted();
-        }
-        // Legacy tables: sort by __offset for deterministic ordering
-        SortOrder.Builder builder = SortOrder.builderFor(icebergSchema);
-        builder.asc(OFFSET_COLUMN_NAME);
-        return builder.build();
     }
 
     private Map<String, String> buildTableProperties(

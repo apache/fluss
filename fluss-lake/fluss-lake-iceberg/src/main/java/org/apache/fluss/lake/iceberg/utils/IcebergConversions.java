@@ -69,17 +69,12 @@ public class IcebergConversions {
                 partitionKey.set(pos++, partition);
             }
         }
-        // Set the bucket value only when the partition spec has a trailing bucket field — either
-        // the legacy identity(__bucket) column or a bucket(userCol) transform. Bucket-unaware
-        // partitioned tables (last field is an identity partition column) have no such field and
-        // must not set a bucket slot.
+        // Set the bucket value only when the trailing partition field is the Fluss bucket field
+        // (legacy identity(__bucket) or a bucket(bucketKey) transform). Bucket-unaware partitioned
+        // tables (a trailing identity partition column) have no such field.
         List<PartitionField> fields = partitionSpec.fields();
         PartitionField lastField = fields.get(fields.size() - 1);
-        Types.NestedField lastSourceField = schema.findField(lastField.sourceId());
-        boolean lastIsLegacyBucket =
-                lastSourceField != null && lastSourceField.name().equals(BUCKET_COLUMN_NAME);
-        boolean lastIsBucketTransform = lastField.transform().toString().startsWith("bucket[");
-        if (lastIsLegacyBucket || lastIsBucketTransform) {
+        if (IcebergPartitionSpecUtils.isFlussBucketField(schema, lastField)) {
             partitionKey.set(pos, bucket);
         }
         return partitionKey;

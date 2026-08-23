@@ -38,13 +38,11 @@ import org.apache.iceberg.types.Types;
 import javax.annotation.Nullable;
 
 import java.io.IOException;
-import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.IntStream;
 
-import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
-import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
+import static org.apache.fluss.lake.iceberg.IcebergSchemaUtils.LEGACY_SYSTEM_COLUMNS;
 
 /**
  * Iceberg record reader. The filter is applied during the plan phase of IcebergSplitPlanner, so the
@@ -63,15 +61,13 @@ public class IcebergRecordReader implements RecordReader {
     protected Types.StructType struct;
 
     public IcebergRecordReader(FileScanTask fileScanTask, Table table, @Nullable int[][] project) {
-        boolean isLegacy = IcebergUtils.isLegacyTable(table.schema());
         TableScan tableScan = table.newScan();
         if (project != null) {
-            tableScan = applyProject(tableScan, project, isLegacy);
+            tableScan = applyProject(tableScan, project);
         }
         IcebergGenericReader reader = new IcebergGenericReader(tableScan, true);
         struct = tableScan.schema().asStruct();
-        this.iterator =
-                new IcebergRecordAsFlussRecordIterator(reader.open(fileScanTask), struct, isLegacy);
+        this.iterator = new IcebergRecordAsFlussRecordIterator(reader.open(fileScanTask), struct);
     }
 
     @Override
@@ -79,19 +75,15 @@ public class IcebergRecordReader implements RecordReader {
         return iterator;
     }
 
-    private TableScan applyProject(TableScan tableScan, int[][] projects, boolean isLegacy) {
+    private TableScan applyProject(TableScan tableScan, int[][] projects) {
         Types.StructType structType = tableScan.schema().asStruct();
-        List<Types.NestedField> cols = new ArrayList<>(projects.length + 2);
-
+        List<Types.NestedField> cols = new ArrayList<>(projects.length);
+        // The projected column ids reference the user (business) columns; the log offset /
+        // timestamp
+        // are not read from the lake table (a clean table has none, and for a legacy table we no
+        // longer read them), so no system column needs to be projected.
         for (int[] project : projects) {
             cols.add(structType.fields().get(project[0]));
-        }
-
-        if (isLegacy) {
-            // Legacy tables carry __offset and __timestamp; project them so the iterator can
-            // read the actual per-record offset and timestamp values.
-            cols.add(structType.field(OFFSET_COLUMN_NAME));
-            cols.add(structType.field(TIMESTAMP_COLUMN_NAME));
         }
         return tableScan.project(new Schema(cols));
     }
@@ -104,29 +96,18 @@ public class IcebergRecordReader implements RecordReader {
         private final ProjectedRow projectedRow;
         private final IcebergRecordAsFlussRow icebergRecordAsFlussRow;
 
-        private final int logOffsetColIndex;
-        private final int timestampColIndex;
-
         public IcebergRecordAsFlussRecordIterator(
-                CloseableIterable<Record> icebergRecordIterator,
-                Types.StructType struct,
-                boolean isLegacy) {
+                CloseableIterable<Record> icebergRecordIterator, Types.StructType struct) {
             this.icebergRecordIterator = icebergRecordIterator.iterator();
 
-            if (isLegacy) {
-                this.logOffsetColIndex = struct.fields().indexOf(struct.field(OFFSET_COLUMN_NAME));
-                this.timestampColIndex =
-                        struct.fields().indexOf(struct.field(TIMESTAMP_COLUMN_NAME));
-                // The last two projected columns are __offset and __timestamp; strip them from the
-                // business row.
-                int[] project = IntStream.range(0, struct.fields().size() - 2).toArray();
-                projectedRow = ProjectedRow.from(project);
-            } else {
-                this.logOffsetColIndex = -1;
-                this.timestampColIndex = -1;
-                projectedRow =
-                        ProjectedRow.from(IntStream.range(0, struct.fields().size()).toArray());
-            }
+            // A legacy table read without projection still exposes its three trailing system
+            // columns; trim them so only the business columns are emitted. A clean table (or any
+            // projected read) has no system columns to trim.
+            int businessFieldCount =
+                    IcebergUtils.isLegacyTable(new Schema(struct.fields()))
+                            ? struct.fields().size() - LEGACY_SYSTEM_COLUMNS.size()
+                            : struct.fields().size();
+            projectedRow = ProjectedRow.from(IntStream.range(0, businessFieldCount).toArray());
             icebergRecordAsFlussRow = new IcebergRecordAsFlussRow();
         }
 
@@ -147,23 +128,13 @@ public class IcebergRecordReader implements RecordReader {
         @Override
         public LogRecord next() {
             Record icebergRecord = icebergRecordIterator.next();
-            long offset;
-            long timestamp;
-            if (logOffsetColIndex >= 0) {
-                offset = icebergRecord.get(logOffsetColIndex, Long.class);
-                timestamp =
-                        icebergRecord
-                                .get(timestampColIndex, OffsetDateTime.class)
-                                .toInstant()
-                                .toEpochMilli();
-            } else {
-                offset = NO_SYSTEM_COLUMN_VALUE;
-                timestamp = NO_SYSTEM_COLUMN_VALUE;
-            }
-
+            // The lake table does not carry a per-record log offset / timestamp (a clean table has
+            // no system columns, and for a legacy table we no longer read them), so a sentinel -1
+            // is
+            // emitted, consistent with the Paimon reader and the LakeRecordRecordEmitter contract.
             return new GenericRecord(
-                    offset,
-                    timestamp,
+                    NO_SYSTEM_COLUMN_VALUE,
+                    NO_SYSTEM_COLUMN_VALUE,
                     ChangeType.INSERT,
                     projectedRow.replaceRow(
                             icebergRecordAsFlussRow.replaceIcebergRecord(icebergRecord)));
