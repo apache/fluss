@@ -558,6 +558,10 @@ When integrating with Iceberg, Fluss automatically converts between Fluss data t
 The table option `table.datalake.auto-compaction` (disabled by default) provides per-table control over automatic compaction.
 When enabled for a specific table, compaction is automatically triggered during write operations to that table by the tiering service.
 
+:::note
+Tiering-managed auto compaction is currently only supported for legacy Iceberg lake tables (tables that still carry the `__bucket`/`__offset`/`__timestamp` system columns). Newly created ("clean") Iceberg lake tables contain only user columns and have no `__bucket` column to scope per-bucket compaction, so `table.datalake.auto-compaction` is a no-op for them (a warning is logged by the tiering service). Use external Iceberg compaction to maintain small files for such tables.
+:::
+
 #### Configuration
 
 ```sql title="Flink SQL"
