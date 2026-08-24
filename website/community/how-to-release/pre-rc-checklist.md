@@ -16,7 +16,7 @@ Run through this before cutting a release candidate. It catches the problems tha
 
 ## Build and publish dry-runs
 
-- [ ] `cargo publish -p fluss-rs --dry-run` succeeds (run after `fluss-rust/scripts/vendor-proto.sh` so the proto is vendored)
+- [ ] `cargo publish -p fluss-rs --dry-run` succeeds
 - [ ] Python wheels + sdist install from **TestPyPI** (the RC tag publishes there):
 
   ```bash

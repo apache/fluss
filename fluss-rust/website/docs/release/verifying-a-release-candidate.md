@@ -62,7 +62,7 @@ fluss-rust-0.1.0.tgz: OK
 
 ## Verifying build
 
-Extract the source release archive and verify that it builds (and optionally that tests pass). You need **Rust** (see [rust-toolchain.toml](https://github.com/apache/fluss/blob/main/fluss-rust/rust-toolchain.toml) for the expected version) and, for full builds, **protobuf** and **Python 3.9+** for bindings.
+Extract the source release archive and verify that it builds (and optionally that tests pass). You need **Rust** (see [rust-toolchain.toml](https://github.com/apache/fluss/blob/main/fluss-rust/rust-toolchain.toml) for the expected version) and, for full builds, **Python 3.9+** for bindings.
 
 ```bash
 tar -xzf fluss-rust-${RELEASE_VERSION}.tgz

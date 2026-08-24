@@ -61,14 +61,6 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Install protobuf compiler
-        run: brew install protobuf
-        if: runner.os == 'macOS'
-
-      - name: Install protobuf compiler
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-        if: runner.os == 'Linux'
-
       - name: Rust Cache
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
@@ -105,9 +97,6 @@ jobs:
       - name: Install the MSRV toolchain
         run: rustup toolchain install 1.88.0 --profile minimal
 
-      - name: Install protobuf compiler
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
       - name: Rust Cache
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
@@ -131,9 +120,6 @@ jobs:
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-deny@0.14.22
-
-      - name: Install protobuf compiler
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
       - name: Check dependency licenses (Apache-compatible)
         run: cargo deny --locked check licenses

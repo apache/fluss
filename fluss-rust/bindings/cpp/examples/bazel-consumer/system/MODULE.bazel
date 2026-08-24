@@ -28,11 +28,10 @@ local_path_override(
     path = "../../../../../",
 )
 
-# Intended interface for preinstalled protoc + Arrow C++ environments.
+# Intended interface for preinstalled Arrow C++ environments.
 fluss_cpp = use_extension("@fluss-cpp//bindings/cpp/bazel/cpp:deps.bzl", "cpp_sdk")
 fluss_cpp.config(
     mode = "system",
-    protobuf_version = "3.25.5",
     arrow_cpp_version = "19.0.1",
     # Adjust these paths for your environment.
     # Ubuntu 22.04 (apt / custom package) commonly uses lib/x86_64-linux-gnu.

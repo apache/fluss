@@ -31,7 +31,6 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(FLUSS_CPP_DEP_MODE "system" CACHE STRING "Dependency provisioning mode for fluss-cpp (system|build)")
 set_property(CACHE FLUSS_CPP_DEP_MODE PROPERTY STRINGS system build)
 set(FLUSS_CPP_ARROW_VERSION "19.0.1" CACHE STRING "Arrow C++ version baseline for fluss-cpp")
-set(FLUSS_CPP_PROTOBUF_VERSION "3.25.5" CACHE STRING "Protobuf/protoc version baseline for fluss-cpp")
 set(FLUSS_CPP_ARROW_SYSTEM_ROOT "" CACHE PATH "Optional Arrow installation prefix for system mode")
 set(FLUSS_CPP_ARROW_SOURCE_URL
     "https://github.com/apache/arrow/archive/refs/tags/apache-arrow-19.0.1.tar.gz"
@@ -64,11 +63,6 @@ if (NOT FLUSS_CPP_DEP_MODE STREQUAL "system" AND NOT FLUSS_CPP_DEP_MODE STREQUAL
     message(FATAL_ERROR "Unsupported FLUSS_CPP_DEP_MODE='${FLUSS_CPP_DEP_MODE}'. Expected 'system' or 'build'.")
 endif()
 
-find_program(FLUSS_PROTOC_EXECUTABLE NAMES protoc)
-if (NOT FLUSS_PROTOC_EXECUTABLE)
-    message(FATAL_ERROR "protoc not found. Install protoc or set it in PATH. (Fluss baseline: ${FLUSS_CPP_PROTOBUF_VERSION})")
-endif()
-
 if (DEFINED ENV{CARGO} AND NOT "$ENV{CARGO}" STREQUAL "" AND EXISTS "$ENV{CARGO}")
     set(FLUSS_CARGO_EXECUTABLE "$ENV{CARGO}")
 else()
@@ -81,27 +75,7 @@ if (NOT FLUSS_CARGO_EXECUTABLE)
     message(FATAL_ERROR "cargo not found. Install Rust toolchain or set CARGO/PATH.")
 endif()
 
-execute_process(
-    COMMAND ${FLUSS_PROTOC_EXECUTABLE} --version
-    OUTPUT_VARIABLE FLUSS_PROTOC_VERSION_OUTPUT
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    ERROR_QUIET
-)
-string(REGEX MATCH "([0-9]+\\.[0-9]+\\.[0-9]+)" FLUSS_PROTOC_VERSION "${FLUSS_PROTOC_VERSION_OUTPUT}")
-set(FLUSS_PROTOC_VERSION_NORM "${FLUSS_PROTOC_VERSION}")
-set(FLUSS_CPP_PROTOBUF_VERSION_NORM "${FLUSS_CPP_PROTOBUF_VERSION}")
-string(REGEX REPLACE "^3\\." "" FLUSS_PROTOC_VERSION_NORM "${FLUSS_PROTOC_VERSION_NORM}")
-string(REGEX REPLACE "^3\\." "" FLUSS_CPP_PROTOBUF_VERSION_NORM "${FLUSS_CPP_PROTOBUF_VERSION_NORM}")
-if (FLUSS_PROTOC_VERSION AND
-    NOT FLUSS_PROTOC_VERSION VERSION_EQUAL FLUSS_CPP_PROTOBUF_VERSION AND
-    NOT FLUSS_PROTOC_VERSION_NORM VERSION_EQUAL FLUSS_CPP_PROTOBUF_VERSION_NORM)
-    message(WARNING
-        "protoc version (${FLUSS_PROTOC_VERSION}) does not match Fluss baseline "
-        "(${FLUSS_CPP_PROTOBUF_VERSION}). Build may still work, but this is outside the tested baseline.")
-endif()
-
 message(STATUS "Fluss C++ dependency mode: ${FLUSS_CPP_DEP_MODE}")
-message(STATUS "Fluss C++ protoc executable: ${FLUSS_PROTOC_EXECUTABLE} (${FLUSS_PROTOC_VERSION_OUTPUT})")
 message(STATUS "Fluss C++ cargo executable: ${FLUSS_CARGO_EXECUTABLE}")
 
 if (FLUSS_CPP_DEP_MODE STREQUAL "system")
@@ -196,7 +170,7 @@ if (NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
 endif()
 
 add_custom_target(cargo_build
-    COMMAND ${CMAKE_COMMAND} -E env PROTOC=${FLUSS_PROTOC_EXECUTABLE} ${FLUSS_CARGO_EXECUTABLE} build --manifest-path ${CARGO_MANIFEST} ${CARGO_BUILD_FLAGS}
+    COMMAND ${FLUSS_CARGO_EXECUTABLE} build --manifest-path ${CARGO_MANIFEST} ${CARGO_BUILD_FLAGS}
     BYPRODUCTS ${RUST_BRIDGE_CPP} ${RUST_LIB} ${RUST_HEADER_FILE}
     DEPENDS ${RUST_SOURCE_FILE}
     USES_TERMINAL

@@ -5,21 +5,17 @@ Welcome to the development guide for `fluss-rust`! This project builds the Fluss
 ## Prerequisites
 
 - Rust 1.85+ (see [rust-toolchain.toml](https://github.com/apache/fluss/blob/main/fluss-rust/rust-toolchain.toml))
-- Protobuf compiler (`protoc`)
 
-Install using your preferred package/version manager:
+Install using your preferred package/version manager, for example:
 
 ```bash
 # Using mise
-mise install protobuf
 mise install rust
-
-# Using Homebrew (macOS)
-brew install protobuf
-
-# Using apt (Ubuntu/Debian)
-sudo apt-get install protobuf-compiler
 ```
+
+The Protobuf compiler (`protoc`) is only needed when regenerating the protobuf code after
+changing the canonical `FlussApi.proto` (run `crates/fluss/regen.sh` and commit the result);
+regular builds use the checked-in `crates/fluss/src/proto/fluss.rs`.
 
 ## IDE Setup
 

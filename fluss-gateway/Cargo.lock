@@ -778,12 +778,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d45db016d36b838f563236e9193d0ee6ce38f3f68b6c94e914b4929c96bbb890"
 
 [[package]]
-name = "fixedbitset"
-version = "0.5.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d674e81391d1e1ab681a28d99df07927c6d4aa5b027d7da16ba32d1d21ecd99"
-
-[[package]]
 name = "flatbuffers"
 version = "25.12.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -846,7 +840,6 @@ dependencies = [
  "parking_lot",
  "parse-display",
  "prost",
- "prost-build",
  "rand 0.9.5",
  "scopeguard",
  "serde",
@@ -860,12 +853,6 @@ dependencies = [
  "url",
  "uuid",
 ]
-
-[[package]]
-name = "foldhash"
-version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
 
 [[package]]
 name = "foldhash"
@@ -1057,20 +1044,11 @@ checksum = "e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1"
 
 [[package]]
 name = "hashbrown"
-version = "0.15.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9229cfe53dfd69f0609a49f65461bd93001ea1ef889cd5529dd176593f5338a1"
-dependencies = [
- "foldhash 0.1.5",
-]
-
-[[package]]
-name = "hashbrown"
 version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
 dependencies = [
- "foldhash 0.2.0",
+ "foldhash",
 ]
 
 [[package]]
@@ -1632,12 +1610,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "multimap"
-version = "0.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d87ecb2933e8aeadb3e3a02b828fed80a7528047e68b4f424523a0981a3a084"
-
-[[package]]
 name = "num-bigint"
 version = "0.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1796,17 +1768,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
-name = "petgraph"
-version = "0.8.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8701b58ea97060d5e5b155d383a69952a60943f0e6dfe30b04c287beb0b27455"
-dependencies = [
- "fixedbitset",
- "hashbrown 0.15.5",
- "indexmap",
-]
-
-[[package]]
 name = "pin-project-lite"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1852,16 +1813,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "prettyplease"
-version = "0.2.37"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "479ca8adacdd7ce8f1fb39ce9ecccbfe93a3f1344b3d0d97f20bc0196208f62b"
-dependencies = [
- "proc-macro2",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "proc-macro2"
 version = "1.0.107"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1881,25 +1832,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "prost-build"
-version = "0.14.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "03da047801ff44bb6a4d407d4860c05fd70bb81714e6b2f3812603d5b145b042"
-dependencies = [
- "heck",
- "itertools",
- "log",
- "multimap",
- "petgraph",
- "prettyplease",
- "prost",
- "prost-types",
- "regex",
- "syn 2.0.119",
- "tempfile",
-]
-
-[[package]]
 name = "prost-derive"
 version = "0.14.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1910,15 +1842,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
-]
-
-[[package]]
-name = "prost-types"
-version = "0.14.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f94967dc7688f3054c7fac87473ffae4cc4c3904800e2d9f5b857246d8963b0a"
-dependencies = [
- "prost",
 ]
 
 [[package]]
