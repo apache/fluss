@@ -32,6 +32,7 @@ mod table_test {
         AddColumn, AlterTableChanges, ColumnPositionType, DataField, DataTypes, JsonSerde,
         PartitionSpec, Schema, TableDescriptor, TablePath,
     };
+    use fluss::predicate::col;
     use fluss::record::ScanRecord;
     use fluss::row::binary_array::FlussArrayWriter;
     use fluss::row::binary_map::FlussMapWriter;
@@ -539,6 +540,467 @@ mod table_test {
             result.is_err(),
             "project_by_name with non-existent column should fail"
         );
+    }
+
+    /// Creates a single-bucket log table with statistics enabled and tiered
+    /// segments kept local, since remotely read segments bypass server-side
+    /// filtering.
+    async fn create_stats_log_table(admin: &FlussAdmin, table_path: &TablePath) {
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("name", DataTypes::string())
+                    .build()
+                    .expect("Failed to build schema"),
+            )
+            .property("table.statistics.columns", "*")
+            .property("table.log.tiered.local-segments", "100")
+            .build()
+            .expect("Failed to build table");
+        create_table(admin, table_path, &table_descriptor).await;
+        wait_for_table_ready(admin, table_path).await;
+    }
+
+    async fn poll_ids_and_names(
+        log_scanner: &fluss::client::LogScanner,
+        expected_count: usize,
+    ) -> Vec<(i32, String)> {
+        let mut collected = poll_until_count(
+            expected_count,
+            DEFAULT_POLL_TIMEOUT,
+            Duration::from_millis(500),
+            async |d| {
+                log_scanner
+                    .poll(d)
+                    .await
+                    .expect("Failed to poll records")
+                    .into_iter()
+                    .map(|rec| {
+                        let row = rec.row();
+                        (
+                            row.get_int(0).unwrap(),
+                            row.get_string(1).unwrap().to_string(),
+                        )
+                    })
+                    .collect()
+            },
+        )
+        .await;
+        collected.sort();
+        collected
+    }
+
+    /// Batches whose statistics cannot match the predicate are pruned from the
+    /// fetch, batches that can match are returned whole.
+    #[tokio::test]
+    async fn filter_pushdown_prunes_non_matching_batches() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss", "test_filter_pushdown_prune");
+        create_stats_log_table(&admin, &table_path).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+        let writer = table
+            .new_append()
+            .expect("Failed to create append")
+            .create_writer()
+            .expect("Failed to create writer");
+
+        // Three wire batches with disjoint id ranges, so min/max pruning is
+        // deterministic: a batch either fully matches the filter or cannot match.
+        writer
+            .append_arrow_batch(
+                record_batch!(
+                    ("id", Int32, [1, 2, 3, 4, 5]),
+                    ("name", Utf8, ["v1", "v2", "v3", "v4", "v5"])
+                )
+                .unwrap(),
+            )
+            .expect("Failed to append batch 1");
+        writer
+            .append_arrow_batch(
+                record_batch!(
+                    ("id", Int32, [100, 101, 102, 103, 104]),
+                    ("name", Utf8, ["v100", "v101", "v102", "v103", "v104"])
+                )
+                .unwrap(),
+            )
+            .expect("Failed to append batch 2");
+        writer
+            .append_arrow_batch(
+                record_batch!(
+                    ("id", Int32, [200, 201, 202, 203, 204]),
+                    ("name", Utf8, ["v200", "v201", "v202", "v203", "v204"])
+                )
+                .unwrap(),
+            )
+            .expect("Failed to append batch 3");
+        writer.flush().await.expect("Failed to flush");
+
+        let log_scanner = table
+            .new_scan()
+            .filter(col("id").ge(200))
+            .expect("Failed to set filter")
+            .create_log_scanner()
+            .expect("Failed to create log scanner");
+        log_scanner
+            .subscribe(0, EARLIEST_OFFSET)
+            .await
+            .expect("Failed to subscribe");
+
+        let collected = poll_ids_and_names(&log_scanner, 5).await;
+        let expected: Vec<(i32, String)> = (200..=204).map(|id| (id, format!("v{id}"))).collect();
+        assert_eq!(
+            collected, expected,
+            "Only the batch overlapping the predicate should be fetched; the two \
+             disjoint batches must be pruned server-side"
+        );
+
+        // The filter resolves against the full row type, so filtering on a column
+        // excluded from the projection must still prune correctly.
+        let projected_scanner = table
+            .new_scan()
+            .project_by_name(&["name"])
+            .expect("Failed to project")
+            .filter(col("id").ge(200))
+            .expect("Failed to set filter")
+            .create_log_scanner()
+            .expect("Failed to create projected log scanner");
+        projected_scanner
+            .subscribe(0, EARLIEST_OFFSET)
+            .await
+            .expect("Failed to subscribe");
+
+        let mut names = poll_until_count(
+            5,
+            DEFAULT_POLL_TIMEOUT,
+            Duration::from_millis(500),
+            async |d| {
+                projected_scanner
+                    .poll(d)
+                    .await
+                    .expect("Failed to poll records")
+                    .into_iter()
+                    .map(|rec| rec.row().get_string(0).unwrap().to_string())
+                    .collect()
+            },
+        )
+        .await;
+        names.sort();
+        assert_eq!(
+            names,
+            vec!["v200", "v201", "v202", "v203", "v204"],
+            "Filtering on a non-projected column should still prune correctly"
+        );
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
+    }
+
+    /// Pruning is batch-granular, so a batch whose statistics overlap the
+    /// predicate is returned whole, non-matching rows included.
+    #[tokio::test]
+    async fn filter_with_overlapping_statistics_returns_whole_batch() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss", "test_filter_overlapping_statistics");
+        create_stats_log_table(&admin, &table_path).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+        let writer = table
+            .new_append()
+            .expect("Failed to create append")
+            .create_writer()
+            .expect("Failed to create writer");
+
+        writer
+            .append_arrow_batch(
+                record_batch!(
+                    ("id", Int32, [1, 2, 3, 4, 5]),
+                    ("name", Utf8, ["low1", "low2", "low3", "low4", "low5"])
+                )
+                .unwrap(),
+            )
+            .expect("Failed to append non-matching batch");
+        writer
+            .append_arrow_batch(
+                record_batch!(
+                    ("id", Int32, [1, 6, 3, 8, 2]),
+                    ("name", Utf8, ["m1", "m6", "m3", "m8", "m2"])
+                )
+                .unwrap(),
+            )
+            .expect("Failed to append mixed batch");
+        writer.flush().await.expect("Failed to flush");
+
+        let log_scanner = table
+            .new_scan()
+            .filter(col("id").gt(5))
+            .expect("Failed to set filter")
+            .create_log_scanner()
+            .expect("Failed to create log scanner");
+        log_scanner
+            .subscribe(0, EARLIEST_OFFSET)
+            .await
+            .expect("Failed to subscribe");
+
+        let collected = poll_ids_and_names(&log_scanner, 5).await;
+        let expected: Vec<(i32, String)> = vec![
+            (1, "m1".to_string()),
+            (2, "m2".to_string()),
+            (3, "m3".to_string()),
+            (6, "m6".to_string()),
+            (8, "m8".to_string()),
+        ];
+        assert_eq!(
+            collected, expected,
+            "The mixed batch (min=1, max=8) should be returned whole as a \
+             superset, while the all-low batch is pruned"
+        );
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
+    }
+
+    /// Row appends are buffered through the row-to-Arrow builder rather than
+    /// passed through as a ready-made batch, and the batches it builds must
+    /// still carry prunable statistics.
+    #[tokio::test]
+    async fn filter_pushdown_prunes_row_appended_batches() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss", "test_filter_pushdown_row_append");
+        create_stats_log_table(&admin, &table_path).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+        let writer = table
+            .new_append()
+            .expect("Failed to create append")
+            .create_writer()
+            .expect("Failed to create writer");
+
+        // Flush between the groups so each becomes its own wire batch.
+        for id in 1..=5 {
+            let mut row = GenericRow::new(2);
+            row.set_field(0, id);
+            row.set_field(1, format!("low{id}"));
+            writer.append(&row).expect("Failed to append row");
+        }
+        writer.flush().await.expect("Failed to flush");
+        for id in 200..=204 {
+            let mut row = GenericRow::new(2);
+            row.set_field(0, id);
+            row.set_field(1, format!("v{id}"));
+            writer.append(&row).expect("Failed to append row");
+        }
+        writer.flush().await.expect("Failed to flush");
+
+        let log_scanner = table
+            .new_scan()
+            .filter(col("id").ge(200))
+            .expect("Failed to set filter")
+            .create_log_scanner()
+            .expect("Failed to create log scanner");
+        log_scanner
+            .subscribe(0, EARLIEST_OFFSET)
+            .await
+            .expect("Failed to subscribe");
+
+        let collected = poll_ids_and_names(&log_scanner, 5).await;
+        let expected: Vec<(i32, String)> = (200..=204).map(|id| (id, format!("v{id}"))).collect();
+        assert_eq!(
+            collected, expected,
+            "Row-appended batches must carry statistics, so the low batch is pruned"
+        );
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
+    }
+
+    /// When every batch is pruned the server returns only a filtered end
+    /// offset, and the scanner must advance across the fully pruned segments
+    /// instead of refetching them forever.
+    #[tokio::test]
+    async fn filter_pushdown_advances_past_fully_pruned_range() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss", "test_filter_pushdown_fully_pruned");
+        create_stats_log_table(&admin, &table_path).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+        let writer = table
+            .new_append()
+            .expect("Failed to create append")
+            .create_writer()
+            .expect("Failed to create writer");
+
+        for (ids, names) in [
+            ([1, 2, 3, 4, 5], ["a1", "a2", "a3", "a4", "a5"]),
+            ([6, 7, 8, 9, 10], ["a6", "a7", "a8", "a9", "a10"]),
+            ([11, 12, 13, 14, 15], ["a11", "a12", "a13", "a14", "a15"]),
+        ] {
+            writer
+                .append_arrow_batch(
+                    record_batch!(("id", Int32, ids.to_vec()), ("name", Utf8, names.to_vec()))
+                        .unwrap(),
+                )
+                .expect("Failed to append batch");
+        }
+        writer.flush().await.expect("Failed to flush");
+
+        let log_scanner = table
+            .new_scan()
+            .filter(col("id").gt(1000))
+            .expect("Failed to set filter")
+            .create_log_scanner()
+            .expect("Failed to create log scanner");
+        log_scanner
+            .subscribe(0, EARLIEST_OFFSET)
+            .await
+            .expect("Failed to subscribe");
+
+        // Every existing batch is pruned, so the poll must come back empty
+        // rather than erroring or returning non-matching rows.
+        let records = log_scanner
+            .poll(Duration::from_secs(3))
+            .await
+            .expect("Failed to poll fully pruned range");
+        let leaked_ids: Vec<i32> = records
+            .into_iter()
+            .map(|rec| rec.row().get_int(0).unwrap())
+            .collect();
+        assert!(
+            leaked_ids.is_empty(),
+            "A fully pruned fetch should return no records, got ids: {leaked_ids:?}"
+        );
+
+        // New matching data appended after the pruned range must be reachable.
+        writer
+            .append_arrow_batch(
+                record_batch!(
+                    ("id", Int32, [2001, 2002, 2003, 2004, 2005]),
+                    ("name", Utf8, ["b1", "b2", "b3", "b4", "b5"])
+                )
+                .unwrap(),
+            )
+            .expect("Failed to append matching batch");
+        writer.flush().await.expect("Failed to flush");
+
+        let collected = poll_ids_and_names(&log_scanner, 5).await;
+        let collected_ids: Vec<i32> = collected.iter().map(|(id, _)| *id).collect();
+        assert_eq!(
+            collected_ids,
+            vec![2001, 2002, 2003, 2004, 2005],
+            "The scanner should advance past the fully pruned range and reach \
+             the new matching batch"
+        );
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
+    }
+
+    /// Without `table.statistics.columns` batches carry no statistics, so the
+    /// server cannot prune and a filtered scan returns every row.
+    #[tokio::test]
+    async fn filter_without_statistics_returns_all_rows() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss", "test_filter_without_statistics");
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("name", DataTypes::string())
+                    .build()
+                    .expect("Failed to build schema"),
+            )
+            .property("table.log.tiered.local-segments", "100")
+            .build()
+            .expect("Failed to build table");
+        create_table(&admin, &table_path, &table_descriptor).await;
+        wait_for_table_ready(&admin, &table_path).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+        let writer = table
+            .new_append()
+            .expect("Failed to create append")
+            .create_writer()
+            .expect("Failed to create writer");
+        writer
+            .append_arrow_batch(
+                record_batch!(("id", Int32, [1, 2, 3]), ("name", Utf8, ["x1", "x2", "x3"]))
+                    .unwrap(),
+            )
+            .expect("Failed to append batch 1");
+        writer
+            .append_arrow_batch(
+                record_batch!(
+                    ("id", Int32, [100, 101, 102]),
+                    ("name", Utf8, ["y1", "y2", "y3"])
+                )
+                .unwrap(),
+            )
+            .expect("Failed to append batch 2");
+        writer.flush().await.expect("Failed to flush");
+
+        let log_scanner = table
+            .new_scan()
+            .filter(col("id").ge(100))
+            .expect("Failed to set filter")
+            .create_log_scanner()
+            .expect("Failed to create log scanner");
+        log_scanner
+            .subscribe(0, EARLIEST_OFFSET)
+            .await
+            .expect("Failed to subscribe");
+
+        let collected = poll_ids_and_names(&log_scanner, 6).await;
+        let collected_ids: Vec<i32> = collected.iter().map(|(id, _)| *id).collect();
+        assert_eq!(
+            collected_ids,
+            vec![1, 2, 3, 100, 101, 102],
+            "Without statistics the server cannot prune, so the scan returns a \
+             superset containing every row"
+        );
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
     }
 
     async fn scan_table<'a>(
