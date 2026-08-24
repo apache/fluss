@@ -81,10 +81,6 @@ impl AlignedRowWriter {
         Bytes::copy_from_slice(&self.buffer[..self.cursor])
     }
 
-    pub fn size_in_bytes(&self) -> usize {
-        self.cursor
-    }
-
     fn field_offset(&self, pos: usize) -> usize {
         self.null_bits_size_in_bytes + 8 * pos
     }

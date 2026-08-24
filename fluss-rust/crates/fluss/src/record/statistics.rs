@@ -1086,18 +1086,25 @@ mod tests {
         assert_eq!(i64::from_le_bytes(max[8..16].try_into().unwrap()), 2_000);
     }
 
-    /// The Java reference block, generated and asserted by
-    /// `LogRecordBatchStatisticsCompatibilityTest` against the same checked-in
-    /// fixture so both languages pin to one set of bytes.
+    /// The Java reference block, a copy of fluss-common's checked-in
+    /// `encoding/statistics_block.hex` fixture that
+    /// `LogRecordBatchStatisticsCompatibilityTest` generates and asserts, so
+    /// both languages pin to one set of bytes. Embedded so the test also runs
+    /// outside the monorepo; in the monorepo the copies are asserted identical.
     fn java_statistics_block_hex() -> String {
-        let path = concat!(
+        let embedded = include_str!("testdata/statistics_block.hex").trim();
+        let java_path = concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../../fluss-common/src/test/resources/encoding/statistics_block.hex"
         );
-        std::fs::read_to_string(path)
-            .expect("read fluss-common's encoding/statistics_block.hex fixture")
-            .trim()
-            .to_string()
+        if let Ok(java_fixture) = std::fs::read_to_string(java_path) {
+            assert_eq!(
+                java_fixture.trim(),
+                embedded,
+                "testdata/statistics_block.hex is out of sync with fluss-common's fixture"
+            );
+        }
+        embedded.to_string()
     }
 
     #[test]

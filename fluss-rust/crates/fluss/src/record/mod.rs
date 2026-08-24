@@ -30,7 +30,7 @@ mod statistics;
 pub(crate) use statistics::is_supported_statistics_type;
 
 pub use arrow::*;
-pub use log_record_batch::*;
+pub(crate) use log_record_batch::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ChangeType {

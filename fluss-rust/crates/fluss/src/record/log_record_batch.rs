@@ -63,7 +63,6 @@ pub const RECORDS_COUNT_OFFSET: usize = BATCH_SEQUENCE_OFFSET + BATCH_SEQUENCE_L
 pub const RECORDS_OFFSET: usize = RECORDS_COUNT_OFFSET + RECORDS_COUNT_LENGTH;
 
 pub const RECORD_BATCH_HEADER_SIZE: usize = RECORDS_OFFSET;
-pub const ARROW_CHANGETYPE_OFFSET: usize = RECORD_BATCH_HEADER_SIZE;
 pub const LOG_OVERHEAD: usize = LENGTH_OFFSET + LENGTH_LENGTH;
 
 pub const STATISTICS_LENGTH_LENGTH: usize = 4;
@@ -105,8 +104,7 @@ pub enum LogMagicValue {
     /// V1 places a statistics section between the fixed header and the records
     /// so the server can prune whole batches against a pushed-down filter.
     V1 = 1,
-    /// V2 adds a leader epoch to the header so followers can build a
-    /// consistent leader epoch cache for log truncation on failover.
+    /// V2 adds a leader epoch field to the header.
     V2 = 2,
 }
 
@@ -169,6 +167,10 @@ fn validate_batch_size(batch_size_bytes: i32) -> Result<usize> {
     Ok(total_size)
 }
 
+#[allow(
+    dead_code,
+    reason = "mirrors Java's LogRecordBatchFormat default magic"
+)]
 pub const CURRENT_LOG_MAGIC_VALUE: u8 = LOG_MAGIC_VALUE_V0;
 
 /// Value used if writer ID is not available or non-idempotent.
@@ -483,8 +485,8 @@ impl LogRecordBatch {
         LittleEndian::read_i64(&self.data[offset..offset + COMMIT_TIMESTAMP_LENGTH])
     }
 
-    /// The epoch of the leader that wrote this batch, or [`NO_LEADER_EPOCH`]
-    /// for magics before V2.
+    /// The leader epoch field of a V2 batch, or [`NO_LEADER_EPOCH`] for
+    /// magics before V2.
     pub fn leader_epoch(&self) -> i32 {
         if self.magic() < LOG_MAGIC_VALUE_V2 {
             return NO_LEADER_EPOCH;

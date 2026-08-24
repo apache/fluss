@@ -423,6 +423,9 @@ impl MemoryLogRecordsArrowBuilder {
     }
 
     pub fn build(&mut self) -> Result<Vec<u8>> {
+        // The header and CRC offsets below assume the V0/V1 layout without V2's leader epoch.
+        debug_assert!(self.magic < LOG_MAGIC_VALUE_V2);
+
         // Capture uncompressed body size before serialization for compression ratio update.
         let uncompressed_body_size = self.arrow_record_batch_builder.estimated_size_in_bytes();
 

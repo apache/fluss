@@ -25,7 +25,7 @@ pub mod view;
 pub(crate) mod datum;
 mod decimal;
 
-pub mod aligned;
+pub(crate) mod aligned;
 pub mod binary;
 pub(crate) mod column_writer;
 pub mod compacted;
