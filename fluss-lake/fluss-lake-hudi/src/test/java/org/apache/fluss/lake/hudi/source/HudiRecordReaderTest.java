@@ -24,7 +24,6 @@ import org.apache.fluss.row.BinaryString;
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.data.StringData;
-import org.apache.flink.table.data.TimestampData;
 import org.apache.flink.types.RowKind;
 import org.apache.hudi.common.util.collection.ClosableIterator;
 import org.apache.hudi.org.apache.avro.Schema;
@@ -41,19 +40,17 @@ class HudiRecordReaderTest {
 
     @Test
     void testIteratorConvertsHudiRowDataToFlussLogRecord() {
+        // FIP-27: a Hudi lake table has only Hudi metadata columns followed by user columns; the
+        // reader strips the metadata columns and emits a sentinel -1 offset / timestamp.
         TestingClosableIterator hudiIterator =
-                new TestingClosableIterator(
-                        rowData(RowKind.UPDATE_AFTER, 11, "value", 3, 42L, 1234L));
+                new TestingClosableIterator(rowData(RowKind.UPDATE_AFTER, 11, "value"));
         HudiRecordReader.HudiRecordAsFlussRecordIterator iterator =
-                new HudiRecordReader.HudiRecordAsFlussRecordIterator(
-                        hudiIterator, fullSchema(), 2, 3);
+                new HudiRecordReader.HudiRecordAsFlussRecordIterator(hudiIterator, fullSchema(), 2);
 
         assertThat(iterator.hasNext()).isTrue();
         LogRecord logRecord = iterator.next();
 
         assertThat(logRecord.getChangeType()).isEqualTo(ChangeType.UPDATE_AFTER);
-        // FIP-27: the reader emits a sentinel -1 offset / timestamp for both layouts; the physical
-        // __offset / __timestamp columns are no longer surfaced.
         assertThat(logRecord.logOffset()).isEqualTo(-1L);
         assertThat(logRecord.timestamp()).isEqualTo(-1L);
         assertThat(logRecord.getRow().getFieldCount()).isEqualTo(2);
@@ -67,13 +64,12 @@ class HudiRecordReaderTest {
     }
 
     @Test
-    void testIteratorSkipsMetadataAndAllSystemColumnsForProjectedSchema() {
+    void testIteratorSkipsMetadataForProjectedSchema() {
         TestingClosableIterator hudiIterator =
-                new TestingClosableIterator(
-                        projectedRowData(RowKind.DELETE, "projected", 5, 7L, 999L));
+                new TestingClosableIterator(projectedRowData(RowKind.DELETE, "projected"));
         HudiRecordReader.HudiRecordAsFlussRecordIterator iterator =
                 new HudiRecordReader.HudiRecordAsFlussRecordIterator(
-                        hudiIterator, projectedSchema(), 2, 3);
+                        hudiIterator, projectedSchema(), 2);
 
         LogRecord logRecord = iterator.next();
 
@@ -87,82 +83,7 @@ class HudiRecordReaderTest {
         assertThat(hudiIterator.getCloseCount()).isEqualTo(1);
     }
 
-    @Test
-    void testIteratorForCleanTableHasNoSystemColumns() {
-        // FIP-27: a clean table read has no trailing system columns (systemFieldCount == 0); all
-        // non-metadata columns are business columns and offset/timestamp are the -1 sentinel.
-        TestingClosableIterator hudiIterator =
-                new TestingClosableIterator(cleanRowData(RowKind.INSERT, 11, "value"));
-        HudiRecordReader.HudiRecordAsFlussRecordIterator iterator =
-                new HudiRecordReader.HudiRecordAsFlussRecordIterator(
-                        hudiIterator, cleanSchema(), 2, 0);
-
-        LogRecord logRecord = iterator.next();
-
-        assertThat(logRecord.getChangeType()).isEqualTo(ChangeType.INSERT);
-        assertThat(logRecord.logOffset()).isEqualTo(-1L);
-        assertThat(logRecord.timestamp()).isEqualTo(-1L);
-        assertThat(logRecord.getRow().getFieldCount()).isEqualTo(2);
-        assertThat(logRecord.getRow().getInt(0)).isEqualTo(11);
-        assertThat(logRecord.getRow().getString(1)).isEqualTo(BinaryString.fromString("value"));
-
-        iterator.close();
-        assertThat(hudiIterator.getCloseCount()).isEqualTo(1);
-    }
-
-    private static RowData rowData(
-            RowKind rowKind, int id, String value, int bucket, long offset, long timestamp) {
-        GenericRowData rowData = new GenericRowData(7);
-        rowData.setRowKind(rowKind);
-        rowData.setField(0, StringData.fromString("commit"));
-        rowData.setField(1, StringData.fromString("record-key"));
-        rowData.setField(2, id);
-        rowData.setField(3, StringData.fromString(value));
-        rowData.setField(4, bucket);
-        rowData.setField(5, offset);
-        rowData.setField(6, TimestampData.fromEpochMillis(timestamp));
-        return rowData;
-    }
-
-    private static RowData projectedRowData(
-            RowKind rowKind, String value, int bucket, long offset, long timestamp) {
-        GenericRowData rowData = new GenericRowData(6);
-        rowData.setRowKind(rowKind);
-        rowData.setField(0, StringData.fromString("commit"));
-        rowData.setField(1, StringData.fromString("record-key"));
-        rowData.setField(2, StringData.fromString(value));
-        rowData.setField(3, bucket);
-        rowData.setField(4, offset);
-        rowData.setField(5, TimestampData.fromEpochMillis(timestamp));
-        return rowData;
-    }
-
-    private static Schema fullSchema() {
-        return parseSchema(
-                "["
-                        + "{\"name\":\"_hoodie_commit_time\",\"type\":\"string\"},"
-                        + "{\"name\":\"_hoodie_record_key\",\"type\":\"string\"},"
-                        + "{\"name\":\"id\",\"type\":\"int\"},"
-                        + "{\"name\":\"value\",\"type\":\"string\"},"
-                        + "{\"name\":\"__bucket\",\"type\":\"int\"},"
-                        + "{\"name\":\"__offset\",\"type\":\"long\"},"
-                        + "{\"name\":\"__timestamp\",\"type\":\"long\"}"
-                        + "]");
-    }
-
-    private static Schema projectedSchema() {
-        return parseSchema(
-                "["
-                        + "{\"name\":\"_hoodie_commit_time\",\"type\":\"string\"},"
-                        + "{\"name\":\"_hoodie_record_key\",\"type\":\"string\"},"
-                        + "{\"name\":\"value\",\"type\":\"string\"},"
-                        + "{\"name\":\"__bucket\",\"type\":\"int\"},"
-                        + "{\"name\":\"__offset\",\"type\":\"long\"},"
-                        + "{\"name\":\"__timestamp\",\"type\":\"long\"}"
-                        + "]");
-    }
-
-    private static RowData cleanRowData(RowKind rowKind, int id, String value) {
+    private static RowData rowData(RowKind rowKind, int id, String value) {
         GenericRowData rowData = new GenericRowData(4);
         rowData.setRowKind(rowKind);
         rowData.setField(0, StringData.fromString("commit"));
@@ -172,12 +93,30 @@ class HudiRecordReaderTest {
         return rowData;
     }
 
-    private static Schema cleanSchema() {
+    private static RowData projectedRowData(RowKind rowKind, String value) {
+        GenericRowData rowData = new GenericRowData(3);
+        rowData.setRowKind(rowKind);
+        rowData.setField(0, StringData.fromString("commit"));
+        rowData.setField(1, StringData.fromString("record-key"));
+        rowData.setField(2, StringData.fromString(value));
+        return rowData;
+    }
+
+    private static Schema fullSchema() {
         return parseSchema(
                 "["
                         + "{\"name\":\"_hoodie_commit_time\",\"type\":\"string\"},"
                         + "{\"name\":\"_hoodie_record_key\",\"type\":\"string\"},"
                         + "{\"name\":\"id\",\"type\":\"int\"},"
+                        + "{\"name\":\"value\",\"type\":\"string\"}"
+                        + "]");
+    }
+
+    private static Schema projectedSchema() {
+        return parseSchema(
+                "["
+                        + "{\"name\":\"_hoodie_commit_time\",\"type\":\"string\"},"
+                        + "{\"name\":\"_hoodie_record_key\",\"type\":\"string\"},"
                         + "{\"name\":\"value\",\"type\":\"string\"}"
                         + "]");
     }

@@ -308,46 +308,6 @@ class HudiLakeCatalogTest {
     }
 
     @Test
-    void testReEnableTieringOnLegacyTable() throws Exception {
-        // FIP-27: re-enabling tiering on a legacy table (one created before FIP-27, carrying the
-        // three trailing system columns) must be accepted. createTable compares against the legacy
-        // layout when the existing physical table is legacy, so it must not throw and must preserve
-        // the system columns.
-        String database = "legacy_reenable_db";
-        String tableName = "legacy_reenable_table";
-
-        Schema flussSchema =
-                Schema.newBuilder()
-                        .column("id", DataTypes.INT())
-                        .column("name", DataTypes.STRING())
-                        .primaryKey("id")
-                        .build();
-        TableDescriptor tableDescriptor =
-                TableDescriptor.builder().schema(flussSchema).distributedBy(4, "id").build();
-        TablePath tablePath = TablePath.of(database, tableName);
-        ObjectPath objectPath = HudiConversions.toHudiObjectPath(tablePath);
-
-        // Build the legacy physical Hudi table directly (user columns + trailing system columns).
-        flussHudiLakeCatalog.createDatabase(database);
-        CatalogTable legacyTable =
-                HudiConversions.createLegacyHudiCatalogTable(
-                        tablePath, tableDescriptor, true, "dfs");
-        flussHudiLakeCatalog.getHudiCatalog().createTable(objectPath, legacyTable, false);
-
-        // Sanity: the physical table is legacy (carries the three system columns).
-        CatalogBaseTable existing = flussHudiLakeCatalog.getHudiCatalog().getTable(objectPath);
-        assertThat(flussHudiLakeCatalog.isLegacyTable(existing)).isTrue();
-
-        // Re-enabling tiering must be accepted for the legacy physical layout.
-        flussHudiLakeCatalog.createTable(
-                tablePath, tableDescriptor, new TestingLakeCatalogContext());
-
-        // The legacy layout must be preserved.
-        CatalogBaseTable reloaded = flussHudiLakeCatalog.getHudiCatalog().getTable(objectPath);
-        assertThat(flussHudiLakeCatalog.isLegacyTable(reloaded)).isTrue();
-    }
-
-    @Test
     void testCreateFlussTableFailsWhenHudiTableAlreadyExists() {
         String database = "existing_hudi_db";
         String tableName = "existing_hudi_table";

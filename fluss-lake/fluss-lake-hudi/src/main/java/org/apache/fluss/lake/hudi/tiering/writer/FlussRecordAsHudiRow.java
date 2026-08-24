@@ -17,87 +17,39 @@
 
 package org.apache.fluss.lake.hudi.tiering.writer;
 
-import org.apache.fluss.lake.hudi.utils.HudiUtils;
 import org.apache.fluss.record.LogRecord;
 
-import org.apache.flink.table.data.TimestampData;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.types.RowKind;
 
-import static org.apache.fluss.lake.hudi.HudiLakeCatalog.LEGACY_SYSTEM_COLUMNS;
 import static org.apache.fluss.lake.hudi.utils.HudiConversions.toRowKind;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
-/** Wraps a Fluss {@link LogRecord} as a Hudi/Flink row with Fluss system columns. */
+/** Wraps a Fluss {@link LogRecord} as a Hudi/Flink row. */
 public class FlussRecordAsHudiRow extends FlussRowAsHudiRow {
 
-    private final int bucket;
-    private final boolean isLegacy;
-
-    // the count of user (business) columns; system columns (if any) start at this index
-    private final int businessFieldCount;
+    // FIP-27: Hudi lake tables contain only user columns; no Fluss system columns are written.
+    private final int fieldCount;
 
     private LogRecord logRecord;
 
-    public FlussRecordAsHudiRow(int bucket, RowType rowType) {
+    public FlussRecordAsHudiRow(RowType rowType) {
         super(rowType);
-        this.bucket = bucket;
-        // FIP-27: a legacy table carries the three trailing system columns; a clean table does not.
-        this.isLegacy = HudiUtils.isLegacyTable(rowType);
-        this.businessFieldCount =
-                isLegacy
-                        ? rowType.getFieldCount() - LEGACY_SYSTEM_COLUMNS.size()
-                        : rowType.getFieldCount();
+        this.fieldCount = rowType.getFieldCount();
     }
 
     public void setFlussRecord(LogRecord logRecord) {
         this.logRecord = logRecord;
         this.internalRow = logRecord.getRow();
         checkState(
-                internalRow.getFieldCount() == businessFieldCount,
-                "The Fluss record's field count (%s) must equal the business field count (%s).",
+                internalRow.getFieldCount() == fieldCount,
+                "The Fluss record's field count (%s) must equal the Hudi table field count (%s).",
                 internalRow.getFieldCount(),
-                businessFieldCount);
+                fieldCount);
     }
 
     @Override
     public RowKind getRowKind() {
         return toRowKind(logRecord.getChangeType());
-    }
-
-    @Override
-    public boolean isNullAt(int pos) {
-        if (pos < businessFieldCount) {
-            return super.isNullAt(pos);
-        }
-        return false;
-    }
-
-    @Override
-    public int getInt(int pos) {
-        if (isLegacy && pos == businessFieldCount) {
-            return bucket;
-        }
-        return super.getInt(pos);
-    }
-
-    @Override
-    public long getLong(int pos) {
-        if (isLegacy) {
-            if (pos == businessFieldCount + 1) {
-                return logRecord.logOffset();
-            } else if (pos == businessFieldCount + 2) {
-                return logRecord.timestamp();
-            }
-        }
-        return super.getLong(pos);
-    }
-
-    @Override
-    public TimestampData getTimestamp(int pos, int precision) {
-        if (isLegacy && pos == businessFieldCount + 2) {
-            return TimestampData.fromEpochMillis(logRecord.timestamp());
-        }
-        return super.getTimestamp(pos, precision);
     }
 }

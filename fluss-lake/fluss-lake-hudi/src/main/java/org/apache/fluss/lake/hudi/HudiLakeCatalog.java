@@ -49,11 +49,9 @@ import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Objects;
-import java.util.Set;
 
 import static org.apache.fluss.lake.hudi.utils.catalog.HudiCatalogUtils.HIVE_META_STORE_TYPE;
 import static org.apache.fluss.lake.hudi.utils.catalog.HudiCatalogUtils.HUDI_CATALOG_DEFAULT_NAME;
@@ -66,13 +64,12 @@ public class HudiLakeCatalog implements LakeCatalog {
 
     private static final Logger LOG = LoggerFactory.getLogger(HudiLakeCatalog.class);
 
-    public static final LinkedHashMap<String, DataType> LEGACY_SYSTEM_COLUMNS =
-            new LinkedHashMap<>();
+    public static final LinkedHashMap<String, DataType> SYSTEM_COLUMNS = new LinkedHashMap<>();
 
     static {
-        LEGACY_SYSTEM_COLUMNS.put(BUCKET_COLUMN_NAME, DataTypes.INT());
-        LEGACY_SYSTEM_COLUMNS.put(OFFSET_COLUMN_NAME, DataTypes.BIGINT());
-        LEGACY_SYSTEM_COLUMNS.put(TIMESTAMP_COLUMN_NAME, DataTypes.TIMESTAMP(6));
+        SYSTEM_COLUMNS.put(BUCKET_COLUMN_NAME, DataTypes.INT());
+        SYSTEM_COLUMNS.put(OFFSET_COLUMN_NAME, DataTypes.BIGINT());
+        SYSTEM_COLUMNS.put(TIMESTAMP_COLUMN_NAME, DataTypes.TIMESTAMP(6));
     }
 
     private final Catalog hudiCatalog;
@@ -101,27 +98,17 @@ public class HudiLakeCatalog implements LakeCatalog {
 
         // Hudi's Flink catalog creates tables from Flink CatalogTable objects, so bridge the
         // Fluss descriptor into Flink/Hudi schema and options before delegating to Hudi.
-        // FIP-27: new tables are created clean; the legacy-layout table is only used to compare
-        // against an existing legacy physical table when re-enabling tiering.
         CatalogTable catalogTable =
                 HudiConversions.createHudiCatalogTable(
-                        tablePath, tableDescriptor, isPkTable, catalogMode);
-        CatalogTable legacyCatalogTable =
-                HudiConversions.createLegacyHudiCatalogTable(
                         tablePath, tableDescriptor, isPkTable, catalogMode);
 
         // Create table in Hudi catalog
         try {
-            createTable(
-                    objectPath, catalogTable, legacyCatalogTable, context.isCreatingFlussTable());
+            createTable(objectPath, catalogTable, context.isCreatingFlussTable());
         } catch (DatabaseNotExistException e) {
             createDatabase(tablePath.getDatabaseName());
             try {
-                createTable(
-                        objectPath,
-                        catalogTable,
-                        legacyCatalogTable,
-                        context.isCreatingFlussTable());
+                createTable(objectPath, catalogTable, context.isCreatingFlussTable());
             } catch (DatabaseNotExistException t) {
                 // shouldn't happen in normal cases
                 throw new RuntimeException(
@@ -143,10 +130,7 @@ public class HudiLakeCatalog implements LakeCatalog {
     }
 
     private void createTable(
-            ObjectPath tablePath,
-            CatalogBaseTable catalogTable,
-            CatalogBaseTable legacyCatalogTable,
-            boolean isCreatingFlussTable)
+            ObjectPath tablePath, CatalogBaseTable catalogTable, boolean isCreatingFlussTable)
             throws DatabaseNotExistException {
         try {
             hudiCatalog.createTable(tablePath, catalogTable, false);
@@ -155,14 +139,7 @@ public class HudiLakeCatalog implements LakeCatalog {
             // table already exists, check schema compatibility for idempotency
             try {
                 CatalogBaseTable existingTable = hudiCatalog.getTable(tablePath);
-                // FIP-27: re-enabling tiering on a legacy table (created before FIP-27, carrying
-                // the
-                // three trailing system columns) hits this path. Compare against the layout the
-                // physical table actually has, otherwise the clean expectation spuriously rejects a
-                // legacy table.
-                CatalogBaseTable expectedTable =
-                        isLegacyTable(existingTable) ? legacyCatalogTable : catalogTable;
-                if (!isHudiSchemaCompatible(existingTable, expectedTable)) {
+                if (!isHudiSchemaCompatible(existingTable, catalogTable)) {
                     throw new org.apache.fluss.exception.TableAlreadyExistException(
                             String.format(
                                     "The table %s already exists in Hudi catalog, but the table schema is not compatible. "
@@ -204,20 +181,6 @@ public class HudiLakeCatalog implements LakeCatalog {
     @VisibleForTesting
     boolean isHudiSchemaCompatible(CatalogBaseTable existingTable, CatalogBaseTable expectedTable) {
         return extractColumns(existingTable).equals(extractColumns(expectedTable));
-    }
-
-    /**
-     * Returns whether the existing Hudi table is a legacy table, i.e. one that carries all three
-     * Fluss system columns (__bucket, __offset, __timestamp). Requiring all three guards against a
-     * user table that merely reuses one of the system-column names.
-     */
-    @VisibleForTesting
-    boolean isLegacyTable(CatalogBaseTable existingTable) {
-        Set<String> columnNames = new HashSet<>();
-        for (ColumnSignature column : extractColumns(existingTable)) {
-            columnNames.add(column.name);
-        }
-        return columnNames.containsAll(LEGACY_SYSTEM_COLUMNS.keySet());
     }
 
     private static List<ColumnSignature> extractColumns(CatalogBaseTable table) {
