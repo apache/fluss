@@ -33,6 +33,40 @@ just up iceberg
 `just up` waits for the Fluss and Flink clusters and, for lake profiles, the tiering job to become
 ready. Run `just --list` to see all available commands.
 
+## How local code is loaded
+
+The containers use the local build output; the DevKit does not rebuild a Docker image for every
+source change:
+
+| Local content | How it reaches the running container |
+|---|---|
+| Fluss Server changes | `just build` packages `fluss-dist`; `build-target` points to that distribution and is mounted read-only as `/opt/fluss`. The Fluss startup scripts run from this mount. |
+| Flink 1.20 Connector changes | `just build` produces `fluss-flink-1.20/target/fluss-flink-1.20-*.jar`. `just up` stages it as `devkit/.deps/flink/active/lib/fluss-flink-1.20.jar`, mounts that directory into the Flink containers, and copies it to `/opt/flink/lib` during container startup. |
+| SQL changes | `just run-sql path/to/query.sql` reads the file from the host and sends it to the SQL Client running in the JobManager container. Flink then plans and executes the job in the Flink cluster. |
+| Lake Tiering changes | `just build-tiering` additionally builds the Lake plugin and Tiering Job. `just up <profile>` stages the plugin under Flink `lib/` and submits the local Tiering Job JAR to Flink. |
+
+This means the SQL you write locally is used directly for that invocation, but Java source code is
+used through a built JAR or distribution. After changing Fluss Server or the Flink Connector code,
+rebuild and restart the selected profile so the containers load the new artifacts:
+
+```bash
+# Core changes
+just build
+just up core
+
+# Lake Tiering changes
+just build-tiering
+just up paimon                 # or iceberg / lance
+
+# SQL-only changes need no Maven build
+just run-sql ./my-query.sql
+```
+
+The Flink image itself remains the upstream runtime image. The Fluss Connector is an extension
+loaded by Flink; it is not a replacement for Flink and it is not loaded from the Java source tree
+at runtime. A running Flink process also does not hot-reload a newly built JAR, so use `just up`
+after rebuilding.
+
 ## Profiles
 
 | Profile | Services |
@@ -41,12 +75,11 @@ ready. Run `just --list` to see all available commands.
 | `iceberg` | Core, RustFS, PostgreSQL JDBC Catalog, Flink, and Iceberg tiering |
 | `paimon` | Core, RustFS, Flink, and Paimon tiering |
 | `lance` | Core, RustFS, Flink, and Lance tiering |
-| `hudi` | Core, RustFS, Flink, and Hudi tiering |
 
 These profiles are selected local-development combinations, not copies of every documented
 deployment. In particular, `core` does not include the Faker source and S3 dependencies bundled in
-the Flink quickstart image. The lake profiles currently exercise append-only table workflows; they
-do not yet cover primary-key snapshot and restart recovery.
+the Flink quickstart image. The lake profiles use primary-key tables so the default workflow also
+exercises KV snapshots; restart recovery is still outside the smoke workflow.
 
 Profiles start one TabletServer by default. Pass `3` as the second argument to start three:
 
@@ -54,6 +87,33 @@ Profiles start one TabletServer by default. Pass `3` as the second argument to s
 just up core 3
 just up paimon 3
 ```
+
+## Core SQL examples
+
+The small set of examples in `examples/core/` covers the main Flink access patterns without
+turning the DevKit into a complete test suite. They follow the same basic flow as the Flink
+quickstart: create a Fluss catalog, prepare Log and Primary Key Tables, write data, and query it.
+The core profile deliberately does not bundle the Faker connector, so these examples use fixed
+`VALUES` data instead of adding another runtime dependency. Start the core profile and run the
+setup file once:
+
+```bash
+just up core
+just run-sql examples/core/01-setup.sql
+```
+
+Then use the focused examples:
+
+| File | Demonstrates |
+|---|---|
+| `02-scan.sql` | Streaming and batch scans of Log and Primary Key Tables |
+| `03-lookup-join.sql` | Point lookup and prefix lookup joins |
+| `04-changelog-binlog.sql` | Changelog and binlog virtual tables |
+
+The scan and virtual-table examples use batch mode and terminate. The streaming scan and lookup
+join examples are intentionally long-running; the lookup file contains one active section at a
+time, with the alternative prefix lookup shown in comments. The setup file must be run before the
+other examples because they use its tables.
 
 ## Validate Lake Tiering
 
@@ -73,7 +133,7 @@ just tiering-status
 just query-lake "$format" "$table"
 ```
 
-Use `iceberg`, `paimon`, or `hudi` for a complete create, write, tier, and lake-query workflow.
+Use `iceberg` or `paimon` for a complete create, write, tier, and lake-query workflow.
 Tiering is asynchronous, so repeat `query-lake` if the first query runs before the lake commit is
 visible.
 
@@ -98,6 +158,22 @@ just clean
 
 Start a profile with `just up` before using `run-sql`. SQL files are read from the host and passed to
 the Flink SQL Client. Relative paths are resolved from the current working directory.
+
+You can write your own SQL file to experiment with Fluss instead of modifying the bundled examples:
+
+```bash
+cat > /tmp/my-fluss-query.sql <<'EOF'
+USE CATALOG fluss_catalog;
+SHOW TABLES;
+EOF
+
+just run-sql /tmp/my-fluss-query.sql
+```
+
+Your SQL file can contain Fluss DDL, batch or streaming queries, writes, lookups, and virtual-table
+queries. The Flink SQL Client runs inside the Compose environment, so use container addresses such
+as `coordinator-server:19123` when defining a Fluss catalog. Start the desired profile first; a
+custom SQL file does not require any DevKit source change.
 
 `just up` replaces containers from the previous profile but preserves named volumes. `down` removes
 containers and keeps data; `clean` also removes Compose volumes and staged Server JARs. Downloaded

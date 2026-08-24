@@ -26,7 +26,8 @@ USE CATALOG fluss_catalog;
 
 CREATE TABLE ${DEVKIT_TABLE} (
     id BIGINT,
-    payload STRING
+    payload STRING,
+    PRIMARY KEY (id) NOT ENFORCED
 ) WITH (
     'bucket.num' = '1',
     'table.datalake.enabled' = 'true',

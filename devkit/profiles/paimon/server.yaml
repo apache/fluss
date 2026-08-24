@@ -33,3 +33,4 @@ datalake.paimon.s3.endpoint: http://rustfs:9000
 datalake.paimon.s3.access-key: rustfsadmin
 datalake.paimon.s3.secret-key: rustfsadmin
 datalake.paimon.s3.path.style.access: true
+fluss.tiering.poll.table.interval: 1s

@@ -14,27 +14,23 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-SET 'execution.runtime-mode' = 'batch';
-SET 'sql-client.execution.result-mode' = 'tableau';
-
-CREATE CATALOG hudi_catalog WITH (
-    'type' = 'hudi',
-    'mode' = 'dfs',
-    'catalog.path' = 's3a://fluss/hudi',
-    'hadoop.fs.s3a.endpoint' = 'http://rustfs:9000',
-    'hadoop.fs.s3a.access.key' = 'rustfsadmin',
-    'hadoop.fs.s3a.secret.key' = 'rustfsadmin',
-    'hadoop.fs.s3a.path.style.access' = 'true',
-    'hadoop.fs.s3a.connection.ssl.enabled' = 'false',
-    'hadoop.fs.s3a.impl.disable.cache' = 'true'
+CREATE CATALOG fluss_catalog WITH (
+    'type' = 'fluss',
+    'bootstrap.servers' = 'coordinator-server:19123'
 );
 
-USE CATALOG hudi_catalog;
+USE CATALOG fluss_catalog;
 
-SELECT
-    COUNT(*) AS row_count,
-    SUM(id) AS id_sum,
-    COUNT(DISTINCT payload) AS payload_count,
-    MIN(payload) AS first_payload,
-    MAX(payload) AS last_payload
-FROM fluss.${DEVKIT_TABLE};
+-- Virtual tables read the raw Fluss log. Batch mode makes this example exit
+-- after replaying the records currently available.
+SET 'execution.runtime-mode' = 'batch';
+SET 'table.dml-sync' = 'true';
+
+-- Changelog is available for both Log Tables and Primary Key Tables.
+SELECT * FROM events$changelog
+/*+ OPTIONS('scan.startup.mode' = 'earliest') */;
+
+-- Binlog is available for Primary Key Tables and exposes nested before/after
+-- images for each change.
+SELECT * FROM profiles$binlog
+/*+ OPTIONS('scan.startup.mode' = 'earliest') */;

@@ -39,3 +39,4 @@ datalake.iceberg.s3.access-key-id: rustfsadmin
 datalake.iceberg.s3.secret-access-key: rustfsadmin
 datalake.iceberg.s3.path-style-access: true
 datalake.iceberg.client.region: us-east-1
+fluss.tiering.poll.table.interval: 1s
