@@ -313,14 +313,6 @@ check-tiering format:
     echo "Tiering job did not start"
     exit 1
 
-[private]
-validate-table table:
-    #!/usr/bin/env bash
-    if [[ ! "{{ table }}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
-      echo "table must match [A-Za-z_][A-Za-z0-9_]*"
-      exit 1
-    fi
-
 [doc("Run a local SQL file with Flink SQL Client")]
 run-sql file:
     #!/usr/bin/env bash
@@ -342,47 +334,6 @@ run-sql file:
       exit 1
     fi
 
-[private]
-run-demo-sql file table marker="":
-    #!/usr/bin/env bash
-    set -e
-    just validate-table "{{ table }}"
-    set +e
-    OUTPUT=$({{ ALL_COMPOSE }} {{ ALL_PROFILES }} exec -T -e DEVKIT_TABLE="{{ table }}" jobmanager /bin/bash -c "envsubst '\${DEVKIT_TABLE}' < /opt/devkit-tests/{{ file }} > /tmp/{{ file }} && /opt/flink/bin/sql-client.sh -f /tmp/{{ file }}" 2>&1)
-    STATUS=$?
-    set -e
-    printf '%s\n' "$OUTPUT"
-    if [ "$STATUS" -ne 0 ] || printf '%s\n' "$OUTPUT" | grep -Eq '\[ERROR\]|Could not execute SQL statement'; then
-      exit 1
-    fi
-    if [ -n "{{ marker }}" ] && ! printf '%s\n' "$OUTPUT" | grep -Fq "{{ marker }}"; then
-      echo "SQL command did not report expected marker: {{ marker }}"
-      exit 1
-    fi
-
-[private]
-run-format-sql operation format table marker="":
-    #!/usr/bin/env bash
-    just validate-profile "{{ format }}"
-    FILE="{{ format }}-{{ operation }}.sql"
-    if [ ! -f "{{ DEVKIT_DIR }}/tests/$FILE" ]; then
-      echo "{{ operation }} is not available for {{ format }}"
-      exit 1
-    fi
-    just run-demo-sql "$FILE" "{{ table }}" "{{ marker }}"
-
-[doc("Create a lake-enabled Fluss table")]
-create-table format table:
-    @just run-format-sql create-table "{{ format }}" "{{ table }}"
-
-[doc("Write three sample rows to a Fluss table")]
-write-data format table:
-    @just run-format-sql write-data "{{ format }}" "{{ table }}" "Job ID:"
-
 [doc("Show running Flink jobs")]
 tiering-status:
     @{{ ALL_COMPOSE }} {{ ALL_PROFILES }} exec -T jobmanager /opt/flink/bin/flink list -r
-
-[doc("Query a table through its lake table")]
-query-lake format table:
-    @just run-format-sql query-lake "{{ format }}" "{{ table }}"

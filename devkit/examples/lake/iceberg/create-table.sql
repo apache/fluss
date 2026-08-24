@@ -16,12 +16,15 @@
 
 CREATE CATALOG fluss_catalog WITH (
     'type' = 'fluss',
-    'bootstrap.servers' = 'coordinator-server:19123'
+    'bootstrap.servers' = 'coordinator-server:19123',
+    'iceberg.jdbc.password' = 'iceberg',
+    'iceberg.s3.access-key-id' = 'rustfsadmin',
+    'iceberg.s3.secret-access-key' = 'rustfsadmin'
 );
 
 USE CATALOG fluss_catalog;
 
-CREATE TABLE ${DEVKIT_TABLE} (
+CREATE TABLE lake_table (
     id BIGINT,
     payload STRING,
     PRIMARY KEY (id) NOT ENFORCED

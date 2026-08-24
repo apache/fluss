@@ -23,12 +23,7 @@ CREATE CATALOG fluss_catalog WITH (
 
 USE CATALOG fluss_catalog;
 
-CREATE TABLE ${DEVKIT_TABLE} (
-    id BIGINT,
-    payload STRING,
-    PRIMARY KEY (id) NOT ENFORCED
-) WITH (
-    'bucket.num' = '1',
-    'table.datalake.enabled' = 'true',
-    'table.datalake.freshness' = '5s'
-);
+INSERT INTO lake_table VALUES
+    (1, 'alpha'),
+    (2, 'beta'),
+    (3, 'gamma');

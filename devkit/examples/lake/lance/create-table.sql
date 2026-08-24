@@ -16,14 +16,17 @@
 
 CREATE CATALOG fluss_catalog WITH (
     'type' = 'fluss',
-    'bootstrap.servers' = 'coordinator-server:19123',
-    'paimon.s3.access-key' = 'rustfsadmin',
-    'paimon.s3.secret-key' = 'rustfsadmin'
+    'bootstrap.servers' = 'coordinator-server:19123'
 );
 
 USE CATALOG fluss_catalog;
 
-INSERT INTO ${DEVKIT_TABLE} VALUES
-    (1, 'alpha'),
-    (2, 'beta'),
-    (3, 'gamma');
+CREATE TABLE lake_table (
+    id BIGINT,
+    payload STRING,
+    PRIMARY KEY (id) NOT ENFORCED
+) WITH (
+    'bucket.num' = '1',
+    'table.datalake.enabled' = 'true',
+    'table.datalake.freshness' = '5s'
+);

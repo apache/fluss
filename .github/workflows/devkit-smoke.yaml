@@ -73,7 +73,6 @@ jobs:
           just up core
           just down
           just up paimon
-          table="devkit_smoke_$(date +%s)"
-          just create-table paimon "$table"
-          just write-data paimon "$table"
-          just query-lake paimon "$table"
+          just run-sql examples/lake/paimon/setup.sql
+          just run-sql examples/lake/paimon/union-read.sql
+          just run-sql examples/lake/paimon/lake-only-read.sql

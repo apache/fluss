@@ -20,9 +20,8 @@ SET 'sql-client.execution.result-mode' = 'tableau';
 CREATE CATALOG fluss_catalog WITH (
     'type' = 'fluss',
     'bootstrap.servers' = 'coordinator-server:19123',
-    'iceberg.jdbc.password' = 'iceberg',
-    'iceberg.s3.access-key-id' = 'rustfsadmin',
-    'iceberg.s3.secret-access-key' = 'rustfsadmin'
+    'paimon.s3.access-key' = 'rustfsadmin',
+    'paimon.s3.secret-key' = 'rustfsadmin'
 );
 
 USE CATALOG fluss_catalog;
@@ -33,4 +32,4 @@ SELECT
     COUNT(DISTINCT payload) AS payload_count,
     MIN(payload) AS first_payload,
     MAX(payload) AS last_payload
-FROM `${DEVKIT_TABLE}$lake`;
+FROM `lake_table$lake`;
