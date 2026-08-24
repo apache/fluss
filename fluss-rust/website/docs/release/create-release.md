@@ -353,7 +353,8 @@ svn commit -m "Remove RC after release fluss-rust ${RELEASE_VERSION}"
 
 - **fluss-rust:** [crates.io/crates/fluss-rs](https://crates.io/crates/fluss-rs) shows version `$RELEASE_VERSION`
 - **fluss-python:** [PyPI – pyfluss](https://pypi.org/project/pyfluss/) shows version `$RELEASE_VERSION`
-- **fluss-cpp:** Distributed via the source archive; no separate registry
+- **fluss-cpp:** Distributed via the source archive; no separate registry. A prebuilt
+  or registry artifact for it would need its own LICENSE and NOTICE.
 
 ### 5. Create GitHub Release
 

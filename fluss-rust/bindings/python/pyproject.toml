@@ -16,18 +16,18 @@
 # under the License.
 
 [build-system]
-requires = ["maturin>=1.0,<2.0"]
+requires = ["maturin>=1.9,<2.0"]
 build-backend = "maturin"
 
 [project]
 name = "pyfluss"
 description = "Apache Fluss Python client"
 authors = [{name = "Apache Fluss", email = "dev@fluss.apache.org"}]
-license = {text = "Apache-2.0"}
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 readme = "PYPI_README.md"
 requires-python = ">=3.9"
 classifiers = [
-    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -54,7 +54,7 @@ dev = [
     "pytest-timeout>=2.3.1",
     "filelock>=3.0",
     "ruff>=0.9.10",
-    "maturin>=1.8.2",
+    "maturin>=1.9,<2.0",
 ]
 docs = [
     "pdoc>=15.0.4",

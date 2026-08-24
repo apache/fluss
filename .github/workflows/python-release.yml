@@ -109,12 +109,43 @@ jobs:
           name: wheels-${{ matrix.os }}-${{ matrix.target || 'native' }}
           path: fluss-rust/bindings/python/dist
 
+  verify-license:
+    name: Verify LICENSE and NOTICE
+    runs-on: ubuntu-latest
+    needs: [sdist, wheels]
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: wheels-*
+          merge-multiple: true
+          path: dist
+
+      # maturin ships these only when [project].license-files lists them.
+      - name: Check the sdist and every wheel
+        run: |
+          SDIST=$(ls dist/*.tar.gz)
+          PREFIX=$(basename "$SDIST" .tar.gz)
+          for f in LICENSE NOTICE; do
+            if [ -z "$(tar -xzOf "$SDIST" "${PREFIX}/${f}" 2>/dev/null)" ]; then
+              echo "Error: ${f} is missing or empty at the root of ${SDIST}"
+              exit 1
+            fi
+          done
+          for whl in dist/*.whl; do
+            for f in LICENSE NOTICE; do
+              if ! unzip -p "$whl" "*.dist-info/licenses/${f}" 2>/dev/null | grep -q .; then
+                echo "Error: ${f} is missing or empty in ${whl}"
+                exit 1
+              fi
+            done
+          done
+
   release:
     name: Publish to PyPI
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    needs: [version-check, sdist, wheels]
+    needs: [version-check, sdist, wheels, verify-license]
     if: startsWith(github.ref, 'refs/tags/')
     steps:
       - uses: actions/download-artifact@v8
