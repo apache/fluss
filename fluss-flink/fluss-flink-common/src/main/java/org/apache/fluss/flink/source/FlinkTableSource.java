@@ -282,6 +282,7 @@ public class FlinkTableSource
         this.leaseContext = source.leaseContext;
         this.mergeEngineType = source.mergeEngineType;
         this.tableConfig = source.tableConfig;
+        // Note: availableStatsColumns is already computed in the constructor
         this.availableStatsColumns = new HashSet<>(source.availableStatsColumns);
         this.producedDataType = source.producedDataType;
         this.projectedFields =
