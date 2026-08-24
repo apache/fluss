@@ -1,0 +1,6 @@
+public class TestClass {
+  private int count;
+  private final String name;
+  private boolean active = true;
+  private static final int MAX = 100;
+}

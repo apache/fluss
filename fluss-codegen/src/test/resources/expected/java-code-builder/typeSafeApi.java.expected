@@ -1,0 +1,12 @@
+public final class Calculator implements java.io.Serializable {
+  private int result;
+
+  public Calculator(java.lang.Object[] refs) throws Exception {
+    this.result = 0;
+  }
+
+  public int add(int a, int b) {
+    int sum = a + b;
+    return sum;
+  }
+}

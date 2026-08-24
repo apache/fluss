@@ -1,0 +1,93 @@
+public final class MultipleFieldsEqualiser$2 implements org.apache.fluss.codegen.types.RecordEqualiser {
+  public MultipleFieldsEqualiser$2(java.lang.Object[] references) throws Exception {
+  }
+
+  @Override
+  public boolean equals(org.apache.fluss.row.InternalRow left, org.apache.fluss.row.InternalRow right) {
+    if (left instanceof org.apache.fluss.row.BinaryRow && right instanceof org.apache.fluss.row.BinaryRow) {
+      return left.equals(right);
+    }
+    boolean result = true;
+    result = result && equalsField0(left, right);
+    result = result && equalsField1(left, right);
+    result = result && equalsField2(left, right);
+    result = result && equalsField3(left, right);
+    result = result && equalsField4(left, right);
+    return result;
+  }
+
+  private boolean equalsField0(org.apache.fluss.row.InternalRow left, org.apache.fluss.row.InternalRow right) {
+    boolean leftNull = left.isNullAt(0);
+    boolean rightNull = right.isNullAt(0);
+    if (leftNull && rightNull) {
+      return true;
+    }
+    if (leftNull || rightNull) {
+      return false;
+    }
+    int leftVal = left.getInt(0);
+    int rightVal = right.getInt(0);
+    return leftVal == rightVal;
+  }
+
+
+  private boolean equalsField1(org.apache.fluss.row.InternalRow left, org.apache.fluss.row.InternalRow right) {
+    boolean leftNull = left.isNullAt(1);
+    boolean rightNull = right.isNullAt(1);
+    if (leftNull && rightNull) {
+      return true;
+    }
+    if (leftNull || rightNull) {
+      return false;
+    }
+    org.apache.fluss.row.BinaryString leftVal = ((org.apache.fluss.row.BinaryString) left.getString(1));
+    org.apache.fluss.row.BinaryString rightVal = ((org.apache.fluss.row.BinaryString) right.getString(1));
+    return leftVal.equals(rightVal);
+  }
+
+
+  private boolean equalsField2(org.apache.fluss.row.InternalRow left, org.apache.fluss.row.InternalRow right) {
+    boolean leftNull = left.isNullAt(2);
+    boolean rightNull = right.isNullAt(2);
+    if (leftNull && rightNull) {
+      return true;
+    }
+    if (leftNull || rightNull) {
+      return false;
+    }
+    boolean leftVal = left.getBoolean(2);
+    boolean rightVal = right.getBoolean(2);
+    return leftVal == rightVal;
+  }
+
+
+  private boolean equalsField3(org.apache.fluss.row.InternalRow left, org.apache.fluss.row.InternalRow right) {
+    boolean leftNull = left.isNullAt(3);
+    boolean rightNull = right.isNullAt(3);
+    if (leftNull && rightNull) {
+      return true;
+    }
+    if (leftNull || rightNull) {
+      return false;
+    }
+    long leftVal = left.getLong(3);
+    long rightVal = right.getLong(3);
+    return leftVal == rightVal;
+  }
+
+
+  private boolean equalsField4(org.apache.fluss.row.InternalRow left, org.apache.fluss.row.InternalRow right) {
+    boolean leftNull = left.isNullAt(4);
+    boolean rightNull = right.isNullAt(4);
+    if (leftNull && rightNull) {
+      return true;
+    }
+    if (leftNull || rightNull) {
+      return false;
+    }
+    double leftVal = left.getDouble(4);
+    double rightVal = right.getDouble(4);
+    return leftVal == rightVal;
+  }
+
+}
