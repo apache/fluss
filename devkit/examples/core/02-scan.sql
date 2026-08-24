@@ -24,6 +24,7 @@ USE CATALOG fluss_catalog;
 -- Batch scan: reads the current bounded contents and then exits.
 SET 'execution.runtime-mode' = 'batch';
 SET 'table.dml-sync' = 'true';
+SET 'sql-client.execution.result-mode' = 'tableau';
 
 SELECT * FROM events
 /*+ OPTIONS('scan.startup.mode' = 'earliest') */;

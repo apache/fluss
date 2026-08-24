@@ -15,6 +15,7 @@
 -- limitations under the License.
 
 SET 'execution.runtime-mode' = 'batch';
+SET 'sql-client.execution.result-mode' = 'tableau';
 
 CREATE CATALOG fluss_catalog WITH (
     'type' = 'fluss',

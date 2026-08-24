@@ -27,6 +27,7 @@ CREATE CATALOG fluss_catalog WITH (
 USE CATALOG fluss_catalog;
 
 SET 'execution.runtime-mode' = 'batch';
+SET 'sql-client.execution.result-mode' = 'tableau';
 
 -- Default read: in batch mode this is a bounded Batch Union Read. It combines
 -- the latest lake snapshot with the Fluss log records after that snapshot.

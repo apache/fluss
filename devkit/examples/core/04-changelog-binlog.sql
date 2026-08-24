@@ -25,6 +25,7 @@ USE CATALOG fluss_catalog;
 -- after replaying the records currently available.
 SET 'execution.runtime-mode' = 'batch';
 SET 'table.dml-sync' = 'true';
+SET 'sql-client.execution.result-mode' = 'tableau';
 
 -- Changelog is available for both Log Tables and Primary Key Tables.
 SELECT * FROM events$changelog
