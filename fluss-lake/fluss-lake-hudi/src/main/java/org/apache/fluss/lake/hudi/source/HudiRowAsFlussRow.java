@@ -31,7 +31,7 @@ import org.apache.flink.table.data.MapData;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.data.TimestampData;
 
-import static org.apache.fluss.lake.hudi.HudiLakeCatalog.SYSTEM_COLUMNS;
+import static org.apache.fluss.lake.hudi.HudiLakeCatalog.LEGACY_SYSTEM_COLUMNS;
 
 /** Wraps a Hudi/Flink {@link RowData} as a Fluss {@link InternalRow}. */
 public class HudiRowAsFlussRow implements InternalRow {
@@ -52,7 +52,7 @@ public class HudiRowAsFlussRow implements InternalRow {
         this.stripSystemColumns = stripSystemColumns;
     }
 
-    private HudiRowAsFlussRow(boolean stripSystemColumns) {
+    HudiRowAsFlussRow(boolean stripSystemColumns) {
         this.stripSystemColumns = stripSystemColumns;
     }
 
@@ -63,7 +63,9 @@ public class HudiRowAsFlussRow implements InternalRow {
 
     @Override
     public int getFieldCount() {
-        return stripSystemColumns ? rowData.getArity() - SYSTEM_COLUMNS.size() : rowData.getArity();
+        return stripSystemColumns
+                ? rowData.getArity() - LEGACY_SYSTEM_COLUMNS.size()
+                : rowData.getArity();
     }
 
     @Override

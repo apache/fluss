@@ -49,7 +49,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import static org.apache.fluss.lake.hudi.HudiLakeCatalog.SYSTEM_COLUMNS;
+import static org.apache.fluss.lake.hudi.HudiLakeCatalog.LEGACY_SYSTEM_COLUMNS;
 import static org.apache.fluss.lake.hudi.utils.catalog.HudiCatalogUtils.HIVE_META_STORE_TYPE;
 
 /** Utils for conversion between Hudi and Fluss. */
@@ -100,6 +100,31 @@ public class HudiConversions {
             TableDescriptor tableDescriptor,
             boolean isPkTable,
             String catalogMode) {
+        // FIP-27: newly created tables are clean (user columns only).
+        return convertToFlinkResolvedSchema(
+                tablePath, tableDescriptor, isPkTable, catalogMode, false);
+    }
+
+    /**
+     * Builds the Flink resolved schema for the legacy layout, i.e. with the three trailing system
+     * columns appended after the user columns. Used to compare against an existing legacy physical
+     * table when re-enabling lake tiering.
+     */
+    public static ResolvedSchema convertToLegacyFlinkResolvedSchema(
+            TablePath tablePath,
+            TableDescriptor tableDescriptor,
+            boolean isPkTable,
+            String catalogMode) {
+        return convertToFlinkResolvedSchema(
+                tablePath, tableDescriptor, isPkTable, catalogMode, true);
+    }
+
+    private static ResolvedSchema convertToFlinkResolvedSchema(
+            TablePath tablePath,
+            TableDescriptor tableDescriptor,
+            boolean isPkTable,
+            String catalogMode,
+            boolean includeSystemColumns) {
         // validate hudi options first
         validateHudiOptions(tableDescriptor.getProperties(), isPkTable);
         validateHudiOptions(tableDescriptor.getCustomProperties(), isPkTable);
@@ -116,7 +141,7 @@ public class HudiConversions {
         for (org.apache.fluss.metadata.Schema.Column column :
                 tableDescriptor.getSchema().getColumns()) {
             String columnName = column.getName();
-            if (SYSTEM_COLUMNS.containsKey(columnName)) {
+            if (LEGACY_SYSTEM_COLUMNS.containsKey(columnName)) {
                 throw new InvalidTableException(
                         String.format(
                                 "Column %s in table %s conflicts with a system column name of Hudi table, "
@@ -133,9 +158,11 @@ public class HudiConversions {
             columns.add(Column.physical(columnName, column.getDataType().accept(converter)));
         }
 
-        // add system metadata columns to schema
-        for (Map.Entry<String, DataType> systemColumn : SYSTEM_COLUMNS.entrySet()) {
-            columns.add(Column.physical(systemColumn.getKey(), systemColumn.getValue()));
+        // FIP-27: only legacy tables carry the trailing __bucket/__offset/__timestamp columns.
+        if (includeSystemColumns) {
+            for (Map.Entry<String, DataType> systemColumn : LEGACY_SYSTEM_COLUMNS.entrySet()) {
+                columns.add(Column.physical(systemColumn.getKey(), systemColumn.getValue()));
+            }
         }
 
         UniqueConstraint constraint = null;
@@ -237,8 +264,32 @@ public class HudiConversions {
             TableDescriptor tableDescriptor,
             boolean isPkTable,
             String catalogMode) {
+        // FIP-27: newly created tables are clean (user columns only).
+        return createHudiCatalogTable(tablePath, tableDescriptor, isPkTable, catalogMode, false);
+    }
+
+    /**
+     * Creates a legacy-layout Hudi CatalogTable (user columns followed by the three trailing system
+     * columns). Used to compare against an existing legacy physical table when re-enabling lake
+     * tiering.
+     */
+    public static CatalogTable createLegacyHudiCatalogTable(
+            TablePath tablePath,
+            TableDescriptor tableDescriptor,
+            boolean isPkTable,
+            String catalogMode) {
+        return createHudiCatalogTable(tablePath, tableDescriptor, isPkTable, catalogMode, true);
+    }
+
+    private static CatalogTable createHudiCatalogTable(
+            TablePath tablePath,
+            TableDescriptor tableDescriptor,
+            boolean isPkTable,
+            String catalogMode,
+            boolean includeSystemColumns) {
         ResolvedSchema resolvedSchema =
-                convertToFlinkResolvedSchema(tablePath, tableDescriptor, isPkTable, catalogMode);
+                convertToFlinkResolvedSchema(
+                        tablePath, tableDescriptor, isPkTable, catalogMode, includeSystemColumns);
         Schema schema = Schema.newBuilder().fromResolvedSchema(resolvedSchema).build();
         List<String> partitionKeys = tableDescriptor.getPartitionKeys();
         Map<String, String> options =

@@ -35,7 +35,6 @@ import java.util.Iterator;
 import java.util.NoSuchElementException;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link HudiRecordReader}. */
 class HudiRecordReaderTest {
@@ -53,8 +52,10 @@ class HudiRecordReaderTest {
         LogRecord logRecord = iterator.next();
 
         assertThat(logRecord.getChangeType()).isEqualTo(ChangeType.UPDATE_AFTER);
-        assertThat(logRecord.logOffset()).isEqualTo(42L);
-        assertThat(logRecord.timestamp()).isEqualTo(1234L);
+        // FIP-27: the reader emits a sentinel -1 offset / timestamp for both layouts; the physical
+        // __offset / __timestamp columns are no longer surfaced.
+        assertThat(logRecord.logOffset()).isEqualTo(-1L);
+        assertThat(logRecord.timestamp()).isEqualTo(-1L);
         assertThat(logRecord.getRow().getFieldCount()).isEqualTo(2);
         assertThat(logRecord.getRow().getInt(0)).isEqualTo(11);
         assertThat(logRecord.getRow().getString(1)).isEqualTo(BinaryString.fromString("value"));
@@ -77,8 +78,8 @@ class HudiRecordReaderTest {
         LogRecord logRecord = iterator.next();
 
         assertThat(logRecord.getChangeType()).isEqualTo(ChangeType.DELETE);
-        assertThat(logRecord.logOffset()).isEqualTo(7L);
-        assertThat(logRecord.timestamp()).isEqualTo(999L);
+        assertThat(logRecord.logOffset()).isEqualTo(-1L);
+        assertThat(logRecord.timestamp()).isEqualTo(-1L);
         assertThat(logRecord.getRow().getFieldCount()).isEqualTo(1);
         assertThat(logRecord.getRow().getString(0)).isEqualTo(BinaryString.fromString("projected"));
 
@@ -87,18 +88,26 @@ class HudiRecordReaderTest {
     }
 
     @Test
-    void testIteratorFailsClearlyWhenRequiredSystemColumnIsMissing() {
+    void testIteratorForCleanTableHasNoSystemColumns() {
+        // FIP-27: a clean table read has no trailing system columns (systemFieldCount == 0); all
+        // non-metadata columns are business columns and offset/timestamp are the -1 sentinel.
         TestingClosableIterator hudiIterator =
-                new TestingClosableIterator(
-                        projectedRowData(RowKind.DELETE, "projected", 5, 7L, 999L));
+                new TestingClosableIterator(cleanRowData(RowKind.INSERT, 11, "value"));
+        HudiRecordReader.HudiRecordAsFlussRecordIterator iterator =
+                new HudiRecordReader.HudiRecordAsFlussRecordIterator(
+                        hudiIterator, cleanSchema(), 2, 0);
 
-        assertThatThrownBy(
-                        () ->
-                                new HudiRecordReader.HudiRecordAsFlussRecordIterator(
-                                        hudiIterator, schemaWithoutOffsetColumn(), 2, 2))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("__offset")
-                .hasMessageContaining("does not exist");
+        LogRecord logRecord = iterator.next();
+
+        assertThat(logRecord.getChangeType()).isEqualTo(ChangeType.INSERT);
+        assertThat(logRecord.logOffset()).isEqualTo(-1L);
+        assertThat(logRecord.timestamp()).isEqualTo(-1L);
+        assertThat(logRecord.getRow().getFieldCount()).isEqualTo(2);
+        assertThat(logRecord.getRow().getInt(0)).isEqualTo(11);
+        assertThat(logRecord.getRow().getString(1)).isEqualTo(BinaryString.fromString("value"));
+
+        iterator.close();
+        assertThat(hudiIterator.getCloseCount()).isEqualTo(1);
     }
 
     private static RowData rowData(
@@ -153,14 +162,23 @@ class HudiRecordReaderTest {
                         + "]");
     }
 
-    private static Schema schemaWithoutOffsetColumn() {
+    private static RowData cleanRowData(RowKind rowKind, int id, String value) {
+        GenericRowData rowData = new GenericRowData(4);
+        rowData.setRowKind(rowKind);
+        rowData.setField(0, StringData.fromString("commit"));
+        rowData.setField(1, StringData.fromString("record-key"));
+        rowData.setField(2, id);
+        rowData.setField(3, StringData.fromString(value));
+        return rowData;
+    }
+
+    private static Schema cleanSchema() {
         return parseSchema(
                 "["
                         + "{\"name\":\"_hoodie_commit_time\",\"type\":\"string\"},"
                         + "{\"name\":\"_hoodie_record_key\",\"type\":\"string\"},"
-                        + "{\"name\":\"value\",\"type\":\"string\"},"
-                        + "{\"name\":\"__bucket\",\"type\":\"int\"},"
-                        + "{\"name\":\"__timestamp\",\"type\":\"long\"}"
+                        + "{\"name\":\"id\",\"type\":\"int\"},"
+                        + "{\"name\":\"value\",\"type\":\"string\"}"
                         + "]");
     }
 

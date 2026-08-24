@@ -184,7 +184,7 @@ class HudiTieringITCase extends FlinkHudiTieringTestBase {
         assertReplicaStatus(logTableBucket, 30);
         assertThat(getLeaderReplica(logTableBucket).getLogTablet().getLakeMaxTimestamp())
                 .isGreaterThan(-1);
-        checkDataInHudiCOWTable(logTablePath, "", flussRows, 0, 0);
+        checkDataInHudiCOWTable(logTablePath, "", flussRows, 0);
         checkFlussOffsetsInSnapshot(logTablePath, Collections.singletonMap(logTableBucket, 30L));
     }
 

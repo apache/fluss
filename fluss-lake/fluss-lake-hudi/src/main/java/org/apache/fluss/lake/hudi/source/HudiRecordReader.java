@@ -19,6 +19,7 @@ package org.apache.fluss.lake.hudi.source;
 
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.lake.hudi.utils.HudiTableInfo;
+import org.apache.fluss.lake.hudi.utils.HudiUtils;
 import org.apache.fluss.lake.source.RecordReader;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.ChangeType;
@@ -55,10 +56,8 @@ import java.util.Map;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
-import static org.apache.fluss.lake.hudi.HudiLakeCatalog.SYSTEM_COLUMNS;
+import static org.apache.fluss.lake.hudi.HudiLakeCatalog.LEGACY_SYSTEM_COLUMNS;
 import static org.apache.fluss.lake.hudi.utils.HudiConversions.toChangeType;
-import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
-import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
 
 /** Record reader for Hudi tables. */
 public class HudiRecordReader implements RecordReader {
@@ -91,7 +90,12 @@ public class HudiRecordReader implements RecordReader {
                     buildFlinkHudiOptions(hudiTableInfo, tablePath, avroSchema);
 
             int metadataFieldCount = metadataFieldCount(avroSchema);
-            int[] selectedFields = selectedFields(avroSchema, project, metadataFieldCount);
+            // FIP-27: a legacy table carries the three trailing system columns; a clean table has
+            // none. Detection drives both projection (whether system columns are selected) and the
+            // trailing-column trimming performed by the iterator.
+            boolean isLegacy = isLegacyTable(avroSchema);
+            int[] selectedFields =
+                    selectedFields(avroSchema, project, metadataFieldCount, isLegacy);
             Schema requiredSchema = createRequiredSchema(avroSchema, selectedFields);
 
             InternalSchemaManager internalSchemaManager =
@@ -129,7 +133,7 @@ public class HudiRecordReader implements RecordReader {
                             hudiRecordIterator,
                             requiredSchema,
                             metadataFieldCount,
-                            SYSTEM_COLUMNS.size());
+                            isLegacy ? LEGACY_SYSTEM_COLUMNS.size() : 0);
         }
     }
 
@@ -158,8 +162,14 @@ public class HudiRecordReader implements RecordReader {
         return metadataFieldCount;
     }
 
+    private static boolean isLegacyTable(Schema avroSchema) {
+        RowType rowType =
+                (RowType) AvroSchemaConverter.convertToDataType(avroSchema).getLogicalType();
+        return HudiUtils.isLegacyTable(rowType);
+    }
+
     private static int[] selectedFields(
-            Schema schema, @Nullable int[][] project, int metadataFieldCount) {
+            Schema schema, @Nullable int[][] project, int metadataFieldCount, boolean isLegacy) {
         if (project == null) {
             return IntStream.range(0, schema.getFields().size()).toArray();
         }
@@ -170,10 +180,16 @@ public class HudiRecordReader implements RecordReader {
                         .filter(projectPath -> projectPath.length > 0)
                         .mapToInt(projectPath -> projectPath[0] + metadataFieldCount)
                         .toArray();
+        // FIP-27: only legacy tables carry the system columns, so only they are projected. The
+        // iterator emits sentinel offset/timestamp for both layouts, so the system columns are not
+        // needed for a clean table.
         int[] systemFields =
-                SYSTEM_COLUMNS.keySet().stream()
-                        .mapToInt(systemColumn -> requiredFieldPosition(schema, systemColumn))
-                        .toArray();
+                isLegacy
+                        ? LEGACY_SYSTEM_COLUMNS.keySet().stream()
+                                .mapToInt(
+                                        systemColumn -> requiredFieldPosition(schema, systemColumn))
+                                .toArray()
+                        : new int[0];
 
         return IntStream.concat(
                         IntStream.concat(
@@ -230,11 +246,12 @@ public class HudiRecordReader implements RecordReader {
     /** Iterator for Hudi {@link RowData} as Fluss {@link LogRecord}. */
     public static class HudiRecordAsFlussRecordIterator implements CloseableIterator<LogRecord> {
 
+        /** Sentinel offset / timestamp emitted for rows read from a lake table. */
+        private static final long NO_SYSTEM_COLUMN_VALUE = -1L;
+
         private final ClosableIterator<RowData> hudiRecordIterator;
         private final ProjectedRow projectedRow;
         private final HudiRowAsFlussRow hudiRowAsFlussRow;
-        private final int logOffsetColIndex;
-        private final int timestampColIndex;
 
         private boolean closed;
 
@@ -244,9 +261,9 @@ public class HudiRecordReader implements RecordReader {
                 int metadataFieldCount,
                 int systemFieldCount) {
             this.hudiRecordIterator = hudiRecordIterator;
-            this.logOffsetColIndex = requiredFieldPosition(schema, OFFSET_COLUMN_NAME);
-            this.timestampColIndex = requiredFieldPosition(schema, TIMESTAMP_COLUMN_NAME);
-            this.hudiRowAsFlussRow = new HudiRowAsFlussRow();
+            // A legacy read still carries the trailing system columns (systemFieldCount == 3); trim
+            // them so only the business columns are emitted. A clean read has none to trim.
+            this.hudiRowAsFlussRow = new HudiRowAsFlussRow(systemFieldCount > 0);
             this.projectedRow =
                     ProjectedRow.from(
                             IntStream.range(
@@ -278,12 +295,13 @@ public class HudiRecordReader implements RecordReader {
         public LogRecord next() {
             RowData rowData = hudiRecordIterator.next();
             ChangeType changeType = toChangeType(rowData.getRowKind());
-            long offset = rowData.getLong(logOffsetColIndex);
-            long timestamp = rowData.getTimestamp(timestampColIndex, 6).getMillisecond();
-
+            // The lake table does not carry a per-record log offset / timestamp meaningful to
+            // downstream consumers (a clean table has no system columns, and for a legacy table we
+            // no longer read them), so a sentinel -1 is emitted, consistent with the Paimon and
+            // Iceberg readers and the LakeRecordRecordEmitter contract.
             return new GenericRecord(
-                    offset,
-                    timestamp,
+                    NO_SYSTEM_COLUMN_VALUE,
+                    NO_SYSTEM_COLUMN_VALUE,
                     changeType,
                     projectedRow.replaceRow(hudiRowAsFlussRow.replaceRow(rowData)));
         }
