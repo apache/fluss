@@ -25,8 +25,6 @@ x-fluss-common: &fluss-common
     - ../build-target:/opt/fluss:ro
     - ${FLUSS_DEVKIT_CONFIG:-./profiles/core/server.yaml}:/opt/fluss/conf/server.yaml:ro
     - shared-data:/tmp/fluss
-  environment:
-    FLUSS_LOG_DIR: /tmp/fluss-logs
   logging:
     driver: json-file
     options:
@@ -112,7 +110,7 @@ services:
       - -Dadvertised.listeners=CLIENT://localhost:${TABLET_SERVER_0_PORT:-9124}
       - -Dinternal.listener.name=INTERNAL
       - -Dtablet-server.id=0
-      - -Dkv.snapshot.interval=0s
+      - -Dkv.snapshot.interval=10s
       - -Ddata.dir=/tmp/fluss/data/tablet-server-0
       - -Dmetrics.reporters=prometheus
       - -Dmetrics.reporter.prometheus.port=9249
@@ -136,7 +134,7 @@ services:
       - -Dadvertised.listeners=CLIENT://localhost:${TABLET_SERVER_1_PORT:-9125}
       - -Dinternal.listener.name=INTERNAL
       - -Dtablet-server.id=1
-      - -Dkv.snapshot.interval=0s
+      - -Dkv.snapshot.interval=10s
       - -Ddata.dir=/tmp/fluss/data/tablet-server-1
       - -Dmetrics.reporters=prometheus
       - -Dmetrics.reporter.prometheus.port=9249
@@ -160,7 +158,7 @@ services:
       - -Dadvertised.listeners=CLIENT://localhost:${TABLET_SERVER_2_PORT:-9126}
       - -Dinternal.listener.name=INTERNAL
       - -Dtablet-server.id=2
-      - -Dkv.snapshot.interval=0s
+      - -Dkv.snapshot.interval=10s
       - -Ddata.dir=/tmp/fluss/data/tablet-server-2
       - -Dmetrics.reporters=prometheus
       - -Dmetrics.reporter.prometheus.port=9249

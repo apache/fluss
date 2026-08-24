@@ -21,7 +21,22 @@ CREATE CATALOG fluss_catalog WITH (
 
 USE CATALOG fluss_catalog;
 
-INSERT INTO ${DEVKIT_TABLE} VALUES
-    (1, 'alpha'),
-    (2, 'beta'),
-    (3, 'gamma');
+-- Batch scan: reads the current bounded contents and then exits.
+SET 'execution.runtime-mode' = 'batch';
+SET 'table.dml-sync' = 'true';
+
+SELECT * FROM events
+/*+ OPTIONS('scan.startup.mode' = 'earliest') */;
+
+SELECT * FROM profiles
+/*+ OPTIONS('scan.startup.mode' = 'earliest') */;
+
+-- Point lookup: a complete primary-key predicate returns one current row.
+SELECT * FROM profiles
+WHERE tenant_id = 10 AND user_id = 100;
+
+-- Streaming scan: run this statement separately. It remains running and
+-- continues to receive records appended after the job starts.
+-- SET 'execution.runtime-mode' = 'streaming';
+-- SELECT * FROM events
+-- /*+ OPTIONS('scan.startup.mode' = 'earliest') */;

@@ -46,7 +46,6 @@ services:
       - |
         until mc alias set rustfs http://rustfs:9000 rustfsadmin rustfsadmin; do sleep 2; done
         mc mb --ignore-existing rustfs/fluss
-        printf '' | mc pipe rustfs/fluss/hudi/.keep
 
   coordinator-server:
     depends_on:
