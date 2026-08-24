@@ -14,6 +14,9 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
+SET 'execution.runtime-mode' = 'batch';
+SET 'sql-client.execution.result-mode' = 'tableau';
+
 CREATE CATALOG fluss_catalog WITH (
     'type' = 'fluss',
     'bootstrap.servers' = 'coordinator-server:19123',
@@ -24,7 +27,10 @@ CREATE CATALOG fluss_catalog WITH (
 
 USE CATALOG fluss_catalog;
 
-INSERT INTO ${DEVKIT_TABLE} VALUES
-    (1, 'alpha'),
-    (2, 'beta'),
-    (3, 'gamma');
+SELECT
+    COUNT(*) AS row_count,
+    SUM(id) AS id_sum,
+    COUNT(DISTINCT payload) AS payload_count,
+    MIN(payload) AS first_payload,
+    MAX(payload) AS last_payload
+FROM `lake_table$lake`;

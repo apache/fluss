@@ -27,7 +27,6 @@ x-flink-common: &flink-common
   volumes:
     - ./.deps/flink/active:/opt/devkit-jars:ro
     - ${FLUSS_DEVKIT_CONFIG:-./profiles/core/server.yaml}:/opt/devkit-config/server.yaml:ro
-    - ./tests:/opt/devkit-tests:ro
     - shared-data:/tmp/fluss
 
 services:

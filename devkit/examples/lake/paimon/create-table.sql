@@ -14,9 +14,6 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-SET 'execution.runtime-mode' = 'batch';
-SET 'sql-client.execution.result-mode' = 'tableau';
-
 CREATE CATALOG fluss_catalog WITH (
     'type' = 'fluss',
     'bootstrap.servers' = 'coordinator-server:19123',
@@ -26,10 +23,12 @@ CREATE CATALOG fluss_catalog WITH (
 
 USE CATALOG fluss_catalog;
 
-SELECT
-    COUNT(*) AS row_count,
-    SUM(id) AS id_sum,
-    COUNT(DISTINCT payload) AS payload_count,
-    MIN(payload) AS first_payload,
-    MAX(payload) AS last_payload
-FROM `${DEVKIT_TABLE}$lake`;
+CREATE TABLE lake_table (
+    id BIGINT,
+    payload STRING,
+    PRIMARY KEY (id) NOT ENFORCED
+) WITH (
+    'bucket.num' = '1',
+    'table.datalake.enabled' = 'true',
+    'table.datalake.freshness' = '5s'
+);

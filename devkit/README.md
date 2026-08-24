@@ -115,34 +115,75 @@ join examples are intentionally long-running; the lookup file contains one activ
 time, with the alternative prefix lookup shown in comments. The setup file must be run before the
 other examples because they use its tables.
 
+## Lakehouse examples
+
+Lakehouse examples are also kept under `examples/`, so the files used by the smoke commands and the
+files intended for interactive exploration have one home. The Paimon example is the complete
+reference path for a table with `table.datalake.enabled = true`:
+
+```text
+examples/lake/paimon/
+├── setup.sql             # Log Table and Primary Key Table, plus sample data
+├── union-read.sql        # Batch Union Read and Streaming Union Read
+└── lake-only-read.sql    # Read the Paimon layer through the $lake table
+```
+
+Run it with a clean environment when starting for the first time:
+
+```bash
+just build-tiering
+just up paimon
+just run-sql examples/lake/paimon/setup.sql
+just run-sql examples/lake/paimon/union-read.sql
+```
+
+The direct table reads in `union-read.sql` combine the lake snapshot with the Fluss log. The batch
+query terminates; uncomment the streaming section to keep consuming new records. After the
+tiering job has committed a snapshot, run the lake-only example:
+
+```bash
+just run-sql examples/lake/paimon/lake-only-read.sql
+```
+
+The Paimon, Iceberg, and Lance `create-table.sql`, `write-data.sql`, and `query-lake.sql` files are
+also available as standalone SQL files. They use the fixed table name `lake_table`, so they can be
+run directly with `just run-sql`:
+
+```bash
+just run-sql examples/lake/paimon/create-table.sql
+just run-sql examples/lake/paimon/write-data.sql
+just run-sql examples/lake/paimon/query-lake.sql
+```
+
+Iceberg and Lance keep the shorter format-specific path; use Paimon when you want to explore the
+full Log Table, Primary Key Table, Union Read, and Lake-only Read chain.
+
 ## Validate Lake Tiering
 
-The validation workflow is intentionally split into commands that can be run and inspected one at
+The validation workflow is intentionally split into SQL files that can be run and inspected one at
 a time:
 
 ```bash
 just build-tiering
 just up paimon
-
-format=paimon
-table="${format}_manual_$(date +%s)"
-
-just create-table "$format" "$table"
-just write-data "$format" "$table"
+just run-sql examples/lake/paimon/setup.sql
+just run-sql examples/lake/paimon/union-read.sql
 just tiering-status
-just query-lake "$format" "$table"
+just run-sql examples/lake/paimon/lake-only-read.sql
 ```
 
-Use `iceberg` or `paimon` for a complete create, write, tier, and lake-query workflow.
-Tiering is asynchronous, so repeat `query-lake` if the first query runs before the lake commit is
-visible.
+Use `paimon` for the complete Log Table, Primary Key Table, Union Read, and Lake-only Read
+workflow. Use the standalone SQL files under `examples/lake/iceberg/` or `examples/lake/lance/` to
+experiment with those formats.
+Tiering is asynchronous, so repeat `lake-only-read.sql` if the first query runs before the lake
+commit is visible.
 
-The sample writes three rows. A successful lake query reports row count `3`, ID sum `6`, three
-distinct payloads, and the payload range `alpha` to `gamma`. Use a new table name for each run:
-dropping a non-empty Fluss table does not remove its lake table.
+The sample writes three rows. A successful Paimon lake query reports row count `3`, ID sum `6`,
+three distinct payloads, and the payload range `alpha` to `gamma`. Run `just clean` before repeating
+the fixed-name examples if the tables already exist.
 
-Lance supports `create-table`, `write-data`, and tiering, but the DevKit does not bundle a Flink SQL
-reader for `query-lake`. Inspect the generated objects in RustFS when validating Lance.
+Lance supports table creation, writing, and tiering, but the DevKit does not bundle a Flink SQL
+reader for a Lance lake-only query. Inspect the generated objects in RustFS when validating Lance.
 
 ## Operations
 

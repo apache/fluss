@@ -14,14 +14,16 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
+SET 'execution.runtime-mode' = 'batch';
+
 CREATE CATALOG fluss_catalog WITH (
     'type' = 'fluss',
-    'bootstrap.servers' = 'coordinator-server:19123'
+    'bootstrap.servers' = 'coordinator-server:19123',
+    'paimon.s3.access-key' = 'rustfsadmin',
+    'paimon.s3.secret-key' = 'rustfsadmin'
 );
 
 USE CATALOG fluss_catalog;
 
-INSERT INTO ${DEVKIT_TABLE} VALUES
-    (1, 'alpha'),
-    (2, 'beta'),
-    (3, 'gamma');
+-- `$lake` reads only the Paimon table, excluding the live Fluss log layer.
+SELECT * FROM lake_profiles$lake;
