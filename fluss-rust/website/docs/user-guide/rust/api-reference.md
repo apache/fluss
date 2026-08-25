@@ -40,6 +40,7 @@ Complete API reference for the Fluss Rust client.
 | `async fn new(config: Config) -> Result<Self>`                                | Create a new connection to a Fluss cluster     |
 | `fn get_admin(&self) -> Result<Arc<FlussAdmin>>`                              | Get the admin interface for cluster management |
 | `async fn get_table(&self, table_path: &TablePath) -> Result<FlussTable<'_>>` | Get a table for read/write operations          |
+| `fn new_multi_table_writer(&self) -> Result<MultiTableWriter>`                | Create a writer for multi-table CDC records    |
 | `fn config(&self) -> &Config`                                                 | Get a reference to the connection config       |
 
 ## `FlussAdmin`
@@ -138,6 +139,17 @@ gauges). Unlike scanner metrics, these are **unlabeled** (global per process),
 matching Java's single `WriterMetricGroup` per client (Java scopes only by
 `client_id`, which the Rust `metrics` facade has no concept of yet). The same
 series are shared by `AppendWriter` (log tables) and `UpsertWriter` (PK tables).
+
+## `MultiTableWriter`
+
+`MultiTableWriter` routes records to multiple tables and caches write state by table and schema id.
+Use `MultiTableWriteRecord::for_append` for log tables and `for_upsert` / `for_delete` for
+primary-key tables.
+
+| Method | Description |
+|--------|-------------|
+| `async fn write(&mut self, record: MultiTableWriteRecord<'_, R>) -> Result<WriteResultFuture>` | Resolve the target table and queue one CDC record |
+| `async fn flush(&self) -> Result<()>` | Flush all writes pending in the connection writer client |
 
 ## `TableScan<'a>`
 
