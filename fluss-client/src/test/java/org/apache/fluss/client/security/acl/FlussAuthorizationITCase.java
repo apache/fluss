@@ -873,7 +873,7 @@ public class FlussAuthorizationITCase {
                                                 PermissionType.ALLOW))))
                 .all()
                 .get();
-        assertThat(guestAdmin.getClusterVersion().get())
+        assertThat(guestAdmin.getClusterVersion().get().getVersion())
                 .isEqualTo(VersionInfo.getVersion())
                 .isNotEqualTo("unknown")
                 .matches("^\\d+\\.\\d+.*");

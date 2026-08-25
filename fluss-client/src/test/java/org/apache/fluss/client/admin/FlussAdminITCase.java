@@ -2996,7 +2996,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
 
     @Test
     void testGetClusterVersion() throws Exception {
-        String version = admin.getClusterVersion().get();
+        String version = admin.getClusterVersion().get().getVersion();
         assertThat(version)
                 .isEqualTo(VersionInfo.getVersion())
                 .isNotEqualTo("unknown")

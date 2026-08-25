@@ -810,13 +810,17 @@ public interface Admin extends AutoCloseable {
      *
      * <p>Returns {@code "unknown"} if the Coordinator could not determine its own version.
      *
+     * <p>The version string is intended for diagnostics and display. For programmatic feature
+     * gating, use the api-versions handshake instead: snapshot builds, downstream distributions,
+     * and the {@code "unknown"} fallback all produce strings a naive comparison mishandles.
+     *
      * <p>Servers that do not yet implement this RPC complete the returned future exceptionally with
      * {@link org.apache.fluss.exception.UnsupportedVersionException}.
      *
-     * @return a {@link CompletableFuture} that completes with the cluster version string.
+     * @return a {@link CompletableFuture} that completes with the cluster version information.
      * @since 1.0
      */
-    CompletableFuture<String> getClusterVersion();
+    CompletableFuture<ClusterVersionInfo> getClusterVersion();
 
     /**
      * List per-bucket remote log manifest entries for a table or partition scope.
