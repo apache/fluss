@@ -64,7 +64,7 @@ const INITIAL_ROW_CAPACITY: usize = 1024;
 /// Matching Java's `ArrowWriter.BUFFER_USAGE_RATIO`.
 const BUFFER_USAGE_RATIO: f32 = 0.95;
 
-pub struct MemoryLogRecordsArrowBuilder {
+pub(crate) struct MemoryLogRecordsArrowBuilder {
     base_log_offset: i64,
     schema_id: i32,
     magic: u8,
@@ -97,7 +97,7 @@ pub struct MemoryLogRecordsArrowBuilder {
 
 /// Table-level configuration for building Arrow log batches, shared by
 /// `ArrowLogWriteBatch` and `MemoryLogRecordsArrowBuilder`.
-pub struct ArrowBatchConfig {
+pub(crate) struct ArrowBatchConfig {
     pub schema_id: i32,
     pub row_type: RowType,
     /// Statistics column mapping; `Some` upgrades batches to V1.
@@ -280,7 +280,7 @@ impl ArrowRecordBatchInnerBuilder for RowAppendRecordBatchBuilder {
 // the previous batch (recordsCount / 2) for a warm start, avoiding the first-record
 // size check on every new batch.
 impl MemoryLogRecordsArrowBuilder {
-    pub fn new(config: ArrowBatchConfig, to_append_record_batch: bool) -> Result<Self> {
+    pub(crate) fn new(config: ArrowBatchConfig, to_append_record_batch: bool) -> Result<Self> {
         let ArrowBatchConfig {
             schema_id,
             row_type,

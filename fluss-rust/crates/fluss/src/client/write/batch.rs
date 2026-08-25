@@ -237,12 +237,12 @@ impl WriteBatch {
 
 pub struct ArrowLogWriteBatch {
     pub write_batch: InnerWriteBatch,
-    pub arrow_builder: MemoryLogRecordsArrowBuilder,
+    pub(crate) arrow_builder: MemoryLogRecordsArrowBuilder,
     built_records: Option<Bytes>,
 }
 
 impl ArrowLogWriteBatch {
-    pub fn new(
+    pub(crate) fn new(
         batch_id: i64,
         physical_table_path: Arc<PhysicalTablePath>,
         config: ArrowBatchConfig,
