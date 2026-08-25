@@ -133,15 +133,9 @@ When a Fluss table is created with the option `'table.datalake.enabled' = 'true'
 For DFS catalog mode, the Hudi table path is `${catalog.path}/${database_name}/${table_name}` unless the Hudi table path is explicitly set by Hudi options.
 For Hive Metastore catalog mode, the table path follows Hudi Hive catalog path inference.
 
-The schema of the Hudi table matches the Fluss table schema, except for three system columns appended by Fluss:
+The schema of the Hudi table matches the Fluss table schema, containing only the user-defined columns. Fluss does not add any system columns to the physical Hudi schema.
 
-| Column        | Type         | Description                                   |
-|---------------|--------------|-----------------------------------------------|
-| `__bucket`    | INT          | Fluss bucket identifier for data distribution |
-| `__offset`    | BIGINT       | Fluss log offset for ordering and seeking     |
-| `__timestamp` | TIMESTAMP(6) | Fluss log timestamp                           |
-
-Do not use user columns named `__bucket`, `__offset`, or `__timestamp`. Hudi metadata column names starting with `_hoodie_` are also reserved.
+The names `__bucket`, `__offset`, and `__timestamp` are reserved for Fluss internal use, so do not use user columns with these names. Hudi metadata column names starting with `_hoodie_` are also reserved.
 
 ### Primary Key Tables
 
