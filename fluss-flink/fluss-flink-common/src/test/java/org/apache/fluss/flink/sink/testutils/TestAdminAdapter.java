@@ -20,6 +20,7 @@ package org.apache.fluss.flink.sink.testutils;
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.admin.ClusterDescription;
 import org.apache.fluss.client.admin.ClusterHealth;
+import org.apache.fluss.client.admin.ClusterVersionInfo;
 import org.apache.fluss.client.admin.CreateAclsResult;
 import org.apache.fluss.client.admin.DropAclsResult;
 import org.apache.fluss.client.admin.KvSnapshotLease;
@@ -367,7 +368,7 @@ public class TestAdminAdapter implements Admin {
     }
 
     @Override
-    public CompletableFuture<String> getClusterVersion() {
+    public CompletableFuture<ClusterVersionInfo> getClusterVersion() {
         throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
     }
 
