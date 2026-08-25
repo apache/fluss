@@ -2,12 +2,19 @@
 title: Real-Time Page User Profile
 sidebar_position: 4
 ---
+import ThemedImage from '@site/src/components/ThemedImage';
 
 # Real-Time Page User Profile
 
 This tutorial demonstrates how to build a real-time page-view analytics system using three core Apache Fluss features: the **Auto-Increment Column**, the **Aggregation Merge Engine**, and the built-in **RoaringBitmap SQL functions**. You will learn how to map high-cardinality email identifiers to compact integer UIDs and accumulate per-dimension page-view (PV) counts and unique visitor (UV) bitmaps directly in the storage layer — keeping the Flink job entirely stateless.
 
 ## How the System Works
+
+<ThemedImage
+    alt="Page User Profile Architecture"
+    light="page_user_profile_light.png"
+    dark="page_user_profile_dark.png"
+/>
 
 ### Core Concepts
 
