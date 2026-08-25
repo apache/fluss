@@ -142,7 +142,7 @@ public class Flink23CatalogTest extends FlinkCatalogTest {
     @MultiVersionTest
     void testMaterializedTableSerializesSeparateQueriesIntoCustomProperties() {
         String originalQuery = "SELECT order_id, orig_ts FROM t";
-        String expandedQuery = "SELECT defalut.t.order_id, defalut.t.orig_ts FROM defalut.t";
+        String expandedQuery = "SELECT default.t.order_id, default.t.orig_ts FROM default.t";
 
         ResolvedSchema resolvedSchema =
                 new ResolvedSchema(
@@ -192,5 +192,21 @@ public class Flink23CatalogTest extends FlinkCatalogTest {
                 .containsEntry(
                         FlinkConnectorOptions.MATERIALIZED_TABLE_EXPANDED_QUERY.key(),
                         expandedQuery);
+
+        // read back: the two queries must stay distinct across the round trip
+        long currentMillis = System.currentTimeMillis();
+        CatalogMaterializedTable readBack =
+                (CatalogMaterializedTable)
+                        FlinkConversions.toFlinkTable(
+                                TableInfo.of(
+                                        TablePath.of("db", "table"),
+                                        1L,
+                                        1,
+                                        flussTable.withBucketCount(1),
+                                        DEFAULT_REMOTE_DATA_DIR,
+                                        currentMillis,
+                                        currentMillis));
+        assertThat(readBack.getOriginalQuery()).isEqualTo(originalQuery);
+        assertThat(readBack.getExpandedQuery()).isEqualTo(expandedQuery);
     }
 }

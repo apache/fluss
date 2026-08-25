@@ -28,6 +28,7 @@ public class Flink23TableSinkITCase extends FlinkTableSinkITCase {
      * FlinkChangelogModeInferenceProgram} does not reject plans whose inferred upsert key differs
      * from the sink PK.
      */
+    @Override
     protected void disableSinkRequireOnConflict() {
         tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_SINK_REQUIRE_ON_CONFLICT, false);
     }

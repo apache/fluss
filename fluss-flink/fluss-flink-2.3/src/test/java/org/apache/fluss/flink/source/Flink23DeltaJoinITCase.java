@@ -1014,88 +1014,142 @@ public class Flink23DeltaJoinITCase extends FlinkTestBase {
                 .hasMessageContaining("doesn't support to do delta join optimization");
     }
 
-    /**
-     * Documents the SQL shape for a "lookup join after a delta join" pipeline (Flink 2.3): a delta
-     * join wrapped in a subquery that adds a {@code PROCTIME()} time attribute, followed by a
-     * downstream lookup (temporal) join against a Fluss dimension table. The proctime computed via
-     * {@code PROCTIME()} in the inner subquery is consumed by the {@code FOR SYSTEM_TIME AS OF}
-     * clause of the downstream lookup join.
-     *
-     * <p>Per Flink 2.3 "Supported Features and Limitations" docs: "Support for lookup join after a
-     * delta join" and "Support for non-deterministic functions in projections and filters between
-     * the delta join and downstream operators".
-     *
-     * <p>Today this is asserted as an expected failure to lock in the precise planner error that is
-     * raised today: the {@code StreamPhysicalSnapshotOnCalcTableScanRule} in Flink 2.3 invokes
-     * {@code FlussTableSource#getLookupRuntimeProvider} with an empty {@code
-     * LookupContext.getKeys()} for the dim table in this scenario, and {@code
-     * LookupNormalizer.validateAndCreateLookupNormalizer} then throws "Can't find expected key 'id'
-     * in lookup keys []". The delta-join strategy is overridden to {@link
-     * OptimizerConfigOptions.DeltaJoinStrategy#AUTO} so that the test is not blocked by {@code
-     * StreamPhysicalDeltaJoinForceValidator}.
-     */
     @Test
-    void testLookupJoinAfterDeltaJoin() {
-        // allow the planner to choose; the validator only rejects when FORCE is set
-        tEnv.getConfig()
-                .set(
-                        OptimizerConfigOptions.TABLE_OPTIMIZER_DELTA_JOIN_STRATEGY,
-                        OptimizerConfigOptions.DeltaJoinStrategy.AUTO);
-        String leftTableName = "left_table_lj_delta";
-        String rightTableName = "right_table_lj_delta";
-        String dimTableName = "dim_table_lj_delta";
-        String sinkTableName = "sink_table_lj_delta";
+    void testCascadedDeltaJoin() {
+        String table1 = "cascade_t1";
+        String table2 = "cascade_t2";
+        String table3 = "cascade_t3";
+        String sinkTableName = "cascade_sink";
+
+        createSource(
+                table1,
+                "a1 int, c1 bigint, d1 int",
+                "c1, d1",
+                "c1",
+                null,
+                ImmutableMap.of("table.delete.behavior", "IGNORE"));
+        createSource(
+                table2,
+                "a2 int, c2 bigint, d2 int",
+                "c2, d2",
+                "c2",
+                null,
+                ImmutableMap.of("table.delete.behavior", "IGNORE"));
+        createSource(
+                table3,
+                "a3 int, c3 bigint, d3 int",
+                "c3, d3",
+                "c3",
+                null,
+                ImmutableMap.of("table.delete.behavior", "IGNORE"));
+        createSink(sinkTableName, "c1 bigint, d1 int, a1 int, a2 int, a3 int", "c1, d1");
+
+        String sql =
+                String.format(
+                        "INSERT INTO %s SELECT t1.c1, t1.d1, t1.a1, t2.a2, t3.a3 FROM %s t1"
+                                + " INNER JOIN %s t2 ON t1.c1 = t2.c2 AND t1.d1 = t2.d2"
+                                + " INNER JOIN %s t3 ON t1.c1 = t3.c3 AND t1.d1 = t3.d3",
+                        sinkTableName, table1, table2, table3);
+
+        // the outer delta join looks up through a multi-round chain over the inner one
+        assertThat(tEnv.explainSql(sql)).contains("round=[1]", "round=[2]");
+    }
+
+    @Test
+    void testDeltaJoinWithNonDeterministicFunctionBeforeSink() {
+        String leftTableName = "left_table_nondeterministic";
+        String rightTableName = "right_table_nondeterministic";
+        String sinkTableName = "sink_table_nondeterministic";
 
         createSource(
                 leftTableName,
-                "a1 int, b1 varchar, c1 bigint, d1 int, e1 bigint",
+                "a1 int, c1 bigint, d1 int",
                 "c1, d1",
                 "c1",
                 null,
                 ImmutableMap.of("table.delete.behavior", "IGNORE"));
         createSource(
                 rightTableName,
-                "a2 int, b2 varchar, c2 bigint, d2 int, e2 bigint",
+                "a2 int, c2 bigint, d2 int",
                 "c2, d2",
                 "c2",
                 null,
                 ImmutableMap.of("table.delete.behavior", "IGNORE"));
-
-        tEnv.executeSql(
-                String.format(
-                        "create table %s ("
-                                + " id int not null,"
-                                + " name varchar,"
-                                + " primary key (id) NOT ENFORCED"
-                                + ") with ("
-                                + " 'connector' = 'fluss',"
-                                + " 'bucket.num' = '1'"
-                                + ")",
-                        dimTableName));
-
-        createSink(
-                sinkTableName,
-                "a1 int, b1 varchar, c1 bigint, d1 int, a2 int, dim_name varchar",
-                "c1, d1");
+        createSink(sinkTableName, "c1 bigint, d1 int, rand_val double", "c1, d1");
 
         String sql =
                 String.format(
-                        "INSERT INTO %s "
-                                + "SELECT tmp.a1, tmp.b1, tmp.c1, tmp.d1, tmp.a2, dim.name "
-                                + "FROM ("
-                                + "  SELECT l.*, r.a2, PROCTIME() AS proc "
-                                + "  FROM %s AS l INNER JOIN %s AS r ON l.c1 = r.c2"
-                                + ") tmp "
-                                + "JOIN %s FOR SYSTEM_TIME AS OF tmp.proc AS dim "
-                                + "  ON dim.id = tmp.c1 "
-                                + "ON CONFLICT DO DEDUPLICATE",
+                        "INSERT INTO %s SELECT l.c1, l.d1, RAND() FROM %s l INNER JOIN %s r"
+                                + " ON l.c1 = r.c2 AND l.d1 = r.d2",
+                        sinkTableName, leftTableName, rightTableName);
+
+        assertThat(tEnv.explainSql(sql)).contains("DeltaJoin(joinType=[InnerJoin]");
+    }
+
+    @Test
+    void testLookupJoinAfterDeltaJoin() throws Exception {
+        tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_DELTA_JOIN_CACHE_ENABLED, false);
+        String leftTableName = "left_table_lookup_after_delta";
+        String rightTableName = "right_table_lookup_after_delta";
+        String dimTableName = "dim_table_lookup_after_delta";
+        String sinkTableName = "sink_table_lookup_after_delta";
+
+        createSource(
+                leftTableName,
+                "a1 int, c1 bigint, d1 int, ptime AS PROCTIME()",
+                "c1, d1",
+                "c1",
+                null,
+                ImmutableMap.of("table.delete.behavior", "IGNORE"));
+        createSource(
+                rightTableName,
+                "a2 int, c2 bigint, d2 int",
+                "c2, d2",
+                "c2",
+                null,
+                ImmutableMap.of("table.delete.behavior", "IGNORE"));
+        createSink(dimTableName, "id bigint, name varchar", "id");
+        createSink(
+                sinkTableName,
+                "c1 bigint, d1 int, c2 bigint, d2 int, a2 int, name varchar",
+                "c1, d1, c2, d2");
+
+        TablePath leftTablePath = TablePath.of(DEFAULT_DB, leftTableName);
+        writeRows(conn, leftTablePath, Arrays.asList(row(1, 100L, 1), row(2, 200L, 2)), false);
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(leftTablePath);
+
+        TablePath rightTablePath = TablePath.of(DEFAULT_DB, rightTableName);
+        writeRows(conn, rightTablePath, Arrays.asList(row(10, 100L, 1), row(20, 200L, 2)), false);
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(rightTablePath);
+
+        TablePath dimTablePath = TablePath.of(DEFAULT_DB, dimTableName);
+        writeRows(
+                conn, dimTablePath, Arrays.asList(row(100L, "dim100"), row(200L, "dim200")), false);
+
+        // prefix join, so the sink is keyed by both sides' primary keys
+        String sql =
+                String.format(
+                        "INSERT INTO %s SELECT l.c1, l.d1, r.c2, r.d2, r.a2, dim.name FROM %s l"
+                                + " INNER JOIN %s r ON l.c1 = r.c2"
+                                + " JOIN %s FOR SYSTEM_TIME AS OF l.ptime AS dim ON dim.id = l.c1",
                         sinkTableName, leftTableName, rightTableName, dimTableName);
 
-        assertThatThrownBy(() -> tEnv.explainSql(sql))
-                .hasRootCauseInstanceOf(org.apache.flink.table.api.TableException.class)
-                .hasRootCauseMessage(
-                        "The Fluss lookup function supports lookup tables where the lookup keys"
-                                + " include all primary keys or all bucket keys. Can't find"
-                                + " expected key 'id' in lookup keys []");
+        String plan = tEnv.explainSql(sql);
+        assertThat(plan).contains("DeltaJoin(joinType=[InnerJoin]", "LookupJoin(");
+
+        tEnv.executeSql(sql);
+
+        CloseableIterator<Row> collected =
+                tEnv.executeSql(String.format("select * from %s", sinkTableName)).collect();
+        assertResultsIgnoreOrder(
+                collected,
+                Arrays.asList(
+                        "+I[100, 1, 100, 1, 10, dim100]",
+                        "-U[100, 1, 100, 1, 10, dim100]",
+                        "+U[100, 1, 100, 1, 10, dim100]",
+                        "+I[200, 2, 200, 2, 20, dim200]",
+                        "-U[200, 2, 200, 2, 20, dim200]",
+                        "+U[200, 2, 200, 2, 20, dim200]"),
+                true);
     }
 }
