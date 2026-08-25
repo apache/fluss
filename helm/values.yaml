@@ -161,17 +161,6 @@ coordinator:
   tolerations: []
   topologySpreadConstraints: []
 
-# Fluss listener configurations.
-#
-# Default advertised.listeners use in-cluster headless Service DNS
-# (<pod>.<svc>.<ns>.svc.cluster.local). Out-of-cluster clients can bootstrap
-# the coordinator but then fail: MetadataResponse redirects produce/fetch to
-# each tablet's advertised address. See the Helm docs (Network Configuration).
-#
-# advertisedHost / advertisedPort are expanded by the container shell
-# ($POD_NAME, $POD_NAMESPACE, $POD_IP, $NODE_IP) and also run through Helm
-# tpl (for example Release.Namespace). Optional per-component overrides:
-# coordinator.listeners.* / tablet.listeners.*.
 listeners:
   internal:
     port: 9123
