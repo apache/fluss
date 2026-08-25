@@ -18,7 +18,6 @@
 package org.apache.fluss.flink.procedure;
 
 import org.apache.fluss.client.admin.Admin;
-import org.apache.fluss.cluster.rebalance.RebalanceInfo;
 import org.apache.fluss.cluster.rebalance.RebalanceProgress;
 import org.apache.fluss.cluster.rebalance.RebalanceProgressJsonSerializer;
 import org.apache.fluss.utils.json.JsonSerdeUtils;
@@ -33,20 +32,19 @@ import javax.annotation.Nullable;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Optional;
 
 /**
  * Procedure to list rebalance progress.
  *
  * <p>This procedure allows querying rebalance progress. See {@link
- * Admin#listRebalanceProgress(String)} and {@link Admin#listRebalances()} for more details.
+ * Admin#listRebalanceProgress(String)} for more details. To list all known rebalances as summaries,
+ * see {@link ListRebalancesProcedure}.
  *
  * <p>Usage examples:
  *
  * <pre>
- * -- List the current rebalance and the retained history of finished rebalances
+ * -- List the current rebalance progress
  * CALL sys.list_rebalance();
  *
  * -- List the rebalance progress with rebalance id
@@ -66,36 +64,8 @@ public class ListRebalanceProcessProcedure extends ProcedureBase {
                     @DataTypeHint(
                             "ROW<rebalance_id STRING, rebalance_status STRING, rebalance_progress STRING, rebalance_plan STRING, started_at TIMESTAMP_LTZ(3), completed_at TIMESTAMP_LTZ(3)>"))
     public Row[] call(ProcedureContext context, @Nullable String rebalanceId) throws Exception {
-        if (rebalanceId != null) {
-            Optional<RebalanceProgress> progressOpt =
-                    admin.listRebalanceProgress(rebalanceId).get();
-            return progressOpt.map(progress -> new Row[] {toRow(progress)}).orElse(new Row[0]);
-        }
-
-        // Without an id, list one row per known rebalance (the current one plus the retained
-        // history), ordered from most recent to oldest. Only the current rebalance carries
-        // per-bucket progress and plan detail. The two RPCs are separate round-trips, so a
-        // rebalance that starts or finishes between them can leave one row briefly out of
-        // date until the next call.
-        Optional<RebalanceProgress> currentOpt = admin.listRebalanceProgress(null).get();
-        List<RebalanceInfo> rebalanceInfos = admin.listRebalances().get();
-        List<Row> rows = new ArrayList<>(rebalanceInfos.size());
-        for (RebalanceInfo info : rebalanceInfos) {
-            if (currentOpt.isPresent()
-                    && currentOpt.get().rebalanceId().equals(info.rebalanceId())) {
-                rows.add(toRow(currentOpt.get()));
-            } else {
-                rows.add(
-                        Row.of(
-                                info.rebalanceId(),
-                                info.status().toString(),
-                                null,
-                                null,
-                                toInstant(info.startedAtMs()),
-                                toInstant(info.completedAtMs())));
-            }
-        }
-        return rows.toArray(new Row[0]);
+        Optional<RebalanceProgress> progressOpt = admin.listRebalanceProgress(rebalanceId).get();
+        return progressOpt.map(progress -> new Row[] {toRow(progress)}).orElse(new Row[0]);
     }
 
     private static Row toRow(RebalanceProgress progress) {
