@@ -597,6 +597,10 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
             authorizer.authorize(currentSession(), OperationType.DESCRIBE, Resource.cluster());
         }
 
+        // Reports this server's own version - no forwarding to the coordinator. The client's
+        // FlussAdmin routes this RPC to the coordinator gateway, so users still see one
+        // consistent answer; per-node versions are a possible follow-up via
+        // TabletServerRegistration.
         GetClusterVersionResponse response = new GetClusterVersionResponse();
         response.setVersion(VersionInfo.getVersion());
         return CompletableFuture.completedFuture(response);

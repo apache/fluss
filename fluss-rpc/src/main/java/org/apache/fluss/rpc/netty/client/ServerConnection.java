@@ -264,7 +264,6 @@ final class ServerConnection {
                         .addLast("handler", new NettyClientHandler(new ResponseCallback()));
                 // start checking api versions
                 switchState(ConnectionState.CHECKING_API_VERSIONS);
-                // TODO: client_software_name is hardcoded; no server-side metrics consumer yet.
                 ApiVersionsRequest request =
                         new ApiVersionsRequest()
                                 .setClientSoftwareName("fluss")

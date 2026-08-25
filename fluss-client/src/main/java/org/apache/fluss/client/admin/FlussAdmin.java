@@ -72,7 +72,6 @@ import org.apache.fluss.rpc.messages.DropDatabaseRequest;
 import org.apache.fluss.rpc.messages.DropTableRequest;
 import org.apache.fluss.rpc.messages.GetClusterHealthRequest;
 import org.apache.fluss.rpc.messages.GetClusterVersionRequest;
-import org.apache.fluss.rpc.messages.GetClusterVersionResponse;
 import org.apache.fluss.rpc.messages.GetDatabaseInfoRequest;
 import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataRequest;
 import org.apache.fluss.rpc.messages.GetLakeSnapshotRequest;
@@ -945,9 +944,9 @@ public class FlussAdmin implements Admin {
     }
 
     @Override
-    public CompletableFuture<String> getClusterVersion() {
+    public CompletableFuture<ClusterVersionInfo> getClusterVersion() {
         return gateway.getClusterVersion(new GetClusterVersionRequest())
-                .thenApply(GetClusterVersionResponse::getVersion);
+                .thenApply(r -> new ClusterVersionInfo(r.getVersion()));
     }
 
     @VisibleForTesting
