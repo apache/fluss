@@ -1,25 +1,27 @@
 ---
-title: Real-Time User Profile
+title: Real-Time Page User Profile
 sidebar_position: 4
 ---
 
-# Real-Time User Profile
+# Real-Time Page User Profile
 
-This tutorial demonstrates how to build a real-time user profiling system using three core Apache Fluss features: the **Auto-Increment Column**, the **Aggregation Merge Engine**, and the built-in **RoaringBitmap SQL functions**. You will learn how to automatically map high-cardinality email identifiers to compact integer UIDs, accumulate click metrics, and count unique visitors — all directly in the storage layer, keeping the Flink job entirely stateless.
+This tutorial demonstrates how to build a real-time page-view analytics system using three core Apache Fluss features: the **Auto-Increment Column**, the **Aggregation Merge Engine**, and the built-in **RoaringBitmap SQL functions**. You will learn how to map high-cardinality email identifiers to compact integer UIDs and accumulate per-dimension page-view (PV) counts and unique visitor (UV) bitmaps directly in the storage layer — keeping the Flink job entirely stateless.
 
 ## How the System Works
 
 ### Core Concepts
 
 - **Identity Mapping**: Incoming email strings are automatically mapped to compact `INT` UIDs using Fluss's auto-increment column — no manual ID management required.
-- **Storage-Level Aggregation**: Click counts are summed and unique visitor bitmaps are OR-ed directly inside the Fluss TabletServers via the Aggregation Merge Engine.
-- **Built-in Bitmap Functions**: `rb_build_agg` and `rb_cardinality` are registered natively in FlussCatalog — no external JAR or `CREATE TEMPORARY FUNCTION` required.
+- **Storage-Level Aggregation**: PV counts are summed and UV bitmaps are OR-ed directly inside the Fluss TabletServers via the Aggregation Merge Engine, with no aggregation state in Flink.
+- **Composable Bitmaps**: Storing hourly RoaringBitmaps per dimension allows the OLAP layer to compose them across arbitrary dimensions and time ranges without double-counting users.
+- **Built-in Bitmap Functions**: `rb_build`, `rb_or_agg`, and `rb_cardinality` are registered natively in FlussCatalog — no external JAR or `CREATE TEMPORARY FUNCTION` required.
 
 ### Data Flow
 
-1. **Ingestion**: Raw click events arrive with an email address and a click count.
+1. **Ingestion**: Raw page-view events arrive with an email address, channel, city, and timestamp.
 2. **Mapping**: A Flink lookup join against `user_dict` resolves the email to a UID. If the email is new, the `insert-if-not-exists` hint instructs Fluss to generate a new UID automatically.
-3. **Aggregation**: The resolved UID is written to `user_profiles`. The Aggregation Merge Engine sums `total_clicks` and OR-s the `unique_visitors` bitmap at the storage layer — no windowing or Flink state required.
+3. **Aggregation**: For each event, `rb_build(ARRAY[d.uid])` emits a singleton bitmap and a PV increment of 1. The Aggregation Merge Engine OR-s the bitmaps and sums the PV counts per `(channel, city, ymd, hh)` bucket at the storage layer — no windowing or Flink state required.
+4. **Roll-up**: OLAP queries use `rb_or_agg` to union the stored hourly bitmaps across arbitrary dimensions, producing accurate UV counts without double-counting.
 
 ## Prerequisites
 
@@ -29,8 +31,8 @@ Before proceeding, ensure that [Docker](https://docs.docker.com/engine/install/)
 
 1. Create a working directory and navigate into it.
    ```shell
-   mkdir fluss-user-profile
-   cd fluss-user-profile
+   mkdir fluss-page-user-profile
+   cd fluss-page-user-profile
    ```
 
 2. Create a `docker-compose.yml` file with the following content:
@@ -93,7 +95,7 @@ Before proceeding, ensure that [Docker](https://docs.docker.com/engine/install/)
          - fluss-remote-data:/tmp/fluss/remote
      sql-client:
        image: apache/fluss-quickstart-flink:$FLUSS_QUICKSTART_FLINK_DOCKER_VERSION$
-       command: ["/opt/sql-client/sql-client"]
+       command: ["/opt/flink/bin/sql-client.sh"]
        depends_on:
          - jobmanager
        environment:
@@ -129,15 +131,10 @@ All the following commands involving `docker compose` should be executed in the 
 Use the following command to enter the Flink SQL Client:
 
 ```shell
-docker compose run --entrypoint bash sql-client -c "
-\${FLINK_HOME}/bin/sql-client.sh \
-  -Drest.address=jobmanager \
-  -Drest.port=8081 \
-  -i /opt/sql-client/sql/sql-client.sql
-"
+docker compose run sql-client
 ```
 
-## Step 1: Create the Fluss Catalog
+### Create the Fluss Catalog
 
 Run these statements one by one in the SQL Client.
 
@@ -157,10 +154,10 @@ USE CATALOG fluss_catalog;
 ```
 
 :::note
-Once you switch to the Fluss catalog, all RoaringBitmap SQL functions (`rb_build_agg`, `rb_cardinality`, `rb_or_agg`, and others) are available immediately — no `CREATE TEMPORARY FUNCTION` statement is needed.
+Once you switch to the Fluss catalog, all RoaringBitmap SQL functions (`rb_build`, `rb_or_agg`, `rb_cardinality`, and others) are available immediately — no `CREATE TEMPORARY FUNCTION` statement is needed.
 :::
 
-## Step 2: Create the User Dictionary Table
+### Create the User Dictionary Table
 
 Create the `user_dict` table to map email addresses to integer UIDs. The `auto-increment.fields` property instructs Fluss to automatically assign a unique `INT` UID for every new email it receives.
 
@@ -174,93 +171,163 @@ CREATE TABLE user_dict (
 );
 ```
 
-## Step 3: Create the Aggregated Profile Table
+### Create the Page User Profile Table
 
-Create the `user_profiles` table using the **Aggregation Merge Engine**. Each user's UID is the primary key. `total_clicks` is summed and `unique_visitors` accumulates a [RoaringBitmap](https://roaringbitmap.org/) of all UIDs seen — both computed directly at the storage layer.
+Create the `page_user_profile` table using the **Aggregation Merge Engine**. The primary key represents the business dimensions and time bucket — `(channel, city, ymd, hh)`. The `uid` is only the visitor identifier stored in the bitmap, not the table key. Each row accumulates a UV bitmap and a PV counter directly at the storage layer.
 
 ```sql
-CREATE TABLE user_profiles (
-    uid             INT,
-    total_clicks    BIGINT,
-    unique_visitors BYTES,
-    PRIMARY KEY (uid) NOT ENFORCED
+CREATE TABLE page_user_profile (
+    channel   STRING,
+    city      STRING,
+    ymd       STRING,
+    hh        STRING,
+    uv_bitmap BYTES,
+    pv        BIGINT,
+    PRIMARY KEY (channel, city, ymd, hh) NOT ENFORCED
 ) WITH (
-    'table.merge-engine'             = 'aggregation',
-    'fields.total_clicks.agg'        = 'sum',
-    'fields.unique_visitors.agg'     = 'rbm32'
+    'table.merge-engine'   = 'aggregation',
+    'fields.uv_bitmap.agg' = 'rbm32',
+    'fields.pv.agg'        = 'sum'
 );
 ```
-
-## Step 4: Ingest and Process Data
-
-Create a temporary source table to simulate raw click events using the Faker connector.
 
 :::note
-Java Faker's `numberBetween(min, max)` treats `max` as exclusive. The expression below produces click counts of 1–10.
+`uv_bitmap` stores a [RoaringBitmap](https://roaringbitmap.org/) of all visitor UIDs for each `(channel, city, ymd, hh)` bucket. Fluss OR-s each incoming singleton bitmap into the stored one, ensuring that a user appearing multiple times in the same bucket is counted only once.
 :::
 
+### Ingest and Process Data
+
+Create a temporary source table to simulate page-view events using the Faker connector. The source generates a bounded pool of user email addresses distributed across 3 channels, 3 cities, and the most recent 36 hours at 10 events per second.
+
 ```sql
-CREATE TEMPORARY TABLE raw_events (
-    email       STRING,
-    click_count INT,
-    proctime    AS PROCTIME()
+CREATE TEMPORARY TABLE page_views (
+    email      STRING,
+    channel    STRING,
+    city       STRING,
+    event_time TIMESTAMP(3),
+    ymd AS DATE_FORMAT(event_time, 'yyyyMMdd'),
+    hh  AS DATE_FORMAT(event_time, 'HH'),
+    proctime AS PROCTIME()
 ) WITH (
-    'connector'                     = 'faker',
-    'rows-per-second'               = '1',
-    'fields.email.expression'       = '#{internet.emailAddress}',
-    'fields.click_count.expression' = '#{number.numberBetween ''1'',''11''}'
+    'connector'                    = 'faker',
+    'rows-per-second'              = '10',
+    'fields.email.expression'      =
+        '#{Name.firstName}#{number.numberBetween ''1'',''500''}@example.com',
+    'fields.channel.expression'    =
+        '#{Options.option ''app'',''web'',''mini_program''}',
+    'fields.city.expression'       =
+        '#{Options.option ''Amsterdam'',''Berlin'',''New York''}',
+    'fields.event_time.expression' =
+        '#{date.past ''36'',''HOURS''}'
 );
 ```
 
-Now run the pipeline. The `lookup.insert-if-not-exists` hint ensures that if an email is not found in `user_dict`, Fluss generates a new `uid` automatically. `rb_build_agg(d.uid)` builds a one-element RoaringBitmap from each UID — the Aggregation Merge Engine OR-s it into the stored bitmap, giving an exact unique visitor count per user over time.
+Now run the pipeline. For each page-view event, `rb_build(ARRAY[d.uid])` creates a singleton bitmap containing just that visitor's UID. Fluss OR-s it into the stored bitmap for the matching `(channel, city, ymd, hh)` bucket, while summing the PV count — all at the storage layer with no Flink state.
 
 ```sql
-INSERT INTO user_profiles
+INSERT INTO page_user_profile
 SELECT
-    d.uid,
-    CAST(e.click_count AS BIGINT),
-    rb_build_agg(d.uid)
-FROM raw_events AS e
-JOIN user_dict /*+ OPTIONS('lookup.insert-if-not-exists' = 'true') */
+    e.channel,
+    e.city,
+    e.ymd,
+    e.hh,
+    rb_build(ARRAY[d.uid]) AS uv_bitmap,
+    CAST(1 AS BIGINT)      AS pv
+FROM page_views AS e
+JOIN user_dict
+/*+ OPTIONS('lookup.insert-if-not-exists' = 'true') */
 FOR SYSTEM_TIME AS OF e.proctime AS d
-ON e.email = d.email
-GROUP BY d.uid, e.click_count;
+ON e.email = d.email;
 ```
 
-## Step 5: Verify Results
+### Verify Results
 
-Open a **second terminal**, navigate to the working directory, and launch another SQL Client session to query results while the pipeline runs.
-
-```shell
-docker compose run --entrypoint bash sql-client -c "
-\${FLINK_HOME}/bin/sql-client.sh \
-  -Drest.address=jobmanager \
-  -Drest.port=8081
-"
-```
-
-Set up the catalog:
+After the pipeline is submitted, the prompt returns immediately since Flink DML is asynchronous by default. Switch to batch mode to run the roll-up queries — `rb_or_agg` operates on the pre-aggregated bitmaps stored in Fluss and does not support streaming retraction.
 
 ```sql
-CREATE CATALOG fluss_catalog WITH (
-    'type' = 'fluss',
-    'bootstrap.servers' = 'coordinator-server:9123'
-);
-USE CATALOG fluss_catalog;
+SET 'execution.runtime-mode' = 'batch';
 SET 'sql-client.execution.result-mode' = 'tableau';
 ```
 
-Query the aggregated profile table. `rb_cardinality` converts the stored bitmap into a human-readable unique visitor count:
+**Roll up UV and PV by channel** across all cities, dates, and hours:
 
 ```sql
 SELECT
-    uid,
-    total_clicks,
-    rb_cardinality(unique_visitors) AS unique_visitor_count
-FROM user_profiles;
+    channel,
+    rb_cardinality(rb_or_agg(uv_bitmap)) AS uv,
+    SUM(pv)                               AS pv
+FROM page_user_profile
+GROUP BY channel;
 ```
 
-You should see rows appearing for each new user, with `total_clicks` and `unique_visitor_count` growing in real time.
+**Output:**
+```text
++--------------+-----+------+
+|      channel |  uv |   pv |
++--------------+-----+------+
+|          app | 357 |  712 |
+| mini_program | 352 |  698 |
+|          web | 351 |  704 |
++--------------+-----+------+
+3 rows in set
+```
+
+Notice that **UV is always less than PV** — users repeat across time buckets, and Fluss correctly deduplicates them via bitmap union.
+
+**Roll up UV and PV by city**:
+
+```sql
+SELECT
+    city,
+    rb_cardinality(rb_or_agg(uv_bitmap)) AS uv,
+    SUM(pv)                               AS pv
+FROM page_user_profile
+GROUP BY city;
+```
+
+**Output:**
+```text
++-----------+-----+------+
+|      city |  uv |   pv |
++-----------+-----+------+
+| Amsterdam | 460 |  913 |
+|    Berlin | 417 |  819 |
+|  New York | 403 |  782 |
++-----------+-----+------+
+3 rows in set
+```
+
+**Daily roll-up by channel**:
+
+```sql
+SELECT
+    channel,
+    ymd,
+    rb_cardinality(rb_or_agg(uv_bitmap)) AS uv,
+    SUM(pv)                               AS pv
+FROM page_user_profile
+GROUP BY channel, ymd;
+```
+
+**Output:**
+```text
++--------------+----------+-----+-----+
+|      channel |      ymd |  uv |  pv |
++--------------+----------+-----+-----+
+|          app | 20260821 |  59 |  78 |
+|          app | 20260822 | 348 | 580 |
+|          app | 20260823 | 115 | 152 |
+| mini_program | 20260821 |  45 |  63 |
+| mini_program | 20260822 | 321 | 547 |
+| mini_program | 20260823 | 138 | 179 |
+|          web | 20260821 |  48 |  65 |
+|          web | 20260822 | 337 | 561 |
+|          web | 20260823 | 109 | 148 |
++--------------+----------+-----+-----+
+9 rows in set
+```
+
+The key insight: a user who visits the `app` channel on multiple days is counted once per day in the daily roll-up, and once overall in the channel roll-up. Bitmaps compose correctly without double-counting across any dimension combination.
 
 To verify the email-to-UID dictionary mapping:
 
@@ -268,7 +335,26 @@ To verify the email-to-UID dictionary mapping:
 SELECT * FROM user_dict LIMIT 10;
 ```
 
-Each email should have a unique compact `INT` uid automatically assigned by Fluss.
+**Output:**
+```text
++-------------------+------+
+|             email |  uid |
++-------------------+------+
+|  Bo77@example.com | 1740 |
+|  Don1@example.com |  927 |
+|  Ken9@example.com |  912 |
+|  Tad3@example.com | 1525 |
+| Al201@example.com |   89 |
+| Amy15@example.com | 1371 |
+| Bo302@example.com | 1657 |
+| Bob12@example.com |  234 |
+| Eve45@example.com |  891 |
+| Joe78@example.com | 1102 |
++-------------------+------+
+10 rows in set
+```
+
+Each email has a unique compact `INT` UID automatically assigned by Fluss.
 
 ## Clean Up
 
@@ -280,8 +366,9 @@ docker compose down -v
 
 ## Architectural Benefits
 
-- **Stateless Flink Jobs:** Offloading identity mapping, click aggregation, and bitmap union to Fluss makes the Flink job lightweight, with fast checkpoints and minimal recovery time.
-- **Compact Storage:** Using auto-incremented `INT` UIDs instead of raw email strings reduces memory and storage footprint significantly.
+- **Stateless Flink Jobs:** Fluss handles all bitmap unions and PV sums at the storage layer. The Flink job is responsible only for identity mapping and event forwarding — no GROUP BY, no windowed aggregation, no Flink state.
+- **Composable Bitmaps:** Storing hourly RoaringBitmaps per dimension allows arbitrary roll-ups across channels, cities, dates, or any combination — without double-counting users.
+- **Compact Storage:** Using auto-incremented `INT` UIDs instead of raw email strings keeps bitmap sizes small even at large user populations.
 - **Exact Unique Counting:** RoaringBitmap provides exact distinct counts — no approximations like HyperLogLog.
 - **Exactly-Once Accuracy:** The Undo Recovery mechanism in the Fluss Flink connector ensures replayed data during failovers does not result in double-counting.
 
