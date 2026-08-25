@@ -413,13 +413,6 @@ public class ConfigOptions {
                                     + "The default value is 10.")
                     .withDeprecatedKeys("coordinator.io-pool.size");
 
-    public static final ConfigOption<String> SERVER_IO_TMP_DIR =
-            key("server.io.tmpdir")
-                    .stringType()
-                    .defaultValue(System.getProperty("java.io.tmpdir") + "/fluss")
-                    .withDescription(
-                            "Local directory used by Fluss components to store temporary files.");
-
     public static final ConfigOption<Integer> SERVER_HISTORICAL_PARTITION_THREAD_POOL_MAX_SIZE =
             key("server.historical-partition.thread-pool.max-size")
                     .intType()
