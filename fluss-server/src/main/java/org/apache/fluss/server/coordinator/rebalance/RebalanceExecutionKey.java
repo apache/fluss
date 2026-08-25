@@ -21,16 +21,14 @@ import org.apache.fluss.metadata.TableBucket;
 
 import java.util.Objects;
 
-/** Identifies one execution attempt of a bucket-level rebalance task. */
+/** Identifies the execution of a bucket-level task within a rebalance. */
 public final class RebalanceExecutionKey {
     private final String rebalanceId;
     private final TableBucket tableBucket;
-    private final long attemptId;
 
-    public RebalanceExecutionKey(String rebalanceId, TableBucket tableBucket, long attemptId) {
+    public RebalanceExecutionKey(String rebalanceId, TableBucket tableBucket) {
         this.rebalanceId = rebalanceId;
         this.tableBucket = tableBucket;
-        this.attemptId = attemptId;
     }
 
     public String getRebalanceId() {
@@ -39,10 +37,6 @@ public final class RebalanceExecutionKey {
 
     public TableBucket getTableBucket() {
         return tableBucket;
-    }
-
-    public long getAttemptId() {
-        return attemptId;
     }
 
     @Override
@@ -54,14 +48,13 @@ public final class RebalanceExecutionKey {
             return false;
         }
         RebalanceExecutionKey that = (RebalanceExecutionKey) o;
-        return attemptId == that.attemptId
-                && Objects.equals(rebalanceId, that.rebalanceId)
+        return Objects.equals(rebalanceId, that.rebalanceId)
                 && Objects.equals(tableBucket, that.tableBucket);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(rebalanceId, tableBucket, attemptId);
+        return Objects.hash(rebalanceId, tableBucket);
     }
 
     @Override
@@ -72,8 +65,6 @@ public final class RebalanceExecutionKey {
                 + '\''
                 + ", tableBucket="
                 + tableBucket
-                + ", attemptId="
-                + attemptId
                 + '}';
     }
 }

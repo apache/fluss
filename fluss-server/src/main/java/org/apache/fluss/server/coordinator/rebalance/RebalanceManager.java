@@ -49,10 +49,12 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
+import javax.annotation.concurrent.ThreadSafe;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -61,7 +63,6 @@ import java.util.Set;
 import java.util.SortedSet;
 import java.util.TreeSet;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -74,12 +75,16 @@ import static org.apache.fluss.cluster.rebalance.RebalanceStatus.NOT_STARTED;
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.REBALANCING;
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.TIMEOUT;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
+import static org.apache.fluss.utils.Preconditions.checkState;
 
 /**
  * A rebalance manager to generate rebalance plan, and execution rebalance plan.
  *
- * <p>This manager can only be used in the coordinator event loop as a single threaded model.
+ * <p>Rebalance progress is driven from the coordinator event loop, but the periodic {@link
+ * #checkTimeout()} runs on its own scheduler thread. All mutable state is therefore guarded by this
+ * manager's monitor.
  */
+@ThreadSafe
 public class RebalanceManager {
     private static final Logger LOG = LoggerFactory.getLogger(RebalanceManager.class);
 
@@ -123,33 +128,30 @@ public class RebalanceManager {
 
     /** A mapping from table bucket to rebalance status of pending and running tasks. */
     private final Map<TableBucket, RebalanceResultForBucket> inProgressRebalanceTasks =
-            new ConcurrentHashMap<>();
+            new HashMap<>();
 
     /** Normally running tasks. This map contains at most one entry until concurrency is added. */
-    private final Map<TableBucket, RebalanceTaskAttempt> runningRebalanceTasks =
-            new ConcurrentHashMap<>();
+    private final Map<TableBucket, RebalanceTaskAttempt> runningRebalanceTasks = new HashMap<>();
 
     /** Soft-timed-out tasks that no longer occupy the normal execution slot. */
-    private final Map<TableBucket, RebalanceTaskAttempt> timedOutRebalanceTasks =
-            new ConcurrentHashMap<>();
+    private final Map<TableBucket, RebalanceTaskAttempt> timedOutRebalanceTasks = new HashMap<>();
 
-    private final Set<RebalanceExecutionKey> queuedTimeoutEvents = ConcurrentHashMap.newKeySet();
-    private final Set<RebalanceExecutionKey> queuedReconcileEvents = ConcurrentHashMap.newKeySet();
+    private final Set<RebalanceExecutionKey> queuedTimeoutEvents = new HashSet<>();
+    private final Set<RebalanceExecutionKey> queuedReconcileEvents = new HashSet<>();
 
     /** A mapping from table bucket to rebalance status of failed or completed tasks. */
     private final Map<TableBucket, RebalanceResultForBucket> finishedRebalanceTasks =
-            new ConcurrentHashMap<>();
+            new HashMap<>();
 
     private final GoalOptimizer goalOptimizer;
-    private volatile long registerTime;
-    private volatile @Nullable RebalanceStatus rebalanceStatus;
-    private volatile @Nullable String currentRebalanceId;
-    private volatile boolean recoveryPending;
-    private volatile boolean cancelRequested;
-    private volatile boolean finalizationPending;
-    private volatile boolean finalizationEventQueued;
-    private volatile boolean isClosed = false;
-    private long nextAttemptId;
+    private long registerTime;
+    private @Nullable RebalanceStatus rebalanceStatus;
+    private @Nullable String currentRebalanceId;
+    private boolean recoveryPending;
+    private boolean cancelRequested;
+    private boolean finalizationPending;
+    private boolean finalizationEventQueued;
+    private boolean isClosed = false;
 
     public RebalanceManager(
             RebalanceExecutor rebalanceExecutor,
@@ -182,13 +184,13 @@ public class RebalanceManager {
         this.goalOptimizer = new GoalOptimizer();
     }
 
-    public void startup() {
+    public synchronized void startup() {
         LOG.info("Start up rebalance manager.");
         initialize();
     }
 
     /** Starts the periodic timeout checker. Call after {@link #startup()}. */
-    public void start() {
+    public synchronized void start() {
         timeoutChecker.scheduleWithFixedDelay(
                 this::checkTimeoutSafely,
                 TIMEOUT_CHECK_INTERVAL_MS,
@@ -200,7 +202,7 @@ public class RebalanceManager {
                 TIMEOUT_CHECK_INTERVAL_MS);
     }
 
-    public @Nullable String getRebalanceId() {
+    public synchronized @Nullable String getRebalanceId() {
         return currentRebalanceId;
     }
 
@@ -434,7 +436,7 @@ public class RebalanceManager {
         return recoveryPending || finalizationPending || !inProgressRebalanceTasks.isEmpty();
     }
 
-    public RebalanceTask generateRebalanceTask(List<Goal> goalsByPriority) {
+    public synchronized RebalanceTask generateRebalanceTask(List<Goal> goalsByPriority) {
         checkNotClosed();
         List<RebalancePlanForBucket> rebalancePlanForBuckets;
         String rebalanceId = UUID.randomUUID().toString();
@@ -594,7 +596,7 @@ public class RebalanceManager {
                 continue;
             }
             RebalanceExecutionKey executionKey =
-                    new RebalanceExecutionKey(currentRebalanceId, tableBucket, ++nextAttemptId);
+                    new RebalanceExecutionKey(currentRebalanceId, tableBucket);
             runningRebalanceTasks.put(
                     tableBucket, new RebalanceTaskAttempt(executionKey, clock.milliseconds()));
             inProgressRebalanceTasks.put(
@@ -804,9 +806,9 @@ public class RebalanceManager {
     }
 
     @VisibleForTesting
-    void checkTimeout() {
+    synchronized void checkTimeout() {
         long now = clock.milliseconds();
-        for (RebalanceTaskAttempt attempt : new HashMap<>(runningRebalanceTasks).values()) {
+        for (RebalanceTaskAttempt attempt : runningRebalanceTasks.values()) {
             long elapsed = now - attempt.startMs;
             if (elapsed > REBALANCE_TASK_TIMEOUT_MS
                     && queuedTimeoutEvents.add(attempt.executionKey)) {
@@ -821,7 +823,7 @@ public class RebalanceManager {
 
         // Reconcile timed-out tasks on a growing backoff, so that a long cluster operation such as
         // a rolling upgrade does not turn into a constant retry storm on the event loop.
-        for (RebalanceTaskAttempt attempt : new HashMap<>(timedOutRebalanceTasks).values()) {
+        for (RebalanceTaskAttempt attempt : timedOutRebalanceTasks.values()) {
             if (now >= attempt.nextReconcileMs) {
                 enqueueReconciliation(attempt);
             }
@@ -835,10 +837,10 @@ public class RebalanceManager {
     }
 
     private void checkNotClosed() {
-        checkArgument(!isClosed, "RebalanceManager is already closed.");
+        checkState(!isClosed, "RebalanceManager is already closed.");
     }
 
-    public void close() {
+    public synchronized void close() {
         isClosed = true;
         timeoutChecker.shutdownNow();
     }
@@ -850,12 +852,12 @@ public class RebalanceManager {
 
     @VisibleForTesting
     @Nullable
-    RebalanceStatus getRebalanceStatus() {
+    synchronized RebalanceStatus getRebalanceStatus() {
         return rebalanceStatus;
     }
 
     @VisibleForTesting
-    boolean isCancelRequested() {
+    synchronized boolean isCancelRequested() {
         return cancelRequested;
     }
 
@@ -875,8 +877,7 @@ public class RebalanceManager {
         /** The number of reconciliations already dispatched, used to grow the backoff. */
         private int reconcileAttempts;
 
-        /** Read by the timeout checker thread, written on the coordinator event loop. */
-        private volatile long nextReconcileMs;
+        private long nextReconcileMs;
 
         private RebalanceTaskAttempt(RebalanceExecutionKey executionKey, long startMs) {
             this.executionKey = executionKey;

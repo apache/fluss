@@ -709,7 +709,7 @@ class CoordinatorEventProcessorRebalanceTest {
                         current.leader(),
                         current.leaderEpoch(),
                         current.bucketEpoch(),
-                        new RebalanceExecutionKey("old-rebalance", tableBucket, 1));
+                        new RebalanceExecutionKey("old-rebalance", tableBucket));
         eventProcessor
                 .getCoordinatorEventManager()
                 .put(

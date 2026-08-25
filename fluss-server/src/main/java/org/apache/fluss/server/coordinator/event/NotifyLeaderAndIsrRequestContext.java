@@ -21,8 +21,6 @@ import org.apache.fluss.server.coordinator.rebalance.RebalanceExecutionKey;
 
 import javax.annotation.Nullable;
 
-import java.util.Objects;
-
 /** The coordinator and bucket epochs of a sent NotifyLeaderAndIsr request. */
 public final class NotifyLeaderAndIsrRequestContext {
 
@@ -68,28 +66,6 @@ public final class NotifyLeaderAndIsrRequestContext {
 
     public @Nullable RebalanceExecutionKey getRebalanceExecutionKey() {
         return rebalanceExecutionKey;
-    }
-
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) {
-            return true;
-        }
-        if (o == null || getClass() != o.getClass()) {
-            return false;
-        }
-        NotifyLeaderAndIsrRequestContext that = (NotifyLeaderAndIsrRequestContext) o;
-        return coordinatorEpoch == that.coordinatorEpoch
-                && leader == that.leader
-                && leaderEpoch == that.leaderEpoch
-                && bucketEpoch == that.bucketEpoch
-                && Objects.equals(rebalanceExecutionKey, that.rebalanceExecutionKey);
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash(
-                coordinatorEpoch, leader, leaderEpoch, bucketEpoch, rebalanceExecutionKey);
     }
 
     @Override

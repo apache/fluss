@@ -1600,16 +1600,8 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
      * </ul>
      */
     public void tryToExecuteRebalanceTask(RebalancePlanForBucket planForBucket) {
-        Set<TableBucket> allBuckets = coordinatorContext.getAllBuckets();
         TableBucket tableBucket = planForBucket.getTableBucket();
-        if (!allBuckets.contains(tableBucket)
-                || coordinatorContext.isTableQueuedForDeletion(tableBucket.getTableId())
-                || coordinatorContext.isToBeDeleted(tableBucket)) {
-            LOG.info(
-                    "Complete rebalance task of tableBucket {} since it was deleted or is being "
-                            + "deleted.",
-                    tableBucket);
-            rebalanceManager.finishRebalanceTask(tableBucket, RebalanceStatus.COMPLETED);
+        if (completeRebalanceTaskIfDeleted(tableBucket, null)) {
             return;
         }
 
@@ -1668,9 +1660,9 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                 rebalanceManager.getRebalancePlanForBucket(tableBucket);
         if (planForBucket != null) {
             if (requestContext != null
-                    && !rebalanceManager
-                            .getExecutionKey(tableBucket)
-                            .equals(requestContext.getRebalanceExecutionKey())) {
+                    && !Objects.equals(
+                            rebalanceManager.getExecutionKey(tableBucket),
+                            requestContext.getRebalanceExecutionKey())) {
                 LOG.debug(
                         "Ignore NotifyLeaderAndIsr response from another rebalance attempt for {} "
                                 + "with context {}.",
@@ -1683,8 +1675,8 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                             planForBucket.getOriginReplicas(), planForBucket.getNewReplicas());
             try {
                 if (planForBucket.isLeaderChanged() && !reassignment.isBeingReassigned()) {
-                    if (!isSuccessfulLeaderOnlyRebalanceResponseFromNewLeader(
-                            notifyLeaderAndIsrResultForBucket, responseServerId, planForBucket)) {
+                    if (notifyLeaderAndIsrResultForBucket.failed()
+                            || responseServerId != planForBucket.getNewLeader()) {
                         return;
                     }
                     LeaderAndIsr leaderAndIsr = zooKeeperClient.getLeaderAndIsr(tableBucket).get();
@@ -1776,14 +1768,7 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
     private void reconcileRebalanceTask(
             RebalanceExecutionKey executionKey, RebalancePlanForBucket planForBucket) {
         TableBucket tableBucket = planForBucket.getTableBucket();
-        if (!coordinatorContext.getAllBuckets().contains(tableBucket)
-                || coordinatorContext.isTableQueuedForDeletion(tableBucket.getTableId())
-                || coordinatorContext.isToBeDeleted(tableBucket)) {
-            LOG.info(
-                    "Complete rebalance task {} because its table bucket was deleted or is being "
-                            + "deleted.",
-                    executionKey);
-            rebalanceManager.finishRebalanceTask(executionKey, RebalanceStatus.COMPLETED);
+        if (completeRebalanceTaskIfDeleted(tableBucket, executionKey)) {
             return;
         }
 
@@ -1810,6 +1795,26 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                     executionKey,
                     e);
         }
+    }
+
+    private boolean completeRebalanceTaskIfDeleted(
+            TableBucket tableBucket, @Nullable RebalanceExecutionKey executionKey) {
+        if (coordinatorContext.getAllBuckets().contains(tableBucket)
+                && !coordinatorContext.isTableQueuedForDeletion(tableBucket.getTableId())
+                && !coordinatorContext.isToBeDeleted(tableBucket)) {
+            return false;
+        }
+
+        LOG.info(
+                "Complete rebalance task {} because its table bucket was deleted or is being "
+                        + "deleted.",
+                executionKey == null ? tableBucket : executionKey);
+        if (executionKey == null) {
+            rebalanceManager.finishRebalanceTask(tableBucket, RebalanceStatus.COMPLETED);
+        } else {
+            rebalanceManager.finishRebalanceTask(executionKey, RebalanceStatus.COMPLETED);
+        }
+        return true;
     }
 
     private void tryToCompleteRebalanceTaskOnLeaderAndIsrChange(TableBucket tableBucket) {
@@ -1854,15 +1859,6 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                     tableBucket);
             onBucketReassignment(tableBucket, reassignment, true);
         }
-    }
-
-    @VisibleForTesting
-    static boolean isSuccessfulLeaderOnlyRebalanceResponseFromNewLeader(
-            NotifyLeaderAndIsrResultForBucket notifyLeaderAndIsrResultForBucket,
-            int responseServerId,
-            RebalancePlanForBucket planForBucket) {
-        return notifyLeaderAndIsrResultForBucket.succeeded()
-                && responseServerId == planForBucket.getNewLeader();
     }
 
     private static boolean isSuccessfulReassignmentResponseFromLeader(
