@@ -33,8 +33,7 @@ public class TableBucketWriteResultSerializer<WriteResult>
     private static final ThreadLocal<DataOutputSerializer> SERIALIZER_CACHE =
             ThreadLocal.withInitial(() -> new DataOutputSerializer(64));
 
-    private static final int VERSION_1 = 1;
-    private static final int VERSION_2 = 2;
+    private static final int CURRENT_VERSION = 1;
 
     private final org.apache.fluss.lake.serializer.SimpleVersionedSerializer<WriteResult>
             writeResultSerializer;
@@ -47,7 +46,7 @@ public class TableBucketWriteResultSerializer<WriteResult>
 
     @Override
     public int getVersion() {
-        return VERSION_2;
+        return CURRENT_VERSION;
     }
 
     @Override
@@ -73,7 +72,6 @@ public class TableBucketWriteResultSerializer<WriteResult>
         out.writeInt(tableBucket.getBucket());
 
         // serialize write result
-        out.writeInt(writeResultSerializer.getVersion());
         WriteResult writeResult = tableBucketWriteResult.writeResult();
         if (writeResult == null) {
             // write -1 to mark write result as null
@@ -101,7 +99,7 @@ public class TableBucketWriteResultSerializer<WriteResult>
     @Override
     public TableBucketWriteResult<WriteResult> deserialize(int version, byte[] serialized)
             throws IOException {
-        if (version != VERSION_1 && version != VERSION_2) {
+        if (version != CURRENT_VERSION) {
             throw new IOException("Unknown version " + version);
         }
         final DataInputDeserializer in = new DataInputDeserializer(serialized);
@@ -122,13 +120,12 @@ public class TableBucketWriteResultSerializer<WriteResult>
         TableBucket tableBucket = new TableBucket(tableId, partitionId, bucketId);
 
         // deserialize write result
-        int writeResultVersion = version == VERSION_1 ? VERSION_1 : in.readInt();
         int writeResultLength = in.readInt();
         WriteResult writeResult;
         if (writeResultLength >= 0) {
             byte[] writeResultBytes = new byte[writeResultLength];
             in.readFully(writeResultBytes);
-            writeResult = writeResultSerializer.deserialize(writeResultVersion, writeResultBytes);
+            writeResult = writeResultSerializer.deserialize(version, writeResultBytes);
         } else {
             writeResult = null;
         }
