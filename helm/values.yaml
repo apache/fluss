@@ -85,6 +85,14 @@ tablet:
   initContainers: []
   extraEnv: []
   envFrom: []
+  # Optional advertised host/port overrides for this component only.
+  # listeners:
+  #   client:
+  #     advertisedHost: ""
+  #     advertisedPort: ""
+  #   external:
+  #     advertisedHost: ""
+  #     advertisedPort: ""
   annotations: {}
   service:
     annotations: {}
@@ -131,6 +139,14 @@ coordinator:
   initContainers: []
   extraEnv: []
   envFrom: []
+  # Optional advertised host/port overrides for this component only.
+  # listeners:
+  #   client:
+  #     advertisedHost: ""
+  #     advertisedPort: ""
+  #   external:
+  #     advertisedHost: ""
+  #     advertisedPort: ""
   annotations: {}
   service:
     annotations: {}
@@ -145,12 +161,33 @@ coordinator:
   tolerations: []
   topologySpreadConstraints: []
 
-# Fluss listener configurations
+# Fluss listener configurations.
+#
+# Default advertised.listeners use in-cluster headless Service DNS
+# (<pod>.<svc>.<ns>.svc.cluster.local). Out-of-cluster clients can bootstrap
+# the coordinator but then fail: MetadataResponse redirects produce/fetch to
+# each tablet's advertised address. See the Helm docs (Network Configuration).
+#
+# advertisedHost / advertisedPort are expanded by the container shell
+# ($POD_NAME, $POD_NAMESPACE, $POD_IP, $NODE_IP) and also run through Helm
+# tpl (for example Release.Namespace). Optional per-component overrides:
+# coordinator.listeners.* / tablet.listeners.*.
 listeners:
   internal:
     port: 9123
   client:
     port: 9124
+    # Empty = <pod>.<headless-svc>.<ns>.svc.cluster.local
+    advertisedHost: ""
+    advertisedPort: ""
+  external:
+    # Opt-in second client listener so in-cluster CLIENT advertised addresses
+    # stay on cluster DNS while external clients bootstrap on EXTERNAL.
+    enabled: false
+    name: EXTERNAL
+    port: 9125
+    advertisedHost: ""
+    advertisedPort: ""
 
 # Secrets referenced from configurationOverrides via config provider markers:
 # mounts are read with ${directory:<basePath>/<name>:<key>}, env entries with
