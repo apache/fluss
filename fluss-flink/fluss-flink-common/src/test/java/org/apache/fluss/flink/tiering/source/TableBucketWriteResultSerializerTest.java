@@ -18,24 +18,29 @@
 package org.apache.fluss.flink.tiering.source;
 
 import org.apache.fluss.flink.tiering.TestingWriteResult;
+import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.io.ByteArrayInputStream;
+import java.io.DataInputStream;
+import java.io.IOException;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link TableBucketWriteResultSerializer}. */
 class TableBucketWriteResultSerializerTest {
 
-    private static final TableBucketWriteResultSerializer<TestingWriteResult>
-            tableBucketWriteResultSerializer =
-                    new TableBucketWriteResultSerializer<>(new TestingWriteResultSerializer());
-
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testSerializeAndDeserialize(boolean isPartitioned) throws Exception {
+        RecordingWriteResultSerializer writeResultSerializer = new RecordingWriteResultSerializer();
+        TableBucketWriteResultSerializer<TestingWriteResult> serializer =
+                new TableBucketWriteResultSerializer<>(writeResultSerializer);
+
         // verify when writeResult is not null
         TestingWriteResult testingWriteResult = new TestingWriteResult(2);
         TablePath tablePath = TablePath.of("db1", "tb1");
@@ -47,10 +52,9 @@ class TableBucketWriteResultSerializerTest {
                         tablePath, tableBucket, partitionName, testingWriteResult, 10, 30L, 20);
 
         // test serialize and deserialize
-        byte[] serialized = tableBucketWriteResultSerializer.serialize(tableBucketWriteResult);
+        byte[] serialized = serializer.serialize(tableBucketWriteResult);
         TableBucketWriteResult<TestingWriteResult> deserialized =
-                tableBucketWriteResultSerializer.deserialize(
-                        tableBucketWriteResultSerializer.getVersion(), serialized);
+                serializer.deserialize(serializer.getVersion(), serialized);
 
         assertThat(deserialized.tablePath()).isEqualTo(tablePath);
         assertThat(deserialized.tableBucket()).isEqualTo(tableBucket);
@@ -59,20 +63,77 @@ class TableBucketWriteResultSerializerTest {
         assertThat(deserializedWriteResult).isNotNull();
         assertThat(deserializedWriteResult.getWriteResult())
                 .isEqualTo(testingWriteResult.getWriteResult());
+        assertThat(writeResultSerializer.deserializedVersion).isEqualTo(7);
         assertThat(deserialized.numberOfWriteResults()).isEqualTo(20);
 
         // verify when writeResult is null
         tableBucketWriteResult =
                 new TableBucketWriteResult<>(
                         tablePath, tableBucket, partitionName, null, 20, 30L, 30);
-        serialized = tableBucketWriteResultSerializer.serialize(tableBucketWriteResult);
-        deserialized =
-                tableBucketWriteResultSerializer.deserialize(
-                        tableBucketWriteResultSerializer.getVersion(), serialized);
+        serialized = serializer.serialize(tableBucketWriteResult);
+        deserialized = serializer.deserialize(serializer.getVersion(), serialized);
         assertThat(deserialized.tablePath()).isEqualTo(tablePath);
         assertThat(deserialized.tableBucket()).isEqualTo(tableBucket);
         assertThat(deserialized.partitionName()).isEqualTo(partitionName);
         assertThat(deserialized.writeResult()).isNull();
         assertThat(deserialized.numberOfWriteResults()).isEqualTo(30);
+
+        // VERSION_1 did not store the nested serializer version and passed 1 to it.
+        tableBucketWriteResult =
+                new TableBucketWriteResult<>(
+                        tablePath, tableBucket, partitionName, testingWriteResult, 10, 30L, 20);
+        byte[] version2Bytes = serializer.serialize(tableBucketWriteResult);
+        byte[] version1Bytes = removeNestedSerializerVersion(version2Bytes);
+        deserialized = serializer.deserialize(1, version1Bytes);
+        assertThat(deserialized.writeResult().getWriteResult())
+                .isEqualTo(testingWriteResult.getWriteResult());
+        assertThat(writeResultSerializer.deserializedVersion).isOne();
+    }
+
+    private byte[] removeNestedSerializerVersion(byte[] version2Bytes) throws IOException {
+        int versionOffset;
+        try (DataInputStream in = new DataInputStream(new ByteArrayInputStream(version2Bytes))) {
+            in.readUTF();
+            in.readUTF();
+            in.readLong();
+            if (in.readBoolean()) {
+                in.readLong();
+                in.readUTF();
+            }
+            in.readInt();
+            versionOffset = version2Bytes.length - in.available();
+        }
+
+        byte[] version1Bytes = new byte[version2Bytes.length - Integer.BYTES];
+        System.arraycopy(version2Bytes, 0, version1Bytes, 0, versionOffset);
+        System.arraycopy(
+                version2Bytes,
+                versionOffset + Integer.BYTES,
+                version1Bytes,
+                versionOffset,
+                version1Bytes.length - versionOffset);
+        return version1Bytes;
+    }
+
+    private static class RecordingWriteResultSerializer
+            implements SimpleVersionedSerializer<TestingWriteResult> {
+
+        private int deserializedVersion;
+
+        @Override
+        public int getVersion() {
+            return 7;
+        }
+
+        @Override
+        public byte[] serialize(TestingWriteResult obj) throws IOException {
+            return new TestingWriteResultSerializer().serialize(obj);
+        }
+
+        @Override
+        public TestingWriteResult deserialize(int version, byte[] serialized) throws IOException {
+            deserializedVersion = version;
+            return new TestingWriteResultSerializer().deserialize(version, serialized);
+        }
     }
 }

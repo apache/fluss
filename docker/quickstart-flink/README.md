@@ -32,7 +32,7 @@ This split keeps the regular "Quickstart with Flink" flow working out of the box
 
 The optional lakehouse directories include the Flink-side filesystem and catalog jars needed by those guides. For example:
 
-- `paimon/` includes `paimon-flink-1.20-1.4.2`, `paimon-s3-1.4.2`, and `hadoop-apache`
+- `paimon/` includes `paimon-flink-1.20-2.0.0`, `paimon-s3-2.0.0`, and `hadoop-apache`
 - `iceberg/` includes `iceberg-flink-runtime`, `hadoop-apache`, `iceberg-aws`, `iceberg-aws-bundle`, and `postgresql`
 
 ## Important Behavior

@@ -4,8 +4,8 @@
     "fullVersion": "1.0-SNAPSHOT",
     "shortVersion": "1.0",
     "dockerVersion": "1.0-SNAPSHOT",
-    "paimonVersion": "1.4.2",
-    "paimonVersionShort": "1.4",
+    "paimonVersion": "2.0.0",
+    "paimonVersionShort": "2.0",
     "released": false
   },
   {

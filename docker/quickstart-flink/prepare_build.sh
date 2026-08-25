@@ -166,15 +166,15 @@ main() {
         "508255883b984483a45ca48d5af6365d4f013bb8" \
         "hadoop-apache-3.3.5-2"
     download_jar \
-        "https://repo1.maven.org/maven2/org/apache/paimon/paimon-flink-1.20/1.4.2/paimon-flink-1.20-1.4.2.jar" \
-        "./paimon/paimon-flink-1.20-1.4.2.jar" \
-        "" \
-        "paimon-flink-1.20-1.4.2"
+        "https://repo1.maven.org/maven2/org/apache/paimon/paimon-flink-1.20/2.0.0/paimon-flink-1.20-2.0.0.jar" \
+        "./paimon/paimon-flink-1.20-2.0.0.jar" \
+        "bce4e7a1a36526db32bfc70f47dc47b76825661b" \
+        "paimon-flink-1.20-2.0.0"
     download_jar \
-        "https://repo.maven.apache.org/maven2/org/apache/paimon/paimon-s3/1.4.2/paimon-s3-1.4.2.jar" \
-        "./paimon/paimon-s3-1.4.2.jar" \
-        "" \
-        "paimon-s3-1.4.2"
+        "https://repo.maven.apache.org/maven2/org/apache/paimon/paimon-s3/2.0.0/paimon-s3-2.0.0.jar" \
+        "./paimon/paimon-s3-2.0.0.jar" \
+        "a7c5d59b04a2d0bb68a9bd96ed4b16dee6e0a92d" \
+        "paimon-s3-2.0.0"
 
     # Iceberg-specific dependencies. These stay outside /opt/flink/lib by
     # default and are activated by init_iceberg.sh only when needed.
@@ -231,8 +231,8 @@ verify_jars() {
     local paimon_jars=(
         "fluss-lake-paimon-*.jar"
         "hadoop-apache-3.3.5-2.jar"
-        "paimon-flink-1.20-1.4.2.jar"
-        "paimon-s3-1.4.2.jar"
+        "paimon-flink-1.20-2.0.0.jar"
+        "paimon-s3-2.0.0.jar"
     )
 
     local iceberg_jars=(
@@ -309,8 +309,8 @@ show_summary() {
     echo "  - Base: Fluss S3 filesystem plugin"
     echo "  - Base: Flink Faker (v0.5.3)"
     echo "  - Paimon only: Fluss Lake Paimon connector"
-    echo "  - Paimon only: Paimon Flink 1.20 (v1.4.2)"
-    echo "  - Paimon only: Paimon S3 (v1.4.2)"
+    echo "  - Paimon only: Paimon Flink 1.20 (v2.0.0)"
+    echo "  - Paimon only: Paimon S3 (v2.0.0)"
     echo "  - Paimon only: Hadoop Apache (v3.3.5-2)"
     echo "  - Iceberg only: Fluss Lake Iceberg connector"
     echo "  - Iceberg only: Iceberg Flink runtime 1.20 (v1.10.1)"

@@ -24,35 +24,54 @@ import org.apache.paimon.table.sink.CommitMessageSerializer;
 
 import java.io.IOException;
 
-/** The {@link SimpleVersionedSerializer} for {@link PaimonWriteResult}. */
+/**
+ * Serializer for {@link PaimonWriteResult}.
+ *
+ * <p>Each Fluss serializer version maps to one Paimon {@link CommitMessageSerializer} version:
+ * Fluss version 1 uses Paimon version 11 (Paimon 1.4.2), and Fluss version 2 uses Paimon version 12
+ * (Paimon 2.0.0). The Paimon serializer version is not stored in the payload. When Paimon changes
+ * its serializer version, a new Fluss serializer version and mapping must be added.
+ */
 public class PaimonWriteResultSerializer implements SimpleVersionedSerializer<PaimonWriteResult> {
 
-    private static final int CURRENT_VERSION = 1;
+    private static final int VERSION_1 = 1;
+    private static final int VERSION_2 = 2;
+    private static final int VERSION_1_PAIMON_SERIALIZER_VERSION = 11;
+    private static final int VERSION_2_PAIMON_SERIALIZER_VERSION = 12;
 
     private final CommitMessageSerializer messageSer = new CommitMessageSerializer();
 
     @Override
     public int getVersion() {
-        return CURRENT_VERSION;
+        return VERSION_2;
     }
 
     @Override
     public byte[] serialize(PaimonWriteResult paimonWriteResult) throws IOException {
+        int expectedPaimonVersion = getPaimonSerializerVersion(getVersion());
+        if (messageSer.getVersion() != expectedPaimonVersion) {
+            throw new IOException(
+                    "Paimon CommitMessage version "
+                            + messageSer.getVersion()
+                            + " requires a new PaimonWriteResult version.");
+        }
         CommitMessage commitMessage = paimonWriteResult.commitMessage();
         return messageSer.serialize(commitMessage);
     }
 
     @Override
     public PaimonWriteResult deserialize(int version, byte[] serialized) throws IOException {
-        if (version != CURRENT_VERSION) {
-            throw new UnsupportedOperationException(
-                    "Expecting PaimonWriteResult version to be "
-                            + CURRENT_VERSION
-                            + ", but found "
-                            + version
-                            + ".");
-        }
-        CommitMessage commitMessage = messageSer.deserialize(messageSer.getVersion(), serialized);
+        int paimonSerializerVersion = getPaimonSerializerVersion(version);
+        CommitMessage commitMessage = messageSer.deserialize(paimonSerializerVersion, serialized);
         return new PaimonWriteResult(commitMessage);
+    }
+
+    private int getPaimonSerializerVersion(int flussVersion) throws IOException {
+        if (flussVersion == VERSION_1) {
+            return VERSION_1_PAIMON_SERIALIZER_VERSION;
+        } else if (flussVersion == VERSION_2) {
+            return VERSION_2_PAIMON_SERIALIZER_VERSION;
+        }
+        throw new IOException("Unsupported PaimonWriteResult version: " + flussVersion);
     }
 }
