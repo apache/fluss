@@ -98,7 +98,8 @@ if (progress.isPresent()) {
     // Check if rebalance is complete
     if (p.status() == RebalanceStatus.COMPLETED) {
         System.out.println("Rebalance completed successfully!");
-        System.out.println("Took " + (p.completedAtMs() - p.startedAtMs()) + " ms");
+        System.out.println("Took " + (p.completedAtMs() - p.startedAtMs())
+                + " ms (approximate; timestamps are wall-clock and may span a coordinator failover)");
     }
 }
 

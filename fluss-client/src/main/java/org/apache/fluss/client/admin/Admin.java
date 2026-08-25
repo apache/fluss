@@ -681,13 +681,14 @@ public interface Admin extends AutoCloseable {
     CompletableFuture<String> rebalance(List<GoalType> priorityGoals);
 
     /**
-     * List the rebalance progress.
+     * List the rebalance progress. A rebalance id from the retained history of finished rebalances
+     * (see {@link #listRebalances()}) is served from that history.
      *
      * <ul>
      *   <li>{@link AuthorizationException} If the authenticated user doesn't have cluster
      *       permissions.
-     *   <li>{@link NoRebalanceInProgressException} If there are no rebalance tasks in progress for
-     *       the input rebalanceId.
+     *   <li>{@link NoRebalanceInProgressException} If the input rebalanceId is neither the current
+     *       rebalance task nor in the retained history.
      * </ul>
      *
      * @param rebalanceId the rebalance id to list progress, if it is null means list the in

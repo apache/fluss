@@ -475,12 +475,12 @@ CALL sys.rebalance('RACK_AWARE,REPLICA_DISTRIBUTION,LEADER_DISTRIBUTION');
 
 ### list_rebalance
 
-Query the progress and status of rebalance operations. This procedure allows you to monitor the ongoing rebalance operation, view detailed information about bucket movements, and list the retained history of finished rebalances.
+Query the progress and status of the ongoing rebalance operation, including detailed information about bucket movements.
 
 **Syntax:**
 
 ```sql
--- List the current rebalance and the retained history of finished rebalances
+-- List the most recent rebalance progress
 CALL [catalog_name.]sys.list_rebalance()
 
 -- List a specific rebalance progress by ID
@@ -491,9 +491,9 @@ CALL [catalog_name.]sys.list_rebalance(
 
 **Parameters:**
 
-- `rebalanceId` (optional): The rebalance ID to query. If omitted, returns one row per known rebalance: the most recent rebalance followed by the retained history of finished rebalances, newest first. The ID to pass here is the value returned by the `rebalance` procedure.
+- `rebalanceId` (optional): The rebalance ID to query. If omitted, returns the progress of the most recent rebalance operation. The ID to pass here is the value returned by the `rebalance` procedure or listed by `list_rebalances`; an ID from the retained history is served from that history.
 
-**Returns:** One row per rebalance with the following columns:
+**Returns:** At most one row with the following columns:
 - `rebalance_id`: The unique identifier of the rebalance operation
 - `rebalance_status`: The overall status of the rebalance. Possible values are:
     - `NOT_STARTED`: The rebalance has been created but not yet started
@@ -501,10 +501,10 @@ CALL [catalog_name.]sys.list_rebalance(
     - `COMPLETED`: The rebalance has successfully completed
     - `FAILED`: The rebalance has failed
     - `CANCELED`: The rebalance has been canceled
-- `rebalance_progress`: The completion percentage (e.g., `75.5%`). `NULL` for historical rows, which do not carry per-bucket detail
-- `rebalance_plan`: Detailed progress information for each bucket being moved, as JSON. `NULL` for historical rows
-- `started_at`: The time the rebalance was started. `NULL` if unknown
-- `completed_at`: The time the rebalance reached a final status. `NULL` while the rebalance is still in progress
+- `rebalance_progress`: The completion percentage (e.g., `75.5%`)
+- `rebalance_plan`: Detailed progress information for each bucket being moved, as JSON
+- `started_at`: The time the rebalance was started, rendered in the session time zone (set `table.local-time-zone` to control it). `NULL` if unknown
+- `completed_at`: The time the rebalance reached a final status, rendered in the session time zone (set `table.local-time-zone` to control it). `NULL` while the rebalance is still in progress
 
 If no rebalance is found, returns empty line.
 
@@ -514,11 +514,39 @@ If no rebalance is found, returns empty line.
 -- Use the Fluss catalog (replace 'fluss_catalog' with your catalog name if different)
 USE fluss_catalog;
 
--- List the current rebalance and the retained history of finished rebalances
+-- List the most recent rebalance progress
 CALL sys.list_rebalance();
 
 -- List a specific rebalance progress by ID
 CALL sys.list_rebalance('rebalance-12345');
+```
+
+### list_rebalances
+
+List all known rebalance operations as summaries: the ongoing rebalance (if any) followed by the retained history of finished rebalances, newest first. Use `list_rebalance` to query the detailed progress of a single rebalance.
+
+**Syntax:**
+
+```sql
+CALL [catalog_name.]sys.list_rebalances()
+```
+
+**Returns:** One row per known rebalance with the following columns:
+- `rebalance_id`: The unique identifier of the rebalance operation
+- `rebalance_status`: The overall status of the rebalance (same values as `list_rebalance`)
+- `started_at`: The time the rebalance was started, rendered in the session time zone (set `table.local-time-zone` to control it). `NULL` if unknown
+- `completed_at`: The time the rebalance reached a final status, rendered in the session time zone (set `table.local-time-zone` to control it). `NULL` while the rebalance is still in progress
+
+If no rebalance is known, returns empty line.
+
+**Example:**
+
+```sql title="Flink SQL"
+-- Use the Fluss catalog (replace 'fluss_catalog' with your catalog name if different)
+USE fluss_catalog;
+
+-- List all known rebalances
+CALL sys.list_rebalances();
 ```
 
 ### cancel_rebalance
