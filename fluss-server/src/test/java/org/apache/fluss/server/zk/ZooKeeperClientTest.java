@@ -960,8 +960,8 @@ class ZooKeeperClientTest {
         // Neither corrupt entry aborts the listing; only the good one is returned.
         assertThat(zookeeperClient.getRebalanceHistory()).containsExactly(good);
 
-        // Corrupt entries are not trimmed (they don't sort), but registering more history past
-        // the retention bound still trims the decodable entries correctly.
+        // The next history write deletes the corrupt entries as part of its retention trim, and
+        // registering more history past the retention bound still trims the decodable entries.
         for (int i = 0; i < 10; i++) {
             zookeeperClient.registerRebalanceHistory(
                     new RebalanceTask("more-history-task-" + i, COMPLETED, bucketPlan, i, 300 + i),
@@ -971,7 +971,7 @@ class ZooKeeperClientTest {
         assertThat(history).hasSize(10);
         assertThat(history).doesNotContain(good);
         assertThat(zookeeperClient.getChildren(RebalanceHistoryZNode.path()))
-                .contains("malformed-history-task", "unknown-status-history-task");
+                .doesNotContain("malformed-history-task", "unknown-status-history-task");
     }
 
     @Test

@@ -19,11 +19,13 @@ package org.apache.fluss.server.coordinator.rebalance;
 
 import org.apache.fluss.cluster.rebalance.RebalanceInfo;
 import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
+import org.apache.fluss.cluster.rebalance.RebalanceProgress;
 import org.apache.fluss.cluster.rebalance.RebalanceResultForBucket;
 import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.NoRebalanceInProgressException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.coordinator.AutoPartitionManager;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
@@ -656,6 +658,21 @@ public class RebalanceManagerTest {
         assertThat(rebalanceInfos.get(0).rebalanceId()).isEqualTo("rebalance-3");
         assertThat(rebalanceInfos.get(1).rebalanceId()).isEqualTo("rebalance-2");
         assertThat(rebalanceInfos.get(2).rebalanceId()).isEqualTo("rebalance-1");
+
+        // A historical id drills down into the full detail served from the ZK history.
+        RebalanceProgress historical = manager.listRebalanceProgress("rebalance-1");
+        assertThat(historical.rebalanceId()).isEqualTo("rebalance-1");
+        assertThat(historical.status()).isEqualTo(COMPLETED);
+        assertThat(historical.progressForBucketMap()).containsKey(tb1);
+        assertThat(historical.progressForBucketMap().get(tb1).status()).isEqualTo(COMPLETED);
+        assertThat(historical.startedAtMs()).isEqualTo(1_000L);
+        assertThat(historical.completedAtMs()).isEqualTo(2_000L);
+
+        // An id that is neither current nor retained still throws, pointing at the listing.
+        assertThatThrownBy(() -> manager.listRebalanceProgress("unknown-id"))
+                .isInstanceOf(NoRebalanceInProgressException.class)
+                .hasMessageContaining("retained history")
+                .hasMessageContaining("Admin#listRebalances()");
 
         manager.close();
     }

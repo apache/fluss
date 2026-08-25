@@ -50,6 +50,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -149,6 +150,7 @@ public abstract class FlinkProcedureITCase {
                             "+I[sys.rebalance]",
                             "+I[sys.cancel_rebalance]",
                             "+I[sys.list_rebalance]",
+                            "+I[sys.list_rebalances]",
                             "+I[sys.drop_kv_snapshot_lease]");
             // make sure no more results is unread.
             assertResultsIgnoreOrder(showProceduresIterator, expectedShowProceduresResult, true);
@@ -812,23 +814,23 @@ public abstract class FlinkProcedureITCase {
                         assertThat(row.getField(1)).isEqualTo(RebalanceStatus.COMPLETED.toString());
                         assertThat((String) row.getField(2)).endsWith("%");
                         assertThat((String) row.getField(3)).startsWith("{\"rebalance_id\":");
-                        assertThat(row.getField(4)).isNotNull();
-                        assertThat(row.getField(5)).isNotNull();
+                        assertThat(row.getField(4)).isInstanceOf(Instant.class);
+                        assertThat((Instant) row.getField(5))
+                                .isAfterOrEqualTo((Instant) row.getField(4));
                     }
                 });
 
         try (CloseableIterator<Row> rows =
-                tEnv.executeSql(String.format("Call %s.sys.list_rebalance()", CATALOG_NAME))
+                tEnv.executeSql(String.format("Call %s.sys.list_rebalances()", CATALOG_NAME))
                         .collect()) {
             List<Row> listResult = CollectionUtil.iteratorToList(rows);
             assertThat(listResult).isNotEmpty();
             Row row = listResult.get(0);
-            assertThat(row.getArity()).isEqualTo(6);
+            assertThat(row.getArity()).isEqualTo(4);
             assertThat(row.getField(0)).isEqualTo(progress.rebalanceId());
             assertThat(row.getField(1)).isEqualTo(RebalanceStatus.COMPLETED.toString());
-            assertThat((String) row.getField(3)).startsWith("{\"rebalance_id\":");
-            assertThat(row.getField(4)).isNotNull();
-            assertThat(row.getField(5)).isNotNull();
+            assertThat(row.getField(2)).isInstanceOf(Instant.class);
+            assertThat((Instant) row.getField(3)).isAfterOrEqualTo((Instant) row.getField(2));
         }
     }
 

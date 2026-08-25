@@ -300,17 +300,11 @@ public class RebalanceManager {
         if (rebalanceId != null
                 && currentRebalanceId != null
                 && !rebalanceId.equals(currentRebalanceId)) {
-            LOG.warn(
-                    "Ignore the list rebalance task because it is not the current"
-                            + " rebalance task.");
-            throw new NoRebalanceInProgressException(
-                    String.format(
-                            "Rebalance task id %s to list is not the current rebalance task id %s.",
-                            rebalanceId, currentRebalanceId));
+            return historicalRebalanceProgress(rebalanceId);
         }
 
         if (currentRebalanceId == null) {
-            return null;
+            return rebalanceId == null ? null : historicalRebalanceProgress(rebalanceId);
         }
 
         Map<TableBucket, RebalanceResultForBucket> progressForBucketMap = new HashMap<>();
@@ -324,6 +318,44 @@ public class RebalanceManager {
                 progressForBucketMap,
                 currentStartedAtMs,
                 currentCompletedAtMs);
+    }
+
+    /**
+     * Serves a finished rebalance from the ZooKeeper-backed history. Historical entries carry the
+     * full per-bucket plan with the task's final status.
+     */
+    private RebalanceProgress historicalRebalanceProgress(String rebalanceId) {
+        Optional<RebalanceTask> taskOpt;
+        try {
+            taskOpt = zkClient.getRebalanceHistoryTask(rebalanceId);
+        } catch (Exception e) {
+            throw new FlussRuntimeException("Failed to get rebalance history from zookeeper.", e);
+        }
+        RebalanceTask task =
+                taskOpt.orElseThrow(
+                        () ->
+                                new NoRebalanceInProgressException(
+                                        String.format(
+                                                "Rebalance task id %s is neither the current rebalance"
+                                                        + " task nor in the retained history. Known"
+                                                        + " rebalances are listed by Admin#listRebalances().",
+                                                rebalanceId)));
+        Map<TableBucket, RebalanceResultForBucket> resultMap = new HashMap<>();
+        task.getExecutePlan()
+                .forEach(
+                        (bucket, plan) ->
+                                resultMap.put(
+                                        bucket,
+                                        RebalanceResultForBucket.of(
+                                                plan, task.getRebalanceStatus())));
+        // the progress will be set at client.
+        return new RebalanceProgress(
+                task.getRebalanceId(),
+                task.getRebalanceStatus(),
+                0.0,
+                resultMap,
+                task.getStartedAtMs(),
+                task.getCompletedAtMs());
     }
 
     /**

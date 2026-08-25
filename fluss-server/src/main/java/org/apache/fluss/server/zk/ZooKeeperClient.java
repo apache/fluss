@@ -1683,7 +1683,7 @@ public class ZooKeeperClient implements AutoCloseable {
     /**
      * Writes a finished rebalance task to the bounded ZooKeeper-backed history, then trims the
      * oldest entries beyond {@code retentionCount} (ordered by {@link
-     * RebalanceTask#getCompletedAtMs()}).
+     * RebalanceTask#getCompletedAtMs()}). Undecodable entries are deleted as part of the trim.
      */
     public void registerRebalanceHistory(RebalanceTask rebalanceTask, int retentionCount)
             throws Exception {
@@ -1697,6 +1697,14 @@ public class ZooKeeperClient implements AutoCloseable {
             zkClient.setData().forPath(path, RebalanceHistoryTaskZNode.encode(rebalanceTask));
         }
 
+        // Delete undecodable entries first: they never appear in the decoded listing below, so
+        // this is their only cleanup point.
+        for (String rebalanceId : getChildren(RebalanceHistoryZNode.path())) {
+            if (!getRebalanceHistoryTask(rebalanceId).isPresent()) {
+                deletePath(RebalanceHistoryTaskZNode.path(rebalanceId));
+            }
+        }
+
         List<RebalanceTask> history = getRebalanceHistory();
         for (RebalanceTask expired :
                 history.subList(Math.min(retentionCount, history.size()), history.size())) {
@@ -1705,37 +1713,40 @@ public class ZooKeeperClient implements AutoCloseable {
     }
 
     /**
+     * Gets one entry of the rebalance history, or empty if absent, undecodable, or decoded with a
+     * null status.
+     */
+    public Optional<RebalanceTask> getRebalanceHistoryTask(String rebalanceId) throws Exception {
+        Optional<byte[]> data = getOrEmpty(RebalanceHistoryTaskZNode.path(rebalanceId));
+        if (!data.isPresent()) {
+            return Optional.empty();
+        }
+        RebalanceTask task;
+        try {
+            task = RebalanceHistoryTaskZNode.decode(data.get());
+        } catch (Exception e) {
+            LOG.warn("Failed to decode rebalance history entry {}.", rebalanceId, e);
+            return Optional.empty();
+        }
+        if (task.getRebalanceStatus() == null) {
+            LOG.warn("Rebalance history entry {} has an unknown status.", rebalanceId);
+            return Optional.empty();
+        }
+        return Optional.of(task);
+    }
+
+    /**
      * Returns the bounded rebalance history, newest first (by {@code completed_at_ms}, ties broken
      * by rebalance id).
      *
      * <p>A child znode that fails to decode, or decodes with a null status, is logged and skipped
-     * rather than failing the whole listing; such an entry is therefore also excluded from the
-     * retention trim performed by {@link #registerRebalanceHistory}.
+     * rather than failing the whole listing; {@link #registerRebalanceHistory} deletes such entries
+     * during its retention trim.
      */
     public List<RebalanceTask> getRebalanceHistory() throws Exception {
         List<RebalanceTask> history = new ArrayList<>();
         for (String rebalanceId : getChildren(RebalanceHistoryZNode.path())) {
-            Optional<byte[]> data = getOrEmpty(RebalanceHistoryTaskZNode.path(rebalanceId));
-            if (!data.isPresent()) {
-                continue;
-            }
-            RebalanceTask task;
-            try {
-                task = RebalanceHistoryTaskZNode.decode(data.get());
-            } catch (Exception e) {
-                LOG.warn(
-                        "Failed to decode rebalance history entry {}, skipping it.",
-                        rebalanceId,
-                        e);
-                continue;
-            }
-            if (task.getRebalanceStatus() == null) {
-                LOG.warn(
-                        "Rebalance history entry {} has an unknown status, skipping it.",
-                        rebalanceId);
-                continue;
-            }
-            history.add(task);
+            getRebalanceHistoryTask(rebalanceId).ifPresent(history::add);
         }
         history.sort(
                 Comparator.comparingLong(RebalanceTask::getCompletedAtMs)
