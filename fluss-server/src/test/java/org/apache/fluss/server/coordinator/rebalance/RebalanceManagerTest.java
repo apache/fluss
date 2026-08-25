@@ -22,6 +22,9 @@ import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
 import org.apache.fluss.cluster.rebalance.RebalanceResultForBucket;
 import org.apache.fluss.cluster.rebalance.RebalanceStatus;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.coordinator.event.CoordinatorEvent;
@@ -62,6 +65,7 @@ import static org.apache.fluss.cluster.rebalance.RebalanceStatus.NOT_STARTED;
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.REBALANCING;
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.TIMEOUT;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link RebalanceManager}. */
 public class RebalanceManagerTest {
@@ -75,6 +79,7 @@ public class RebalanceManagerTest {
 
     private TestingRebalanceExecutor rebalanceExecutor;
     private RecordingEventManager eventManager;
+    private ManualClock clock;
     private RebalanceManager rebalanceManager;
 
     @BeforeAll
@@ -91,12 +96,14 @@ public class RebalanceManagerTest {
         zookeeperClient.deleteRebalanceTask();
         rebalanceExecutor = new TestingRebalanceExecutor(new CoordinatorContext(zkEpoch));
         eventManager = new RecordingEventManager();
+        clock = new ManualClock();
         rebalanceManager =
                 new RebalanceManager(
                         rebalanceExecutor,
                         zookeeperClient,
                         eventManager,
-                        new ManualClock(),
+                        clock,
+                        new Configuration(),
                         new NoOpScheduledExecutor());
         rebalanceManager.startup();
     }
@@ -139,6 +146,7 @@ public class RebalanceManagerTest {
                         zookeeperClient,
                         eventManager,
                         clock,
+                        new Configuration(),
                         executor);
         manager.startup();
 
@@ -180,6 +188,7 @@ public class RebalanceManagerTest {
                         zookeeperClient,
                         eventManager,
                         clock,
+                        new Configuration(),
                         new NoOpScheduledExecutor());
         manager.startup();
 
@@ -231,6 +240,163 @@ public class RebalanceManagerTest {
                 .isEqualTo(COMPLETED);
 
         manager.close();
+    }
+
+    @Test
+    void testRegisterRebalanceRespectsMaxInflightTasks() {
+        rebalanceManager.updateMaxInflightRebalanceTasks(2);
+        TableBucket tb1 = new TableBucket(1L, 0);
+        TableBucket tb2 = new TableBucket(1L, 1);
+        TableBucket tb3 = new TableBucket(1L, 2);
+        TableBucket tb4 = new TableBucket(1L, 3);
+
+        rebalanceManager.registerRebalance(
+                "concurrent-test", plans(tb1, tb2, tb3, tb4), NOT_STARTED);
+
+        assertThat(rebalanceExecutor.executedPlans)
+                .extracting(RebalancePlanForBucket::getTableBucket)
+                .containsExactly(tb1, tb2);
+        assertThat(countStatus(rebalanceManager, REBALANCING)).isEqualTo(2);
+        assertThat(countStatus(rebalanceManager, NOT_STARTED)).isEqualTo(2);
+
+        rebalanceManager.finishRebalanceTask(tb1, COMPLETED);
+
+        assertThat(rebalanceExecutor.executedPlans)
+                .extracting(RebalancePlanForBucket::getTableBucket)
+                .containsExactly(tb1, tb2, tb3);
+        assertThat(countStatus(rebalanceManager, REBALANCING)).isEqualTo(2);
+    }
+
+    @Test
+    void testIncreaseMaxInflightTasksStartsPendingTasks() {
+        TableBucket tb1 = new TableBucket(1L, 0);
+        TableBucket tb2 = new TableBucket(1L, 1);
+        TableBucket tb3 = new TableBucket(1L, 2);
+        TableBucket tb4 = new TableBucket(1L, 3);
+        rebalanceManager.registerRebalance("scale-up-test", plans(tb1, tb2, tb3, tb4), NOT_STARTED);
+
+        assertThat(rebalanceManager.getMaxInflightRebalanceTasks()).isEqualTo(1);
+        assertThat(rebalanceExecutor.executedPlans).hasSize(1);
+
+        rebalanceManager.updateMaxInflightRebalanceTasks(3);
+
+        assertThat(rebalanceManager.getMaxInflightRebalanceTasks()).isEqualTo(3);
+        assertThat(rebalanceExecutor.executedPlans)
+                .extracting(RebalancePlanForBucket::getTableBucket)
+                .containsExactly(tb1, tb2, tb3);
+    }
+
+    @Test
+    void testZeroMaxInflightTasksPausesAndResumesScheduling() {
+        rebalanceManager.updateMaxInflightRebalanceTasks(0);
+        TableBucket tb1 = new TableBucket(1L, 0);
+        TableBucket tb2 = new TableBucket(1L, 1);
+        TableBucket tb3 = new TableBucket(1L, 2);
+        rebalanceManager.registerRebalance("pause-test", plans(tb1, tb2, tb3), NOT_STARTED);
+
+        assertThat(rebalanceManager.getMaxInflightRebalanceTasks()).isZero();
+        assertThat(rebalanceExecutor.executedPlans).isEmpty();
+        assertThat(countStatus(rebalanceManager, NOT_STARTED)).isEqualTo(3);
+        assertThat(rebalanceManager.hasInProgressRebalance()).isTrue();
+
+        rebalanceManager.updateMaxInflightRebalanceTasks(2);
+
+        assertThat(rebalanceExecutor.executedPlans)
+                .extracting(RebalancePlanForBucket::getTableBucket)
+                .containsExactly(tb1, tb2);
+        assertThat(countStatus(rebalanceManager, REBALANCING)).isEqualTo(2);
+    }
+
+    @Test
+    void testDecreaseMaxInflightTasksDoesNotCancelRunningTasks() {
+        rebalanceManager.updateMaxInflightRebalanceTasks(3);
+        TableBucket tb1 = new TableBucket(1L, 0);
+        TableBucket tb2 = new TableBucket(1L, 1);
+        TableBucket tb3 = new TableBucket(1L, 2);
+        TableBucket tb4 = new TableBucket(1L, 3);
+        TableBucket tb5 = new TableBucket(1L, 4);
+        rebalanceManager.registerRebalance(
+                "scale-down-test", plans(tb1, tb2, tb3, tb4, tb5), NOT_STARTED);
+
+        rebalanceManager.updateMaxInflightRebalanceTasks(1);
+
+        assertThat(rebalanceExecutor.executedPlans).hasSize(3);
+        rebalanceManager.finishRebalanceTask(tb1, COMPLETED);
+        rebalanceManager.finishRebalanceTask(tb2, COMPLETED);
+        assertThat(rebalanceExecutor.executedPlans).hasSize(3);
+
+        rebalanceManager.finishRebalanceTask(tb3, COMPLETED);
+        assertThat(rebalanceExecutor.executedPlans)
+                .extracting(RebalancePlanForBucket::getTableBucket)
+                .containsExactly(tb1, tb2, tb3, tb4);
+    }
+
+    @Test
+    void testTimeoutEnqueuesEventsForAllInflightTasks() {
+        rebalanceManager.updateMaxInflightRebalanceTasks(2);
+        TableBucket tb1 = new TableBucket(1L, 0);
+        TableBucket tb2 = new TableBucket(1L, 1);
+        TableBucket tb3 = new TableBucket(1L, 2);
+        rebalanceManager.registerRebalance("timeout-all-test", plans(tb1, tb2, tb3), NOT_STARTED);
+
+        clock.advanceTime(Duration.ofMillis(130_000));
+        rebalanceManager.checkTimeout();
+
+        assertThat(eventManager.events)
+                .filteredOn(RebalanceTaskTimeoutEvent.class::isInstance)
+                .extracting(
+                        event ->
+                                ((RebalanceTaskTimeoutEvent) event)
+                                        .getExecutionKey()
+                                        .getTableBucket())
+                .containsExactlyInAnyOrder(tb1, tb2);
+        RebalanceTaskTimeoutEvent firstTimeout =
+                (RebalanceTaskTimeoutEvent) eventManager.events.get(0);
+        RebalanceTaskTimeoutEvent secondTimeout =
+                (RebalanceTaskTimeoutEvent) eventManager.events.get(1);
+
+        assertThat(rebalanceManager.timeoutRebalanceTask(firstTimeout.getExecutionKey())).isTrue();
+        assertThat(rebalanceManager.timeoutRebalanceTask(secondTimeout.getExecutionKey())).isTrue();
+        assertThat(rebalanceExecutor.executedPlans)
+                .extracting(RebalancePlanForBucket::getTableBucket)
+                .containsExactly(tb1, tb2, tb3);
+    }
+
+    @Test
+    void testTimeoutTrackingCapIsPreservedWithConcurrentTasks() {
+        rebalanceManager.updateMaxInflightRebalanceTasks(10);
+        TableBucket[] tableBuckets = new TableBucket[10];
+        for (int i = 0; i < tableBuckets.length; i++) {
+            tableBuckets[i] = new TableBucket(1L, i);
+        }
+        rebalanceManager.registerRebalance(
+                "concurrent-timeout-cap-test", plans(tableBuckets), NOT_STARTED);
+        List<RebalanceExecutionKey> attempts = new ArrayList<>();
+        for (TableBucket tableBucket : tableBuckets) {
+            attempts.add(rebalanceManager.getExecutionKey(tableBucket));
+        }
+
+        for (int i = 0; i < 8; i++) {
+            assertThat(rebalanceManager.timeoutRebalanceTask(attempts.get(i))).isTrue();
+        }
+        assertThat(rebalanceManager.timeoutRebalanceTask(attempts.get(8))).isFalse();
+        assertThat(countStatus(rebalanceManager, TIMEOUT)).isEqualTo(8);
+        assertThat(countStatus(rebalanceManager, REBALANCING)).isEqualTo(2);
+
+        assertThat(rebalanceManager.finishRebalanceTask(attempts.get(0), COMPLETED)).isTrue();
+        assertThat(rebalanceManager.timeoutRebalanceTask(attempts.get(8))).isTrue();
+        assertThat(countStatus(rebalanceManager, TIMEOUT)).isEqualTo(8);
+        assertThat(countStatus(rebalanceManager, REBALANCING)).isEqualTo(1);
+    }
+
+    @Test
+    void testRejectNegativeMaxInflightTasks() {
+        Configuration invalidConfig = new Configuration();
+        invalidConfig.set(ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS, -1);
+
+        assertThatThrownBy(() -> rebalanceManager.validate(invalidConfig))
+                .isInstanceOf(ConfigException.class)
+                .hasMessageContaining("must be non-negative");
     }
 
     @Test
@@ -459,9 +625,21 @@ public class RebalanceManagerTest {
                         zookeeperClient,
                         eventManager,
                         clock,
+                        new Configuration(),
                         new NoOpScheduledExecutor());
         manager.startup();
         return manager;
+    }
+
+    private static int countStatus(RebalanceManager manager, RebalanceStatus status) {
+        int count = 0;
+        for (RebalanceResultForBucket result :
+                manager.listRebalanceProgress(null).progressForBucketMap().values()) {
+            if (result.status() == status) {
+                count++;
+            }
+        }
+        return count;
     }
 
     private static int reconciliationsFor(
@@ -501,6 +679,7 @@ public class RebalanceManagerTest {
                         zookeeperClient,
                         recordingEventManager,
                         new ManualClock(),
+                        new Configuration(),
                         new NoOpScheduledExecutor());
 
         recoveringManager.startup();

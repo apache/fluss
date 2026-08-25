@@ -202,6 +202,23 @@ class CoordinatorEventProcessorRebalanceTest {
     }
 
     @Test
+    void testApplyRebalanceConcurrencyChangeOnCoordinatorEventThread() {
+        Configuration newConfig = new Configuration();
+        newConfig.set(ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS, 3);
+
+        eventProcessor.getRebalanceManager().reconfigure(newConfig);
+
+        retry(
+                Duration.ofSeconds(10),
+                () ->
+                        assertThat(
+                                        eventProcessor
+                                                .getRebalanceManager()
+                                                .getMaxInflightRebalanceTasks())
+                                .isEqualTo(3));
+    }
+
+    @Test
     void testDoBucketReassignment() throws Exception {
         registerTabletServer(3);
 

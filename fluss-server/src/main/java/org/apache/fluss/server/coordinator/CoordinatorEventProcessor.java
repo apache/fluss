@@ -87,6 +87,7 @@ import org.apache.fluss.server.coordinator.event.NotifyLakeTableOffsetEvent;
 import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrRequestContext;
 import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrResponseReceivedEvent;
 import org.apache.fluss.server.coordinator.event.RebalanceEvent;
+import org.apache.fluss.server.coordinator.event.RebalanceMaxInflightTasksChangedEvent;
 import org.apache.fluss.server.coordinator.event.RebalanceTaskTimeoutEvent;
 import org.apache.fluss.server.coordinator.event.ReconcileRebalanceTaskEvent;
 import org.apache.fluss.server.coordinator.event.RecoverRebalanceEvent;
@@ -271,7 +272,7 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
         this.coordinatorMetricGroup = coordinatorMetricGroup;
         this.internalListenerName = conf.getString(ConfigOptions.INTERNAL_LISTENER_NAME);
         this.rebalanceManager =
-                new RebalanceManager(this, zooKeeperClient, coordinatorEventManager, clock);
+                new RebalanceManager(this, zooKeeperClient, coordinatorEventManager, clock, conf);
         replicaRequestBatch.setRebalanceExecutionKeyResolver(rebalanceManager::getExecutionKey);
         bucketRequestBatch.setRebalanceExecutionKeyResolver(rebalanceManager::getExecutionKey);
         coordinatorRequestBatch.setRebalanceExecutionKeyResolver(rebalanceManager::getExecutionKey);
@@ -747,6 +748,9 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                     rebalanceEvent.getRespCallback(), () -> processRebalance(rebalanceEvent));
         } else if (event instanceof RecoverRebalanceEvent) {
             rebalanceManager.recoverRebalance(((RecoverRebalanceEvent) event).getRebalanceTask());
+        } else if (event instanceof RebalanceMaxInflightTasksChangedEvent) {
+            rebalanceManager.updateMaxInflightRebalanceTasks(
+                    ((RebalanceMaxInflightTasksChangedEvent) event).getMaxInflightTasks());
         } else if (event instanceof CancelRebalanceEvent) {
             CancelRebalanceEvent cancelRebalanceEvent = (CancelRebalanceEvent) event;
             completeFromCallable(
@@ -1620,9 +1624,9 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
         if (planForBucket.isLeaderChanged() && !reassignment.isBeingReassigned()) {
             // buckets only need to change leader like leader replica rebalance.
             // Don't finish the task immediately; wait for the NotifyLeaderAndIsr response
-            // from the tablet server to confirm the leader change has been applied.
-            // This ensures leader migrations are executed sequentially, avoiding excessive
-            // pressure on tablet servers (especially for KV tables).
+            // from the tablet server to confirm the leader change has been applied. The task keeps
+            // occupying a RebalanceManager execution slot while waiting, so concurrent leader
+            // migrations remain bounded by the configured rebalance limit.
             LOG.info("trigger leader election for tableBucket {}.", tableBucket);
             tableBucketStateMachine.handleStateChange(
                     Collections.singleton(tableBucket),

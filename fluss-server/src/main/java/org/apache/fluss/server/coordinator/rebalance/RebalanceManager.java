@@ -23,12 +23,17 @@ import org.apache.fluss.cluster.rebalance.RebalanceProgress;
 import org.apache.fluss.cluster.rebalance.RebalanceResultForBucket;
 import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.cluster.rebalance.ServerTag;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.cluster.ServerReconfigurable;
+import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.exception.NoRebalanceInProgressException;
 import org.apache.fluss.exception.RebalanceFailureException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.coordinator.event.EventManager;
 import org.apache.fluss.server.coordinator.event.FinalizeRebalanceEvent;
+import org.apache.fluss.server.coordinator.event.RebalanceMaxInflightTasksChangedEvent;
 import org.apache.fluss.server.coordinator.event.RebalanceTaskTimeoutEvent;
 import org.apache.fluss.server.coordinator.event.ReconcileRebalanceTaskEvent;
 import org.apache.fluss.server.coordinator.event.RecoverRebalanceEvent;
@@ -78,9 +83,10 @@ import static org.apache.fluss.utils.Preconditions.checkArgument;
 /**
  * A rebalance manager to generate rebalance plan, and execution rebalance plan.
  *
- * <p>This manager can only be used in the coordinator event loop as a single threaded model.
+ * <p>This manager is used in the coordinator event loop as a single-threaded model. Non-event
+ * threads enqueue coordinator events instead of directly advancing rebalance state.
  */
-public class RebalanceManager {
+public class RebalanceManager implements ServerReconfigurable {
     private static final Logger LOG = LoggerFactory.getLogger(RebalanceManager.class);
 
     /** Hardcoded timeout for an in-flight rebalance task: 2 minutes. */
@@ -125,7 +131,7 @@ public class RebalanceManager {
     private final Map<TableBucket, RebalanceResultForBucket> inProgressRebalanceTasks =
             new ConcurrentHashMap<>();
 
-    /** Normally running tasks. This map contains at most one entry until concurrency is added. */
+    /** Normally running tasks that occupy configured execution slots. */
     private final Map<TableBucket, RebalanceTaskAttempt> runningRebalanceTasks =
             new ConcurrentHashMap<>();
 
@@ -141,6 +147,8 @@ public class RebalanceManager {
             new ConcurrentHashMap<>();
 
     private final GoalOptimizer goalOptimizer;
+    private int maxInflightRebalanceTasks;
+    private int queuedMaxInflightRebalanceTasks;
     private volatile long registerTime;
     private volatile @Nullable RebalanceStatus rebalanceStatus;
     private volatile @Nullable String currentRebalanceId;
@@ -155,12 +163,14 @@ public class RebalanceManager {
             RebalanceExecutor rebalanceExecutor,
             ZooKeeperClient zkClient,
             EventManager eventManager,
-            Clock clock) {
+            Clock clock,
+            Configuration conf) {
         this(
                 rebalanceExecutor,
                 zkClient,
                 eventManager,
                 clock,
+                conf,
                 // TODO: Reuse the CoordinatorServer shared scheduler for this lightweight
                 // coordinator timeout checker instead of creating a component-owned scheduler.
                 Executors.newScheduledThreadPool(
@@ -173,6 +183,7 @@ public class RebalanceManager {
             ZooKeeperClient zkClient,
             EventManager eventManager,
             Clock clock,
+            Configuration conf,
             ScheduledExecutorService timeoutChecker) {
         this.rebalanceExecutor = rebalanceExecutor;
         this.zkClient = zkClient;
@@ -180,6 +191,10 @@ public class RebalanceManager {
         this.clock = clock == null ? SystemClock.getInstance() : clock;
         this.timeoutChecker = timeoutChecker;
         this.goalOptimizer = new GoalOptimizer();
+        validate(conf);
+        this.maxInflightRebalanceTasks =
+                conf.get(ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS);
+        this.queuedMaxInflightRebalanceTasks = maxInflightRebalanceTasks;
     }
 
     public void startup() {
@@ -202,6 +217,44 @@ public class RebalanceManager {
 
     public @Nullable String getRebalanceId() {
         return currentRebalanceId;
+    }
+
+    @Override
+    public void validate(Configuration newConfig) throws ConfigException {
+        int newMaxInflightRebalanceTasks =
+                newConfig.get(ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS);
+        if (newMaxInflightRebalanceTasks < 0) {
+            throw new ConfigException(
+                    String.format(
+                            "Invalid %s: must be non-negative, but was %s",
+                            ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS.key(),
+                            newMaxInflightRebalanceTasks));
+        }
+    }
+
+    @Override
+    public synchronized void reconfigure(Configuration newConfig) {
+        int newMaxInflightRebalanceTasks =
+                newConfig.get(ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS);
+        if (newMaxInflightRebalanceTasks == queuedMaxInflightRebalanceTasks) {
+            LOG.debug(
+                    "{} unchanged: {}",
+                    ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS.key(),
+                    newMaxInflightRebalanceTasks);
+            return;
+        }
+
+        int oldQueuedMaxInflightRebalanceTasks = queuedMaxInflightRebalanceTasks;
+        queuedMaxInflightRebalanceTasks = newMaxInflightRebalanceTasks;
+        LOG.info(
+                "{} change queued: {} -> {}",
+                ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS.key(),
+                oldQueuedMaxInflightRebalanceTasks,
+                newMaxInflightRebalanceTasks);
+        if (!isClosed) {
+            eventManager.put(
+                    new RebalanceMaxInflightTasksChangedEvent(newMaxInflightRebalanceTasks));
+        }
     }
 
     private void initialize() {
@@ -243,7 +296,7 @@ public class RebalanceManager {
 
         if (!pendingRebalanceTasks.isEmpty()) {
             rebalanceStatus = REBALANCING;
-            processNewRebalanceTask();
+            processNewRebalanceTasks();
         } else {
             rebalanceStatus = newStatus;
         }
@@ -289,7 +342,7 @@ public class RebalanceManager {
             persistFinalStatus();
         } else {
             rebalanceStatus = REBALANCING;
-            processNewRebalanceTask();
+            processNewRebalanceTasks();
         }
     }
 
@@ -334,7 +387,7 @@ public class RebalanceManager {
         if (inProgressRebalanceTasks.isEmpty()) {
             finalizeRebalance();
         } else {
-            processNewRebalanceTask();
+            processNewRebalanceTasks();
         }
         return true;
     }
@@ -494,6 +547,16 @@ public class RebalanceManager {
             LOG.debug("Ignore stale timeout for {}.", executionKey);
             return false;
         }
+        if (timedOutRebalanceTasks.size() >= MAX_TRACKED_TIMED_OUT_TASKS) {
+            // Keep the attempt in the normal running set until a reconciliation slot becomes
+            // available. The timeout checker will enqueue another timeout event on its next pass.
+            LOG.info(
+                    "Keep timed-out rebalance task {} in the running set because {} other "
+                            + "timed-out tasks are still being reconciled.",
+                    executionKey,
+                    timedOutRebalanceTasks.size());
+            return false;
+        }
 
         TableBucket tableBucket = executionKey.getTableBucket();
         runningRebalanceTasks.remove(tableBucket);
@@ -507,7 +570,7 @@ public class RebalanceManager {
                 tableBucket, RebalanceResultForBucket.of(result.plan(), TIMEOUT));
         attempt.onTimedOut(clock.milliseconds(), observeBucketState(tableBucket));
         enqueueReconciliation(attempt);
-        processNewRebalanceTask();
+        processNewRebalanceTasks();
         return true;
     }
 
@@ -572,10 +635,7 @@ public class RebalanceManager {
         }
     }
 
-    private void processNewRebalanceTask() {
-        if (!runningRebalanceTasks.isEmpty()) {
-            return;
-        }
+    private void processNewRebalanceTasks() {
         if (timedOutRebalanceTasks.size() >= MAX_TRACKED_TIMED_OUT_TASKS) {
             // Stop admitting work until some of the timed-out tasks reach a final status, so that
             // a long cluster operation cannot grow the tracked set, and with it the reconciliation
@@ -587,8 +647,12 @@ public class RebalanceManager {
                     timedOutRebalanceTasks.size());
             return;
         }
-        TableBucket tableBucket;
-        while ((tableBucket = pendingRebalanceTasks.poll()) != null) {
+
+        while (runningRebalanceTasks.size() < maxInflightRebalanceTasks) {
+            TableBucket tableBucket = pendingRebalanceTasks.poll();
+            if (tableBucket == null) {
+                return;
+            }
             RebalanceResultForBucket resultForBucket = inProgressRebalanceTasks.get(tableBucket);
             if (resultForBucket == null || resultForBucket.status() != NOT_STARTED) {
                 continue;
@@ -600,8 +664,45 @@ public class RebalanceManager {
             inProgressRebalanceTasks.put(
                     tableBucket, RebalanceResultForBucket.of(resultForBucket.plan(), REBALANCING));
             rebalanceExecutor.tryToExecuteRebalanceTask(resultForBucket.plan());
+        }
+    }
+
+    /**
+     * Applies a new rebalance concurrency limit on the coordinator event loop.
+     *
+     * <p>Increasing the limit admits pending tasks immediately. Decreasing it does not cancel
+     * running tasks; new tasks are admitted only after the number of running tasks falls below the
+     * new limit.
+     */
+    public synchronized void updateMaxInflightRebalanceTasks(int newMaxInflightRebalanceTasks) {
+        checkArgument(
+                newMaxInflightRebalanceTasks >= 0,
+                "%s must be non-negative.",
+                ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS.key());
+        int oldMaxInflightRebalanceTasks = maxInflightRebalanceTasks;
+        if (newMaxInflightRebalanceTasks == oldMaxInflightRebalanceTasks) {
+            LOG.debug(
+                    "{} unchanged: {}",
+                    ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS.key(),
+                    newMaxInflightRebalanceTasks);
             return;
         }
+
+        maxInflightRebalanceTasks = newMaxInflightRebalanceTasks;
+        LOG.info(
+                "{} reconfigured: {} -> {}",
+                ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS.key(),
+                oldMaxInflightRebalanceTasks,
+                newMaxInflightRebalanceTasks);
+        if (!isClosed) {
+            processNewRebalanceTasks();
+        }
+    }
+
+    /** Returns the rebalance concurrency limit currently applied on the coordinator event loop. */
+    @VisibleForTesting
+    public synchronized int getMaxInflightRebalanceTasks() {
+        return maxInflightRebalanceTasks;
     }
 
     private void finalizeRebalance() {
