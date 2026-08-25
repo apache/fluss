@@ -47,8 +47,8 @@ class PartitionRegistrationJsonSerdeTest extends JsonSerdeTestBase<PartitionRegi
     @Override
     protected String[] expectedJsons() {
         return new String[] {
-            "{\"version\":1,\"table_id\":1234,\"partition_id\":5678,\"remote_data_dir\":\"file://local/remote\"}",
-            "{\"version\":1,\"table_id\":246,\"partition_id\":135}"
+            "{\"version\":2,\"table_id\":1234,\"partition_id\":5678,\"remote_data_dir\":\"file://local/remote\"}",
+            "{\"version\":2,\"table_id\":246,\"partition_id\":135}"
         };
     }
 

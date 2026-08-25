@@ -45,10 +45,19 @@ public class PartitionRegistration {
      */
     private final @Nullable String remoteDataDir;
 
+    /** Whether writes to the partition have been permanently frozen. */
+    private final boolean frozen;
+
     public PartitionRegistration(long tableId, long partitionId, @Nullable String remoteDataDir) {
+        this(tableId, partitionId, remoteDataDir, false);
+    }
+
+    PartitionRegistration(
+            long tableId, long partitionId, @Nullable String remoteDataDir, boolean frozen) {
         this.tableId = tableId;
         this.partitionId = partitionId;
         this.remoteDataDir = remoteDataDir;
+        this.frozen = frozen;
     }
 
     public long getTableId() {
@@ -64,6 +73,10 @@ public class PartitionRegistration {
         return remoteDataDir;
     }
 
+    public boolean isFrozen() {
+        return frozen;
+    }
+
     public TablePartition toTablePartition() {
         return new TablePartition(tableId, partitionId);
     }
@@ -77,7 +90,12 @@ public class PartitionRegistration {
      * @return a new registration with the given remote data directory
      */
     public PartitionRegistration newRemoteDataDir(String remoteDataDir) {
-        return new PartitionRegistration(tableId, partitionId, remoteDataDir);
+        return new PartitionRegistration(tableId, partitionId, remoteDataDir, frozen);
+    }
+
+    /** Returns a new registration whose partition is permanently frozen. */
+    public PartitionRegistration withFrozen() {
+        return frozen ? this : new PartitionRegistration(tableId, partitionId, remoteDataDir, true);
     }
 
     @Override
@@ -88,12 +106,13 @@ public class PartitionRegistration {
         PartitionRegistration that = (PartitionRegistration) o;
         return tableId == that.tableId
                 && partitionId == that.partitionId
+                && frozen == that.frozen
                 && Objects.equals(remoteDataDir, that.remoteDataDir);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(tableId, partitionId, remoteDataDir);
+        return Objects.hash(tableId, partitionId, remoteDataDir, frozen);
     }
 
     @Override
@@ -106,6 +125,8 @@ public class PartitionRegistration {
                 + ", remoteDataDir='"
                 + remoteDataDir
                 + '\''
+                + ", frozen="
+                + frozen
                 + '}';
     }
 }

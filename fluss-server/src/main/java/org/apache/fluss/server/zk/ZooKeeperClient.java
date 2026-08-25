@@ -924,6 +924,54 @@ public class ZooKeeperClient implements AutoCloseable {
         return partitions;
     }
 
+    /**
+     * Atomically marks a partition as frozen if its identity still matches.
+     *
+     * <p>A concurrent metadata update is retried with its latest contents so that unrelated fields
+     * are not overwritten.
+     */
+    public Optional<PartitionRegistration> markPartitionFrozen(
+            TablePath tablePath,
+            String partitionName,
+            long expectedTableId,
+            long expectedPartitionId)
+            throws Exception {
+        String path = PartitionZNode.path(tablePath, partitionName);
+        while (true) {
+            Stat stat = new Stat();
+            final byte[] data;
+            try {
+                data = zkClient.getData().storingStatIn(stat).forPath(path);
+            } catch (KeeperException.NoNodeException e) {
+                return Optional.empty();
+            }
+
+            PartitionRegistration registration = PartitionZNode.decode(data);
+            if (registration.getTableId() != expectedTableId
+                    || registration.getPartitionId() != expectedPartitionId) {
+                return Optional.empty();
+            }
+            if (registration.getRemoteDataDir() == null) {
+                registration = registration.newRemoteDataDir(defaultRemoteDataDir);
+            }
+            if (registration.isFrozen()) {
+                return Optional.of(registration);
+            }
+
+            PartitionRegistration frozenRegistration = registration.withFrozen();
+            try {
+                zkClient.setData()
+                        .withVersion(stat.getVersion())
+                        .forPath(path, PartitionZNode.encode(frozenRegistration));
+                return Optional.of(frozenRegistration);
+            } catch (KeeperException.BadVersionException e) {
+                // Retry against the latest registration.
+            } catch (KeeperException.NoNodeException e) {
+                return Optional.empty();
+            }
+        }
+    }
+
     /** Get the partition and the id for the partitions of tables in ZK. */
     public Map<TablePath, Map<String, Long>> getPartitionNameAndIdsForTables(
             List<TablePath> tablePaths) throws Exception {
@@ -1068,6 +1116,41 @@ public class ZooKeeperClient implements AutoCloseable {
     public void deletePartition(TablePath tablePath, String partitionName) throws Exception {
         String path = PartitionZNode.path(tablePath, partitionName);
         zkClient.delete().forPath(path);
+    }
+
+    /** Delete a partition only if its current registration still has the expected identity. */
+    public boolean deleteFrozenPartitionIfMatches(
+            TablePath tablePath,
+            String partitionName,
+            long expectedTableId,
+            long expectedPartitionId)
+            throws Exception {
+        String path = PartitionZNode.path(tablePath, partitionName);
+        while (true) {
+            Stat stat = new Stat();
+            final byte[] data;
+            try {
+                data = zkClient.getData().storingStatIn(stat).forPath(path);
+            } catch (KeeperException.NoNodeException e) {
+                return false;
+            }
+
+            PartitionRegistration registration = PartitionZNode.decode(data);
+            if (registration.getTableId() != expectedTableId
+                    || registration.getPartitionId() != expectedPartitionId
+                    || !registration.isFrozen()) {
+                return false;
+            }
+
+            try {
+                zkClient.delete().withVersion(stat.getVersion()).forPath(path);
+                return true;
+            } catch (KeeperException.BadVersionException e) {
+                // Retry against the latest registration.
+            } catch (KeeperException.NoNodeException e) {
+                return false;
+            }
+        }
     }
 
     /** Register partition assignment and metadata in transaction. */
