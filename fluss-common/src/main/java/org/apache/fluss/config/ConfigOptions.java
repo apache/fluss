@@ -1248,7 +1248,7 @@ public class ConfigOptions {
     public static final ConfigOption<Duration> CLIENT_CONNECT_TIMEOUT =
             key("client.connect-timeout")
                     .durationType()
-                    .defaultValue(Duration.ofSeconds(120))
+                    .defaultValue(Duration.ofSeconds(15))
                     .withDescription("The Netty client connect timeout.");
 
     public static final ConfigOption<List<String>> BOOTSTRAP_SERVERS =
