@@ -135,14 +135,16 @@ public class RocksDBStatistics implements AutoCloseable {
     /**
      * Get get operation latency in microseconds (P99).
      *
-     * <p>This uses RocksDB Statistics histogram data to get the P99 latency of get operations. P99
-     * is used instead of average because it better reflects tail latency issues, which are more
-     * critical for monitoring database performance.
+     * <p>This uses RocksDB Statistics histogram data to get the higher P99 latency of point-get and
+     * multi-get operations. P99 is used instead of average because it better reflects tail latency
+     * issues, which are more critical for monitoring database performance.
      *
      * @return P99 get latency in microseconds, or 0 if not available
      */
     public long getGetLatencyMicros() {
-        return getHistogramValue(HistogramType.DB_GET);
+        return Math.max(
+                getHistogramValue(HistogramType.DB_GET),
+                getHistogramValue(HistogramType.DB_MULTIGET));
     }
 
     /**
