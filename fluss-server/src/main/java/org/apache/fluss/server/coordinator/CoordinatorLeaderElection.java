@@ -190,6 +190,35 @@ public class CoordinatorLeaderElection implements AutoCloseable {
         return !closing.get() && state == State.LEADER;
     }
 
+    /**
+     * Returns whether the coordinator group currently has an elected leader — this server or any
+     * other participant. Returns {@code false} when the state cannot be determined (e.g. ZooKeeper
+     * unreachable), because an unknown leader must not be reported as present to a readiness probe.
+     *
+     * <p>On a standby this performs a synchronous ZooKeeper read, so it is intended for
+     * probe-frequency callers only (the Kubernetes readiness probe calls it at most every few
+     * seconds), not for hot paths.
+     *
+     * <p>TODO: when leader initialization fails, {@code becomeLeader} transitions this server back
+     * to STANDBY but the {@link LeaderLatch} keeps the ZK leadership, so this method can report an
+     * elected leader while no functional leader exists until the latch is released or the session
+     * expires. Pre-existing election behavior; revisit together with latch relinquishing.
+     */
+    public boolean isLeaderElected() {
+        if (closing.get()) {
+            return false;
+        }
+        if (state == State.LEADER) {
+            return true;
+        }
+        try {
+            return leaderLatch.getLeader().isLeader();
+        } catch (Exception e) {
+            LOG.debug("Failed to read leader election state for server {}", serverId, e);
+            return false;
+        }
+    }
+
     private void submitLeadershipEvent(Runnable leadershipEvent) {
         if (closing.get()) {
             return;
