@@ -207,7 +207,7 @@ spec:
         accessModes: [ "ReadWriteOnce" ]
         resources:
           requests:
-            storage: {{ .size }}
-        storageClassName: {{ .storageClass }}
+            storage: {{ .size | toYaml }}
+        storageClassName: {{ if .storageClass }}{{ .storageClass | toYaml }}{{ end }}
     {{- end }}
   {{- end}}
