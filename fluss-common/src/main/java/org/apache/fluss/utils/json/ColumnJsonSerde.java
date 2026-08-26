@@ -27,8 +27,10 @@ import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import org.apache.fluss.types.DataType;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 
 import static org.apache.fluss.metadata.Schema.Column.UNKNOWN_COLUMN_ID;
@@ -46,6 +48,7 @@ public class ColumnJsonSerde
     static final String AGG_FUNCTION = "agg_function";
     static final String AGG_FUNCTION_TYPE = "type";
     static final String AGG_FUNCTION_PARAMS = "parameters";
+    static final String SEQUENCE_COLUMNS = "sequence_columns";
 
     @Override
     public void serialize(Schema.Column column, JsonGenerator generator) throws IOException {
@@ -70,6 +73,13 @@ public class ColumnJsonSerde
                 generator.writeEndObject();
             }
             generator.writeEndObject();
+        }
+        if (column.getSequenceColumns().isPresent()) {
+            generator.writeArrayFieldStart(SEQUENCE_COLUMNS);
+            for (String sequenceColumn : column.getSequenceColumns().get()) {
+                generator.writeString(sequenceColumn);
+            }
+            generator.writeEndArray();
         }
         generator.writeNumberField(ID, column.getColumnId());
 
@@ -105,11 +115,20 @@ public class ColumnJsonSerde
             }
         }
 
+        List<String> sequenceColumns = null;
+        if (node.hasNonNull(SEQUENCE_COLUMNS)) {
+            sequenceColumns = new ArrayList<>();
+            for (JsonNode sequenceColumn : node.get(SEQUENCE_COLUMNS)) {
+                sequenceColumns.add(sequenceColumn.asText());
+            }
+        }
+
         return new Schema.Column(
                 columnName,
                 dataType,
                 node.hasNonNull(COMMENT) ? node.get(COMMENT).asText() : null,
                 node.has(ID) ? node.get(ID).asInt() : UNKNOWN_COLUMN_ID,
-                aggFunction);
+                aggFunction,
+                sequenceColumns);
     }
 }

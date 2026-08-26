@@ -23,6 +23,7 @@ import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.record.BinaryValue;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.RowEncoder;
+import org.apache.fluss.server.kv.rowmerger.SequenceGroups;
 import org.apache.fluss.types.DataType;
 
 import javax.annotation.Nullable;
@@ -43,9 +44,25 @@ public class PartialUpdater {
     private final BitSet primaryKeyCols = new BitSet();
     private final boolean updatePrimaryKeyOnly;
     private final DataType[] fieldDataTypes;
+    private final @Nullable SequenceGroups sequenceGroups;
 
     public PartialUpdater(KvFormat kvFormat, short schemaId, Schema schema, int[] targetColumns) {
+        this(kvFormat, schemaId, schema, targetColumns, SequenceGroups.create(schema));
+    }
+
+    /**
+     * @param sequenceGroups the sequence groups arbitrating the update, or null to replace the
+     *     target columns blindly as required when recovering by overwriting an already decided
+     *     value
+     */
+    public PartialUpdater(
+            KvFormat kvFormat,
+            short schemaId,
+            Schema schema,
+            int[] targetColumns,
+            @Nullable SequenceGroups sequenceGroups) {
         this.targetSchemaId = schemaId;
+        this.sequenceGroups = sequenceGroups;
         for (int targetColumn : targetColumns) {
             partialUpdateCols.set(targetColumn);
         }
@@ -97,6 +114,9 @@ public class PartialUpdater {
      * oldValue} may be null, in this case, the field don't exist in the {@code partialRow} will be
      * set to null.
      *
+     * <p>When the schema declares sequence groups, a target column is only taken from {@code
+     * partialValue} if the group arbitrating it advances, otherwise the stored value is kept.
+     *
      * @param oldValue the old value to be updated
      * @param partialValue the new value to be updated.
      * @return the updated value (schema id + row bytes)
@@ -107,11 +127,18 @@ public class PartialUpdater {
             return oldValue;
         }
 
+        boolean[] acceptance =
+                sequenceGroups == null
+                        ? null
+                        : sequenceGroups.resolveAcceptance(
+                                oldValue == null ? null : oldValue.row, partialValue.row);
+
         rowEncoder.startNewRow();
         // write each field
         for (int i = 0; i < fieldDataTypes.length; i++) {
-            // use the partial row value
-            if (partialUpdateCols.get(i)) {
+            // use the partial row value, unless the sequence group arbitrating the field holds it
+            // back because the incoming row is not newer
+            if (partialUpdateCols.get(i) && (acceptance == null || acceptance[i])) {
                 rowEncoder.encodeField(i, flussFieldGetters[i].getFieldOrNull(partialValue.row));
             } else {
                 // use the old row value, the old row may be old schema with fewer fields,
@@ -136,6 +163,8 @@ public class PartialUpdater {
      * @return the value after partial deleted
      */
     public @Nullable BinaryValue deleteRow(BinaryValue value) {
+        // TODO: arbitrate the delete with the sequence groups when a delete record carries the
+        //  sequence columns, so that a stale delete no longer nulls out newer columns
         if (isFieldsNull(value.row, partialUpdateCols)) {
             return null;
         } else {

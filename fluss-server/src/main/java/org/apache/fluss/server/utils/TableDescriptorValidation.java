@@ -51,6 +51,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.EnumSet;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
@@ -402,6 +403,7 @@ public class TableDescriptorValidation {
         if (mergeEngine != MergeEngineType.AGGREGATION) {
             validateNoAggregationFunctions(schema);
         }
+        validateSequenceGroups(mergeEngine, hasPrimaryKey, schema);
         if (mergeEngine != null) {
             if (!hasPrimaryKey) {
                 throw new InvalidConfigException(
@@ -452,6 +454,93 @@ public class TableDescriptorValidation {
                 }
                 // Validate aggregation function parameters for aggregation merge engine
                 validateAggregationFunctionParameters(schema);
+            }
+        }
+    }
+
+    /**
+     * Validates the sequence groups declared on the schema.
+     *
+     * <p>A sequence group puts one or more columns under the order of a sequence column, so that
+     * each group decides on its own whether an incoming write is newer than the stored row. This
+     * lets several writers update disjoint column groups of the same row without overwriting each
+     * other with stale values.
+     */
+    private static void validateSequenceGroups(
+            @Nullable MergeEngineType mergeEngine, boolean hasPrimaryKey, Schema schema) {
+        if (!schema.hasSequenceGroup()) {
+            return;
+        }
+
+        // both checks reject a configuration that would otherwise be silently ignored, as only the
+        // primary key table without merge engine consults the sequence groups when merging
+        if (!hasPrimaryKey) {
+            throw new InvalidConfigException(
+                    "Sequence group is only supported in primary key table.");
+        }
+        if (mergeEngine != null) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "Sequence group is not supported for '%s' merge engine.", mergeEngine));
+        }
+
+        RowType rowType = schema.getRowType();
+        List<String> primaryKeyNames = schema.getPrimaryKeyColumnNames();
+        Set<String> protectedColumnNames = new HashSet<>();
+        for (Schema.Column column : schema.getColumns()) {
+            if (column.getSequenceColumns().isPresent()) {
+                protectedColumnNames.add(column.getName());
+            }
+        }
+        EnumSet<DataTypeRoot> supportedTypes =
+                EnumSet.of(
+                        DataTypeRoot.INTEGER,
+                        DataTypeRoot.BIGINT,
+                        DataTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE,
+                        DataTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE);
+
+        for (Schema.Column column : schema.getColumns()) {
+            List<String> sequenceColumns = column.getSequenceColumns().orElse(null);
+            if (sequenceColumns == null) {
+                continue;
+            }
+            // a primary key column holds the same value in both rows being merged, so it can
+            // neither order a group nor be held back by one
+            if (primaryKeyNames.contains(column.getName())) {
+                throw new InvalidConfigException(
+                        String.format(
+                                "The primary key column '%s' must not be put in a sequence group.",
+                                column.getName()));
+            }
+            for (String sequenceColumn : sequenceColumns) {
+                int columnIndex = rowType.getFieldIndex(sequenceColumn);
+                if (columnIndex < 0) {
+                    throw new InvalidConfigException(
+                            String.format(
+                                    "The sequence column '%s' doesn't exist in schema.",
+                                    sequenceColumn));
+                }
+                if (primaryKeyNames.contains(sequenceColumn)) {
+                    throw new InvalidConfigException(
+                            String.format(
+                                    "The sequence column '%s' must not be a primary key column.",
+                                    sequenceColumn));
+                }
+                if (protectedColumnNames.contains(sequenceColumn)) {
+                    throw new InvalidConfigException(
+                            String.format(
+                                    "The sequence column '%s' orders a sequence group, "
+                                            + "so it must not be put into another one.",
+                                    sequenceColumn));
+                }
+                DataType columnType = rowType.getTypeAt(columnIndex);
+                if (!supportedTypes.contains(columnType.getTypeRoot())) {
+                    throw new InvalidConfigException(
+                            String.format(
+                                    "The sequence column '%s' must be one type of "
+                                            + "[INT, BIGINT, TIMESTAMP, TIMESTAMP_LTZ], but got %s.",
+                                    sequenceColumn, columnType));
+                }
             }
         }
     }

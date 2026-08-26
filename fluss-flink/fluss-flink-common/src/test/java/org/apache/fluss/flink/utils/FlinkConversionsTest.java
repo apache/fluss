@@ -359,6 +359,96 @@ public class FlinkConversionsTest {
         assertThat(flussTable.getCustomProperties()).containsExactlyEntriesOf(customProperties);
     }
 
+    /**
+     * Converts a primary key table declaring the given options, whose columns are {@code k}, {@code
+     * a}, {@code b}, {@code g1} and {@code g2}.
+     */
+    private static org.apache.fluss.metadata.Schema convertWithOptions(
+            Map<String, String> options) {
+        ResolvedSchema resolvedSchema =
+                new ResolvedSchema(
+                        Arrays.asList(
+                                Column.physical(
+                                        "k",
+                                        org.apache.flink.table.api.DataTypes.BIGINT().notNull()),
+                                Column.physical("a", org.apache.flink.table.api.DataTypes.STRING()),
+                                Column.physical("b", org.apache.flink.table.api.DataTypes.STRING()),
+                                Column.physical(
+                                        "g1", org.apache.flink.table.api.DataTypes.BIGINT()),
+                                Column.physical(
+                                        "g2", org.apache.flink.table.api.DataTypes.BIGINT())),
+                        Collections.emptyList(),
+                        null);
+        CatalogTable flinkTable =
+                CatalogTable.of(
+                        Schema.newBuilder().fromResolvedSchema(resolvedSchema).build(),
+                        null,
+                        Collections.emptyList(),
+                        options);
+        return FlinkConversions.toFlussTable(new ResolvedCatalogTable(flinkTable, resolvedSchema))
+                .getSchema();
+    }
+
+    private static Map<String, String> sequenceGroup(String key, String value) {
+        Map<String, String> options = new HashMap<>();
+        options.put(key, value);
+        return options;
+    }
+
+    private static List<String> sequenceColumnsOf(
+            org.apache.fluss.metadata.Schema schema, String columnName) {
+        return schema.getColumns().stream()
+                .filter(column -> column.getName().equals(columnName))
+                .findFirst()
+                .flatMap(org.apache.fluss.metadata.Schema.Column::getSequenceColumns)
+                .orElse(null);
+    }
+
+    private static void assertSequenceGroupRejected(String key, String value, String message) {
+        assertThatThrownBy(() -> convertWithOptions(sequenceGroup(key, value)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(message);
+    }
+
+    @Test
+    void testSequenceGroupIsInvertedOntoTheProtectedColumns() {
+        org.apache.fluss.metadata.Schema schema =
+                convertWithOptions(sequenceGroup("fields.g1.sequence-group", "a, b"));
+
+        // the declaration is keyed by the sequence column, while the schema stores the relation on
+        // each protected column, and the names are trimmed on the way
+        assertThat(schema.hasSequenceGroup()).isTrue();
+        assertThat(sequenceColumnsOf(schema, "a")).containsExactly("g1");
+        assertThat(sequenceColumnsOf(schema, "b")).containsExactly("g1");
+        assertThat(sequenceColumnsOf(schema, "k")).isNull();
+        assertThat(sequenceColumnsOf(schema, "g1")).isNull();
+    }
+
+    @Test
+    void testCompositeSequenceGroupKeepsItsDeclaredOrder() {
+        // the order the sequence columns are named in is the order they are compared in
+        org.apache.fluss.metadata.Schema schema =
+                convertWithOptions(sequenceGroup("fields. g2 , g1 .sequence-group", "a"));
+
+        assertThat(sequenceColumnsOf(schema, "a")).containsExactly("g2", "g1");
+    }
+
+    @Test
+    void testColumnDeclaredByTwoSequenceGroupsIsRejected() {
+        Map<String, String> options = sequenceGroup("fields.g1.sequence-group", "a");
+        options.put("fields.g2.sequence-group", "a");
+
+        assertThatThrownBy(() -> convertWithOptions(options))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("is declared repeatedly by sequence groups");
+    }
+
+    @Test
+    void testColumnProtectedByItselfIsRejected() {
+        assertSequenceGroupRejected(
+                "fields.g1.sequence-group", "a,g1", "column 'g1' must not be protected by itself");
+    }
+
     @Test
     void testOptionConversions() {
         ConfigOption<?> flinkOption = FlinkConversions.toFlinkOption(ConfigOptions.TABLE_KV_FORMAT);

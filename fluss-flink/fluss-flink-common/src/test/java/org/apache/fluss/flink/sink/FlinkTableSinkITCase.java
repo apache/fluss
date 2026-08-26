@@ -2002,4 +2002,78 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
      * version. The Flink 2.3-specific subclass overrides it to actually flip the option off.
      */
     protected void disableSinkRequireOnConflict() {}
+
+    @Test
+    void testSequenceGroupArbitratesEachGroupOnItsOwn() throws Exception {
+        // the groups are declared on the table, so they have to survive being persisted to and read
+        // back from the server before any of this can arbitrate a write
+        tEnv.executeSql(
+                "create table seq_group ("
+                        + " k int not null primary key not enforced,"
+                        + " pay_status string, pay_time bigint,"
+                        + " ship_status string, ship_time bigint"
+                        + ") with ('fields.pay_time.sequence-group' = 'pay_status',"
+                        + "'fields.ship_time.sequence-group' = 'ship_status')");
+
+        tEnv.executeSql("insert into seq_group values (1, 'paid', 100, 'shipped', 100)").await();
+
+        CloseableIterator<Row> rowIter = tEnv.executeSql("select * from seq_group").collect();
+        assertResultsIgnoreOrder(
+                rowIter, Collections.singletonList("+I[1, paid, 100, shipped, 100]"), false);
+
+        // the pay group moves forward while the ship group falls behind, so only the pay columns
+        // take the incoming values
+        tEnv.executeSql("insert into seq_group values (1, 'refunded', 200, 'lost', 99)").await();
+        assertResultsIgnoreOrder(
+                rowIter,
+                Arrays.asList(
+                        "-U[1, paid, 100, shipped, 100]", "+U[1, refunded, 200, shipped, 100]"),
+                false);
+
+        // the ship group catches up on its own, leaving the pay columns untouched
+        tEnv.executeSql("insert into seq_group values (1, 'stale', 2, 'delivered', 300)").await();
+        assertResultsIgnoreOrder(
+                rowIter,
+                Arrays.asList(
+                        "-U[1, refunded, 200, shipped, 100]",
+                        "+U[1, refunded, 200, delivered, 300]"),
+                true);
+    }
+
+    @Test
+    void testSequenceGroupSurvivesAddColumn() throws Exception {
+        tEnv.executeSql(
+                "create table seq_group_evolving ("
+                        + " k int not null primary key not enforced, v string, ts bigint"
+                        + ") with ('fields.ts.sequence-group' = 'v')");
+
+        tEnv.executeSql("insert into seq_group_evolving values (1, 'first', 100)").await();
+        tEnv.executeSql("alter table seq_group_evolving add (extra string)");
+
+        CloseableIterator<Row> rowIter =
+                tEnv.executeSql("select * from seq_group_evolving").collect();
+        assertResultsIgnoreOrder(
+                rowIter, Collections.singletonList("+I[1, first, 100, null]"), false);
+
+        // the group keeps arbitrating across the schema change, and the row stored under the older
+        // schema is read back with the added column as null
+        tEnv.executeSql("insert into seq_group_evolving values (1, 'newer', 101, 'x')").await();
+        assertResultsIgnoreOrder(
+                rowIter, Arrays.asList("-U[1, first, 100, null]", "+U[1, newer, 101, x]"), true);
+    }
+
+    @Test
+    void testUnsupportedSequenceGroupIsRejectedByTheServer() {
+        // the client parses the declaration while only the server can judge it, so the rejection
+        // has to travel back across that boundary
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                        "create table seq_group_bad_type ("
+                                                + " k int not null primary key not enforced,"
+                                                + " v string, ts string)"
+                                                + " with ('fields.ts.sequence-group' = 'v')"))
+                .rootCause()
+                .hasMessageContaining("The sequence column 'ts' must be one type of");
+    }
 }

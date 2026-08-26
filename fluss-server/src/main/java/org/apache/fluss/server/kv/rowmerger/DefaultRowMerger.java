@@ -21,9 +21,12 @@ import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.record.BinaryValue;
+import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.encode.RowEncoder;
 import org.apache.fluss.server.kv.TargetColumns;
 import org.apache.fluss.server.kv.partialupdate.PartialUpdater;
 import org.apache.fluss.server.kv.partialupdate.PartialUpdaterCache;
+import org.apache.fluss.types.DataType;
 
 import javax.annotation.Nullable;
 
@@ -40,13 +43,39 @@ public class DefaultRowMerger implements RowMerger {
     private final PartialUpdaterCache partialUpdaterCache;
     private final KvFormat kvFormat;
     private final DeleteBehavior deleteBehavior;
+    private final boolean arbitrateSequenceGroups;
+
+    // the full-row merger of the schema resolved last, kept so that a sequence group table doesn't
+    // rebuild its encoder on every batch. sequence groups only change along with the schema.
+    private short resolvedSchemaId = -1;
+    private @Nullable RowMerger sequenceGroupRowMerger;
 
     public DefaultRowMerger(KvFormat kvFormat, @Nullable DeleteBehavior deleteBehavior) {
+        this(kvFormat, deleteBehavior, true);
+    }
+
+    private DefaultRowMerger(
+            KvFormat kvFormat,
+            @Nullable DeleteBehavior deleteBehavior,
+            boolean arbitrateSequenceGroups) {
         this.kvFormat = kvFormat;
+        this.arbitrateSequenceGroups = arbitrateSequenceGroups;
         // for compatibility, default to ALLOW if not specified
         this.deleteBehavior = deleteBehavior != null ? deleteBehavior : DeleteBehavior.ALLOW;
         // TODO: share cache in server level when PartialUpdater is thread-safe
         this.partialUpdaterCache = new PartialUpdaterCache();
+    }
+
+    /**
+     * Creates a merger that replaces values blindly, bypassing the sequence groups declared on the
+     * schema.
+     *
+     * <p>Used to recover by overwriting an already decided value, where the stored row must be
+     * replaced no matter what its sequence columns say. Since such a write restores an earlier
+     * state, arbitrating it would reject it as stale and leave the row inconsistent.
+     */
+    public static DefaultRowMerger forBlindOverwrite(KvFormat kvFormat) {
+        return new DefaultRowMerger(kvFormat, DeleteBehavior.ALLOW, false);
     }
 
     @Nullable
@@ -73,14 +102,42 @@ public class DefaultRowMerger implements RowMerger {
             @Nullable int[] targetColumns, short latestShemaId, Schema latestSchema) {
         if (targetColumns == null
                 || TargetColumns.specifiesAllSchemaFieldIndexes(latestSchema, targetColumns)) {
-            return this;
+            return fullRowMerger(latestShemaId, latestSchema);
         } else {
             // this also sanity checks the validity of the partial update
             PartialUpdater partialUpdater =
-                    partialUpdaterCache.getOrCreatePartialUpdater(
-                            kvFormat, latestShemaId, latestSchema, targetColumns);
+                    arbitrateSequenceGroups
+                            ? partialUpdaterCache.getOrCreatePartialUpdater(
+                                    kvFormat, latestShemaId, latestSchema, targetColumns)
+                            : new PartialUpdater(
+                                    kvFormat, latestShemaId, latestSchema, targetColumns, null);
             return new PartialUpdateRowMerger(partialUpdater, deleteBehavior);
         }
+    }
+
+    /**
+     * Returns the merger handling a full-row write. Without sequence groups the new row always
+     * wins, so this merger is used as it is; with sequence groups the stored row has to be
+     * consulted to arbitrate every group, which needs a merger of its own.
+     */
+    private RowMerger fullRowMerger(short latestSchemaId, Schema latestSchema) {
+        if (!arbitrateSequenceGroups) {
+            return this;
+        }
+        if (latestSchemaId != resolvedSchemaId) {
+            SequenceGroups sequenceGroups = SequenceGroups.create(latestSchema);
+            sequenceGroupRowMerger =
+                    sequenceGroups == null
+                            ? null
+                            : new SequenceGroupRowMerger(
+                                    kvFormat,
+                                    latestSchemaId,
+                                    latestSchema,
+                                    sequenceGroups,
+                                    deleteBehavior);
+            resolvedSchemaId = latestSchemaId;
+        }
+        return sequenceGroupRowMerger == null ? this : sequenceGroupRowMerger;
     }
 
     /** A merger that partially updates specified columns with the new row. */
@@ -117,6 +174,99 @@ public class DefaultRowMerger implements RowMerger {
         @Override
         public DeleteBehavior deleteBehavior() {
             return deleteBehavior;
+        }
+    }
+
+    /**
+     * A merger that arbitrates a full-row write with sequence groups: a column only takes the
+     * incoming value if the group protecting it advances, otherwise the stored value survives.
+     * Since this engine has no aggregate functions, a group that doesn't advance simply drops the
+     * incoming values, so the outcome depends only on the largest sequence seen per group rather
+     * than on the order the records arrive in.
+     *
+     * <p>Sequence groups arbitrate writes only: a delete carries no sequence values to compare
+     * against the stored row, so it keeps removing the whole row as it did before sequence groups
+     * existed.
+     */
+    private static class SequenceGroupRowMerger implements RowMerger {
+
+        private final SequenceGroups sequenceGroups;
+        private final InternalRow.FieldGetter[] fieldGetters;
+        private final RowEncoder rowEncoder;
+        private final short targetSchemaId;
+        private final DeleteBehavior deleteBehavior;
+
+        SequenceGroupRowMerger(
+                KvFormat kvFormat,
+                short targetSchemaId,
+                Schema schema,
+                SequenceGroups sequenceGroups,
+                DeleteBehavior deleteBehavior) {
+            this.sequenceGroups = sequenceGroups;
+            this.targetSchemaId = targetSchemaId;
+            this.deleteBehavior = deleteBehavior;
+            DataType[] fieldDataTypes = schema.getRowType().getChildren().toArray(new DataType[0]);
+            this.fieldGetters = new InternalRow.FieldGetter[fieldDataTypes.length];
+            for (int i = 0; i < fieldDataTypes.length; i++) {
+                fieldGetters[i] = InternalRow.createFieldGetter(fieldDataTypes[i], i);
+            }
+            this.rowEncoder = RowEncoder.create(kvFormat, fieldDataTypes);
+        }
+
+        @Nullable
+        @Override
+        public BinaryValue merge(@Nullable BinaryValue oldValue, BinaryValue newValue) {
+            if (oldValue == null) {
+                return newValue;
+            }
+
+            boolean[] acceptance = sequenceGroups.resolveAcceptance(oldValue.row, newValue.row);
+            if (acceptsEveryField(acceptance)) {
+                // Every group advances, so the whole incoming row wins
+                return newValue;
+            }
+
+            rowEncoder.startNewRow();
+            for (int i = 0; i < fieldGetters.length; i++) {
+                InternalRow source = acceptance[i] ? newValue.row : oldValue.row;
+                // the stored row may follow an older schema with fewer fields, in which case the
+                // missing fields are null
+                if (source.getFieldCount() < i + 1) {
+                    rowEncoder.encodeField(i, null);
+                } else {
+                    rowEncoder.encodeField(i, fieldGetters[i].getFieldOrNull(source));
+                }
+            }
+            return new BinaryValue(targetSchemaId, rowEncoder.finishRow());
+        }
+
+        private static boolean acceptsEveryField(boolean[] acceptance) {
+            for (boolean accepted : acceptance) {
+                if (!accepted) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        @Nullable
+        @Override
+        public BinaryValue delete(BinaryValue oldRow) {
+            // TODO: arbitrate the delete with the sequence groups when a delete record carries the
+            //  sequence columns, so that a stale delete no longer drops a newer row
+            return null;
+        }
+
+        @Override
+        public DeleteBehavior deleteBehavior() {
+            return deleteBehavior;
+        }
+
+        @Override
+        public RowMerger configureTargetColumns(
+                @Nullable int[] targetColumns, short schemaId, Schema schema) {
+            throw new IllegalStateException(
+                    "SequenceGroupRowMerger does not support reconfigure target merge columns.");
         }
     }
 }

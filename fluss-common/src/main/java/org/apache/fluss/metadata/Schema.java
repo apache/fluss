@@ -142,6 +142,11 @@ public final class Schema implements Serializable {
                 .flatMap(Column::getAggFunction);
     }
 
+    /** Returns true if at least one column of this schema is protected by a sequence group. */
+    public boolean hasSequenceGroup() {
+        return columns.stream().anyMatch(col -> col.getSequenceColumns().isPresent());
+    }
+
     /** Returns the primary key indexes, if any, otherwise returns an empty array. */
     public int[] getPrimaryKeyIndexes() {
         final List<String> columns = getColumnNames();
@@ -365,7 +370,8 @@ public final class Schema implements Serializable {
                                     column.dataType,
                                     column.comment,
                                     newColumnId,
-                                    column.aggFunction));
+                                    column.aggFunction,
+                                    column.sequenceColumns));
                 }
             }
 
@@ -489,6 +495,30 @@ public final class Schema implements Serializable {
         }
 
         /**
+         * Apply the sequence columns ordering the previous column, i.e. put the previous column
+         * into the sequence group ordered by the given columns.
+         *
+         * <p>Passing more than one column declares a composite sequence key, where the columns are
+         * compared in the given order and the first unequal one decides.
+         *
+         * @param sequenceColumns the columns ordering the previous column
+         */
+        public Builder withSequenceColumns(String... sequenceColumns) {
+            checkNotNull(sequenceColumns, "Sequence columns must not be null.");
+            checkArgument(sequenceColumns.length > 0, "Sequence columns must not be empty.");
+            if (columns.isEmpty()) {
+                throw new IllegalArgumentException(
+                        "Method 'withSequenceColumns(...)' must be called after a column definition, "
+                                + "but there is no preceding column defined.");
+            }
+            columns.set(
+                    columns.size() - 1,
+                    columns.get(columns.size() - 1)
+                            .withSequenceColumns(Arrays.asList(sequenceColumns)));
+            return this;
+        }
+
+        /**
          * Declares a primary key constraint for a set of given columns. Primary key uniquely
          * identify a row in a table. Neither of columns in a primary can be nullable. Adding a
          * primary key will force the column(s) to be marked {@code NOT NULL}. A table can have at
@@ -589,6 +619,7 @@ public final class Schema implements Serializable {
         private final DataType dataType;
         private final @Nullable String comment;
         private final @Nullable AggFunction aggFunction;
+        private final @Nullable List<String> sequenceColumns;
 
         public Column(String columnName, DataType dataType) {
             this(columnName, dataType, null, UNKNOWN_COLUMN_ID, null);
@@ -609,11 +640,25 @@ public final class Schema implements Serializable {
                 @Nullable String comment,
                 int columnId,
                 @Nullable AggFunction aggFunction) {
+            this(columnName, dataType, comment, columnId, aggFunction, null);
+        }
+
+        public Column(
+                String columnName,
+                DataType dataType,
+                @Nullable String comment,
+                int columnId,
+                @Nullable AggFunction aggFunction,
+                @Nullable List<String> sequenceColumns) {
             this.columnName = columnName;
             this.dataType = dataType;
             this.comment = comment;
             this.columnId = columnId;
             this.aggFunction = aggFunction;
+            this.sequenceColumns =
+                    sequenceColumns == null
+                            ? null
+                            : Collections.unmodifiableList(new ArrayList<>(sequenceColumns));
         }
 
         public String getName() {
@@ -641,12 +686,33 @@ public final class Schema implements Serializable {
             return Optional.ofNullable(aggFunction);
         }
 
+        /**
+         * Gets the sequence columns ordering this column, i.e. the sequence group protecting it.
+         * The column only takes an incoming value when those sequence columns are not older than
+         * the stored ones.
+         *
+         * <p>More than one column means a composite sequence key, where the listed columns are
+         * compared in order and the first unequal one decides.
+         *
+         * @return the sequence columns, or empty if the column is merged without order arbitration
+         */
+        public Optional<List<String>> getSequenceColumns() {
+            return Optional.ofNullable(sequenceColumns);
+        }
+
         public Column withComment(String comment) {
-            return new Column(columnName, dataType, comment, columnId, aggFunction);
+            return new Column(
+                    columnName, dataType, comment, columnId, aggFunction, sequenceColumns);
         }
 
         public Column withAggFunction(@Nullable AggFunction aggFunction) {
-            return new Column(columnName, dataType, comment, columnId, aggFunction);
+            return new Column(
+                    columnName, dataType, comment, columnId, aggFunction, sequenceColumns);
+        }
+
+        public Column withSequenceColumns(@Nullable List<String> sequenceColumns) {
+            return new Column(
+                    columnName, dataType, comment, columnId, aggFunction, sequenceColumns);
         }
 
         @Override
@@ -676,12 +742,14 @@ public final class Schema implements Serializable {
                     && Objects.equals(dataType, that.dataType)
                     && Objects.equals(comment, that.comment)
                     && Objects.equals(columnId, that.columnId)
-                    && Objects.equals(aggFunction, that.aggFunction);
+                    && Objects.equals(aggFunction, that.aggFunction)
+                    && Objects.equals(sequenceColumns, that.sequenceColumns);
         }
 
         @Override
         public int hashCode() {
-            return Objects.hash(columnName, dataType, comment, columnId, aggFunction);
+            return Objects.hash(
+                    columnName, dataType, comment, columnId, aggFunction, sequenceColumns);
         }
     }
 
@@ -820,7 +888,8 @@ public final class Schema implements Serializable {
                                 column.getDataType().copy(false),
                                 column.getComment().isPresent() ? column.getComment().get() : null,
                                 column.getColumnId(),
-                                column.getAggFunction().orElse(null)));
+                                column.getAggFunction().orElse(null),
+                                column.sequenceColumns));
             } else {
                 newColumns.add(column);
             }
