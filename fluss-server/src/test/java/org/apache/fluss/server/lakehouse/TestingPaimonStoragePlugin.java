@@ -28,6 +28,8 @@ import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
 import org.apache.fluss.lake.lakestorage.LakeStorage;
 import org.apache.fluss.lake.lakestorage.LakeStoragePlugin;
+import org.apache.fluss.lake.lakestorage.LakeTableLookupRuntime;
+import org.apache.fluss.lake.lakestorage.LakeTableLookuper;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
@@ -85,6 +87,24 @@ public class TestingPaimonStoragePlugin implements LakeStoragePlugin {
         @Override
         public LakeSource<?> createLakeSource(TablePath tablePath) {
             throw new UnsupportedOperationException("Not implemented");
+        }
+
+        @Override
+        public LakeTableLookupRuntime createLakeTableLookupRuntime(
+                String ioTmpDir, long lookupCacheMaxDiskBytes) {
+            return new LakeTableLookupRuntime() {
+                @Override
+                public LakeTableLookuper createLakeTableLookuper(
+                        TablePath tablePath, Context context) {
+                    throw new UnsupportedOperationException("Not implemented");
+                }
+
+                @Override
+                public void updateLookupCacheMaxDiskBytes(long lookupCacheMaxDiskBytes) {}
+
+                @Override
+                public void close() {}
+            };
         }
     }
 

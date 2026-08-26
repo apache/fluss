@@ -81,7 +81,6 @@ class HistoricalLakeLookupManagerTest {
         assertThat(staleLookupFile).doesNotExist();
         assertThat(serverLookupDir).isDirectory();
         lookup(manager, PARTITION_TABLE_INFO);
-        assertThat(manager.createdIoTmpDirs.get(0)).startsWith(serverLookupDir.getAbsolutePath());
 
         File liveLookupFile = new File(serverLookupDir, "live-lookup-file");
         assertThat(liveLookupFile.createNewFile()).isTrue();
@@ -292,9 +291,35 @@ class HistoricalLakeLookupManagerTest {
 
         assertThat(manager.createdLookupers).hasSize(11);
         assertThat(manager.createdLookupers).filteredOn(lookuper -> lookuper.closed).hasSize(1);
-        assertThat(manager.createdCacheSizes).containsOnly(2L);
+        assertThat(manager.createdCacheNamespaces).doesNotHaveDuplicates();
+        assertThat(manager.lookupCacheMaxDiskBytes()).isEqualTo(20L);
         assertThat(manager.cachedTableCount()).isEqualTo(10);
         assertThat(manager.capacityEvictions().getCount()).isEqualTo(1);
+    }
+
+    @Test
+    void testUpdatesSharedCacheLimitWithoutReplacingLookuper() throws Exception {
+        Configuration initialConf = conf();
+        initialConf.set(
+                ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO, 0.10);
+        TestingHistoricalLakeLookupManager manager =
+                new TestingHistoricalLakeLookupManager(
+                        initialConf,
+                        Ticker.systemTicker(),
+                        Scheduler.disabledScheduler(),
+                        100L,
+                        0L);
+        manager.startup(NO_OP_SCHEDULER);
+        lookup(manager, PARTITION_TABLE_INFO);
+        TestingLakeTableLookuper lookuper = manager.createdLookupers.get(0);
+
+        Configuration newConf = new Configuration(initialConf);
+        newConf.set(ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO, 0.20);
+        manager.reconfigure(newConf);
+
+        assertThat(manager.lookupCacheMaxDiskBytes()).isEqualTo(20L);
+        assertThat(lookuper.closed).isFalse();
+        assertThat(manager.cachedTableCount()).isOne();
     }
 
     @Test
@@ -304,6 +329,7 @@ class HistoricalLakeLookupManagerTest {
         initialConf.setString("datalake.paimon.warehouse", "old-warehouse");
         TestingHistoricalLakeLookupManager manager =
                 new TestingHistoricalLakeLookupManager(initialConf);
+        assertThat(manager.hasLookupRuntime()).isTrue();
         manager.startup(NO_OP_SCHEDULER);
 
         lookup(manager, PARTITION_TABLE_INFO);
@@ -380,9 +406,8 @@ class HistoricalLakeLookupManagerTest {
             extends HistoricalLakeLookupManager {
         private final List<TestingLakeTableLookuper> createdLookupers = new ArrayList<>();
         private final List<TablePath> createdTablePaths = new ArrayList<>();
-        private final List<String> createdIoTmpDirs = new ArrayList<>();
         private final List<TableConfig> createdTableConfigs = new ArrayList<>();
-        private final List<Long> createdCacheSizes = new ArrayList<>();
+        private final List<String> createdCacheNamespaces = new ArrayList<>();
         private final List<Configuration> createdClusterConfigs = new ArrayList<>();
         private final long lookupCacheFileBytes;
 
@@ -431,17 +456,18 @@ class HistoricalLakeLookupManagerTest {
         @Override
         LakeTableLookuper createLakeTableLookuper(
                 TablePath tablePath,
-                String ioTmpDir,
                 TableConfig tableConfig,
-                long cacheSizeBytes,
+                String cacheNamespace,
                 Configuration clusterConf) {
             TestingLakeTableLookuper lookuper =
-                    new TestingLakeTableLookuper(new File(ioTmpDir), lookupCacheFileBytes);
+                    new TestingLakeTableLookuper(
+                            FlussPaths.historicalLookupRootDir(
+                                    new File(clusterConf.get(ConfigOptions.DATA_DIR))),
+                            lookupCacheFileBytes);
             createdLookupers.add(lookuper);
             createdTablePaths.add(tablePath);
-            createdIoTmpDirs.add(ioTmpDir);
             createdTableConfigs.add(tableConfig);
-            createdCacheSizes.add(cacheSizeBytes);
+            createdCacheNamespaces.add(cacheNamespace);
             createdClusterConfigs.add(clusterConf);
             return lookuper;
         }

@@ -96,6 +96,19 @@ class LakeStorageTest {
                         ((PluginLakeStorageWrapper.ClassLoaderFixingLakeCatalog) lakeCatalog)
                                 .getWrappedDelegate())
                 .isInstanceOf(TestPaimonLakeCatalog.class);
+
+        LakeTableLookupRuntime lookupRuntime =
+                lakeStorage.createLakeTableLookupRuntime("lookup-dir", 1024L);
+        assertThat(lookupRuntime)
+                .isInstanceOf(
+                        PluginLakeStorageWrapper.ClassLoaderFixingLakeTableLookupRuntime.class);
+        TestLakeTableLookupRuntime innerLookupRuntime =
+                (TestLakeTableLookupRuntime)
+                        ((PluginLakeStorageWrapper.ClassLoaderFixingLakeTableLookupRuntime)
+                                        lookupRuntime)
+                                .getWrappedDelegate();
+        lookupRuntime.close();
+        assertThat(innerLookupRuntime.closed).isTrue();
     }
 
     private static class TestingPluginManager implements PluginManager {
@@ -129,7 +142,6 @@ class LakeStorageTest {
     }
 
     private static class TestPaimonLakeStorage implements LakeStorage {
-
         public TestPaimonLakeStorage() {}
 
         @Override
@@ -145,6 +157,30 @@ class LakeStorageTest {
         @Override
         public LakeSource<?> createLakeSource(TablePath tablePath) {
             throw new UnsupportedOperationException("Not implemented");
+        }
+
+        @Override
+        public LakeTableLookupRuntime createLakeTableLookupRuntime(
+                String ioTmpDir, long lookupCacheMaxDiskBytes) {
+            return new TestLakeTableLookupRuntime();
+        }
+    }
+
+    private static class TestLakeTableLookupRuntime implements LakeTableLookupRuntime {
+
+        private boolean closed;
+
+        @Override
+        public LakeTableLookuper createLakeTableLookuper(TablePath tablePath, Context context) {
+            throw new UnsupportedOperationException("Not implemented");
+        }
+
+        @Override
+        public void updateLookupCacheMaxDiskBytes(long lookupCacheMaxDiskBytes) {}
+
+        @Override
+        public void close() {
+            closed = true;
         }
     }
 
