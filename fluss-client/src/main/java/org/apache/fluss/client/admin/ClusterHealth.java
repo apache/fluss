@@ -24,6 +24,11 @@ import java.util.Objects;
 /**
  * Cluster health information returned by {@link Admin#getClusterHealth()}.
  *
+ * <p>A standby coordinator answers this request instead of rejecting it (so Kubernetes readiness
+ * probes can gate on it). A response served by a standby carries {@link #isServedByLeader()} {@code
+ * false}, status {@link ClusterHealthStatus#UNKNOWN}, and zeroed replica counts — callers that
+ * monitor cluster health should check {@link #isServedByLeader()} before interpreting the counts.
+ *
  * @since 1.0
  */
 @PublicEvolving
@@ -34,18 +39,24 @@ public final class ClusterHealth {
     private final int numLeaderReplicas;
     private final int activeLeaderReplicas;
     private final ClusterHealthStatus status;
+    private final boolean servedByLeader;
+    private final boolean leaderElected;
 
     public ClusterHealth(
             int numReplicas,
             int inSyncReplicas,
             int numLeaderReplicas,
             int activeLeaderReplicas,
-            ClusterHealthStatus status) {
+            ClusterHealthStatus status,
+            boolean servedByLeader,
+            boolean leaderElected) {
         this.numReplicas = numReplicas;
         this.inSyncReplicas = inSyncReplicas;
         this.numLeaderReplicas = numLeaderReplicas;
         this.activeLeaderReplicas = activeLeaderReplicas;
         this.status = Objects.requireNonNull(status, "status");
+        this.servedByLeader = servedByLeader;
+        this.leaderElected = leaderElected;
     }
 
     public int getNumReplicas() {
@@ -68,6 +79,26 @@ public final class ClusterHealth {
         return status;
     }
 
+    /**
+     * Whether the coordinator that answered is the current leader. {@code false} means a standby
+     * answered (e.g. the client's coordinator address was stale during a failover): the status is
+     * {@link ClusterHealthStatus#UNKNOWN} and the replica counts are zero, not cluster facts.
+     * Responses from servers that predate this field report {@code true} — a standby of those
+     * versions rejects the request instead of answering.
+     */
+    public boolean isServedByLeader() {
+        return servedByLeader;
+    }
+
+    /**
+     * Whether the coordinator group currently has an elected leader — the answering server or any
+     * other participant. Only meaningful when {@link #isServedByLeader()} is {@code false}; a
+     * leader-served response always reports {@code true}.
+     */
+    public boolean isLeaderElected() {
+        return leaderElected;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) {
@@ -81,13 +112,21 @@ public final class ClusterHealth {
                 && inSyncReplicas == that.inSyncReplicas
                 && numLeaderReplicas == that.numLeaderReplicas
                 && activeLeaderReplicas == that.activeLeaderReplicas
-                && status == that.status;
+                && status == that.status
+                && servedByLeader == that.servedByLeader
+                && leaderElected == that.leaderElected;
     }
 
     @Override
     public int hashCode() {
         return Objects.hash(
-                numReplicas, inSyncReplicas, numLeaderReplicas, activeLeaderReplicas, status);
+                numReplicas,
+                inSyncReplicas,
+                numLeaderReplicas,
+                activeLeaderReplicas,
+                status,
+                servedByLeader,
+                leaderElected);
     }
 
     @Override
@@ -103,6 +142,10 @@ public final class ClusterHealth {
                 + activeLeaderReplicas
                 + ", status="
                 + status
+                + ", servedByLeader="
+                + servedByLeader
+                + ", leaderElected="
+                + leaderElected
                 + '}';
     }
 }
