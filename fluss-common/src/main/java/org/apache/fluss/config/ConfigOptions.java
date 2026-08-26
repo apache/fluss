@@ -428,7 +428,7 @@ public class ConfigOptions {
                             .defaultValue(0.10)
                             .withDescription(
                                     "The maximum fraction of the total capacity of the volume containing the first available data directory allocated to historical partition lookup caches on a TabletServer. "
-                                            + "Up to ten table lookupers are cached, and each receives one tenth of this capacity. Historical lookup cache files are stored under that data directory; additional data volumes are not used. "
+                                            + "Up to ten table lookupers share this capacity. Historical lookup cache files are stored under that data directory; additional data volumes are not used. "
                                             + "The valid range is (0.0, 1.0].");
 
     public static final ConfigOption<Duration>

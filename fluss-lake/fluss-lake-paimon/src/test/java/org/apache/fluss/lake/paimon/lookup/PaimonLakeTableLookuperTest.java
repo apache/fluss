@@ -22,9 +22,11 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.DiskWriteLockedException;
+import org.apache.fluss.lake.lakestorage.LakeTableLookupRuntime;
 import org.apache.fluss.lake.lakestorage.LakeTableLookuper;
 import org.apache.fluss.lake.lakestorage.TestingLakeCatalogContext;
 import org.apache.fluss.lake.paimon.PaimonLakeCatalog;
+import org.apache.fluss.lake.paimon.PaimonLakeStorage;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.Schema;
@@ -61,16 +63,22 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_2;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
@@ -96,6 +104,7 @@ class PaimonLakeTableLookuperTest {
     private Configuration paimonConfig;
     private PaimonLakeCatalog lakeCatalog;
     private Catalog paimonCatalog;
+    private LakeTableLookupRuntime lookupRuntime;
 
     @BeforeEach
     void setUp() {
@@ -105,10 +114,17 @@ class PaimonLakeTableLookuperTest {
         paimonCatalog =
                 CatalogFactory.createCatalog(
                         CatalogContext.create(Options.fromMap(paimonConfig.toMap())));
+        lookupRuntime =
+                new PaimonLakeStorage(paimonConfig)
+                        .createLakeTableLookupRuntime(
+                                tempWarehouseDir.getAbsolutePath(), LOOKUP_CACHE_MAX_DISK_BYTES);
     }
 
     @AfterEach
     void tearDown() throws Exception {
+        if (lookupRuntime != null) {
+            lookupRuntime.close();
+        }
         if (paimonCatalog != null) {
             paimonCatalog.close();
         }
@@ -129,13 +145,8 @@ class PaimonLakeTableLookuperTest {
                         0, Collections.singletonList(paimonRow(1, "20240101", "Alice"))));
 
         try (LakeTableLookuper lookuper =
-                new PaimonLakeTableLookuper(
-                        paimonConfig,
-                        tablePath,
-                        tempWarehouseDir.getAbsolutePath(),
-                        tableConfig(KvFormat.COMPACTED),
-                        LOOKUP_CACHE_MAX_DISK_BYTES,
-                        NO_OP_DISK_WRITE_GUARD)) {
+                createLookuper(
+                        tablePath, tableConfig(KvFormat.COMPACTED), NO_OP_DISK_WRITE_GUARD)) {
             List<Boolean> lookupFileDownloads = new ArrayList<>();
             LakeTableLookuper.LookupContext context =
                     lookupContext(
@@ -185,13 +196,7 @@ class PaimonLakeTableLookuperTest {
                 };
 
         try (LakeTableLookuper lookuper =
-                new PaimonLakeTableLookuper(
-                        paimonConfig,
-                        tablePath,
-                        tempWarehouseDir.getAbsolutePath(),
-                        tableConfig(KvFormat.COMPACTED),
-                        LOOKUP_CACHE_MAX_DISK_BYTES,
-                        diskWriteGuard)) {
+                createLookuper(tablePath, tableConfig(KvFormat.COMPACTED), diskWriteGuard)) {
             LakeTableLookuper.LookupContext cachedPartition =
                     lookupContext(schema, "20240101", 0, SCHEMA_ID);
             LakeTableLookuper.LookupContext uncachedPartition =
@@ -214,6 +219,83 @@ class PaimonLakeTableLookuperTest {
             assertThat(lookuper.lookup(paimonKey(schema, 2, "20240102"), uncachedPartition))
                     .isNotNull();
         }
+    }
+
+    @Test
+    void testSharesIOManagerAndDeletesOnlyClosedLookuperFiles() throws Exception {
+        Schema schema = pkSchema();
+        TablePath firstTablePath = TablePath.of(DB, "shared_io_first");
+        TablePath secondTablePath = TablePath.of(DB, "shared_io_second");
+        FileStoreTable firstTable =
+                createPaimonTable(firstTablePath, partitionedPkDescriptor(schema));
+        FileStoreTable secondTable =
+                createPaimonTable(secondTablePath, partitionedPkDescriptor(schema));
+        writeAndCommitData(
+                firstTable,
+                Collections.singletonMap(
+                        0, Collections.singletonList(paimonRow(1, "20240101", "Alice"))));
+        writeAndCommitData(
+                secondTable,
+                Collections.singletonMap(
+                        0, Collections.singletonList(paimonRow(2, "20240101", "Bob"))));
+
+        File lookupDir = new File(tempWarehouseDir, "shared-lookup-cache");
+        LakeTableLookupRuntime.Context firstLookuperContext =
+                new LakeTableLookupRuntime.Context(
+                        paimonConfig,
+                        "first-table",
+                        tableConfig(KvFormat.COMPACTED),
+                        NO_OP_DISK_WRITE_GUARD);
+        LakeTableLookupRuntime.Context secondLookuperContext =
+                new LakeTableLookupRuntime.Context(
+                        paimonConfig,
+                        "second-table",
+                        tableConfig(KvFormat.COMPACTED),
+                        NO_OP_DISK_WRITE_GUARD);
+        LakeTableLookupRuntime sharedLookupRuntime =
+                new PaimonLakeStorage(paimonConfig)
+                        .createLakeTableLookupRuntime(
+                                lookupDir.getAbsolutePath(), LOOKUP_CACHE_MAX_DISK_BYTES);
+        try {
+            try (LakeTableLookuper firstLookuper =
+                            sharedLookupRuntime.createLakeTableLookuper(
+                                    firstTablePath, firstLookuperContext);
+                    LakeTableLookuper secondLookuper =
+                            sharedLookupRuntime.createLakeTableLookuper(
+                                    secondTablePath, secondLookuperContext)) {
+                assertThat(
+                                firstLookuper.lookup(
+                                        paimonKey(schema, 1, "20240101"),
+                                        lookupContext(schema, "20240101", 0, SCHEMA_ID)))
+                        .isNotNull();
+                Set<java.nio.file.Path> firstLookupFiles = regularFiles(lookupDir);
+                assertThat(firstLookupFiles).isNotEmpty();
+
+                assertThat(
+                                secondLookuper.lookup(
+                                        paimonKey(schema, 2, "20240101"),
+                                        lookupContext(schema, "20240101", 0, SCHEMA_ID)))
+                        .isNotNull();
+                Set<java.nio.file.Path> secondLookupFiles = regularFiles(lookupDir);
+                secondLookupFiles.removeAll(firstLookupFiles);
+                assertThat(secondLookupFiles).isNotEmpty();
+                assertThat(lookupDir.listFiles(File::isDirectory)).hasSize(1);
+
+                firstLookuper.close();
+                assertThat(firstLookupFiles).allMatch(path -> !Files.exists(path));
+                assertThat(secondLookupFiles).allMatch(Files::exists);
+                assertThat(
+                                secondLookuper.lookup(
+                                        paimonKey(schema, 2, "20240101"),
+                                        lookupContext(schema, "20240101", 0, SCHEMA_ID)))
+                        .isNotNull();
+            }
+            assertThat(regularFiles(lookupDir)).isEmpty();
+            assertThat(lookupDir.listFiles(File::isDirectory)).hasSize(1);
+        } finally {
+            sharedLookupRuntime.close();
+        }
+        assertThat(lookupDir.listFiles(File::isDirectory)).isEmpty();
     }
 
     @Test
@@ -242,13 +324,8 @@ class PaimonLakeTableLookuperTest {
                         0, Collections.singletonList(paimonRow(2, secondPartition, "Bob"))));
 
         try (LakeTableLookuper lookuper =
-                new PaimonLakeTableLookuper(
-                        paimonConfig,
-                        tablePath,
-                        tempWarehouseDir.getAbsolutePath(),
-                        tableConfig(KvFormat.COMPACTED),
-                        LOOKUP_CACHE_MAX_DISK_BYTES,
-                        NO_OP_DISK_WRITE_GUARD)) {
+                createLookuper(
+                        tablePath, tableConfig(KvFormat.COMPACTED), NO_OP_DISK_WRITE_GUARD)) {
             BinaryValue firstValue =
                     decodeValue(
                             lookuper.lookup(
@@ -284,13 +361,7 @@ class PaimonLakeTableLookuperTest {
                         0, Collections.singletonList(paimonRow(1, "20240101", "Alice"))));
 
         try (LakeTableLookuper lookuper =
-                new PaimonLakeTableLookuper(
-                        paimonConfig,
-                        tablePath,
-                        tempWarehouseDir.getAbsolutePath(),
-                        tableConfig(KvFormat.INDEXED),
-                        LOOKUP_CACHE_MAX_DISK_BYTES,
-                        NO_OP_DISK_WRITE_GUARD)) {
+                createLookuper(tablePath, tableConfig(KvFormat.INDEXED), NO_OP_DISK_WRITE_GUARD)) {
             LakeTableLookuper.LookupContext context =
                     lookupContext(schema, "20240101", 0, SCHEMA_ID);
 
@@ -330,12 +401,9 @@ class PaimonLakeTableLookuperTest {
                         0, Collections.singletonList(paimonRow(1, "sub-1", "20240101", "Alice"))));
 
         try (LakeTableLookuper lookuper =
-                new PaimonLakeTableLookuper(
-                        paimonConfig,
+                createLookuper(
                         tablePath,
-                        tempWarehouseDir.getAbsolutePath(),
                         tableConfig(KvFormat.COMPACTED, KV_FORMAT_VERSION_2),
-                        LOOKUP_CACHE_MAX_DISK_BYTES,
                         NO_OP_DISK_WRITE_GUARD)) {
             LakeTableLookuper.LookupContext context =
                     lookupContext(schema, "20240101", 0, SCHEMA_ID);
@@ -387,12 +455,9 @@ class PaimonLakeTableLookuperTest {
                         .build();
 
         try (LakeTableLookuper lookuper =
-                new PaimonLakeTableLookuper(
-                        paimonConfig,
+                createLookuper(
                         tablePath,
-                        tempWarehouseDir.getAbsolutePath(),
                         tableConfig(KvFormat.COMPACTED, KV_FORMAT_VERSION_2),
-                        LOOKUP_CACHE_MAX_DISK_BYTES,
                         NO_OP_DISK_WRITE_GUARD)) {
             // Inject a late initialization failure: the Paimon table requires sub_id in its
             // lookup key, but the first lookup's value row type deliberately omits that field.
@@ -451,13 +516,7 @@ class PaimonLakeTableLookuperTest {
                 };
 
         try (LakeTableLookuper lookuper =
-                new PaimonLakeTableLookuper(
-                        paimonConfig,
-                        tablePath,
-                        tempWarehouseDir.getAbsolutePath(),
-                        tableConfig(KvFormat.COMPACTED),
-                        LOOKUP_CACHE_MAX_DISK_BYTES,
-                        diskWriteGuard)) {
+                createLookuper(tablePath, tableConfig(KvFormat.COMPACTED), diskWriteGuard)) {
             assertThat(
                             lookuper.lookup(
                                     paimonKey(schema, 5, "20240101"),
@@ -569,13 +628,8 @@ class PaimonLakeTableLookuperTest {
                 Collections.singletonMap(0, Collections.singletonList(paimonRow(1, 7, "Alice"))));
 
         try (LakeTableLookuper lookuper =
-                new PaimonLakeTableLookuper(
-                        paimonConfig,
-                        tablePath,
-                        tempWarehouseDir.getAbsolutePath(),
-                        tableConfig(KvFormat.COMPACTED),
-                        LOOKUP_CACHE_MAX_DISK_BYTES,
-                        NO_OP_DISK_WRITE_GUARD)) {
+                createLookuper(
+                        tablePath, tableConfig(KvFormat.COMPACTED), NO_OP_DISK_WRITE_GUARD)) {
             LakeTableLookuper.LookupContext context =
                     new LakeTableLookuper.LookupContext(
                             ResolvedPartitionSpec.fromPartitionName(
@@ -607,13 +661,8 @@ class PaimonLakeTableLookuperTest {
         createPaimonTable(tablePath, tableDescriptor);
 
         try (LakeTableLookuper lookuper =
-                new PaimonLakeTableLookuper(
-                        paimonConfig,
-                        tablePath,
-                        tempWarehouseDir.getAbsolutePath(),
-                        tableConfig(KvFormat.COMPACTED),
-                        LOOKUP_CACHE_MAX_DISK_BYTES,
-                        NO_OP_DISK_WRITE_GUARD)) {
+                createLookuper(
+                        tablePath, tableConfig(KvFormat.COMPACTED), NO_OP_DISK_WRITE_GUARD)) {
             LakeTableLookuper.LookupContext context =
                     new LakeTableLookuper.LookupContext(
                             new ResolvedPartitionSpec(
@@ -666,13 +715,8 @@ class PaimonLakeTableLookuperTest {
                         Collections.singletonList(paimonRow(2, "20240101", "Bob", "new-value"))));
 
         try (LakeTableLookuper lookuper =
-                new PaimonLakeTableLookuper(
-                        paimonConfig,
-                        tablePath,
-                        tempWarehouseDir.getAbsolutePath(),
-                        tableConfig(KvFormat.COMPACTED),
-                        LOOKUP_CACHE_MAX_DISK_BYTES,
-                        NO_OP_DISK_WRITE_GUARD)) {
+                createLookuper(
+                        tablePath, tableConfig(KvFormat.COMPACTED), NO_OP_DISK_WRITE_GUARD)) {
             BinaryValue oldSchemaValue =
                     decodeValue(
                             lookuper.lookup(
@@ -738,6 +782,23 @@ class PaimonLakeTableLookuperTest {
         config.set(ConfigOptions.TABLE_KV_FORMAT, kvFormat);
         config.set(ConfigOptions.TABLE_KV_FORMAT_VERSION, kvFormatVersion);
         return new TableConfig(config);
+    }
+
+    private LakeTableLookuper createLookuper(
+            TablePath tablePath, TableConfig tableConfig, Runnable diskWriteGuard) {
+        return lookupRuntime.createLakeTableLookuper(
+                tablePath,
+                new LakeTableLookupRuntime.Context(
+                        paimonConfig, tablePath.toString(), tableConfig, diskWriteGuard));
+    }
+
+    private static Set<java.nio.file.Path> regularFiles(File directory) throws IOException {
+        if (!directory.exists()) {
+            return new HashSet<>();
+        }
+        try (Stream<java.nio.file.Path> paths = Files.walk(directory.toPath())) {
+            return paths.filter(Files::isRegularFile).collect(Collectors.toSet());
+        }
     }
 
     private static Schema pkSchema() {

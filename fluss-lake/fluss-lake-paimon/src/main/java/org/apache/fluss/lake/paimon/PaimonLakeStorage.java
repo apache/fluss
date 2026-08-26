@@ -19,8 +19,10 @@ package org.apache.fluss.lake.paimon;
 
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.lake.lakestorage.LakeStorage;
+import org.apache.fluss.lake.lakestorage.LakeTableLookupRuntime;
 import org.apache.fluss.lake.lakestorage.LakeTableLookuper;
 import org.apache.fluss.lake.paimon.lookup.PaimonLakeTableLookuper;
+import org.apache.fluss.lake.paimon.lookup.SharedLookupFileCache;
 import org.apache.fluss.lake.paimon.source.PaimonLakeSource;
 import org.apache.fluss.lake.paimon.source.PaimonSplit;
 import org.apache.fluss.lake.paimon.tiering.PaimonCommittable;
@@ -29,6 +31,14 @@ import org.apache.fluss.lake.paimon.tiering.PaimonWriteResult;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.utils.IOUtils;
+
+import org.apache.paimon.CoreOptions;
+import org.apache.paimon.disk.IOManager;
+import org.apache.paimon.options.MemorySize;
+
+import static org.apache.fluss.utils.Preconditions.checkArgument;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** Paimon implementation of {@link LakeStorage}. */
 public class PaimonLakeStorage implements LakeStorage {
@@ -55,13 +65,50 @@ public class PaimonLakeStorage implements LakeStorage {
     }
 
     @Override
-    public LakeTableLookuper createLakeTableLookuper(TablePath tablePath, LookuperContext context) {
-        return new PaimonLakeTableLookuper(
-                paimonConfig,
-                tablePath,
-                context.ioTmpDir(),
-                context.tableConfig(),
-                context.lookupCacheMaxDiskBytes(),
-                context.diskWriteGuard());
+    public LakeTableLookupRuntime createLakeTableLookupRuntime(
+            String ioTmpDir, long lookupCacheMaxDiskBytes) {
+        return new PaimonLakeTableLookupRuntime(ioTmpDir, lookupCacheMaxDiskBytes);
+    }
+
+    /** Paimon lookup runtime sharing one I/O manager across table lookupers. */
+    private static final class PaimonLakeTableLookupRuntime implements LakeTableLookupRuntime {
+        private final IOManager ioManager;
+        private final SharedLookupFileCache lookupFileCache;
+
+        private PaimonLakeTableLookupRuntime(String ioTmpDir, long lookupCacheMaxDiskBytes) {
+            checkArgument(
+                    lookupCacheMaxDiskBytes > 0, "lookupCacheMaxDiskBytes must be greater than 0.");
+            this.ioManager = IOManager.create(checkNotNull(ioTmpDir, "ioTmpDir must not be null."));
+            // ponytail: one runtime-wide retention; add a server option if this needs tuning.
+            this.lookupFileCache =
+                    new SharedLookupFileCache(
+                            CoreOptions.LOOKUP_CACHE_FILE_RETENTION.defaultValue(),
+                            new MemorySize(lookupCacheMaxDiskBytes));
+        }
+
+        @Override
+        public LakeTableLookuper createLakeTableLookuper(TablePath tablePath, Context context) {
+            return new PaimonLakeTableLookuper(
+                    new Configuration(context.lakeConfiguration()),
+                    tablePath,
+                    ioManager,
+                    lookupFileCache,
+                    context.cacheNamespace(),
+                    context.tableConfig(),
+                    context.diskWriteGuard());
+        }
+
+        @Override
+        public void updateLookupCacheMaxDiskBytes(long lookupCacheMaxDiskBytes) {
+            checkArgument(
+                    lookupCacheMaxDiskBytes > 0, "lookupCacheMaxDiskBytes must be greater than 0.");
+            lookupFileCache.updateMaxDiskSize(new MemorySize(lookupCacheMaxDiskBytes));
+        }
+
+        @Override
+        public void close() {
+            IOUtils.closeQuietly(lookupFileCache, "shared Paimon lookup-file cache");
+            IOUtils.closeQuietly(ioManager, "shared Paimon lookup IO manager");
+        }
     }
 }
