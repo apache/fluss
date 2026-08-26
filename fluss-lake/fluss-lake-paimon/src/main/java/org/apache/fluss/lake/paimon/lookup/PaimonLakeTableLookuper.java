@@ -144,8 +144,7 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
         checkNotClosed();
         ensureInitialized(context.valueRowType());
 
-        try (TrackingMetrics ignored =
-                     new TrackingMetrics(lookupFileDownloaded, context)) {
+        try (TrackingMetrics ignored = new TrackingMetrics(lookupFileDownloaded, context)) {
             return lookupInternal(key, context);
         } catch (Exception e) {
             DiskWriteLockedException diskWriteLockedException =
@@ -312,8 +311,7 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
         org.apache.paimon.data.InternalRow paimonRow;
         try {
             paimonRow =
-                    lookupPaimon(
-                            getPartition(context), context.bucketId(), getKey(key, context));
+                    lookupPaimon(getPartition(context), context.bucketId(), getKey(key, context));
         } catch (IOException e) {
             // Historical Paimon point lookup is part of the Fluss KV lookup path. Expose a
             // persistent I/O failure as a retriable KV error so the existing KV RPC retry
@@ -367,8 +365,7 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
                 (ignored, currentFiles) -> {
                     List<DataFileMeta> files =
                             checkNotNull(
-                                    currentFiles,
-                                    "Partition-bucket files must be initialized.");
+                                    currentFiles, "Partition-bucket files must be initialized.");
                     return files == filesBeforeLookup
                             ? registerFiles(partition, bucket, filesBeforeLookup)
                             : files;
