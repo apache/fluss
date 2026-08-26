@@ -126,10 +126,30 @@ tests:
       tablet.storage.volumes:
         - name: fast-0
           size: 50Gi
+          storageClass: "1234"
     asserts:
       - matchRegex:
           path: data["server.yaml"]
           pattern: 'data\.dirs: /tmp/fluss/fast-0'
+        template: templates/configmap.yaml
+      - equal:
+          path: spec.volumeClaimTemplates[0].spec.storageClassName
+          value: "1234"
+        template: templates/sts-tablet.yaml
+
+  - it: renders data.dirs when configurationOverrides is nulled out
+    set:
+      configurationOverrides: null
+      tablet.storage.enabled: true
+      tablet.storage.volumes:
+        - name: data-0
+          size: 100Gi
+    asserts:
+      - notFailedTemplate: {}
+        template: templates/NOTES.txt
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: 'data\.dirs: /tmp/fluss/data-0'
         template: templates/configmap.yaml
 
   - it: renders one emptyDir per volume when storage is disabled
@@ -177,17 +197,15 @@ tests:
             hostPath:
               path: /mnt/scratch
         template: templates/sts-tablet.yaml
-      - contains:
+      - equal:
           path: spec.template.spec.containers[0].volumeMounts
-          content:
-            name: data-0
-            mountPath: /tmp/fluss/data-0
-        template: templates/sts-tablet.yaml
-      - contains:
-          path: spec.template.spec.containers[0].volumeMounts
-          content:
-            name: scratch
-            mountPath: /mnt/scratch
+          value:
+            - name: fluss-conf
+              mountPath: /opt/conf
+            - name: data-0
+              mountPath: /tmp/fluss/data-0
+            - name: scratch
+              mountPath: /mnt/scratch
         template: templates/sts-tablet.yaml
 
   - it: fails when a volume entry has no size
@@ -221,6 +239,17 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: "VALUES VALIDATION:\ntablet.storage.volumes: duplicate volume name \"data-0\""
+        template: templates/NOTES.txt
+
+  - it: fails on a volume name that is not a DNS-1123 label
+    set:
+      tablet.storage.enabled: true
+      tablet.storage.volumes:
+        - name: bad_Name
+          size: 100Gi
+    asserts:
+      - failedTemplate:
+          errorMessage: "VALUES VALIDATION:\ntablet.storage.volumes: volume name \"bad_Name\" must be a lowercase DNS-1123 label (^[a-z0-9]([-a-z0-9]*[a-z0-9])?$)"
         template: templates/NOTES.txt
 
   - it: fails on a chart-reserved volume name

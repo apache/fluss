@@ -66,13 +66,16 @@ Usage:
     {{- if or (eq .name "fluss-conf") (eq .name "sasl-config") (hasPrefix "secret-" .name) -}}
       {{- $messages = append $messages (printf "tablet.storage.volumes: volume name %q collides with a chart-managed volume (fluss-conf, sasl-config, secret-*)" .name) -}}
     {{- end -}}
+    {{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" .name) -}}
+      {{- $messages = append $messages (printf "tablet.storage.volumes: volume name %q must be a lowercase DNS-1123 label (^[a-z0-9]([-a-z0-9]*[a-z0-9])?$)" .name) -}}
+    {{- end -}}
     {{- if not .size -}}
       {{- $messages = append $messages (printf "tablet.storage.volumes: entry %q must set size" .name) -}}
     {{- end -}}
     {{- $names = append $names .name -}}
   {{- end -}}
 {{- end -}}
-{{- if and .Values.tablet.storage.volumes (hasKey .Values.configurationOverrides "data.dirs") -}}
+{{- if and .Values.tablet.storage.volumes (hasKey (.Values.configurationOverrides | default dict) "data.dirs") -}}
   {{- $messages = append $messages "configurationOverrides must not set data.dirs when tablet.storage.volumes is used: the chart renders data.dirs from the volume list" -}}
 {{- end -}}
 {{- join "\n" $messages -}}
