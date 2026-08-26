@@ -139,12 +139,53 @@ public class PluginLakeStorageWrapper implements LakeStoragePlugin {
         }
 
         @Override
-        public LakeTableLookuper createLakeTableLookuper(
-                TablePath tablePath, LookuperContext context) {
+        public LakeTableLookupRuntime createLakeTableLookupRuntime(
+                String ioTmpDir, long lookupCacheMaxDiskBytes) {
+            try (TemporaryClassLoaderContext ignored = TemporaryClassLoaderContext.of(loader)) {
+                return new ClassLoaderFixingLakeTableLookupRuntime(
+                        inner.createLakeTableLookupRuntime(ioTmpDir, lookupCacheMaxDiskBytes),
+                        loader);
+            }
+        }
+    }
+
+    static class ClassLoaderFixingLakeTableLookupRuntime
+            implements LakeTableLookupRuntime, WrappingProxy<LakeTableLookupRuntime> {
+
+        private final LakeTableLookupRuntime inner;
+        private final ClassLoader loader;
+
+        private ClassLoaderFixingLakeTableLookupRuntime(
+                LakeTableLookupRuntime inner, ClassLoader loader) {
+            this.inner = inner;
+            this.loader = loader;
+        }
+
+        @Override
+        public LakeTableLookuper createLakeTableLookuper(TablePath tablePath, Context context) {
             try (TemporaryClassLoaderContext ignored = TemporaryClassLoaderContext.of(loader)) {
                 return new ClassLoaderFixingLakeTableLookuper(
                         inner.createLakeTableLookuper(tablePath, context), loader);
             }
+        }
+
+        @Override
+        public void updateLookupCacheMaxDiskBytes(long lookupCacheMaxDiskBytes) {
+            try (TemporaryClassLoaderContext ignored = TemporaryClassLoaderContext.of(loader)) {
+                inner.updateLookupCacheMaxDiskBytes(lookupCacheMaxDiskBytes);
+            }
+        }
+
+        @Override
+        public void close() throws Exception {
+            try (TemporaryClassLoaderContext ignored = TemporaryClassLoaderContext.of(loader)) {
+                inner.close();
+            }
+        }
+
+        @Override
+        public LakeTableLookupRuntime getWrappedDelegate() {
+            return inner;
         }
     }
 
