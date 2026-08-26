@@ -21,10 +21,13 @@ import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.NotCoordinatorLeaderException;
 import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.metrics.registry.MetricRegistryImpl;
 import org.apache.fluss.rpc.GatewayClientProxy;
 import org.apache.fluss.rpc.RpcClient;
+import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
+import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.GetClusterHealthRequest;
 import org.apache.fluss.rpc.messages.GetClusterHealthResponse;
@@ -32,18 +35,25 @@ import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 import org.apache.fluss.utils.ExceptionUtils;
 
 import java.util.Collections;
+import java.util.Locale;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
 /**
- * Lightweight readiness-check CLI for Fluss tablet-server pods.
+ * Lightweight readiness-check CLI for Fluss server pods.
  *
- * <p>The probe connects to a tablet server (typically the local one on {@code 127.0.0.1}) and
- * issues a single {@code getClusterHealth} call. The tablet server forwards the request to the
- * coordinator over its internal listener and returns the cluster-wide health snapshot. This means
- * the readiness probe never has to know the coordinator's address and survives coordinator pod
- * restarts cleanly.
+ * <p>In the default {@code tablet} role, the probe connects to a tablet server (typically the local
+ * one on {@code 127.0.0.1}) and issues a single {@code getClusterHealth} call. The tablet server
+ * forwards the request to the coordinator over its internal listener and returns the cluster-wide
+ * health snapshot. This means the readiness probe never has to know the coordinator's address and
+ * survives coordinator pod restarts cleanly. Readiness requires status GREEN.
+ *
+ * <p>In the {@code coordinator} role, the probe connects to the local coordinator server. A leader
+ * coordinator is Ready regardless of cluster color — its readiness must not depend on tablet
+ * health, and the tablet probes already gate on cluster recovery. A standby coordinator answers
+ * with its role and election state and is Ready only when the coordinator group currently has an
+ * elected leader, so "all coordinator pods Ready" certifies a functioning group.
  *
  * <h3>Inputs</h3>
  *
@@ -53,9 +63,11 @@ import java.util.concurrent.TimeoutException;
  *
  * <ul>
  *   <li>{@code --timeoutMs <ms>}: optional, defaults to {@value #DEFAULT_TIMEOUT_MS}.
- *   <li>{@code --host <host>} / env {@value #ENV_TCP_HOST}: tablet server host. Defaults to {@code
+ *   <li>{@code --role <role>} / env {@value #ENV_ROLE}: {@code tablet} (default) or {@code
+ *       coordinator} — the type of the local server the probe talks to.
+ *   <li>{@code --host <host>} / env {@value #ENV_TCP_HOST}: server host. Defaults to {@code
  *       127.0.0.1}.
- *   <li>{@code --port <port>} / env {@value #ENV_TCP_PORT}: tablet server port. Defaults to {@value
+ *   <li>{@code --port <port>} / env {@value #ENV_TCP_PORT}: server port. Defaults to {@value
  *       #DEFAULT_TCP_PORT}.
  *   <li>{@code --healthCheckAuth <props>} / env {@value #ENV_HEALTH_CHECK_AUTH}: optional client
  *       auth configuration as semicolon-separated {@code key:value} pairs (e.g. {@code
@@ -67,11 +79,14 @@ import java.util.concurrent.TimeoutException;
  * <h3>Exit codes</h3>
  *
  * <ul>
- *   <li>{@value #EXIT_READY} — cluster status is GREEN (Ready).
- *   <li>{@value #EXIT_NOT_READY} — cluster status is YELLOW/RED/UNKNOWN, the tablet server is
- *       unreachable, or the RPC timed out.
- *   <li>{@value #EXIT_API_UNSUPPORTED} — tablet server is reachable but does not implement the
- *       cluster-health API ({@link UnsupportedVersionException}).
+ *   <li>{@value #EXIT_READY} — Ready: tablet role — cluster status is GREEN; coordinator role — the
+ *       server is the leader, or a standby whose group has an elected leader.
+ *   <li>{@value #EXIT_NOT_READY} — tablet role: cluster status is YELLOW/RED/UNKNOWN; coordinator
+ *       role: a standby whose group has no elected leader. Both roles: the server is unreachable or
+ *       the RPC timed out.
+ *   <li>{@value #EXIT_API_UNSUPPORTED} — server is reachable but does not implement the
+ *       cluster-health API ({@link UnsupportedVersionException}), or — coordinator role only — is a
+ *       standby from a version that rejects the RPC ({@link NotCoordinatorLeaderException}).
  *   <li>{@value #EXIT_ERROR} — invalid arguments or environment.
  * </ul>
  */
@@ -91,6 +106,15 @@ public final class ClusterHealthReadinessCheck {
 
     /** Environment variable carrying the tablet server port. */
     static final String ENV_TCP_PORT = "READINESS_TCP_PORT";
+
+    /**
+     * Environment variable carrying the probed server's role: {@code tablet} (default) or {@code
+     * coordinator}.
+     */
+    static final String ENV_ROLE = "READINESS_ROLE";
+
+    static final String ROLE_TABLET = "tablet";
+    static final String ROLE_COORDINATOR = "coordinator";
 
     /**
      * Environment variable carrying client auth configuration as semicolon-separated {@code
@@ -116,6 +140,7 @@ public final class ClusterHealthReadinessCheck {
         String hostArg = null;
         String portArg = null;
         String authArg = null;
+        String roleArg = null;
         for (int i = 0; i < args.length; i++) {
             if ("--timeoutMs".equals(args[i]) && i + 1 < args.length) {
                 String raw = args[++i];
@@ -132,6 +157,8 @@ public final class ClusterHealthReadinessCheck {
                 portArg = args[++i];
             } else if ("--healthCheckAuth".equals(args[i]) && i + 1 < args.length) {
                 authArg = args[++i];
+            } else if ("--role".equals(args[i]) && i + 1 < args.length) {
+                roleArg = args[++i];
             }
         }
 
@@ -147,8 +174,22 @@ public final class ClusterHealthReadinessCheck {
                 return EXIT_ERROR;
             }
         }
+        String role =
+                firstNonBlank(roleArg, System.getenv(ENV_ROLE), ROLE_TABLET)
+                        .trim()
+                        .toLowerCase(Locale.ROOT);
+        if (!ROLE_TABLET.equals(role) && !ROLE_COORDINATOR.equals(role)) {
+            System.err.println("[readiness-check] ERROR: invalid role \"" + role + "\"");
+            return EXIT_ERROR;
+        }
+        boolean coordinatorRole = ROLE_COORDINATOR.equals(role);
         // The server id is irrelevant for a one-shot probe; pick a sentinel value.
-        ServerNode tabletServer = new ServerNode(0, host, port, ServerType.TABLET_SERVER);
+        ServerNode serverNode =
+                new ServerNode(
+                        0,
+                        host,
+                        port,
+                        coordinatorRole ? ServerType.COORDINATOR : ServerType.TABLET_SERVER);
         String address = host + ":" + port;
 
         String authPropsString = authArg != null ? authArg : System.getenv(ENV_HEALTH_CHECK_AUTH);
@@ -167,13 +208,16 @@ public final class ClusterHealthReadinessCheck {
         MetricRegistryImpl registry = new MetricRegistryImpl(Collections.emptyList());
         ClientMetricGroup metricGroup = new ClientMetricGroup(registry, "readiness-probe");
         try (RpcClient rpcClient = RpcClient.create(conf, metricGroup)) {
-            TabletServerGateway gateway =
-                    GatewayClientProxy.createGatewayProxy(
-                            () -> tabletServer, rpcClient, TabletServerGateway.class);
+            AdminReadOnlyGateway gateway =
+                    coordinatorRole
+                            ? GatewayClientProxy.createGatewayProxy(
+                                    () -> serverNode, rpcClient, CoordinatorGateway.class)
+                            : GatewayClientProxy.createGatewayProxy(
+                                    () -> serverNode, rpcClient, TabletServerGateway.class);
             GetClusterHealthResponse resp =
                     gateway.getClusterHealth(new GetClusterHealthRequest())
                             .get(timeoutMs, TimeUnit.MILLISECONDS);
-            return evaluate(resp);
+            return coordinatorRole ? evaluateCoordinator(resp) : evaluate(resp);
         } catch (TimeoutException e) {
             System.err.println(
                     "[readiness-check] Timeout calling getClusterHealth on "
@@ -182,20 +226,10 @@ public final class ClusterHealthReadinessCheck {
             return EXIT_NOT_READY;
         } catch (ExecutionException e) {
             Throwable cause = e.getCause() != null ? e.getCause() : e;
-            if (ExceptionUtils.findThrowable(cause, UnsupportedVersionException.class)
-                    .isPresent()) {
-                System.err.println("[readiness-check] API unsupported: " + cause.getMessage());
-                return EXIT_API_UNSUPPORTED;
-            }
-            System.err.println(
-                    "[readiness-check] Cannot reach tablet server at "
-                            + address
-                            + ", treating as not ready: "
-                            + cause.getMessage());
-            return EXIT_NOT_READY;
+            return mapExecutionFailure(cause, coordinatorRole, address);
         } catch (Exception e) {
             System.err.println(
-                    "[readiness-check] Cannot reach tablet server at "
+                    "[readiness-check] Cannot reach server at "
                             + address
                             + ", treating as not ready: "
                             + e.getMessage());
@@ -251,7 +285,35 @@ public final class ClusterHealthReadinessCheck {
         return conf;
     }
 
-    private static int evaluate(GetClusterHealthResponse resp) {
+    /** Maps a failed RPC's cause to an exit code. */
+    static int mapExecutionFailure(Throwable cause, boolean coordinatorRole, String address) {
+        if (ExceptionUtils.findThrowable(cause, UnsupportedVersionException.class).isPresent()) {
+            System.err.println("[readiness-check] API unsupported: " + cause.getMessage());
+            return EXIT_API_UNSUPPORTED;
+        }
+        if (coordinatorRole
+                && ExceptionUtils.findThrowable(cause, NotCoordinatorLeaderException.class)
+                        .isPresent()) {
+            // A standby from a version that predates standby-served cluster health rejects
+            // the RPC. There is nothing to wait for on that version, so report
+            // API-unsupported and let the caller latch its TCP fallback. In the Helm chart
+            // this path cannot fire — the probe and the server ship in the same image — but
+            // it keeps a hand-run probe against an older remote server from looping forever.
+            System.err.println(
+                    "[readiness-check] Standby coordinator does not serve cluster health"
+                            + " (pre-upgrade version): "
+                            + cause.getMessage());
+            return EXIT_API_UNSUPPORTED;
+        }
+        System.err.println(
+                "[readiness-check] Cannot reach server at "
+                        + address
+                        + ", treating as not ready: "
+                        + cause.getMessage());
+        return EXIT_NOT_READY;
+    }
+
+    static int evaluate(GetClusterHealthResponse resp) {
         int status = resp.getStatus();
         System.out.println(
                 "[readiness-check] status="
@@ -265,5 +327,36 @@ public final class ClusterHealthReadinessCheck {
                         + " activeLeaderReplicas="
                         + resp.getActiveLeaderReplicas());
         return status == STATUS_GREEN ? EXIT_READY : EXIT_NOT_READY;
+    }
+
+    /**
+     * Coordinator-role readiness: a leader is Ready regardless of cluster color (coordinator
+     * readiness must not depend on tablet health — the tablet probes gate on cluster recovery); a
+     * standby is Ready only when the coordinator group currently has an elected leader.
+     *
+     * <p>A response without the {@code is_leader} field comes from a leader that predates the field
+     * — a standby of such a version rejects the RPC instead of answering — so it is treated as
+     * leader-served and Ready.
+     */
+    static int evaluateCoordinator(GetClusterHealthResponse resp) {
+        boolean isLeader = !resp.hasIsLeader() || resp.isIsLeader();
+        boolean leaderElected = isLeader || (resp.hasLeaderElected() && resp.isLeaderElected());
+        System.out.println(
+                "[readiness-check] role=coordinator isLeader="
+                        + isLeader
+                        + " leaderElected="
+                        + leaderElected
+                        + " status="
+                        + resp.getStatus());
+        if (isLeader) {
+            return EXIT_READY;
+        }
+        if (leaderElected) {
+            return EXIT_READY;
+        }
+        System.err.println(
+                "[readiness-check] Standby coordinator sees no elected leader, treating as"
+                        + " not ready");
+        return EXIT_NOT_READY;
     }
 }

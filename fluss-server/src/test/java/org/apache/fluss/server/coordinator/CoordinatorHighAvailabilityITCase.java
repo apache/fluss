@@ -34,6 +34,8 @@ import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.CreateDatabaseRequest;
+import org.apache.fluss.rpc.messages.GetClusterHealthRequest;
+import org.apache.fluss.rpc.messages.GetClusterHealthResponse;
 import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
@@ -179,6 +181,48 @@ class CoordinatorHighAvailabilityITCase {
                 .isInstanceOf(ExecutionException.class)
                 .hasCauseInstanceOf(NotCoordinatorLeaderException.class)
                 .hasMessageContaining("not the current leader");
+    }
+
+    @Test
+    void testClusterHealthServedByLeaderAndStandby() throws Exception {
+        coordinatorServer1 = new CoordinatorServer(createConfiguration());
+        coordinatorServer2 = new CoordinatorServer(createConfiguration());
+
+        coordinatorServer1.start();
+        coordinatorServer2.start();
+
+        waitUntilCoordinatorServerElected();
+        CoordinatorAddress leaderAddress = zookeeperClient.getCoordinatorLeaderAddress().get();
+
+        CoordinatorServer leader = findServerById(leaderAddress.getId());
+        CoordinatorServer standby = findServerByNotId(leaderAddress.getId());
+        assertThat(leader).isNotNull();
+        assertThat(standby).isNotNull();
+
+        // The leader answers with its role and the real health snapshot (empty cluster = GREEN).
+        GetClusterHealthResponse leaderResp =
+                createGatewayForServer(leader)
+                        .getClusterHealth(new GetClusterHealthRequest())
+                        .get();
+        assertThat(leaderResp.hasIsLeader()).isTrue();
+        assertThat(leaderResp.isIsLeader()).isTrue();
+        assertThat(leaderResp.hasLeaderElected()).isTrue();
+        assertThat(leaderResp.isLeaderElected()).isTrue();
+        assertThat(leaderResp.getStatus()).isEqualTo(0 /* GREEN */);
+
+        // The standby answers instead of rejecting with NotCoordinatorLeaderException: it has no
+        // CoordinatorContext, so status is UNKNOWN with zeroed counts, but the role fields let a
+        // readiness probe tell a healthy standby from a wedged one.
+        GetClusterHealthResponse standbyResp =
+                createGatewayForServer(standby)
+                        .getClusterHealth(new GetClusterHealthRequest())
+                        .get();
+        assertThat(standbyResp.hasIsLeader()).isTrue();
+        assertThat(standbyResp.isIsLeader()).isFalse();
+        assertThat(standbyResp.hasLeaderElected()).isTrue();
+        assertThat(standbyResp.isLeaderElected()).isTrue();
+        assertThat(standbyResp.getStatus()).isEqualTo(3 /* UNKNOWN */);
+        assertThat(standbyResp.getNumReplicas()).isEqualTo(0);
     }
 
     @Test
