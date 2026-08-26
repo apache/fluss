@@ -121,11 +121,57 @@ tablet:
   topologySpreadConstraints: []
 
 coordinator:
+  # The default stays 1. Running more than one replica gives you warm standbys
+  # that take over via leader election on coordinator failure — see the
+  # "Coordinator High Availability" section of the deployment documentation
+  # (website/docs/install-deploy/deploying-with-helm.md) for PDB,
+  # rolling-update, and client bootstrap guidance.
   numberOfReplicas: 1
   storage:
     enabled: false
     size: 1Gi
     storageClass:
+  # Readiness probe configuration. The probe talks to the LOCAL coordinator
+  # (POD_IP:client-port) and asks for its role and election state:
+  #   - the leader is Ready regardless of cluster color (its readiness must not
+  #     depend on tablet health; the tablet probes gate on cluster recovery),
+  #   - a standby is Ready only when the coordinator group currently has an
+  #     elected leader.
+  # The probe script ships inside the Fluss image, so this chart needs an image
+  # with role-aware cluster health. With an older image, a standby coordinator
+  # stays NotReady until healthCheckTimeoutSeconds expires and the probe
+  # latches TCP-only readiness — the rollout completes, but each standby pod
+  # burns the full budget first.
+  readinessProbe:
+    # Timeout in ms for the RPC call.
+    rpcTimeoutMs: 5000
+    # Standard Kubernetes probe parameters.
+    #
+    # The total time Kubernetes will wait before flipping the pod to NotReady is
+    #     initialDelaySeconds + failureThreshold * periodSeconds
+    #   = 15 + 360 * 5 = 1815s (~30 minutes) by default.
+    # IMPORTANT: this window MUST be larger than healthCheckTimeoutSeconds
+    # below, otherwise Kubernetes will mark the pod NotReady BEFORE the
+    # in-script fallback has a chance to latch the TCP fast path. If you tune
+    # healthCheckTimeoutSeconds upward, raise failureThreshold accordingly so
+    # the inequality (failureThreshold * periodSeconds > healthCheckTimeoutSeconds)
+    # always holds.
+    failureThreshold: 360
+    timeoutSeconds: 10
+    initialDelaySeconds: 15
+    periodSeconds: 5
+    # Maximum wall-clock seconds the election gate is allowed to keep a
+    # freshly-created coordinator pod NotReady on its first boot. After this
+    # budget is exhausted the probe latches the TCP-only fast path so a broken
+    # election cannot wedge a rolling upgrade indefinitely.
+    # Default: 1200 (20 minutes).
+    healthCheckTimeoutSeconds: 1200
+    # Optional client auth configuration passed to the probe's RpcClient as a
+    # single-line string of semicolon-separated `key:value` pairs (no quoting
+    # or escaping needed). Required only when the local client listener
+    # enforces SASL. Example:
+    #   healthCheckAuth: "client.security.protocol:SASL;client.sasl.mechanism:PLAIN;client.security.sasl.username:admin;client.security.sasl.password:admin-pass"
+    healthCheckAuth: ""
   extraVolumes: []
   extraVolumeMounts: []
   initContainers: []

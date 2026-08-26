@@ -442,6 +442,12 @@ making rotation fully hands-off.
 |-----------|-------------|---------|
 | `tablet.numberOfReplicas` | Number of TabletServer replicas to deploy | `3` |
 
+### Coordinator Server Parameters
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `coordinator.numberOfReplicas` | Number of CoordinatorServer replicas to deploy. Replicas beyond the elected leader run as warm standbys — see [Coordinator High Availability](#coordinator-high-availability) | `1` |
+
 ### Scheduling Parameters
 
 | Parameter | Description | Default |
@@ -870,13 +876,70 @@ tablet:
 | Parameter          | Default | Description                                                                                                                                    |
 |--------------------|---------|------------------------------------------------------------------------------------------------------------------------------------------------|
 | `rpcTimeoutMs`     | `5000`  | Timeout in milliseconds for the RPC call to the Coordinator.                                                                                   |
-| `failureThreshold` | `200`   | Max consecutive probe failures before marking the pod as unready. With `periodSeconds=5`, this allows up to ~16 minutes for recovery.          |
+| `failureThreshold` | `360`   | Max consecutive probe failures before marking the pod as unready. With `periodSeconds=5`, this allows up to ~30 minutes for recovery.          |
 | `periodSeconds`    | `5`     | How often the probe runs.                                                                                                                      |
 
 :::note
-The CoordinatorServer does not need the Cluster Health API probe — it does not host data replicas, so a simple TCP check is sufficient.
 The Coordinator should be upgraded **after** all TabletServers are fully upgraded and recovered.
 :::
+
+### Coordinator High Availability
+
+CoordinatorServer high availability is supported: with `coordinator.numberOfReplicas` greater
+than `1`, one replica is elected leader and the others run as warm standbys that take over via
+leader election when the leader fails. The default stays `1` — raising it is an explicit choice.
+
+```yaml
+coordinator:
+  numberOfReplicas: 3
+  podDisruptionBudget:
+    enabled: true
+    maxUnavailable: 1
+```
+
+#### Coordinator Readiness Probe
+
+A standby coordinator binds the same client port as the leader, so a TCP check cannot tell a
+healthy standby from a wedged one. The coordinator readiness probe instead asks the local server
+for its role and election state:
+
+- The **leader** is Ready regardless of cluster health color. Its readiness controls the DNS
+  record clients bootstrap against, so it must not depend on TabletServer health — the
+  TabletServer probes already gate rolling upgrades on cluster recovery.
+- A **standby** is Ready only when the coordinator group currently has an elected leader. "All
+  coordinator pods Ready" therefore certifies a functioning group, and a rolling update will not
+  proceed past a pod whose group has no leader.
+
+The gate runs on a pod's first boot; once it has passed (or its
+`healthCheckTimeoutSeconds` budget is exhausted), the probe latches a cheap TCP-only check for
+the rest of the pod's lifetime, so a later ZooKeeper blip cannot flip all coordinators NotReady
+at once. The probe parameters mirror the TabletServer ones under
+`coordinator.readinessProbe.*`, including `healthCheckAuth` for clusters whose client listener
+enforces SASL.
+
+Version skew: the probe script ships inside the Fluss image, so this chart version needs an
+image that supports role-aware cluster health. With an **older image** (one that already ships
+`readiness-check.sh` but without role support), a standby coordinator stays NotReady until the
+`healthCheckTimeoutSeconds` budget (20 minutes by default) expires and the probe latches the
+TCP-only fallback — the rollout completes, but each standby pod burns the full budget first.
+Images that predate `readiness-check.sh` entirely never become Ready under this chart. Keep the
+chart and image versions in step, or lower `healthCheckTimeoutSeconds` for the transition
+rollout. An **older chart** with a newer image keeps its TCP-only coordinator probe and is
+unaffected.
+
+#### Running More Than One Replica
+
+- **Client bootstrap:** list every coordinator replica in `bootstrap.servers`, e.g.
+  `coordinator-server-0.coordinator-server-hs.<ns>:9124,coordinator-server-1.coordinator-server-hs.<ns>:9124,coordinator-server-2.coordinator-server-hs.<ns>:9124`.
+  A standby answers client requests with `NotCoordinatorLeaderException`; clients retry other
+  bootstrap addresses, so any live replica in the list keeps bootstrap working during failover.
+- **PodDisruptionBudget:** enable `coordinator.podDisruptionBudget` with `maxUnavailable: 1` so
+  voluntary disruptions (node drains) never take down more than one coordinator at a time.
+- **Rolling updates:** the StatefulSet updates one pod at a time from the highest ordinal down.
+  When the leader is restarted, a standby takes over via leader election; the restarted pod
+  rejoins as a standby and flips Ready once it sees the elected leader.
+- **Spreading:** use `coordinator.affinity` or `coordinator.topologySpreadConstraints` to keep
+  replicas on separate nodes or zones — colocated replicas share their failure domain.
 
 ## Custom Container Images
 
@@ -912,7 +975,7 @@ image:
 
 ### Health Checks
 
-The chart includes liveness and readiness probes. By default, both use TCP socket checks:
+The chart includes liveness and readiness probes. Liveness uses a TCP socket check:
 
 ```yaml
 livenessProbe:
@@ -921,17 +984,12 @@ livenessProbe:
   initialDelaySeconds: 10
   periodSeconds: 3
   failureThreshold: 100
-
-readinessProbe:
-  tcpSocket:
-    port: 9124
-  initialDelaySeconds: 10
-  periodSeconds: 3
-  failureThreshold: 100
 ```
 
-For TabletServers, you can enable the Cluster Health readiness probe for safe rolling upgrades.
-See [Cluster Health Readiness Probe](#cluster-health-readiness-probe) for details.
+Readiness is role-aware: TabletServers gate on cluster health for safe rolling upgrades (see
+[Cluster Health Readiness Probe](#cluster-health-readiness-probe)), and CoordinatorServers gate
+on leader/standby election state (see
+[Coordinator Readiness Probe](#coordinator-readiness-probe)).
 
 ### Logs
 
