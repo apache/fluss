@@ -140,12 +140,31 @@ spec:
             tcpSocket:
               port: {{ .Values.listeners.client.port }}
           readinessProbe:
-            failureThreshold: 100
-            timeoutSeconds: 1
-            initialDelaySeconds: 10
-            periodSeconds: 3
-            tcpSocket:
-              port: {{ .Values.listeners.client.port }}
+            failureThreshold: {{ .Values.coordinator.readinessProbe.failureThreshold | default 360 }}
+            timeoutSeconds: {{ .Values.coordinator.readinessProbe.timeoutSeconds | default 10 }}
+            initialDelaySeconds: {{ .Values.coordinator.readinessProbe.initialDelaySeconds | default 15 }}
+            periodSeconds: {{ .Values.coordinator.readinessProbe.periodSeconds | default 5 }}
+            exec:
+              command:
+                - /bin/bash
+                - -c
+                - |
+                  export FLUSS_SERVER_ID=${POD_NAME##*-}
+                  # Probe the LOCAL coordinator: a leader passes regardless of cluster
+                  # color; a standby passes only when the coordinator group currently
+                  # has an elected leader — so a standby that binds its port but never
+                  # joins the group stays NotReady instead of looking healthy via TCP.
+                  export READINESS_ROLE=coordinator
+                  export READINESS_TIMEOUT_MS={{ .Values.coordinator.readinessProbe.rpcTimeoutMs | default 5000 }}
+                  export READINESS_TCP_PORT={{ .Values.listeners.client.port }}
+                  # bind.listeners binds the coordinator's CLIENT endpoint to ${POD_IP},
+                  # not 0.0.0.0, so we must probe the pod's own IP instead of 127.0.0.1.
+                  export READINESS_TCP_HOST=${POD_IP}
+                  export READINESS_HEALTH_CHECK_TIMEOUT_SECONDS={{ .Values.coordinator.readinessProbe.healthCheckTimeoutSeconds | default 1200 }}
+                  {{- with .Values.coordinator.readinessProbe.healthCheckAuth }}
+                  export READINESS_HEALTH_CHECK_AUTH={{ . | quote }}
+                  {{- end }}
+                  exec $FLUSS_HOME/bin/readiness-check.sh
           resources:
             {{- toYaml .Values.resources.coordinatorServer | nindent 12 }}
           volumeMounts:
