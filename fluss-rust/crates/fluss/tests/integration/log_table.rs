@@ -32,7 +32,7 @@ mod table_test {
         AddColumn, AlterTableChanges, ColumnPositionType, DataField, DataTypes, JsonSerde,
         PartitionSpec, Schema, TableDescriptor, TablePath,
     };
-    use fluss::predicate::col;
+    use fluss::predicate::{Literal, Predicate, col};
     use fluss::record::ScanRecord;
     use fluss::row::binary_array::FlussArrayWriter;
     use fluss::row::binary_map::FlussMapWriter;
@@ -839,6 +839,166 @@ mod table_test {
             .expect("Failed to drop table");
     }
 
+    /// Pruning across the statistics encodings: spilled string bounds, compact
+    /// and non-compact decimals and timestamps, time, and null counts.
+    #[tokio::test]
+    async fn filter_pushdown_prunes_across_column_types() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss", "test_filter_pushdown_column_types");
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("name", DataTypes::string())
+                    .column("price", DataTypes::decimal(10, 2))
+                    .column("big", DataTypes::decimal(22, 5))
+                    .column("ts3", DataTypes::timestamp_with_precision(3))
+                    .column("ts6", DataTypes::timestamp_with_precision(6))
+                    .column("t", DataTypes::time_with_precision(3))
+                    .column("opt", DataTypes::int())
+                    .build()
+                    .expect("Failed to build schema"),
+            )
+            .property("table.statistics.columns", "*")
+            .property("table.log.tiered.local-segments", "100")
+            .build()
+            .expect("Failed to build table");
+        create_table(&admin, &table_path, &table_descriptor).await;
+        wait_for_table_ready(&admin, &table_path).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+        let writer = table
+            .new_append()
+            .expect("Failed to create append")
+            .create_writer()
+            .expect("Failed to create writer");
+
+        // Names exceed 7 bytes so the string bounds spill to the stats row tail.
+        for id in 1..=3 {
+            let mut row = GenericRow::new(8);
+            row.set_field(0, id);
+            row.set_field(1, format!("aaaaaaaaaaaa-{id}"));
+            row.set_field(
+                2,
+                Decimal::from_unscaled_long(1_000 + id as i64, 10, 2).unwrap(),
+            );
+            row.set_field(
+                3,
+                Decimal::from_unscaled_bytes(&(100_000_i64 + id as i64).to_be_bytes(), 22, 5)
+                    .unwrap(),
+            );
+            row.set_field(
+                4,
+                TimestampNtz::from_millis_nanos(1_600_000_000_000 + id as i64, 0).unwrap(),
+            );
+            row.set_field(
+                5,
+                TimestampNtz::from_millis_nanos(1_600_000_000_000 + id as i64, 123_000).unwrap(),
+            );
+            row.set_field(6, Time::new(32_400_000 + id));
+            row.set_field(7, Datum::Null);
+            writer.append(&row).expect("Failed to append low row");
+        }
+        writer.flush().await.expect("Failed to flush");
+        for id in 101..=103 {
+            let mut row = GenericRow::new(8);
+            row.set_field(0, id);
+            row.set_field(1, format!("zzzzzzzzzzzz-{id}"));
+            row.set_field(
+                2,
+                Decimal::from_unscaled_long(99_000 + id as i64, 10, 2).unwrap(),
+            );
+            row.set_field(
+                3,
+                Decimal::from_unscaled_bytes(
+                    &(900_000_000_000_i64 + id as i64).to_be_bytes(),
+                    22,
+                    5,
+                )
+                .unwrap(),
+            );
+            row.set_field(
+                4,
+                TimestampNtz::from_millis_nanos(1_900_000_000_000 + id as i64, 0).unwrap(),
+            );
+            row.set_field(
+                5,
+                TimestampNtz::from_millis_nanos(1_900_000_000_000 + id as i64, 456_000).unwrap(),
+            );
+            row.set_field(6, Time::new(72_000_000 + id));
+            row.set_field(7, id);
+            writer.append(&row).expect("Failed to append high row");
+        }
+        writer.flush().await.expect("Failed to flush");
+
+        let low_ids = vec![1, 2, 3];
+        let high_ids = vec![101, 102, 103];
+        let cases: Vec<(&str, Predicate, &Vec<i32>)> = vec![
+            ("string", col("name").gt("mmmmmmmmmmmm"), &high_ids),
+            (
+                "compact decimal",
+                col("price").gt(Decimal::from_unscaled_long(50_000, 10, 2).unwrap()),
+                &high_ids,
+            ),
+            (
+                "non-compact decimal",
+                col("big").gt(Decimal::from_unscaled_bytes(
+                    &500_000_000_000_i64.to_be_bytes(),
+                    22,
+                    5,
+                )
+                .unwrap()),
+                &high_ids,
+            ),
+            (
+                "compact timestamp",
+                col("ts3").gt(TimestampNtz::from_millis_nanos(1_800_000_000_000, 0).unwrap()),
+                &high_ids,
+            ),
+            (
+                "non-compact timestamp",
+                col("ts6").gt(TimestampNtz::from_millis_nanos(1_800_000_000_000, 500_000).unwrap()),
+                &high_ids,
+            ),
+            ("time", col("t").gt(Literal::Time(43_200_000)), &high_ids),
+            ("is_not_null", col("opt").is_not_null(), &high_ids),
+            ("is_null", col("opt").is_null(), &low_ids),
+        ];
+
+        for (label, predicate, expected) in cases {
+            let log_scanner = table
+                .new_scan()
+                .filter(predicate)
+                .expect("Failed to set filter")
+                .create_log_scanner()
+                .expect("Failed to create log scanner");
+            log_scanner
+                .subscribe(0, EARLIEST_OFFSET)
+                .await
+                .expect("Failed to subscribe");
+            let ids: Vec<i32> = poll_ids_and_names(&log_scanner, expected.len())
+                .await
+                .into_iter()
+                .map(|(id, _)| id)
+                .collect();
+            assert_eq!(
+                &ids, expected,
+                "Predicate on {label} should prune the non-matching batch"
+            );
+        }
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
+    }
+
     /// When every batch is pruned the server returns only a filtered end
     /// offset, and the scanner must advance across the fully pruned segments
     /// instead of refetching them forever.
@@ -874,6 +1034,22 @@ mod table_test {
                 .expect("Failed to append batch");
         }
         writer.flush().await.expect("Failed to flush");
+
+        // Prove the data is fetchable before asserting the filtered scan sees none.
+        let unfiltered = table
+            .new_scan()
+            .create_log_scanner()
+            .expect("Failed to create unfiltered log scanner");
+        unfiltered
+            .subscribe(0, EARLIEST_OFFSET)
+            .await
+            .expect("Failed to subscribe");
+        let all = poll_ids_and_names(&unfiltered, 15).await;
+        assert_eq!(
+            all.len(),
+            15,
+            "All rows should be visible to an unfiltered scan"
+        );
 
         let log_scanner = table
             .new_scan()
