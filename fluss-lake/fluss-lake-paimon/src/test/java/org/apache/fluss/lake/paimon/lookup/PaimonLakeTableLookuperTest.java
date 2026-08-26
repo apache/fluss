@@ -38,6 +38,7 @@ import org.apache.fluss.row.encode.CompactedKeyEncoder;
 import org.apache.fluss.row.encode.ValueDecoder;
 import org.apache.fluss.row.encode.paimon.PaimonKeyEncoder;
 import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.utils.ExecutorUtils;
 
 import org.apache.paimon.CoreOptions;
 import org.apache.paimon.catalog.Catalog;
@@ -64,6 +65,11 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_2;
@@ -419,10 +425,30 @@ class PaimonLakeTableLookuperTest {
                     Collections.singletonMap(
                             0, Collections.singletonList(paimonRow(id, "20240101", "name-" + id))));
         }
+        writeAndCommitData(
+                table,
+                Collections.singletonMap(
+                        0, Collections.singletonList(paimonRow(6, "20240102", "name-6"))));
 
         BinaryRow partition = BinaryRow.singleColumn(BinaryString.fromString("20240101"));
         List<DataFileMeta> filesBeforeCompaction = dataFiles(table, partition, 0);
         assertThat(filesBeforeCompaction).hasSize(5);
+
+        AtomicBoolean blockDownloads = new AtomicBoolean();
+        CountDownLatch downloadStarted = new CountDownLatch(1);
+        CountDownLatch continueDownload = new CountDownLatch(1);
+        Runnable diskWriteGuard =
+                () -> {
+                    if (blockDownloads.get()) {
+                        downloadStarted.countDown();
+                        try {
+                            continueDownload.await();
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            throw new RuntimeException(e);
+                        }
+                    }
+                };
 
         try (LakeTableLookuper lookuper =
                 new PaimonLakeTableLookuper(
@@ -431,10 +457,17 @@ class PaimonLakeTableLookuperTest {
                         tempWarehouseDir.getAbsolutePath(),
                         tableConfig(KvFormat.COMPACTED),
                         LOOKUP_CACHE_MAX_DISK_BYTES,
-                        NO_OP_DISK_WRITE_GUARD)) {
-            LakeTableLookuper.LookupContext context =
-                    lookupContext(schema, "20240101", 0, SCHEMA_ID);
-            assertThat(lookuper.lookup(paimonKey(schema, 5, "20240101"), context)).isNotNull();
+                        diskWriteGuard)) {
+            assertThat(
+                            lookuper.lookup(
+                                    paimonKey(schema, 5, "20240101"),
+                                    lookupContext(schema, "20240101", 0, SCHEMA_ID)))
+                    .isNotNull();
+            assertThat(
+                            lookuper.lookup(
+                                    paimonKey(schema, 6, "20240102"),
+                                    lookupContext(schema, "20240102", 0, SCHEMA_ID)))
+                    .isNotNull();
 
             new CompactHelper(table, new File(tempWarehouseDir, "compact"))
                     .compactBucket(partition, 0)
@@ -462,12 +495,55 @@ class PaimonLakeTableLookuperTest {
                 assertThat(table.store().snapshotManager().fileIO().exists(path)).isFalse();
             }
 
-            BinaryValue decodedValue =
-                    decodeValue(
-                            lookuper.lookup(paimonKey(schema, 1, "20240101"), context),
+            List<Boolean> refreshedLookupDownloads = new ArrayList<>();
+            List<Boolean> cachedLookupDownloads = new ArrayList<>();
+            LakeTableLookuper.LookupContext refreshedContext =
+                    lookupContext(
+                            schema,
+                            "20240101",
+                            0,
                             SCHEMA_ID,
-                            schema);
-            assertRow(decodedValue.row, 1, "20240101", "name-1");
+                            (lookupTimeNanos, lookupFileDownloaded) ->
+                                    refreshedLookupDownloads.add(lookupFileDownloaded));
+            LakeTableLookuper.LookupContext cachedContext =
+                    lookupContext(
+                            schema,
+                            "20240102",
+                            0,
+                            SCHEMA_ID,
+                            (lookupTimeNanos, lookupFileDownloaded) ->
+                                    cachedLookupDownloads.add(lookupFileDownloaded));
+            ExecutorService executor = Executors.newFixedThreadPool(2);
+            blockDownloads.set(true);
+            try {
+                Future<byte[]> refreshedLookup =
+                        executor.submit(
+                                () ->
+                                        lookuper.lookup(
+                                                paimonKey(schema, 1, "20240101"),
+                                                refreshedContext));
+                assertThat(downloadStarted.await(30, TimeUnit.SECONDS)).isTrue();
+
+                Future<byte[]> cachedLookup =
+                        executor.submit(
+                                () ->
+                                        lookuper.lookup(
+                                                paimonKey(schema, 6, "20240102"), cachedContext));
+                BinaryValue cachedValue =
+                        decodeValue(cachedLookup.get(30, TimeUnit.SECONDS), SCHEMA_ID, schema);
+                assertRow(cachedValue.row, 6, "20240102", "name-6");
+
+                continueDownload.countDown();
+                BinaryValue refreshedValue =
+                        decodeValue(refreshedLookup.get(30, TimeUnit.SECONDS), SCHEMA_ID, schema);
+                assertRow(refreshedValue.row, 1, "20240101", "name-1");
+            } finally {
+                continueDownload.countDown();
+                ExecutorUtils.gracefulShutdown(30, TimeUnit.SECONDS, executor);
+            }
+
+            assertThat(refreshedLookupDownloads).containsExactly(true);
+            assertThat(cachedLookupDownloads).containsExactly(false);
         }
     }
 

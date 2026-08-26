@@ -87,6 +87,10 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  * lookup I/O failure refreshes that partition-bucket with the files from the latest snapshot and
  * retries once.
  *
+ * <p>Lookup concurrency is delegated to {@link LocalTableQuery}. Older Paimon versions may
+ * serialize lookups internally, while Paimon 2.0 supports concurrent lookups without an additional
+ * Fluss-level lock.
+ *
  * <p>Close is expected only after the owner has drained active lookups. It is synchronized with
  * lazy initialization, but deliberately does not add a lifecycle lock to every lookup.
  */
