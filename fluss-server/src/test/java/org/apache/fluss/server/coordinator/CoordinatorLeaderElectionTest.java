@@ -124,6 +124,40 @@ class CoordinatorLeaderElectionTest {
     }
 
     @Test
+    void testIsLeaderElectedReflectsElectionState() throws Exception {
+        CoordinatorLeaderElection leaderElection =
+                new CoordinatorLeaderElection(zooKeeperClient, "coordinator-elected-leader");
+        CoordinatorLeaderElection standbyElection =
+                new CoordinatorLeaderElection(zooKeeperClient, "coordinator-elected-standby");
+        try {
+            // before the election starts there is nothing to report
+            assertThat(leaderElection.isLeaderElected()).isFalse();
+
+            leaderElection.startElectLeaderAsync(() -> {}, ignored -> {});
+            waitUntil(
+                    leaderElection::isLeader,
+                    Duration.ofSeconds(30),
+                    "Coordinator did not become leader");
+            assertThat(leaderElection.isLeaderElected()).isTrue();
+
+            // a standby participant sees the leader elected by another server
+            standbyElection.startElectLeaderAsync(() -> {}, ignored -> {});
+            waitUntil(
+                    standbyElection::isLeaderElected,
+                    Duration.ofSeconds(30),
+                    "Standby did not observe the elected leader");
+            assertThat(standbyElection.isLeader()).isFalse();
+        } finally {
+            standbyElection.close();
+            leaderElection.close();
+        }
+
+        // after close, no leader is reported regardless of group state
+        assertThat(standbyElection.isLeaderElected()).isFalse();
+        assertThat(leaderElection.isLeaderElected()).isFalse();
+    }
+
+    @Test
     void testInitializationFailureKeepsLeaderLatchAndBlocksReElection() throws Exception {
         CoordinatorLeaderElection failedElection =
                 new CoordinatorLeaderElection(zooKeeperClient, "coordinator-init-failure");

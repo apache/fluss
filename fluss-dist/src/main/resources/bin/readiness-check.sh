@@ -24,13 +24,17 @@
 #
 # Two-step readiness probe for Kubernetes StatefulSet rolling upgrades:
 #
-#   Step 1 — Local TCP port check: verify this TabletServer process is alive
+#   Step 1 — Local TCP port check: verify this server process is alive
 #            and has bound its RPC port. Fast, no external dependency.
 #
-#   Step 2 — Cluster health check: call the LOCAL TabletServer's Cluster
-#            Health API (which forwards to the Coordinator over the internal
-#            listener) and pass only if status is GREEN.
-#            YELLOW/RED/UNKNOWN means recovery is incomplete — block the upgrade.
+#   Step 2 — Cluster health check, role-dependent (READINESS_ROLE):
+#            tablet (default) — call the LOCAL TabletServer's Cluster Health
+#            API (which forwards to the Coordinator over the internal
+#            listener) and pass only if status is GREEN. YELLOW/RED/UNKNOWN
+#            means recovery is incomplete — block the upgrade.
+#            coordinator — call the LOCAL CoordinatorServer's Cluster Health
+#            API. A leader passes regardless of cluster color; a standby
+#            passes only when the coordinator group has an elected leader.
 #
 # Both steps must pass for the pod to be marked Ready.
 #
@@ -41,6 +45,8 @@
 #
 # Environment variables (set by helm template or container spec):
 #   FLUSS_HOME                    - Fluss installation directory
+#   READINESS_ROLE                - Role of the local server the probe talks to:
+#       "tablet" (default) or "coordinator".
 #   READINESS_TIMEOUT_MS          - Timeout for Health API call (default: 5000)
 #   READINESS_TCP_HOST            - TabletServer host the probe talks to. Defaults
 #       to ${POD_IP} when set (the typical Kubernetes case where bind.listeners
@@ -66,6 +72,7 @@ set -o pipefail
 # ---- Configuration ----
 
 FLUSS_HOME="${FLUSS_HOME:-/opt/fluss}"
+ROLE="${READINESS_ROLE:-tablet}"
 TIMEOUT_MS="${READINESS_TIMEOUT_MS:-5000}"
 # Probe the local sidecar tablet inside the same pod — it forwards the request
 # to the Coordinator internally, so the probe never has to know the
@@ -145,6 +152,7 @@ run_recovery_check() {
         -Xmx64m \
         -classpath "${classpath}" \
         org.apache.fluss.server.tools.ClusterHealthReadinessCheck \
+        --role "${ROLE}" \
         --host "${TCP_HOST}" \
         --port "${TCP_PORT}" \
         --timeoutMs "${timeout_ms}" 2>&1)
