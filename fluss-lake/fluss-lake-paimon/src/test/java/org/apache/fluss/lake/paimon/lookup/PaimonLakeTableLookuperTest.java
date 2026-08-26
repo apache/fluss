@@ -64,13 +64,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_2;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
@@ -348,107 +342,6 @@ class PaimonLakeTableLookuperTest {
                     decodeValue(lookuper.lookup(compactedKey, context), SCHEMA_ID, schema);
 
             assertRow(decodedValue.row, 1, "sub-1", "20240101", "Alice");
-        }
-    }
-
-    @Test
-    void testConcurrentLookupWithRequestScopedEncoders() throws Exception {
-        TablePath tablePath = TablePath.of(DB, "concurrent_non_default_bucket_key");
-        Schema schema =
-                Schema.newBuilder()
-                        .column("id", DataTypes.INT())
-                        .column("sub_id", DataTypes.STRING())
-                        .column("dt", DataTypes.STRING())
-                        .column("name", DataTypes.STRING())
-                        .primaryKey("id", "sub_id", "dt")
-                        .build();
-        TableDescriptor tableDescriptor =
-                TableDescriptor.builder()
-                        .schema(schema)
-                        .partitionedBy("dt")
-                        .distributedBy(1, "id")
-                        .build();
-        FileStoreTable table = createPaimonTable(tablePath, tableDescriptor);
-        writeAndCommitData(
-                table,
-                Collections.singletonMap(
-                        0,
-                        Arrays.asList(
-                                paimonRow(1, "sub-1", "20240101", "Alice"),
-                                paimonRow(2, "sub-2", "20240101", "Bob"))));
-
-        List<String> compactedKeys = Arrays.asList("id", "sub_id");
-        CompactedKeyEncoder keyEncoder =
-                CompactedKeyEncoder.createKeyEncoder(schema.getRowType(), compactedKeys);
-        byte[][] keys =
-                new byte[][] {
-                    keyEncoder.encodeKey(row(1, "sub-1", "20240101", "")),
-                    keyEncoder.encodeKey(row(2, "sub-2", "20240101", ""))
-                };
-        String[] subIds = new String[] {"sub-1", "sub-2"};
-        String[] names = new String[] {"Alice", "Bob"};
-
-        try (LakeTableLookuper lookuper =
-                new PaimonLakeTableLookuper(
-                        paimonConfig,
-                        tablePath,
-                        tempWarehouseDir.getAbsolutePath(),
-                        tableConfig(KvFormat.COMPACTED, KV_FORMAT_VERSION_2),
-                        LOOKUP_CACHE_MAX_DISK_BYTES,
-                        NO_OP_DISK_WRITE_GUARD)) {
-            AtomicInteger lookupFileDownloads = new AtomicInteger();
-            LakeTableLookuper.LookupContext context =
-                    lookupContext(
-                            schema,
-                            "20240101",
-                            0,
-                            SCHEMA_ID,
-                            (lookupTimeNanos, lookupFileDownloaded) -> {
-                                if (lookupFileDownloaded) {
-                                    lookupFileDownloads.incrementAndGet();
-                                }
-                            });
-            int threadCount = 8;
-            CountDownLatch start = new CountDownLatch(1);
-            ExecutorService executor = Executors.newFixedThreadPool(threadCount);
-            try {
-                List<Future<?>> futures = new ArrayList<>();
-                for (int thread = 0; thread < threadCount; thread++) {
-                    final int taskId = thread;
-                    futures.add(
-                            executor.submit(
-                                    () -> {
-                                        start.await();
-                                        for (int lookup = 0; lookup < 50; lookup++) {
-                                            int rowIndex = (taskId + lookup) % keys.length;
-                                            BinaryValue value =
-                                                    decodeValue(
-                                                            lookuper.lookup(
-                                                                    keys[rowIndex], context),
-                                                            SCHEMA_ID,
-                                                            schema);
-                                            assertRow(
-                                                    value.row,
-                                                    rowIndex + 1,
-                                                    subIds[rowIndex],
-                                                    "20240101",
-                                                    names[rowIndex]);
-                                        }
-                                        return null;
-                                    }));
-                }
-
-                start.countDown();
-                for (Future<?> future : futures) {
-                    future.get(30, TimeUnit.SECONDS);
-                }
-            } finally {
-                executor.shutdownNow();
-            }
-
-            // All concurrent requests query the same remote data file. Only the request that
-            // creates its local lookup file should be attributed with the download.
-            assertThat(lookupFileDownloads).hasValue(1);
         }
     }
 
