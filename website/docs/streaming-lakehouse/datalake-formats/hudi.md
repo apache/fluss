@@ -137,6 +137,10 @@ The schema of the Hudi table matches the Fluss table schema, containing only the
 
 The names `__bucket`, `__offset`, and `__timestamp` are reserved for Fluss internal use, so do not use user columns with these names. Hudi metadata column names starting with `_hoodie_` are also reserved.
 
+:::note
+Unlike Paimon and Iceberg, the Hudi lake storage was never exposed in a publicly released Fluss version, so there are no legacy Hudi tables carrying system columns. Hudi therefore only ever uses the clean layout, and the legacy-table rolling-upgrade considerations in the [Upgrade Notes](../../maintenance/operations/upgrade-notes-1.0.md) do not apply to Hudi.
+:::
+
 ### Primary Key Tables
 
 Primary-key Fluss tables are mapped to Hudi Merge-On-Read tables:

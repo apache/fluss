@@ -218,8 +218,17 @@ Use Iceberg-specific configurations as parameters when starting the Flink tierin
 
 When a Fluss table is created or altered with the option `'table.datalake.enabled' = 'true'` and configured with Iceberg as the datalake format, Fluss will automatically create a corresponding Iceberg table with the same table path.
 
-The schema of the Iceberg table matches that of the Fluss table, except for the addition of three system columns at the end: `__bucket`, `__offset`, and `__timestamp`.  
-These system columns help Fluss clients consume data from Iceberg in a streaming fashion, such as seeking by a specific bucket using an offset or timestamp.
+Newly created Iceberg tables (**clean** tables) contain only the user-defined columns of the Fluss table. Fluss no longer appends the `__bucket`, `__offset`, and `__timestamp` system columns to the physical schema, and a clean table therefore has no `__bucket` partitioning or `__offset` sort order.
+
+:::note
+Iceberg tables created by earlier Fluss versions (**legacy** tables) still carry the three trailing system columns, together with the `__bucket` partitioning and `__offset` sort order described in the sections below. These tables are **not** migrated and remain fully readable and writable. Fluss detects the layout from the physical schema — a table is treated as legacy when it carries the system columns, and clean otherwise — so both layouts are supported side by side without any manual migration.
+
+The `__bucket` partitioning, `__offset` sort order, and system columns shown in the **Primary Key Tables**, **Log Tables**, and **Partitioned Tables** sections below describe the **legacy** physical layout. A clean table has none of them.
+
+The names `__bucket`, `__offset`, and `__timestamp` remain reserved for Fluss internal use, so user columns must not use these names.
+
+For the rolling-upgrade requirements when moving to a Fluss version that creates clean tables, see [Upgrade Notes](../../maintenance/operations/upgrade-notes-1.0.md).
+:::
 
 ### Basic Configuration
 
@@ -415,7 +424,7 @@ SORTED BY (__offset ASC);
 
 ### System Columns
 
-All Iceberg tables created by Fluss include three system columns:
+**Legacy** Iceberg tables (created by earlier Fluss versions) include three trailing system columns. Newly created **clean** tables do not include them.
 
 | Column        | Type          | Description                                   |
 |---------------|---------------|-----------------------------------------------|
