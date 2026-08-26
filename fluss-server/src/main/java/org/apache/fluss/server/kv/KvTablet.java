@@ -22,6 +22,7 @@ import org.apache.fluss.compression.ArrowCompressionInfo;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.DeletionDisabledException;
+import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.exception.SchemaNotExistException;
@@ -99,14 +100,43 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executor;
+import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReadWriteLock;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import static org.apache.fluss.utils.Preconditions.checkState;
+import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
 import static org.apache.fluss.utils.concurrent.LockUtils.inReadLock;
 import static org.apache.fluss.utils.concurrent.LockUtils.inWriteLock;
 
-/** A kv tablet which presents a unified view of kv storage. */
+/**
+ * A KV tablet that presents the committed RocksDB state and coordinates the mutable write pipeline
+ * used to produce that state.
+ *
+ * <p>The tablet uses two locks with deliberately different scopes:
+ *
+ * <ul>
+ *   <li>{@code kvStateLock} protects the RocksDB-visible state and the tablet lifecycle. Ordinary
+ *       lookups and puts take its read lock, so a lookup may execute concurrently with a put.
+ *       Flush, snapshot and close take its write lock because they must exclude both operations.
+ *   <li>{@code mutationLock} serializes the non-thread-safe write pipeline: row merging,
+ *       auto-increment allocation, pre-write-buffer mutation, WAL append and rollback. It keeps
+ *       put-put ordering without making ordinary lookups wait for that work.
+ * </ul>
+ *
+ * <p>When both locks are needed, the only valid order is {@code kvStateLock -> mutationLock}. Lock
+ * upgrading and the reverse order are forbidden. In particular, a put that requests backpressure
+ * flushing must release both locks before requesting {@code kvStateLock}'s write lock, and
+ * callbacks that may enter Replica lifecycle code must run after both locks are released.
+ *
+ * <p>A logical flush holds both locks across every native RocksDB write and the corresponding
+ * {@code flushedLogOffset}/{@code rowCount} update. Consequently, a lookup can observe either the
+ * state before the flush or the completed state, but never an intermediate prefix of a segmented
+ * flush. Close holds {@code kvStateLock}'s write lock while closing RocksDB, which makes a
+ * point-lookup lease unnecessary. Resources that outlive one lock acquisition, such as scan
+ * iterators, must still retain a {@link ResourceGuard.Lease} for their full lifetime.
+ */
 @ThreadSafe
 public final class KvTablet {
     private static final Logger LOG = LoggerFactory.getLogger(KvTablet.class);
@@ -148,8 +178,18 @@ public final class KvTablet {
     private final KvFlushScheduler kvFlushScheduler;
     private final boolean closeFlushScheduler;
 
-    // A lock that guards all modifications to the kv.
-    private final ReadWriteLock kvLock = new ReentrantReadWriteLock();
+    /**
+     * Guards RocksDB-visible state and the tablet lifecycle. Read holders may access a live RocksDB
+     * instance; write holders may atomically publish a flush, take a snapshot or close it.
+     */
+    private final ReadWriteLock kvStateLock = new ReentrantReadWriteLock();
+
+    /**
+     * Serializes merge, auto-increment, pre-write-buffer mutation, WAL append and rollback. If
+     * acquired together with {@link #kvStateLock}, this lock must always be acquired second.
+     */
+    private final Lock mutationLock = new ReentrantLock();
+
     private final LogFormat logFormat;
     private final KvFormat kvFormat;
     // defines how to merge rows on the same primary key
@@ -174,13 +214,13 @@ public final class KvTablet {
      */
     private volatile long flushedLogOffset = 0;
 
-    @GuardedBy("kvLock")
+    @GuardedBy("kvStateLock")
     private FlushState flushState = FlushState.IDLE;
 
-    @GuardedBy("kvLock")
+    @GuardedBy("kvStateLock")
     private long requestedFlushOffset = 0;
 
-    @GuardedBy("kvLock")
+    @GuardedBy("kvStateLock")
     private int flushRetryAttempts = 0;
 
     /** Invoked after each flush that made progress; set at construction time by the owner. */
@@ -190,7 +230,7 @@ public final class KvTablet {
 
     private volatile long rowCount;
 
-    @GuardedBy("kvLock")
+    @GuardedBy("kvStateLock")
     private volatile boolean isClosed = false;
 
     private KvTablet(
@@ -465,10 +505,10 @@ public final class KvTablet {
      * ID range. This is used for snapshot and recovery to capture the state of the tablet at a
      * specific log offset.
      *
-     * <p>Note: this method must be called under the kvLock to ensure the consistency between the
-     * returned state and the log offset.
+     * <p>Note: this method must be called under the kvStateLock to ensure the consistency between
+     * the returned state and the log offset.
      */
-    @GuardedBy("kvLock")
+    @GuardedBy("kvStateLock")
     public TabletState getTabletState() {
         return new TabletState(
                 flushedLogOffset,
@@ -514,103 +554,154 @@ public final class KvTablet {
     public LogAppendInfo putAsLeader(
             KvRecordBatch kvRecords, @Nullable int[] targetColumns, MergeMode mergeMode)
             throws Exception {
-        return inWriteLock(
-                kvLock,
-                () -> {
-                    rocksDBKv.checkIfRocksDBClosed();
+        try {
+            return inReadLock(
+                    kvStateLock,
+                    () ->
+                            inLock(
+                                    mutationLock,
+                                    () -> {
+                                        checkIfClosed();
 
-                    long pendingFlushBytesAfterWrite =
-                            kvPreWriteBuffer.pendingFlushBytes() + kvRecords.sizeInBytes();
+                                        long pendingFlushBytesAfterWrite =
+                                                kvPreWriteBuffer.pendingFlushBytes()
+                                                        + kvRecords.sizeInBytes();
 
-                    // Write-path admission gate: reject the request if accepting this batch would
-                    // push the buffered KV view beyond RocksDB's safe write budget.
-                    if (rocksDBKv.wouldExceedFlushBudget(pendingFlushBytesAfterWrite)) {
-                        requestFlushInternal(
-                                Math.max(requestedFlushOffset, logTablet.getHighWatermark()));
-                        throw new StorageBackpressureException(
-                                String.format(
-                                        "Write rejected for %s: flush budget exceeded "
-                                                + "(storage pressure or buffer size limit reached). "
-                                                + "Retry after backoff.",
-                                        tableBucket));
-                    }
+                                        // Write-path admission gate: reject the request if
+                                        // accepting this batch would
+                                        // push the buffered KV view beyond RocksDB's safe write
+                                        // budget.
+                                        if (rocksDBKv.wouldExceedFlushBudget(
+                                                pendingFlushBytesAfterWrite)) {
+                                            throw new StorageBackpressureException(
+                                                    String.format(
+                                                            "Write rejected for %s: flush budget exceeded "
+                                                                    + "(storage pressure or buffer size limit reached). "
+                                                                    + "Retry after backoff.",
+                                                            tableBucket));
+                                        }
 
-                    SchemaInfo schemaInfo = schemaGetter.getLatestSchemaInfo();
-                    Schema latestSchema = schemaInfo.getSchema();
-                    short latestSchemaId = (short) schemaInfo.getSchemaId();
-                    validateSchemaId(kvRecords.schemaId(), latestSchemaId);
+                                        SchemaInfo schemaInfo = schemaGetter.getLatestSchemaInfo();
+                                        Schema latestSchema = schemaInfo.getSchema();
+                                        short latestSchemaId = (short) schemaInfo.getSchemaId();
+                                        validateSchemaId(kvRecords.schemaId(), latestSchemaId);
 
-                    AutoIncrementUpdater currentAutoIncrementUpdater =
-                            autoIncrementManager.getUpdaterForSchema(kvFormat, latestSchemaId);
+                                        AutoIncrementUpdater currentAutoIncrementUpdater =
+                                                autoIncrementManager.getUpdaterForSchema(
+                                                        kvFormat, latestSchemaId);
 
-                    // Validate targetColumns doesn't contain auto-increment column
-                    currentAutoIncrementUpdater.validateTargetColumns(targetColumns);
+                                        // Validate targetColumns doesn't contain auto-increment
+                                        // column
+                                        currentAutoIncrementUpdater.validateTargetColumns(
+                                                targetColumns);
 
-                    // Determine the row merger based on mergeMode:
-                    // - DEFAULT: Use the configured merge engine (rowMerger)
-                    // - OVERWRITE: Bypass merge engine, use pre-created overwriteRowMerger
-                    //   to directly replace values (for undo recovery scenarios)
-                    // We only support ADD COLUMN, so targetColumns is fine to be used directly.
-                    RowMerger currentMerger =
-                            (mergeMode == MergeMode.OVERWRITE)
-                                    ? overwriteRowMerger.configureTargetColumns(
-                                            targetColumns, latestSchemaId, latestSchema)
-                                    : rowMerger.configureTargetColumns(
-                                            targetColumns, latestSchemaId, latestSchema);
+                                        // Determine the row merger based on mergeMode:
+                                        // - DEFAULT: Use the configured merge engine (rowMerger)
+                                        // - OVERWRITE: Bypass merge engine, use pre-created
+                                        // overwriteRowMerger
+                                        //   to directly replace values (for undo recovery
+                                        // scenarios)
+                                        // We only support ADD COLUMN, so targetColumns is fine to
+                                        // be used directly.
+                                        RowMerger currentMerger =
+                                                (mergeMode == MergeMode.OVERWRITE)
+                                                        ? overwriteRowMerger.configureTargetColumns(
+                                                                targetColumns,
+                                                                latestSchemaId,
+                                                                latestSchema)
+                                                        : rowMerger.configureTargetColumns(
+                                                                targetColumns,
+                                                                latestSchemaId,
+                                                                latestSchema);
 
-                    RowType latestRowType = latestSchema.getRowType();
-                    WalBuilder walBuilder = createWalBuilder(latestSchemaId, latestRowType);
-                    walBuilder.setWriterState(kvRecords.writerId(), kvRecords.batchSequence());
-                    // we only support ADD COLUMN LAST, so the BinaryRow after RowMerger is
-                    // only has fewer ending columns than latest schema, so we pad nulls to
-                    // the end of the BinaryRow to get the latest schema row.
-                    PaddingRow latestSchemaRow = new PaddingRow(latestRowType.getFieldCount());
-                    // get offset to track the offset corresponded to the kv record
-                    long logEndOffsetOfPrevBatch = logTablet.localLogEndOffset();
+                                        RowType latestRowType = latestSchema.getRowType();
+                                        WalBuilder walBuilder =
+                                                createWalBuilder(latestSchemaId, latestRowType);
+                                        walBuilder.setWriterState(
+                                                kvRecords.writerId(), kvRecords.batchSequence());
+                                        // we only support ADD COLUMN LAST, so the BinaryRow after
+                                        // RowMerger is
+                                        // only has fewer ending columns than latest schema, so we
+                                        // pad nulls to
+                                        // the end of the BinaryRow to get the latest schema row.
+                                        PaddingRow latestSchemaRow =
+                                                new PaddingRow(latestRowType.getFieldCount());
+                                        // get offset to track the offset corresponded to the kv
+                                        // record
+                                        long logEndOffsetOfPrevBatch =
+                                                logTablet.localLogEndOffset();
 
-                    try {
-                        processKvRecords(
-                                kvRecords,
-                                kvRecords.schemaId(),
-                                currentMerger,
-                                currentAutoIncrementUpdater,
-                                walBuilder,
-                                latestSchemaRow,
-                                logEndOffsetOfPrevBatch);
+                                        try {
+                                            processKvRecords(
+                                                    kvRecords,
+                                                    kvRecords.schemaId(),
+                                                    currentMerger,
+                                                    currentAutoIncrementUpdater,
+                                                    walBuilder,
+                                                    latestSchemaRow,
+                                                    logEndOffsetOfPrevBatch);
 
-                        // There will be a situation that these batches of kvRecordBatch have not
-                        // generated any CDC logs, for example, when client attempts to delete
-                        // some non-existent keys or MergeEngineType set to FIRST_ROW. In this case,
-                        // we cannot simply return, as doing so would cause a
-                        // OutOfOrderSequenceException problem. Therefore, here we will build an
-                        // empty batch with lastLogOffset to 0L as the baseLogOffset is 0L. As doing
-                        // that, the logOffsetDelta in logRecordBatch will be set to 0L. So, we will
-                        // put a batch into file with recordCount 0 and offset plus 1L, it will
-                        // update the batchSequence corresponding to the writerId and also increment
-                        // the CDC log offset by 1.
-                        LogAppendInfo logAppendInfo = logTablet.appendAsLeader(walBuilder.build());
+                                            // There will be a situation that these batches of
+                                            // kvRecordBatch have not
+                                            // generated any CDC logs, for example, when client
+                                            // attempts to delete
+                                            // some non-existent keys or MergeEngineType set to
+                                            // FIRST_ROW. In this case,
+                                            // we cannot simply return, as doing so would cause a
+                                            // OutOfOrderSequenceException problem. Therefore, here
+                                            // we will build an
+                                            // empty batch with lastLogOffset to 0L as the
+                                            // baseLogOffset is 0L. As doing
+                                            // that, the logOffsetDelta in logRecordBatch will be
+                                            // set to 0L. So, we will
+                                            // put a batch into file with recordCount 0 and offset
+                                            // plus 1L, it will
+                                            // update the batchSequence corresponding to the
+                                            // writerId and also increment
+                                            // the CDC log offset by 1.
+                                            LogAppendInfo logAppendInfo =
+                                                    logTablet.appendAsLeader(walBuilder.build());
 
-                        // if the batch is duplicated, we should truncate the kvPreWriteBuffer
-                        // already written.
-                        if (logAppendInfo.duplicated()) {
-                            kvPreWriteBuffer.truncateTo(
-                                    logEndOffsetOfPrevBatch, TruncateReason.DUPLICATED);
-                        }
-                        return logAppendInfo;
-                    } catch (Throwable t) {
-                        // While encounter error here, the CDC logs may fail writing to disk,
-                        // and the client probably will resend the batch. If we do not remove the
-                        // values generated by the erroneous batch from the kvPreWriteBuffer, the
-                        // retry-send batch will produce incorrect CDC logs.
-                        // TODO for some errors, the cdc logs may already be written to disk, for
-                        //  those errors, we should not truncate the kvPreWriteBuffer.
-                        kvPreWriteBuffer.truncateTo(logEndOffsetOfPrevBatch, TruncateReason.ERROR);
-                        throw t;
-                    } finally {
-                        // deallocate the memory and arrow writer used by the wal builder
-                        walBuilder.deallocate();
-                    }
-                });
+                                            // if the batch is duplicated, we should truncate the
+                                            // kvPreWriteBuffer
+                                            // already written.
+                                            if (logAppendInfo.duplicated()) {
+                                                kvPreWriteBuffer.truncateTo(
+                                                        logEndOffsetOfPrevBatch,
+                                                        TruncateReason.DUPLICATED);
+                                            }
+                                            return logAppendInfo;
+                                        } catch (Throwable t) {
+                                            // While encounter error here, the CDC logs may fail
+                                            // writing to disk,
+                                            // and the client probably will resend the batch. If we
+                                            // do not remove the
+                                            // values generated by the erroneous batch from the
+                                            // kvPreWriteBuffer, the
+                                            // retry-send batch will produce incorrect CDC logs.
+                                            // TODO for some errors, the cdc logs may already be
+                                            // written to disk, for
+                                            //  those errors, we should not truncate the
+                                            // kvPreWriteBuffer.
+                                            kvPreWriteBuffer.truncateTo(
+                                                    logEndOffsetOfPrevBatch, TruncateReason.ERROR);
+                                            throw t;
+                                        } finally {
+                                            // deallocate the memory and arrow writer used by the
+                                            // wal builder
+                                            walBuilder.deallocate();
+                                        }
+                                    }));
+        } catch (StorageBackpressureException e) {
+            // Releasing the read lock before requesting a flush avoids a read-to-write lock
+            // upgrade, which ReentrantReadWriteLock does not support.
+            inWriteLock(
+                    kvStateLock,
+                    () ->
+                            requestFlushInternal(
+                                    Math.max(requestedFlushOffset, logTablet.getHighWatermark())));
+            throw e;
+        }
     }
 
     private void validateSchemaId(short schemaIdOfNewData, short latestSchemaId) {
@@ -833,7 +924,7 @@ public final class KvTablet {
 
     public void requestFlush(long exclusiveUpToLogOffset, FatalErrorHandler fatalErrorHandler) {
         asyncFatalErrorHandler = fatalErrorHandler;
-        inWriteLock(kvLock, () -> requestFlushInternal(exclusiveUpToLogOffset));
+        inWriteLock(kvStateLock, () -> requestFlushInternal(exclusiveUpToLogOffset));
     }
 
     /** Detaches or replaces the flush-complete listener set at construction time. */
@@ -848,15 +939,15 @@ public final class KvTablet {
 
     @VisibleForTesting
     FlushState getFlushState() {
-        return inReadLock(kvLock, () -> flushState);
+        return inReadLock(kvStateLock, () -> flushState);
     }
 
     @VisibleForTesting
     void setFlushState(FlushState state) {
-        inWriteLock(kvLock, () -> flushState = state);
+        inWriteLock(kvStateLock, () -> flushState = state);
     }
 
-    @GuardedBy("kvLock")
+    @GuardedBy("kvStateLock")
     private void requestFlushInternal(long exclusiveUpToLogOffset) {
         if (isClosed || exclusiveUpToLogOffset <= flushedLogOffset) {
             return;
@@ -872,7 +963,7 @@ public final class KvTablet {
 
     void requestFlushRetry() {
         inWriteLock(
-                kvLock,
+                kvStateLock,
                 () -> {
                     if (!isClosed && flushState == FlushState.STORAGE_BLOCKED) {
                         transitionFlushState(FlushState.STORAGE_BLOCKED, FlushState.QUEUED);
@@ -891,27 +982,29 @@ public final class KvTablet {
         // target instead of chasing an ever-increasing requestedFlushOffset within one run.
         long flushedOffsetBefore = flushedLogOffset;
         try {
-            // The whole prepare -> write -> complete sequence runs under the kvLock write lock,
-            // so snapshots, scans and puts can only observe states where the RocksDB content
-            // matches flushedLogOffset/rowCount. The RocksDB lease is acquired strictly inside
-            // kvLock, keeping the lock order kvLock -> lease on every path.
-            inWriteLock(kvLock, this::doScheduledFlush);
+            // Keep the complete logical flush hidden from lookups. writePreparedFlush may issue
+            // several native RocksDB writes, so releasing kvStateLock between segments would
+            // expose a partially applied flush. mutationLock also excludes every pre-write-buffer
+            // and auto-increment mutation while the flush state is being committed.
+            inWriteLock(kvStateLock, () -> inLock(mutationLock, this::doScheduledFlush));
         } catch (StorageBackpressureException e) {
             delayScheduledFlush(e);
         } catch (Throwable t) {
             failScheduledFlush(t);
         } finally {
             // Publish progress (including the completed prefix of a partially rejected run) so
-            // the high watermark can advance. Runs outside kvLock because the listener acquires
+            // the high watermark can advance. Runs outside kvStateLock because the listener
+            // acquires
             // the replica's leaderIsrUpdateLock while the write path acquires
-            // leaderIsrUpdateLock -> kvLock; invoking it under kvLock would invert that order.
+            // leaderIsrUpdateLock -> kvStateLock; invoking it under kvStateLock would invert that
+            // order.
             if (flushedLogOffset > flushedOffsetBefore) {
                 notifyFlushComplete();
             }
         }
     }
 
-    @GuardedBy("kvLock")
+    @GuardedBy("kvStateLock")
     private void doScheduledFlush() throws Exception {
         PreparedFlush preparedFlush = prepareScheduledFlush();
         if (preparedFlush == null) {
@@ -929,7 +1022,7 @@ public final class KvTablet {
 
     private boolean tryAcquireScheduledFlush() {
         return inWriteLock(
-                kvLock,
+                kvStateLock,
                 () -> {
                     if (isClosed || flushState != FlushState.QUEUED) {
                         return false;
@@ -939,7 +1032,7 @@ public final class KvTablet {
                 });
     }
 
-    @GuardedBy("kvLock")
+    @GuardedBy("kvStateLock")
     private @Nullable PreparedFlush prepareScheduledFlush() {
         if (isClosed) {
             // close() already forced the state machine to its terminal IDLE state.
@@ -956,7 +1049,7 @@ public final class KvTablet {
         } catch (IllegalStateException e) {
             // Orphaned PREPARED entries from a previous incomplete flush cycle. Structurally
             // unreachable now that every flush run completes or aborts all its prepared entries
-            // before releasing kvLock; kept as defense in depth.
+            // before releasing kvStateLock; kept as defense in depth.
             LOG.warn("Found orphaned PREPARED entries in {}, aborting.", tableBucket, e);
             kvPreWriteBuffer.abortAllPrepared();
             transitionFlushState(FlushState.RUNNING, FlushState.STORAGE_BLOCKED);
@@ -976,7 +1069,7 @@ public final class KvTablet {
      * immediately after it lands, so {@code flushedLogOffset}/{@code rowCount} stay consistent with
      * the RocksDB content even if a later segment is rejected by the no-slowdown gate.
      */
-    @GuardedBy("kvLock")
+    @GuardedBy("kvStateLock")
     private void writePreparedFlush(PreparedFlush preparedFlush) throws Exception {
         List<PreparedFlush> segments =
                 preparedFlush.split(writeBatchSize, MAX_RECORDS_PER_NATIVE_WRITE);
@@ -1012,7 +1105,7 @@ public final class KvTablet {
      * Publishes one flushed segment: removes its entries from the pre-write buffer and advances
      * {@code flushedLogOffset}/{@code rowCount} to cover exactly the data now in RocksDB.
      */
-    @GuardedBy("kvLock")
+    @GuardedBy("kvStateLock")
     private void completeFlushedSegment(PreparedFlush segment) {
         int rowCountDiff = kvPreWriteBuffer.completeFlush(segment);
         if (segment.exclusiveUpToLogSequenceNumber() > flushedLogOffset) {
@@ -1027,7 +1120,7 @@ public final class KvTablet {
         resetFlushRetryBackoff();
     }
 
-    @GuardedBy("kvLock")
+    @GuardedBy("kvStateLock")
     private void finishScheduledFlush() {
         if (isClosed) {
             // close() already forced the state machine to its terminal IDLE state.
@@ -1047,25 +1140,30 @@ public final class KvTablet {
     @VisibleForTesting
     void completeScheduledFlush(PreparedFlush preparedFlush) {
         inWriteLock(
-                kvLock,
-                () -> {
-                    if (!isClosed) {
-                        completeFlushedSegment(preparedFlush);
-                    }
-                    finishScheduledFlush();
-                });
+                kvStateLock,
+                () ->
+                        inLock(
+                                mutationLock,
+                                () -> {
+                                    if (!isClosed) {
+                                        completeFlushedSegment(preparedFlush);
+                                    }
+                                    finishScheduledFlush();
+                                }));
     }
 
     @VisibleForTesting
     void abortScheduledFlush(PreparedFlush preparedFlush) {
-        inWriteLock(kvLock, () -> kvPreWriteBuffer.abortFlush(preparedFlush));
+        inWriteLock(
+                kvStateLock,
+                () -> inLock(mutationLock, () -> kvPreWriteBuffer.abortFlush(preparedFlush)));
     }
 
     @VisibleForTesting
     void delayScheduledFlush(StorageBackpressureException e) {
         LOG.debug("KV flush for {} delayed by RocksDB backpressure.", tableBucket, e);
         inWriteLock(
-                kvLock,
+                kvStateLock,
                 () -> {
                     if (!isClosed) {
                         transitionFlushState(FlushState.RUNNING, FlushState.STORAGE_BLOCKED);
@@ -1083,7 +1181,7 @@ public final class KvTablet {
      * saturates; the shift is capped at {@link #MAX_FLUSH_RETRY_BACKOFF_SHIFT} so the shifted value
      * stays bounded and cannot overflow.
      */
-    @GuardedBy("kvLock")
+    @GuardedBy("kvStateLock")
     private long nextFlushRetryDelayMs() {
         int shift = Math.min(flushRetryAttempts, MAX_FLUSH_RETRY_BACKOFF_SHIFT);
         if (flushRetryAttempts < MAX_FLUSH_RETRY_BACKOFF_SHIFT) {
@@ -1092,26 +1190,27 @@ public final class KvTablet {
         return Math.min(MIN_FLUSH_RETRY_DELAY_MS << shift, MAX_FLUSH_RETRY_DELAY_MS);
     }
 
-    @GuardedBy("kvLock")
+    @GuardedBy("kvStateLock")
     private void resetFlushRetryBackoff() {
         flushRetryAttempts = 0;
     }
 
     private void failScheduledFlush(Throwable t) {
-        inWriteLock(
-                kvLock,
-                () -> {
-                    // Fatal path: force the state machine back to IDLE regardless of the current
-                    // state (a concurrent close() may have forced IDLE already).
-                    flushState = FlushState.IDLE;
-                    FatalErrorHandler fatalErrorHandler = asyncFatalErrorHandler;
-                    if (fatalErrorHandler != null) {
-                        fatalErrorHandler.onFatalError(
-                                new KvStorageException("Failed to flush kv pre-write buffer.", t));
-                    } else {
-                        LOG.error("Failed to flush kv pre-write buffer for {}.", tableBucket, t);
-                    }
-                });
+        FatalErrorHandler fatalErrorHandler =
+                inWriteLock(
+                        kvStateLock,
+                        () -> {
+                            // Fatal path: force the state machine back to IDLE regardless of the
+                            // current state (a concurrent close() may have forced IDLE already).
+                            flushState = FlushState.IDLE;
+                            return asyncFatalErrorHandler;
+                        });
+        if (fatalErrorHandler != null) {
+            fatalErrorHandler.onFatalError(
+                    new KvStorageException("Failed to flush kv pre-write buffer.", t));
+        } else {
+            LOG.error("Failed to flush kv pre-write buffer for {}.", tableBucket, t);
+        }
     }
 
     private void notifyFlushComplete() {
@@ -1138,14 +1237,17 @@ public final class KvTablet {
     }
 
     /**
-     * Get a executor that executes submitted runnable tasks with preventing any concurrent
-     * modification to this tablet.
+     * Returns an executor that runs a task against one stable tablet state.
+     *
+     * <p>The task runs under {@code kvStateLock.write -> mutationLock}. Snapshot creation uses this
+     * boundary so its RocksDB checkpoint, flushed offset, row count and auto-increment range all
+     * describe the same state.
      *
      * @return An executor that wraps task execution within the lock for all modification to this
      *     tablet.
      */
     public Executor getGuardedExecutor() {
-        return runnable -> inWriteLock(kvLock, runnable::run);
+        return runnable -> inWriteLock(kvStateLock, () -> inLock(mutationLock, runnable::run));
     }
 
     // get from kv pre-write buffer first, if can't find, get from rocksdb
@@ -1157,11 +1259,19 @@ public final class KvTablet {
         return value.get();
     }
 
+    /**
+     * Reads committed values directly from RocksDB.
+     *
+     * <p>This method intentionally does not acquire {@code mutationLock} and does not inspect the
+     * pre-write buffer. It can therefore overlap a put while preserving the existing rule that
+     * unflushed WAL records are invisible to ordinary lookup clients. The {@code kvStateLock} read
+     * lock prevents concurrent logical flush publication and native RocksDB close.
+     */
     public List<byte[]> multiGet(List<byte[]> keys) throws IOException {
         return inReadLock(
-                kvLock,
+                kvStateLock,
                 () -> {
-                    rocksDBKv.checkIfRocksDBClosed();
+                    checkIfClosed();
                     return rocksDBKv.multiGet(keys);
                 });
     }
@@ -1176,39 +1286,42 @@ public final class KvTablet {
      */
     public List<byte[]> multiGetFromBufferOrKv(List<byte[]> keys) throws IOException {
         return inReadLock(
-                kvLock,
-                () -> {
-                    rocksDBKv.checkIfRocksDBClosed();
-                    List<byte[]> values = new ArrayList<>(keys.size());
-                    for (byte[] key : keys) {
-                        values.add(getFromBufferOrKv(KvPreWriteBuffer.Key.of(key)));
-                    }
-                    return values;
-                });
+                kvStateLock,
+                () ->
+                        inLock(
+                                mutationLock,
+                                () -> {
+                                    checkIfClosed();
+                                    List<byte[]> values = new ArrayList<>(keys.size());
+                                    for (byte[] key : keys) {
+                                        values.add(getFromBufferOrKv(KvPreWriteBuffer.Key.of(key)));
+                                    }
+                                    return values;
+                                }));
     }
 
     public List<byte[]> prefixLookup(byte[] prefixKey) throws IOException {
         return inReadLock(
-                kvLock,
+                kvStateLock,
                 () -> {
-                    rocksDBKv.checkIfRocksDBClosed();
+                    checkIfClosed();
                     return rocksDBKv.prefixLookup(prefixKey);
                 });
     }
 
     public List<byte[]> limitScan(int limit) throws IOException {
         return inReadLock(
-                kvLock,
+                kvStateLock,
                 () -> {
-                    rocksDBKv.checkIfRocksDBClosed();
+                    checkIfClosed();
                     return rocksDBKv.limitScan(limit);
                 });
     }
 
     /**
-     * Opens a new full-scan session under the {@code kvLock} read lock. Returns an empty-bucket
-     * result (context = {@code null}, all RocksDB resources released internally) when the bucket
-     * has no rows. The returned {@link ScannerContext} is unregistered; the caller owns
+     * Opens a new full-scan session under the {@code kvStateLock} read lock. Returns an
+     * empty-bucket result (context = {@code null}, all RocksDB resources released internally) when
+     * the bucket has no rows. The returned {@link ScannerContext} is unregistered; the caller owns
      * registration and close.
      *
      * @param limit row-count cap across all batches ({@code ≤ 0} means unlimited)
@@ -1217,9 +1330,9 @@ public final class KvTablet {
     public OpenScanResult openScan(String scannerId, long limit, long initialAccessTimeMs)
             throws IOException {
         return inReadLock(
-                kvLock,
+                kvStateLock,
                 () -> {
-                    rocksDBKv.checkIfRocksDBClosed();
+                    checkIfClosed();
                     ResourceGuard.Lease lease = rocksDBKv.getResourceGuard().acquireResource();
                     Snapshot snapshot = null;
                     ReadOptions readOptions = null;
@@ -1227,7 +1340,7 @@ public final class KvTablet {
                     boolean success = false;
                     try {
                         snapshot = rocksDBKv.getDb().getSnapshot();
-                        // Capture under kvLock so the offset matches the data visible through
+                        // Capture under kvStateLock so the offset matches the data visible through
                         // the snapshot.
                         long capturedLogOffset = flushedLogOffset;
                         readOptions = new ReadOptions().setSnapshot(snapshot);
@@ -1299,7 +1412,7 @@ public final class KvTablet {
                 closeMode);
         boolean shouldClose =
                 inWriteLock(
-                        kvLock,
+                        kvStateLock,
                         () -> {
                             if (isClosed) {
                                 return false;
@@ -1314,22 +1427,26 @@ public final class KvTablet {
             kvFlushScheduler.close();
         }
         if (shouldClose && rocksDBKv != null) {
-            // Note: RocksDB metrics lifecycle is managed by TableMetricGroup.
-            // Close outside kvLock so an async flush can finish and release its RocksDB lease.
-            rocksDBKv.close(closeMode);
+            // isClosed rejects operations entering during scheduler shutdown. The write lock here
+            // then waits for all point lookups and puts that entered before closure, and remains
+            // held throughout native close. Long-lived scanners are protected separately by their
+            // ResourceGuard leases. RocksDB metrics lifecycle is managed by TableMetricGroup.
+            inWriteLock(kvStateLock, () -> rocksDBKv.close(closeMode));
         }
     }
 
     /** Completely delete the kv directory and all contents form the file system with no delay. */
     public void drop() throws Exception {
-        inWriteLock(
-                kvLock,
-                () -> {
-                    // first close the kv.
-                    close(KvCloseMode.DISCARD_UNPERSISTED_STATE);
-                    // then delete the directory.
-                    FileUtils.deleteDirectory(kvTabletDir);
-                });
+        close(KvCloseMode.DISCARD_UNPERSISTED_STATE);
+        FileUtils.deleteDirectory(kvTabletDir);
+    }
+
+    @GuardedBy("kvStateLock")
+    private void checkIfClosed() {
+        if (isClosed) {
+            throw new FlussRuntimeException("The KV tablet " + tableBucket + " is already closed");
+        }
+        rocksDBKv.checkIfRocksDBClosed();
     }
 
     public RocksIncrementalSnapshot createIncrementalSnapshot(
@@ -1367,7 +1484,7 @@ public final class KvTablet {
      * of the transition shown in the {@link FlushState} state graph. Terminal transitions forced by
      * {@link #close()} and {@link #failScheduledFlush(Throwable)} assign the state directly.
      */
-    @GuardedBy("kvLock")
+    @GuardedBy("kvStateLock")
     private void transitionFlushState(FlushState expected, FlushState target) {
         checkState(
                 flushState == expected,
@@ -1429,8 +1546,8 @@ public final class KvTablet {
      * <p>A higher flush target received in {@code QUEUED}, {@code RUNNING}, or {@code
      * STORAGE_BLOCKED} only advances {@code requestedFlushOffset}; it does not change the state or
      * enqueue another task. Closing the tablet sets {@code isClosed} and terminates the state
-     * machine. All transitions must happen while holding {@code kvLock} and are applied through
-     * {@code transitionFlushState}, which enforces the source state of each transition.
+     * machine. All transitions must happen while holding {@code kvStateLock} and are applied
+     * through {@code transitionFlushState}, which enforces the source state of each transition.
      */
     enum FlushState {
         IDLE,

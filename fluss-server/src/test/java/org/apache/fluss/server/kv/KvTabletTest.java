@@ -21,6 +21,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.config.TableConfig;
+import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.InvalidTargetColumnException;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
@@ -91,7 +92,10 @@ import org.rocksdb.RocksDBException;
 import javax.annotation.Nullable;
 
 import java.io.File;
+import java.io.IOException;
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -100,9 +104,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Random;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -124,6 +131,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Fail.fail;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.spy;
 
 /** Test for {@link KvTablet}. */
 class KvTabletTest {
@@ -716,6 +726,133 @@ class KvTabletTest {
                             + " or "
                             + expectLogLastOffset2);
         }
+    }
+
+    @Test
+    void testLookupCanRunWhilePutIsInProgress() throws Exception {
+        PhysicalTablePath physicalTablePath = PhysicalTablePath.of(TablePath.of("testDb", "t1"));
+        CountDownLatch putEnteredSchemaLookup = new CountDownLatch(1);
+        CountDownLatch continuePut = new CountDownLatch(1);
+        AtomicBoolean blockSchemaLookup = new AtomicBoolean();
+        schemaGetter =
+                new TestingSchemaGetter(new SchemaInfo(DATA1_SCHEMA_PK, schemaId)) {
+                    @Override
+                    public SchemaInfo getLatestSchemaInfo() {
+                        if (blockSchemaLookup.get()) {
+                            putEnteredSchemaLookup.countDown();
+                            try {
+                                continuePut.await();
+                            } catch (InterruptedException e) {
+                                Thread.currentThread().interrupt();
+                                throw new RuntimeException(e);
+                            }
+                        }
+                        return super.getLatestSchemaInfo();
+                    }
+                };
+        logTablet = createLogTablet(tempLogDir, 0L, physicalTablePath);
+        kvTablet =
+                createKvTablet(
+                        physicalTablePath,
+                        logTablet.getTableBucket(),
+                        logTablet,
+                        tmpKvDir,
+                        schemaGetter,
+                        new HashMap<>());
+
+        KvRecordBatch kvRecordBatch =
+                kvRecordBatchFactory.ofRecords(
+                        kvRecordFactory.ofRecord("k1", new Object[] {1, "v1"}));
+        blockSchemaLookup.set(true);
+        Future<LogAppendInfo> putFuture =
+                executor.submit(() -> kvTablet.putAsLeader(kvRecordBatch, null));
+
+        assertThat(putEnteredSchemaLookup.await(10, TimeUnit.SECONDS)).isTrue();
+        Future<List<byte[]>> lookupFuture =
+                executor.submit(
+                        () -> kvTablet.multiGet(Collections.singletonList("missing".getBytes())));
+        try {
+            assertThat(lookupFuture.get(1, TimeUnit.SECONDS)).hasSize(1);
+        } finally {
+            continuePut.countDown();
+            putFuture.get(10, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
+    void testLookupCannotEnterRocksDbWhileTabletIsClosing() throws Exception {
+        initLogTabletAndKvTablet(DATA1_SCHEMA_PK, new HashMap<>());
+        CountDownLatch nativeCloseStarted = new CountDownLatch(1);
+        CountDownLatch continueNativeClose = new CountDownLatch(1);
+        RocksDBKv rocksDBKvSpy = spy(kvTablet.getRocksDBKv());
+        doAnswer(
+                        invocation -> {
+                            nativeCloseStarted.countDown();
+                            continueNativeClose.await();
+                            return invocation.callRealMethod();
+                        })
+                .when(rocksDBKvSpy)
+                .close(any(KvCloseMode.class));
+        Field rocksDBKvField = KvTablet.class.getDeclaredField("rocksDBKv");
+        rocksDBKvField.setAccessible(true);
+        rocksDBKvField.set(kvTablet, rocksDBKvSpy);
+
+        Future<?> closeFuture =
+                executor.submit(
+                        () -> {
+                            kvTablet.close();
+                            return null;
+                        });
+        assertThat(nativeCloseStarted.await(10, TimeUnit.SECONDS)).isTrue();
+        Future<List<byte[]>> lookupFuture =
+                executor.submit(
+                        () -> kvTablet.multiGet(Collections.singletonList("key".getBytes())));
+        try {
+            assertThatThrownBy(() -> lookupFuture.get(200, TimeUnit.MILLISECONDS))
+                    .isInstanceOf(TimeoutException.class);
+        } finally {
+            continueNativeClose.countDown();
+        }
+
+        closeFuture.get(10, TimeUnit.SECONDS);
+        assertThatThrownBy(() -> lookupFuture.get(10, TimeUnit.SECONDS))
+                .hasCauseInstanceOf(FlussRuntimeException.class);
+    }
+
+    @Test
+    void testFatalErrorHandlerRunsOutsideKvStateLock() throws Exception {
+        initLogTabletAndKvTablet(DATA1_SCHEMA_PK, new HashMap<>());
+        kvTablet.requestFlush(
+                0,
+                ignored -> {
+                    Future<?> closeFuture =
+                            executor.submit(
+                                    () -> {
+                                        kvTablet.close();
+                                        return null;
+                                    });
+                    try {
+                        closeFuture.get(1, TimeUnit.SECONDS);
+                    } catch (Exception e) {
+                        throw new RuntimeException(e);
+                    }
+                });
+        Method failScheduledFlush =
+                KvTablet.class.getDeclaredMethod("failScheduledFlush", Throwable.class);
+        failScheduledFlush.setAccessible(true);
+
+        Future<?> callbackFuture =
+                executor.submit(
+                        () -> {
+                            try {
+                                failScheduledFlush.invoke(kvTablet, new IOException("expected"));
+                            } catch (InvocationTargetException e) {
+                                throw new RuntimeException(e.getCause());
+                            }
+                            return null;
+                        });
+
+        callbackFuture.get(10, TimeUnit.SECONDS);
     }
 
     @Test
