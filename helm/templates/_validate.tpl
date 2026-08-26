@@ -44,6 +44,7 @@ Usage:
 {{- $messages = append $messages (include "fluss.secrets.validateError" .) -}}
 {{- $messages = append $messages (include "fluss.names.validateError" .) -}}
 {{- $messages = append $messages (include "fluss.listeners.validateError" .) -}}
+{{- $messages = append $messages (include "fluss.storage.validateError" .) -}}
 
 {{- $messages = without $messages "" -}}
 {{- join "\n" $messages -}}
