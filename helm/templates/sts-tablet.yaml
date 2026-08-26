@@ -164,8 +164,10 @@ spec:
           volumeMounts:
             - name: fluss-conf
               mountPath: /opt/conf
-            - name: data
-              mountPath: /tmp/fluss/data
+            {{- range (include "fluss.tablet.storage.volumes" . | fromYamlArray) }}
+            - name: {{ .name }}
+              mountPath: /tmp/fluss/{{ .name }}
+            {{- end }}
             {{- if (include "fluss.security.jaas.required" .) }}
             - name: sasl-config
               mountPath: /etc/fluss/conf
@@ -182,8 +184,10 @@ spec:
           configMap:
             name: fluss-conf-file
         {{- if not .Values.tablet.storage.enabled }}
-        - name: data
+        {{- range (include "fluss.tablet.storage.volumes" . | fromYamlArray) }}
+        - name: {{ .name }}
           emptyDir: {}
+        {{- end }}
         {{- end }}
         {{- if (include "fluss.security.jaas.required" .) }}
         {{- include "fluss.security.jaas.volumes" . | nindent 8 }}
@@ -196,12 +200,14 @@ spec:
         {{- end }}
   {{- if .Values.tablet.storage.enabled }}
   volumeClaimTemplates:
+    {{- range (include "fluss.tablet.storage.volumes" . | fromYamlArray) }}
     - metadata:
-        name: data
+        name: {{ .name }}
       spec:
         accessModes: [ "ReadWriteOnce" ]
         resources:
           requests:
-            storage: {{ .Values.tablet.storage.size }}
-        storageClassName: {{ .Values.tablet.storage.storageClass }}
+            storage: {{ .size }}
+        storageClassName: {{ .storageClass }}
+    {{- end }}
   {{- end}}

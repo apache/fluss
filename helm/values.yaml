@@ -43,6 +43,18 @@ tablet:
     enabled: false
     size: 1Gi
     storageClass:
+    # Multi-disk (JBOD): one PVC per entry, mounted at /tmp/fluss/<name>. When
+    # non-empty, this list takes precedence over size/storageClass above and the
+    # chart renders `data.dirs` with all mount paths in server.yaml.
+    # NOTE: volumeClaimTemplates are immutable - enabling this on an existing
+    # release requires recreating the tablet StatefulSet (see the Helm docs page).
+    volumes: []
+    # - name: data-0
+    #   size: 100Gi
+    #   storageClass: fast
+    # - name: data-1
+    #   size: 100Gi
+    #   storageClass: fast
   # Readiness probe configuration for rolling upgrade gate.
   # The probe talks to the LOCAL tablet server (127.0.0.1:client-port) and
   # asks it to forward a getClusterHealth RPC to the Coordinator over the

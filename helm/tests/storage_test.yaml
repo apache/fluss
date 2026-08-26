@@ -1,0 +1,248 @@
+#
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+suite: tablet-storage
+templates:
+  - templates/sts-tablet.yaml
+  - templates/configmap.yaml
+  - templates/NOTES.txt
+tests:
+  - it: renders a single emptyDir named data by default
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: data
+            emptyDir: {}
+        template: templates/sts-tablet.yaml
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: data
+            mountPath: /tmp/fluss/data
+        template: templates/sts-tablet.yaml
+      - notExists:
+          path: spec.volumeClaimTemplates
+        template: templates/sts-tablet.yaml
+      - notMatchRegex:
+          path: data["server.yaml"]
+          pattern: 'data\.dirs:'
+        template: templates/configmap.yaml
+
+  - it: renders the legacy single claim from size and storageClass
+    set:
+      tablet.storage.enabled: true
+      tablet.storage.size: 20Gi
+      tablet.storage.storageClass: fast
+    asserts:
+      - equal:
+          path: spec.volumeClaimTemplates
+          value:
+            - metadata:
+                name: data
+              spec:
+                accessModes: [ "ReadWriteOnce" ]
+                resources:
+                  requests:
+                    storage: 20Gi
+                storageClassName: fast
+        template: templates/sts-tablet.yaml
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: data
+            emptyDir: {}
+        template: templates/sts-tablet.yaml
+      - notMatchRegex:
+          path: data["server.yaml"]
+          pattern: 'data\.dirs:'
+        template: templates/configmap.yaml
+
+  - it: renders one claim, one mount, and data.dirs per configured volume
+    set:
+      tablet.storage.enabled: true
+      tablet.storage.volumes:
+        - name: data-0
+          size: 100Gi
+          storageClass: fast
+        - name: data-1
+          size: 200Gi
+    asserts:
+      - equal:
+          path: spec.volumeClaimTemplates
+          value:
+            - metadata:
+                name: data-0
+              spec:
+                accessModes: [ "ReadWriteOnce" ]
+                resources:
+                  requests:
+                    storage: 100Gi
+                storageClassName: fast
+            - metadata:
+                name: data-1
+              spec:
+                accessModes: [ "ReadWriteOnce" ]
+                resources:
+                  requests:
+                    storage: 200Gi
+                storageClassName: null
+        template: templates/sts-tablet.yaml
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: data-0
+            mountPath: /tmp/fluss/data-0
+        template: templates/sts-tablet.yaml
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: data-1
+            mountPath: /tmp/fluss/data-1
+        template: templates/sts-tablet.yaml
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: 'data\.dirs: /tmp/fluss/data-0,/tmp/fluss/data-1'
+        template: templates/configmap.yaml
+
+  - it: renders data.dirs for a single-entry volume list
+    set:
+      tablet.storage.enabled: true
+      tablet.storage.volumes:
+        - name: fast-0
+          size: 50Gi
+    asserts:
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: 'data\.dirs: /tmp/fluss/fast-0'
+        template: templates/configmap.yaml
+
+  - it: renders one emptyDir per volume when storage is disabled
+    set:
+      tablet.storage.volumes:
+        - name: data-0
+          size: 100Gi
+        - name: data-1
+          size: 100Gi
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: data-0
+            emptyDir: {}
+        template: templates/sts-tablet.yaml
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: data-1
+            emptyDir: {}
+        template: templates/sts-tablet.yaml
+      - notExists:
+          path: spec.volumeClaimTemplates
+        template: templates/sts-tablet.yaml
+
+  - it: keeps extraVolumes and extraVolumeMounts after the storage entries
+    set:
+      tablet.storage.enabled: true
+      tablet.storage.volumes:
+        - name: data-0
+          size: 100Gi
+      tablet.extraVolumes:
+        - name: scratch
+          hostPath:
+            path: /mnt/scratch
+      tablet.extraVolumeMounts:
+        - name: scratch
+          mountPath: /mnt/scratch
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: scratch
+            hostPath:
+              path: /mnt/scratch
+        template: templates/sts-tablet.yaml
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: data-0
+            mountPath: /tmp/fluss/data-0
+        template: templates/sts-tablet.yaml
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: scratch
+            mountPath: /mnt/scratch
+        template: templates/sts-tablet.yaml
+
+  - it: fails when a volume entry has no size
+    set:
+      tablet.storage.enabled: true
+      tablet.storage.volumes:
+        - name: data-0
+    asserts:
+      - failedTemplate:
+          errorMessage: "VALUES VALIDATION:\ntablet.storage.volumes: entry \"data-0\" must set size"
+        template: templates/NOTES.txt
+
+  - it: fails when a volume entry has no name
+    set:
+      tablet.storage.enabled: true
+      tablet.storage.volumes:
+        - size: 100Gi
+    asserts:
+      - failedTemplate:
+          errorMessage: "VALUES VALIDATION:\ntablet.storage.volumes: every entry must set name"
+        template: templates/NOTES.txt
+
+  - it: fails on duplicate volume names
+    set:
+      tablet.storage.enabled: true
+      tablet.storage.volumes:
+        - name: data-0
+          size: 100Gi
+        - name: data-0
+          size: 100Gi
+    asserts:
+      - failedTemplate:
+          errorMessage: "VALUES VALIDATION:\ntablet.storage.volumes: duplicate volume name \"data-0\""
+        template: templates/NOTES.txt
+
+  - it: fails on a chart-reserved volume name
+    set:
+      tablet.storage.enabled: true
+      tablet.storage.volumes:
+        - name: sasl-config
+          size: 100Gi
+    asserts:
+      - failedTemplate:
+          errorMessage: "VALUES VALIDATION:\ntablet.storage.volumes: volume name \"sasl-config\" collides with a chart-managed volume (fluss-conf, sasl-config, secret-*)"
+        template: templates/NOTES.txt
+
+  - it: fails when configurationOverrides also sets data.dirs
+    set:
+      tablet.storage.enabled: true
+      tablet.storage.volumes:
+        - name: data-0
+          size: 100Gi
+      configurationOverrides:
+        data.dirs: /elsewhere
+    asserts:
+      - failedTemplate:
+          errorMessage: "VALUES VALIDATION:\nconfigurationOverrides must not set data.dirs when tablet.storage.volumes is used: the chart renders data.dirs from the volume list"
+        template: templates/NOTES.txt
