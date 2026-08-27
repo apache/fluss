@@ -580,6 +580,56 @@ class PaimonLakeCatalogTest {
                 .option(CoreOptions.BUCKET_KEY.key(), bucketKey);
     }
 
+    @Test
+    void testUserFacingAlterTableStillRejectsBucketChange() throws Exception {
+        // The "bucket.num" SetOption is Fluss's trusted bucket-count propagation and is applied,
+        // while any attempt to set Paimon's own bucket option directly through property change
+        // keeps being rejected.
+        String database = "test_user_bucket_reject_db";
+        String tableName = "test_user_bucket_reject_table";
+        TablePath tablePath = TablePath.of(database, tableName);
+        createFixedBucketTable(database, tableName, 4);
+
+        TableDescriptor fixedBucketDescriptor = fixedBucketTableDescriptor(4);
+        TestingLakeCatalogContext matchingContext =
+                new TestingLakeCatalogContext(fixedBucketDescriptor, fixedBucketDescriptor);
+
+        List<TableChange> userChanges =
+                Collections.singletonList(
+                        TableChange.set(
+                                "paimon." + org.apache.paimon.CoreOptions.BUCKET.key(), "8"));
+        assertThatThrownBy(
+                        () ->
+                                flussPaimonCatalog.alterTable(
+                                        tablePath, userChanges, matchingContext))
+                .hasMessageContaining("bucket")
+                .hasMessageContaining("cannot be changed");
+
+        flussPaimonCatalog.alterTable(
+                tablePath,
+                Collections.singletonList(TableChange.set("bucket.num", "8")),
+                matchingContext);
+        Identifier identifier = Identifier.create(database, tableName);
+        Table after = flussPaimonCatalog.getPaimonCatalog().getTable(identifier);
+        assertThat(after.options().get(org.apache.paimon.CoreOptions.BUCKET.key())).isEqualTo("8");
+    }
+
+    private TableDescriptor fixedBucketTableDescriptor(int bucketCount) {
+        return TableDescriptor.builder()
+                .schema(FLUSS_SCHEMA)
+                .property(TABLE_DATALAKE_ENABLED.key(), "true")
+                .property(TABLE_DATALAKE_FORMAT.key(), "paimon")
+                .property("table.datalake.paimon.warehouse", tempWarehouseDir.toURI().toString())
+                .distributedBy(bucketCount, "id")
+                .build();
+    }
+
+    private void createFixedBucketTable(String database, String tableName, int initialBucketCount) {
+        TableDescriptor td = fixedBucketTableDescriptor(initialBucketCount);
+        flussPaimonCatalog.createTable(
+                TablePath.of(database, tableName), td, new TestingLakeCatalogContext(td, td));
+    }
+
     private void createTable(String database, String tableName) {
         TableDescriptor td = getTableDescriptor(FLUSS_SCHEMA);
         TablePath tablePath = TablePath.of(database, tableName);

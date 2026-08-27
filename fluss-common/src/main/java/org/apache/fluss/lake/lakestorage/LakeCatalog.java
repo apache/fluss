@@ -51,6 +51,12 @@ public interface LakeCatalog extends AutoCloseable {
     /**
      * Alter a table in lake.
      *
+     * <p>A {@code SetOption} of the Fluss property {@code bucket.num} is Fluss's coordinator-
+     * orchestrated bucket count rescale: implementations supporting rescale must apply it to their
+     * bucket layout option, others should throw {@link UnsupportedOperationException}. User-facing
+     * changes to the lake-native bucket option (e.g. Paimon {@code bucket}) keep being rejected to
+     * prevent the two systems from diverging.
+     *
      * @param tablePath path of the table to be altered
      * @param tableChanges The changes to be applied to the table
      * @param context contextual information needed for alter table

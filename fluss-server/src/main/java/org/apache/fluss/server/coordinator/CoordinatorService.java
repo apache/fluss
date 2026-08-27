@@ -58,6 +58,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
@@ -251,6 +252,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     private final boolean kvTableAllowCreation;
     private final Supplier<EventManager> eventManagerSupplier;
     private final Supplier<Integer> coordinatorEpochSupplier;
+    private final Supplier<Integer> coordinatorEpochZkVersionSupplier;
     private final CoordinatorMetadataCache metadataCache;
 
     private final Supplier<CompletedSnapshotStoreManager> snapshotStoreManagerSupplier;
@@ -296,6 +298,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 () -> coordinatorEventProcessorSupplier.get().getCoordinatorEventManager();
         this.coordinatorEpochSupplier =
                 () -> coordinatorEventProcessorSupplier.get().getCoordinatorEpoch();
+        this.coordinatorEpochZkVersionSupplier =
+                () -> coordinatorEventProcessorSupplier.get().getCoordinatorZkVersion();
         this.snapshotStoreManagerSupplier =
                 () -> coordinatorEventProcessorSupplier.get().completedSnapshotStoreManager();
         this.lakeTableTieringManager = lakeTableTieringManager;
@@ -609,7 +613,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                     request.isIgnoreIfNotExists(),
                     currentSession().getPrincipal(),
                     this::beforeTablePropertiesUpdate,
-                    this::afterTablePropertiesUpdate);
+                    this::afterTablePropertiesUpdate,
+                    coordinatorEpochZkVersionSupplier.get());
         }
 
         return CompletableFuture.completedFuture(new AlterTableResponse());
@@ -618,13 +623,13 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     private void beforeTablePropertiesUpdate(TableInfo currentTable, TableDescriptor updatedTable) {
         if (!currentTable.getTableConfig().isHistoricalPartitionEnabled()
                 && isHistoricalPartitionEnabled(updatedTable)) {
+            TablePath tablePath = currentTable.getTablePath();
             try {
                 replicaCapacityController.checkCanCreateKvLeaderReplicas(
                         getBucketCount(updatedTable));
-                createHistoricalPartition(
-                        currentTable.getTablePath(), currentTable.getTableId(), updatedTable);
+                createHistoricalPartition(tablePath, currentTable.getTableId(), updatedTable);
             } catch (Exception e) {
-                throw historicalPartitionEnableException(currentTable.getTablePath(), e);
+                throw historicalPartitionEnableException(tablePath, e);
             }
         }
     }
@@ -636,11 +641,11 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             return;
         }
 
+        TablePath tablePath = currentTable.getTablePath();
         try {
-            metadataManager.dropPartition(
-                    currentTable.getTablePath(), historicalPartitionSpec(updatedTable), true);
+            metadataManager.dropPartition(tablePath, historicalPartitionSpec(updatedTable), true);
         } catch (Exception e) {
-            throw historicalPartitionDisableException(currentTable.getTablePath(), e);
+            throw historicalPartitionDisableException(tablePath, e);
         }
     }
 
@@ -648,9 +653,9 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             TablePath tablePath, long tableId, TableDescriptor tableDescriptor) {
         int replicaFactor = tableDescriptor.getReplicationFactor();
         TabletServerInfo[] servers = metadataCache.getLiveServers();
+        int bucketCount = getBucketCount(tableDescriptor);
         Map<Integer, BucketAssignment> bucketAssignments =
-                generateAssignment(getBucketCount(tableDescriptor), replicaFactor, servers)
-                        .getBucketAssignments();
+                generateAssignment(bucketCount, replicaFactor, servers).getBucketAssignments();
         PartitionAssignment partitionAssignment =
                 new PartitionAssignment(tableId, bucketAssignments);
         String remoteDataDir = remoteDirDynamicLoader.getRemoteDirSelector().nextDataDir();
@@ -661,7 +666,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 remoteDataDir,
                 partitionAssignment,
                 historicalPartitionSpec(tableDescriptor),
-                true);
+                true,
+                bucketCount);
     }
 
     private static ResolvedPartitionSpec historicalPartitionSpec(TableDescriptor tableDescriptor) {
@@ -871,6 +877,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         authorizeTable(OperationType.WRITE, tablePath);
 
         CreatePartitionResponse response = new CreatePartitionResponse();
+        // The table metadata (including bucket.num) is read fresh here, and the partition's
+        // registration persists its assignment and bucket count atomically in one ZK transaction
         TableInfo tableInfo = metadataManager.getTable(tablePath);
         if (!tableInfo.isPartitioned()) {
             throw new TableNotPartitionedException(
@@ -919,7 +927,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 remoteDataDir,
                 partitionAssignment,
                 partitionToCreate,
-                request.isIgnoreIfNotExists());
+                request.isIgnoreIfNotExists(),
+                tableInfo.getNumBuckets());
         return CompletableFuture.completedFuture(response);
     }
 
@@ -1055,6 +1064,17 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         AccessContextEvent<Integer> event =
                 new AccessContextEvent<>(
                         ctx -> {
+                            if (partitionId != null) {
+                                // for partitions, the table-level bucket count may differ from the
+                                // partition's actual bucket count after ALTER bucket.num; use the
+                                // partition assignment size instead
+                                Map<Integer, List<Integer>> partitionAssignment =
+                                        ctx.getPartitionAssignment(
+                                                new TablePartition(tableId, partitionId));
+                                return partitionAssignment.isEmpty()
+                                        ? null
+                                        : partitionAssignment.size();
+                            }
                             TablePath tablePath = ctx.getTablePathById(tableId);
                             if (tablePath != null) {
                                 TableInfo tableInfo = ctx.getTableInfoById(tableId);

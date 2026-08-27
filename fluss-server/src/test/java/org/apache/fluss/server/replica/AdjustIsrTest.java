@@ -140,7 +140,9 @@ public class AdjustIsrTest extends ReplicaTestBase {
                         DATA1_PHYSICAL_TABLE_PATH,
                         tb,
                         Arrays.asList(1, 2),
-                        new LeaderAndIsr(1, 0, Arrays.asList(1, 2), Collections.emptyList(), 0, 0));
+                        new LeaderAndIsr(1, 0, Arrays.asList(1, 2), Collections.emptyList(), 0, 0),
+                        3,
+                        0L);
 
         ReentrantReadWriteLock leaderIsrUpdateLock = replica.getLeaderIsrUpdateLock();
 
@@ -349,6 +351,8 @@ public class AdjustIsrTest extends ReplicaTestBase {
                                         replicas,
                                         Collections.emptyList(),
                                         replica.getCoordinatorEpoch(),
-                                        bucketEpoch))));
+                                        bucketEpoch),
+                                3,
+                                0L)));
     }
 }

@@ -113,17 +113,24 @@ public class LookupClient {
             TableBucket tableBucket,
             byte[] keyBytes,
             boolean insertIfNotExists,
-            @Nullable String originalPartitionName) {
+            @Nullable String originalPartitionName,
+            int bucketCountActual) {
         LookupQuery lookup =
                 new LookupQuery(
-                        tablePath, tableBucket, keyBytes, insertIfNotExists, originalPartitionName);
+                        tablePath,
+                        tableBucket,
+                        keyBytes,
+                        insertIfNotExists,
+                        originalPartitionName,
+                        bucketCountActual);
         lookupQueue.appendLookup(lookup);
         return lookup.future();
     }
 
     public CompletableFuture<List<byte[]>> prefixLookup(
-            TablePath tablePath, TableBucket tableBucket, byte[] keyBytes) {
-        PrefixLookupQuery prefixLookup = new PrefixLookupQuery(tablePath, tableBucket, keyBytes);
+            TablePath tablePath, TableBucket tableBucket, byte[] keyBytes, int bucketCountActual) {
+        PrefixLookupQuery prefixLookup =
+                new PrefixLookupQuery(tablePath, tableBucket, keyBytes, bucketCountActual);
         lookupQueue.appendLookup(prefixLookup);
         return prefixLookup.future();
     }

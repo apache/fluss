@@ -66,6 +66,14 @@ public class TableRegistration {
     public final long createdTime;
     public final long modifiedTime;
 
+    /**
+     * A table-level, monotonically increasing version for bucket.num changes. New tables start at
+     * 0; a legacy JSON without the field is read as 0; every committed bucket.num change increments
+     * it. It is used to decide whether legacy clients without bucket count are still allowed (epoch
+     * 0) and to let TabletServers ignore older UpdateMetadata messages.
+     */
+    public final long bucketLayoutEpoch;
+
     public TableRegistration(
             long tableId,
             @Nullable String comment,
@@ -76,6 +84,30 @@ public class TableRegistration {
             @Nullable String remoteDataDir,
             long createdTime,
             long modifiedTime) {
+        this(
+                tableId,
+                comment,
+                partitionKeys,
+                tableDistribution,
+                properties,
+                customProperties,
+                remoteDataDir,
+                createdTime,
+                modifiedTime,
+                0L);
+    }
+
+    public TableRegistration(
+            long tableId,
+            @Nullable String comment,
+            List<String> partitionKeys,
+            TableDistribution tableDistribution,
+            Map<String, String> properties,
+            Map<String, String> customProperties,
+            @Nullable String remoteDataDir,
+            long createdTime,
+            long modifiedTime,
+            long bucketLayoutEpoch) {
         checkArgument(
                 tableDistribution.getBucketCount().isPresent(),
                 "Bucket count is required for table registration.");
@@ -89,6 +121,7 @@ public class TableRegistration {
         this.remoteDataDir = remoteDataDir;
         this.createdTime = createdTime;
         this.modifiedTime = modifiedTime;
+        this.bucketLayoutEpoch = bucketLayoutEpoch;
     }
 
     public boolean isPartitioned() {
@@ -127,7 +160,8 @@ public class TableRegistration {
                 this.remoteDataDir,
                 this.comment,
                 this.createdTime,
-                this.modifiedTime);
+                this.modifiedTime,
+                this.bucketLayoutEpoch);
     }
 
     public static TableRegistration newTable(
@@ -160,7 +194,28 @@ public class TableRegistration {
                 newCustomProperties,
                 remoteDataDir,
                 createdTime,
-                currentMillis);
+                currentMillis,
+                bucketLayoutEpoch);
+    }
+
+    /**
+     * Replaces the table-level bucket count and increments {@code bucketLayoutEpoch} atomically.
+     * For a partitioned table, the new count applies to partitions created after this ALTER;
+     * existing partitions retain their actual bucket counts in their partition registrations.
+     */
+    public TableRegistration withBucketCount(int newBucketCount) {
+        final long currentMillis = System.currentTimeMillis();
+        return new TableRegistration(
+                tableId,
+                comment,
+                partitionKeys,
+                new TableDistribution(newBucketCount, bucketKeys),
+                properties,
+                customProperties,
+                remoteDataDir,
+                createdTime,
+                currentMillis,
+                bucketLayoutEpoch + 1);
     }
 
     /**
@@ -181,7 +236,8 @@ public class TableRegistration {
                 customProperties,
                 remoteDataDir,
                 createdTime,
-                modifiedTime);
+                modifiedTime,
+                bucketLayoutEpoch);
     }
 
     @Override
@@ -197,6 +253,7 @@ public class TableRegistration {
         return tableId == that.tableId
                 && createdTime == that.createdTime
                 && modifiedTime == that.modifiedTime
+                && bucketLayoutEpoch == that.bucketLayoutEpoch
                 && Objects.equals(comment, that.comment)
                 && Objects.equals(partitionKeys, that.partitionKeys)
                 && Objects.equals(bucketCount, that.bucketCount)
@@ -218,7 +275,8 @@ public class TableRegistration {
                 customProperties,
                 remoteDataDir,
                 createdTime,
-                modifiedTime);
+                modifiedTime,
+                bucketLayoutEpoch);
     }
 
     @Override
@@ -245,6 +303,8 @@ public class TableRegistration {
                 + createdTime
                 + ", modifiedTime="
                 + modifiedTime
+                + ", bucketLayoutEpoch="
+                + bucketLayoutEpoch
                 + '}';
     }
 }

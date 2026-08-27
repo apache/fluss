@@ -187,7 +187,8 @@ class ZkBasedMetadataProviderTest {
                 partitionAssignment,
                 DEFAULT_REMOTE_DATA_DIR,
                 tablePath,
-                tableId);
+                tableId,
+                partitionAssignment.getBucketAssignments().size());
 
         // Create leader and isr for partition buckets
         TableBucket partitionBucket0 = new TableBucket(tableId, partitionId, 0);
@@ -272,14 +273,16 @@ class ZkBasedMetadataProviderTest {
                 partitionAssignment1,
                 DEFAULT_REMOTE_DATA_DIR,
                 tablePath1,
-                tableId1);
+                tableId1,
+                partitionAssignment1.getBucketAssignments().size());
         zookeeperClient.registerPartitionAssignmentAndMetadata(
                 partitionId2,
                 partitionName2,
                 partitionAssignment2,
                 DEFAULT_REMOTE_DATA_DIR,
                 tablePath1,
-                tableId1);
+                tableId1,
+                partitionAssignment2.getBucketAssignments().size());
 
         // Create partition for table2
         long partitionId3 = 21L;
@@ -295,7 +298,8 @@ class ZkBasedMetadataProviderTest {
                 partitionAssignment3,
                 DEFAULT_REMOTE_DATA_DIR,
                 tablePath2,
-                tableId2);
+                tableId2,
+                partitionAssignment3.getBucketAssignments().size());
 
         // Create leader and isr for all partition buckets
         TableBucket bucket1 = new TableBucket(tableId1, partitionId1, 0);

@@ -19,6 +19,7 @@ package org.apache.fluss.server.replica;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.LogFormat;
@@ -48,6 +49,7 @@ import org.apache.fluss.server.kv.snapshot.KvSnapshotDataDownloader;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotDownloadSpec;
 import org.apache.fluss.server.kv.snapshot.TestingCompletedKvSnapshotCommitter;
 import org.apache.fluss.server.log.FetchParams;
+import org.apache.fluss.server.log.ListOffsetsParam;
 import org.apache.fluss.server.log.LogAppendInfo;
 import org.apache.fluss.server.log.LogReadInfo;
 import org.apache.fluss.server.testutils.KvTestUtils;
@@ -150,6 +152,21 @@ final class ReplicaTest extends ReplicaTestBase {
     }
 
     @Test
+    void testGetOffsetRequiresLeader() throws Exception {
+        Replica replica =
+                makeLogReplica(DATA1_PHYSICAL_TABLE_PATH, new TableBucket(DATA1_TABLE_ID, 1));
+
+        assertThat(replica.isLeader()).isFalse();
+        assertThatThrownBy(
+                        () ->
+                                replica.getOffset(
+                                        remoteLogManager,
+                                        new ListOffsetsParam(
+                                                -1, ListOffsetsParam.LATEST_OFFSET_TYPE, null)))
+                .isInstanceOf(NotLeaderOrFollowerException.class);
+    }
+
+    @Test
     void testAppendRecordsToLeader() throws Exception {
         Replica logReplica =
                 makeLogReplica(DATA1_PHYSICAL_TABLE_PATH, new TableBucket(DATA1_TABLE_ID, 1));
@@ -237,7 +254,9 @@ final class ReplicaTest extends ReplicaTestBase {
                                 replicas,
                                 Collections.emptyList(),
                                 INITIAL_COORDINATOR_EPOCH,
-                                followerLeaderEpoch)));
+                                followerLeaderEpoch),
+                        3,
+                        0L));
 
         assertThat(logReplica.isLeader()).isFalse();
         assertThat(localLogSizeGauge.getValue()).isEqualTo(localLogSize);
@@ -1147,7 +1166,9 @@ final class ReplicaTest extends ReplicaTestBase {
                                 Collections.emptyList(),
                                 INITIAL_COORDINATOR_EPOCH,
                                 // we also use the leader epoch as bucket epoch
-                                leaderEpoch)));
+                                leaderEpoch),
+                        3,
+                        0L));
     }
 
     private void makeLeaderReplica(
@@ -1165,7 +1186,9 @@ final class ReplicaTest extends ReplicaTestBase {
                                 Collections.emptyList(),
                                 INITIAL_COORDINATOR_EPOCH,
                                 // we also use the leader epoch as bucket epoch
-                                leaderEpoch)));
+                                leaderEpoch),
+                        3,
+                        0L));
     }
 
     private static LogRecords fetchRecords(Replica replica) throws IOException {

@@ -25,6 +25,7 @@ import org.apache.fluss.client.metadata.TestingMetadataUpdater;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.client.table.writer.UpsertWriter;
+import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
@@ -166,11 +167,9 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         Admin admin1 = conn.getAdmin();
         Admin admin2 = conn.getAdmin();
         assertThat(admin1).isEqualTo(admin2);
-
         TableInfo t1 = admin1.getTableInfo(DEFAULT_TABLE_PATH).get();
         TableInfo t2 = admin2.getTableInfo(DEFAULT_TABLE_PATH).get();
         assertThat(t1).isEqualTo(t2);
-
         admin1.close();
         admin2.close();
     }
@@ -1247,13 +1246,11 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
 
         // Restart the coordinator server so that the lease uses a stale cached address.
         restartCoordinatorServer(zkClient);
-
         lease.acquireSnapshots(snapshots).get();
         assertThat(zkClient.getKvSnapshotLeaseMetadata(lease.leaseId())).isPresent();
 
         // Verify that release also refreshes metadata and retries against the new coordinator.
         restartCoordinatorServer(zkClient);
-
         lease.releaseSnapshots(Collections.singleton(tableBucket)).get();
         assertThat(zkClient.getKvSnapshotLeaseMetadata(lease.leaseId())).isNotPresent();
 
@@ -2925,7 +2922,11 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
 
         ListOffsetsRequest request =
                 makeListOffsetsRequest(
-                        1L, null, Arrays.asList(0, 1, 2), new OffsetSpec.LatestSpec());
+                        1L,
+                        null,
+                        Arrays.asList(0, 1, 2),
+                        new OffsetSpec.LatestSpec(),
+                        Cluster.empty());
         Map<Integer, ListOffsetsRequest> leaderToRequestMap = new HashMap<>();
         leaderToRequestMap.put(1, request);
 

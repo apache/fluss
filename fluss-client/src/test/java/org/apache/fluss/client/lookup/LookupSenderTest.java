@@ -599,6 +599,68 @@ public class LookupSenderTest {
                 .isGreaterThanOrEqualTo(2); // at least 1 failure + 1 success for the batch
     }
 
+    @Test
+    void testLookupRequestCarriesPinnedRoutingBucketCount() throws Exception {
+        // TOCTOU: the bucket count pinned at T1 (lookup time) must be carried to T2 (send time)
+        // as the request's routing_bucket_count, not re-read from cluster metadata at T2.
+        List<LookupRequest> receivedRequests = Collections.synchronizedList(new ArrayList<>());
+        gateway.setLookupHandler(
+                request -> {
+                    receivedRequests.add(request);
+                    return createSuccessResponse(request, "value".getBytes());
+                });
+
+        // T1: create query with bucketCountActual=4 (the partition's actual count at lookup time)
+        LookupQuery query =
+                new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("key"), false, null, 4);
+        // The pinned value is visible on the query object
+        assertThat(query.bucketCountActual()).isEqualTo(4);
+
+        lookupSender.sendLookups(1, LookupType.LOOKUP, Collections.singletonList(query));
+
+        // T2: the request must carry the T1-pinned count as routing_bucket_count
+        assertThat(receivedRequests).hasSize(1);
+        LookupRequest request = receivedRequests.get(0);
+        assertThat(request.getBucketsReqAt(0).hasRoutingBucketCount()).isTrue();
+        assertThat(request.getBucketsReqAt(0).getRoutingBucketCount()).isEqualTo(4);
+
+        // A legacy query (bucketCountActual=0) must not set routing_bucket_count at all, letting
+        // the server's epoch check decide.
+        receivedRequests.clear();
+        LookupQuery legacyQuery = new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("key"));
+        assertThat(legacyQuery.bucketCountActual()).isEqualTo(0);
+
+        lookupSender.sendLookups(1, LookupType.LOOKUP, Collections.singletonList(legacyQuery));
+
+        assertThat(receivedRequests).hasSize(1);
+        assertThat(receivedRequests.get(0).getBucketsReqAt(0).hasRoutingBucketCount()).isFalse();
+    }
+
+    @Test
+    void testPrefixLookupRequestCarriesPinnedRoutingBucketCount() throws Exception {
+        // TOCTOU: same anchoring for prefix lookup path.
+        List<PrefixLookupRequest> receivedRequests =
+                Collections.synchronizedList(new ArrayList<>());
+        gateway.setPrefixLookupHandler(
+                request -> {
+                    receivedRequests.add(request);
+                    return createSuccessPrefixLookupResponse(request);
+                });
+
+        // T1: create prefix query with bucketCountActual=4
+        PrefixLookupQuery query =
+                new PrefixLookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("prefix"), 4);
+        assertThat(query.bucketCountActual()).isEqualTo(4);
+
+        lookupSender.sendLookups(1, LookupType.PREFIX_LOOKUP, Collections.singletonList(query));
+
+        // T2: the request must carry the T1-pinned count as routing_bucket_count
+        assertThat(receivedRequests).hasSize(1);
+        PrefixLookupRequest request = receivedRequests.get(0);
+        assertThat(request.getBucketsReqAt(0).hasRoutingBucketCount()).isTrue();
+        assertThat(request.getBucketsReqAt(0).getRoutingBucketCount()).isEqualTo(4);
+    }
+
     // Helper methods
 
     private CompletableFuture<LookupResponse> createPartitionNameEchoResponse(

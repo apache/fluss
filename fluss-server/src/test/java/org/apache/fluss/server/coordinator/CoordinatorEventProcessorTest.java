@@ -91,6 +91,7 @@ import org.apache.fluss.server.zk.data.TabletServerRegistration;
 import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.server.zk.data.ZkData.PartitionIdsZNode;
 import org.apache.fluss.server.zk.data.ZkData.TableIdsZNode;
+import org.apache.fluss.server.zk.data.ZkVersion;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
 import org.apache.fluss.types.DataTypes;
@@ -1822,7 +1823,8 @@ class CoordinatorEventProcessorTest {
                 false,
                 null,
                 (currentTable, updatedTable) -> {},
-                (currentTable, updatedTable) -> {});
+                (currentTable, updatedTable) -> {},
+                ZkVersion.MATCH_ANY_VERSION.getVersion());
 
         // get updated table info and verify metadata update request is sent
         TableInfo updatedTableInfo = metadataManager.getTable(t1);
@@ -1889,7 +1891,8 @@ class CoordinatorEventProcessorTest {
                 false,
                 null,
                 (currentTable, updatedTable) -> {},
-                (currentTable, updatedTable) -> {});
+                (currentTable, updatedTable) -> {},
+                ZkVersion.MATCH_ANY_VERSION.getVersion());
 
         // verify standby replicas are removed after re-election
         retryVerifyContext(
@@ -1963,7 +1966,8 @@ class CoordinatorEventProcessorTest {
                 false,
                 null,
                 (currentTable, updatedTable) -> {},
-                (currentTable, updatedTable) -> {});
+                (currentTable, updatedTable) -> {},
+                ZkVersion.MATCH_ANY_VERSION.getVersion());
 
         // Verify re-election happened: standby assigned and leaderEpoch incremented
         retryVerifyContext(
@@ -2026,7 +2030,8 @@ class CoordinatorEventProcessorTest {
                                         false,
                                         null,
                                         (currentTable, updatedTable) -> {},
-                                        (currentTable, updatedTable) -> {}))
+                                        (currentTable, updatedTable) -> {},
+                                        ZkVersion.MATCH_ANY_VERSION.getVersion()))
                 .isInstanceOf(InvalidAlterTableException.class)
                 .hasMessageContaining("can only be altered on primary key tables");
 
@@ -2043,7 +2048,8 @@ class CoordinatorEventProcessorTest {
                                         false,
                                         null,
                                         (currentTable, updatedTable) -> {},
-                                        (currentTable, updatedTable) -> {}))
+                                        (currentTable, updatedTable) -> {},
+                                        ZkVersion.MATCH_ANY_VERSION.getVersion()))
                 .isInstanceOf(InvalidAlterTableException.class)
                 .hasMessageContaining("can only be altered on primary key tables");
     }
@@ -2468,14 +2474,16 @@ class CoordinatorEventProcessorTest {
                 partitionAssignment,
                 remoteDataDir,
                 tablePath,
-                tableId);
+                tableId,
+                partitionAssignment.getBucketAssignments().size());
         zookeeperClient.registerPartitionAssignmentAndMetadata(
                 partition2Id,
                 partition2Name,
                 partitionAssignment,
                 remoteDataDir,
                 tablePath,
-                tableId);
+                tableId,
+                partitionAssignment.getBucketAssignments().size());
 
         return Tuple2.of(
                 new PartitionIdName(partition1Id, partition1Name),

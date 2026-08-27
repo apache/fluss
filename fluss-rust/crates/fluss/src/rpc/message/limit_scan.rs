@@ -42,6 +42,7 @@ impl LimitScanRequest {
             partition_id,
             bucket_id,
             limit,
+            routing_bucket_count: None,
         };
 
         Self {

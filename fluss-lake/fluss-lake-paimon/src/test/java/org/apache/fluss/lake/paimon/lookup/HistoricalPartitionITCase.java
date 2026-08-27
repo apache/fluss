@@ -17,6 +17,7 @@
 
 package org.apache.fluss.lake.paimon.lookup;
 
+import org.apache.fluss.bucketing.BucketingFunction;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.lookup.LookupResult;
@@ -25,6 +26,7 @@ import org.apache.fluss.client.table.Table;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.lake.paimon.testutils.FlinkPaimonTieringTestBase;
+import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.Schema;
@@ -33,11 +35,16 @@ import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.types.RowType;
 
 import org.apache.flink.core.execution.JobClient;
+import org.apache.paimon.table.FileStoreTable;
+import org.apache.paimon.table.source.DataSplit;
+import org.apache.paimon.table.source.Split;
 import org.apache.paimon.utils.CloseableIterator;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -49,10 +56,13 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
+import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.InternalRowAssert.assertThatRow;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
@@ -66,6 +76,9 @@ class HistoricalPartitionITCase extends FlinkPaimonTieringTestBase {
     private static final String SECOND_EXPIRED_PARTITION_NAME = "20240102";
     private static final int INITIAL_PARTITION_RETENTION = 100000;
     private static final int EXPIRED_PARTITION_RETENTION = 1;
+    private static final int PRE_RESCALE_BUCKET_NUM = 2;
+    private static final int POST_RESCALE_BUCKET_NUM = 4;
+    private static final int MAX_CANDIDATE_ID = 64;
 
     @RegisterExtension
     public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
@@ -315,6 +328,200 @@ class HistoricalPartitionITCase extends FlinkPaimonTieringTestBase {
         dropTable(tablePath);
     }
 
+    /**
+     * Changing bucket.num must not disable historical point lookup. The old partition keeps the
+     * bucket layout it was tiered with while later partitions use the new count, so the lookup has
+     * to be served from the bucket the lake data actually lives in.
+     */
+    @ParameterizedTest(name = "defaultBucketKey={0}")
+    @ValueSource(booleans = {true, false})
+    void testLookupExpiredPartitionAfterBucketNumRescale(boolean defaultBucketKey)
+            throws Exception {
+        TablePath tablePath =
+                TablePath.of(
+                        DEFAULT_DB,
+                        defaultBucketKey
+                                ? "historical_rescale_default_bucket"
+                                : "historical_rescale_bucket_subset");
+        Schema schema = partitionedPkSchema(defaultBucketKey);
+        long tableId =
+                createTable(tablePath, partitionedPkDescriptor(schema, PRE_RESCALE_BUCKET_NUM));
+
+        // A key that lands in different buckets under the two layouts, so routing with the wrong
+        // bucket count cannot accidentally hit the right lake bucket.
+        int lookupId = idRoutedDifferentlyAcrossLayouts(defaultBucketKey, schema);
+
+        admin.alterTable(
+                        tablePath,
+                        Collections.singletonList(
+                                TableChange.set(
+                                        ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED
+                                                .key(),
+                                        "true")),
+                        false)
+                .get();
+        Optional<PartitionRegistration> historicalPartition =
+                FLUSS_CLUSTER_EXTENSION
+                        .getZooKeeperClient()
+                        .getPartition(tablePath, HISTORICAL_PARTITION_VALUE);
+        assertThat(historicalPartition).isPresent();
+        FLUSS_CLUSTER_EXTENSION.waitUntilTablePartitionReady(
+                tableId, historicalPartition.get().getPartitionId());
+
+        // The old partition is created and written before the rescale, so it is laid out with
+        // PRE_RESCALE_BUCKET_NUM buckets.
+        admin.createPartition(tablePath, partitionSpec(EXPIRED_PARTITION_NAME), false).get();
+        long oldPartitionId = getPartitionId(tablePath, EXPIRED_PARTITION_NAME);
+        FLUSS_CLUSTER_EXTENSION.waitUntilTablePartitionReady(tableId, oldPartitionId);
+        assertThat(bucketCountActualOf(tablePath, EXPIRED_PARTITION_NAME))
+                .isEqualTo(PRE_RESCALE_BUCKET_NUM);
+
+        InternalRow expectedOldRow =
+                dataRow(defaultBucketKey, lookupId, "sub-" + lookupId, "Alice");
+        writeRows(tablePath, Collections.singletonList(expectedOldRow), false);
+
+        admin.alterTable(
+                        tablePath,
+                        Collections.singletonList(
+                                TableChange.set(
+                                        "bucket.num", String.valueOf(POST_RESCALE_BUCKET_NUM))),
+                        false)
+                .get();
+
+        // A partition created after the rescale uses the new count, establishing mixed layouts.
+        admin.createPartition(tablePath, partitionSpec(SECOND_EXPIRED_PARTITION_NAME), false).get();
+        long newPartitionId = getPartitionId(tablePath, SECOND_EXPIRED_PARTITION_NAME);
+        FLUSS_CLUSTER_EXTENSION.waitUntilTablePartitionReady(tableId, newPartitionId);
+        assertThat(bucketCountActualOf(tablePath, SECOND_EXPIRED_PARTITION_NAME))
+                .isEqualTo(POST_RESCALE_BUCKET_NUM);
+        writeRows(
+                tablePath,
+                Collections.singletonList(
+                        dataRow(
+                                defaultBucketKey,
+                                lookupId,
+                                "sub-" + lookupId,
+                                "Carol",
+                                SECOND_EXPIRED_PARTITION_NAME)),
+                false);
+
+        // Snapshot only the buckets the rows were actually written to; a primary-key table is
+        // tiered from its KV snapshots.
+        Set<TableBucket> tableBuckets = new HashSet<>();
+        tableBuckets.add(
+                new TableBucket(
+                        tableId,
+                        oldPartitionId,
+                        lakeBucketOf(defaultBucketKey, schema, lookupId, PRE_RESCALE_BUCKET_NUM)));
+        tableBuckets.add(
+                new TableBucket(
+                        tableId,
+                        newPartitionId,
+                        lakeBucketOf(defaultBucketKey, schema, lookupId, POST_RESCALE_BUCKET_NUM)));
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshots(tableBuckets);
+
+        JobClient jobClient = buildTieringJob(execEnv);
+        try {
+            // The tiered lake data of the old partition keeps the bucket count it was written with,
+            // not the new table-level one.
+            retry(
+                    Duration.ofMinutes(2),
+                    () ->
+                            assertThat(totalBucketsOfPartition(tablePath, EXPIRED_PARTITION_NAME))
+                                    .containsExactly(PRE_RESCALE_BUCKET_NUM));
+        } finally {
+            jobClient.cancel().get();
+        }
+
+        try (Connection lookupConn = ConnectionFactory.createConnection(clientConf);
+                Table table = lookupConn.getTable(tablePath)) {
+            Lookuper lookuper = table.newLookup().createLookuper();
+
+            admin.alterTable(
+                            tablePath,
+                            Collections.singletonList(
+                                    TableChange.set(
+                                            ConfigOptions.TABLE_AUTO_PARTITION_NUM_RETENTION.key(),
+                                            String.valueOf(EXPIRED_PARTITION_RETENTION))),
+                            false)
+                    .get();
+            waitUntilPartitionDropped(tablePath, EXPIRED_PARTITION_NAME);
+
+            InternalRow lookupRow =
+                    lookuper.lookup(lookupKey(defaultBucketKey, lookupId, "sub-" + lookupId))
+                            .get()
+                            .getSingletonRow();
+            assertThatRow(lookupRow).withSchema(schema.getRowType()).isEqualTo(expectedOldRow);
+        }
+        dropTable(tablePath);
+    }
+
+    /**
+     * Returns an id whose bucket differs between the pre-rescale and post-rescale layouts, so a
+     * lookup routed with the wrong bucket count cannot accidentally read the right lake bucket.
+     */
+    private static int idRoutedDifferentlyAcrossLayouts(boolean defaultBucketKey, Schema schema) {
+        for (int id = 1; id <= MAX_CANDIDATE_ID; id++) {
+            if (lakeBucketOf(defaultBucketKey, schema, id, PRE_RESCALE_BUCKET_NUM)
+                    != lakeBucketOf(defaultBucketKey, schema, id, POST_RESCALE_BUCKET_NUM)) {
+                return id;
+            }
+        }
+        throw new AssertionError(
+                "No id within "
+                        + MAX_CANDIDATE_ID
+                        + " candidates is routed to different buckets by the "
+                        + PRE_RESCALE_BUCKET_NUM
+                        + "- and "
+                        + POST_RESCALE_BUCKET_NUM
+                        + "-bucket layouts, so this test could not detect routing with the wrong "
+                        + "bucket count.");
+    }
+
+    /** Computes the lake bucket of a lookup key the same way the write and lookup paths do. */
+    private static int lakeBucketOf(
+            boolean defaultBucketKey, Schema schema, int id, int bucketNum) {
+        RowType lookupRowType = schema.getRowType().project(schema.getPrimaryKeyColumnNames());
+        KeyEncoder bucketKeyEncoder =
+                KeyEncoder.ofBucketKeyEncoder(
+                        lookupRowType, Collections.singletonList("id"), DataLakeFormat.PAIMON);
+        byte[] bucketKey = bucketKeyEncoder.encodeKey(lookupKey(defaultBucketKey, id, "sub-" + id));
+        return BucketingFunction.of(DataLakeFormat.PAIMON).bucketing(bucketKey, bucketNum);
+    }
+
+    /** Reads the bucket count a Fluss partition was created with. */
+    private static int bucketCountActualOf(TablePath tablePath, String partitionName)
+            throws Exception {
+        Optional<PartitionRegistration> partition =
+                FLUSS_CLUSTER_EXTENSION.getZooKeeperClient().getPartition(tablePath, partitionName);
+        assertThat(partition).isPresent();
+        return partition.get().getBucketCountActual();
+    }
+
+    /** Reads the bucket counts the tiered lake data of a partition was written with. */
+    private static Set<Integer> totalBucketsOfPartition(TablePath tablePath, String partitionName)
+            throws Exception {
+        FileStoreTable fileStoreTable =
+                (FileStoreTable) paimonCatalog.getTable(toPaimon(tablePath));
+        List<Split> splits =
+                fileStoreTable
+                        .newReadBuilder()
+                        .withPartitionFilter(Collections.singletonMap("dt", partitionName))
+                        .newScan()
+                        .plan()
+                        .splits();
+        assertThat(splits)
+                .withFailMessage(
+                        "No lake splits for partition %s; all lake splits: %s",
+                        partitionName, fileStoreTable.newReadBuilder().newScan().plan().splits())
+                .isNotEmpty();
+        Set<Integer> totalBuckets = new HashSet<>();
+        for (Split split : splits) {
+            totalBuckets.add(((DataSplit) split).totalBuckets());
+        }
+        return totalBuckets;
+    }
+
     @Override
     protected FlussClusterExtension getFlussClusterExtension() {
         return FLUSS_CLUSTER_EXTENSION;
@@ -466,6 +673,26 @@ class HistoricalPartitionITCase extends FlinkPaimonTieringTestBase {
             builder.property(ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED, true);
         }
         return builder.build();
+    }
+
+    /** Same as {@link #partitionedDescriptor} but with an explicit table-level bucket count. */
+    private static TableDescriptor partitionedPkDescriptor(Schema schema, int bucketNum) {
+        return TableDescriptor.builder()
+                .schema(schema)
+                // This is the default bucket key for (id, dt), and a strict subset of the physical
+                // primary key for (id, sub_id, dt).
+                .distributedBy(bucketNum, "id")
+                .partitionedBy("dt")
+                .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
+                .property(ConfigOptions.TABLE_AUTO_PARTITION_KEY, "dt")
+                .property(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, AutoPartitionTimeUnit.DAY)
+                .property(
+                        ConfigOptions.TABLE_AUTO_PARTITION_NUM_RETENTION,
+                        INITIAL_PARTITION_RETENTION)
+                .property(ConfigOptions.TABLE_AUTO_PARTITION_TIMEZONE, "UTC")
+                .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500))
+                .build();
     }
 
     private static InternalRow dataRow(

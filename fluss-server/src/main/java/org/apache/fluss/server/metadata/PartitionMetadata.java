@@ -17,6 +17,8 @@
 
 package org.apache.fluss.server.metadata;
 
+import javax.annotation.Nullable;
+
 import java.util.List;
 
 /** This entity used to describe the table's partition metadata. */
@@ -40,16 +42,27 @@ public class PartitionMetadata {
     private final String partitionName;
     private final long partitionId;
     private final List<BucketMetadata> bucketMetadataList;
+    @Nullable private final Integer bucketCountActual;
 
     public PartitionMetadata(
             long tableId,
             String partitionName,
             long partitionId,
             List<BucketMetadata> bucketMetadataList) {
+        this(tableId, partitionName, partitionId, bucketMetadataList, null);
+    }
+
+    public PartitionMetadata(
+            long tableId,
+            String partitionName,
+            long partitionId,
+            List<BucketMetadata> bucketMetadataList,
+            @Nullable Integer bucketCountActual) {
         this.tableId = tableId;
         this.partitionName = partitionName;
         this.partitionId = partitionId;
         this.bucketMetadataList = bucketMetadataList;
+        this.bucketCountActual = bucketCountActual;
     }
 
     public long getTableId() {
@@ -66,5 +79,11 @@ public class PartitionMetadata {
 
     public List<BucketMetadata> getBucketMetadataList() {
         return bucketMetadataList;
+    }
+
+    /** Returns the actual bucket count for this partition, or null if not set (old data). */
+    @Nullable
+    public Integer getBucketCountActual() {
+        return bucketCountActual;
     }
 }

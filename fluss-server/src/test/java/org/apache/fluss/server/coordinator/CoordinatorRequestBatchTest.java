@@ -20,6 +20,7 @@ package org.apache.fluss.server.coordinator;
 import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
@@ -35,6 +36,8 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.function.BiConsumer;
 
+import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
+import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for the {@link CoordinatorRequestBatch}. */
@@ -59,6 +62,7 @@ class CoordinatorRequestBatchTest {
         TablePath tablePath = TablePath.of("db1", "t1");
 
         coordinatorContext.putTablePath(tableId, tablePath);
+        putTableInfo(tableId, tablePath);
         coordinatorContext.setLiveTabletServers(
                 CoordinatorTestUtils.createServers(Collections.singletonList(0)));
         coordinatorContext.updateBucketReplicaAssignment(tb, Collections.singletonList(0));
@@ -98,6 +102,7 @@ class CoordinatorRequestBatchTest {
         TablePath tablePath = TablePath.of("db1", "t2");
 
         coordinatorContext.putTablePath(tableId, tablePath);
+        putTableInfo(tableId, tablePath);
         coordinatorContext.setLiveTabletServers(
                 CoordinatorTestUtils.createServers(Arrays.asList(0, 1)));
         coordinatorContext.updateBucketReplicaAssignment(followerTb, Arrays.asList(0, 1));
@@ -130,6 +135,22 @@ class CoordinatorRequestBatchTest {
         // The unrelated leader's pending entry must remain intact.
         assertThat(coordinatorContext.getPendingLeaderActivationBuckets())
                 .containsExactly(otherLeaderTb);
+    }
+
+    /**
+     * Registers the table metadata that {@code addNotifyLeaderRequestForTabletServers} needs to
+     * resolve the bucket layout epoch; without it the bucket is skipped before the send path.
+     */
+    private void putTableInfo(long tableId, TablePath tablePath) {
+        coordinatorContext.putTableInfo(
+                TableInfo.of(
+                        tablePath,
+                        tableId,
+                        0,
+                        DATA1_TABLE_DESCRIPTOR,
+                        DEFAULT_REMOTE_DATA_DIR,
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis()));
     }
 
     private static TestCoordinatorChannelManager newAlwaysFailingChannelManager() {
