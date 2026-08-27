@@ -19,6 +19,7 @@ package org.apache.fluss.config;
 
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.compression.ArrowCompressionInfo;
+import org.apache.fluss.lake.lakestorage.LakeStorage.LookupMode;
 import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DeleteBehavior;
@@ -132,6 +133,11 @@ public class TableConfig {
     /** Whether historical partition lookup is enabled. */
     public boolean isHistoricalPartitionEnabled() {
         return config.get(ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED);
+    }
+
+    /** Gets the lookup mode for historical partitions of the table. */
+    public LookupMode getHistoricalLookupMode() {
+        return config.get(ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_MODE);
     }
 
     /**

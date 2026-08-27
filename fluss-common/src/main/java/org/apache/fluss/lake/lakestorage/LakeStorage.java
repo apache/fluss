@@ -68,12 +68,22 @@ public interface LakeStorage {
                 "Point lookup is not supported for this lake storage.");
     }
 
+    /** Mode used to look up historical data in lake storage. */
+    enum LookupMode {
+        /** Use local lookup files cached from lake storage. */
+        SST,
+
+        /** Scan lake storage with primary-key filters and return at most one row. */
+        SCAN
+    }
+
     /** Runtime context for creating a lake table lookuper. */
     final class LookuperContext {
         private final String ioTmpDir;
         private final TableConfig tableConfig;
         private final long lookupCacheMaxDiskBytes;
         private final Runnable diskWriteGuard;
+        private final LookupMode lookupMode;
 
         /**
          * Creates a lookuper context.
@@ -94,6 +104,7 @@ public interface LakeStorage {
                     lookupCacheMaxDiskBytes > 0, "lookupCacheMaxDiskBytes must be greater than 0.");
             this.lookupCacheMaxDiskBytes = lookupCacheMaxDiskBytes;
             this.diskWriteGuard = checkNotNull(diskWriteGuard, "diskWriteGuard must not be null.");
+            this.lookupMode = tableConfig.getHistoricalLookupMode();
         }
 
         /** Returns the local directory for temporary files used by the lookuper. */
@@ -114,6 +125,11 @@ public interface LakeStorage {
         /** Returns the guard invoked before creating a local lookup cache file. */
         public Runnable diskWriteGuard() {
             return diskWriteGuard;
+        }
+
+        /** Returns the mode used to look up historical data. */
+        public LookupMode lookupMode() {
+            return lookupMode;
         }
     }
 }
