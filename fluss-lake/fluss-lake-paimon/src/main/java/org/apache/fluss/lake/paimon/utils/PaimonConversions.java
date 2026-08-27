@@ -210,10 +210,7 @@ public class PaimonConversions {
                 schemaChanges.add(SchemaChange.removeOption(key));
                 // #4102: resetting datalake.enabled is equivalent to disabling acceleration.
                 maybeSyncLakeStreamOption(
-                        resetOption.getKey(),
-                        null,
-                        paimonIncludingSystemColumns,
-                        schemaChanges);
+                        resetOption.getKey(), null, paimonIncludingSystemColumns, schemaChanges);
             } else if (tableChange instanceof TableChange.AddColumn) {
                 TableChange.AddColumn addColumn = (TableChange.AddColumn) tableChange;
 
@@ -380,10 +377,7 @@ public class PaimonConversions {
      * @param out the schema-change list to append to
      */
     private static void maybeSyncLakeStreamOption(
-            String flussKey,
-            @Nullable String value,
-            boolean legacyTable,
-            List<SchemaChange> out) {
+            String flussKey, @Nullable String value, boolean legacyTable, List<SchemaChange> out) {
         if (!TABLE_DATALAKE_ENABLED.key().equals(flussKey)) {
             return;
         }
@@ -392,9 +386,7 @@ public class PaimonConversions {
             return;
         }
         if (Boolean.parseBoolean(value)) {
-            out.add(
-                    SchemaChange.setOption(
-                            LAKESTREAM_ENABLED_OPTION_KEY, Boolean.TRUE.toString()));
+            out.add(SchemaChange.setOption(LAKESTREAM_ENABLED_OPTION_KEY, Boolean.TRUE.toString()));
         } else {
             // Disabling (SetOption "false") or resetting removes the option entirely.
             out.add(SchemaChange.removeOption(LAKESTREAM_ENABLED_OPTION_KEY));
