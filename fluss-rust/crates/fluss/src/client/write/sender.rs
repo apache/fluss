@@ -2105,6 +2105,7 @@ mod tests {
                                     created_time: 0,
                                     modified_time: 0,
                                     remote_data_dir: None,
+                                    bucket_layout_epoch: None,
                                 }
                                 .encode(&mut body)
                                 .expect("encode GetTableInfoResponse");

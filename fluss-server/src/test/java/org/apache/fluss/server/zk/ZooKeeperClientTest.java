@@ -594,7 +594,8 @@ class ZooKeeperClientTest {
                 new PartitionAssignment(tableId, partitionBucketAssignments),
                 remoteDataDir,
                 TablePath.of("db", "partitioned_table"),
-                tableId);
+                tableId,
+                partitionBucketAssignments.size());
         TableBucket partitionBucket = new TableBucket(tableId, partitionId, 0);
         BucketSnapshot partitionSnapshot = new BucketSnapshot(5L, 50L, "oss://test/partition-cp5");
         zookeeperClient.registerTableBucketSnapshot(partitionBucket, partitionSnapshot);
@@ -734,9 +735,21 @@ class ZooKeeperClientTest {
                                         })
                                 .getBucketAssignments());
         zookeeperClient.registerPartitionAssignmentAndMetadata(
-                1L, "p1", partitionAssignment, remoteDataDir, tablePath, tableId);
+                1L,
+                "p1",
+                partitionAssignment,
+                remoteDataDir,
+                tablePath,
+                tableId,
+                partitionAssignment.getBucketAssignments().size());
         zookeeperClient.registerPartitionAssignmentAndMetadata(
-                2L, "p2", partitionAssignment, remoteDataDir, tablePath, tableId);
+                2L,
+                "p2",
+                partitionAssignment,
+                remoteDataDir,
+                tablePath,
+                tableId,
+                partitionAssignment.getBucketAssignments().size());
 
         // check created partitions
         partitions = zookeeperClient.getPartitions(tablePath);

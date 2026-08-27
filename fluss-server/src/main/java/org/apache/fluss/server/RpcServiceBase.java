@@ -319,7 +319,8 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                 .setTableId(tableInfo.getTableId())
                 .setRemoteDataDir(tableInfo.getRemoteDataDir())
                 .setCreatedTime(tableInfo.getCreatedTime())
-                .setModifiedTime(tableInfo.getModifiedTime());
+                .setModifiedTime(tableInfo.getModifiedTime())
+                .setBucketLayoutEpoch(tableInfo.getBucketLayoutEpoch());
         return CompletableFuture.completedFuture(response);
     }
 
@@ -391,8 +392,15 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
             // get table id
             long tableId = tableInfo.getTableId();
             int numBuckets = tableInfo.getNumBuckets();
-            Long partitionId =
-                    hasPartitionName ? getPartitionId(tablePath, request.getPartitionName()) : null;
+            Long partitionId = null;
+            if (hasPartitionName) {
+                PartitionRegistration partition =
+                        getPartition(tablePath, request.getPartitionName());
+                partitionId = partition.getPartitionId();
+                numBuckets =
+                        partition.getBucketCountActualOrDefault(
+                                numBuckets, tableInfo.getBucketLayoutEpoch());
+            }
             Map<Integer, Optional<BucketSnapshot>> snapshots;
             if (partitionId != null) {
                 snapshots = zkClient.getPartitionLatestBucketSnapshot(partitionId);
@@ -406,7 +414,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         }
     }
 
-    private long getPartitionId(TablePath tablePath, String partitionName) {
+    private PartitionRegistration getPartition(TablePath tablePath, String partitionName) {
         Optional<PartitionRegistration> optPartitionRegistration;
         try {
             optPartitionRegistration = zkClient.getPartition(tablePath, partitionName);
@@ -421,7 +429,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                             "The partition '%s' of table '%s' does not exist.",
                             partitionName, tablePath));
         }
-        return optPartitionRegistration.get().getPartitionId();
+        return optPartitionRegistration.get();
     }
 
     @Override
@@ -495,6 +503,12 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         TablePath tablePath = toTablePath(request.getTablePath());
         authorizeTable(OperationType.DESCRIBE, tablePath);
 
+        // Read table metadata before reading partitions. This prevents a read spanning ALTER from
+        // combining a pre-ALTER PartitionRegistration (without bucketCountActual) with a post-ALTER
+        // TableInfo.
+        TableInfo tableInfo = metadataManager.getTable(tablePath);
+        List<String> partitionKeys = tableInfo.getPartitionKeys();
+
         Map<String, PartitionRegistration> partitionRegistrations;
         if (request.hasPartialPartitionSpec()) {
             ResolvedPartitionSpec partitionSpecFromRequest =
@@ -506,10 +520,12 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         }
         // TODO: Return the actual lake partitions instead of the internal historical partition.
         partitionRegistrations.remove(HISTORICAL_PARTITION_VALUE);
-        TableInfo tableInfo = metadataManager.getTable(tablePath);
-        List<String> partitionKeys = tableInfo.getPartitionKeys();
         return CompletableFuture.completedFuture(
-                toListPartitionInfosResponse(partitionKeys, partitionRegistrations));
+                toListPartitionInfosResponse(
+                        partitionKeys,
+                        partitionRegistrations,
+                        tableInfo.getNumBuckets(),
+                        tableInfo.getBucketLayoutEpoch()));
     }
 
     @Override

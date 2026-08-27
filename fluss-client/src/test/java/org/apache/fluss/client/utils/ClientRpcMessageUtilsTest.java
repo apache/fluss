@@ -22,12 +22,19 @@ import org.apache.fluss.client.write.ReadyWriteBatch;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.memory.PreAllocatedPagedOutputView;
 import org.apache.fluss.metadata.KvFormat;
+import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.rpc.messages.ListPartitionInfosResponse;
+import org.apache.fluss.rpc.messages.PbKeyValue;
+import org.apache.fluss.rpc.messages.PbPartitionInfo;
+import org.apache.fluss.rpc.messages.PbPartitionSpec;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.protocol.MergeMode;
 
 import org.junit.jupiter.api.Test;
+
+import javax.annotation.Nullable;
 
 import java.util.Arrays;
 import java.util.Collections;
@@ -124,6 +131,56 @@ class ClientRpcMessageUtilsTest {
                 ClientRpcMessageUtils.makePutKvRequest(TABLE_ID, ACKS, TIMEOUT_MS, readyBatches);
 
         assertThat(request.getAggMode()).isEqualTo(MergeMode.OVERWRITE.getProtoValue());
+    }
+
+    @Test
+    void testToPartitionInfosParsesBucketCountActual() {
+        // one partition with bucket_count_actual set, one without (simulating an old cluster / old
+        // partition that did not persist per-partition bucket count)
+        ListPartitionInfosResponse response =
+                new ListPartitionInfosResponse()
+                        .addAllPartitionsInfos(
+                                Arrays.asList(
+                                        makePbPartitionInfo(1L, "20240101", "file://dir1", 8),
+                                        makePbPartitionInfo(2L, "20240102", null, null)));
+
+        List<PartitionInfo> partitionInfos = ClientRpcMessageUtils.toPartitionInfos(response, 4);
+
+        assertThat(partitionInfos).hasSize(2);
+
+        PartitionInfo withBucketCountActual = partitionInfos.get(0);
+        assertThat(withBucketCountActual.getPartitionId()).isEqualTo(1L);
+        assertThat(withBucketCountActual.getPartitionName()).isEqualTo("20240101");
+        assertThat(withBucketCountActual.getRemoteDataDir()).isEqualTo("file://dir1");
+        assertThat(withBucketCountActual.getBucketCountActual()).isEqualTo(8);
+
+        // backward compatibility: missing bucket_count_actual must resolve to the given table-level
+        // default, not the proto default 0
+        PartitionInfo withoutBucketCountActual = partitionInfos.get(1);
+        assertThat(withoutBucketCountActual.getPartitionId()).isEqualTo(2L);
+        assertThat(withoutBucketCountActual.getPartitionName()).isEqualTo("20240102");
+        assertThat(withoutBucketCountActual.getRemoteDataDir()).isNull();
+        assertThat(withoutBucketCountActual.getBucketCountActual()).isEqualTo(4);
+    }
+
+    private static PbPartitionInfo makePbPartitionInfo(
+            long partitionId,
+            String partitionValue,
+            @Nullable String remoteDataDir,
+            @Nullable Integer bucketCountActual) {
+        PbPartitionSpec partitionSpec = new PbPartitionSpec();
+        PbKeyValue keyValue = new PbKeyValue().setKey("dt").setValue(partitionValue);
+        partitionSpec.addAllPartitionKeyValues(Collections.singletonList(keyValue));
+
+        PbPartitionInfo pbPartitionInfo =
+                new PbPartitionInfo().setPartitionId(partitionId).setPartitionSpec(partitionSpec);
+        if (remoteDataDir != null) {
+            pbPartitionInfo.setRemoteDataDir(remoteDataDir);
+        }
+        if (bucketCountActual != null) {
+            pbPartitionInfo.setBucketCountActual(bucketCountActual);
+        }
+        return pbPartitionInfo;
     }
 
     private KvWriteBatch createKvWriteBatch(int bucketId, MergeMode mergeMode) throws Exception {

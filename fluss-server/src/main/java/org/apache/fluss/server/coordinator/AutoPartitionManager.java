@@ -256,12 +256,14 @@ public class AutoPartitionManager implements AutoCloseable {
                                     partitionsByTable.get(tableId),
                                     "Auto partition state does not exist for table " + tableId);
                     if (!currentPartitions.containsKey(HISTORICAL_PARTITION_VALUE)) {
+                        TablePath tablePath = tableInfo.getTablePath();
                         createPartition(
                                 tableInfo,
                                 new ResolvedPartitionSpec(
                                         tableInfo.getPartitionKeys(),
                                         Collections.singletonList(HISTORICAL_PARTITION_VALUE)),
-                                currentPartitions);
+                                currentPartitions,
+                                metadataManager.getTableRegistration(tablePath).bucketCount);
                     }
                 });
     }
@@ -278,9 +280,10 @@ public class AutoPartitionManager implements AutoCloseable {
                             && !currentPartitions.containsKey(HISTORICAL_PARTITION_VALUE)) {
                         return;
                     }
+                    TablePath tablePath = tableInfo.getTablePath();
                     try {
                         metadataManager.dropPartition(
-                                tableInfo.getTablePath(),
+                                tablePath,
                                 new ResolvedPartitionSpec(
                                         tableInfo.getPartitionKeys(),
                                         Collections.singletonList(HISTORICAL_PARTITION_VALUE)),
@@ -288,13 +291,11 @@ public class AutoPartitionManager implements AutoCloseable {
                         if (currentPartitions != null) {
                             currentPartitions.remove(HISTORICAL_PARTITION_VALUE);
                         }
-                        LOG.info(
-                                "Deleted historical partition for table [{}].",
-                                tableInfo.getTablePath());
+                        LOG.info("Deleted historical partition for table [{}].", tablePath);
                     } catch (Exception e) {
                         LOG.warn(
-                                "Failed to delete historical partition for table [{}].",
-                                tableInfo.getTablePath(),
+                                "Failed to delete historical partition for table [{}] .",
+                                tablePath,
                                 e);
                     }
                 });
@@ -482,32 +483,52 @@ public class AutoPartitionManager implements AutoCloseable {
             return;
         }
 
+        TablePath tablePath = tableInfo.getTablePath();
+
+        // Read the table-level bucket count fresh from ZK, not from the possibly-stale TableInfo
+        int bucketCount;
+        try {
+            bucketCount = metadataManager.getTableRegistration(tablePath).bucketCount;
+        } catch (Exception e) {
+            LOG.warn(
+                    "Skipping auto partitioning for table [{}] as failed to read the "
+                            + "table-level bucket count.",
+                    tablePath,
+                    e);
+            return;
+        }
         for (ResolvedPartitionSpec partition : partitionsToPreCreate) {
-            createPartition(tableInfo, partition, currentPartitions);
+            createPartition(tableInfo, partition, currentPartitions, bucketCount);
         }
     }
 
     private void createPartition(
             TableInfo tableInfo,
             ResolvedPartitionSpec partition,
-            TreeMap<String, Set<String>> currentPartitions) {
+            TreeMap<String, Set<String>> currentPartitions,
+            int bucketCount) {
         TablePath tablePath = tableInfo.getTablePath();
         long tableId = tableInfo.getTableId();
         int replicaFactor = tableInfo.getTableConfig().getReplicationFactor();
         TabletServerInfo[] servers = metadataCache.getLiveServers();
-        long newKvLeaderReplicaCount = tableInfo.hasPrimaryKey() ? tableInfo.getNumBuckets() : 0;
+        long newKvLeaderReplicaCount = tableInfo.hasPrimaryKey() ? bucketCount : 0;
         try {
             replicaCapacityController.checkCanCreateKvLeaderReplicas(newKvLeaderReplicaCount);
 
             Map<Integer, BucketAssignment> bucketAssignments =
-                    generateAssignment(tableInfo.getNumBuckets(), replicaFactor, servers)
-                            .getBucketAssignments();
+                    generateAssignment(bucketCount, replicaFactor, servers).getBucketAssignments();
             PartitionAssignment partitionAssignment =
                     new PartitionAssignment(tableInfo.getTableId(), bucketAssignments);
 
             String remoteDataDir = remoteDirDynamicLoader.getRemoteDirSelector().nextDataDir();
             metadataManager.createPartition(
-                    tablePath, tableId, remoteDataDir, partitionAssignment, partition, false);
+                    tablePath,
+                    tableId,
+                    remoteDataDir,
+                    partitionAssignment,
+                    partition,
+                    false,
+                    bucketCount);
             currentPartitions.put(partition.getPartitionName(), null);
             LOG.info(
                     "Auto partitioning created partition {} for table [{}].", partition, tablePath);
@@ -612,8 +633,8 @@ public class AutoPartitionManager implements AutoCloseable {
                 currentPartitions.headMap(lastRetainPartitionTime).entrySet().iterator();
         while (iterator.hasNext()) {
             Map.Entry<String, Set<String>> entry = iterator.next();
-            // Historical system partitions are managed explicitly by table configuration changes
-            // and Coordinator recovery, never by normal retention cleanup.
+            // Historical system partitions are managed explicitly by table configuration
+            // changes and Coordinator recovery, never by normal retention cleanup.
             if (HISTORICAL_PARTITION_VALUE.equals(entry.getKey())) {
                 continue;
             }

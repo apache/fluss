@@ -185,6 +185,8 @@ pub struct GetTableInfoResponse {
     pub modified_time: i64,
     #[prost(string, optional, tag = "6")]
     pub remote_data_dir: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(int64, optional, tag = "7")]
+    pub bucket_layout_epoch: ::core::option::Option<i64>,
 }
 /// list tables request and response
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -365,6 +367,8 @@ pub struct LimitScanRequest {
     pub bucket_id: i32,
     #[prost(int32, required, tag = "5")]
     pub limit: i32,
+    #[prost(int32, optional, tag = "6")]
+    pub routing_bucket_count: ::core::option::Option<i32>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct LimitScanResponse {
@@ -392,6 +396,8 @@ pub struct PbScanReqForBucket {
     /// If set, stops returning rows after this many records.
     #[prost(int64, optional, tag = "4")]
     pub limit: ::core::option::Option<i64>,
+    #[prost(int32, optional, tag = "5")]
+    pub routing_bucket_count: ::core::option::Option<i32>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ScanKvRequest {
@@ -512,6 +518,8 @@ pub struct ListOffsetsRequest {
     pub bucket_id: ::prost::alloc::vec::Vec<i32>,
     #[prost(int64, optional, tag = "6")]
     pub start_timestamp: ::core::option::Option<i64>,
+    #[prost(int32, optional, tag = "7")]
+    pub routing_bucket_count: ::core::option::Option<i32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListOffsetsResponse {
@@ -1131,6 +1139,9 @@ pub struct PbTableMetadata {
     pub modified_time: i64,
     #[prost(string, optional, tag = "8")]
     pub remote_data_dir: ::core::option::Option<::prost::alloc::string::String>,
+    /// A table-level, monotonically increasing version for bucket.num changes.
+    #[prost(int64, optional, tag = "9")]
+    pub bucket_layout_epoch: ::core::option::Option<i64>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PbPartitionMetadata {
@@ -1143,6 +1154,9 @@ pub struct PbPartitionMetadata {
     pub partition_id: i64,
     #[prost(message, repeated, tag = "4")]
     pub bucket_metadata: ::prost::alloc::vec::Vec<PbBucketMetadata>,
+    /// the actual bucket count for this partition, used for per-partition bucket rescale
+    #[prost(int32, optional, tag = "5")]
+    pub bucket_count_actual: ::core::option::Option<i32>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PbBucketMetadata {
@@ -1173,6 +1187,8 @@ pub struct PbProduceLogReqForBucket {
     /// The original partition name for a historical write; unset for a normal write.
     #[prost(string, optional, tag = "4")]
     pub original_partition_name: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(int32, optional, tag = "5")]
+    pub routing_bucket_count: ::core::option::Option<i32>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PbProduceLogRespForBucket {
@@ -1219,6 +1235,8 @@ pub struct PbFetchLogReqForBucket {
     pub fetch_offset: i64,
     #[prost(int32, required, tag = "4")]
     pub max_fetch_bytes: i32,
+    #[prost(int32, optional, tag = "5")]
+    pub routing_bucket_count: ::core::option::Option<i32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PbFetchLogRespForTable {
@@ -1267,6 +1285,10 @@ pub struct PbPutKvReqForBucket {
     /// The original partition name for historical PK writes. It is unset for normal writes.
     #[prost(string, optional, tag = "4")]
     pub original_partition_name: ::core::option::Option<::prost::alloc::string::String>,
+    /// the bucket count the sender used to form bucket_id; the server compares it against the
+    /// actual count to detect stale routing. Not authoritative metadata.
+    #[prost(int32, optional, tag = "5")]
+    pub routing_bucket_count: ::core::option::Option<i32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PbPutKvRespForBucket {
@@ -1302,6 +1324,8 @@ pub struct PbLookupReqForBucket {
     /// The original partition name for historical lookup. It is unset for normal lookup.
     #[prost(string, optional, tag = "4")]
     pub original_partition_name: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(int32, optional, tag = "5")]
+    pub routing_bucket_count: ::core::option::Option<i32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PbLookupRespForBucket {
@@ -1338,6 +1362,8 @@ pub struct PbPrefixLookupReqForBucket {
     pub bucket_id: i32,
     #[prost(bytes = "bytes", repeated, tag = "3")]
     pub keys: ::prost::alloc::vec::Vec<::prost::bytes::Bytes>,
+    #[prost(int32, optional, tag = "4")]
+    pub routing_bucket_count: ::core::option::Option<i32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PbPrefixLookupRespForBucket {
@@ -1447,6 +1473,10 @@ pub struct PbNotifyLeaderAndIsrReqForBucket {
     pub bucket_epoch: i32,
     #[prost(int32, repeated, tag = "8")]
     pub standby_replicas: ::prost::alloc::vec::Vec<i32>,
+    #[prost(int32, optional, tag = "9")]
+    pub bucket_count_actual: ::core::option::Option<i32>,
+    #[prost(int64, optional, tag = "10")]
+    pub bucket_layout_epoch: ::core::option::Option<i64>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PbNotifyLeaderAndIsrRespForBucket {
@@ -1550,6 +1580,9 @@ pub struct PbPartitionInfo {
     pub partition_spec: PbPartitionSpec,
     #[prost(string, optional, tag = "3")]
     pub remote_data_dir: ::core::option::Option<::prost::alloc::string::String>,
+    /// the actual bucket count for this partition, used for per-partition bucket rescale
+    #[prost(int32, optional, tag = "4")]
+    pub bucket_count_actual: ::core::option::Option<i32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PbPartitionSpec {
@@ -1865,6 +1898,8 @@ pub struct PbTableStatsReqForBucket {
     pub partition_id: ::core::option::Option<i64>,
     #[prost(int32, required, tag = "2")]
     pub bucket_id: i32,
+    #[prost(int32, optional, tag = "3")]
+    pub routing_bucket_count: ::core::option::Option<i32>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PbTableStatsRespForBucket {

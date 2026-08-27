@@ -157,6 +157,7 @@ message GetTableInfoResponse {
   required int64 created_time = 4;
   required int64 modified_time = 5;
   optional string remote_data_dir = 6;
+  optional int64 bucket_layout_epoch = 7;
 }
 
 // list tables request and response
@@ -295,6 +296,7 @@ message LimitScanRequest {
   optional int64 partition_id = 3;
   required int32 bucket_id = 4;
   required int32 limit = 5;
+  optional int32 routing_bucket_count = 6;
 }
 
 message LimitScanResponse{
@@ -315,6 +317,7 @@ message PbScanReqForBucket {
   required int32 bucket_id = 3;
   // If set, stops returning rows after this many records.
   optional int64 limit = 4;
+  optional int32 routing_bucket_count = 5;
 }
 
 message ScanKvRequest {
@@ -399,6 +402,7 @@ message ListOffsetsRequest {
   optional int64 partition_id = 4;
   repeated int32 bucket_id = 5 [packed = true]; // it is recommended to use packed for repeated numerics to get more efficient encoding
   optional int64 startTimestamp = 6;
+  optional int32 routing_bucket_count = 7;
 }
 message ListOffsetsResponse {
   repeated PbListOffsetsRespForBucket buckets_resp = 1;
@@ -860,6 +864,8 @@ message PbTableMetadata {
   required int64 created_time = 6;
   required int64 modified_time = 7;
   optional string remote_data_dir = 8;
+  // A table-level, monotonically increasing version for bucket.num changes.
+  optional int64 bucket_layout_epoch = 9;
 
   // TODO add a new filed 'deleted_table' to indicate this table is deleted in UpdateMetadataRequest.
   // trace by: https://github.com/apache/fluss/issues/981
@@ -871,6 +877,8 @@ message PbPartitionMetadata {
   required string partition_name = 2;
   required int64 partition_id = 3;
   repeated PbBucketMetadata bucket_metadata = 4;
+  // the actual bucket count for this partition, used for per-partition bucket rescale
+  optional int32 bucket_count_actual = 5;
 }
 
 message PbBucketMetadata {
@@ -891,6 +899,7 @@ message PbProduceLogReqForBucket {
   required bytes records = 3;
   // The original partition name for a historical write; unset for a normal write.
   optional string original_partition_name = 4;
+  optional int32 routing_bucket_count = 5;
 }
 
 message PbProduceLogRespForBucket {
@@ -921,6 +930,7 @@ message PbFetchLogReqForBucket {
   // TODO leader epoch
   required int64 fetch_offset = 3;
   required int32 max_fetch_bytes = 4;
+  optional int32 routing_bucket_count = 5;
 }
 
 message PbFetchLogRespForTable {
@@ -951,6 +961,9 @@ message PbPutKvReqForBucket {
   required bytes records = 3;
   // The original partition name for historical PK writes. It is unset for normal writes.
   optional string original_partition_name = 4;
+  // the bucket count the sender used to form bucket_id; the server compares it against the
+  // actual count to detect stale routing. Not authoritative metadata.
+  optional int32 routing_bucket_count = 5;
 }
 
 message PbPutKvRespForBucket {
@@ -975,6 +988,7 @@ message PbLookupReqForBucket {
   repeated bytes keys = 3;
   // The original partition name for historical lookup. It is unset for normal lookup.
   optional string original_partition_name = 4;
+  optional int32 routing_bucket_count = 5;
 }
 
 message PbLookupRespForBucket {
@@ -1000,6 +1014,7 @@ message PbPrefixLookupReqForBucket {
   optional int64 partition_id = 1;
   required int32 bucket_id = 2;
   repeated bytes keys = 3;
+  optional int32 routing_bucket_count = 4;
 }
 
 message PbPrefixLookupRespForBucket {
@@ -1069,6 +1084,8 @@ message PbNotifyLeaderAndIsrReqForBucket {
   repeated int32 isr = 6 [packed = true];
   required int32 bucket_epoch = 7;
   repeated int32 standby_replicas = 8 [packed = true];
+  optional int32 bucket_count_actual = 9;
+  optional int64 bucket_layout_epoch = 10;
 }
 
 message PbNotifyLeaderAndIsrRespForBucket {
@@ -1139,6 +1156,8 @@ message PbPartitionInfo {
   required int64 partition_id = 1;
   required PbPartitionSpec partition_spec = 2;
   optional string remote_data_dir = 3;
+  // the actual bucket count for this partition, used for per-partition bucket rescale
+  optional int32 bucket_count_actual = 4;
 }
 
 message PbPartitionSpec {
@@ -1349,6 +1368,7 @@ message PbKvSnapshotLeaseForBucket {
 message PbTableStatsReqForBucket {
   optional int64 partition_id = 1;
   required int32 bucket_id = 2;
+  optional int32 routing_bucket_count = 3;
 }
 
 message PbTableStatsRespForBucket {

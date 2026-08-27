@@ -389,8 +389,6 @@ public class PushdownUtils {
                     "The Fluss cluster doesn't support count(*) on primary key table yet. Please upgrade to newer version (≥ 0.9).");
         }
         int bucketCount = tableInfo.getNumBuckets();
-        Collection<Integer> buckets =
-                IntStream.range(0, bucketCount).boxed().collect(Collectors.toList());
         List<PartitionInfo> partitionInfos;
         if (tableInfo.isPartitioned()) {
             partitionInfos = flussAdmin.listPartitionInfos(tablePath).get();
@@ -399,7 +397,7 @@ public class PushdownUtils {
         }
 
         List<CompletableFuture<Long>> countFutureList =
-                offsetLengthes(flussAdmin, tablePath, partitionInfos, buckets);
+                offsetLengthes(flussAdmin, tablePath, partitionInfos, bucketCount);
         // wait for all the response
         CompletableFuture.allOf(countFutureList.toArray(new CompletableFuture[0])).join();
         long count = 0;
@@ -413,10 +411,14 @@ public class PushdownUtils {
             Admin flussAdmin,
             TablePath tablePath,
             List<PartitionInfo> partitionInfos,
-            Collection<Integer> buckets) {
+            int tableBucketCount) {
         List<CompletableFuture<Long>> list = new ArrayList<>();
         for (@Nullable PartitionInfo info : partitionInfos) {
             String partitionName = info != null ? info.getPartitionName() : null;
+            int partitionBucketCount =
+                    PartitionInfo.bucketCountActualOrDefault(info, tableBucketCount);
+            Collection<Integer> buckets =
+                    IntStream.range(0, partitionBucketCount).boxed().collect(Collectors.toList());
             ListOffsetsResult earliestOffsets =
                     listOffsets(
                             flussAdmin,

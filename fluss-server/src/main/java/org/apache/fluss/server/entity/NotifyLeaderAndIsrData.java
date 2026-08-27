@@ -22,6 +22,8 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 
+import javax.annotation.Nullable;
+
 import java.util.List;
 
 /** The table bucket data of {@link NotifyLeaderAndIsrRequest}. */
@@ -30,16 +32,31 @@ public final class NotifyLeaderAndIsrData {
     private final TableBucket tableBucket;
     private final List<Integer> replicas;
     private final LeaderAndIsr leaderAndIsr;
+    // null when a legacy coordinator omits the fields
+    private final @Nullable Integer bucketCountActual;
+    private final @Nullable Long bucketLayoutEpoch;
 
     public NotifyLeaderAndIsrData(
             PhysicalTablePath physicalTablePath,
             TableBucket tableBucket,
             List<Integer> replicas,
             LeaderAndIsr leaderAndIsr) {
+        this(physicalTablePath, tableBucket, replicas, leaderAndIsr, null, null);
+    }
+
+    public NotifyLeaderAndIsrData(
+            PhysicalTablePath physicalTablePath,
+            TableBucket tableBucket,
+            List<Integer> replicas,
+            LeaderAndIsr leaderAndIsr,
+            @Nullable Integer bucketCountActual,
+            @Nullable Long bucketLayoutEpoch) {
         this.physicalTablePath = physicalTablePath;
         this.tableBucket = tableBucket;
         this.replicas = replicas;
         this.leaderAndIsr = leaderAndIsr;
+        this.bucketCountActual = bucketCountActual;
+        this.bucketLayoutEpoch = bucketLayoutEpoch;
     }
 
     public PhysicalTablePath getPhysicalTablePath() {
@@ -92,5 +109,15 @@ public final class NotifyLeaderAndIsrData {
 
     public int[] getStandbyReplicasArray() {
         return leaderAndIsr.standbyReplicas().stream().mapToInt(Integer::intValue).toArray();
+    }
+
+    /** The actual bucket count of the owning table/partition, or null if not carried. */
+    public @Nullable Integer getBucketCountActual() {
+        return bucketCountActual;
+    }
+
+    /** The bucket layout epoch of the owning table, or null if not carried. */
+    public @Nullable Long getBucketLayoutEpoch() {
+        return bucketLayoutEpoch;
     }
 }

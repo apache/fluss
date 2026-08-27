@@ -54,6 +54,11 @@ class WriterInitContextTest {
                     public TableInfo tableInfo() {
                         return null;
                     }
+
+                    @Override
+                    public int bucketCountActual() {
+                        throw new UnsupportedOperationException("not used in this test");
+                    }
                 };
 
         assertThat(context.splitIndex()).isEqualTo(WriterInitContext.UNKNOWN_SPLIT_INDEX);

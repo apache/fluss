@@ -372,6 +372,11 @@ public class CoordinatorEventProcessor implements EventProcessor {
         return coordinatorContext.getCoordinatorEpoch();
     }
 
+    /** The ZK version of the coordinator epoch znode, used for epoch fencing of ZK mutations. */
+    public int getCoordinatorZkVersion() {
+        return coordinatorContext.getCoordinatorZkVersion();
+    }
+
     private void initCoordinatorContext() throws Exception {
         long start = System.currentTimeMillis();
         // get all coordinator servers
@@ -997,6 +1002,19 @@ public class CoordinatorEventProcessor implements EventProcessor {
                     newAutoPartitionStrategy);
             autoPartitionManager.handleAutoPartitionStrategyChange(
                     newTableInfo, oldAutoPartitionStrategy, newAutoPartitionStrategy);
+        } else if (newAutoPartitionStrategy.isAutoPartitionEnabled()
+                && oldTableInfo.getNumBuckets() != newTableInfo.getNumBuckets()) {
+            // bucket.num changed (e.g. via ALTER TABLE) without any auto-partition strategy
+            // change. Refresh the cached TableInfo so that newly auto-created partitions use
+            // the updated table-level bucket count as their per-partition bucket count.
+            LOG.info(
+                    "Updating auto-partition metadata for table {} (tableId={}) after "
+                            + "bucket.num changed from {} to {}.",
+                    newTableInfo.getTablePath(),
+                    newTableInfo.getTableId(),
+                    oldTableInfo.getNumBuckets(),
+                    newTableInfo.getNumBuckets());
+            autoPartitionManager.updateAutoPartitionTables(newTableInfo);
         }
 
         // If standby replica config changed, trigger re-election for all online buckets

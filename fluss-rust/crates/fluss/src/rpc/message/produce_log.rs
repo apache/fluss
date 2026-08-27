@@ -50,6 +50,7 @@ impl ProduceLogRequest {
                 bucket_id: ready_batch.table_bucket.bucket_id(),
                 records: ready_batch.write_batch.build()?,
                 original_partition_name: None,
+                routing_bucket_count: None,
             })
         }
 
