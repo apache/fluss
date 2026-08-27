@@ -20,7 +20,9 @@
 from enum import IntEnum
 from types import TracebackType
 from typing import (
+    Any,
     AsyncIterator,
+    NoReturn,
     Dict,
     Iterator,
     List,
@@ -467,6 +469,116 @@ class DatabaseInfo:
     def __repr__(self) -> str: ...
 
 @final
+class Predicate:
+    """A filter expression for a log scan.
+
+    Build one from :func:`col`, then combine with ``&`` and ``|``.
+
+    Example:
+        ```python
+        from fluss import col
+
+        hot = (col("id") >= 200) & col("name").starts_with("high")
+        scanner = await table.new_scan().filter(hot).create_log_scanner()
+        ```
+    """
+
+    def and_(self, other: Predicate) -> Predicate:
+        """Match rows satisfying both predicates."""
+        ...
+    def or_(self, other: Predicate) -> Predicate:
+        """Match rows satisfying either predicate."""
+        ...
+    def __bool__(self) -> NoReturn:
+        """Always raises: use ``&`` and ``|``, since ``and``/``or`` would
+        silently return one side."""
+        ...
+    def __and__(self, other: Predicate, /) -> Predicate: ...
+    def __or__(self, other: Predicate, /) -> Predicate: ...
+    def __repr__(self) -> str: ...
+
+@final
+class ColumnRef:
+    """A column reference used to build a :class:`Predicate`.
+
+    Comparison operators build predicates, so ``col("id") >= 200`` and
+    ``col("id").greater_or_equal(200)`` are equivalent.
+
+    Literals are plain Python values: ``bool``, ``int``, ``float``, ``str``,
+    ``bytes``, ``decimal.Decimal``,
+    ``datetime.date``, ``datetime.time`` and ``datetime.datetime``. A naive
+    datetime is a wall clock and filters a TIMESTAMP column, an aware one a
+    TIMESTAMP_LTZ column. Nulls are matched with ``is_null()`` and
+    ``is_not_null()`` rather than a comparison against ``None``.
+    """
+
+    def __new__(cls, name: str) -> ColumnRef: ...
+    @property
+    def name(self) -> str:
+        """The column name this reference points at."""
+        ...
+    def __eq__(self, value: Any, /) -> Predicate: ...  # type: ignore[override]
+    def __ne__(self, value: Any, /) -> Predicate: ...  # type: ignore[override]
+    def __lt__(self, value: Any, /) -> Predicate: ...
+    def __le__(self, value: Any, /) -> Predicate: ...
+    def __gt__(self, value: Any, /) -> Predicate: ...
+    def __ge__(self, value: Any, /) -> Predicate: ...
+    def equal(self, value: Any) -> Predicate:
+        """Match rows where the column equals ``value``."""
+        ...
+    def not_equal(self, value: Any) -> Predicate:
+        """Match rows where the column differs from ``value``."""
+        ...
+    def less_than(self, value: Any) -> Predicate:
+        """Match rows where the column is less than ``value``."""
+        ...
+    def less_or_equal(self, value: Any) -> Predicate:
+        """Match rows where the column is less than or equal to ``value``."""
+        ...
+    def greater_than(self, value: Any) -> Predicate:
+        """Match rows where the column is greater than ``value``."""
+        ...
+    def greater_or_equal(self, value: Any) -> Predicate:
+        """Match rows where the column is greater than or equal to ``value``."""
+        ...
+    def is_null(self) -> Predicate:
+        """Match rows where the column is null."""
+        ...
+    def is_not_null(self) -> Predicate:
+        """Match rows where the column is not null."""
+        ...
+    def starts_with(self, prefix: str) -> Predicate:
+        """Match rows where the string column starts with ``prefix``."""
+        ...
+    def ends_with(self, suffix: str) -> Predicate:
+        """Match rows where the string column ends with ``suffix``."""
+        ...
+    def contains(self, infix: str) -> Predicate:
+        """Match rows where the string column contains ``infix``."""
+        ...
+    def __bool__(self) -> NoReturn:
+        """Always raises, like :meth:`Predicate.__bool__`."""
+        ...
+    def is_in(self, values: List[Any]) -> Predicate:
+        """Match rows where the column equals any of ``values``."""
+        ...
+    def not_in(self, values: List[Any]) -> Predicate:
+        """Match rows where the column equals none of ``values``."""
+        ...
+    def __repr__(self) -> str: ...
+
+def col(name: str) -> ColumnRef:
+    """Reference a column by name when building a filter.
+
+    Args:
+        name: Column name as declared in the table schema.
+
+    Returns:
+        A ColumnRef that builds predicates via comparison operators.
+    """
+    ...
+
+@final
 class TableScan:
     """Builder for creating log scanners with flexible configuration.
 
@@ -523,6 +635,20 @@ class TableScan:
 
         Args:
             n: The maximum number of rows to scan. Must be positive.
+
+        Returns:
+            Self for method chaining.
+        """
+        ...
+    def filter(self, predicate: Predicate) -> "TableScan":
+        """Push a filter down to the server for batch pruning.
+
+        Pruning is conservative: a returned batch may still contain
+        non-matching rows, so re-apply the predicate on the results. Only
+        Arrow log scans prune; a filter combined with ``limit()`` is rejected.
+
+        Args:
+            predicate: Predicate built from :func:`col`.
 
         Returns:
             Self for method chaining.

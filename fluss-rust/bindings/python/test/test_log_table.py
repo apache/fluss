@@ -21,6 +21,8 @@ Mirrors the Rust integration tests in crates/fluss/tests/integration/log_table.r
 """
 
 import asyncio
+import datetime
+import decimal
 import time
 
 import pyarrow as pa
@@ -1625,3 +1627,500 @@ async def test_append_arrow_batch_complex_types(connection, admin):
     ]
 
     await admin.drop_table(table_path, ignore_if_not_exists=False)
+
+
+def _stats_descriptor(schema):
+    """A single-bucket log table with statistics, keeping segments local.
+
+    Only server-side reads prune, and the client downloads remote segments.
+    """
+    return fluss.TableDescriptor(
+        schema,
+        bucket_count=1,
+        properties={
+            "table.statistics.columns": "*",
+            "table.log.tiered.local-segments": "100",
+        },
+    )
+
+
+async def _filtered_ids(table, predicate, expected_count, column="id", project=None):
+    """Scans with `predicate` pushed down and returns the ids that came back.
+
+    Expecting nothing still waits for a fetch, or the assertion passes whether
+    the batch was pruned or merely slow.
+    """
+    scan = table.new_scan()
+    if project is not None:
+        scan = scan.project_by_name(project)
+    scanner = await scan.filter(predicate).create_log_scanner()
+    scanner.subscribe_buckets({0: 0})
+    if expected_count == 0:
+        records = await scanner.poll(3000)
+    else:
+        records = await _poll_records(scanner, expected_count=expected_count)
+    return sorted(record.row[column] for record in records)
+
+
+async def test_filter_pushdown_prunes_non_matching_batches(connection, admin):
+    """Batches whose statistics cannot match the filter are pruned server-side."""
+    table_path = fluss.TablePath("fluss", "py_test_filter_pushdown_prune")
+    await admin.drop_table(table_path, ignore_if_not_exists=True)
+
+    arrow_schema = pa.schema(
+        [pa.field("id", pa.int32()), pa.field("name", pa.string())]
+    )
+    schema = fluss.Schema(arrow_schema)
+    await admin.create_table(
+        table_path, _stats_descriptor(schema), ignore_if_exists=False
+    )
+
+    table = await connection.get_table(table_path)
+    writer = table.new_append().create_writer()
+    # Three wire batches with disjoint id ranges, so a batch either fully
+    # matches the filter or cannot match.
+    for base in (1, 100, 200):
+        ids = list(range(base, base + 5))
+        writer.write_arrow_batch(
+            pa.RecordBatch.from_arrays(
+                [pa.array(ids, type=pa.int32()), pa.array([f"v{i}" for i in ids])],
+                schema=arrow_schema,
+            )
+        )
+    await writer.flush()
+
+    ids = await _filtered_ids(table, fluss.col("id") >= 200, expected_count=5)
+    assert ids == [200, 201, 202, 203, 204], (
+        "only the batch overlapping the filter should be fetched; "
+        "the two disjoint batches must be pruned server-side"
+    )
+
+    # The filter resolves against the full row type, so filtering on a column
+    # excluded from the projection must still prune.
+    scanner = await (
+        table.new_scan()
+        .project_by_name(["name"])
+        .filter(fluss.col("id") >= 200)
+        .create_log_scanner()
+    )
+    scanner.subscribe_buckets({0: 0})
+    records = await _poll_records(scanner, expected_count=5)
+    names = sorted(record.row["name"] for record in records)
+    assert names == ["v200", "v201", "v202", "v203", "v204"]
+
+    await admin.drop_table(table_path, ignore_if_not_exists=False)
+
+
+async def test_filter_with_overlapping_statistics_returns_whole_batch(
+    connection, admin
+):
+    """Pruning is batch-granular, so an overlapping batch comes back whole."""
+    table_path = fluss.TablePath("fluss", "py_test_filter_overlapping")
+    await admin.drop_table(table_path, ignore_if_not_exists=True)
+
+    arrow_schema = pa.schema(
+        [pa.field("id", pa.int32()), pa.field("name", pa.string())]
+    )
+    schema = fluss.Schema(arrow_schema)
+    await admin.create_table(
+        table_path, _stats_descriptor(schema), ignore_if_exists=False
+    )
+
+    table = await connection.get_table(table_path)
+    writer = table.new_append().create_writer()
+    for ids in ([1, 2, 3, 4, 5], [1, 6, 3, 8, 2]):
+        writer.write_arrow_batch(
+            pa.RecordBatch.from_arrays(
+                [pa.array(ids, type=pa.int32()), pa.array([f"v{i}" for i in ids])],
+                schema=arrow_schema,
+            )
+        )
+    await writer.flush()
+
+    ids = await _filtered_ids(table, fluss.col("id") > 5, expected_count=5)
+    assert ids == [1, 2, 3, 6, 8], (
+        "the mixed batch (min=1, max=8) is returned whole as a superset, "
+        "while the all-low batch is pruned"
+    )
+
+    await admin.drop_table(table_path, ignore_if_not_exists=False)
+
+
+async def test_filter_pushdown_prunes_row_appended_batches(connection, admin):
+    """Row appends go through the row-to-Arrow builder and still carry statistics."""
+    table_path = fluss.TablePath("fluss", "py_test_filter_row_append")
+    await admin.drop_table(table_path, ignore_if_not_exists=True)
+
+    arrow_schema = pa.schema(
+        [pa.field("id", pa.int32()), pa.field("name", pa.string())]
+    )
+    schema = fluss.Schema(arrow_schema)
+    await admin.create_table(
+        table_path, _stats_descriptor(schema), ignore_if_exists=False
+    )
+
+    table = await connection.get_table(table_path)
+    writer = table.new_append().create_writer()
+    # Flush between the groups so each becomes its own wire batch.
+    for base, prefix in ((1, "low"), (200, "v")):
+        for i in range(base, base + 5):
+            writer.append({"id": i, "name": f"{prefix}{i}"})
+        await writer.flush()
+
+    ids = await _filtered_ids(table, fluss.col("id") >= 200, expected_count=5)
+    assert ids == [200, 201, 202, 203, 204]
+
+    await admin.drop_table(table_path, ignore_if_not_exists=False)
+
+
+async def test_filter_without_statistics_returns_all_rows(connection, admin):
+    """Without statistics the server cannot prune, so the scan is a superset."""
+    table_path = fluss.TablePath("fluss", "py_test_filter_no_statistics")
+    await admin.drop_table(table_path, ignore_if_not_exists=True)
+
+    arrow_schema = pa.schema(
+        [pa.field("id", pa.int32()), pa.field("name", pa.string())]
+    )
+    schema = fluss.Schema(arrow_schema)
+    descriptor = fluss.TableDescriptor(
+        schema,
+        bucket_count=1,
+        properties={"table.log.tiered.local-segments": "100"},
+    )
+    await admin.create_table(table_path, descriptor, ignore_if_exists=False)
+
+    table = await connection.get_table(table_path)
+    writer = table.new_append().create_writer()
+    for ids in ([1, 2, 3], [100, 101, 102]):
+        writer.write_arrow_batch(
+            pa.RecordBatch.from_arrays(
+                [pa.array(ids, type=pa.int32()), pa.array([f"v{i}" for i in ids])],
+                schema=arrow_schema,
+            )
+        )
+    await writer.flush()
+
+    ids = await _filtered_ids(table, fluss.col("id") >= 100, expected_count=6)
+    assert ids == [1, 2, 3, 100, 101, 102]
+
+    await admin.drop_table(table_path, ignore_if_not_exists=False)
+
+
+async def test_filter_pushdown_prunes_across_column_types(connection, admin):
+    """Both decimal widths, both timestamp precisions, TIME(0) which Arrow stores
+    as seconds, string bounds too long to inline, and null counts."""
+    table_path = fluss.TablePath("fluss", "py_test_filter_column_types")
+    await admin.drop_table(table_path, ignore_if_not_exists=True)
+
+    arrow_schema = pa.schema(
+        [
+            pa.field("id", pa.int32()),
+            pa.field("name", pa.string()),
+            pa.field("price", pa.decimal128(10, 2)),
+            pa.field("big", pa.decimal128(22, 5)),
+            pa.field("ts3", pa.timestamp("ms")),
+            pa.field("ts6", pa.timestamp("us")),
+            pa.field("t", pa.time32("s")),
+            pa.field("opt", pa.int32()),
+        ]
+    )
+    schema = fluss.Schema(arrow_schema)
+    await admin.create_table(
+        table_path, _stats_descriptor(schema), ignore_if_exists=False
+    )
+
+    table = await connection.get_table(table_path)
+    writer = table.new_append().create_writer()
+
+    def batch(ids, name_prefix, price, big, millis, micros, seconds, opt):
+        return pa.RecordBatch.from_arrays(
+            [
+                pa.array(ids, type=pa.int32()),
+                # Names exceed seven bytes so the string bounds spill out of
+                # the statistics row's inline slot.
+                pa.array([f"{name_prefix}-{i}" for i in ids]),
+                pa.array([price] * len(ids), type=pa.decimal128(10, 2)),
+                pa.array([big] * len(ids), type=pa.decimal128(22, 5)),
+                pa.array([millis] * len(ids), type=pa.timestamp("ms")),
+                pa.array([micros] * len(ids), type=pa.timestamp("us")),
+                pa.array([seconds] * len(ids), type=pa.time32("s")),
+                pa.array([opt] * len(ids), type=pa.int32()),
+            ],
+            schema=arrow_schema,
+        )
+
+    low_ids = [1, 2, 3]
+    high_ids = [101, 102, 103]
+    writer.write_arrow_batch(
+        batch(
+            low_ids,
+            "aaaaaaaaaaaa",
+            decimal.Decimal("10.01"),
+            decimal.Decimal("1.00001"),
+            datetime.datetime(2020, 1, 1, 0, 0, 0),
+            datetime.datetime(2020, 1, 1, 0, 0, 0, 123456),
+            datetime.time(9, 0, 0),
+            None,
+        )
+    )
+    await writer.flush()
+    writer.write_arrow_batch(
+        batch(
+            high_ids,
+            "zzzzzzzzzzzz",
+            decimal.Decimal("990.01"),
+            decimal.Decimal("9000000.00001"),
+            datetime.datetime(2030, 1, 1, 0, 0, 0),
+            datetime.datetime(2030, 1, 1, 0, 0, 0, 456789),
+            datetime.time(20, 0, 0),
+            7,
+        )
+    )
+    await writer.flush()
+
+    cases = [
+        ("int", fluss.col("id") > 50, high_ids),
+        ("string", fluss.col("name") > "mmmmmmmmmmmm", high_ids),
+        ("compact decimal", fluss.col("price") > decimal.Decimal("500.00"), high_ids),
+        ("wide decimal", fluss.col("big") > decimal.Decimal("100.00000"), high_ids),
+        (
+            "timestamp(3)",
+            fluss.col("ts3") > datetime.datetime(2025, 1, 1, 0, 0, 0),
+            high_ids,
+        ),
+        (
+            "timestamp(6)",
+            fluss.col("ts6") > datetime.datetime(2025, 1, 1, 0, 0, 0, 500000),
+            high_ids,
+        ),
+        ("time(0)", fluss.col("t") > datetime.time(12, 0, 0), high_ids),
+        ("is_not_null", fluss.col("opt").is_not_null(), high_ids),
+        ("is_null", fluss.col("opt").is_null(), low_ids),
+    ]
+
+    for label, predicate, expected in cases:
+        ids = await _filtered_ids(table, predicate, expected_count=len(expected))
+        assert ids == expected, f"{label} filter should prune the other batch"
+
+    await admin.drop_table(table_path, ignore_if_not_exists=False)
+
+
+async def test_filter_rejects_invalid_predicates(connection, admin):
+    """A filter is validated against the schema when the scanner is created."""
+    table_path = fluss.TablePath("fluss", "py_test_filter_invalid")
+    await admin.drop_table(table_path, ignore_if_not_exists=True)
+
+    arrow_schema = pa.schema(
+        [pa.field("id", pa.int32()), pa.field("price", pa.decimal128(10, 2))]
+    )
+    schema = fluss.Schema(arrow_schema)
+    await admin.create_table(
+        table_path, _stats_descriptor(schema), ignore_if_exists=False
+    )
+    table = await connection.get_table(table_path)
+
+    # Unknown column.
+    with pytest.raises(Exception, match="missing"):
+        await table.new_scan().filter(fluss.col("missing") == 1).create_log_scanner()
+
+    # A literal the column's scale cannot hold exactly would move the bound.
+    with pytest.raises(Exception, match="does not fit"):
+        await (
+            table.new_scan()
+            .filter(fluss.col("price") == decimal.Decimal("12.345"))
+            .create_log_scanner()
+        )
+
+    # A literal of the wrong type for the column.
+    with pytest.raises(Exception, match="does not match"):
+        await table.new_scan().filter(fluss.col("id") == "abc").create_log_scanner()
+
+    # Unsupported Python literal, rejected while building the predicate.
+    with pytest.raises(TypeError, match="Unsupported filter literal"):
+        fluss.col("id") == object()
+
+    # Limit pushdown and filter pushdown target different scanners.
+    with pytest.raises(Exception, match="limit"):
+        await table.new_scan().filter(fluss.col("id") > 1).limit(1).create_log_scanner()
+
+    await admin.drop_table(table_path, ignore_if_not_exists=False)
+
+
+@pytest.fixture
+def non_utc_timezone(monkeypatch):
+    """Runs a test in a non-UTC zone, where a local-time misread would show."""
+    monkeypatch.setenv("TZ", "Europe/Berlin")
+    time.tzset()
+    yield
+    monkeypatch.undo()
+    time.tzset()
+
+
+async def test_filter_timestamp_literals_are_wall_clock(
+    connection, admin, non_utc_timezone
+):
+    """A naive datetime is a wall clock, not local time."""
+    table_path = fluss.TablePath("fluss", "py_test_filter_timestamp_wall_clock")
+    await admin.drop_table(table_path, ignore_if_not_exists=True)
+
+    arrow_schema = pa.schema(
+        [pa.field("id", pa.int32()), pa.field("ts", pa.timestamp("ms"))]
+    )
+    schema = fluss.Schema(arrow_schema)
+    await admin.create_table(
+        table_path, _stats_descriptor(schema), ignore_if_exists=False
+    )
+
+    written = datetime.datetime(2030, 1, 1, 12, 0, 0)
+    table = await connection.get_table(table_path)
+    writer = table.new_append().create_writer()
+    writer.write_arrow_batch(
+        pa.RecordBatch.from_arrays(
+            [
+                pa.array([1], type=pa.int32()),
+                pa.array([written], type=pa.timestamp("ms")),
+            ],
+            schema=arrow_schema,
+        )
+    )
+    await writer.flush()
+
+    # A literal shifted by the local offset would keep this batch.
+    after = await _filtered_ids(
+        table, fluss.col("ts") > written + datetime.timedelta(seconds=1), 0
+    )
+    assert after == [], f"a bound after the row must prune it, got {after}"
+
+    before = await _filtered_ids(
+        table, fluss.col("ts") > written - datetime.timedelta(seconds=1), 1
+    )
+    assert before == [1], f"a bound before the row must keep it, got {before}"
+
+    await admin.drop_table(table_path, ignore_if_not_exists=False)
+
+
+async def test_filter_set_and_string_predicates(connection, admin):
+    """is_in, not_in and the string predicates reach the server."""
+    table_path = fluss.TablePath("fluss", "py_test_filter_set_predicates")
+    await admin.drop_table(table_path, ignore_if_not_exists=True)
+
+    arrow_schema = pa.schema(
+        [pa.field("id", pa.int32()), pa.field("name", pa.string())]
+    )
+    schema = fluss.Schema(arrow_schema)
+    await admin.create_table(
+        table_path, _stats_descriptor(schema), ignore_if_exists=False
+    )
+
+    table = await connection.get_table(table_path)
+    writer = table.new_append().create_writer()
+    for ids, prefix in (([1, 2, 3], "low"), ([101, 102, 103], "high")):
+        writer.write_arrow_batch(
+            pa.RecordBatch.from_arrays(
+                [
+                    pa.array(ids, type=pa.int32()),
+                    pa.array([f"{prefix}-{i}" for i in ids]),
+                ],
+                schema=arrow_schema,
+            )
+        )
+        await writer.flush()
+
+    assert await _filtered_ids(table, fluss.col("id").is_in([101, 102, 103]), 3) == [
+        101,
+        102,
+        103,
+    ]
+    # min/max cannot refute a NOT IN set, so both batches survive.
+    assert await _filtered_ids(table, fluss.col("id").not_in([1, 2, 3]), 6) == [
+        1,
+        2,
+        3,
+        101,
+        102,
+        103,
+    ]
+    assert await _filtered_ids(table, fluss.col("name").starts_with("high"), 3) == [
+        101,
+        102,
+        103,
+    ]
+    # ends_with tells nothing about min/max, so neither batch can be pruned.
+    assert await _filtered_ids(table, fluss.col("name").ends_with("-102"), 6) == [
+        1,
+        2,
+        3,
+        101,
+        102,
+        103,
+    ]
+    # An empty set matches nothing.
+    assert await _filtered_ids(table, fluss.col("id").is_in([]), 0) == []
+    # Either branch of an OR keeps a batch.
+    both = fluss.col("id").is_in([1]) | fluss.col("id").is_in([101])
+    assert await _filtered_ids(table, both, 6) == [1, 2, 3, 101, 102, 103]
+
+    # Null comparisons go through is_null(), not `== None`.
+    with pytest.raises(Exception, match="is_null"):
+        await table.new_scan().filter(fluss.col("id") == None).create_log_scanner()  # noqa: E711
+
+    await admin.drop_table(table_path, ignore_if_not_exists=False)
+
+
+async def test_filter_float_literals(connection, admin):
+    """A double literal is rejected unless it narrows to the column exactly."""
+    table_path = fluss.TablePath("fluss", "py_test_filter_float")
+    await admin.drop_table(table_path, ignore_if_not_exists=True)
+
+    arrow_schema = pa.schema(
+        [pa.field("id", pa.int32()), pa.field("score", pa.float32())]
+    )
+    schema = fluss.Schema(arrow_schema)
+    await admin.create_table(
+        table_path, _stats_descriptor(schema), ignore_if_exists=False
+    )
+
+    table = await connection.get_table(table_path)
+    writer = table.new_append().create_writer()
+    for ids, score in (([1, 2], 1.5), ([101, 102], 900.5)):
+        writer.write_arrow_batch(
+            pa.RecordBatch.from_arrays(
+                [
+                    pa.array(ids, type=pa.int32()),
+                    pa.array([score] * len(ids), type=pa.float32()),
+                ],
+                schema=arrow_schema,
+            )
+        )
+        await writer.flush()
+
+    assert await _filtered_ids(table, fluss.col("score") > 500.25, 2) == [101, 102]
+
+    # 0.1 has no exact single-precision form, so the bound would move.
+    with pytest.raises(Exception, match="cannot be represented exactly"):
+        await table.new_scan().filter(fluss.col("score") > 0.1).create_log_scanner()
+
+    await admin.drop_table(table_path, ignore_if_not_exists=False)
+
+
+def test_predicate_rejects_python_boolean_operators():
+    """`and`/`or` would silently return one side, so a predicate has no truth value."""
+    low = fluss.col("id") >= 1
+    high = fluss.col("id") >= 200
+
+    for build in (lambda: low and high, lambda: low or high, lambda: bool(low)):
+        with pytest.raises(TypeError, match="no truth value"):
+            build()
+
+    with pytest.raises(TypeError, match="no truth value"):
+        bool(fluss.col("id"))
+
+    # The operators are what actually combine them.
+    assert "Compound" in repr(low & high)
+    assert "Compound" in repr(low | high)
+
+
+def test_predicate_rejects_out_of_range_integer_literal():
+    """An int too large for INT64 must not silently become a float literal."""
+    with pytest.raises(OverflowError):
+        fluss.col("id") > 2**70
