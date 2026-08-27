@@ -60,3 +60,7 @@ path = "src/example_partitioned_prefix_lookup.rs"
 [[example]]
 name = "example-prometheus-metrics"
 path = "src/example_prometheus_metrics.rs"
+
+[[example]]
+name = "example-filter-pushdown"
+path = "src/example_filter_pushdown.rs"

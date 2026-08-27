@@ -146,6 +146,7 @@ series are shared by `AppendWriter` (log tables) and `UpsertWriter` (PK tables).
 | `fn project(self, indices: &[usize]) -> Result<Self>`                       | Project columns by index                |
 | `fn project_by_name(self, names: &[&str]) -> Result<Self>`                  | Project columns by name                 |
 | `fn limit(self, n: i32) -> Result<Self>`                                    | Set a row limit (enables `create_bucket_batch_scanner`; rejected by log scanners) |
+| `fn filter(self, predicate: Predicate) -> Result<Self>`                     | Push a predicate down to log scanners; whole batches are pruned by statistics, and returned batches can still hold non-matching rows (see [Filter Pushdown](example/filter-pushdown.md); rejected by `create_bucket_batch_scanner`) |
 | `fn create_log_scanner(self) -> Result<LogScanner>`                         | Create a record-based log scanner; on a primary-key table, subscribes to its CDC changelog (per-record `ChangeType`) |
 | `fn create_record_batch_log_scanner(self) -> Result<RecordBatchLogScanner>` | Create an Arrow batch-based log scanner (log tables only — no per-record change types) |
 | `fn create_bucket_batch_scanner(self, bucket: TableBucket) -> Result<LimitBatchScanner>` | Bounded scan of one bucket (requires `limit`; runs on first `next_batch`) |
