@@ -22,20 +22,30 @@ import org.apache.fluss.security.auth.ClientAuthenticationPlugin;
 import org.apache.fluss.security.auth.ClientAuthenticator;
 import org.apache.fluss.security.auth.ServerAuthenticationPlugin;
 import org.apache.fluss.security.auth.ServerAuthenticator;
+import org.apache.fluss.security.auth.sasl.SaslAuthenticatorFactory;
 
 /** Authentication plugin for SASL. */
 public class SaslAuthenticationPlugin
         implements ClientAuthenticationPlugin, ServerAuthenticationPlugin {
     static final String SASL_AUTH_PROTOCOL = "sasl";
 
+    private volatile SaslServerMechanismFactory mechanismFactory;
+
     @Override
     public ClientAuthenticator createClientAuthenticator(Configuration configuration) {
-        return new SaslClientAuthenticator(configuration);
+        return SaslAuthenticatorFactory.createClientAuthenticator(configuration);
     }
 
     @Override
     public ServerAuthenticator createServerAuthenticator(Configuration configuration) {
-        return new SaslServerAuthenticator(configuration);
+        if (mechanismFactory == null) {
+            synchronized (this) {
+                if (mechanismFactory == null) {
+                    mechanismFactory = new SaslServerMechanismFactory(configuration);
+                }
+            }
+        }
+        return new SaslServerAuthenticator(configuration, mechanismFactory);
     }
 
     @Override

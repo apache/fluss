@@ -400,6 +400,18 @@ public class FlinkConversionsTest {
                                 .withDescription(
                                         ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE
                                                 .description()));
+
+        flinkOption =
+                FlinkConversions.toFlinkOption(ConfigOptions.CLIENT_SASL_OAUTHBEARER_CLIENT_SECRET);
+        assertThat(flinkOption)
+                .isEqualTo(
+                        org.apache.flink.configuration.ConfigOptions.key(
+                                        ConfigOptions.CLIENT_SASL_OAUTHBEARER_CLIENT_SECRET.key())
+                                .stringType()
+                                .noDefaultValue()
+                                .withDescription(
+                                        ConfigOptions.CLIENT_SASL_OAUTHBEARER_CLIENT_SECRET
+                                                .description()));
     }
 
     @Test

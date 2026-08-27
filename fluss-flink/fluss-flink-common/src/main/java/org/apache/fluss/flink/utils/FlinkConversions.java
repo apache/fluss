@@ -363,8 +363,11 @@ public class FlinkConversions {
                                                     (Duration) flussOption.defaultValue()))
                             : builder.stringType().noDefaultValue();
         } else if (clazz.equals(Password.class)) {
-            String defaultValue = ((Password) flussOption.defaultValue()).value();
-            option = builder.stringType().defaultValue(defaultValue);
+            Password defaultValue = (Password) flussOption.defaultValue();
+            option =
+                    defaultValue == null
+                            ? builder.stringType().noDefaultValue()
+                            : builder.stringType().defaultValue(defaultValue.value());
         } else if (clazz.equals(MemorySize.class)) {
             // use string type in Flink option instead to make convert back easier
             option = builder.stringType().defaultValue(flussOption.defaultValue().toString());

@@ -27,6 +27,7 @@ import org.apache.fluss.rpc.protocol.ApiManager;
 import org.apache.fluss.rpc.protocol.NetworkProtocolPlugin;
 import org.apache.fluss.security.auth.AuthenticationFactory;
 import org.apache.fluss.security.auth.PlainTextAuthenticationPlugin;
+import org.apache.fluss.security.auth.ServerAuthenticator;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandler;
 
 import java.util.LinkedHashMap;
@@ -34,6 +35,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -65,6 +67,7 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
     private final List<String> listeners;
     private final RequestsMetrics requestsMetrics;
     private Configuration conf;
+    private Map<String, Supplier<ServerAuthenticator>> serverAuthenticatorSuppliers;
     /** Initial credentials from `security.sasl.plain.jaas.config`. */
     private Map<String, String> initialPlainCredentialsFromJaasConfig;
 
@@ -88,6 +91,8 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
         this.conf = new Configuration(conf);
         this.initialPlainCredentialsFromJaasConfig = parseCredentialsFromJaasConfig(conf);
         enrichWithJaasConfig(conf);
+        this.serverAuthenticatorSuppliers =
+                AuthenticationFactory.loadServerAuthenticatorSuppliers(this.conf);
     }
 
     @Override
@@ -106,9 +111,7 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
                 requestsMetrics,
                 conf.get(ConfigOptions.NETTY_CONNECTION_MAX_IDLE_TIME).getSeconds(),
                 (int) conf.get(ConfigOptions.NETTY_SERVER_MAX_REQUEST_SIZE).getBytes(),
-                Optional.ofNullable(
-                                AuthenticationFactory.loadServerAuthenticatorSuppliers(this.conf)
-                                        .get(listenerName))
+                Optional.ofNullable(serverAuthenticatorSuppliers.get(listenerName))
                         .orElse(PlainTextAuthenticationPlugin.PlainTextServerAuthenticator::new));
     }
 
