@@ -840,7 +840,8 @@ mod table_test {
     }
 
     /// Pruning across the statistics encodings: spilled string bounds, compact
-    /// and non-compact decimals and timestamps, time, and null counts.
+    /// and non-compact decimals and timestamps, time with seconds-to-millis
+    /// scaling, and null counts.
     #[tokio::test]
     async fn filter_pushdown_prunes_across_column_types() {
         let cluster = get_shared_cluster();
@@ -857,7 +858,7 @@ mod table_test {
                     .column("big", DataTypes::decimal(22, 5))
                     .column("ts3", DataTypes::timestamp_with_precision(3))
                     .column("ts6", DataTypes::timestamp_with_precision(6))
-                    .column("t", DataTypes::time_with_precision(3))
+                    .column("t", DataTypes::time_with_precision(0))
                     .column("opt", DataTypes::int())
                     .build()
                     .expect("Failed to build schema"),
@@ -901,7 +902,7 @@ mod table_test {
                 5,
                 TimestampNtz::from_millis_nanos(1_600_000_000_000 + id as i64, 123_000).unwrap(),
             );
-            row.set_field(6, Time::new(32_400_000 + id));
+            row.set_field(6, Time::new(32_400_000 + id * 1_000));
             row.set_field(7, Datum::Null);
             writer.append(&row).expect("Failed to append low row");
         }
@@ -931,7 +932,7 @@ mod table_test {
                 5,
                 TimestampNtz::from_millis_nanos(1_900_000_000_000 + id as i64, 456_000).unwrap(),
             );
-            row.set_field(6, Time::new(72_000_000 + id));
+            row.set_field(6, Time::new(72_000_000 + id * 1_000));
             row.set_field(7, id);
             writer.append(&row).expect("Failed to append high row");
         }
