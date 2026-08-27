@@ -33,13 +33,25 @@ Below is the list for all configurations to control the log segments tiered beha
 
 ### Table configurations about remote log
 
-When local log segments are copied to remote storage, the local log segments will be deleted to reduce local disk cost.
-But sometimes, we want to keep the several latest log segments retain in local, although they have been coped to remote storage for better read performance.
-You can control local retention per table with `table.log.tiered.local-segments` (default is 2)
-and `table.log.local-ttl`. When `table.log.local-ttl` is not configured, it falls back to
-`table.log.ttl`. A non-positive local TTL disables TTL-based local cleanup. When both TTLs are
-positive, the local TTL must be less than or equal to `table.log.ttl`. An expired local segment is
-deleted only after it has been copied to remote storage.
+After a rolled local log segment is copied to remote storage, it can be removed to reduce local disk
+usage. Uncopied segments are never eligible for local TTL cleanup.
+
+Use the following table options to control local retention:
+
+- `table.log.local-ttl` controls TTL-based cleanup. It inherits `table.log.ttl` when it is not
+  configured. Setting it to `0ms` disables TTL-based local cleanup. When both TTLs are positive,
+  the local TTL must be less than or equal to `table.log.ttl`.
+- `table.log.tiered.local-segments` keeps the configured number of recent local segments from
+  count-based cleanup (default: 2). Copied segments beyond that count can be removed even before
+  their local TTL expires.
+
+The two cleanup policies are independent: a copied local segment can be removed when it exceeds the
+configured segment count or when its local TTL expires.
+
+`table.log.ttl` independently controls the retention of table log data, including its remote copy.
+See [TTL](../../table-design/data-distribution/ttl.md) for the complete lifecycle from an active
+local segment through rolling, upload, local cleanup, and remote expiration. The server-side
+remote-log settings are listed in [server configuration](../configuration.md#log-tiered-storage).
 
 ## Remote snapshot of primary key table
 

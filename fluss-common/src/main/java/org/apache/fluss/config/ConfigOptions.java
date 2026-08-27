@@ -990,8 +990,9 @@ public class ConfigOptions {
                     .booleanType()
                     .defaultValue(false)
                     .withDescription(
-                            "Whether to roll a non-empty active log segment when it has expired "
-                                    + "according to the table log TTL. Disabled by default.");
+                            "Whether to roll a non-empty active log segment after it has expired "
+                                    + "according to the effective local cleanup TTL and the high "
+                                    + "watermark has reached the log end offset. Disabled by default.");
 
     public static final ConfigOption<Duration> LOG_REPLICA_HIGH_WATERMARK_CHECKPOINT_INTERVAL =
             key("log.replica.high-watermark.checkpoint-interval")
