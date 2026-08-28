@@ -110,11 +110,13 @@ TRACKED_PREFIXES: Sequence[str] = ("org/apache/hadoop/",)
 # so the checker stays usable as a gate. --compare still fails if one of these
 # grows. Entries are (jar filename prefix, forbidden package prefix).
 #
-# fluss-client bundles commons-lang3 at its original path. #3960 relocated
-# org.apache.commons in the S3/GS/Azure filesystem plugins only; the client
-# uber-jar was never covered. Tracked upstream separately from #3553 / #4072.
+# fluss-client bundles commons-lang3 at its original path, and the Flink
+# connector uber-jars inherit it. #3960 relocated org.apache.commons in the
+# S3/GS/Azure filesystem plugins only; the client was never covered. Separate
+# pre-existing issue from #3553 / #4072.
 KNOWN_EXCEPTIONS: Sequence[Tuple[str, str]] = (
     ("fluss-client", "org/apache/commons/"),
+    ("fluss-flink-", "org/apache/commons/"),
 )
 
 
