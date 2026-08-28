@@ -275,6 +275,21 @@
                                     <pattern>org.apache.commons</pattern>
                                     <shadedPattern>org.apache.fluss.shaded.org.apache.commons</shadedPattern>
                                 </relocation>
+                                <relocation>
+                                    <pattern>io.netty</pattern>
+                                    <shadedPattern>
+                                        org.apache.fluss.fs.shaded.azure.io.netty
+                                    </shadedPattern>
+                                    <excludes>
+                                        <!-- netty-tcnative is a JNI wrapper around OpenSSL and its
+                                             native symbols bind to the io.netty.internal.tcnative
+                                             package name, so renaming it would break them. It is
+                                             referenced here but supplied from elsewhere, if at all;
+                                             leaving it alone keeps OpenSSL usable when the host
+                                             provides it and avoids references resolving nowhere. -->
+                                        <exclude>io.netty.internal.tcnative.**</exclude>
+                                    </excludes>
+                                </relocation>
                             </relocations>
                         </configuration>
                     </execution>
