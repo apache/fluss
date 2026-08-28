@@ -52,6 +52,7 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
@@ -677,8 +678,9 @@ class AutoPartitionManagerTest {
         assertThat(partitions.keySet()).contains("20250420", "20250421", "20250422");
     }
 
-    @Test
-    void testRemovePartitionFromMultiplePartitionKeysTable() throws Exception {
+    @ParameterizedTest
+    @ValueSource(ints = {2, -1})
+    void testRemovePartitionFromMultiplePartitionKeysTable(int numRetention) throws Exception {
         ManuallyTriggeredScheduledExecutorService periodicExecutor =
                 new ManuallyTriggeredScheduledExecutorService();
         AutoPartitionManager autoPartitionManager =
@@ -691,7 +693,7 @@ class AutoPartitionManagerTest {
                         new ManualClock(0L),
                         periodicExecutor);
 
-        TableInfo table = createPartitionedTable(2, 0, AutoPartitionTimeUnit.DAY, true);
+        TableInfo table = createPartitionedTable(numRetention, 0, AutoPartitionTimeUnit.DAY, true);
         long tableId = table.getTableId();
         autoPartitionManager.addAutoPartitionTable(table, false);
         autoPartitionManager.addPartition(tableId, "20250419$A");

@@ -354,21 +354,10 @@ public class AutoPartitionManager implements AutoCloseable {
                 lock,
                 () -> {
                     if (autoPartitionTables.containsKey(tableId)) {
-                        TableInfo tableInfo = autoPartitionTables.get(tableId);
-                        TreeMap<String, Set<String>> partitionMap = partitionsByTable.get(tableId);
-                        if (tableInfo.getPartitionKeys().size() > 1) {
-                            String autoPartitionValue =
-                                    extractAutoPartitionValue(tableInfo, partitionName);
-                            Set<String> partitionSet = partitionMap.get(autoPartitionValue);
-                            if (partitionSet != null) {
-                                partitionSet.remove(partitionName);
-                                if (partitionSet.isEmpty()) {
-                                    partitionMap.remove(autoPartitionValue);
-                                }
-                            }
-                        } else {
-                            partitionMap.remove(partitionName);
-                        }
+                        removePartitionFromPartitionsByTable(
+                                autoPartitionTables.get(tableId),
+                                partitionsByTable.get(tableId),
+                                partitionName);
                     }
                 });
     }
@@ -410,6 +399,24 @@ public class AutoPartitionManager implements AutoCloseable {
             partitionSet.add(partitionName);
         } else {
             partitionMap.put(partitionName, null);
+        }
+    }
+
+    private void removePartitionFromPartitionsByTable(
+            TableInfo tableInfo,
+            NavigableMap<String, Set<String>> partitionMap,
+            String partitionName) {
+        if (tableInfo.getPartitionKeys().size() > 1) {
+            String autoPartitionValue = extractAutoPartitionValue(tableInfo, partitionName);
+            Set<String> partitionSet = partitionMap.get(autoPartitionValue);
+            if (partitionSet != null) {
+                partitionSet.remove(partitionName);
+                if (partitionSet.isEmpty()) {
+                    partitionMap.remove(autoPartitionValue);
+                }
+            }
+        } else {
+            partitionMap.remove(partitionName);
         }
     }
 
