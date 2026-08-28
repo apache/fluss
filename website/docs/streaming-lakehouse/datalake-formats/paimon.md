@@ -180,6 +180,25 @@ SELECT COUNT(*) FROM paimon_catalog.fluss.orders;
 SELECT * FROM paimon_catalog.fluss.enriched_orders$snapshots;
 ```
 
+## Schema Evolution
+
+The schema of a Paimon table managed by Fluss must always be evolved through Fluss. When you add columns to a Fluss table with `ALTER TABLE ... ADD` (see [Add Columns](../../engine-flink/ddl.md#add-columns)), the new columns are appended at the end as nullable columns, and Fluss applies the same change to the Paimon table as part of the `ALTER TABLE` statement, so the two schemas stay in sync.
+
+:::warning External schema changes stall tiering
+Do not change the schema of a Fluss-managed Paimon table through an external engine, for example by adding a column on the Paimon table from Spark or Doris. The tiering service requires the user columns of the Paimon table to match the Fluss table schema. Once the Paimon table contains a column that the Fluss table does not have, tiering the table's records can fail with an error like the following:
+
+```
+Caused by: java.io.IOException: Failed to write Fluss record to Paimon.
+Caused by: java.lang.IllegalStateException: Field 18 is NULL because Paimon schema is wider than Fluss record.
+```
+
+The tiering job then fails and restarts in a loop until the schemas match again, cycling between the RUNNING and RESTARTING states in the Flink UI. The restart loop also interrupts tiering progress for the other tables served by the same job. Adding a column is the most common trigger, but any external change that makes the schemas diverge stops tiering in the same way, possibly with a different error message.
+
+No data is lost or corrupted, and the records that could not be tiered remain readable in Fluss. However, Fluss keeps log data until it has been tiered, so log retention for the table is effectively paused and storage usage grows until the schemas match again. Fix the mismatch promptly.
+
+To recover, make the two schemas consistent again. To keep the externally added column, run a matching `ALTER TABLE ... ADD` statement on the Fluss table. When the Paimon table already contains the column in the expected position, Fluss completes the change without touching the Paimon table. If Fluss rejects the statement because the schemas cannot be reconciled, drop the externally added column from the Paimon table and, if you still need it, add it through Fluss afterwards. Once the schemas match, the tiering job recovers on its next automatic restart and the pending records are tiered completely. If you cancelled the tiering job in the meantime, resubmit it.
+:::
+
 ## Data Type Mapping
 
 When integrating with Paimon, Fluss automatically converts between Fluss data types and Paimon data types.  
