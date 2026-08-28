@@ -75,7 +75,7 @@ The names `__bucket`, `__offset`, and `__timestamp` remain reserved for Fluss in
 | Old tiering service | Supported | **Not supported** — must not process clean tables |
 | Old Flink connectors using `FULL` startup mode | Readable | **Not readable** |
 
-Old Flink connectors that use `FULL` startup mode assume the presence of the system columns and therefore cannot read newly created clean lake tables.
+Old Flink connectors that use `FULL` startup mode assume the presence of the system columns and therefore cannot read newly created clean lake tables. Note that `FULL` is the **default** value of `scan.startup.mode`, so an old connector that does not explicitly set a startup mode is also affected — when auditing jobs before an upgrade, do not look only for jobs that explicitly configure `FULL`. A lake-reading Flink connector must be upgraded together with its matching lake storage plugin.
 
 ### Required Upgrade Order
 
