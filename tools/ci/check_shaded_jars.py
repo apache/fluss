@@ -134,14 +134,36 @@ TRACKED_PREFIXES: Sequence[str] = ("org/apache/hadoop/",)
 # so the checker stays usable as a gate. --compare still fails if one of these
 # grows. Entries are (jar filename prefix, forbidden package prefix).
 #
-# fluss-client bundles commons-lang3 at its original path, and the Flink
-# connector uber-jars inherit it. #3960 relocated org.apache.commons in the
-# S3/GS/Azure filesystem plugins only; the client was never covered. Separate
-# pre-existing issue from #3553 / #4072.
+# fluss-client bundles commons-math3 (1386 classes) and commons-lang3 (431) at
+# their original paths, and the Flink and Spark uber-jars inherit both. #3960
+# relocated org.apache.commons in the S3/GS/Azure filesystem plugins only; the
+# client was never covered. Separate pre-existing issue from #3553 / #4072.
+#
+# fluss-lake-iceberg leaks commons too but from different libraries
+# (commons-compress 602, lang3 431, commons-pool 57), so it is a distinct
+# problem and is deliberately NOT excepted here.
 KNOWN_EXCEPTIONS: Sequence[Tuple[str, str]] = (
     ("fluss-client", "org/apache/commons/"),
     ("fluss-flink-", "org/apache/commons/"),
 )
+
+
+# Packages holding only annotations. A missing or duplicated annotation class
+# is ignored by the JVM at class load, so an unshaded copy cannot shadow
+# anything that changes behaviour. Reported, never fatal -- otherwise a jar
+# fails the gate over something like a single
+# org/codehaus/mojo/animal_sniffer/IgnoreJRERequirement.class.
+ANNOTATION_ONLY: Sequence[str] = (
+    "org/codehaus/mojo/animal_sniffer/",
+    "com/google/errorprone/annotations/",
+    "com/google/j2objc/annotations/",
+    "org/checkerframework/",
+)
+
+
+def is_annotation_only(entry: str) -> bool:
+    logical = MRJ_PREFIX.sub("", entry)
+    return any(logical.startswith(p) for p in ANNOTATION_ONLY)
 
 
 def is_known_exception(jar_path: str, prefix: str) -> bool:
@@ -163,6 +185,8 @@ class JarReport:
         self.leaked: Dict[str, int] = {p: 0 for p, _ in RULES}
         self.leaked_mrj: Dict[str, int] = {p: 0 for p, _ in RULES}
         self.relocated: Dict[str, int] = {p: 0 for p, _ in RULES}
+        # unshaded but annotation-only: reported, never fatal
+        self.annotations: Dict[str, int] = {p: 0 for p, _ in RULES}
         self.tracked: Dict[str, int] = {p: 0 for p in TRACKED_PREFIXES}
         # forbidden prefix -> first few offending entry names
         self.samples: Dict[str, List[str]] = {p: [] for p, _ in RULES}
@@ -177,6 +201,7 @@ class JarReport:
             "leaked": self.leaked,
             "leaked_mrj": self.leaked_mrj,
             "relocated": self.relocated,
+            "annotations": self.annotations,
             "tracked": self.tracked,
             "mrj_other": self.mrj_other,
         }
@@ -218,6 +243,10 @@ def _classify(name: str, report: JarReport, relocated_res: Sequence[re.Pattern])
 
     for idx, (prefix, _) in enumerate(RULES):
         if logical.startswith(prefix):
+            if is_annotation_only(logical):
+                # counted and reported, but never a gate failure
+                report.annotations[prefix] += 1
+                return
             bucket = report.leaked_mrj if mrj_match else report.leaked
             bucket[prefix] += 1
             if len(report.samples[prefix]) < 5:
@@ -313,8 +342,8 @@ def format_report(report: JarReport) -> str:
         report.path,
         "  {} entries, {} classes".format(report.total_entries, report.total_classes),
     ]
-    header = "  {:<22} {:>8} {:>8} {:>10}".format(
-        "package", "leaked", "mrj", "relocated"
+    header = "  {:<22} {:>8} {:>8} {:>10} {:>7}".format(
+        "package", "leaked", "mrj", "relocated", "annot"
     )
     lines.append(header)
     lines.append("  " + "-" * (len(header) - 2))
@@ -322,26 +351,34 @@ def format_report(report: JarReport) -> str:
         base = report.leaked[prefix]
         mrj = report.leaked_mrj[prefix]
         reloc = report.relocated[prefix]
-        if not (base or mrj or reloc):
+        annot = report.annotations[prefix]
+        if not (base or mrj or reloc or annot):
             continue
         flag = "  LEAK" if (base or mrj) else ""
         lines.append(
-            "  {:<22} {:>8} {:>8} {:>10}{}".format(
-                prefix.rstrip("/"), base, mrj, reloc, flag
+            "  {:<22} {:>8} {:>8} {:>10} {:>7}{}".format(
+                prefix.rstrip("/"), base, mrj, reloc, annot, flag
             )
         )
     for prefix in TRACKED_PREFIXES:
         lines.append(
-            "  {:<22} {:>8} {:>8} {:>10}  (tracked, never fatal)".format(
-                prefix.rstrip("/"), report.tracked[prefix], "-", "-"
+            "  {:<22} {:>8} {:>8} {:>10} {:>7}  (tracked, never fatal)".format(
+                prefix.rstrip("/"), report.tracked[prefix], "-", "-", "-"
             )
         )
     lines.append(
         "  {:<22} {:>8}".format("other MRJ entries", report.mrj_other)
     )
+    # Group samples under a heading naming their package. Printed flat they
+    # trail the "other MRJ entries" row and read as if they were MRJ examples,
+    # which they are not -- they are examples of the leak in that package.
     for prefix, _ in RULES:
-        for sample in report.samples[prefix]:
-            lines.append("    e.g. {}".format(sample))
+        samples = report.samples[prefix]
+        if not samples:
+            continue
+        lines.append("  leaked from {}:".format(prefix.rstrip("/")))
+        for sample in samples:
+            lines.append("      {}".format(sample))
     return "\n".join(lines)
 
 
@@ -495,10 +532,15 @@ def main() -> int:
     if not paths:
         print("no jars matched", file=sys.stderr)
         return 2
+    # with --json, stdout carries only the JSON document; everything a human
+    # reads goes to stderr so the output stays pipeable into jq
+    out = sys.stderr if args.json else sys.stdout
+
     if skipped:
         print(
             "scanning {} jars ({} skipped: original-/tests/sources/javadoc, "
-            "build intermediates, distribution copies)".format(len(paths), skipped)
+            "build intermediates, distribution copies)".format(len(paths), skipped),
+            file=out,
         )
 
     if args.dangling:
@@ -552,7 +594,7 @@ def main() -> int:
     if args.baseline:
         with open(args.baseline, "w") as handle:
             json.dump([r.to_dict() for r in reports], handle, indent=2)
-        print("\nbaseline written to {}".format(args.baseline))
+        print("\nbaseline written to {}".format(args.baseline), file=out)
         return 0
 
     failed = False
@@ -565,28 +607,31 @@ def main() -> int:
             print("cannot read baseline: {}".format(err), file=sys.stderr)
             return 2
         regressions, notes = compare_reports(baseline, reports)
-        print("\n--- comparison against {} ---".format(args.compare))
+        print("\n--- comparison against {} ---".format(args.compare), file=out)
         for note in notes:
-            print("  ok   {}".format(note))
+            print("  ok   {}".format(note), file=out)
         for regression in regressions:
-            print("  FAIL {}".format(regression))
+            print("  FAIL {}".format(regression), file=out)
         if not notes and not regressions:
-            print("  no differences")
+            print("  no differences", file=out)
         failed = failed or bool(regressions)
 
-    print("\n--- leak check ---")
+    print("\n--- leak check ---", file=out)
     for report in reports:
         fatal, warnings = report.violations()
         name = report.path.rsplit("/", 1)[-1]
         if fatal:
             failed = True
-            print("  FAIL {}".format(name))
+            print("  FAIL {}".format(name), file=out)
             for problem in fatal:
-                print("       {}".format(problem))
+                print("       {}".format(problem), file=out)
         else:
-            print("  ok   {}".format(name))
+            print("  ok   {}".format(name), file=out)
         for problem in warnings:
-            print("  WARN {}: {} (known pre-existing, not gating)".format(name, problem))
+            print(
+                "  WARN {}: {} (known pre-existing, not gating)".format(name, problem),
+                file=out,
+            )
 
     return 1 if failed else 0
 
