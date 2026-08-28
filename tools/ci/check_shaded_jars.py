@@ -76,12 +76,19 @@ MRJ_PREFIX = re.compile(r"^META-INF/versions/\d+/")
 # this checker only cares that the classes ended up somewhere under
 # org/apache/fluss/, not which namespace was chosen.
 RULES: Sequence[Tuple[str, str]] = (
+    # the five relocated by fluss-fs-hadoop-shaded and fluss-fs-s3
     ("com/fasterxml/", r"^org/apache/fluss/.*/com/fasterxml/"),
     ("org/codehaus/", r"^org/apache/fluss/.*/org/codehaus/"),
     ("com/ctc/", r"^org/apache/fluss/.*/com/ctc/"),
     ("org/apache/htrace/", r"^org/apache/fluss/.*/org/apache/htrace/"),
     ("com/google/re2j/", r"^org/apache/fluss/.*/com/google/re2j/"),
     ("org/apache/commons/", r"^org/apache/fluss/.*/org/apache/commons/"),
+    # the libraries Fluss ships pre-shaded; see the forbidden-import list in
+    # AGENTS.md. An unshaded copy in an uber-jar defeats that shading.
+    ("com/google/common/", r"^org/apache/fluss/shaded/guava\d*/com/google/common/"),
+    ("io/netty/", r"^org/apache/fluss/shaded/netty\d*/io/netty/"),
+    ("org/apache/arrow/", r"^org/apache/fluss/shaded/arrow/org/apache/arrow/"),
+    ("org/apache/zookeeper/", r"^org/apache/fluss/shaded/zookeeper\d*/org/apache/zookeeper/"),
 )
 
 # Prefixes that are legitimately present unshaded.
@@ -202,6 +209,32 @@ def _classify(name: str, report: JarReport, relocated_res: Sequence[re.Pattern])
         if relocated_res[idx].match(logical):
             report.relocated[prefix] += 1
             return
+
+
+def audit_packages(path: str, depth: int = 3) -> List[Tuple[str, int]]:
+    """Every non-Fluss, non-JDK package shipped in the jar, largest first.
+
+    Discovery aid for the repo-wide sweep: RULES only covers packages we
+    already know about, so this answers "what else is in here". Entries are
+    grouped to `depth` path segments, and relocated classes under
+    org/apache/fluss are folded away since those are the shaded copies.
+    """
+    counts: Dict[str, int] = {}
+    jdk = ("java/", "javax/", "jdk/", "sun/", "META-INF/")
+    with zipfile.ZipFile(path) as zf:
+        for name in zf.namelist():
+            if not name.endswith(".class"):
+                continue
+            logical = MRJ_PREFIX.sub("", name)
+            if logical.startswith("org/apache/fluss/") or logical.startswith(jdk):
+                continue
+            parts = logical.split("/")
+            if len(parts) <= 1:
+                key = "(default package)"
+            else:
+                key = "/".join(parts[: min(depth, len(parts) - 1)])
+            counts[key] = counts.get(key, 0) + 1
+    return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
 
 
 def scan_jar(path: str) -> JarReport:
@@ -346,12 +379,41 @@ def main() -> int:
         "--compare", metavar="FILE", help="compare against a baseline written earlier"
     )
     parser.add_argument("--json", action="store_true", help="emit JSON to stdout")
+    parser.add_argument(
+        "--audit",
+        action="store_true",
+        help="list every unshaded third-party package per jar and exit 0; "
+        "discovery mode, does not gate",
+    )
+    parser.add_argument(
+        "--audit-min",
+        type=int,
+        default=1,
+        metavar="N",
+        help="with --audit, hide packages with fewer than N classes",
+    )
     args = parser.parse_args()
 
     paths = expand(args.jars)
     if not paths:
         print("no jars matched", file=sys.stderr)
         return 2
+
+    if args.audit:
+        for path in paths:
+            try:
+                packages = audit_packages(path)
+            except (OSError, zipfile.BadZipFile) as err:
+                print("cannot read {}: {}".format(path, err), file=sys.stderr)
+                continue
+            shown = [(p, n) for p, n in packages if n >= args.audit_min]
+            total = sum(n for _, n in packages)
+            print("\n{}  ({} unshaded third-party classes)".format(path, total))
+            if not shown:
+                print("  none")
+            for package, count in shown:
+                print("  {:>7}  {}".format(count, package))
+        return 0
 
     reports = []
     for path in paths:
