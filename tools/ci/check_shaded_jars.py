@@ -134,18 +134,15 @@ TRACKED_PREFIXES: Sequence[str] = ("org/apache/hadoop/",)
 # so the checker stays usable as a gate. --compare still fails if one of these
 # grows. Entries are (jar filename prefix, forbidden package prefix).
 #
-# fluss-client bundles commons-math3 (1386 classes) and commons-lang3 (431) at
-# their original paths, and the Flink and Spark uber-jars inherit both. #3960
-# relocated org.apache.commons in the S3/GS/Azure filesystem plugins only; the
-# client was never covered. Separate pre-existing issue from #3553 / #4072.
+# Currently empty. fluss-client, the Flink connectors and the Spark connectors
+# used to be listed here for commons-math3/commons-lang3; that leak is fixed,
+# so the entries are gone rather than left behind where they would mask a
+# regression.
 #
-# fluss-lake-iceberg leaks commons too but from different libraries
-# (commons-compress 602, lang3 431, commons-pool 57), so it is a distinct
-# problem and is deliberately NOT excepted here.
-KNOWN_EXCEPTIONS: Sequence[Tuple[str, str]] = (
-    ("fluss-client", "org/apache/commons/"),
-    ("fluss-flink-", "org/apache/commons/"),
-)
+# fluss-lake-iceberg still leaks commons, but from different libraries
+# (commons-compress 602, lang3 431, commons-pool 57). It is deliberately NOT
+# excepted: it is a real unfixed problem, not an accepted one.
+KNOWN_EXCEPTIONS: Sequence[Tuple[str, str]] = ()
 
 
 # Packages holding only annotations. A missing or duplicated annotation class
