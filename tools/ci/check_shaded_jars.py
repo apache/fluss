@@ -85,10 +85,14 @@ RULES: Sequence[Tuple[str, str]] = (
     ("org/apache/commons/", r"^org/apache/fluss/.*/org/apache/commons/"),
     # the libraries Fluss ships pre-shaded; see the forbidden-import list in
     # AGENTS.md. An unshaded copy in an uber-jar defeats that shading.
-    ("com/google/common/", r"^org/apache/fluss/shaded/guava\d*/com/google/common/"),
-    ("io/netty/", r"^org/apache/fluss/shaded/netty\d*/io/netty/"),
-    ("org/apache/arrow/", r"^org/apache/fluss/shaded/arrow/org/apache/arrow/"),
-    ("org/apache/zookeeper/", r"^org/apache/fluss/shaded/zookeeper\d*/org/apache/zookeeper/"),
+    # the relocated path is matched loosely on purpose: these land under
+    # org/apache/fluss/shaded/<lib>/ when they come from a fluss-shaded
+    # artifact, but under org/apache/fluss/fs/shaded/<plugin>/ when a
+    # filesystem plugin relocates its own bundled copy.
+    ("com/google/common/", r"^org/apache/fluss/.*/com/google/common/"),
+    ("io/netty/", r"^org/apache/fluss/.*/io/netty/"),
+    ("org/apache/arrow/", r"^org/apache/fluss/.*/org/apache/arrow/"),
+    ("org/apache/zookeeper/", r"^org/apache/fluss/.*/org/apache/zookeeper/"),
 )
 
 # Prefixes that are legitimately present unshaded.
@@ -237,6 +241,46 @@ def audit_packages(path: str, depth: int = 3) -> List[Tuple[str, int]]:
     return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
 
 
+# A relocated class reference in a constant pool, e.g.
+# org/apache/fluss/fs/shaded/hadoop3/com/google/common/collect/ImmutableList
+RELOCATED_REF = re.compile(
+    rb"org/apache/fluss/(?:fs/)?shaded/[A-Za-z0-9_$/-]+"
+)
+
+
+def dangling_relocations(path: str, limit: int = 12) -> List[Tuple[str, int]]:
+    """Relocated class names referenced by the jar but not contained in it.
+
+    The shade plugin rewrites every reference matching a <relocation> pattern,
+    including references to classes the jar does not bundle. Relocating
+    org.apache.commons when only some commons artifacts are present therefore
+    leaves links to org/apache/fluss/shaded/org/apache/commons/cli/... that
+    resolve nowhere, and the failure only shows up at runtime.
+
+    Returns (missing class name, reference count), most referenced first.
+    """
+    missing: Dict[str, int] = {}
+    with zipfile.ZipFile(path) as zf:
+        names = set(zf.namelist())
+        for name in zf.namelist():
+            if not name.endswith(".class"):
+                continue
+            try:
+                blob = zf.read(name)
+            except (OSError, zipfile.BadZipFile):
+                continue
+            for raw in set(RELOCATED_REF.findall(blob)):
+                ref = raw.decode("utf-8", "replace")
+                # inner classes and array/descriptor noise resolve via the
+                # outer name; only flag when nothing plausible is present
+                if ref + ".class" in names:
+                    continue
+                if any(n.startswith(ref + "$") or n.startswith(ref + "/") for n in names):
+                    continue
+                missing[ref] = missing.get(ref, 0) + 1
+    return sorted(missing.items(), key=lambda kv: (-kv[1], kv[0]))[:limit]
+
+
 def scan_jar(path: str) -> JarReport:
     report = JarReport(path)
     relocated_res = [re.compile(pat) for _, pat in RULES]
@@ -380,6 +424,13 @@ def main() -> int:
     )
     parser.add_argument("--json", action="store_true", help="emit JSON to stdout")
     parser.add_argument(
+        "--dangling",
+        action="store_true",
+        help="report relocated class references the jar does not contain; "
+        "catches a <relocation> pattern that rewrote links to classes that "
+        "were never bundled",
+    )
+    parser.add_argument(
         "--audit",
         action="store_true",
         help="list every unshaded third-party package per jar and exit 0; "
@@ -398,6 +449,24 @@ def main() -> int:
     if not paths:
         print("no jars matched", file=sys.stderr)
         return 2
+
+    if args.dangling:
+        failed = False
+        for path in paths:
+            try:
+                missing = dangling_relocations(path)
+            except (OSError, zipfile.BadZipFile) as err:
+                print("cannot read {}: {}".format(path, err), file=sys.stderr)
+                return 2
+            name = path.rsplit("/", 1)[-1]
+            if missing:
+                failed = True
+                print("  FAIL {}".format(name))
+                for ref, count in missing:
+                    print("       missing {}  ({} refs)".format(ref, count))
+            else:
+                print("  ok   {}".format(name))
+        return 1 if failed else 0
 
     if args.audit:
         for path in paths:
