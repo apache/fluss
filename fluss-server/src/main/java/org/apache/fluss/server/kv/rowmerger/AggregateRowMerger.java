@@ -102,7 +102,13 @@ public class AggregateRowMerger implements RowMerger {
 
         // Aggregate using target schema context to ensure output uses server's latest schema
         AggregateFieldsProcessor.aggregateAllFieldsWithTargetSchema(
-                oldValue.row, newValue.row, oldContext, newContext, targetContext, encoder);
+                oldValue.row,
+                newValue.row,
+                oldContext,
+                newContext,
+                targetContext,
+                targetContext.getSequenceGroups(),
+                encoder);
         BinaryRow mergedRow = encoder.finishRow();
 
         return new BinaryValue(targetSchemaId, mergedRow);
@@ -291,6 +297,7 @@ public class AggregateRowMerger implements RowMerger {
                     newContext,
                     targetContext,
                     targetColumnIdBitSet,
+                    targetContext.getSequenceGroups(),
                     encoder);
             BinaryRow mergedRow = encoder.finishRow();
 

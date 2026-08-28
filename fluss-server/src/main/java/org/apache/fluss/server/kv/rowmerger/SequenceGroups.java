@@ -55,6 +55,36 @@ public class SequenceGroups implements Serializable {
 
     private static final long serialVersionUID = 1L;
 
+    /**
+     * What a group makes of an incoming row, once its sequence columns have been compared with the
+     * stored ones.
+     *
+     * <p>A merger without aggregate functions treats {@link #SKIP} and {@link #STALE} alike, since
+     * both keep the stored values. One with aggregate functions has to tell them apart: a skipped
+     * group contributes nothing at all, while a stale one still aggregates, only as a record that
+     * happened earlier.
+     */
+    public enum Decision {
+        /**
+         * The incoming row carries no sequence value for the group at all, so the group has no way
+         * to order it and leaves its fields untouched.
+         */
+        SKIP,
+
+        /**
+         * The incoming sequence is not older than the stored one, so the group moves forward: its
+         * fields take the incoming values and its sequence columns advance along with them.
+         */
+        FORWARD,
+
+        /**
+         * The incoming sequence is older than the stored one. The group doesn't move forward, so
+         * its sequence columns keep the stored values, and an aggregate function sees the incoming
+         * row as one that happened earlier.
+         */
+        STALE
+    }
+
     /** A field taking part in no group, so it is never held back. */
     private static final int NO_GROUP = -1;
 
@@ -143,23 +173,54 @@ public class SequenceGroups implements Serializable {
      * @param newRow the incoming row
      */
     public boolean[] resolveAcceptance(@Nullable InternalRow oldRow, InternalRow newRow) {
-        boolean[] advanced = new boolean[readersOfGroup.length];
-        for (int groupId = 0; groupId < readersOfGroup.length; groupId++) {
-            advanced[groupId] = advances(readersOfGroup[groupId], oldRow, newRow);
-        }
+        Decision[] decisions = decideGroups(oldRow, newRow);
 
         boolean[] acceptance = new boolean[groupOfField.length];
         for (int i = 0; i < groupOfField.length; i++) {
-            acceptance[i] = groupOfField[i] == NO_GROUP || advanced[groupOfField[i]];
+            // without aggregate functions a skipped group and a stale one both keep the stored
+            // values, so the two need no telling apart here
+            acceptance[i] =
+                    groupOfField[i] == NO_GROUP || decisions[groupOfField[i]] == Decision.FORWARD;
         }
         return acceptance;
     }
 
     /**
-     * Decides whether one group takes the incoming values, by comparing its sequence columns in the
-     * declared order until one of them differs.
+     * Resolves, for every field, what the group arbitrating it makes of the incoming row. Fields
+     * taking part in no group always report {@link Decision#FORWARD}, keeping their original
+     * behavior.
+     *
+     * <p>Callers that aggregate need this rather than {@link #resolveAcceptance}, so that they can
+     * aggregate a stale row in reverse instead of dropping it.
+     *
+     * @param oldRow the stored row, or null when there is no stored row yet
+     * @param newRow the incoming row
      */
-    private static boolean advances(
+    public Decision[] resolveDecisions(@Nullable InternalRow oldRow, InternalRow newRow) {
+        Decision[] decisions = decideGroups(oldRow, newRow);
+
+        Decision[] ofField = new Decision[groupOfField.length];
+        for (int i = 0; i < groupOfField.length; i++) {
+            ofField[i] =
+                    groupOfField[i] == NO_GROUP ? Decision.FORWARD : decisions[groupOfField[i]];
+        }
+        return ofField;
+    }
+
+    /** Decides every group of the schema, indexed by group id. */
+    private Decision[] decideGroups(@Nullable InternalRow oldRow, InternalRow newRow) {
+        Decision[] decisions = new Decision[readersOfGroup.length];
+        for (int groupId = 0; groupId < readersOfGroup.length; groupId++) {
+            decisions[groupId] = decide(readersOfGroup[groupId], oldRow, newRow);
+        }
+        return decisions;
+    }
+
+    /**
+     * Decides one group, by comparing its sequence columns in the declared order until one of them
+     * differs.
+     */
+    private static Decision decide(
             SequenceReader[] readers, @Nullable InternalRow oldRow, InternalRow newRow) {
         Comparable<?>[] newSequence = new Comparable<?>[readers.length];
         boolean allNull = true;
@@ -170,21 +231,21 @@ public class SequenceGroups implements Serializable {
             }
         }
         if (allNull) {
-            // the group carries no order information at all, so its incoming values are dropped
-            return false;
+            // the group carries no order information at all
+            return Decision.SKIP;
         }
         if (oldRow == null) {
-            return true;
+            return Decision.FORWARD;
         }
 
         for (int i = 0; i < readers.length; i++) {
             int comparison = compare(newSequence[i], readers[i].read(oldRow));
             if (comparison != 0) {
-                return comparison > 0;
+                return comparison > 0 ? Decision.FORWARD : Decision.STALE;
             }
         }
         // equal sequences advance, so that a replayed record still refreshes the group
-        return true;
+        return Decision.FORWARD;
     }
 
     /** Null is treated as the smallest value, consistently with the versioned merge engine. */

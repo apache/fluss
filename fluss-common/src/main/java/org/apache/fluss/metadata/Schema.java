@@ -687,12 +687,9 @@ public final class Schema implements Serializable {
         }
 
         /**
-         * Gets the sequence columns ordering this column, i.e. the sequence group protecting it.
-         * The column only takes an incoming value when those sequence columns are not older than
-         * the stored ones.
-         *
-         * <p>More than one column means a composite sequence key, where the listed columns are
-         * compared in order and the first unequal one decides.
+         * Gets the sequence columns ordering this column: it only takes an incoming value when they
+         * are not older than the stored ones. More than one means a composite key, compared in the
+         * listed order until one differs.
          *
          * @return the sequence columns, or empty if the column is merged without order arbitration
          */

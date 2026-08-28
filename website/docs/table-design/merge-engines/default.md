@@ -163,8 +163,9 @@ CREATE TABLE T (
 
 A table is rejected at creation when:
 
-- it is a Log Table, or it configures any `'table.merge-engine'`, since no other merge engine consults the sequence
-  groups while merging;
+- it is a Log Table, or it configures the `first_row` or `versioned` merge engine, since neither consults the sequence
+  groups while merging. The [Aggregation Merge Engine](table-design/merge-engines/aggregation.md) does support them,
+  where a group acts as an ordering key rather than a version filter;
 - a sequence column doesn't exist in the schema, or its type is not one of `INT`, `BIGINT`, `TIMESTAMP` and
   `TIMESTAMP_LTZ`;
 - a primary key column is put into a group or used as a sequence column, since it holds the same value in both rows

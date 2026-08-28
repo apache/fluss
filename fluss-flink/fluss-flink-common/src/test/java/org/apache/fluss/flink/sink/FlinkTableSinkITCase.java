@@ -2076,4 +2076,84 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                 .rootCause()
                 .hasMessageContaining("The sequence column 'ts' must be one type of");
     }
+
+    @Test
+    void testSequenceGroupOnAggregationMergeEngine() throws Exception {
+        // with an aggregate function a sequence group orders the records rather than filtering
+        // them: a stale record still contributes to the sum, it only must not move the sequence
+        tEnv.executeSql(
+                "create table agg_seq_group ("
+                        + " k int not null primary key not enforced,"
+                        + " total bigint,"
+                        + " ts int"
+                        + ") with ('table.merge-engine' = 'aggregation',"
+                        + "'fields.total.agg' = 'sum',"
+                        + "'fields.ts.sequence-group' = 'total')");
+
+        tEnv.executeSql("insert into agg_seq_group values (1, 30, 100)").await();
+
+        CloseableIterator<Row> rowIter = tEnv.executeSql("select * from agg_seq_group").collect();
+        assertResultsIgnoreOrder(rowIter, Collections.singletonList("+I[1, 30, 100]"), false);
+
+        // the sequence moves forward, so the total accumulates and the sequence follows
+        tEnv.executeSql("insert into agg_seq_group values (1, 20, 200)").await();
+        assertResultsIgnoreOrder(rowIter, Arrays.asList("-U[1, 30, 100]", "+U[1, 50, 200]"), false);
+
+        // an older record still accumulates, but leaves the stored sequence at 200
+        tEnv.executeSql("insert into agg_seq_group values (1, 10, 50)").await();
+        assertResultsIgnoreOrder(rowIter, Arrays.asList("-U[1, 50, 200]", "+U[1, 60, 200]"), false);
+
+        // a record without any sequence carries no order information, so it is skipped entirely
+        tEnv.executeSql("insert into agg_seq_group values (1, 5, cast(null as int))").await();
+        assertResultsIgnoreOrder(rowIter, Arrays.asList("-U[1, 60, 200]", "+U[1, 60, 200]"), true);
+    }
+
+    @Test
+    void testSequenceGroupsAreArbitratedIndependentlyOnAggregationMergeEngine() throws Exception {
+        tEnv.executeSql(
+                "create table agg_two_groups ("
+                        + " k int not null primary key not enforced,"
+                        + " paid bigint, pay_ts int,"
+                        + " shipped bigint, ship_ts int"
+                        + ") with ('table.merge-engine' = 'aggregation',"
+                        + "'fields.paid.agg' = 'sum',"
+                        + "'fields.shipped.agg' = 'sum',"
+                        + "'fields.pay_ts.sequence-group' = 'paid',"
+                        + "'fields.ship_ts.sequence-group' = 'shipped')");
+
+        tEnv.executeSql("insert into agg_two_groups values (1, 30, 100, 30, 100)").await();
+
+        CloseableIterator<Row> rowIter = tEnv.executeSql("select * from agg_two_groups").collect();
+        assertResultsIgnoreOrder(
+                rowIter, Collections.singletonList("+I[1, 30, 100, 30, 100]"), false);
+
+        // the pay group moves forward while the ship group carries no sequence at all, so only the
+        // pay total accumulates
+        tEnv.executeSql(
+                        "insert into agg_two_groups values "
+                                + "(1, 20, 200, 20, cast(null as int))")
+                .await();
+        assertResultsIgnoreOrder(
+                rowIter, Arrays.asList("-U[1, 30, 100, 30, 100]", "+U[1, 50, 200, 30, 100]"), true);
+    }
+
+    @Test
+    void testSequenceColumnWithAggregateFunctionIsRejectedByTheServer() {
+        // the group it orders decides when it advances, so aggregating the sequence column itself
+        // would let a stale record move the sequence backwards
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                        "create table agg_seq_bad ("
+                                                + " k int not null primary key not enforced,"
+                                                + " total bigint, ts int)"
+                                                + " with ('table.merge-engine' = 'aggregation',"
+                                                + "'fields.total.agg' = 'sum',"
+                                                + "'fields.ts.agg' = 'sum',"
+                                                + "'fields.ts.sequence-group' = 'total')"))
+                .rootCause()
+                .hasMessageContaining(
+                        "The sequence column 'ts' orders a sequence group, "
+                                + "so it must not have an aggregate function.");
+    }
 }

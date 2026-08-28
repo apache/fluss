@@ -21,7 +21,10 @@ import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.RowEncoder;
+import org.apache.fluss.server.kv.rowmerger.SequenceGroups;
 import org.apache.fluss.server.kv.rowmerger.aggregate.functions.FieldAggregator;
+
+import javax.annotation.Nullable;
 
 import java.util.BitSet;
 import java.util.List;
@@ -59,6 +62,8 @@ public final class AggregateFieldsProcessor {
      * @param oldContext context for the old row schema
      * @param newInputContext context for the new row schema (for reading newRow)
      * @param targetContext context for the target output schema
+     * @param sequenceGroups the sequence groups arbitrating the merge, or null when the schema
+     *     declares none
      * @param encoder the row encoder to encode results (should match targetContext)
      */
     public static void aggregateAllFieldsWithTargetSchema(
@@ -67,10 +72,15 @@ public final class AggregateFieldsProcessor {
             AggregationContext oldContext,
             AggregationContext newInputContext,
             AggregationContext targetContext,
+            @Nullable SequenceGroups sequenceGroups,
             RowEncoder encoder) {
+        // the groups are resolved against the target schema, which is the one being encoded
+        SequenceGroups.Decision[] decisions =
+                sequenceGroups == null ? null : sequenceGroups.resolveDecisions(oldRow, newRow);
+
         // Fast path: all three schemas are the same
         if (targetContext == oldContext && targetContext == newInputContext) {
-            aggregateAllFieldsWithSameSchema(oldRow, newRow, targetContext, encoder);
+            aggregateAllFieldsWithSameSchema(oldRow, newRow, targetContext, decisions, encoder);
             return;
         }
 
@@ -101,9 +111,19 @@ public final class AggregateFieldsProcessor {
                     oldRow,
                     newRow,
                     targetAggregators[targetIdx],
+                    decisionOf(decisions, targetIdx),
                     targetIdx,
                     encoder);
         }
+    }
+
+    /**
+     * Returns what the group arbitrating the given field makes of the incoming row, defaulting to
+     * {@link SequenceGroups.Decision#FORWARD} when the schema declares no sequence group at all.
+     */
+    private static SequenceGroups.Decision decisionOf(
+            @Nullable SequenceGroups.Decision[] decisions, int fieldIndex) {
+        return decisions == null ? SequenceGroups.Decision.FORWARD : decisions[fieldIndex];
     }
 
     /**
@@ -114,6 +134,8 @@ public final class AggregateFieldsProcessor {
      * @param oldRow the old row
      * @param newRow the new row
      * @param aggregator the aggregator for this field
+     * @param decision what the sequence group arbitrating this field makes of the incoming row, or
+     *     {@link SequenceGroups.Decision#FORWARD} when no group arbitrates it
      * @param targetIdx the target index to encode
      * @param encoder the row encoder
      */
@@ -123,11 +145,22 @@ public final class AggregateFieldsProcessor {
             BinaryRow oldRow,
             BinaryRow newRow,
             FieldAggregator aggregator,
+            SequenceGroups.Decision decision,
             int targetIdx,
             RowEncoder encoder) {
         Object accumulator = oldFieldGetter.getFieldOrNull(oldRow);
+        if (decision == SequenceGroups.Decision.SKIP) {
+            // the incoming row carries no sequence for the group, so it contributes nothing
+            encoder.encodeField(targetIdx, accumulator);
+            return;
+        }
+
         Object inputField = newFieldGetter.getFieldOrNull(newRow);
-        Object mergedField = aggregator.agg(accumulator, inputField);
+        // a stale row still aggregates, only as one that happened before the stored value
+        Object mergedField =
+                decision == SequenceGroups.Decision.STALE
+                        ? aggregator.aggReversed(accumulator, inputField)
+                        : aggregator.agg(accumulator, inputField);
         encoder.encodeField(targetIdx, mergedField);
     }
 
@@ -165,6 +198,8 @@ public final class AggregateFieldsProcessor {
      * @param newInputContext context for the new row schema (for reading newRow)
      * @param targetContext context for the target output schema
      * @param targetColumnIdBitSet BitSet marking target columns by column ID
+     * @param sequenceGroups the sequence groups arbitrating the merge, or null when the schema
+     *     declares none
      * @param encoder the row encoder to encode results (should match targetContext)
      */
     public static void aggregateTargetFieldsWithTargetSchema(
@@ -174,11 +209,15 @@ public final class AggregateFieldsProcessor {
             AggregationContext newInputContext,
             AggregationContext targetContext,
             BitSet targetColumnIdBitSet,
+            @Nullable SequenceGroups sequenceGroups,
             RowEncoder encoder) {
+        SequenceGroups.Decision[] decisions =
+                sequenceGroups == null ? null : sequenceGroups.resolveDecisions(oldRow, newRow);
+
         // Fast path: all three schemas are the same
         if (targetContext == oldContext && targetContext == newInputContext) {
             aggregateTargetFieldsWithSameSchema(
-                    oldRow, newRow, targetContext, targetColumnIdBitSet, encoder);
+                    oldRow, newRow, targetContext, targetColumnIdBitSet, decisions, encoder);
             return;
         }
 
@@ -208,6 +247,7 @@ public final class AggregateFieldsProcessor {
                         oldRow,
                         newRow,
                         targetAggregators[targetIdx],
+                        decisionOf(decisions, targetIdx),
                         targetIdx,
                         encoder);
             } else if (oldIdx != null) {
@@ -229,7 +269,11 @@ public final class AggregateFieldsProcessor {
      * <p>Fast path: field positions match directly, no column ID lookup needed.
      */
     private static void aggregateAllFieldsWithSameSchema(
-            BinaryRow oldRow, BinaryRow newRow, AggregationContext context, RowEncoder encoder) {
+            BinaryRow oldRow,
+            BinaryRow newRow,
+            AggregationContext context,
+            @Nullable SequenceGroups.Decision[] decisions,
+            RowEncoder encoder) {
         InternalRow.FieldGetter[] fieldGetters = context.getFieldGetters();
         FieldAggregator[] aggregators = context.getAggregators();
         int fieldCount = context.getFieldCount();
@@ -241,6 +285,7 @@ public final class AggregateFieldsProcessor {
                     oldRow,
                     newRow,
                     aggregators[idx],
+                    decisionOf(decisions, idx),
                     idx,
                     encoder);
         }
@@ -256,6 +301,7 @@ public final class AggregateFieldsProcessor {
             BinaryRow newRow,
             AggregationContext context,
             BitSet targetColumnIdBitSet,
+            @Nullable SequenceGroups.Decision[] decisions,
             RowEncoder encoder) {
         InternalRow.FieldGetter[] fieldGetters = context.getFieldGetters();
         FieldAggregator[] aggregators = context.getAggregators();
@@ -273,6 +319,7 @@ public final class AggregateFieldsProcessor {
                         oldRow,
                         newRow,
                         aggregators[idx],
+                        decisionOf(decisions, idx),
                         idx,
                         encoder);
             } else {
