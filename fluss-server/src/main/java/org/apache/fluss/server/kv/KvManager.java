@@ -408,11 +408,7 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
         inKvLock(
                 tableBucket,
                 () -> {
-                    try {
-                        doDropKv(tableBucket);
-                    } finally {
-                        kvLocks.remove(tableBucket);
-                    }
+                    doDropKv(tableBucket);
                     return null;
                 });
     }
@@ -615,7 +611,15 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
                 if (kvLocks.get(tableBucket) != lock) {
                     continue;
                 }
-                return action.get();
+                try {
+                    return action.get();
+                } finally {
+                    if (!currentKvs.containsKey(tableBucket)) {
+                        // Retire the lock only after the action completes, while still holding
+                        // its monitor. Threads waiting on this lock must retry with the new one.
+                        kvLocks.remove(tableBucket, lock);
+                    }
+                }
             }
         }
     }
