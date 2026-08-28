@@ -68,11 +68,8 @@ public class DefaultRowMerger implements RowMerger {
 
     /**
      * Creates a merger that replaces values blindly, bypassing the sequence groups declared on the
-     * schema.
-     *
-     * <p>Used to recover by overwriting an already decided value, where the stored row must be
-     * replaced no matter what its sequence columns say. Since such a write restores an earlier
-     * state, arbitrating it would reject it as stale and leave the row inconsistent.
+     * schema. Used to recover by overwriting an already decided value: such a write restores an
+     * earlier state, so arbitrating it would reject it as stale and leave the row inconsistent.
      */
     public static DefaultRowMerger forBlindOverwrite(KvFormat kvFormat) {
         return new DefaultRowMerger(kvFormat, DeleteBehavior.ALLOW, false);

@@ -1088,6 +1088,106 @@ TableDescriptor.builder()
 </TabItem>
 </Tabs>
 
+## Sequence Group
+
+Aggregate functions such as `sum` give the same result whatever order the records arrive in, but
+`first_value`, `last_value` and `listagg` do not: they depend on which record is considered first or
+last. Out of order records therefore produce a result that follows the arrival order rather than the
+business order.
+
+A **sequence group** puts one or more columns under the order of a *sequence column*, giving the
+engine an explicit order to follow. It is declared with the
+`'fields.<sequence-column>.sequence-group'` property, whose value lists the columns it protects:
+
+```sql title="Flink SQL"
+CREATE TABLE orders (
+    k     INT,
+    total BIGINT,
+    ts    INT,
+    PRIMARY KEY (k) NOT ENFORCED
+) WITH (
+    'table.merge-engine'          = 'aggregation',
+    'fields.total.agg'            = 'sum',
+    'fields.ts.sequence-group'    = 'total'
+);
+
+INSERT INTO orders VALUES (1, 30, 100);
+-- the sequence moves forward, so the total accumulates and the sequence follows
+INSERT INTO orders VALUES (1, 20, 200);
+SELECT * FROM orders;
+-- Output:
++---+-------+-----+
+| k | total | ts  |
++---+-------+-----+
+| 1 | 50    | 200 |
++---+-------+-----+
+
+-- an older record still accumulates, but leaves the stored sequence at 200
+INSERT INTO orders VALUES (1, 10, 50);
+SELECT * FROM orders;
+-- Output:
++---+-------+-----+
+| k | total | ts  |
++---+-------+-----+
+| 1 | 60    | 200 |
++---+-------+-----+
+```
+
+Each group is arbitrated on its own, so within a single write one group may move forward while
+another does not.
+
+### Ordering key, not a version filter
+
+The meaning of a sequence group differs between this engine and the
+[Default Merge Engine](table-design/merge-engines/default.md):
+
+| Incoming record                    | Default merge engine     | Aggregation merge engine                          |
+| ---------------------------------- | ------------------------ | ------------------------------------------------- |
+| sequence not older than the stored | takes the incoming value | aggregates, and the sequence moves forward        |
+| sequence older than the stored     | keeps the stored value   | still aggregates, but the sequence stays put      |
+| no sequence at all (all NULL)      | keeps the stored value   | contributes nothing at all                        |
+
+Without aggregate functions a group acts as a version filter, dropping whatever is older. With them
+it acts as an ordering key instead: an older record is a fact that still belongs in the total, so it
+is aggregated as one that happened earlier. For order-independent functions (`sum`, `product`,
+`max`, `min`, `bool_and`, `bool_or`, `rbm32`, `rbm64`) the order makes no difference to the result;
+for the order-dependent ones the sequence decides which record counts as first or last.
+
+A record whose sequence columns are all NULL carries no order information at all and is skipped, so
+its values are not aggregated.
+
+### Composite sequence key
+
+Naming more than one sequence column declares a composite sequence key. The columns are compared in
+the declared order, and the first one that differs decides:
+
+```sql title="Flink SQL"
+CREATE TABLE T (
+    k     INT,
+    total BIGINT,
+    epoch INT,
+    ts    BIGINT,
+    PRIMARY KEY (k) NOT ENFORCED
+) WITH (
+    'table.merge-engine'              = 'aggregation',
+    'fields.total.agg'                = 'sum',
+    'fields.epoch,ts.sequence-group'  = 'total'
+);
+```
+
+### Restrictions
+
+A table is rejected at creation when:
+
+- a sequence column has an aggregate function of its own, since the group it orders decides when it
+  advances and aggregating it would let a stale record move the sequence backwards;
+- a sequence column doesn't exist in the schema, or its type is not one of `INT`, `BIGINT`,
+  `TIMESTAMP` and `TIMESTAMP_LTZ`;
+- a primary key column is put into a group or used as a sequence column, since it holds the same
+  value in both rows being merged;
+- a sequence column is put into another group, since it reports the order of its own group;
+- the same column is declared by more than one group.
+
 ## Delete Behavior
 
 The aggregation merge engine provides limited support for delete operations. You can configure the behavior using the `'table.delete.behavior'` option:

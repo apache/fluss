@@ -755,19 +755,16 @@ public class FlinkConversions {
     }
 
     /**
-     * Parses the sequence groups declared in the table options.
-     *
-     * <p>The options are keyed by the sequence columns and list the columns they protect. Naming
-     * more than one sequence column declares a composite sequence key:
+     * Parses the sequence groups declared in the table options, keyed by the sequence columns and
+     * listing the columns they protect:
      *
      * <pre>
      * 'fields.g1.sequence-group' = 'a,b'
      * 'fields.g1,g2.sequence-group' = 'c'
      * </pre>
      *
-     * <p>The returned mapping is inverted, i.e. it gives the sequence columns ordering each
-     * protected column, which is the way {@link Schema.Column} stores the relation and the way a
-     * merger looks it up.
+     * <p>The returned mapping is inverted, giving the sequence columns of each protected column,
+     * which is how {@link Schema.Column} stores the relation.
      */
     private static Map<String, List<String>> parseSequenceGroups(Configuration tableConf) {
         Map<String, List<String>> sequenceColumnsOf = new HashMap<>();

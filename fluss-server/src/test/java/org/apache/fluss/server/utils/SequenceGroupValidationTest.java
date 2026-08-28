@@ -19,6 +19,8 @@ package org.apache.fluss.server.utils;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.InvalidConfigException;
+import org.apache.fluss.metadata.AggFunctionType;
+import org.apache.fluss.metadata.AggFunctions;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -132,14 +134,41 @@ class SequenceGroupValidationTest {
     }
 
     @ParameterizedTest
-    @EnumSource(MergeEngineType.class)
-    void testEveryMergeEngineIsRejected(MergeEngineType mergeEngine) {
+    @EnumSource(
+            value = MergeEngineType.class,
+            names = {"AGGREGATION"},
+            mode = EnumSource.Mode.EXCLUDE)
+    void testMergeEngineWithoutSequenceGroupSupportIsRejected(MergeEngineType mergeEngine) {
         assertThatThrownBy(() -> validate(orderedByG(DataTypes.INT()), mergeEngine))
                 .isInstanceOf(InvalidConfigException.class)
                 .hasMessageContaining(
                         String.format(
                                 "Sequence group is not supported for '%s' merge engine.",
                                 mergeEngine));
+    }
+
+    @Test
+    void testAggregationMergeEngineIsAccepted() {
+        // the aggregation engine reads the groups as an ordering key rather than a version filter,
+        // so it takes part in the arbitration instead of rejecting it
+        assertThatCode(() -> validate(orderedByG(DataTypes.INT()), MergeEngineType.AGGREGATION))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void testSequenceColumnWithAggregateFunctionIsRejected() {
+        Schema schema =
+                pkSchema()
+                        .withSequenceColumns("g")
+                        .column("g", DataTypes.INT(), AggFunctions.of(AggFunctionType.SUM))
+                        .primaryKey("k")
+                        .build();
+
+        assertThatThrownBy(() -> validate(schema, MergeEngineType.AGGREGATION))
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining(
+                        "The sequence column 'g' orders a sequence group, "
+                                + "so it must not have an aggregate function.");
     }
 
     @Test

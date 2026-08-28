@@ -25,15 +25,20 @@ import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.RowEncoder;
+import org.apache.fluss.server.kv.rowmerger.SequenceGroups;
 import org.apache.fluss.server.kv.rowmerger.aggregate.factory.FieldAggregatorFactory;
 import org.apache.fluss.server.kv.rowmerger.aggregate.functions.FieldAggregator;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
 
+import javax.annotation.Nullable;
+
 import java.util.BitSet;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Context for aggregation operations, containing field getters, aggregators, and encoder for a
@@ -54,6 +59,12 @@ public class AggregationContext {
     final int fieldCount;
 
     /**
+     * The sequence groups declared on this schema, or null when it declares none. Resolved once per
+     * schema, since the groups only change along with the schema itself.
+     */
+    private final @Nullable SequenceGroups sequenceGroups;
+
+    /**
      * Mapping from column ID to field index in this schema. This is used for schema evolution to
      * correctly match fields between old and new schemas.
      */
@@ -70,12 +81,14 @@ public class AggregationContext {
             RowType rowType,
             InternalRow.FieldGetter[] fieldGetters,
             FieldAggregator[] aggregators,
-            RowEncoder rowEncoder) {
+            RowEncoder rowEncoder,
+            @Nullable SequenceGroups sequenceGroups) {
         this.schema = schema;
         this.rowType = rowType;
         this.fieldGetters = fieldGetters;
         this.aggregators = aggregators;
         this.rowEncoder = rowEncoder;
+        this.sequenceGroups = sequenceGroups;
         this.fieldCount = rowType.getFieldCount();
 
         // Build columnId to index mapping for schema evolution support
@@ -106,6 +119,14 @@ public class AggregationContext {
 
     public FieldAggregator[] getAggregators() {
         return aggregators;
+    }
+
+    /**
+     * Gets the sequence groups declared on this schema, or null when it declares none. A null
+     * result lets a caller keep aggregating every field unconditionally.
+     */
+    public @Nullable SequenceGroups getSequenceGroups() {
+        return sequenceGroups;
     }
 
     public int getFieldCount() {
@@ -224,7 +245,13 @@ public class AggregationContext {
         // Create row encoder
         RowEncoder rowEncoder = RowEncoder.create(kvFormat, rowType);
 
-        return new AggregationContext(schema, rowType, fieldGetters, aggregators, rowEncoder);
+        return new AggregationContext(
+                schema,
+                rowType,
+                fieldGetters,
+                aggregators,
+                rowEncoder,
+                SequenceGroups.create(schema));
     }
 
     /**
@@ -239,6 +266,7 @@ public class AggregationContext {
     private static FieldAggregator[] createAggregators(Schema schema) {
         RowType rowType = schema.getRowType();
         List<String> primaryKeys = schema.getPrimaryKeyColumnNames();
+        Set<String> sequenceColumns = sequenceColumnNames(schema);
         List<String> fieldNames = rowType.getFieldNames();
         int fieldCount = rowType.getFieldCount();
 
@@ -249,7 +277,7 @@ public class AggregationContext {
             DataType fieldType = rowType.getTypeAt(i);
 
             // Get the aggregate function for this field
-            AggFunction aggFunc = getAggFunction(fieldName, primaryKeys, schema);
+            AggFunction aggFunc = getAggFunction(fieldName, primaryKeys, sequenceColumns, schema);
 
             // Get the factory for this aggregation function type and create the aggregator
             AggFunctionType type = aggFunc.getType();
@@ -273,24 +301,44 @@ public class AggregationContext {
      *
      * <ol>
      *   <li>Primary key fields use "last_value" (no aggregation)
+     *   <li>A sequence column uses "last_value" as well, since the group it orders decides when it
+     *       advances and aggregating it would let a stale row move the sequence backwards
      *   <li>Schema.getAggFunction() - aggregation function defined in Schema (from Column)
      *   <li>Final fallback: "last_value_ignore_nulls"
      * </ol>
      *
      * @param fieldName the field name
      * @param primaryKeys the list of primary key field names
+     * @param sequenceColumns the names of the columns that order a sequence group
      * @param schema the Schema object
      * @return the aggregate function to use
      */
     private static AggFunction getAggFunction(
-            String fieldName, List<String> primaryKeys, Schema schema) {
+            String fieldName,
+            List<String> primaryKeys,
+            Set<String> sequenceColumns,
+            Schema schema) {
 
         // 1. Primary key fields don't aggregate
         if (primaryKeys.contains(fieldName)) {
             return AggFunctions.of(AggFunctionType.LAST_VALUE);
         }
 
-        // 2. Check Schema for aggregation function, or use default fallback
+        // 2. A sequence column is driven by its own group rather than by an aggregate function
+        if (sequenceColumns.contains(fieldName)) {
+            return AggFunctions.of(AggFunctionType.LAST_VALUE);
+        }
+
+        // 3. Check Schema for aggregation function, or use default fallback
         return schema.getAggFunction(fieldName).orElseGet(AggFunctions::LAST_VALUE_IGNORE_NULLS);
+    }
+
+    /** Collects every column that orders a sequence group of the schema. */
+    private static Set<String> sequenceColumnNames(Schema schema) {
+        Set<String> names = new HashSet<>();
+        for (Schema.Column column : schema.getColumns()) {
+            column.getSequenceColumns().ifPresent(names::addAll);
+        }
+        return names;
     }
 }

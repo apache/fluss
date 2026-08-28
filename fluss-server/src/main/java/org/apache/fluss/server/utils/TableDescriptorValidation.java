@@ -473,12 +473,13 @@ public class TableDescriptorValidation {
         }
 
         // both checks reject a configuration that would otherwise be silently ignored, as only the
-        // primary key table without merge engine consults the sequence groups when merging
+        // primary key table without merge engine, or with the aggregation one, consults the
+        // sequence groups when merging
         if (!hasPrimaryKey) {
             throw new InvalidConfigException(
                     "Sequence group is only supported in primary key table.");
         }
-        if (mergeEngine != null) {
+        if (mergeEngine != null && mergeEngine != MergeEngineType.AGGREGATION) {
             throw new InvalidConfigException(
                     String.format(
                             "Sequence group is not supported for '%s' merge engine.", mergeEngine));
@@ -531,6 +532,15 @@ public class TableDescriptorValidation {
                             String.format(
                                     "The sequence column '%s' orders a sequence group, "
                                             + "so it must not be put into another one.",
+                                    sequenceColumn));
+                }
+                // the group it orders decides when it advances, so an aggregate function on it
+                // would let a stale row move the sequence backwards
+                if (schema.getAggFunction(sequenceColumn).isPresent()) {
+                    throw new InvalidConfigException(
+                            String.format(
+                                    "The sequence column '%s' orders a sequence group, "
+                                            + "so it must not have an aggregate function.",
                                     sequenceColumn));
                 }
                 DataType columnType = rowType.getTypeAt(columnIndex);
