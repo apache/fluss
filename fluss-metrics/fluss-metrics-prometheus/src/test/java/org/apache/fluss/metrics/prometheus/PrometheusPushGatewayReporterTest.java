@@ -20,7 +20,14 @@ package org.apache.fluss.metrics.prometheus;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.Password;
+import org.apache.fluss.metrics.groups.GenericMetricGroup;
+import org.apache.fluss.metrics.groups.MetricGroup;
+import org.apache.fluss.metrics.registry.MetricRegistry;
+import org.apache.fluss.metrics.registry.MetricRegistryImpl;
 import org.apache.fluss.metrics.reporter.MetricReporter;
+import org.apache.fluss.metrics.reporter.ReporterAndSettings;
+import org.apache.fluss.metrics.reporter.ReporterSetup;
+import org.apache.fluss.metrics.util.TestHistogram;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
@@ -28,6 +35,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.InetSocketAddress;
@@ -36,20 +44,24 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Base64;
 import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+/** Tests for {@link PrometheusPushGatewayReporter}. */
 class PrometheusPushGatewayReporterTest {
 
     private HttpServer server;
     private BlockingQueue<String> receivedAuthHeaders;
+    private BlockingQueue<String> receivedBodies;
 
     @BeforeEach
     void startFakePushGateway() throws IOException {
         receivedAuthHeaders = new ArrayBlockingQueue<>(8);
+        receivedBodies = new ArrayBlockingQueue<>(8);
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext(
                 "/",
@@ -57,12 +69,15 @@ class PrometheusPushGatewayReporterTest {
                     // capture (possibly null) Authorization header, using empty string as absent
                     String auth = exchange.getRequestHeaders().getFirst("Authorization");
                     receivedAuthHeaders.offer(auth == null ? "" : auth);
-                    // drain request body so client does not block (JDK 8 compatible)
-                    try (InputStream body = exchange.getRequestBody()) {
+                    try (InputStream body = exchange.getRequestBody();
+                            ByteArrayOutputStream bytes = new ByteArrayOutputStream()) {
                         byte[] buf = new byte[1024];
-                        while (body.read(buf) != -1) {
-                            // discard
+                        int length;
+                        while ((length = body.read(buf)) != -1) {
+                            bytes.write(buf, 0, length);
                         }
+                        receivedBodies.offer(
+                                new String(bytes.toByteArray(), StandardCharsets.UTF_8));
                     }
 
                     exchange.sendResponseHeaders(202, -1);
@@ -181,6 +196,59 @@ class PrometheusPushGatewayReporterTest {
             assertThat(decoded).isEqualTo("plugUser:plugPwd");
         } finally {
             reporter.close();
+        }
+    }
+
+    @Test
+    void testFiltersReducePushedMetrics() throws Exception {
+        Configuration config = new Configuration();
+        config.set(ConfigOptions.METRICS_REPORTERS, Collections.singletonList("prometheus-push"));
+        config.setString(
+                ConfigOptions.METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_HOST_URL,
+                pushGatewayUrl().toString());
+        config.setString(
+                ConfigOptions.METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_JOB_NAME, "filtered-job");
+        config.setString(ConfigOptions.METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_GROUPING_KEY, "");
+        config.set(ConfigOptions.METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_DELETE_ON_SHUTDOWN, false);
+        config.set(
+                ConfigOptions.METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_PUSH_INTERVAL,
+                Duration.ofHours(1));
+        config.setString(
+                "metrics.reporter.prometheus-push.filter.includes",
+                "tabletserver.*:bytesIn,latency");
+        config.setString(
+                "metrics.reporter.prometheus-push.filter.excludes",
+                "*.bucket;*.bucket.*;*:*:histogram");
+
+        List<ReporterAndSettings> reporters = ReporterSetup.fromConfiguration(config, null);
+        assertThat(reporters).hasSize(1);
+        PrometheusPushGatewayReporter reporter =
+                (PrometheusPushGatewayReporter) reporters.get(0).getReporter();
+        try (MetricRegistry registry = MetricRegistryImpl.fromReporters(reporters)) {
+            GenericMetricGroup root = new GenericMetricGroup(registry, null, "tabletserver");
+            MetricGroup table = root.addGroup("table", "orders");
+            table.counter("bytesIn").inc(42);
+            table.counter("bytesOut").inc(99);
+            table.histogram("latency", new TestHistogram());
+            MetricGroup bucket = table.addGroup("bucket", "0");
+            bucket.counter("bytesIn").inc(21);
+            bucket.addGroup("log").counter("bytesIn").inc(7);
+            table.gauge(
+                    "debug",
+                    () -> {
+                        throw new AssertionError("Filtered gauge must not be collected");
+                    });
+
+            reporter.report();
+
+            assertThat(receivedBodies.poll(5, TimeUnit.SECONDS))
+                    .contains("fluss_tabletserver_table_bytesIn", "table=\"orders\"", "42.0")
+                    .doesNotContain("bytesOut", "bucket", "latency", "debug");
+
+            root.close();
+            reporter.report();
+
+            assertThat(receivedBodies.poll(5, TimeUnit.SECONDS)).isNotNull().isEmpty();
         }
     }
 
