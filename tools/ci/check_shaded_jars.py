@@ -46,9 +46,22 @@ Usage::
     # fail on any leak
     python3 tools/ci/check_shaded_jars.py path/to/*.jar
 
+    # every uber-jar in the repo; quote the globs so this script expands them
+    python3 tools/ci/check_shaded_jars.py \
+        'fluss-*/target/*.jar' 'fluss-*/*/target/*.jar' 'tools/ci/*/target/*.jar'
+
     # record a baseline, then compare a later build against it
     python3 tools/ci/check_shaded_jars.py --baseline before.json path/to/*.jar
     python3 tools/ci/check_shaded_jars.py --compare  before.json path/to/*.jar
+
+Arguments are globbed by this script rather than the shell, and artifacts that
+are never worth scanning are dropped automatically: ``original-*`` pre-shade
+jars, ``-tests``/``-sources``/``-javadoc`` jars, ``target/temporary/`` build
+intermediates, and the ``target/*-bin/`` distribution tree whose plugin jars
+duplicate ones already scanned. The number skipped is printed, not hidden.
+
+Scan a clean build. An incremental build reuses already-relocated classes in
+``target/classes``, so a changed relocation pattern looks like it did nothing.
 
 Exit codes: 0 = clean, 1 = violations found, 2 = usage or I/O error.
 """
@@ -399,16 +412,49 @@ def compare_reports(
     return regressions, notes
 
 
-def expand(patterns: Iterable[str]) -> List[str]:
+# Artifacts a Maven build leaves in target/ that are never worth scanning.
+# Filtering here rather than in the caller's shell means a plain glob such as
+# 'fluss-*/*/target/*.jar' is already correct.
+SKIP_SUFFIXES: Sequence[str] = ("-tests.jar", "-sources.jar", "-javadoc.jar")
+
+# original-<artifact>.jar is the pre-shade input the plugin renames aside; it
+# still holds every unshaded class and would report leaks the real jar does not
+# have.
+SKIP_PREFIXES: Sequence[str] = ("original-",)
+
+# target/temporary/ holds unpacked build intermediates (the fs plugins stage
+# jaxb-api there). target/<name>-bin/ is the assembled distribution, which
+# duplicates plugin jars already scanned in their own module directories.
+SKIP_PATH_RE = re.compile(r"/target/(temporary/|[^/]*-bin/)")
+
+
+def _is_scannable(path: str) -> bool:
+    name = path.rsplit("/", 1)[-1]
+    if any(name.startswith(p) for p in SKIP_PREFIXES):
+        return False
+    if any(name.endswith(s) for s in SKIP_SUFFIXES):
+        return False
+    return not SKIP_PATH_RE.search(path)
+
+
+def expand(patterns: Iterable[str]) -> Tuple[List[str], int]:
+    """Resolve globs to jar paths, dropping artifacts not worth scanning.
+
+    Returns (paths, skipped_count). The count is reported rather than dropped
+    silently, so a run that quietly scanned nothing is visible.
+    """
     paths: List[str] = []
+    seen = set()
     for pattern in patterns:
         matches = sorted(glob.glob(pattern))
-        if matches:
-            paths.extend(matches)
-        else:
-            paths.append(pattern)
-    # a shaded build leaves original-* and dependency-reduced artifacts around
-    return [p for p in paths if not p.rsplit("/", 1)[-1].startswith("original-")]
+        # a literal path that does not exist is kept so the caller gets a clear
+        # "cannot read" error rather than silently scanning nothing
+        for path in matches or [pattern]:
+            if path not in seen:
+                seen.add(path)
+                paths.append(path)
+    scannable = [p for p in paths if _is_scannable(p)]
+    return scannable, len(paths) - len(scannable)
 
 
 def main() -> int:
@@ -445,10 +491,15 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    paths = expand(args.jars)
+    paths, skipped = expand(args.jars)
     if not paths:
         print("no jars matched", file=sys.stderr)
         return 2
+    if skipped:
+        print(
+            "scanning {} jars ({} skipped: original-/tests/sources/javadoc, "
+            "build intermediates, distribution copies)".format(len(paths), skipped)
+        )
 
     if args.dangling:
         failed = False
