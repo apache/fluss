@@ -237,6 +237,40 @@
                                 </filter>
                             </filters>
                             <relocations>
+                                <!-- relocate the third-party packages bundled from
+                                     Hadoop and the cloud SDK so they cannot shadow a
+                                     downstream application's own copies, mirroring
+                                     fluss-fs-hadoop-shaded and fluss-fs-s3 -->
+                                <relocation>
+                                    <pattern>com.google</pattern>
+                                    <shadedPattern>
+                                        org.apache.fluss.fs.shaded.azure.com.google
+                                    </shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>org.apache.htrace</pattern>
+                                    <shadedPattern>
+                                        org.apache.fluss.fs.shaded.azure.org.apache.htrace
+                                    </shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>com.fasterxml</pattern>
+                                    <shadedPattern>
+                                        org.apache.fluss.fs.shaded.azure.com.fasterxml
+                                    </shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>org.codehaus</pattern>
+                                    <shadedPattern>
+                                        org.apache.fluss.fs.shaded.azure.org.codehaus
+                                    </shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>com.ctc</pattern>
+                                    <shadedPattern>
+                                        org.apache.fluss.fs.shaded.azure.com.ctc
+                                    </shadedPattern>
+                                </relocation>
                                 <relocation>
                                     <pattern>org.apache.commons</pattern>
                                     <shadedPattern>org.apache.fluss.shaded.org.apache.commons</shadedPattern>
