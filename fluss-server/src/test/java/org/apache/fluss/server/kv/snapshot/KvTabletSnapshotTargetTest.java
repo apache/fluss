@@ -645,7 +645,8 @@ class KvTabletSnapshotTargetTest {
                     kvSnapshotDataUploader,
                     instanceBasePath,
                     lastCompletedSnapshotId,
-                    remoteKvCopyBytes);
+                    remoteKvCopyBytes,
+                    false);
             this.snapshotFailType = snapshotFailType;
         }
 

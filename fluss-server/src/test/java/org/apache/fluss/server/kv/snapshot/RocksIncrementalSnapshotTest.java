@@ -81,7 +81,7 @@ class RocksIncrementalSnapshotTest {
                         snapshotShareDir,
                         1024);
         try (CloseableRegistry closeableRegistry = new CloseableRegistry();
-                RocksIncrementalSnapshot incrementalSnapshot = createIncrementalSnapshot()) {
+                RocksIncrementalSnapshot incrementalSnapshot = createIncrementalSnapshot(true)) {
             RocksDB rocksDB = rocksDBExtension.getRocksDb();
             rocksDB.put("key1".getBytes(), "val1".getBytes());
 
@@ -193,6 +193,27 @@ class RocksIncrementalSnapshotTest {
         }
     }
 
+    @Test
+    void testSnapshotDirectoryIsNotRetainedWhenLocalRecoveryDisabled(@TempDir Path snapshotBaseDir)
+            throws Exception {
+        FsPath testingTabletDir = FsPath.fromLocalFile(snapshotBaseDir.toFile());
+        SnapshotLocation snapshotLocation =
+                new SnapshotLocation(
+                        LocalFileSystem.getSharedInstance(),
+                        FlussPaths.remoteKvSnapshotDir(testingTabletDir, 1L),
+                        FlussPaths.remoteKvSharedDir(testingTabletDir),
+                        1024);
+        try (CloseableRegistry closeableRegistry = new CloseableRegistry();
+                RocksIncrementalSnapshot incrementalSnapshot = createIncrementalSnapshot(false)) {
+            snapshot(1L, incrementalSnapshot, snapshotLocation, closeableRegistry);
+
+            assertThat(
+                            LocalKvSnapshotUtils.getSnapshotDirectory(
+                                    rocksDBExtension.getRockDbDir(), 1L))
+                    .doesNotExist();
+        }
+    }
+
     private void verifyShareFileEqual(
             KvSnapshotHandle kvSnapshotHandle1, KvSnapshotHandle kvSnapshotHandle2) {
         List<KvFileHandleAndLocalPath> handles1 = kvSnapshotHandle1.getSharedKvFileHandles();
@@ -207,7 +228,7 @@ class RocksIncrementalSnapshotTest {
         }
     }
 
-    private RocksIncrementalSnapshot createIncrementalSnapshot() {
+    private RocksIncrementalSnapshot createIncrementalSnapshot(boolean localRecoveryEnabled) {
         long lastCompletedSnapshotId = -1L;
         Map<Long, Collection<KvFileHandleAndLocalPath>> uploadedSstFiles = new HashMap<>();
         ResourceGuard rocksDBResourceGuard = new ResourceGuard();
@@ -223,7 +244,8 @@ class RocksIncrementalSnapshotTest {
                 snapshotDataUploader,
                 rocksDBExtension.getRockDbDir(),
                 lastCompletedSnapshotId,
-                remoteKvCopyBytes);
+                remoteKvCopyBytes,
+                localRecoveryEnabled);
     }
 
     /** Takes a snapshot and verifies that only newly uploaded files increase the counter. */
@@ -260,8 +282,7 @@ class RocksIncrementalSnapshotTest {
             assertThat(remoteKvCopyBytes.getCount()).isEqualTo(bytesBefore + uploadedBytes);
             return handle;
         } finally {
-            // Upload completion releases native resources, but the local checkpoint remains until
-            // the commit result is reported.
+            // Release or retain the local checkpoint according to the local-recovery setting.
             nativeRocksDBSnapshotResources.release();
         }
     }

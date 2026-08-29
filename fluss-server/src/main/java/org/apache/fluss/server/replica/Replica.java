@@ -881,11 +881,13 @@ public final class Replica {
                 File tabletDir;
                 long start = System.currentTimeMillis();
                 Optional<File> optionalTabletDir =
-                        kvManager.restoreKvFromLocalSnapshot(
-                                logTablet.getDataDir(),
-                                physicalPath,
-                                tableBucket,
-                                completedSnapshot);
+                        snapshotContext.isLocalRecoveryEnabled()
+                                ? kvManager.restoreKvFromLocalSnapshot(
+                                        logTablet.getDataDir(),
+                                        physicalPath,
+                                        tableBucket,
+                                        completedSnapshot)
+                                : Optional.empty();
                 if (optionalTabletDir.isPresent()) {
                     tabletDir = optionalTabletDir.get();
                     LOG.info(
@@ -1145,7 +1147,8 @@ public final class Replica {
                             uploadedSstFiles,
                             snapshotContext.getSnapshotDataUploader(),
                             lastCompletedSnapshotId,
-                            tableMetrics().remoteKvCopyBytes());
+                            tableMetrics().remoteKvCopyBytes(),
+                            snapshotContext.isLocalRecoveryEnabled());
 
             // create snapshot ID counter
             SequenceIDCounter snapshotIDCounter =

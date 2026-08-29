@@ -83,6 +83,9 @@ public class RocksIncrementalSnapshot implements AutoCloseable {
 
     private final Counter remoteKvCopyBytes;
 
+    /** Whether to retain the latest completed checkpoint for local recovery. */
+    private final boolean localRecoveryEnabled;
+
     /** Creates an incremental snapshot using the table's thread-safe upload byte counter. */
     public RocksIncrementalSnapshot(
             Map<Long, Collection<KvFileHandleAndLocalPath>> uploadedSstFiles,
@@ -91,7 +94,8 @@ public class RocksIncrementalSnapshot implements AutoCloseable {
             KvSnapshotDataUploader kvSnapshotDataUploader,
             @Nonnull File instanceBasePath,
             long lastCompletedSnapshotId,
-            Counter remoteKvCopyBytes) {
+            Counter remoteKvCopyBytes,
+            boolean localRecoveryEnabled) {
         this.remoteKvCopyBytes = remoteKvCopyBytes;
         this.uploadedSstFiles = uploadedSstFiles;
         this.db = db;
@@ -99,6 +103,7 @@ public class RocksIncrementalSnapshot implements AutoCloseable {
         this.kvSnapshotDataUploader = kvSnapshotDataUploader;
         this.instanceBasePath = instanceBasePath;
         this.lastCompletedSnapshotId = lastCompletedSnapshotId;
+        this.localRecoveryEnabled = localRecoveryEnabled;
     }
 
     public SnapshotResultSupplier asyncSnapshot(
@@ -119,9 +124,11 @@ public class RocksIncrementalSnapshot implements AutoCloseable {
             uploadedSstFiles.keySet().removeIf(snapshotId -> snapshotId < completedSnapshotId);
             lastCompletedSnapshotId = completedSnapshotId;
         }
-        // The local checkpoint is useful after an in-place restart. Keep the committed snapshot and
-        // remove older or uncommitted checkpoints only after the remote commit succeeds.
-        LocalKvSnapshotUtils.retainOnly(instanceBasePath, completedSnapshotId);
+        if (localRecoveryEnabled) {
+            // The local checkpoint is useful after an in-place restart. Keep the committed snapshot
+            // and remove older or uncommitted checkpoints only after the remote commit succeeds.
+            LocalKvSnapshotUtils.retainOnly(instanceBasePath, completedSnapshotId);
+        }
     }
 
     public void notifySnapshotAbort(long abortedSnapshotId) {
@@ -144,7 +151,8 @@ public class RocksIncrementalSnapshot implements AutoCloseable {
 
         takeDBNativeSnapshot(snapshotDirectory);
 
-        return new NativeRocksDBSnapshotResources(snapshotDirectory, previousSnapshot);
+        return new NativeRocksDBSnapshotResources(
+                snapshotDirectory, previousSnapshot, localRecoveryEnabled);
     }
 
     private File prepareLocalSnapshotDirectory(long snapshotId) {
@@ -327,17 +335,34 @@ public class RocksIncrementalSnapshot implements AutoCloseable {
 
         @Nonnull protected final PreviousSnapshot previousSnapshot;
 
+        private final boolean localRecoveryEnabled;
+
         protected NativeRocksDBSnapshotResources(
-                File snapshotDirectory, PreviousSnapshot previousSnapshot) {
+                File snapshotDirectory,
+                PreviousSnapshot previousSnapshot,
+                boolean localRecoveryEnabled) {
             this.snapshotDirectory = snapshotDirectory;
             this.previousSnapshot = previousSnapshot;
+            this.localRecoveryEnabled = localRecoveryEnabled;
         }
 
         @Override
         public void release() {
-            // Do not delete the checkpoint when the asynchronous upload finishes. Its lifecycle is
-            // decided only after the snapshot commit result is known: notifySnapshotComplete keeps
-            // the latest committed checkpoint and notifySnapshotAbort removes a failed candidate.
+            if (localRecoveryEnabled) {
+                // Its lifecycle is decided after the snapshot commit result is known.
+                return;
+            }
+
+            try {
+                if (snapshotDirectory.exists()) {
+                    LOG.trace(
+                            "Running cleanup for local RocksDB backup directory {}.",
+                            snapshotDirectory);
+                    FileUtils.deleteDirectory(snapshotDirectory);
+                }
+            } catch (IOException e) {
+                LOG.warn("Could not properly cleanup local RocksDB backup directory.", e);
+            }
         }
     }
 
