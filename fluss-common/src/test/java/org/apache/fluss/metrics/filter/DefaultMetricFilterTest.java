@@ -74,6 +74,14 @@ class DefaultMetricFilterTest {
     }
 
     @Test
+    void testConvertToPatternTrimsEntries() {
+        final Pattern pattern = DefaultMetricFilter.convertToPattern("numRecordsIn, numBytesIn");
+
+        assertThat(pattern.matcher("numRecordsIn").matches()).isTrue();
+        assertThat(pattern.matcher("numBytesIn").matches()).isTrue();
+    }
+
+    @Test
     void testRegexMetacharactersAndEscaping() {
         final Pattern regex = DefaultMetricFilter.convertToPattern("bytes(In|Out)[0-9]+");
         assertThat(regex.matcher("bytesIn1").matches()).isTrue();
@@ -95,6 +103,15 @@ class DefaultMetricFilterTest {
     void testParseMetricTypesMultiple() {
         final EnumSet<MetricType> types = DefaultMetricFilter.parseMetricTypes("meter,counter");
         assertThat(types).containsExactlyInAnyOrder(MetricType.METER, MetricType.COUNTER);
+    }
+
+    @Test
+    void testParseMetricTypesTrimsEntries() {
+        final EnumSet<MetricType> types = DefaultMetricFilter.parseMetricTypes("counter, gauge");
+
+        assertThat(types).containsExactlyInAnyOrder(MetricType.COUNTER, MetricType.GAUGE);
+        assertThat(DefaultMetricFilter.parseMetricTypes(" * "))
+                .containsExactlyInAnyOrder(MetricType.values());
     }
 
     @Test

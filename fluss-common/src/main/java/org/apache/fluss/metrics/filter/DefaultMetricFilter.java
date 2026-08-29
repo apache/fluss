@@ -118,6 +118,7 @@ public class DefaultMetricFilter implements MetricFilter {
 
         final String rawPattern =
                 Arrays.stream(split)
+                        .map(String::trim)
                         .map(s -> s.replaceAll("\\*", ".*"))
                         .collect(Collectors.joining("|", "(", ")"));
 
@@ -126,14 +127,17 @@ public class DefaultMetricFilter implements MetricFilter {
 
     @VisibleForTesting
     static EnumSet<MetricType> parseMetricTypes(String typeComponent) {
-        final String[] split = typeComponent.split(LIST_DELIMITER);
+        final List<String> split =
+                Arrays.stream(typeComponent.split(LIST_DELIMITER))
+                        .map(String::trim)
+                        .collect(Collectors.toList());
 
-        if (split.length == 1 && split[0].equals("*")) {
+        if (split.size() == 1 && split.get(0).equals("*")) {
             return ALL_METRIC_TYPES;
         }
 
         return EnumSet.copyOf(
-                Arrays.stream(split)
+                split.stream()
                         .map(s -> ConfigurationUtils.<MetricType>convertValue(s, MetricType.class))
                         .collect(Collectors.toSet()));
     }
