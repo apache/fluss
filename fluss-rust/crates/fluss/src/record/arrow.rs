@@ -671,9 +671,93 @@ fn parse_ipc_message(
     Ok((batch_metadata, body_buffer, message.version()))
 }
 
+/// Drops what does not change how a value is read: nested field names, which
+/// readers take by position, nullability, which `check_not_null` covers, and the
+/// name of a timestamp's zone.
+fn erase_read_irrelevant(data_type: &ArrowDataType) -> ArrowDataType {
+    // Arrow names the list element and the map entries struct itself; builders
+    // disagree on what to call them, and nothing is identified by them.
+    let anonymous =
+        |f: &Arc<Field>| Arc::new(Field::new("", erase_read_irrelevant(f.data_type()), true));
+    // A field the table named. Its name says which value it is, so it is kept.
+    let named = |f: &Arc<Field>| {
+        Arc::new(Field::new(
+            f.name(),
+            erase_read_irrelevant(f.data_type()),
+            true,
+        ))
+    };
+    match data_type {
+        ArrowDataType::List(f) => ArrowDataType::List(anonymous(f)),
+        // A map's key and value are Arrow's own names and builders disagree on
+        // them (`keys`/`values` vs `key`/`value`), so they are dropped too. That
+        // leaves a swap undetectable when key and value share a type - callers
+        // must build entries as (key, value).
+        ArrowDataType::Map(f, _) => {
+            let entries = match f.data_type() {
+                ArrowDataType::Struct(kv) => {
+                    ArrowDataType::Struct(kv.iter().map(anonymous).collect::<Vec<_>>().into())
+                }
+                other => erase_read_irrelevant(other),
+            };
+            ArrowDataType::Map(Arc::new(Field::new("", entries, true)), false)
+        }
+        ArrowDataType::Struct(fields) => {
+            ArrowDataType::Struct(fields.iter().map(named).collect::<Vec<_>>().into())
+        }
+        // Zoned or not is a real difference; which zone it names is not, since
+        // the stored value is the same instant either way.
+        ArrowDataType::Timestamp(unit, zone) => {
+            ArrowDataType::Timestamp(*unit, zone.as_ref().map(|_| "".into()))
+        }
+        other => other.clone(),
+    }
+}
+
+/// A mismatched Arrow type is reread as something else - `timestamp[ns]` in a
+/// `TIMESTAMP(3)` column comes back as milliseconds, `decimal(10,4)` in a
+/// `DECIMAL(10,2)` shifts two digits.
+fn check_column_types(batch: &RecordBatch, row_type: &RowType) -> Result<()> {
+    let expected = to_arrow_schema(row_type)?;
+    if batch.num_columns() != expected.fields().len() {
+        return Err(IllegalArgument {
+            message: format!(
+                "RecordBatch has {} columns but the table has {}",
+                batch.num_columns(),
+                expected.fields().len()
+            ),
+        });
+    }
+    for (i, field) in expected.fields().iter().enumerate() {
+        // Columns are matched by position, so a batch whose columns are in a
+        // different order would silently write into the wrong ones.
+        let actual_name = batch.schema().field(i).name().clone();
+        if actual_name != *field.name() {
+            return Err(IllegalArgument {
+                message: format!(
+                    "Column {i} is named '{actual_name}' but the table declares '{}'",
+                    field.name()
+                ),
+            });
+        }
+        let actual = batch.column(i).data_type();
+        if erase_read_irrelevant(actual) != erase_read_irrelevant(field.data_type()) {
+            return Err(IllegalArgument {
+                message: format!(
+                    "Column '{}' has Arrow type {} but the table declares {}",
+                    field.name(),
+                    actual,
+                    field.data_type()
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn validate_append_record_batch(batch: &RecordBatch, row_type: &RowType) -> Result<()> {
-    let typed = TypedBatch::build(batch, row_type)?;
-    typed.check_not_null(row_type)
+    check_column_types(batch, row_type)?;
+    TypedBatch::build(batch, row_type)?.check_not_null(row_type)
 }
 
 /// The fixed fields of a log record batch header.
@@ -1397,6 +1481,11 @@ mod tests {
     use crate::row::{DataGetters, GenericRow};
     use crate::test_utils::{
         build_append_only_batch, build_table_info, uncompressed_arrow_batch_config,
+    };
+    use arrow::array::{
+        Decimal128Array, FixedSizeBinaryArray, Int32Builder, ListBuilder, MapBuilder,
+        StringBuilder, StructArray, Time32MillisecondArray, Time64MicrosecondArray,
+        TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
     };
     use bytes::Bytes;
 
@@ -2700,8 +2789,8 @@ mod tests {
         );
         let decodes = LogRecordsBatches::new(bytes)
             .next()
-            .expect("one batch")
-            .expect("batch header")
+            .expect("a batch was written")
+            .expect("the batch parses")
             .records(&read_context)
             .map(|records| records.count())
             .is_ok();
@@ -2954,16 +3043,18 @@ mod tests {
     fn validation_agrees_with_reader_across_element_types() {
         use arrow::array::{Float64Array, StringArray, TimestampMillisecondArray};
 
-        let cases: Vec<(&str, DataType, ArrayRef)> = vec![
+        let cases: Vec<(&str, DataType, ArrayRef, ArrayRef)> = vec![
             (
                 "STRING",
                 DataTypes::string().as_non_nullable(),
                 Arc::new(StringArray::from(vec![Some("a"), None])),
+                Arc::new(StringArray::from(vec!["a", "b"])),
             ),
             (
                 "DOUBLE",
                 DataTypes::double().as_non_nullable(),
                 Arc::new(Float64Array::from(vec![Some(1.5), None])),
+                Arc::new(Float64Array::from(vec![1.5, 2.5])),
             ),
             (
                 "TIMESTAMP",
@@ -2972,15 +3063,20 @@ mod tests {
                     Some(1_700_000_000_000),
                     None,
                 ])),
+                Arc::new(TimestampMillisecondArray::from(vec![
+                    1_700_000_000_000_i64,
+                    1_700_000_000_001,
+                ])),
             ),
             (
                 "BIGINT",
                 DataTypes::bigint().as_non_nullable(),
                 Arc::new(arrow::array::Int64Array::from(vec![Some(7_i64), None])),
+                Arc::new(arrow::array::Int64Array::from(vec![7_i64, 8])),
             ),
         ];
 
-        for (name, element_type, values) in cases {
+        for (name, element_type, values, clean) in cases {
             let row_type = RowType::new(vec![DataField::new(
                 "tags",
                 DataTypes::array(element_type),
@@ -2999,6 +3095,389 @@ mod tests {
                 ),
                 &row_type,
             );
+            assert_validation_matches_reader(
+                &format!("ARRAY<{name} NOT NULL>: no nulls"),
+                &single_col_batch("tags", list_array(clean, vec![0, 2], None)),
+                &row_type,
+            );
         }
+    }
+
+    /// The batch must be accepted and read back as what it was given. A mistyped
+    /// column decodes fine, it just decodes to a different number.
+    fn assert_round_trips(label: &str, batch: &RecordBatch, row_type: &RowType) {
+        validate_append_record_batch(batch, row_type)
+            .unwrap_or_else(|e| panic!("{label} must be accepted: {e}"));
+        let bytes = encode_batch_bypassing_validation(batch);
+        let read_context = ReadContext::new(
+            to_arrow_schema(row_type).expect("arrow schema"),
+            Arc::new(row_type.clone()),
+            false,
+        );
+        let decoded = LogRecordsBatches::new(bytes)
+            .next()
+            .expect("a batch was written")
+            .expect("the batch parses")
+            .record_batch(&read_context)
+            .expect("an accepted batch must decode");
+        for i in 0..batch.num_columns() {
+            assert_eq!(
+                batch.column(i).as_ref(),
+                decoded.column(i).as_ref(),
+                "{label}: column {i} changed on the way through"
+            );
+        }
+    }
+
+    fn assert_rejected(label: &str, batch: &RecordBatch, row_type: &RowType) {
+        let err = validate_append_record_batch(batch, row_type)
+            .expect_err(&format!("{label} must be rejected"));
+        assert!(
+            err.to_string().contains("but the table declares"),
+            "{label}: unexpected error {err}"
+        );
+    }
+
+    #[test]
+    fn column_types_must_match_the_table() {
+        let ts3 = RowType::new(vec![DataField::new(
+            "ts",
+            DataTypes::timestamp_with_precision(3),
+            None,
+        )]);
+        assert_round_trips(
+            "timestamp[ms] into TIMESTAMP(3)",
+            &single_col_batch(
+                "ts",
+                Arc::new(TimestampMillisecondArray::from(vec![1_700_i64])),
+            ),
+            &ts3,
+        );
+        assert_rejected(
+            "timestamp[ns] into TIMESTAMP(3)",
+            &single_col_batch(
+                "ts",
+                Arc::new(TimestampNanosecondArray::from(vec![1_700_i64])),
+            ),
+            &ts3,
+        );
+        assert_rejected(
+            "timestamp[us] into TIMESTAMP(3)",
+            &single_col_batch(
+                "ts",
+                Arc::new(TimestampMicrosecondArray::from(vec![1_700_i64])),
+            ),
+            &ts3,
+        );
+
+        let dec = RowType::new(vec![DataField::new("d", DataTypes::decimal(10, 2), None)]);
+        let decimal = |p, s| {
+            single_col_batch(
+                "d",
+                Arc::new(
+                    Decimal128Array::from(vec![1_234_567_i128])
+                        .with_precision_and_scale(p, s)
+                        .unwrap(),
+                ),
+            )
+        };
+        assert_round_trips("decimal(10,2) into DECIMAL(10,2)", &decimal(10, 2), &dec);
+        assert_rejected("decimal(10,4) into DECIMAL(10,2)", &decimal(10, 4), &dec);
+        assert_rejected("decimal(12,2) into DECIMAL(10,2)", &decimal(12, 2), &dec);
+
+        let time3 = RowType::new(vec![DataField::new(
+            "t",
+            DataTypes::time_with_precision(3),
+            None,
+        )]);
+        assert_round_trips(
+            "time32[ms] into TIME(3)",
+            &single_col_batch("t", Arc::new(Time32MillisecondArray::from(vec![1_000]))),
+            &time3,
+        );
+        assert_rejected(
+            "time64[us] into TIME(3)",
+            &single_col_batch("t", Arc::new(Time64MicrosecondArray::from(vec![1_000_i64]))),
+            &time3,
+        );
+
+        let bin8 = RowType::new(vec![DataField::new("b", DataTypes::binary(8), None)]);
+        assert_rejected(
+            "fixed_size_binary(4) into BINARY(8)",
+            &single_col_batch(
+                "b",
+                Arc::new(
+                    FixedSizeBinaryArray::try_from_iter(vec![vec![1_u8, 2, 3, 4]].into_iter())
+                        .unwrap(),
+                ),
+            ),
+            &bin8,
+        );
+    }
+
+    /// A ROW's fields are matched by position too, so the same swap is possible
+    /// one level down.
+    #[test]
+    fn row_field_names_must_match_the_table() {
+        use arrow::array::StructArray;
+
+        let row_type = RowType::new(vec![DataField::new(
+            "person",
+            DataTypes::row(vec![
+                DataField::new("name_id", DataTypes::int(), None),
+                DataField::new("surname_id", DataTypes::int(), None),
+            ]),
+            None,
+        )]);
+        let person = |first: &str, second: &str| {
+            single_col_batch(
+                "person",
+                Arc::new(StructArray::from(vec![
+                    (
+                        Arc::new(Field::new(first, ArrowDataType::Int32, true)),
+                        Arc::new(arrow::array::Int32Array::from(vec![1])) as ArrayRef,
+                    ),
+                    (
+                        Arc::new(Field::new(second, ArrowDataType::Int32, true)),
+                        Arc::new(arrow::array::Int32Array::from(vec![999])) as ArrayRef,
+                    ),
+                ])),
+            )
+        };
+
+        assert_round_trips(
+            "ROW fields in table order",
+            &person("name_id", "surname_id"),
+            &row_type,
+        );
+        assert_rejected(
+            "ROW fields swapped",
+            &person("surname_id", "name_id"),
+            &row_type,
+        );
+    }
+
+    /// Columns are matched by position. Two same-typed columns supplied in the
+    /// wrong order would otherwise be written into each other's place.
+    #[test]
+    fn column_names_must_match_the_table() {
+        let row_type = RowType::new(vec![
+            DataField::new("user_id", DataTypes::int(), None),
+            DataField::new("account_id", DataTypes::int(), None),
+        ]);
+        let batch = |first: &str, second: &str| {
+            RecordBatch::try_new(
+                Arc::new(arrow_schema::Schema::new(vec![
+                    Field::new(first, ArrowDataType::Int32, true),
+                    Field::new(second, ArrowDataType::Int32, true),
+                ])),
+                vec![
+                    Arc::new(arrow::array::Int32Array::from(vec![1])) as ArrayRef,
+                    Arc::new(arrow::array::Int32Array::from(vec![999])) as ArrayRef,
+                ],
+            )
+            .expect("batch")
+        };
+
+        assert_round_trips(
+            "columns in table order",
+            &batch("user_id", "account_id"),
+            &row_type,
+        );
+
+        let err = validate_append_record_batch(&batch("account_id", "user_id"), &row_type)
+            .expect_err("swapped columns must be rejected");
+        assert!(
+            err.to_string().contains("is named"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn nested_column_types_must_match_the_table() {
+        use arrow::array::{ListArray, MapArray, StringArray, StructArray};
+        use arrow::buffer::OffsetBuffer;
+
+        // ARRAY<TIMESTAMP(3)> given a list of ns.
+        let list_of = |values: ArrayRef| -> ArrayRef {
+            Arc::new(ListArray::new(
+                Arc::new(Field::new("item", values.data_type().clone(), true)),
+                OffsetBuffer::new(vec![0_i32, 1].into()),
+                values,
+                None,
+            ))
+        };
+        let array_of_ts3 = RowType::new(vec![DataField::new(
+            "tags",
+            DataTypes::array(DataTypes::timestamp_with_precision(3)),
+            None,
+        )]);
+        assert_round_trips(
+            "ARRAY<TIMESTAMP(3)> of ms",
+            &single_col_batch(
+                "tags",
+                list_of(Arc::new(TimestampMillisecondArray::from(vec![1_700_i64]))),
+            ),
+            &array_of_ts3,
+        );
+        assert_rejected(
+            "ARRAY<TIMESTAMP(3)> of ns",
+            &single_col_batch(
+                "tags",
+                list_of(Arc::new(TimestampNanosecondArray::from(vec![1_700_i64]))),
+            ),
+            &array_of_ts3,
+        );
+
+        // ROW<d DECIMAL(10,2)> given decimal(10,4).
+        let struct_of = |value: ArrayRef| -> ArrayRef {
+            Arc::new(StructArray::from(vec![(
+                Arc::new(Field::new("d", value.data_type().clone(), true)),
+                value,
+            )]))
+        };
+        let decimal = |p, s| {
+            Arc::new(
+                Decimal128Array::from(vec![1_234_i128])
+                    .with_precision_and_scale(p, s)
+                    .unwrap(),
+            ) as ArrayRef
+        };
+        let row_of_decimal = RowType::new(vec![DataField::new(
+            "nested",
+            DataTypes::row(vec![DataField::new("d", DataTypes::decimal(10, 2), None)]),
+            None,
+        )]);
+        assert_round_trips(
+            "ROW<DECIMAL(10,2)> of (10,2)",
+            &single_col_batch("nested", struct_of(decimal(10, 2))),
+            &row_of_decimal,
+        );
+        assert_rejected(
+            "ROW<DECIMAL(10,2)> of (10,4)",
+            &single_col_batch("nested", struct_of(decimal(10, 4))),
+            &row_of_decimal,
+        );
+
+        // MAP<STRING,INT> given a large_string key.
+        let map_of = |keys: ArrayRef| -> ArrayRef {
+            let entries = StructArray::from(vec![
+                (
+                    Arc::new(Field::new("key", keys.data_type().clone(), false)),
+                    keys,
+                ),
+                (
+                    Arc::new(Field::new("value", ArrowDataType::Int32, true)),
+                    Arc::new(arrow::array::Int32Array::from(vec![1])) as ArrayRef,
+                ),
+            ]);
+            Arc::new(MapArray::new(
+                Arc::new(Field::new("entries", entries.data_type().clone(), false)),
+                OffsetBuffer::new(vec![0_i32, 1].into()),
+                entries,
+                None,
+                false,
+            ))
+        };
+        let map_type = RowType::new(vec![DataField::new(
+            "attrs",
+            DataTypes::map(DataTypes::string(), DataTypes::int()),
+            None,
+        )]);
+        assert_round_trips(
+            "MAP<STRING,INT> with utf8 keys",
+            &single_col_batch("attrs", map_of(Arc::new(StringArray::from(vec!["a"])))),
+            &map_type,
+        );
+        assert_rejected(
+            "MAP<STRING,INT> with large_utf8 keys",
+            &single_col_batch(
+                "attrs",
+                map_of(Arc::new(arrow::array::LargeStringArray::from(vec!["a"]))),
+            ),
+            &map_type,
+        );
+    }
+
+    /// `MapBuilder` emits `keys`/`values` where Fluss uses `key`/`value`, so
+    /// builder output must not trip the check.
+    #[test]
+    fn builder_produced_batches_are_accepted() {
+        let mut lists = ListBuilder::new(Int32Builder::new());
+        lists.values().append_value(1);
+        lists.values().append_value(2);
+        lists.append(true);
+        assert_round_trips(
+            "ListBuilder output",
+            &single_col_batch("tags", Arc::new(lists.finish())),
+            &RowType::new(vec![DataField::new(
+                "tags",
+                DataTypes::array(DataTypes::int()),
+                None,
+            )]),
+        );
+
+        let mut maps = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
+        maps.keys().append_value("a");
+        maps.values().append_value(1);
+        maps.append(true).unwrap();
+        assert_round_trips(
+            "MapBuilder output",
+            &single_col_batch("attrs", Arc::new(maps.finish())),
+            &RowType::new(vec![DataField::new(
+                "attrs",
+                DataTypes::map(DataTypes::string(), DataTypes::int()),
+                None,
+            )]),
+        );
+
+        let structs = StructArray::from(vec![(
+            Arc::new(Field::new("seq", ArrowDataType::Int32, true)),
+            Arc::new(arrow::array::Int32Array::from(vec![1])) as ArrayRef,
+        )]);
+        assert_round_trips(
+            "StructArray built from the table's field names",
+            &single_col_batch("nested", Arc::new(structs)),
+            &RowType::new(vec![DataField::new(
+                "nested",
+                DataTypes::row(vec![DataField::new("seq", DataTypes::int(), None)]),
+                None,
+            )]),
+        );
+    }
+
+    /// A `TIMESTAMP_LTZ` value is an instant, so the zone is a label rather than
+    /// part of the value. Zoned against naive is still a real difference.
+    #[test]
+    fn timestamp_zone_name_is_not_a_type_difference() {
+        let ltz = RowType::new(vec![DataField::new(
+            "ts",
+            DataTypes::timestamp_ltz_with_precision(6),
+            None,
+        )]);
+        for zone in ["UTC", "+00:00", "Etc/UTC", "America/New_York"] {
+            let column: ArrayRef =
+                Arc::new(TimestampMicrosecondArray::from(vec![1_i64]).with_timezone(zone));
+            validate_append_record_batch(&single_col_batch("ts", column), &ltz)
+                .unwrap_or_else(|e| panic!("zone {zone} must be accepted: {e}"));
+        }
+
+        assert_rejected(
+            "naive timestamp into TIMESTAMP_LTZ",
+            &single_col_batch("ts", Arc::new(TimestampMicrosecondArray::from(vec![1_i64]))),
+            &ltz,
+        );
+        assert_rejected(
+            "zoned timestamp into TIMESTAMP",
+            &single_col_batch(
+                "ts",
+                Arc::new(TimestampMicrosecondArray::from(vec![1_i64]).with_timezone("UTC")),
+            ),
+            &RowType::new(vec![DataField::new(
+                "ts",
+                DataTypes::timestamp_with_precision(6),
+                None,
+            )]),
+        );
     }
 }
