@@ -70,6 +70,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -699,6 +700,83 @@ final class ReplicaTest extends ReplicaTestBase {
         assertThat(finalLocalSnapshot).isDirectory();
         makeKvReplicaAsFollower(kvReplica, 3);
         assertThat(finalKvTabletDir).doesNotExist();
+    }
+
+    @Test
+    void testLocalSnapshotLoadFailureFallsBackToRemote(@TempDir File snapshotKvTabletDir)
+            throws Exception {
+        conf.set(ConfigOptions.KV_SNAPSHOT_LOCAL_RECOVERY_ENABLED, true);
+        TableBucket tableBucket = new TableBucket(DATA1_TABLE_ID_PK, 1);
+        TestSnapshotContext testKvSnapshotContext =
+                new TestSnapshotContext(snapshotKvTabletDir.getPath());
+        TestingCompletedKvSnapshotCommitter kvSnapshotStore =
+                testKvSnapshotContext.testKvSnapshotStore;
+
+        Replica kvReplica =
+                makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, tableBucket, testKvSnapshotContext);
+        makeKvReplicaAsLeader(kvReplica);
+        List<Tuple2<byte[], byte[]>> expectedKeyValues =
+                getKeyValuePairs(
+                        genKvRecords(
+                                Tuple2.of("k1", new Object[] {1, "a"}),
+                                Tuple2.of("k2", new Object[] {2, "b"})));
+        putRecordsToLeader(
+                kvReplica,
+                genKvRecordBatch(
+                        Tuple2.of("k1", new Object[] {1, "a"}),
+                        Tuple2.of("k2", new Object[] {2, "b"})));
+
+        testKvSnapshotContext.scheduledExecutorService.triggerAllNonPeriodicTasks();
+        CompletedSnapshot completedSnapshot =
+                kvSnapshotStore.waitUntilSnapshotComplete(tableBucket, 0);
+        File localKvTabletDir = checkNotNull(kvReplica.getKvTablet()).getKvTabletDir();
+        File retainedLocalSnapshot =
+                LocalKvSnapshotUtils.getSnapshotDirectory(
+                        localKvTabletDir, completedSnapshot.getSnapshotID());
+
+        restartKvManager();
+        assertThat(retainedLocalSnapshot).isDirectory();
+
+        // Keep the file name and size valid for local snapshot validation, but make RocksDB unable
+        // to resolve its manifest when opening the restored checkpoint.
+        Path currentFile = retainedLocalSnapshot.toPath().resolve("CURRENT");
+        long currentFileSize = Files.size(currentFile);
+        Files.write(currentFile, new byte[(int) currentFileSize]);
+        assertThat(Files.size(currentFile)).isEqualTo(currentFileSize);
+
+        AtomicBoolean downloadedRemoteSnapshot = new AtomicBoolean(false);
+        AtomicBoolean handledBrokenSnapshot = new AtomicBoolean(false);
+        testKvSnapshotContext =
+                new TestSnapshotContext(snapshotKvTabletDir.getPath(), kvSnapshotStore) {
+                    @Override
+                    public KvSnapshotDataDownloader getSnapshotDataDownloader() {
+                        return new KvSnapshotDataDownloader(executorService) {
+                            @Override
+                            public void transferAllDataToDirectory(
+                                    KvSnapshotDownloadSpec downloadSpec,
+                                    CloseableRegistry closeableRegistry)
+                                    throws Exception {
+                                downloadedRemoteSnapshot.set(true);
+                                super.transferAllDataToDirectory(downloadSpec, closeableRegistry);
+                            }
+                        };
+                    }
+
+                    @Override
+                    public void handleSnapshotBroken(CompletedSnapshot snapshot) throws Exception {
+                        handledBrokenSnapshot.set(true);
+                        super.handleSnapshotBroken(snapshot);
+                    }
+                };
+        kvReplica = makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, tableBucket, testKvSnapshotContext);
+        makeKvReplicaAsLeader(kvReplica, 2);
+
+        assertThat(downloadedRemoteSnapshot).isTrue();
+        assertThat(handledBrokenSnapshot).isFalse();
+        assertThat(kvSnapshotStore.getLatestCompletedSnapshot(tableBucket))
+                .isEqualTo(completedSnapshot);
+        assertThat(retainedLocalSnapshot).doesNotExist();
+        verifyGetKeyValues(checkNotNull(kvReplica.getKvTablet()), expectedKeyValues);
     }
 
     @Test

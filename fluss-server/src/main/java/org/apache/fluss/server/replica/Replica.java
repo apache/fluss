@@ -59,6 +59,7 @@ import org.apache.fluss.rpc.util.PredicateMessageUtils;
 import org.apache.fluss.server.SequenceIDCounter;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
+import org.apache.fluss.server.exception.KvBuildingException;
 import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.server.kv.KvRecoverHelper;
 import org.apache.fluss.server.kv.KvStateLookupResult;
@@ -833,34 +834,7 @@ public final class Replica {
                         tableBucket,
                         physicalPath);
                 CompletedSnapshot completedSnapshot = optCompletedSnapshot.get();
-
-                File tabletDir;
-                long start = System.currentTimeMillis();
-                Optional<File> optionalTabletDir =
-                        snapshotContext.isLocalRecoveryEnabled()
-                                ? kvManager.restoreKvFromLocalSnapshot(
-                                        logTablet.getDataDir(),
-                                        physicalPath,
-                                        tableBucket,
-                                        completedSnapshot)
-                                : Optional.empty();
-                if (optionalTabletDir.isPresent()) {
-                    tabletDir = optionalTabletDir.get();
-                    LOG.info(
-                            "Rebuilt kv tablet for {} of table {} from retained local snapshot {} that costs {} ms.",
-                            tableBucket,
-                            physicalPath,
-                            completedSnapshot.getSnapshotID(),
-                            System.currentTimeMillis() - start);
-                } else {
-                    tabletDir =
-                            kvManager.deleteAndCreateTabletDir(
-                                    logTablet.getDataDir(), physicalPath, tableBucket);
-                    downloadKvSnapshots(completedSnapshot, tabletDir.toPath());
-                }
-
-                // as we have downloaded kv files into the tablet dir, now, we can load it
-                kvTablet = kvManager.loadKv(tabletDir, schemaGetter, this::onKvFlushComplete);
+                kvTablet = restoreKvTablet(completedSnapshot);
 
                 checkNotNull(kvTablet, "kv tablet should not be null.");
                 restoreStartOffset = completedSnapshot.getLogOffset();
@@ -925,6 +899,59 @@ public final class Replica {
         }
 
         return optCompletedSnapshot;
+    }
+
+    private KvTablet restoreKvTablet(CompletedSnapshot completedSnapshot) throws Exception {
+        checkNotNull(kvManager);
+        long start = System.currentTimeMillis();
+        Optional<File> optionalTabletDir =
+                snapshotContext.isLocalRecoveryEnabled()
+                        ? kvManager.restoreKvFromLocalSnapshot(
+                                logTablet.getDataDir(),
+                                physicalPath,
+                                tableBucket,
+                                completedSnapshot)
+                        : Optional.empty();
+        if (optionalTabletDir.isPresent()) {
+            try {
+                KvTablet restoredKvTablet =
+                        kvManager.loadKv(
+                                optionalTabletDir.get(), schemaGetter, this::onKvFlushComplete);
+                LOG.info(
+                        "Rebuilt kv tablet for {} of table {} from retained local snapshot {} that costs {} ms.",
+                        tableBucket,
+                        physicalPath,
+                        completedSnapshot.getSnapshotID(),
+                        System.currentTimeMillis() - start);
+                return restoredKvTablet;
+            } catch (KvBuildingException localRecoveryException) {
+                LOG.warn(
+                        "Failed to load retained local KV snapshot {} for {} of table {}. "
+                                + "Falling back to remote snapshot recovery.",
+                        completedSnapshot.getSnapshotID(),
+                        tableBucket,
+                        physicalPath,
+                        localRecoveryException);
+                try {
+                    return downloadAndLoadKvSnapshot(completedSnapshot);
+                } catch (Exception remoteRecoveryException) {
+                    remoteRecoveryException.addSuppressed(localRecoveryException);
+                    throw remoteRecoveryException;
+                }
+            }
+        }
+
+        return downloadAndLoadKvSnapshot(completedSnapshot);
+    }
+
+    private KvTablet downloadAndLoadKvSnapshot(CompletedSnapshot completedSnapshot)
+            throws Exception {
+        checkNotNull(kvManager);
+        File tabletDir =
+                kvManager.deleteAndCreateTabletDir(
+                        logTablet.getDataDir(), physicalPath, tableBucket);
+        downloadKvSnapshots(completedSnapshot, tabletDir.toPath());
+        return kvManager.loadKv(tabletDir, schemaGetter, this::onKvFlushComplete);
     }
 
     private void downloadKvSnapshots(CompletedSnapshot completedSnapshot, Path kvTabletDir)
