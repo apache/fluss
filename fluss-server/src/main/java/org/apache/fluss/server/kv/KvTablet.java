@@ -1282,14 +1282,16 @@ public final class KvTablet {
     public RocksIncrementalSnapshot createIncrementalSnapshot(
             Map<Long, Collection<KvFileHandleAndLocalPath>> uploadedSstFiles,
             KvSnapshotDataUploader kvSnapshotDataUploader,
-            long lastCompletedSnapshotId) {
+            long lastCompletedSnapshotId,
+            boolean localRecoveryEnabled) {
         return new RocksIncrementalSnapshot(
                 uploadedSstFiles,
                 rocksDBKv.getDb(),
                 rocksDBKv.getResourceGuard(),
                 kvSnapshotDataUploader,
                 kvTabletDir,
-                lastCompletedSnapshotId);
+                lastCompletedSnapshotId,
+                localRecoveryEnabled);
     }
 
     // only for testing.

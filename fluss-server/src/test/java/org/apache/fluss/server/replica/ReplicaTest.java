@@ -575,6 +575,7 @@ final class ReplicaTest extends ReplicaTestBase {
 
     @Test
     void testKvReplicaSnapshot(@TempDir File snapshotKvTabletDir) throws Exception {
+        conf.set(ConfigOptions.KV_SNAPSHOT_LOCAL_RECOVERY_ENABLED, true);
         TableBucket tableBucket = new TableBucket(DATA1_TABLE_ID_PK, 1);
 
         // create test context

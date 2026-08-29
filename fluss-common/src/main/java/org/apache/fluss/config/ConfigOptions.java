@@ -2054,6 +2054,14 @@ public class ConfigOptions {
                             "The interval to perform periodic snapshot for kv data. "
                                     + "The default setting is 10 minutes.");
 
+    public static final ConfigOption<Boolean> KV_SNAPSHOT_LOCAL_RECOVERY_ENABLED =
+            key("kv.snapshot.local-recovery.enabled")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether to retain the latest completed KV snapshot locally and use it for recovery. "
+                                    + "By default, local recovery is disabled and KV snapshots are restored from remote storage.");
+
     public static final ConfigOption<Integer> KV_SNAPSHOT_SCHEDULER_THREAD_NUM =
             key("kv.snapshot.scheduler-thread-num")
                     .intType()

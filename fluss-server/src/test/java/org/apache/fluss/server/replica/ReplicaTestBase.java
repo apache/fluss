@@ -744,6 +744,11 @@ public class ReplicaTestBase {
         }
 
         @Override
+        public boolean isLocalRecoveryEnabled() {
+            return conf.get(ConfigOptions.KV_SNAPSHOT_LOCAL_RECOVERY_ENABLED);
+        }
+
+        @Override
         public int getSnapshotFsWriteBufferSize() {
             return 1024;
         }
