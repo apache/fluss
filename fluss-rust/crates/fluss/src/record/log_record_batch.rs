@@ -631,7 +631,7 @@ impl LogRecordBatch {
 
     /// Splits the batch body into its per-record change types and the trailing
     /// Arrow IPC payload (see [`APPEND_ONLY_FLAG_MASK`] for the layout).
-    fn decode_change_types(&self) -> Result<(BatchChangeTypes, &[u8])> {
+    fn decode_change_types(&self) -> Result<(BatchChangeTypes, Bytes)> {
         let records_offset = self.records_data_offset()?;
         let body = self
             .data
@@ -645,7 +645,10 @@ impl LogRecordBatch {
             })?;
 
         if self.is_append_only() {
-            return Ok((BatchChangeTypes::Uniform(ChangeType::AppendOnly), body));
+            return Ok((
+                BatchChangeTypes::Uniform(ChangeType::AppendOnly),
+                self.data.slice(records_offset..),
+            ));
         }
 
         let record_count = self.record_count();
@@ -656,7 +659,7 @@ impl LogRecordBatch {
             });
         }
         let record_count = record_count as usize;
-        let (change_type_bytes, arrow_data) =
+        let (change_type_bytes, _) =
             body.split_at_checked(record_count)
                 .ok_or_else(|| Error::UnexpectedError {
                     message: format!(
@@ -666,6 +669,7 @@ impl LogRecordBatch {
                     ),
                     source: None,
                 })?;
+        let arrow_data = self.data.slice(records_offset + record_count..);
 
         let mut change_types = Vec::with_capacity(record_count);
         for &byte in change_type_bytes {
@@ -1294,5 +1298,35 @@ mod tests {
             .err()
             .expect("a statistics length past the batch end must be rejected");
         assert!(err.to_string().contains("records offset"));
+    }
+    /// Changelog batches put a record_count-byte change-type vector before the
+    /// Arrow payload, so the payload's offset - and its alignment - shifts with
+    /// the record count. Decode every count from 1..=16 to cover each residue.
+    #[test]
+    fn decodes_changelog_at_every_payload_alignment() -> Result<()> {
+        for n in 1usize..=16 {
+            let rows: Vec<(i32, String)> = (0..n).map(|i| (i as i32, format!("v{i}"))).collect();
+            let row_refs: Vec<(i32, &str)> = rows.iter().map(|(i, s)| (*i, s.as_str())).collect();
+            let (row_type, append_only) = build_append_only_batch(&row_refs);
+            let change_types = vec![ChangeType::Insert; n];
+            let changelog = splice_change_type_vector(&append_only, &change_types);
+
+            let batch = LogRecordsBatches::new(changelog)
+                .next()
+                .expect("changelog batch")?;
+            let read_context =
+                ReadContext::new(to_arrow_schema(&row_type)?, Arc::new(row_type), false);
+
+            let decoded = batch.record_batch(&read_context)?;
+            assert_eq!(decoded.num_rows(), n, "row count for {n} records");
+
+            let ids: Vec<i32> = batch
+                .records(&read_context)?
+                .map(|r| r.row().get_int(0).expect("id"))
+                .collect();
+            let expected: Vec<i32> = (0..n as i32).collect();
+            assert_eq!(ids, expected, "values for {n} records");
+        }
+        Ok(())
     }
 }

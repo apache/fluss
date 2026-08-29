@@ -53,6 +53,7 @@ use super::log_record_batch::*;
 use crate::error::Error::IllegalArgument;
 use crate::record::statistics::{estimated_serialized_size, serialize_statistics};
 use arrow::ipc::writer::IpcWriteOptions;
+use bytes::Bytes;
 
 pub const BUILDER_DEFAULT_OFFSET: i64 = 0;
 
@@ -631,7 +632,7 @@ pub trait ToArrow {
 /// Returns `Err(arrow_error)` on errors
 /// - `arrow_error`: Error details e.g. malformed, too short or bad continuation marker.
 fn parse_ipc_message(
-    data: &[u8],
+    data: &Bytes,
 ) -> Result<(
     arrow::ipc::RecordBatch<'_>,
     Buffer,
@@ -668,8 +669,8 @@ fn parse_ipc_message(
 
     let metadata_padded_size = (metadata_size + 7) & !7;
     let body_start = 8 + metadata_padded_size;
-    let body_data = &data[body_start..];
-    let body_buffer = Buffer::from(body_data);
+    // Slicing the `Bytes` bumps a refcount; `Buffer::from(&[u8])` would copy.
+    let body_buffer = Buffer::from(data.slice(body_start..));
 
     Ok((batch_metadata, body_buffer, message.version()))
 }
@@ -1426,8 +1427,8 @@ impl ReadContext {
             .map(|p| p.ordered_fields.as_slice())
     }
 
-    pub fn record_batch(&self, data: &[u8]) -> Result<RecordBatch> {
-        let (batch_metadata, body_buffer, version) = parse_ipc_message(data)?;
+    pub(crate) fn record_batch(&self, data: Bytes) -> Result<RecordBatch> {
+        let (batch_metadata, body_buffer, version) = parse_ipc_message(&data)?;
 
         let resolve_schema = {
             // if from remote, no projection, need to use full schema
@@ -1495,8 +1496,8 @@ impl ReadContext {
         Ok(record_batch)
     }
 
-    pub fn record_batch_for_remote_log(&self, data: &[u8]) -> Result<Option<RecordBatch>> {
-        let (batch_metadata, body_buffer, version) = parse_ipc_message(data)?;
+    pub(crate) fn record_batch_for_remote_log(&self, data: Bytes) -> Result<Option<RecordBatch>> {
+        let (batch_metadata, body_buffer, version) = parse_ipc_message(&data)?;
 
         let record_batch = read_record_batch(
             &body_buffer,
@@ -2462,8 +2463,8 @@ mod tests {
 
     #[test]
     fn test_parse_ipc_message() {
-        let empty_body: &[u8] = &le_bytes(&[0xFFFFFFFF, 0x00000000]);
-        let result = parse_ipc_message(empty_body);
+        let empty_body = Bytes::from(le_bytes(&[0xFFFFFFFF, 0x00000000]));
+        let result = parse_ipc_message(&empty_body);
         assert_eq!(
             result.unwrap_err().to_string(),
             String::from(
@@ -2471,17 +2472,17 @@ mod tests {
             )
         );
 
-        let invalid_data = &[];
+        let invalid_data = Bytes::new();
         assert_eq!(
-            parse_ipc_message(invalid_data).unwrap_err().to_string(),
+            parse_ipc_message(&invalid_data).unwrap_err().to_string(),
             String::from(
                 "Fluss hitting Arrow error Parser error: Invalid data length: 0: ParseError(\"Invalid data length: 0\")."
             )
         );
 
-        let data_with_invalid_continuation: &[u8] = &le_bytes(&[0x00000001, 0x00000000]);
+        let data_with_invalid_continuation = Bytes::from(le_bytes(&[0x00000001, 0x00000000]));
         assert_eq!(
-            parse_ipc_message(data_with_invalid_continuation)
+            parse_ipc_message(&data_with_invalid_continuation)
                 .unwrap_err()
                 .to_string(),
             String::from(
@@ -2489,9 +2490,9 @@ mod tests {
             )
         );
 
-        let data_with_invalid_length: &[u8] = &le_bytes(&[0xFFFFFFFF, 0x00000001]);
+        let data_with_invalid_length = Bytes::from(le_bytes(&[0xFFFFFFFF, 0x00000001]));
         assert_eq!(
-            parse_ipc_message(data_with_invalid_length)
+            parse_ipc_message(&data_with_invalid_length)
                 .unwrap_err()
                 .to_string(),
             String::from(
@@ -2499,9 +2500,9 @@ mod tests {
             )
         );
 
-        let data_with_invalid_length = &le_bytes(&[0xFFFFFFFF, 0x00000004, 0x00000000]);
+        let data_with_invalid_length = Bytes::from(le_bytes(&[0xFFFFFFFF, 0x00000004, 0x00000000]));
         assert_eq!(
-            parse_ipc_message(data_with_invalid_length)
+            parse_ipc_message(&data_with_invalid_length)
                 .unwrap_err()
                 .to_string(),
             String::from(
