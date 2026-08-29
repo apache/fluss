@@ -698,8 +698,24 @@ final class ReplicaTest extends ReplicaTestBase {
                 LocalKvSnapshotUtils.getSnapshotDirectory(
                         finalKvTabletDir, completedSnapshot2.getSnapshotID());
         assertThat(finalLocalSnapshot).isDirectory();
-        makeKvReplicaAsFollower(kvReplica, 3);
-        assertThat(finalKvTabletDir).doesNotExist();
+
+        // Make the retained checkpoint invalid while leaving the remote snapshot intact. Recovery
+        // should reject the local copy and download the committed remote snapshot instead.
+        restartKvManager();
+        Path currentFile = finalLocalSnapshot.toPath().resolve("CURRENT");
+        Files.delete(currentFile);
+        assertThat(currentFile).doesNotExist();
+
+        downloadedRemoteSnapshot.set(false);
+        kvReplica = makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, tableBucket, testKvSnapshotContext);
+        makeKvReplicaAsLeader(kvReplica, 3);
+        assertThat(downloadedRemoteSnapshot).isTrue();
+        assertThat(finalLocalSnapshot).doesNotExist();
+        verifyGetKeyValues(checkNotNull(kvReplica.getKvTablet()), expectedKeyValues);
+
+        File recoveredKvTabletDir = checkNotNull(kvReplica.getKvTablet()).getKvTabletDir();
+        makeKvReplicaAsFollower(kvReplica, 4);
+        assertThat(recoveredKvTabletDir).doesNotExist();
     }
 
     @Test
