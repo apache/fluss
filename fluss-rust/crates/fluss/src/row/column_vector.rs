@@ -34,78 +34,42 @@ use arrow::array::{
 use arrow::datatypes::{DataType as ArrowDataType, TimeUnit};
 use std::sync::Arc;
 
-struct AncestorValidity<'a> {
-    array: &'a dyn Array,
-    parent: Option<&'a AncestorValidity<'a>>,
-}
-
-impl AncestorValidity<'_> {
-    fn all_valid(&self) -> bool {
-        self.array.null_count() == 0 && self.parent.is_none_or(Self::all_valid)
-    }
-
-    fn is_valid(&self, index: usize) -> bool {
-        !self.array.is_null(index) && self.parent.is_none_or(|parent| parent.is_valid(index))
-    }
-}
-
-/// True when `array[start..end)` has a null at an index where all ancestors are valid.
-/// `ListArray::values()` / `MapArray::keys()` keep the full child, so a sliced
-/// parent or a null container can leave leftover slots outside the live window;
-/// those must not count.
+/// True when `array[start..end)` is null anywhere `parent` is valid.
 fn has_null_in_range(
     array: &dyn Array,
     start: usize,
     end: usize,
-    ancestors: Option<&AncestorValidity<'_>>,
+    parent: Option<&dyn Array>,
 ) -> bool {
     debug_assert!(start <= end && end <= array.len());
     if start == end || array.null_count() == 0 {
         return false;
     }
-    if let Some(ancestors) = ancestors.filter(|ancestors| !ancestors.all_valid()) {
-        return (start..end).any(|i| array.is_null(i) && ancestors.is_valid(i));
+    if let Some(parent) = parent.filter(|parent| parent.null_count() > 0) {
+        return (start..end).any(|i| array.is_null(i) && !parent.is_null(i));
     }
     (start == 0 && end == array.len()) || array.slice(start, end - start).null_count() > 0
 }
 
-/// Walks child slots of live list/map rows in `rows` on the already-typed
-/// child. A row is dead when the container itself is null, or when an ancestor
-/// (e.g. the enclosing ROW's struct) is null.
+/// Checks the child slots `rows` covers. A null list/map entry does not hide the
+/// values in its range - Arrow checks them against the element type either way -
+/// so only the offset window matters, and IPC compacts a sliced parent away.
 fn check_offset_window_not_null(
     child: &TypedColumn,
     offsets: &[i32],
     container: &dyn Array,
-    ancestors: Option<&AncestorValidity<'_>>,
     fluss_type: &DataType,
     path: String,
     rows: std::ops::Range<usize>,
 ) -> Result<()> {
     debug_assert!(rows.end <= container.len());
-    let ancestor_all_valid = ancestors.is_none_or(AncestorValidity::all_valid);
-    if container.null_count() == 0 && ancestor_all_valid {
-        return child.check_range_not_null(
-            offsets[rows.start] as usize,
-            offsets[rows.end] as usize,
-            fluss_type,
-            &path,
-            None,
-        );
-    }
-    for i in rows {
-        let dead = container.is_null(i) || ancestors.is_some_and(|a| !a.is_valid(i));
-        if dead {
-            continue;
-        }
-        child.check_range_not_null(
-            offsets[i] as usize,
-            offsets[i + 1] as usize,
-            fluss_type,
-            &path,
-            None,
-        )?;
-    }
-    Ok(())
+    child.check_range_not_null(
+        offsets[rows.start] as usize,
+        offsets[rows.end] as usize,
+        fluss_type,
+        &path,
+        None,
+    )
 }
 
 /// One typed Arrow column.
@@ -314,9 +278,9 @@ impl TypedColumn {
         &self,
         fluss_type: &DataType,
         path: &str,
-        ancestors: Option<&AncestorValidity<'_>>,
+        parent: Option<&dyn Array>,
     ) -> Result<()> {
-        self.check_range_not_null(0, self.outer_array().len(), fluss_type, path, ancestors)
+        self.check_range_not_null(0, self.outer_array().len(), fluss_type, path, parent)
     }
 
     fn check_range_not_null(
@@ -325,10 +289,9 @@ impl TypedColumn {
         end: usize,
         fluss_type: &DataType,
         path: &str,
-        ancestors: Option<&AncestorValidity<'_>>,
+        parent: Option<&dyn Array>,
     ) -> Result<()> {
-        if !fluss_type.is_nullable() && has_null_in_range(self.outer_array(), start, end, ancestors)
-        {
+        if !fluss_type.is_nullable() && has_null_in_range(self.outer_array(), start, end, parent) {
             return Err(IllegalArgument {
                 message: format!("{path} is declared as non-nullable but contains null values"),
             });
@@ -339,7 +302,6 @@ impl TypedColumn {
                     element,
                     list_arr.value_offsets(),
                     list_arr,
-                    ancestors,
                     array_type.get_element_type(),
                     format!("{path} element"),
                     start..end,
@@ -351,7 +313,6 @@ impl TypedColumn {
                     key,
                     offsets,
                     map_arr,
-                    ancestors,
                     map_type.key_type(),
                     format!("{path} key"),
                     start..end,
@@ -360,24 +321,19 @@ impl TypedColumn {
                     value,
                     offsets,
                     map_arr,
-                    ancestors,
                     map_type.value_type(),
                     format!("{path} value"),
                     start..end,
                 )
             }
             (Self::Row(struct_arr, inner), DataType::Row(row_type)) => {
-                let row_ancestors = AncestorValidity {
-                    array: struct_arr,
-                    parent: ancestors,
-                };
                 for (field, column) in row_type.fields().iter().zip(inner.columns.iter()) {
                     column.check_range_not_null(
                         start,
                         end,
                         field.data_type(),
                         &format!("{path}.{}", field.name()),
-                        Some(&row_ancestors),
+                        Some(struct_arr),
                     )?;
                 }
                 Ok(())

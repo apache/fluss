@@ -514,34 +514,18 @@ impl MemoryLogRecordsArrowBuilder {
     }
 
     fn write_batch_header(&self, buffer: &mut [u8], statistics_length: usize) -> Result<()> {
-        let total_len = buffer.len();
-        let mut cursor = Cursor::new(buffer);
-        cursor.write_i64::<LittleEndian>(self.base_log_offset)?;
-        cursor
-            .write_i32::<LittleEndian>((total_len - BASE_OFFSET_LENGTH - LENGTH_LENGTH) as i32)?;
-        cursor.write_u8(self.magic)?;
-        cursor.write_i64::<LittleEndian>(0)?; // timestamp placeholder
-        cursor.write_u32::<LittleEndian>(0)?; // crc placeholder
-        cursor.write_i16::<LittleEndian>(self.schema_id as i16)?;
-
-        let record_count = self.arrow_record_batch_builder.records_count();
-        // todo: curerntly, always is append only
-        let append_only = true;
-        cursor.write_u8(if append_only { 1 } else { 0 })?;
-        cursor.write_i32::<LittleEndian>(if record_count > 0 {
-            record_count - 1
-        } else {
-            0
-        })?;
-
-        cursor.write_i64::<LittleEndian>(self.writer_id)?;
-        cursor.write_i32::<LittleEndian>(self.batch_sequence)?;
-        cursor.write_i32::<LittleEndian>(record_count)?;
-
-        if self.magic >= LOG_MAGIC_VALUE_V1 {
-            cursor.write_i32::<LittleEndian>(statistics_length as i32)?;
-        }
-        Ok(())
+        write_batch_header_fields(
+            buffer,
+            BatchHeaderFields {
+                base_log_offset: self.base_log_offset,
+                magic: self.magic,
+                schema_id: self.schema_id,
+                writer_id: self.writer_id,
+                batch_sequence: self.batch_sequence,
+                record_count: self.arrow_record_batch_builder.records_count(),
+                statistics_length,
+            },
+        )
     }
 
     pub fn set_writer_state(&mut self, writer_id: i64, batch_base_sequence: i32) {
@@ -690,6 +674,51 @@ fn parse_ipc_message(
 pub(crate) fn validate_append_record_batch(batch: &RecordBatch, row_type: &RowType) -> Result<()> {
     let typed = TypedBatch::build(batch, row_type)?;
     typed.check_not_null(row_type)
+}
+
+/// The fixed fields of a log record batch header.
+pub(crate) struct BatchHeaderFields {
+    pub base_log_offset: i64,
+    pub magic: u8,
+    pub schema_id: i32,
+    pub writer_id: i64,
+    pub batch_sequence: i32,
+    pub record_count: i32,
+    /// Only written for V1 and above.
+    pub statistics_length: usize,
+}
+
+/// `buffer` must be the whole batch. Timestamp and CRC are left for the caller.
+pub(crate) fn write_batch_header_fields(
+    buffer: &mut [u8],
+    fields: BatchHeaderFields,
+) -> Result<()> {
+    let total_len = buffer.len();
+    let mut cursor = Cursor::new(buffer);
+    cursor.write_i64::<LittleEndian>(fields.base_log_offset)?;
+    cursor.write_i32::<LittleEndian>((total_len - BASE_OFFSET_LENGTH - LENGTH_LENGTH) as i32)?;
+    cursor.write_u8(fields.magic)?;
+    cursor.write_i64::<LittleEndian>(0)?; // timestamp placeholder
+    cursor.write_u32::<LittleEndian>(0)?; // crc placeholder
+    cursor.write_i16::<LittleEndian>(fields.schema_id as i16)?;
+
+    // todo: curerntly, always is append only
+    let append_only = true;
+    cursor.write_u8(if append_only { 1 } else { 0 })?;
+    cursor.write_i32::<LittleEndian>(if fields.record_count > 0 {
+        fields.record_count - 1
+    } else {
+        0
+    })?;
+
+    cursor.write_i64::<LittleEndian>(fields.writer_id)?;
+    cursor.write_i32::<LittleEndian>(fields.batch_sequence)?;
+    cursor.write_i32::<LittleEndian>(fields.record_count)?;
+
+    if fields.magic >= LOG_MAGIC_VALUE_V1 {
+        cursor.write_i32::<LittleEndian>(fields.statistics_length as i32)?;
+    }
+    Ok(())
 }
 
 pub fn to_arrow_schema(fluss_schema: &RowType) -> Result<SchemaRef> {
@@ -1744,176 +1773,6 @@ mod tests {
     }
 
     #[test]
-    fn validate_append_record_batch_allows_null_parent_with_not_null_child() {
-        let row_col_type = RowType::new(vec![DataField::new(
-            "nested",
-            DataTypes::row(vec![
-                DataField::new("seq", DataTypes::int().as_non_nullable(), None),
-                DataField::new("label", DataTypes::string(), None),
-            ]),
-            None,
-        )]);
-        let batch = single_col_batch(
-            "nested",
-            struct_int_string_array(vec![None], vec![None], Some(vec![false])),
-        );
-        validate_append_record_batch(&batch, &row_col_type).expect(
-            "null ROW value must be accepted when the row column is nullable even if seq is NOT NULL",
-        );
-
-        let nested_row_type = RowType::new(vec![DataField::new(
-            "nested",
-            DataTypes::row(vec![DataField::new(
-                "inner",
-                DataTypes::row(vec![DataField::new(
-                    "seq",
-                    DataTypes::int().as_non_nullable(),
-                    None,
-                )]),
-                None,
-            )]),
-            None,
-        )]);
-        let nested_row = |outer_valid| {
-            struct_with_field(
-                "inner",
-                struct_with_field(
-                    "seq",
-                    Arc::new(arrow::array::Int32Array::from(vec![None])) as ArrayRef,
-                    None,
-                ),
-                Some(vec![outer_valid]),
-            )
-        };
-        validate_append_record_batch(
-            &single_col_batch("nested", nested_row(false)),
-            &nested_row_type,
-        )
-        .expect("null outer ROW must mask leftover poison in a valid inner ROW");
-        assert_not_null_violation(
-            validate_append_record_batch(
-                &single_col_batch("nested", nested_row(true)),
-                &nested_row_type,
-            )
-            .expect_err("inner ROW poison under a live outer ROW must reject"),
-        );
-
-        // An empty child range under a null list is the usual builder layout.
-        let array_type = RowType::new(vec![DataField::new(
-            "tags",
-            DataTypes::array(DataTypes::int().as_non_nullable()),
-            None,
-        )]);
-        validate_append_record_batch(
-            &single_col_batch(
-                "tags",
-                list_int_array(vec![Some(1)], vec![0, 0, 1], Some(vec![false, true])),
-            ),
-            &array_type,
-        )
-        .expect("null ARRAY with empty leftover range must be accepted");
-        validate_append_record_batch(
-            &single_col_batch(
-                "tags",
-                list_int_array(vec![None, Some(1)], vec![0, 1, 2], Some(vec![false, true])),
-            ),
-            &array_type,
-        )
-        .expect("null ARRAY leftover values() slots must not count as live elements");
-
-        let map_type = RowType::new(vec![DataField::new(
-            "attrs",
-            DataTypes::map(DataTypes::string(), DataTypes::int().as_non_nullable()),
-            None,
-        )]);
-        validate_append_record_batch(
-            &single_col_batch(
-                "attrs",
-                map_string_int_array(
-                    vec!["a"],
-                    vec![Some(1)],
-                    vec![0, 0, 1],
-                    Some(vec![false, true]),
-                ),
-            ),
-            &map_type,
-        )
-        .expect("null MAP with empty leftover range must be accepted");
-        validate_append_record_batch(
-            &single_col_batch(
-                "attrs",
-                map_string_int_array(
-                    vec!["x", "a"],
-                    vec![None, Some(1)],
-                    vec![0, 1, 2],
-                    Some(vec![false, true]),
-                ),
-            ),
-            &map_type,
-        )
-        .expect("null MAP leftover values() slots must not count as live entries");
-
-        // Nested child under a null container: leftover ROW field / inner-list
-        // element poison must not reject. The same poison on a live row must.
-        let array_of_row = RowType::new(vec![DataField::new(
-            "nested",
-            DataTypes::array(DataTypes::row(vec![
-                DataField::new("seq", DataTypes::int().as_non_nullable(), None),
-                DataField::new("label", DataTypes::string(), None),
-            ])),
-            None,
-        )]);
-        validate_append_record_batch(
-            &single_col_batch(
-                "nested",
-                list_array(
-                    struct_int_string_array(vec![None, Some(2)], vec![Some("x"), Some("y")], None),
-                    vec![0, 1, 2],
-                    Some(vec![false, true]),
-                ),
-            ),
-            &array_of_row,
-        )
-        .expect("leftover ROW field poison under a null list must be accepted");
-        assert_not_null_violation(
-            validate_append_record_batch(
-                &single_col_batch(
-                    "nested",
-                    list_array(
-                        struct_int_string_array(
-                            vec![None, Some(2)],
-                            vec![Some("x"), Some("y")],
-                            None,
-                        ),
-                        vec![0, 1, 2],
-                        Some(vec![true, false]),
-                    ),
-                ),
-                &array_of_row,
-            )
-            .expect_err("ROW field poison on the live list must reject"),
-        );
-
-        let array_of_array = RowType::new(vec![DataField::new(
-            "tags",
-            DataTypes::array(DataTypes::array(DataTypes::int().as_non_nullable())),
-            None,
-        )]);
-        validate_append_record_batch(
-            &single_col_batch(
-                "tags",
-                list_array(
-                    list_int_array(vec![None, Some(1)], vec![0, 1, 2], None),
-                    vec![0, 1, 2],
-                    Some(vec![false, true]),
-                ),
-            ),
-            &array_of_array,
-        )
-        .expect("leftover inner-list poison under a null outer list must be accepted");
-    }
-
-    #[test]
     fn validate_append_record_batch_ignores_nulls_in_sliced_away_nested_values() {
         let array_type = RowType::new(vec![DataField::new(
             "tags",
@@ -1976,75 +1835,6 @@ mod tests {
             validate_append_record_batch(&structs.slice(0, 1), &row_col_type)
                 .expect_err("live slice that still contains the ROW field null must reject"),
         );
-    }
-
-    #[test]
-    fn validate_append_record_batch_ignores_leftover_nested_poison_under_null_row() {
-        // A null ROW row can still leave non-null child container data behind.
-        // That leftover is dead (the row is null) and must not false-reject.
-        let array_field = RowType::new(vec![DataField::new(
-            "nested",
-            DataTypes::row(vec![DataField::new(
-                "tags",
-                DataTypes::array(DataTypes::int().as_non_nullable()),
-                None,
-            )]),
-            None,
-        )]);
-        validate_append_record_batch(
-            &single_col_batch(
-                "nested",
-                struct_with_field(
-                    "tags",
-                    list_int_array(vec![Some(1), None, Some(2), Some(3)], vec![0, 2, 4], None),
-                    Some(vec![false, true]),
-                ),
-            ),
-            &array_field,
-        )
-        .expect("leftover ARRAY poison under a null ROW row must be accepted");
-        // Sanity: same poison on the live row still rejects.
-        assert_not_null_violation(
-            validate_append_record_batch(
-                &single_col_batch(
-                    "nested",
-                    struct_with_field(
-                        "tags",
-                        list_int_array(vec![Some(1), None, Some(2), Some(3)], vec![0, 2, 4], None),
-                        Some(vec![true, false]),
-                    ),
-                ),
-                &array_field,
-            )
-            .expect_err("poison element on the live ROW row must reject"),
-        );
-
-        let map_field = RowType::new(vec![DataField::new(
-            "nested",
-            DataTypes::row(vec![DataField::new(
-                "attrs",
-                DataTypes::map(DataTypes::string(), DataTypes::int().as_non_nullable()),
-                None,
-            )]),
-            None,
-        )]);
-        validate_append_record_batch(
-            &single_col_batch(
-                "nested",
-                struct_with_field(
-                    "attrs",
-                    map_string_int_array(
-                        vec!["a", "b", "c", "d"],
-                        vec![Some(1), None, Some(2), Some(3)],
-                        vec![0, 2, 4],
-                        None,
-                    ),
-                    Some(vec![false, true]),
-                ),
-            ),
-            &map_field,
-        )
-        .expect("leftover MAP poison under a null ROW row must be accepted");
     }
 
     #[test]
@@ -2862,5 +2652,353 @@ mod tests {
         .err()
         .expect("an out-of-range statistics index must be rejected");
         assert!(err.to_string().contains("out of range"));
+    }
+
+    /// Encodes `batch` without going through `MemoryLogRecordsArrowBuilder`, so a
+    /// batch that validation rejects can still be handed to the reader.
+    fn encode_batch_bypassing_validation(batch: &RecordBatch) -> Vec<u8> {
+        use arrow::ipc::writer::StreamWriter;
+
+        let mut ipc = Vec::new();
+        let mut writer =
+            StreamWriter::try_new(&mut ipc, batch.schema().as_ref()).expect("ipc writer");
+        let schema_message_len = writer.get_ref().len();
+        writer.write(batch).expect("write batch");
+        drop(writer);
+        let payload = &ipc[schema_message_len..];
+
+        let mut bytes = vec![0u8; RECORD_BATCH_HEADER_SIZE + payload.len()];
+        write_batch_header_fields(
+            &mut bytes,
+            BatchHeaderFields {
+                base_log_offset: BUILDER_DEFAULT_OFFSET,
+                magic: CURRENT_LOG_MAGIC_VALUE,
+                schema_id: 1,
+                writer_id: NO_WRITER_ID,
+                batch_sequence: NO_BATCH_SEQUENCE,
+                record_count: batch.num_rows() as i32,
+                statistics_length: 0,
+            },
+        )
+        .expect("write header");
+        bytes[RECORD_BATCH_HEADER_SIZE..].copy_from_slice(payload);
+
+        let crc = crc32c(&bytes[SCHEMA_ID_OFFSET..]);
+        bytes[CRC_OFFSET..CRC_OFFSET + CRC_LENGTH].copy_from_slice(&crc.to_le_bytes());
+        bytes
+    }
+
+    /// A batch validation accepts must decode; one that fails to decode must be
+    /// rejected. Pairing the two verdicts keeps the masking rules out of the test.
+    fn assert_validation_matches_reader(label: &str, batch: &RecordBatch, row_type: &RowType) {
+        let accepted = validate_append_record_batch(batch, row_type).is_ok();
+        let bytes = encode_batch_bypassing_validation(batch);
+        let read_context = ReadContext::new(
+            to_arrow_schema(row_type).expect("arrow schema"),
+            Arc::new(row_type.clone()),
+            false,
+        );
+        let decodes = LogRecordsBatches::new(bytes)
+            .next()
+            .expect("one batch")
+            .expect("batch header")
+            .records(&read_context)
+            .map(|records| records.count())
+            .is_ok();
+
+        assert_eq!(
+            accepted,
+            decodes,
+            "{label}: validation {} but the reader {}",
+            if accepted { "accepted" } else { "rejected" },
+            if decodes {
+                "decoded it"
+            } else {
+                "could not decode it"
+            }
+        );
+    }
+
+    #[test]
+    fn validation_agrees_with_reader_on_nested_nullability() {
+        let array_of_not_null = RowType::new(vec![DataField::new(
+            "tags",
+            DataTypes::array(DataTypes::int().as_non_nullable()),
+            None,
+        )]);
+        let row_of_not_null_array = RowType::new(vec![DataField::new(
+            "nested",
+            DataTypes::row(vec![DataField::new(
+                "tags",
+                DataTypes::array(DataTypes::int().as_non_nullable()),
+                None,
+            )]),
+            None,
+        )]);
+        let row_of_not_null_field = RowType::new(vec![DataField::new(
+            "nested",
+            DataTypes::row(vec![DataField::new(
+                "seq",
+                DataTypes::int().as_non_nullable(),
+                None,
+            )]),
+            None,
+        )]);
+
+        assert_validation_matches_reader(
+            "poison on a live list row",
+            &single_col_batch(
+                "tags",
+                list_int_array(vec![Some(1), None], vec![0, 2], None),
+            ),
+            &array_of_not_null,
+        );
+        assert_validation_matches_reader(
+            "leftover under a null list row",
+            &single_col_batch(
+                "tags",
+                list_int_array(vec![Some(1), None], vec![0, 1, 2], Some(vec![true, false])),
+            ),
+            &array_of_not_null,
+        );
+        assert_validation_matches_reader(
+            "null list row owning no elements",
+            &single_col_batch(
+                "tags",
+                list_int_array(vec![Some(1)], vec![0, 1, 1], Some(vec![true, false])),
+            ),
+            &array_of_not_null,
+        );
+        assert_validation_matches_reader(
+            "null ROW row masking its own field",
+            &single_col_batch(
+                "nested",
+                struct_with_field(
+                    "seq",
+                    Arc::new(arrow::array::Int32Array::from(vec![None, Some(2)])) as ArrayRef,
+                    Some(vec![false, true]),
+                ),
+            ),
+            &row_of_not_null_field,
+        );
+        assert_validation_matches_reader(
+            "null ROW row above a live list",
+            &single_col_batch(
+                "nested",
+                struct_with_field(
+                    "tags",
+                    list_int_array(vec![None, Some(7)], vec![0, 1, 2], None),
+                    Some(vec![false, true]),
+                ),
+            ),
+            &row_of_not_null_array,
+        );
+        assert_validation_matches_reader(
+            "poison removed by a slice",
+            &single_col_batch(
+                "tags",
+                list_int_array(vec![None, Some(7), Some(8)], vec![0, 1, 3], None),
+            )
+            .slice(1, 1),
+            &array_of_not_null,
+        );
+    }
+
+    #[test]
+    fn validation_agrees_with_reader_on_maps_and_deeper_nesting() {
+        let map_of_not_null_value = RowType::new(vec![DataField::new(
+            "attrs",
+            DataTypes::map(DataTypes::string(), DataTypes::int().as_non_nullable()),
+            None,
+        )]);
+        assert_validation_matches_reader(
+            "MAP: poison on a live entry",
+            &single_col_batch(
+                "attrs",
+                map_string_int_array(vec!["a", "b"], vec![Some(1), None], vec![0, 2], None),
+            ),
+            &map_of_not_null_value,
+        );
+        assert_validation_matches_reader(
+            "MAP: leftover under a null entry",
+            &single_col_batch(
+                "attrs",
+                map_string_int_array(
+                    vec!["a", "b"],
+                    vec![Some(1), None],
+                    vec![0, 1, 2],
+                    Some(vec![true, false]),
+                ),
+            ),
+            &map_of_not_null_value,
+        );
+        assert_validation_matches_reader(
+            "MAP: null entry owning nothing",
+            &single_col_batch(
+                "attrs",
+                map_string_int_array(
+                    vec!["a"],
+                    vec![Some(1)],
+                    vec![0, 1, 1],
+                    Some(vec![true, false]),
+                ),
+            ),
+            &map_of_not_null_value,
+        );
+
+        let array_of_array = RowType::new(vec![DataField::new(
+            "grid",
+            DataTypes::array(DataTypes::array(DataTypes::int().as_non_nullable())),
+            None,
+        )]);
+        let inner_with_poison = || list_int_array(vec![None, Some(4)], vec![0, 1, 2], None);
+        assert_validation_matches_reader(
+            "ARRAY<ARRAY>: poison on a live outer row",
+            &single_col_batch("grid", list_array(inner_with_poison(), vec![0, 2], None)),
+            &array_of_array,
+        );
+        assert_validation_matches_reader(
+            "ARRAY<ARRAY>: poison sliced away",
+            &single_col_batch("grid", list_array(inner_with_poison(), vec![0, 1, 2], None))
+                .slice(1, 1),
+            &array_of_array,
+        );
+
+        let array_of_row = RowType::new(vec![DataField::new(
+            "items",
+            DataTypes::array(DataTypes::row(vec![
+                DataField::new("seq", DataTypes::int().as_non_nullable(), None),
+                DataField::new("label", DataTypes::string(), None),
+            ])),
+            None,
+        )]);
+        assert_validation_matches_reader(
+            "ARRAY<ROW>: poison on a live list row",
+            &single_col_batch(
+                "items",
+                list_array(
+                    struct_int_string_array(vec![None, Some(2)], vec![Some("x"), Some("y")], None),
+                    vec![0, 2],
+                    None,
+                ),
+            ),
+            &array_of_row,
+        );
+        assert_validation_matches_reader(
+            "ARRAY<ROW>: leftover under a null list row",
+            &single_col_batch(
+                "items",
+                list_array(
+                    struct_int_string_array(vec![None, Some(2)], vec![Some("x"), Some("y")], None),
+                    vec![0, 1, 2],
+                    Some(vec![false, true]),
+                ),
+            ),
+            &array_of_row,
+        );
+
+        let row_of_row = RowType::new(vec![DataField::new(
+            "outer",
+            DataTypes::row(vec![DataField::new(
+                "inner",
+                DataTypes::row(vec![DataField::new(
+                    "seq",
+                    DataTypes::int().as_non_nullable(),
+                    None,
+                )]),
+                None,
+            )]),
+            None,
+        )]);
+        // A null ROW row above a live MAP.
+        assert_validation_matches_reader(
+            "ROW<MAP>: null ROW row above a live map",
+            &single_col_batch(
+                "nested",
+                struct_with_field(
+                    "attrs",
+                    map_string_int_array(vec!["a", "b"], vec![Some(1), None], vec![0, 2], None),
+                    Some(vec![false]),
+                ),
+            ),
+            &RowType::new(vec![DataField::new(
+                "nested",
+                DataTypes::row(vec![DataField::new(
+                    "attrs",
+                    DataTypes::map(DataTypes::string(), DataTypes::int().as_non_nullable()),
+                    None,
+                )]),
+                None,
+            )]),
+        );
+
+        assert_validation_matches_reader(
+            "ROW<ROW>: null outer over a live inner",
+            &single_col_batch(
+                "outer",
+                struct_with_field(
+                    "inner",
+                    struct_with_field(
+                        "seq",
+                        Arc::new(arrow::array::Int32Array::from(vec![None, Some(2)])) as ArrayRef,
+                        None,
+                    ),
+                    Some(vec![false, true]),
+                ),
+            ),
+            &row_of_row,
+        );
+    }
+
+    #[test]
+    fn validation_agrees_with_reader_across_element_types() {
+        use arrow::array::{Float64Array, StringArray, TimestampMillisecondArray};
+
+        let cases: Vec<(&str, DataType, ArrayRef)> = vec![
+            (
+                "STRING",
+                DataTypes::string().as_non_nullable(),
+                Arc::new(StringArray::from(vec![Some("a"), None])),
+            ),
+            (
+                "DOUBLE",
+                DataTypes::double().as_non_nullable(),
+                Arc::new(Float64Array::from(vec![Some(1.5), None])),
+            ),
+            (
+                "TIMESTAMP",
+                DataTypes::timestamp_with_precision(3).as_non_nullable(),
+                Arc::new(TimestampMillisecondArray::from(vec![
+                    Some(1_700_000_000_000),
+                    None,
+                ])),
+            ),
+            (
+                "BIGINT",
+                DataTypes::bigint().as_non_nullable(),
+                Arc::new(arrow::array::Int64Array::from(vec![Some(7_i64), None])),
+            ),
+        ];
+
+        for (name, element_type, values) in cases {
+            let row_type = RowType::new(vec![DataField::new(
+                "tags",
+                DataTypes::array(element_type),
+                None,
+            )]);
+            assert_validation_matches_reader(
+                &format!("ARRAY<{name} NOT NULL>: poison on a live row"),
+                &single_col_batch("tags", list_array(Arc::clone(&values), vec![0, 2], None)),
+                &row_type,
+            );
+            assert_validation_matches_reader(
+                &format!("ARRAY<{name} NOT NULL>: leftover under a null row"),
+                &single_col_batch(
+                    "tags",
+                    list_array(values, vec![0, 1, 2], Some(vec![true, false])),
+                ),
+                &row_type,
+            );
+        }
     }
 }
