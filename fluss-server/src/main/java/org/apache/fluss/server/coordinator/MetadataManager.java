@@ -618,12 +618,18 @@ public class MetadataManager {
         // We should always alter lake table even though datalake is disabled.
         // Otherwise, if user alter the fluss table when datalake is disabled, then enable datalake
         // again, the lake table will mismatch.
-        // Only sync to lake if this table has ever opted into datalake (key present regardless of
-        // value).
+        // Sync to lake if this table has ever opted into datalake (key present regardless of
+        // value), or if this change is enabling datalake now. The latter is needed because
+        // resetting table.datalake.enabled removes the key entirely (see
+        // #getUpdatedTableDescriptor), so a later re-enable would otherwise see an old descriptor
+        // without the key and skip the alterTable call that re-applies lakestream.enabled.
+        boolean enablingDataLake =
+                isDataLakeEnabled(newDescriptor) && !isDataLakeEnabled(tableDescriptor);
         if (lakeCatalog != null
-                && tableDescriptor
-                        .getProperties()
-                        .containsKey(ConfigOptions.TABLE_DATALAKE_ENABLED.key())) {
+                && (enablingDataLake
+                        || tableDescriptor
+                                .getProperties()
+                                .containsKey(ConfigOptions.TABLE_DATALAKE_ENABLED.key()))) {
             try {
                 lakeCatalog.alterTable(tablePath, tableChanges, lakeCatalogContext);
             } catch (TableNotExistException e) {

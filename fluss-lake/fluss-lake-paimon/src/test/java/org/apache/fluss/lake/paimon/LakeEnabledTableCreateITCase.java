@@ -831,6 +831,30 @@ class LakeEnabledTableCreateITCase {
                 .get();
         assertThat(paimonCatalog.getTable(paimonTablePath).options())
                 .containsEntry(LAKESTREAM_ENABLED_OPTION_KEY, "true");
+
+        // resetting datalake.enabled is equivalent to disabling acceleration, and removes the
+        // key from the table descriptor entirely (unlike SetOption "false")
+        admin.alterTable(
+                        pkTablePath,
+                        Collections.singletonList(
+                                TableChange.reset(ConfigOptions.TABLE_DATALAKE_ENABLED.key())),
+                        false)
+                .get();
+        assertThat(paimonCatalog.getTable(paimonTablePath).options())
+                .doesNotContainKey(LAKESTREAM_ENABLED_OPTION_KEY);
+
+        // re-enabling after a reset must still sync lakestream.enabled=true: since the reset
+        // removed the key from the descriptor, MetadataManager must not rely solely on "the old
+        // descriptor already had the key" to decide whether to sync to the lake table
+        admin.alterTable(
+                        pkTablePath,
+                        Collections.singletonList(
+                                TableChange.set(
+                                        ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")),
+                        false)
+                .get();
+        assertThat(paimonCatalog.getTable(paimonTablePath).options())
+                .containsEntry(LAKESTREAM_ENABLED_OPTION_KEY, "true");
     }
 
     @Test

@@ -43,8 +43,6 @@ import org.apache.paimon.types.DataType;
 import org.apache.paimon.types.RowKind;
 import org.apache.paimon.types.RowType;
 
-import javax.annotation.Nullable;
-
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -198,9 +196,9 @@ public class PaimonConversions {
                 validateAlterPaimonOptions(key);
                 schemaChanges.add(SchemaChange.setOption(key, setOption.getValue()));
                 // #4102: keep lakestream.enabled in sync with datalake acceleration state.
-                maybeSyncLakeStreamOption(
+                appendLakeStreamOptionChange(
                         setOption.getKey(),
-                        setOption.getValue(),
+                        Boolean.parseBoolean(setOption.getValue()),
                         paimonIncludingSystemColumns,
                         schemaChanges);
             } else if (tableChange instanceof TableChange.ResetOption) {
@@ -209,8 +207,8 @@ public class PaimonConversions {
                 validateAlterPaimonOptions(key);
                 schemaChanges.add(SchemaChange.removeOption(key));
                 // #4102: resetting datalake.enabled is equivalent to disabling acceleration.
-                maybeSyncLakeStreamOption(
-                        resetOption.getKey(), null, paimonIncludingSystemColumns, schemaChanges);
+                appendLakeStreamOptionChange(
+                        resetOption.getKey(), false, paimonIncludingSystemColumns, schemaChanges);
             } else if (tableChange instanceof TableChange.AddColumn) {
                 TableChange.AddColumn addColumn = (TableChange.AddColumn) tableChange;
 
@@ -372,12 +370,15 @@ public class PaimonConversions {
      * instead of persisting {@code false}.
      *
      * @param flussKey the original (un-prefixed) Fluss change key
-     * @param value the option value for a SetOption change, or {@code null} for a ResetOption
+     * @param lakeStreamEnabled whether datalake acceleration is enabled after this change
      * @param legacyTable whether the Paimon table uses the legacy system-column layout
      * @param out the schema-change list to append to
      */
-    private static void maybeSyncLakeStreamOption(
-            String flussKey, @Nullable String value, boolean legacyTable, List<SchemaChange> out) {
+    private static void appendLakeStreamOptionChange(
+            String flussKey,
+            boolean lakeStreamEnabled,
+            boolean legacyTable,
+            List<SchemaChange> out) {
         if (!TABLE_DATALAKE_ENABLED.key().equals(flussKey)) {
             return;
         }
@@ -385,7 +386,7 @@ public class PaimonConversions {
         if (legacyTable) {
             return;
         }
-        if (Boolean.parseBoolean(value)) {
+        if (lakeStreamEnabled) {
             out.add(SchemaChange.setOption(LAKESTREAM_ENABLED_OPTION_KEY, Boolean.TRUE.toString()));
         } else {
             // Disabling (SetOption "false") or resetting removes the option entirely.
