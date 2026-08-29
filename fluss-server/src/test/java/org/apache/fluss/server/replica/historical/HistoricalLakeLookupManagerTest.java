@@ -119,6 +119,34 @@ class HistoricalLakeLookupManagerTest {
     }
 
     @Test
+    void testCreatesLookuperWithMappedLakeTablePath() throws Exception {
+        TestingHistoricalLakeLookupManager manager = createTestingManager();
+        TablePath lakeTablePath = TablePath.of("lake_db", "lake_table");
+        TableDescriptor mappedDescriptor =
+                TableDescriptor.builder(PARTITION_TABLE_INFO.toTableDescriptor())
+                        .property(
+                                ConfigOptions.TABLE_DATALAKE_DATABASE_NAME,
+                                lakeTablePath.getDatabaseName())
+                        .property(
+                                ConfigOptions.TABLE_DATALAKE_TABLE_NAME,
+                                lakeTablePath.getTableName())
+                        .build();
+        TableInfo mappedTableInfo =
+                TableInfo.of(
+                        PARTITION_TABLE_INFO.getTablePath(),
+                        PARTITION_TABLE_INFO.getTableId(),
+                        PARTITION_TABLE_INFO.getSchemaId(),
+                        mappedDescriptor,
+                        PARTITION_TABLE_INFO.getRemoteDataDir(),
+                        PARTITION_TABLE_INFO.getCreatedTime(),
+                        PARTITION_TABLE_INFO.getModifiedTime());
+
+        lookup(manager, mappedTableInfo);
+
+        assertThat(manager.createdTablePaths).containsExactly(lakeTablePath);
+    }
+
+    @Test
     void testDoesNotReuseLookuperForRecreatedTable() throws Exception {
         TestingHistoricalLakeLookupManager manager = createTestingManager();
 
@@ -350,6 +378,7 @@ class HistoricalLakeLookupManagerTest {
     private static final class TestingHistoricalLakeLookupManager
             extends HistoricalLakeLookupManager {
         private final List<TestingLakeTableLookuper> createdLookupers = new ArrayList<>();
+        private final List<TablePath> createdTablePaths = new ArrayList<>();
         private final List<String> createdIoTmpDirs = new ArrayList<>();
         private final List<TableConfig> createdTableConfigs = new ArrayList<>();
         private final List<Long> createdCacheSizes = new ArrayList<>();
@@ -408,6 +437,7 @@ class HistoricalLakeLookupManagerTest {
             TestingLakeTableLookuper lookuper =
                     new TestingLakeTableLookuper(new File(ioTmpDir), lookupCacheFileBytes);
             createdLookupers.add(lookuper);
+            createdTablePaths.add(tablePath);
             createdIoTmpDirs.add(ioTmpDir);
             createdTableConfigs.add(tableConfig);
             createdCacheSizes.add(cacheSizeBytes);
