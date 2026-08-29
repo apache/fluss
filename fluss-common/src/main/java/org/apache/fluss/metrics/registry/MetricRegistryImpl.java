@@ -283,16 +283,14 @@ public class MetricRegistryImpl implements MetricRegistry {
             Metric metric,
             String metricName,
             AbstractMetricGroup group) {
+        final String logicalScope = group.getLogicalScope(NO_OP_FILTER, '.');
         for (ReporterAndSettings reporterAndSettings : reporters) {
             try {
                 if (reporterAndSettings != null
                         && reporterAndSettings
                                 .getSettings()
                                 .getFilter()
-                                .filter(
-                                        metric,
-                                        metricName,
-                                        group.getLogicalScope(NO_OP_FILTER, '.'))) {
+                                .filter(metric, metricName, logicalScope)) {
                     FrontMetricGroup<?> front =
                             new FrontMetricGroup<>(reporterAndSettings.getSettings(), group);
                     operation.accept(reporterAndSettings.getReporter(), metric, metricName, front);
