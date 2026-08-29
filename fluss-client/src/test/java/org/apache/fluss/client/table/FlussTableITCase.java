@@ -993,6 +993,14 @@ class FlussTableITCase extends ClientToServerITCaseBase {
             assertThat(lookupRow(lookuper, rowKey))
                     .isEqualTo(compactedRow(schema.getRowType(), new Object[] {1, "bbb", 200L}));
 
+            // a null in the NOT NULL target column c is rejected before anything is sent
+            assertThatThrownBy(() -> upsertWriter.upsert(row(1, null, null)))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessage(
+                            "Target column c is NOT NULL but the written row has no value for it.");
+            assertThat(lookupRow(lookuper, rowKey))
+                    .isEqualTo(compactedRow(schema.getRowType(), new Object[] {1, "bbb", 200L}));
+
             // a partial delete would null out the NOT NULL column c, and only the server can
             // tell, since it depends on the stored row
             assertThatThrownBy(() -> upsertWriter.delete(row(1, null, 200L)).get())
@@ -1106,6 +1114,78 @@ class FlussTableITCase extends ClientToServerITCaseBase {
             Lookuper lookuper = table.newLookup().createLookuper();
             assertThat(lookupRow(lookuper, row(1)))
                     .isEqualTo(compactedRow(schema.getRowType(), new Object[] {1, null, 100L}));
+        }
+    }
+
+    @Test
+    void testPartialUpdateOnFirstRowAndVersionedTable() throws Exception {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .column("c", DataTypes.BIGINT())
+                        .primaryKey("a")
+                        .build();
+
+        Map<String, String> firstRowProperties = new HashMap<>();
+        firstRowProperties.put(ConfigOptions.TABLE_MERGE_ENGINE.key(), "first_row");
+        TableDescriptor firstRowDescriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .distributedBy(3, "a")
+                        .properties(firstRowProperties)
+                        .build();
+        TablePath firstRowPath = TablePath.of("test_db_1", "test_first_row_partial_update");
+        createTable(firstRowPath, firstRowDescriptor, true);
+
+        Map<String, String> versionedProperties = new HashMap<>();
+        versionedProperties.put(ConfigOptions.TABLE_MERGE_ENGINE.key(), "versioned");
+        versionedProperties.put(ConfigOptions.TABLE_MERGE_ENGINE_VERSION_COLUMN.key(), "c");
+        TableDescriptor versionedDescriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .distributedBy(3, "a")
+                        .properties(versionedProperties)
+                        .build();
+        TablePath versionedPath = TablePath.of("test_db_1", "test_versioned_partial_update");
+        createTable(versionedPath, versionedDescriptor, true);
+
+        try (Table firstRowTable = conn.getTable(firstRowPath);
+                Table versionedTable = conn.getTable(versionedPath)) {
+            // both mergers reject partial update on the server at the first write, so the
+            // client rejects the writer at creation instead
+            assertThatThrownBy(
+                            () -> firstRowTable.newUpsert().partialUpdate("a", "b").createWriter())
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessage("Partial update is not supported for the first_row merge engine.");
+            assertThatThrownBy(
+                            () -> versionedTable.newUpsert().partialUpdate("a", "b").createWriter())
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessage("Partial update is not supported for the versioned merge engine.");
+
+            // OVERWRITE bypasses the configured merge engine on the server, which merges with
+            // the default merger instead, so partial update behaves as on an ordinary table
+            UpsertWriter firstRowOverwriteWriter =
+                    firstRowTable
+                            .newUpsert()
+                            .mergeMode(MergeMode.OVERWRITE)
+                            .partialUpdate("a", "b")
+                            .createWriter();
+            firstRowOverwriteWriter.upsert(row(1, "x", null)).get();
+            Lookuper firstRowLookuper = firstRowTable.newLookup().createLookuper();
+            assertThat(lookupRow(firstRowLookuper, row(1)))
+                    .isEqualTo(compactedRow(schema.getRowType(), new Object[] {1, "x", null}));
+
+            UpsertWriter versionedOverwriteWriter =
+                    versionedTable
+                            .newUpsert()
+                            .mergeMode(MergeMode.OVERWRITE)
+                            .partialUpdate("a", "b")
+                            .createWriter();
+            versionedOverwriteWriter.upsert(row(1, "y", null)).get();
+            Lookuper versionedLookuper = versionedTable.newLookup().createLookuper();
+            assertThat(lookupRow(versionedLookuper, row(1)))
+                    .isEqualTo(compactedRow(schema.getRowType(), new Object[] {1, "y", null}));
         }
     }
 

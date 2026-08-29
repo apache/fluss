@@ -36,6 +36,7 @@ import org.apache.fluss.types.RowType;
 
 import javax.annotation.Nullable;
 
+import java.util.Arrays;
 import java.util.BitSet;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -57,6 +58,9 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
 
     /** The merge mode for this writer. This controls how the server handles data merging. */
     private final MergeMode mergeMode;
+
+    /** Indexes of the NOT NULL target columns, empty when there is nothing to check. */
+    private final int[] notNullTargetColumns;
 
     UpsertWriterImpl(
             TablePath tablePath,
@@ -105,6 +109,21 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
 
         this.tableInfo = tableInfo;
         this.mergeMode = mergeMode;
+        this.notNullTargetColumns = findNotNullTargetColumns(rowType, partialUpdateColumns);
+    }
+
+    private static int[] findNotNullTargetColumns(RowType rowType, @Nullable int[] targetColumns) {
+        if (targetColumns == null) {
+            return new int[0];
+        }
+        int[] indexes = new int[targetColumns.length];
+        int count = 0;
+        for (int targetColumn : targetColumns) {
+            if (!rowType.getTypeAt(targetColumn).isNullable()) {
+                indexes[count++] = targetColumn;
+            }
+        }
+        return Arrays.copyOf(indexes, count);
     }
 
     private static void sanityCheck(
@@ -155,9 +174,22 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
             autoIncrementColumnSet.set(autoIncrementColumnIndex);
         }
 
-        // the aggregation merge engine does not null fill omitted columns on the first write, so
-        // it keeps requiring every column except the primary key to be nullable, like the server.
-        // OVERWRITE is exempt, since the server merges it with the default merger instead.
+        // the first_row and versioned mergers reject partial update outright on the server, at
+        // the first write, so fail at writer creation instead. OVERWRITE is exempt, since the
+        // server merges it with the default merger.
+        if (mergeMode != MergeMode.OVERWRITE) {
+            if (mergeEngineType == MergeEngineType.FIRST_ROW) {
+                throw new IllegalArgumentException(
+                        "Partial update is not supported for the first_row merge engine.");
+            } else if (mergeEngineType == MergeEngineType.VERSIONED) {
+                throw new IllegalArgumentException(
+                        "Partial update is not supported for the versioned merge engine.");
+            }
+        }
+
+        // the aggregation merge engine does not fill omitted columns with null on the first
+        // write, so it keeps requiring every column except the primary key to be nullable, like
+        // the server. OVERWRITE is exempt, since the server merges it with the default merger.
         if (mergeEngineType == MergeEngineType.AGGREGATION && mergeMode != MergeMode.OVERWRITE) {
             for (int i = 0; i < rowType.getFieldCount(); i++) {
                 if (!primaryKeys.contains(rowType.getFieldNames().get(i))
@@ -198,6 +230,7 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
     @Override
     public CompletableFuture<UpsertResult> upsert(InternalRow row) {
         checkFieldCount(row);
+        checkNotNullTargetColumns(row);
         byte[] key = primaryKeyEncoder.encodeKey(row);
         byte[] bucketKey =
                 bucketKeyEncoder == primaryKeyEncoder ? key : bucketKeyEncoder.encodeKey(row);
@@ -237,6 +270,23 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
                         targetColumns,
                         mergeMode);
         return sendWithResult(record, DeleteResult::new);
+    }
+
+    /**
+     * Rejects a null in a NOT NULL target column. Runs before any field getter or encoding, which
+     * would fail with a bare NullPointerException. Slightly stricter than the server when the
+     * target columns cover every schema column, since the server then skips the PartialUpdater, but
+     * such a row is not reachable through the public API.
+     */
+    private void checkNotNullTargetColumns(InternalRow row) {
+        for (int index : notNullTargetColumns) {
+            if (row.isNullAt(index)) {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Target column %s is NOT NULL but the written row has no value for it.",
+                                tableInfo.getRowType().getFieldNames().get(index)));
+            }
+        }
     }
 
     private BinaryRow encodeRow(InternalRow row) {

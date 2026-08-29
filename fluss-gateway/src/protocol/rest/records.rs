@@ -291,19 +291,24 @@ fn sparse_targets(
             ));
         }
     }
+    // A listed target column may be NOT NULL. The sparse decoder requires it to be present
+    // with a non-null value in every upsert row.
     for field in fields {
-        if table
-            .get_primary_keys()
-            .iter()
-            .any(|key| key == field.name())
-            || auto_increment.iter().any(|name| name == field.name())
-        {
+        if selected.contains(field.name()) {
             continue;
         }
         if !field.data_type().is_nullable() {
+            if auto_increment.iter().any(|name| name == field.name()) {
+                return Err(RowDecodeError::schema_mismatch(
+                    GatewayError::invalid_argument(format!(
+                        "a partial update requires the auto-increment column `{}` to be nullable, since it is always omitted from the target columns and assigned by the server",
+                        field.name()
+                    )),
+                ));
+            }
             return Err(RowDecodeError::schema_mismatch(
                 GatewayError::invalid_argument(format!(
-                    "a partial update requires every non-primary-key, non-auto-increment column to be nullable, but column `{}` is NOT NULL",
+                    "a partial update requires every column omitted from the target columns to be nullable, but omitted column `{}` is NOT NULL",
                     field.name()
                 )),
             ));
@@ -397,11 +402,12 @@ fn ensure_json_acceptable(headers: &axum::http::HeaderMap) -> GatewayResult<()> 
 pub struct WriteBody<T> {
     /// Columns targeted by every entry in this batch. KV tables only.
     ///
-    /// Every primary-key column must be included, and every non-primary-key,
-    /// non-auto-increment column in the table must be nullable. Missing or explicit-null nullable
-    /// targets are written as null; untargeted columns are preserved. Deletes require only
-    /// primary-key values and clear the targeted non-key columns; the row is removed when all
-    /// non-key columns become null.
+    /// Every primary-key column must be included, and every column omitted from the target
+    /// columns must be nullable. A NOT NULL target column must be present with a non-null value
+    /// in every upsert row. Missing or explicit-null nullable targets are written as null, and
+    /// untargeted columns are preserved. Deletes require only primary-key values and clear the
+    /// targeted non-key columns, so Fluss rejects a delete that would null a NOT NULL target
+    /// column. The row is removed when all non-key columns become null.
     #[serde(default)]
     #[schema(min_items = 1)]
     pub partial_update_columns: Option<Vec<String>>,
@@ -743,8 +749,8 @@ mod tests {
         assert!(sparse_targets(&table, None).unwrap().is_none());
     }
 
-    #[test]
-    fn partial_updates_require_nullable_non_key_columns() {
+    /// A KV table whose non-key column `name` is NOT NULL, legal as a partial-update target.
+    fn strict_table_info(table: &str) -> TableInfo {
         let schema = Schema::builder()
             .column(
                 "id",
@@ -762,11 +768,94 @@ mod tests {
             .distributed_by(Some(1), Vec::new())
             .build()
             .unwrap();
-        let table = TableInfo::of(TablePath::new("fluss", "strict"), 1, 1, descriptor, 0, 0);
+        TableInfo::of(TablePath::new("fluss", table), 1, 1, descriptor, 0, 0)
+    }
 
-        let error =
-            sparse_targets(&table, Some(&["id".to_string(), "name".to_string()])).unwrap_err();
-        assert!(error.message().contains("column `name` is NOT NULL"));
+    #[test]
+    fn partial_updates_require_omitted_columns_to_be_nullable() {
+        let table = strict_table_info("strict");
+
+        let targets = vec!["id".to_string(), "name".to_string()];
+        assert_eq!(
+            sparse_targets(&table, Some(&targets)).unwrap(),
+            Some(targets)
+        );
+
+        let error = sparse_targets(&table, Some(&["id".to_string()])).unwrap_err();
+        assert!(
+            error
+                .message()
+                .contains("omitted column `name` is NOT NULL"),
+            "got {}",
+            error.message()
+        );
+    }
+
+    /// A KV table with one auto-increment column `seq` of the given nullability.
+    fn auto_increment_table_info(seq_nullable: bool) -> TableInfo {
+        let schema = Schema::builder()
+            .column(
+                "id",
+                DataType::Int(fluss::metadata::IntType::with_nullable(false)),
+            )
+            .column(
+                "seq",
+                DataType::BigInt(fluss::metadata::BigIntType::with_nullable(seq_nullable)),
+            )
+            .column("name", DataType::String(fluss::metadata::StringType::new()))
+            .primary_key(["id"])
+            .enable_auto_increment("seq")
+            .unwrap()
+            .build()
+            .unwrap();
+        let descriptor = TableDescriptor::builder()
+            .schema(schema)
+            .distributed_by(Some(1), Vec::new())
+            .build()
+            .unwrap();
+        TableInfo::of(TablePath::new("fluss", "counters"), 1, 1, descriptor, 0, 0)
+    }
+
+    #[test]
+    fn omitted_auto_increment_columns_follow_the_nullable_rule_with_a_dedicated_message() {
+        let error = sparse_targets(&auto_increment_table_info(false), Some(&["id".to_string()]))
+            .unwrap_err();
+        assert!(
+            error.message().contains(
+                "requires the auto-increment column `seq` to be nullable, since it is always \
+                 omitted from the target columns and assigned by the server"
+            ),
+            "got {}",
+            error.message()
+        );
+
+        assert_eq!(
+            sparse_targets(&auto_increment_table_info(true), Some(&["id".to_string()])).unwrap(),
+            Some(vec!["id".to_string()])
+        );
+    }
+
+    /// A delete decodes only the primary key, so a NOT NULL non-key target column is fine at
+    /// preflight and the server judges it per row against the stored data.
+    #[test]
+    fn a_delete_entry_is_accepted_under_a_not_null_target_column() {
+        let table = strict_table_info("strict");
+        let targets = vec!["id".to_string(), "name".to_string()];
+        assert_eq!(
+            sparse_targets(&table, Some(&targets)).unwrap(),
+            Some(targets)
+        );
+
+        let decoder = SchemaDecoder::new(table.row_type().clone()).unwrap();
+        assert!(
+            decoder
+                .decode_row(
+                    "entry `d1`",
+                    br#"{"id":7}"#,
+                    RowShape::Sparse(table.get_primary_keys()),
+                )
+                .is_ok()
+        );
     }
 
     async fn post(app: &axum::Router, path: &str, body: &str) -> (StatusCode, serde_json::Value) {
@@ -1150,5 +1239,58 @@ mod tests {
             recorded[0].as_deref(),
             Some(&["id".to_string(), "name".to_string()][..])
         );
+    }
+
+    /// A NOT NULL target column is legal, but every upsert row must then carry a non-null value
+    /// for it. A row that omits it or sends null is rejected with 400 before submission, the
+    /// endpoint's contract for validation failures.
+    #[tokio::test]
+    async fn a_not_null_target_column_is_accepted_and_enforced_per_row() {
+        let backend = Arc::new(
+            FakeFlussBackend::with_catalog(&[("fluss", &["strict"])])
+                .with_table(strict_table_info("strict")),
+        );
+        let app = app(Arc::clone(&backend));
+        let path = "/v1/clusters/default/databases/fluss/tables/strict/records";
+
+        for (body, expected_in_message) in [
+            (
+                r#"{"partial_update_columns":["id","name"],
+                    "entries":[{"id":"e1","upsert":{"id":1,"name":"ada"}},
+                               {"id":"e2","upsert":{"id":2}}]}"#,
+                "entry `e2`: column `name` is required and was not provided",
+            ),
+            (
+                r#"{"partial_update_columns":["id","name"],
+                    "entries":[{"id":"e1","upsert":{"id":1,"name":"ada"}},
+                               {"id":"e2","upsert":{"id":2,"name":null}}]}"#,
+                "entry `e2`: column `name` must not be null",
+            ),
+            (
+                r#"{"partial_update_columns":["id"],
+                    "entries":[{"id":"e1","upsert":{"id":1}}]}"#,
+                "omitted column `name` is NOT NULL",
+            ),
+        ] {
+            let (status, response) = post(&app, path, body).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "body: {body}");
+            let message = response["error"]["message"].as_str().unwrap();
+            assert!(
+                message.contains(expected_in_message),
+                "body {body} gave message {message}"
+            );
+        }
+        assert!(backend.writes().is_empty());
+
+        let (status, response) = post(
+            &app,
+            path,
+            r#"{"partial_update_columns":["id","name"],
+                "entries":[{"id":"e1","upsert":{"id":1,"name":"ada"}}]}"#,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(response["success_count"], 1);
+        assert_eq!(backend.writes().len(), 1);
     }
 }

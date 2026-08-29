@@ -21,8 +21,8 @@ import org.apache.fluss.exception.InvalidTargetColumnException;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.record.BinaryValue;
-import org.apache.fluss.row.compacted.CompactedRow;
-import org.apache.fluss.row.compacted.CompactedRowDeserializer;
+import org.apache.fluss.row.BinaryRow;
+import org.apache.fluss.row.decode.RowDecoder;
 import org.apache.fluss.types.BigIntType;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
@@ -33,6 +33,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
 import static org.apache.fluss.testutils.DataTestUtils.compactedRow;
+import static org.apache.fluss.testutils.DataTestUtils.indexedRow;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -146,13 +147,17 @@ class PartialUpdaterTest {
 
         BinaryValue merged =
                 partialUpdater.updateRow(
-                        binaryValue(SCHEMA, 1, "old", "oldC"), row(1, null, "newC"));
+                        binaryValue(kvFormat, SCHEMA, 1, "old", "oldC"),
+                        row(kvFormat, 1, null, "newC"));
         assertThat(merged.row.getString(1).toString()).isEqualTo("old");
         assertThat(merged.row.getString(2).toString()).isEqualTo("newC");
 
         // a null in a non-nullable slot has to be caught rather than encoded. the row is typed
         // with SCHEMA as the server types it, so the guard has to fire before any deserialization
-        assertThatThrownBy(() -> partialUpdater.updateRow(null, asServerTypedRow(1, "b", null)))
+        assertThatThrownBy(
+                        () ->
+                                partialUpdater.updateRow(
+                                        null, asServerTypedRow(kvFormat, 1, "b", null)))
                 .isInstanceOf(InvalidTargetColumnException.class)
                 .hasMessage("Target column c is NOT NULL but the written row has no value for it.");
     }
@@ -163,14 +168,15 @@ class PartialUpdaterTest {
         PartialUpdater partialUpdater =
                 new PartialUpdater(kvFormat, SCHEMA_ID, SCHEMA, new int[] {0, 2});
 
-        assertThatThrownBy(() -> partialUpdater.deleteRow(binaryValue(SCHEMA, 1, "b", "c")))
+        assertThatThrownBy(
+                        () -> partialUpdater.deleteRow(binaryValue(kvFormat, SCHEMA, 1, "b", "c")))
                 .isInstanceOf(InvalidTargetColumnException.class)
                 .hasMessage(
                         "Partial Delete sets the target columns to null, so it requires all target columns "
                                 + "except primary key to be nullable, but target column c is NOT NULL.");
 
         // b is already null, so the row is removed outright and nothing is nulled
-        assertThat(partialUpdater.deleteRow(binaryValue(SCHEMA, 1, null, "c"))).isNull();
+        assertThat(partialUpdater.deleteRow(binaryValue(kvFormat, SCHEMA, 1, null, "c"))).isNull();
     }
 
     @ParameterizedTest
@@ -179,7 +185,8 @@ class PartialUpdaterTest {
         PartialUpdater partialUpdater =
                 new PartialUpdater(kvFormat, SCHEMA_ID, NULLABLE_SCHEMA, new int[] {0, 2});
 
-        BinaryValue deleted = partialUpdater.deleteRow(binaryValue(NULLABLE_SCHEMA, 1, "b", "c"));
+        BinaryValue deleted =
+                partialUpdater.deleteRow(binaryValue(kvFormat, NULLABLE_SCHEMA, 1, "b", "c"));
 
         assertThat(deleted).isNotNull();
         assertThat(deleted.row.getString(1).toString()).isEqualTo("b");
@@ -201,26 +208,34 @@ class PartialUpdaterTest {
     }
 
     /** A row of {@link #NULLABLE_SCHEMA}, usable as the partial value for any of the schemas. */
-    private static BinaryValue row(int a, String b, String c) {
-        return binaryValue(NULLABLE_SCHEMA, a, b, c);
+    private static BinaryValue row(KvFormat kvFormat, int a, String b, String c) {
+        return binaryValue(kvFormat, NULLABLE_SCHEMA, a, b, c);
     }
 
     /**
      * The same bytes as {@link #row}, but typed with {@link #SCHEMA} the way the server types an
-     * incoming record. Reading any field of it deserializes the whole row and fails on the null
-     * that {@code c} is not allowed to hold.
+     * incoming record. Both formats size the null-bit header from the field count alone, and the
+     * guard reads only that header, so the null in {@code c} reaches the guard.
      */
-    private static BinaryValue asServerTypedRow(int a, String b, String c) {
-        CompactedRow encoded = compactedRow(NULLABLE_SCHEMA.getRowType(), new Object[] {a, b, c});
+    private static BinaryValue asServerTypedRow(KvFormat kvFormat, int a, String b, String c) {
+        BinaryRow encoded = encodeRow(kvFormat, NULLABLE_SCHEMA, a, b, c);
         byte[] bytes = new byte[encoded.getSizeInBytes()];
         encoded.copyTo(bytes, 0);
         DataType[] types = SCHEMA.getRowType().getChildren().toArray(new DataType[0]);
-        return new BinaryValue(
-                SCHEMA_ID, CompactedRow.from(types, bytes, new CompactedRowDeserializer(types)));
+        return new BinaryValue(SCHEMA_ID, RowDecoder.create(kvFormat, types).decode(bytes));
     }
 
-    private static BinaryValue binaryValue(Schema schema, int a, String b, String c) {
-        return new BinaryValue(
-                SCHEMA_ID, compactedRow(schema.getRowType(), new Object[] {a, b, c}));
+    private static BinaryValue binaryValue(
+            KvFormat kvFormat, Schema schema, int a, String b, String c) {
+        return new BinaryValue(SCHEMA_ID, encodeRow(kvFormat, schema, a, b, c));
+    }
+
+    /** Builds the row in the concrete type of the kv format, as the server read path does. */
+    private static BinaryRow encodeRow(
+            KvFormat kvFormat, Schema schema, int a, String b, String c) {
+        Object[] values = new Object[] {a, b, c};
+        return kvFormat == KvFormat.INDEXED
+                ? indexedRow(schema.getRowType(), values)
+                : compactedRow(schema.getRowType(), values);
     }
 }
