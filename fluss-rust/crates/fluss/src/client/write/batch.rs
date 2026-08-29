@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::TableId;
 use crate::client::broadcast::{BatchWriteResult, BroadcastOnce};
 use crate::client::{Record, ResultHandle, WriteRecord};
 use crate::error::{Error, Result};
@@ -30,6 +31,7 @@ use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 pub struct InnerWriteBatch {
     batch_id: i64,
     physical_table_path: Arc<PhysicalTablePath>,
+    table_id: TableId,
     create_ms: i64,
     results: BroadcastOnce<BatchWriteResult>,
     completed: AtomicBool,
@@ -40,10 +42,16 @@ pub struct InnerWriteBatch {
 }
 
 impl InnerWriteBatch {
-    fn new(batch_id: i64, physical_table_path: Arc<PhysicalTablePath>, create_ms: i64) -> Self {
+    fn new(
+        batch_id: i64,
+        physical_table_path: Arc<PhysicalTablePath>,
+        table_id: TableId,
+        create_ms: i64,
+    ) -> Self {
         InnerWriteBatch {
             batch_id,
             physical_table_path,
+            table_id,
             create_ms,
             results: Default::default(),
             completed: AtomicBool::new(false),
@@ -96,6 +104,10 @@ impl InnerWriteBatch {
 
     fn physical_table_path(&self) -> &Arc<PhysicalTablePath> {
         &self.physical_table_path
+    }
+
+    fn table_id(&self) -> TableId {
+        self.table_id
     }
 
     fn attempts(&self) -> i32 {
@@ -203,6 +215,10 @@ impl WriteBatch {
         self.inner_batch().physical_table_path()
     }
 
+    pub fn table_id(&self) -> TableId {
+        self.inner_batch().table_id()
+    }
+
     pub fn attempts(&self) -> i32 {
         self.inner_batch().attempts()
     }
@@ -245,11 +261,12 @@ impl ArrowLogWriteBatch {
     pub(crate) fn new(
         batch_id: i64,
         physical_table_path: Arc<PhysicalTablePath>,
+        table_id: TableId,
         config: ArrowBatchConfig,
         create_ms: i64,
         to_append_record_batch: bool,
     ) -> Result<Self> {
-        let base = InnerWriteBatch::new(batch_id, physical_table_path, create_ms);
+        let base = InnerWriteBatch::new(batch_id, physical_table_path, table_id, create_ms);
         Ok(Self {
             write_batch: base,
             arrow_builder: MemoryLogRecordsArrowBuilder::new(config, to_append_record_batch)?,
@@ -325,13 +342,14 @@ impl KvWriteBatch {
     pub fn new(
         batch_id: i64,
         physical_table_path: Arc<PhysicalTablePath>,
+        table_id: TableId,
         schema_id: i32,
         write_limit: usize,
         kv_format: KvFormat,
         target_columns: Option<Arc<Vec<usize>>>,
         create_ms: i64,
     ) -> Self {
-        let base = InnerWriteBatch::new(batch_id, physical_table_path, create_ms);
+        let base = InnerWriteBatch::new(batch_id, physical_table_path, table_id, create_ms);
         Self {
             write_batch: base,
             kv_batch_builder: KvRecordBatchBuilder::new(schema_id, write_limit, kv_format),
@@ -440,7 +458,7 @@ mod tests {
     fn complete_only_once() {
         let table_path = TablePath::new("db".to_string(), "tbl".to_string());
         let physical_path = PhysicalTablePath::of(Arc::new(table_path));
-        let batch = InnerWriteBatch::new(1, Arc::new(physical_path), 0);
+        let batch = InnerWriteBatch::new(1, Arc::new(physical_path), 1, 0);
         assert!(batch.complete(Ok(())));
         assert!(!batch.complete(Err(crate::client::broadcast::Error::Dropped)));
     }
@@ -449,7 +467,7 @@ mod tests {
     fn attempts_increment_on_reenqueue() {
         let table_path = TablePath::new("db".to_string(), "tbl".to_string());
         let physical_path = PhysicalTablePath::of(Arc::new(table_path));
-        let batch = InnerWriteBatch::new(1, Arc::new(physical_path), 0);
+        let batch = InnerWriteBatch::new(1, Arc::new(physical_path), 1, 0);
         assert_eq!(batch.attempts(), 0);
         batch.re_enqueued();
         assert_eq!(batch.attempts(), 1);
@@ -459,7 +477,7 @@ mod tests {
     fn queue_time_ms_is_drained_minus_create() {
         let table_path = TablePath::new("db".to_string(), "tbl".to_string());
         let physical_path = PhysicalTablePath::of(Arc::new(table_path));
-        let mut batch = InnerWriteBatch::new(1, Arc::new(physical_path), 1_000);
+        let mut batch = InnerWriteBatch::new(1, Arc::new(physical_path), 1, 1_000);
         // Not drained yet -> 0 (drained_ms == -1).
         assert_eq!(batch.queue_time_ms(), 0);
         batch.drained(1_150);
@@ -487,6 +505,7 @@ mod tests {
         let arrow_batch = ArrowLogWriteBatch::new(
             1,
             Arc::clone(&physical_table_path),
+            1,
             uncompressed_config(&row_type, 2 * 1024 * 1024),
             0,
             false,
@@ -521,6 +540,7 @@ mod tests {
         let mut batch = WriteBatch::Kv(KvWriteBatch::new(
             1,
             Arc::clone(&physical_path),
+            1,
             1,
             64 * 1024,
             KvFormat::COMPACTED,
@@ -566,6 +586,7 @@ mod tests {
             let mut batch = ArrowLogWriteBatch::new(
                 1,
                 Arc::clone(&physical_table_path),
+                1,
                 uncompressed_config(&row_type, 2 * 1024 * 1024),
                 0,
                 false,
@@ -605,6 +626,7 @@ mod tests {
             let mut batch = ArrowLogWriteBatch::new(
                 1,
                 physical_table_path.clone(),
+                1,
                 uncompressed_config(&row_type, 2 * 1024 * 1024),
                 0,
                 true,
@@ -658,6 +680,7 @@ mod tests {
         let mut batch = KvWriteBatch::new(
             1,
             Arc::clone(&physical_path),
+            1,
             1,
             256,
             KvFormat::COMPACTED,
@@ -716,6 +739,7 @@ mod tests {
         let mut batch = ArrowLogWriteBatch::new(
             1,
             Arc::clone(&physical_table_path),
+            1,
             uncompressed_config(&row_type, write_limit),
             0,
             false,
@@ -759,6 +783,7 @@ mod tests {
         let mut batch = ArrowLogWriteBatch::new(
             2,
             Arc::clone(&physical_table_path),
+            1,
             uncompressed_config(&row_type_small, 2 * 1024 * 1024),
             0,
             false,
@@ -796,6 +821,7 @@ mod tests {
         let mut batch1 = ArrowLogWriteBatch::new(
             3,
             Arc::clone(&physical_table_path),
+            1,
             ArrowBatchConfig {
                 schema_id: 1,
                 row_type: row_type.clone(),
@@ -836,6 +862,7 @@ mod tests {
         let mut batch2 = ArrowLogWriteBatch::new(
             4,
             Arc::clone(&physical_table_path),
+            1,
             ArrowBatchConfig {
                 schema_id: 1,
                 row_type: row_type.clone(),

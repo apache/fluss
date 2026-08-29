@@ -3633,4 +3633,211 @@ mod table_test {
 
         admin.drop_table(&table_path, false).await.expect("drop");
     }
+
+    /// A pending write to a dropped table must complete with TableNotExist
+    /// instead of retrying UnknownTableOrBucketException forever, and the
+    /// stale table metadata must be evicted so later writes fail fast.
+    #[tokio::test]
+    async fn write_after_drop_completes_with_table_not_exist() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("admin");
+
+        let table_path = TablePath::new("fluss", "test_log_write_after_drop");
+        let descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("c1", DataTypes::int())
+                    .build()
+                    .expect("schema"),
+            )
+            .distributed_by(Some(1), vec![])
+            .build()
+            .expect("descriptor");
+        create_table(&admin, &table_path, &descriptor).await;
+        wait_for_table_ready(&admin, &table_path).await;
+
+        let table = connection.get_table(&table_path).await.expect("table");
+        let writer = table
+            .new_append()
+            .expect("append")
+            .create_writer()
+            .expect("writer");
+
+        // Warm the metadata cache with a successful write.
+        let mut row = GenericRow::new(1);
+        row.set_field(0, 1);
+        writer
+            .append(&row)
+            .expect("append")
+            .await
+            .expect("first write");
+
+        admin.drop_table(&table_path, false).await.expect("drop");
+
+        // Append until a write observes the drop, tolerating writes that still
+        // succeed while the drop propagates to the tablet servers. Every write
+        // shares one budget, so a write left retrying trips the timeout instead
+        // of running until the caller's own deadline.
+        let deadline = std::time::Instant::now() + DEFAULT_POLL_TIMEOUT;
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            assert!(
+                !remaining.is_zero(),
+                "writes kept succeeding after the table was dropped"
+            );
+            let result = match writer.append(&row) {
+                Ok(write_future) => tokio::time::timeout(remaining, write_future)
+                    .await
+                    .expect("write must settle promptly instead of retrying until the deadline"),
+                Err(error) => Err(error),
+            };
+            match result {
+                Ok(()) => tokio::time::sleep(Duration::from_millis(500)).await,
+                Err(error) => {
+                    assert_eq!(
+                        error.api_error(),
+                        Some(FlussError::TableNotExist),
+                        "Expected TableNotExist error, got {:?}",
+                        error
+                    );
+                    break;
+                }
+            }
+        }
+
+        // The stale metadata is evicted, so the next append fails fast rather
+        // than hanging or panicking in the bucket assigner, and it reports the
+        // same error as the write that observed the drop.
+        let error = writer
+            .append(&row)
+            .expect_err("append after eviction must fail");
+        assert_eq!(
+            error.api_error(),
+            Some(FlussError::TableNotExist),
+            "Expected TableNotExist error, got {:?}",
+            error
+        );
+    }
+
+    /// Drives real rows through a live cluster across a drop and a recreate of
+    /// the same path, covering both table instance behaviours end to end.
+    #[tokio::test]
+    async fn real_data_survives_drop_and_recreate_of_the_same_path() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("admin");
+
+        let table_path = TablePath::new("fluss", "test_real_data_drop_recreate");
+        let descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("c1", DataTypes::int())
+                    .column("c2", DataTypes::string())
+                    .build()
+                    .expect("schema"),
+            )
+            .distributed_by(Some(3), vec!["c1".to_string()])
+            .build()
+            .expect("descriptor");
+        create_table(&admin, &table_path, &descriptor).await;
+        wait_for_table_buckets_ready(&admin, &table_path, &[0, 1, 2]).await;
+
+        // Real rows across all three buckets must persist before the drop.
+        let table = connection.get_table(&table_path).await.expect("table");
+        let writer = table
+            .new_append()
+            .expect("append")
+            .create_writer()
+            .expect("writer");
+        let batch = record_batch!(
+            ("c1", Int32, [1, 2, 3, 4, 5, 6, 7, 8, 9]),
+            ("c2", Utf8, ["a", "b", "c", "d", "e", "f", "g", "h", "i"])
+        )
+        .unwrap();
+        writer.append_arrow_batch(batch).expect("append batch");
+        writer.flush().await.expect("flush");
+        let offsets = admin
+            .list_offsets(&table_path, &[0, 1, 2], OffsetSpec::Latest)
+            .await
+            .expect("list offsets");
+        let total: i64 = offsets.values().sum();
+        assert_eq!(total, 9, "all rows must persist, got {offsets:?}");
+
+        admin.drop_table(&table_path, false).await.expect("drop");
+
+        // Writes settle with TableNotExist instead of retrying to the deadline.
+        let mut row = GenericRow::new(2);
+        row.set_field(0, 42);
+        row.set_field(1, "after-drop");
+        let deadline = std::time::Instant::now() + DEFAULT_POLL_TIMEOUT;
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            assert!(
+                !remaining.is_zero(),
+                "writes kept succeeding after the drop"
+            );
+            let result = match writer.append(&row) {
+                Ok(write_future) => tokio::time::timeout(remaining, write_future)
+                    .await
+                    .expect("write must settle, not retry to the deadline"),
+                Err(error) => Err(error),
+            };
+            match result {
+                Ok(()) => tokio::time::sleep(Duration::from_millis(500)).await,
+                Err(error) => {
+                    assert_eq!(
+                        error.api_error(),
+                        Some(FlussError::TableNotExist),
+                        "Expected TableNotExist, got {:?}",
+                        error
+                    );
+                    break;
+                }
+            }
+        }
+
+        // The writer sees the drop before the coordinator finishes clearing it,
+        // so wait for the server side to settle before recreating the path.
+        let deadline = std::time::Instant::now() + DEFAULT_POLL_TIMEOUT;
+        while admin.table_exists(&table_path).await.unwrap_or(true) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the dropped table never disappeared server side"
+            );
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+
+        // The recreated path must hold only rows written to the new table instance.
+        create_table(&admin, &table_path, &descriptor).await;
+        wait_for_table_buckets_ready(&admin, &table_path, &[0, 1, 2]).await;
+
+        let fresh_table = connection.get_table(&table_path).await.expect("table");
+        let fresh_writer = fresh_table
+            .new_append()
+            .expect("append")
+            .create_writer()
+            .expect("writer");
+        let batch2 = record_batch!(
+            ("c1", Int32, [10, 11, 12, 13]),
+            ("c2", Utf8, ["j", "k", "l", "m"])
+        )
+        .unwrap();
+        fresh_writer
+            .append_arrow_batch(batch2)
+            .expect("append batch");
+        fresh_writer.flush().await.expect("flush");
+
+        let offsets = admin
+            .list_offsets(&table_path, &[0, 1, 2], OffsetSpec::Latest)
+            .await
+            .expect("list offsets");
+        let total: i64 = offsets.values().sum();
+        assert_eq!(
+            total, 4,
+            "the recreated table must hold only its own rows, got {offsets:?}"
+        );
+
+        admin.drop_table(&table_path, false).await.expect("drop");
+    }
 }

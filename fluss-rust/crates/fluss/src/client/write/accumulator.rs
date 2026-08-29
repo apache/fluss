@@ -24,8 +24,8 @@ use crate::client::{LogWriteRecord, Record, ResultHandle, WriteRecord};
 use crate::cluster::{BucketLocation, Cluster, ServerNode};
 use crate::compression::ArrowCompressionRatioEstimator;
 use crate::config::Config;
-use crate::error::{Error, Result};
-use crate::metadata::{PhysicalTablePath, TableBucket};
+use crate::error::{Error, FlussError, Result};
+use crate::metadata::{PhysicalTablePath, TableBucket, TablePath};
 use crate::record::{ArrowBatchConfig, NO_BATCH_SEQUENCE, NO_WRITER_ID};
 use crate::util::current_time_ms;
 use crate::{BucketId, PartitionId, TableId};
@@ -254,6 +254,10 @@ impl RecordAccumulator {
     ) -> Result<Option<RecordAppendResult>> {
         let dq_size = dq.len();
         if let Some(last_batch) = dq.back_mut() {
+            // A recreated path shares one queue, so keep table instances apart.
+            if last_batch.table_id() != record.table_info.table_id {
+                return Ok(None);
+            }
             return if let Some(result_handle) = last_batch.try_append(record)? {
                 Ok(Some(RecordAppendResult::new(
                     result_handle,
@@ -299,6 +303,7 @@ impl RecordAccumulator {
             Record::Log(_) => ArrowLog(ArrowLogWriteBatch::new(
                 self.batch_id.fetch_add(1, Ordering::Relaxed),
                 Arc::clone(physical_table_path),
+                record.table_info.table_id,
                 ArrowBatchConfig {
                     schema_id,
                     row_type: row_type.clone(),
@@ -313,6 +318,7 @@ impl RecordAccumulator {
             Record::Kv(kv_record) => Kv(KvWriteBatch::new(
                 self.batch_id.fetch_add(1, Ordering::Relaxed),
                 Arc::clone(physical_table_path),
+                record.table_info.table_id,
                 schema_id,
                 alloc_size,
                 record.write_format.to_kv_format()?,
@@ -364,12 +370,7 @@ impl RecordAccumulator {
                 .write_batches
                 .entry(Arc::clone(physical_table_path))
                 .or_insert_with(|| {
-                    BucketAndWriteBatches::new(
-                        table_info.table_id,
-                        is_partitioned_table,
-                        partition_id,
-                        &self.config,
-                    )
+                    BucketAndWriteBatches::new(is_partitioned_table, partition_id, &self.config)
                 });
             let bucket_and_batches = binding.value_mut();
             let dq = bucket_and_batches
@@ -519,7 +520,11 @@ impl RecordAccumulator {
             let waited_time_ms = batch.waited_time_ms(current_time_ms());
             let deque_size = batch_guard.len();
             let full = deque_size > 1 || batch.is_closed();
-            let table_bucket = cluster.get_table_bucket(physical_table_path, bucket_id)?;
+            // An evicted table must not stall the check every table shares.
+            let Ok(table_bucket) = cluster.get_table_bucket(physical_table_path, bucket_id) else {
+                unknown_leader_tables.insert(Arc::clone(physical_table_path));
+                return Ok(next_delay);
+            };
             if let Some(expiry) = self.throttle_expiry_ms.get(&table_bucket).map(|e| *e) {
                 let remaining = expiry.saturating_sub(current_time_ms());
                 if remaining > 0 {
@@ -711,32 +716,58 @@ impl RecordAccumulator {
 
             if let Some(deque) = deque {
                 let mut maybe_batch = None;
+                let mut stale_batches = Vec::new();
                 {
                     let mut batch_lock = deque.lock();
-                    if !batch_lock.is_empty() {
-                        let first_batch = batch_lock.front().unwrap();
-
-                        if size + first_batch.estimated_size_in_bytes() > max_size as usize
-                            && !ready.is_empty()
-                        {
-                            // there is a rare case that a single batch size is larger than the request size
-                            // due to compression; in this case we will still eventually send this batch in
-                            // a single request.
-                            break;
-                        }
-
-                        // Improvement: `continue` instead of `break` to skip
-                        // only this bucket, not all buckets for the node.
-                        if self.should_stop_drain_batches_for_bucket(first_batch, &table_bucket) {
+                    let head_table_id = batch_lock.front().map(|batch| batch.table_id());
+                    if let Some(head_table_id) = head_table_id {
+                        if head_table_id < table_bucket.table_id() {
+                            // Table ids only ever grow, so a lower one means these belong to
+                            // a dropped table. Take every consecutive stale head batch in one
+                            // pass, ahead of the checks that gate batches actually being sent.
+                            while batch_lock
+                                .front()
+                                .is_some_and(|batch| batch.table_id() == head_table_id)
+                            {
+                                stale_batches.push(batch_lock.pop_front().unwrap());
+                            }
+                        } else if head_table_id > table_bucket.table_id() {
+                            // This snapshot predates a recreate the appender already saw.
+                            // Sending under the old id would write to the dropped table, so
+                            // leave the batch for a cycle with fresher metadata.
                             if current_index == start {
                                 break;
                             }
                             continue;
-                        }
+                        } else {
+                            let first_batch = batch_lock.front().unwrap();
 
-                        maybe_batch = Some(batch_lock.pop_front().unwrap());
+                            if size + first_batch.estimated_size_in_bytes() > max_size as usize
+                                && !ready.is_empty()
+                            {
+                                // there is a rare case that a single batch size is larger than the request size
+                                // due to compression; in this case we will still eventually send this batch in
+                                // a single request.
+                                break;
+                            }
+
+                            // Improvement: `continue` instead of `break` to skip
+                            // only this bucket, not all buckets for the node.
+                            if self.should_stop_drain_batches_for_bucket(first_batch, &table_bucket)
+                            {
+                                if current_index == start {
+                                    break;
+                                }
+                                continue;
+                            }
+
+                            maybe_batch = Some(batch_lock.pop_front().unwrap());
+                        }
                     }
                 }
+
+                // Outside the deque lock, so waking a writer never runs under it.
+                self.fail_stale_batches(table_path, &table_bucket, stale_batches);
 
                 if let Some(ref mut batch) = maybe_batch {
                     // Assign writer state to fresh batches (matching Java's drain loop)
@@ -911,7 +942,6 @@ impl RecordAccumulator {
     ) -> Arc<Mutex<VecDeque<WriteBatch>>> {
         let physical_table_path = ready_write_batch.write_batch.physical_table_path();
         let bucket_id = ready_write_batch.table_bucket.bucket_id();
-        let table_id = ready_write_batch.table_bucket.table_id();
         let partition_id = ready_write_batch.table_bucket.partition_id();
         let is_partitioned_table = partition_id.is_some();
 
@@ -919,12 +949,7 @@ impl RecordAccumulator {
             .write_batches
             .entry(Arc::clone(physical_table_path))
             .or_insert_with(|| {
-                BucketAndWriteBatches::new(
-                    table_id,
-                    is_partitioned_table,
-                    partition_id,
-                    &self.config,
-                )
+                BucketAndWriteBatches::new(is_partitioned_table, partition_id, &self.config)
             });
         let bucket_and_batches = binding.value_mut();
         bucket_and_batches
@@ -965,6 +990,102 @@ impl RecordAccumulator {
             handle.fail(error.clone());
         }
         incomplete.clear();
+    }
+
+    /// Fails the queued batches of `table_path` that were appended under
+    /// `table_id`, so a dropped table's pending writes complete instead of
+    /// waiting on a leader that never arrives. Batches belonging to another
+    /// table instance of the same path are kept, in order, since a drop and
+    /// recreate leaves both sharing one queue. In-flight batches are failed by
+    /// the sender. The map entries are kept, as in `abort_batches`, so a
+    /// concurrent `append` cannot strand a batch in a deque nothing owns.
+    pub fn fail_batches_for_table(
+        &self,
+        table_path: &TablePath,
+        table_id: TableId,
+        error: broadcast::Error,
+    ) {
+        let mut completed_batch_ids = Vec::new();
+        for mut entry in self
+            .write_batches
+            .iter_mut()
+            .filter(|entry| entry.key().get_table_path() == table_path)
+        {
+            for deque in entry.value_mut().batches.values_mut() {
+                let stale: Vec<WriteBatch> = {
+                    let mut dq = deque.lock();
+                    let mut kept = VecDeque::with_capacity(dq.len());
+                    let mut stale = Vec::new();
+                    while let Some(batch) = dq.pop_front() {
+                        if batch.table_id() == table_id {
+                            stale.push(batch);
+                        } else {
+                            kept.push_back(batch);
+                        }
+                    }
+                    *dq = kept;
+                    stale
+                };
+                // Outside the deque lock, as the Java accumulator does, so waking
+                // a writer never runs under it.
+                for batch in stale {
+                    completed_batch_ids.push(batch.batch_id());
+                    batch.complete(Err(error.clone()));
+                    self.release_idempotence_slot(&batch);
+                }
+            }
+        }
+
+        // Drop the completed batches' handles and memory permits.
+        let mut incomplete = self.incomplete_batches.write();
+        for batch_id in completed_batch_ids {
+            incomplete.remove(&batch_id);
+        }
+    }
+
+    /// Fails batches whose table instance no longer matches the bucket they would
+    /// be sent to. Call outside the deque lock.
+    fn fail_stale_batches(
+        &self,
+        table_path: &Arc<PhysicalTablePath>,
+        table_bucket: &TableBucket,
+        stale_batches: Vec<WriteBatch>,
+    ) {
+        let Some(stale_table_id) = stale_batches.first().map(|batch| batch.table_id()) else {
+            return;
+        };
+        log::warn!(
+            "Table {} was dropped and re-created with a new table id. Old id: {}, new id: {}. Failing {} pending batches for the old table instance.",
+            table_path.as_ref(),
+            stale_table_id,
+            table_bucket.table_id(),
+            stale_batches.len()
+        );
+        let error = broadcast::Error::WriteFailed {
+            code: FlussError::TableNotExist.code(),
+            message: format!(
+                "Table {} now resolves to table_id={}, so this write to table_id={} was not sent.",
+                table_path.as_ref(),
+                table_bucket.table_id(),
+                stale_table_id
+            ),
+        };
+        for batch in stale_batches {
+            if batch.complete(Err(error.clone())) {
+                self.release_idempotence_slot(&batch);
+                self.incomplete_batches.write().remove(&batch.batch_id());
+            }
+        }
+    }
+
+    /// Releases the in-flight slot a batch failed here still holds. A batch that
+    /// was never drained has no sequence and holds none.
+    fn release_idempotence_slot(&self, batch: &WriteBatch) {
+        if !self.idempotence_manager.is_enabled() || !batch.has_batch_sequence() {
+            return;
+        }
+        self.idempotence_manager
+            .remove_in_flight_batch_by_id(batch.batch_id());
     }
 
     pub fn has_incomplete(&self) -> bool {
@@ -1064,9 +1185,9 @@ impl ReadyWriteBatch {
     }
 }
 
-#[allow(dead_code)]
 struct BucketAndWriteBatches {
-    table_id: TableId,
+    // Kept for symmetry with the Java accumulator; `ready` derives this from the path.
+    #[allow(dead_code)]
     is_partitioned_table: bool,
     partition_id: Option<PartitionId>,
     batches: HashMap<BucketId, Arc<Mutex<VecDeque<WriteBatch>>>>,
@@ -1077,12 +1198,7 @@ struct BucketAndWriteBatches {
 }
 
 impl BucketAndWriteBatches {
-    fn new(
-        table_id: TableId,
-        is_partitioned_table: bool,
-        partition_id: Option<PartitionId>,
-        config: &Config,
-    ) -> Self {
+    fn new(is_partitioned_table: bool, partition_id: Option<PartitionId>, config: &Config) -> Self {
         let dynamic_batch_size = config.writer_dynamic_batch_size_enabled.then(|| {
             DynamicWriteBatchSizeEstimator::new(
                 config.writer_dynamic_batch_size_min as usize,
@@ -1090,7 +1206,6 @@ impl BucketAndWriteBatches {
             )
         });
         Self {
-            table_id,
             is_partitioned_table,
             partition_id,
             batches: Default::default(),
@@ -1508,6 +1623,410 @@ mod tests {
             batch_result,
             Err(broadcast::Error::Client { message }) if message == "test abort"
         ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_fail_batches_for_table_only_fails_target_table() -> Result<()> {
+        let idempotence = disabled_idempotence();
+        let config = Config::default();
+        let accumulator = RecordAccumulator::new(config, Arc::clone(&idempotence));
+        let row = GenericRow {
+            values: vec![Datum::Int32(1)],
+        };
+
+        let table_path_a = TablePath::new("db".to_string(), "tbl_a".to_string());
+        let physical_path_a = Arc::new(PhysicalTablePath::of(Arc::new(table_path_a.clone())));
+        let table_info_a = Arc::new(build_table_info(table_path_a.clone(), 1, 1));
+        let cluster_a = Arc::new(build_cluster(&table_path_a, 1, 1));
+        let record_a = WriteRecord::for_append(table_info_a, physical_path_a, 1, &row);
+        let result_a = accumulator.append(&record_a, 0, &cluster_a, false)?;
+        let handle_a = result_a.result_handle.expect("handle");
+
+        let table_path_b = TablePath::new("db".to_string(), "tbl_b".to_string());
+        let physical_path_b = Arc::new(PhysicalTablePath::of(Arc::new(table_path_b.clone())));
+        let table_info_b = Arc::new(build_table_info(table_path_b.clone(), 2, 1));
+        let cluster_b = Arc::new(build_cluster(&table_path_b, 2, 1));
+        let record_b = WriteRecord::for_append(table_info_b, physical_path_b, 1, &row);
+        accumulator.append(&record_b, 0, &cluster_b, false)?;
+
+        accumulator.fail_batches_for_table(
+            &table_path_a,
+            1,
+            broadcast::Error::WriteFailed {
+                code: 7,
+                message: "table dropped".to_string(),
+            },
+        );
+
+        // The target table's handle receives the error.
+        let batch_result = tokio::time::timeout(Duration::from_secs(10), handle_a.wait())
+            .await
+            .expect("the swept write must be failed, not left pending")?;
+        assert!(matches!(
+            batch_result,
+            Err(broadcast::Error::WriteFailed { code, .. }) if code == 7
+        ));
+
+        // The other table's batch is untouched and still drains.
+        assert!(accumulator.has_incomplete());
+        assert!(accumulator.has_undrained());
+        let server = cluster_b.get_tablet_server(1).expect("server");
+        let nodes = HashSet::from([server.clone()]);
+        let mut batches = accumulator.drain(cluster_b, &nodes, 1024 * 1024)?;
+        let drained = batches.remove(&1).expect("drained");
+        assert_eq!(drained.len(), 1);
+        assert_eq!(drained[0].table_bucket.table_id(), 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_fail_batches_for_table_releases_the_idempotence_slot() -> Result<()> {
+        let idempotence = enabled_idempotence();
+        idempotence.set_writer_id(42);
+        let accumulator = RecordAccumulator::new(Config::default(), Arc::clone(&idempotence));
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let cluster = Arc::new(build_cluster(&table_path, 1, 1));
+
+        // Only a drained batch holds a slot, so drain it and put it back.
+        let batch = append_and_drain(&accumulator, &cluster, &table_path, 0)?;
+        let table_bucket = batch.table_bucket.clone();
+        accumulator.re_enqueue(batch);
+        assert_eq!(idempotence.in_flight_count(&table_bucket), 1);
+
+        accumulator.fail_batches_for_table(
+            &table_path,
+            1,
+            broadcast::Error::WriteFailed {
+                code: FlussError::TableNotExist.code(),
+                message: "table dropped".to_string(),
+            },
+        );
+
+        assert_eq!(
+            idempotence.in_flight_count(&table_bucket),
+            0,
+            "the swept batch must not leave its in-flight slot behind"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_fail_batches_for_table_spares_a_newer_table_instance() -> Result<()> {
+        let idempotence = disabled_idempotence();
+        let config = Config::default();
+        let accumulator = RecordAccumulator::new(config, Arc::clone(&idempotence));
+        let row = GenericRow {
+            values: vec![Datum::Int32(1)],
+        };
+
+        // Dropped and recreated: queued batches are id 2, the sweep is id 1.
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let physical_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path.clone())));
+        let table_info = Arc::new(build_table_info(table_path.clone(), 2, 1));
+        let cluster = Arc::new(build_cluster(&table_path, 2, 1));
+        let record = WriteRecord::for_append(table_info, physical_path, 1, &row);
+        accumulator.append(&record, 0, &cluster, false)?;
+
+        accumulator.fail_batches_for_table(
+            &table_path,
+            1,
+            broadcast::Error::WriteFailed {
+                code: 7,
+                message: "table dropped".to_string(),
+            },
+        );
+
+        // The recreated table's batch survives and still drains.
+        assert!(accumulator.has_incomplete());
+        let server = cluster.get_tablet_server(1).expect("server");
+        let nodes = HashSet::from([server.clone()]);
+        let mut batches = accumulator.drain(cluster, &nodes, 1024 * 1024)?;
+        let drained = batches.remove(&1).expect("drained");
+        assert_eq!(drained.len(), 1);
+        assert_eq!(drained[0].table_bucket.table_id(), 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_fail_batches_for_table_splits_a_shared_queue_by_table_instance() -> Result<()> {
+        let idempotence = disabled_idempotence();
+        let config = Config::default();
+        let accumulator = RecordAccumulator::new(config, Arc::clone(&idempotence));
+        let row = GenericRow {
+            values: vec![Datum::Int32(1)],
+        };
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let physical_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path.clone())));
+
+        // One record per table instance, both in the same bucket deque.
+        let cluster_old = Arc::new(build_cluster(&table_path, 1, 1));
+        let record_old = WriteRecord::for_append(
+            Arc::new(build_table_info(table_path.clone(), 1, 1)),
+            Arc::clone(&physical_path),
+            1,
+            &row,
+        );
+        let old_handle = accumulator
+            .append(&record_old, 0, &cluster_old, false)?
+            .result_handle
+            .expect("old handle");
+
+        let cluster_new = Arc::new(build_cluster(&table_path, 2, 1));
+        let record_new = WriteRecord::for_append(
+            Arc::new(build_table_info(table_path.clone(), 2, 1)),
+            physical_path,
+            1,
+            &row,
+        );
+        let new_handle = accumulator
+            .append(&record_new, 0, &cluster_new, false)?
+            .result_handle
+            .expect("new handle");
+
+        accumulator.fail_batches_for_table(
+            &table_path,
+            1,
+            broadcast::Error::WriteFailed {
+                code: 7,
+                message: "table dropped".to_string(),
+            },
+        );
+
+        // The dropped table instance's record is failed, not carried over.
+        let old_result = tokio::time::timeout(Duration::from_secs(10), old_handle.wait())
+            .await
+            .expect("the dropped table instance's write must be failed")?;
+        assert!(matches!(
+            old_result,
+            Err(broadcast::Error::WriteFailed { code, .. }) if code == 7
+        ));
+
+        // The recreated table's record is untouched and still drains.
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), new_handle.wait())
+                .await
+                .is_err(),
+            "the recreated table's write must survive the stale sweep"
+        );
+        let server = cluster_new.get_tablet_server(1).expect("server");
+        let nodes = HashSet::from([server.clone()]);
+        let mut batches = accumulator.drain(cluster_new, &nodes, 1024 * 1024)?;
+        let drained = batches.remove(&1).expect("drained");
+        assert_eq!(drained.len(), 1);
+        assert_eq!(drained[0].write_batch.table_id(), 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_drain_fails_every_stale_batch_in_one_pass() -> Result<()> {
+        let accumulator = RecordAccumulator::new(Config::default(), disabled_idempotence());
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let cluster_old = Arc::new(build_cluster(&table_path, 1, 1));
+
+        // Two batches queued under table id 1, drained and put back.
+        let first = append_and_drain(&accumulator, &cluster_old, &table_path, 0)?;
+        let second = append_and_drain(&accumulator, &cluster_old, &table_path, 0)?;
+        accumulator.re_enqueue(second);
+        accumulator.re_enqueue(first);
+
+        let cluster_new = Arc::new(build_cluster(&table_path, 2, 1));
+        let server = cluster_new.get_tablet_server(1).expect("server");
+        let nodes = HashSet::from([server.clone()]);
+        let batches = accumulator.drain(cluster_new, &nodes, 1024 * 1024)?;
+
+        assert!(batches.values().all(|drained| drained.is_empty()));
+        let physical_path = PhysicalTablePath::of(Arc::new(table_path));
+        let entry = accumulator
+            .write_batches
+            .get(&physical_path)
+            .expect("entry");
+        let remaining = entry.batches.get(&0).expect("deque").lock().len();
+        assert_eq!(
+            remaining, 0,
+            "a single drain must clear every consecutive stale batch, not just the head"
+        );
+        assert!(!accumulator.has_incomplete());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_drain_keeps_a_batch_newer_than_the_cluster_snapshot() -> Result<()> {
+        let accumulator = RecordAccumulator::new(Config::default(), disabled_idempotence());
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+
+        // Appended against the recreated table while the sender still holds a
+        // snapshot pinned before the recreate.
+        let cluster_new = Arc::new(build_cluster(&table_path, 2, 1));
+        let row = GenericRow {
+            values: vec![Datum::Int32(1)],
+        };
+        let record = WriteRecord::for_append(
+            Arc::new(build_table_info(table_path.clone(), 2, 1)),
+            Arc::new(PhysicalTablePath::of(Arc::new(table_path.clone()))),
+            1,
+            &row,
+        );
+        let handle = accumulator
+            .append(&record, 0, &cluster_new, false)?
+            .result_handle
+            .expect("handle");
+
+        let cluster_old = Arc::new(build_cluster(&table_path, 1, 1));
+        let server = cluster_old.get_tablet_server(1).expect("server");
+        let nodes = HashSet::from([server.clone()]);
+        let batches = accumulator.drain(cluster_old, &nodes, 1024 * 1024)?;
+
+        // Neither sent under the stale id nor failed as though it were dropped.
+        assert!(batches.values().all(|drained| drained.is_empty()));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), handle.wait())
+                .await
+                .is_err(),
+            "a batch newer than the snapshot must wait, not be failed"
+        );
+        assert!(accumulator.has_incomplete());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_drain_fails_a_batch_whose_table_instance_is_gone() -> Result<()> {
+        let idempotence = disabled_idempotence();
+        let config = Config::default();
+        let accumulator = RecordAccumulator::new(config, Arc::clone(&idempotence));
+        let row = GenericRow {
+            values: vec![Datum::Int32(1)],
+        };
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+
+        // Queued under table id 1, but the cache now resolves the path to 2.
+        let cluster_old = Arc::new(build_cluster(&table_path, 1, 1));
+        let record = WriteRecord::for_append(
+            Arc::new(build_table_info(table_path.clone(), 1, 1)),
+            Arc::new(PhysicalTablePath::of(Arc::new(table_path.clone()))),
+            1,
+            &row,
+        );
+        let handle = accumulator
+            .append(&record, 0, &cluster_old, false)?
+            .result_handle
+            .expect("handle");
+
+        let cluster_new = Arc::new(build_cluster(&table_path, 2, 1));
+        let server = cluster_new.get_tablet_server(1).expect("server");
+        let nodes = HashSet::from([server.clone()]);
+        let batches = accumulator.drain(cluster_new, &nodes, 1024 * 1024)?;
+
+        // The batch is failed rather than written into the new table instance.
+        assert!(batches.values().all(|drained| drained.is_empty()));
+        let result = tokio::time::timeout(Duration::from_secs(10), handle.wait())
+            .await
+            .expect("the stale batch must be failed at drain")?;
+        assert!(matches!(
+            result,
+            Err(broadcast::Error::WriteFailed { code, .. })
+                if code == FlussError::TableNotExist.code()
+        ));
+        assert!(!accumulator.has_incomplete());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_ready_skips_a_table_whose_metadata_was_evicted() -> Result<()> {
+        let idempotence = disabled_idempotence();
+        let config = Config::default();
+        let accumulator = RecordAccumulator::new(config, Arc::clone(&idempotence));
+        let row = GenericRow {
+            values: vec![Datum::Int32(1)],
+        };
+
+        let evicted_path = TablePath::new("db".to_string(), "evicted".to_string());
+        let evicted_cluster = Arc::new(build_cluster(&evicted_path, 1, 1));
+        let record_evicted = WriteRecord::for_append(
+            Arc::new(build_table_info(evicted_path.clone(), 1, 1)),
+            Arc::new(PhysicalTablePath::of(Arc::new(evicted_path.clone()))),
+            1,
+            &row,
+        );
+        accumulator.append(&record_evicted, 0, &evicted_cluster, false)?;
+
+        let live_path = TablePath::new("db".to_string(), "live".to_string());
+        let live_cluster = Arc::new(build_cluster(&live_path, 2, 1));
+        let record_live = WriteRecord::for_append(
+            Arc::new(build_table_info(live_path.clone(), 2, 1)),
+            Arc::new(PhysicalTablePath::of(Arc::new(live_path.clone()))),
+            1,
+            &row,
+        );
+        accumulator.append(&record_live, 0, &live_cluster, false)?;
+
+        // Only the live table is known, as after an eviction.
+        let result = accumulator.ready(&live_cluster)?;
+        assert!(
+            result
+                .unknown_leader_tables
+                .iter()
+                .any(|path| path.get_table_path() == &evicted_path)
+        );
+        assert!(
+            !result
+                .unknown_leader_tables
+                .iter()
+                .any(|path| path.get_table_path() == &live_path),
+            "the live table must still be checked normally"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_reenqueue_does_not_expose_newer_table_instance_to_stale_sweep() -> Result<()> {
+        let idempotence = disabled_idempotence();
+        let config = Config::default();
+        let accumulator = RecordAccumulator::new(config, Arc::clone(&idempotence));
+        let row = GenericRow {
+            values: vec![Datum::Int32(1)],
+        };
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let physical_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path.clone())));
+
+        // Drained under id 1, before the drop and recreate.
+        let cluster_old = Arc::new(build_cluster(&table_path, 1, 1));
+        let table_info_old = Arc::new(build_table_info(table_path.clone(), 1, 1));
+        let record_old =
+            WriteRecord::for_append(table_info_old, Arc::clone(&physical_path), 1, &row);
+        accumulator.append(&record_old, 0, &cluster_old, false)?;
+        let server_old = cluster_old.get_tablet_server(1).expect("server");
+        let nodes_old = HashSet::from([server_old.clone()]);
+        let mut drained = accumulator.drain(cluster_old, &nodes_old, 1024 * 1024)?;
+        let old_batch = drained.remove(&1).expect("drained").pop().expect("batch");
+        assert_eq!(old_batch.table_bucket.table_id(), 1);
+
+        // The path is recreated as table id 2 and a new record is queued.
+        let cluster_new = Arc::new(build_cluster(&table_path, 2, 1));
+        let table_info_new = Arc::new(build_table_info(table_path.clone(), 2, 1));
+        let record_new = WriteRecord::for_append(table_info_new, physical_path, 1, &row);
+        let result_new = accumulator.append(&record_new, 0, &cluster_new, false)?;
+        let handle_new = result_new.result_handle.expect("handle");
+
+        // The stale batch is retried after the recreate.
+        accumulator.re_enqueue(old_batch);
+
+        accumulator.fail_batches_for_table(
+            &table_path,
+            1,
+            broadcast::Error::WriteFailed {
+                code: 7,
+                message: "table dropped".to_string(),
+            },
+        );
+
+        // The recreated table's write is untouched by the stale sweep.
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), handle_new.wait())
+                .await
+                .is_err(),
+            "a write to the recreated table must not be failed by the stale sweep"
+        );
         Ok(())
     }
 

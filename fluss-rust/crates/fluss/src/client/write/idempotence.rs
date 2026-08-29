@@ -245,6 +245,16 @@ impl IdempotenceManager {
         }
     }
 
+    /// Drops a batch's in-flight entry by id, which is unique across buckets, so
+    /// the caller needs no key. Leaves sequences and the writer id alone, for
+    /// buckets with no ordering left to preserve such as a dropped table.
+    pub fn remove_in_flight_batch_by_id(&self, batch_id: i64) {
+        let mut entries = self.bucket_entries.lock();
+        for entry in entries.values_mut() {
+            entry.in_flight.retain(|batch| batch.batch_id != batch_id);
+        }
+    }
+
     #[cfg(test)]
     pub fn remove_in_flight_batch(&self, bucket: &TableBucket, batch_id: i64) {
         let mut entries = self.bucket_entries.lock();

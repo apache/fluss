@@ -153,7 +153,6 @@ impl NativeFlussBackend {
 
         let deadline = ctx.deadline();
         for (index, future) in pending {
-            // TODO: Surface dropped tables as table_not_found after fluss-rust fixes #4136.
             let error = match tokio::time::timeout_at(deadline.into(), future).await {
                 Ok(Ok(())) => continue,
                 Ok(Err(error)) => classify_unknown(error),
@@ -391,7 +390,11 @@ fn classify_rejected(error: FlussClientError) -> GatewayError {
 fn classify_unknown(error: FlussClientError) -> GatewayError {
     if matches!(
         error.api_error(),
-        Some(FlussError::StorageBackpressureException | FlussError::AuthorizationException)
+        Some(
+            FlussError::StorageBackpressureException
+                | FlussError::AuthorizationException
+                | FlussError::TableNotExist
+        )
     ) {
         return classify_rejected(error);
     }
@@ -466,6 +469,7 @@ mod tests {
         for error in [
             FlussError::StorageBackpressureException,
             FlussError::AuthorizationException,
+            FlussError::TableNotExist,
         ] {
             assert!(
                 !classify_unknown(api_failure(error))
