@@ -28,6 +28,7 @@ use fluss::PartitionId;
 use fluss::client::PrefixKeyLookuper;
 use fluss::error::Error;
 use fluss::metadata::{Column, DataType, TableInfo};
+use fluss::record::to_arrow_schema;
 use fluss::row::{Datum, GenericRow};
 use fluss::rpc::FlussError as CoreFlussError;
 use fluss::rpc::message::OffsetSpec;
@@ -512,6 +513,9 @@ mod ffi {
             bucket_id: i32,
         ) -> FfiPtrResult;
         fn get_table_info_from_table(self: &Table) -> FfiTableInfo;
+        // Writes the table's Arrow schema into the `ArrowSchema` C++ owns at
+        // `out_ptr`, so neither side frees memory the other allocated.
+        unsafe fn get_arrow_schema(self: &Table, out_ptr: usize) -> FfiResult;
         fn get_table_path(self: &Table) -> FfiTablePath;
         fn has_primary_key(self: &Table) -> bool;
         fn create_upsert_writer(self: &Table, column_indices: Vec<usize>) -> FfiPtrResult;
@@ -2025,6 +2029,24 @@ impl Table {
 
     fn get_table_info_from_table(&self) -> ffi::FfiTableInfo {
         types::core_table_info_to_ffi(&self.table_info)
+    }
+
+    /// # Safety
+    /// `out_ptr` must point to an `ArrowSchema` C++ owns and has not populated.
+    unsafe fn get_arrow_schema(&self, out_ptr: usize) -> ffi::FfiResult {
+        let schema = match to_arrow_schema(self.table_info.get_row_type()) {
+            Ok(s) => s,
+            Err(e) => return err_from_core_error(&e),
+        };
+        let ffi_schema = match FFI_ArrowSchema::try_from(schema.as_ref()) {
+            Ok(s) => s,
+            Err(e) => {
+                return client_err(format!("Failed to export Arrow schema: {e}"));
+            }
+        };
+        // Moves the exported schema into the caller's struct; C++ releases it.
+        unsafe { std::ptr::write(out_ptr as *mut FFI_ArrowSchema, ffi_schema) };
+        ok_result()
     }
 
     fn get_table_path(&self) -> ffi::FfiTablePath {

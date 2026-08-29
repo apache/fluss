@@ -1694,6 +1694,12 @@ class Table {
     Result NewPrefixLookup(std::vector<std::string> lookup_columns, PrefixLookuper& out);
 
     TableInfo GetTableInfo() const;
+
+    /// The table's Arrow schema. `AppendWriter::AppendArrowBatch` requires a
+    /// batch whose column types match it, so this is what to build or cast
+    /// against.
+    Result GetArrowSchema(std::shared_ptr<arrow::Schema>& out) const;
+
     TablePath GetTablePath() const;
     bool HasPrimaryKey() const;
 

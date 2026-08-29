@@ -1568,6 +1568,58 @@ async def test_all_complex_datatypes(connection, admin):
     await admin.drop_table(table_path, ignore_if_not_exists=False)
 
 
+async def test_arrow_schema_matches_write_arrow_batch(connection, admin):
+    """`table.arrow_schema` is the schema write_arrow_batch expects: a batch built
+    from it round-trips, and one with other types is refused until it is cast."""
+    table_path = fluss.TablePath("fluss", "py_test_arrow_schema")
+    await admin.drop_table(table_path, ignore_if_not_exists=True)
+
+    pa_schema = pa.schema(
+        [pa.field("id", pa.int32()), pa.field("ts", pa.timestamp("ms"))]
+    )
+    schema = fluss.Schema(pa_schema)
+    await admin.create_table(
+        table_path, fluss.TableDescriptor(schema), ignore_if_exists=False
+    )
+
+    table = await connection.get_table(table_path)
+    assert table.arrow_schema == pa_schema
+
+    writer = table.new_append().create_writer()
+    good = pa.RecordBatch.from_arrays(
+        [
+            pa.array([1], type=pa.int32()),
+            pa.array([1700000000000], type=pa.timestamp("ms")),
+        ],
+        schema=table.arrow_schema,
+    )
+    writer.write_arrow_batch(good)
+    await writer.flush()
+
+    # A different unit is refused, and casting to the schema brings it into line.
+    other = pa.RecordBatch.from_arrays(
+        [
+            pa.array([2], type=pa.int32()),
+            pa.array([1700000000001000], type=pa.timestamp("us")),
+        ],
+        schema=pa.schema(
+            [pa.field("id", pa.int32()), pa.field("ts", pa.timestamp("us"))]
+        ),
+    )
+    with pytest.raises(Exception, match="but the table declares"):
+        writer.write_arrow_batch(other)
+
+    writer.write_arrow_batch(other.cast(table.arrow_schema))
+    await writer.flush()
+
+    scanner = await table.new_scan().create_log_scanner()
+    scanner.subscribe_buckets({0: fluss.EARLIEST_OFFSET})
+    records = await _poll_records(scanner, expected_count=2)
+    assert sorted(r.row["id"] for r in records) == [1, 2]
+
+    await admin.drop_table(table_path, ignore_if_not_exists=False)
+
+
 async def test_append_arrow_batch_complex_types(connection, admin):
     """Arrow write path: write MAP and ROW columns via write_arrow_batch and
     verify through both the record and Arrow scan paths."""

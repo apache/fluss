@@ -90,6 +90,10 @@ Supports `async with` statement (async context manager).
 | `get_table_path() -> TablePath` | Get table path                          |
 | `has_primary_key() -> bool`     | Check if table has a primary key        |
 
+| Property                     |  Description                                 |
+|------------------------------|----------------------------------------------|
+| `.arrow_schema -> pa.Schema` | The Arrow schema `write_arrow_batch` expects |
+
 ## `TableScan`
 
 | Method                                                   |  Description                                                        |
@@ -185,7 +189,7 @@ Builder for creating a `PrefixLookuper`. Obtain via `TableLookup.lookup_by(colum
 |--------------------------------------------------|-------------------------------------|
 | `.append(row) -> WriteResultHandle`              | Append a row (dict, list, or tuple) |
 | `.write_arrow(table)`                            | Write a PyArrow Table               |
-| `.write_arrow_batch(batch) -> WriteResultHandle` | Write a PyArrow RecordBatch         |
+| `.write_arrow_batch(batch) -> WriteResultHandle` | Write a PyArrow RecordBatch, whose column types must match `table.arrow_schema` |
 | `.write_pandas(df)`                              | Write a Pandas DataFrame            |
 | `await .flush()`                                 | Flush all pending writes            |
 

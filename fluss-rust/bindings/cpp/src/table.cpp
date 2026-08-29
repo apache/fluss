@@ -1237,6 +1237,28 @@ TableInfo Table::GetTableInfo() const {
     return utils::from_ffi_table_info(ffi_info);
 }
 
+Result Table::GetArrowSchema(std::shared_ptr<arrow::Schema>& out) const {
+    if (!Available()) {
+        return utils::make_client_error("Table not available");
+    }
+    // Ours, so no allocation crosses the boundary: Rust fills it in and
+    // ImportSchema releases it.
+    struct ArrowSchema c_schema {};
+    auto result = utils::from_ffi_result(
+        table_->get_arrow_schema(reinterpret_cast<size_t>(&c_schema)));
+    if (!result.Ok()) {
+        return result;
+    }
+
+    auto imported = arrow::ImportSchema(&c_schema);
+    if (!imported.ok()) {
+        return utils::make_client_error("Failed to import Arrow schema: " +
+                                        imported.status().ToString());
+    }
+    out = *imported;
+    return Result{};
+}
+
 TablePath Table::GetTablePath() const {
     if (!Available()) {
         return TablePath{};

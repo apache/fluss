@@ -40,6 +40,48 @@ class LogTableTest : public ::testing::Test {
     }
 };
 
+TEST_F(LogTableTest, GetArrowSchemaMatchesAppendArrowBatch) {
+    auto& adm = admin();
+    auto& conn = connection();
+
+    fluss::TablePath table_path("fluss", "test_get_arrow_schema_cpp");
+
+    auto schema = fluss::Schema::NewBuilder()
+                      .AddColumn("id", DataType::Int())
+                      .AddColumn("ts", DataType::Timestamp(3))
+                      .Build();
+    auto table_descriptor = fluss::TableDescriptor::NewBuilder()
+                                .SetSchema(schema)
+                                .SetProperty("table.replication.factor", "1")
+                                .Build();
+    fluss_test::CreateTable(adm, table_path, table_descriptor);
+
+    fluss::Table table;
+    ASSERT_OK(conn.GetTable(table_path, table));
+
+    std::shared_ptr<arrow::Schema> arrow_schema;
+    ASSERT_OK(table.GetArrowSchema(arrow_schema));
+    ASSERT_NE(arrow_schema, nullptr);
+    ASSERT_EQ(arrow_schema->num_fields(), 2);
+    EXPECT_EQ(arrow_schema->field(0)->name(), "id");
+    EXPECT_TRUE(arrow_schema->field(0)->type()->Equals(arrow::int32()));
+    EXPECT_TRUE(arrow_schema->field(1)->type()->Equals(arrow::timestamp(arrow::TimeUnit::MILLI)));
+
+    auto table_append = table.NewAppend();
+    fluss::AppendWriter append_writer;
+    ASSERT_OK(table_append.CreateWriter(append_writer));
+
+    auto id = arrow::Int32Builder();
+    id.AppendValues({1}).ok();
+    auto ts = arrow::TimestampBuilder(arrow::timestamp(arrow::TimeUnit::MILLI),
+                                      arrow::default_memory_pool());
+    ts.AppendValues({1700000000000}).ok();
+    auto batch = arrow::RecordBatch::Make(arrow_schema, 1,
+                                          {id.Finish().ValueOrDie(), ts.Finish().ValueOrDie()});
+    ASSERT_OK(append_writer.AppendArrowBatch(batch));
+    ASSERT_OK(append_writer.Flush());
+}
+
 TEST_F(LogTableTest, AppendRecordBatchAndScan) {
     auto& adm = admin();
     auto& conn = connection();

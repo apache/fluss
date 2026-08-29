@@ -121,6 +121,7 @@ Complete API reference for the Fluss C++ client.
 | `NewPrefixLookup(std::vector<std::string> cols, PrefixLookuper& out) -> Result` | Create a prefix (bucket-key) lookuper |
 | `NewScan() -> TableScan`      | Create a scan builder                    |
 | `GetTableInfo() -> TableInfo` | Get table metadata                       |
+| `GetArrowSchema(std::shared_ptr<arrow::Schema>& out) -> Result` | The Arrow schema `AppendArrowBatch` expects |
 | `GetTablePath() -> TablePath` | Get the table path                       |
 | `HasPrimaryKey() -> bool`     | Check if the table has a primary key     |
 

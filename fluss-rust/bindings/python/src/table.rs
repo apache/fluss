@@ -784,6 +784,19 @@ impl FlussTable {
         TableInfo::from_core(self.table_info.clone())
     }
 
+    /// The table's schema as a PyArrow schema. `write_arrow_batch` requires a
+    /// batch whose column types match it, so this is what to cast against.
+    #[getter]
+    pub fn arrow_schema(&self, py: Python) -> PyResult<Py<PyAny>> {
+        let schema = to_arrow_schema(self.table_info.get_row_type())
+            .map_err(|e| FlussError::from_core_error(&e))?;
+        Ok(schema
+            .as_ref()
+            .to_pyarrow(py)
+            .map_err(|e| FlussError::new_err(format!("Failed to convert schema: {e}")))?
+            .unbind())
+    }
+
     /// Get table path
     pub fn get_table_path(&self) -> TablePath {
         TablePath::from_core(self.table_path.clone())
