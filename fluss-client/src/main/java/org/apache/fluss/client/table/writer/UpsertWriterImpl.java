@@ -274,9 +274,9 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
 
     /**
      * Rejects a null in a NOT NULL target column. Runs before any field getter or encoding, which
-     * would fail with a bare NullPointerException. Slightly stricter than the server when the
-     * target columns cover every schema column, since the server then skips the PartialUpdater, but
-     * such a row is not reachable through the public API.
+     * would fail with a bare NullPointerException. When the target columns cover every schema
+     * column the server skips the PartialUpdater and this check is the only guard, and the encoders
+     * would reject the null anyway, so it never changes which rows are accepted.
      */
     private void checkNotNullTargetColumns(InternalRow row) {
         for (int index : notNullTargetColumns) {

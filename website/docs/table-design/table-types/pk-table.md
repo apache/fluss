@@ -85,8 +85,8 @@ Partial delete has a stricter requirement. It sets the target columns other than
 rejected when one of them is `NOT NULL`, unless every column outside the target columns is already `null`, in which
 case the whole row is removed instead.
 
-Tables using the `aggregation` merge engine keep the stricter rule for partial update as well: every column other than
-the primary key must be nullable, including the target columns.
+Tables using the `aggregation` merge engine keep the stricter rule for partial update as well, so every column other
+than the primary key must be nullable, including the target columns.
 
 ## Merge Engines
 
