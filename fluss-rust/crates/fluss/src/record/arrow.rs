@@ -154,7 +154,10 @@ impl ArrowRecordBatchInnerBuilder for PrebuiltRecordBatchBuilder {
         if self.arrow_record_batch.is_some() {
             return Ok(false);
         }
-        validate_append_record_batch(record_batch.as_ref(), &self.row_type)?;
+        let record_batch = Arc::new(prepare_append_record_batch(
+            record_batch.as_ref(),
+            &self.row_type,
+        )?);
         self.records_count = record_batch.num_rows() as i32;
         self.arrow_record_batch = Some(record_batch);
         Ok(true)
@@ -717,7 +720,10 @@ fn erase_read_irrelevant(data_type: &ArrowDataType) -> ArrowDataType {
 /// A mismatched Arrow type is reread as something else - `timestamp[ns]` in a
 /// `TIMESTAMP(3)` column comes back as milliseconds, `decimal(10,4)` in a
 /// `DECIMAL(10,2)` shifts two digits.
-fn check_column_types(batch: &RecordBatch, row_type: &RowType) -> Result<()> {
+/// Columns are matched by position, so a batch whose columns are in a different
+/// order would silently write into the wrong ones. Checked before any conversion,
+/// which rebuilds the schema and would otherwise supply the names itself.
+fn check_column_names(batch: &RecordBatch, row_type: &RowType) -> Result<()> {
     let expected = to_arrow_schema(row_type)?;
     if batch.num_columns() != expected.fields().len() {
         return Err(IllegalArgument {
@@ -729,8 +735,6 @@ fn check_column_types(batch: &RecordBatch, row_type: &RowType) -> Result<()> {
         });
     }
     for (i, field) in expected.fields().iter().enumerate() {
-        // Columns are matched by position, so a batch whose columns are in a
-        // different order would silently write into the wrong ones.
         let actual_name = batch.schema().field(i).name().clone();
         if actual_name != *field.name() {
             return Err(IllegalArgument {
@@ -740,6 +744,13 @@ fn check_column_types(batch: &RecordBatch, row_type: &RowType) -> Result<()> {
                 ),
             });
         }
+    }
+    Ok(())
+}
+
+fn check_column_types(batch: &RecordBatch, row_type: &RowType) -> Result<()> {
+    let expected = to_arrow_schema(row_type)?;
+    for (i, field) in expected.fields().iter().enumerate() {
         let actual = batch.column(i).data_type();
         if erase_read_irrelevant(actual) != erase_read_irrelevant(field.data_type()) {
             return Err(IllegalArgument {
@@ -755,9 +766,153 @@ fn check_column_types(batch: &RecordBatch, row_type: &RowType) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn validate_append_record_batch(batch: &RecordBatch, row_type: &RowType) -> Result<()> {
-    check_column_types(batch, row_type)?;
-    TypedBatch::build(batch, row_type)?.check_not_null(row_type)
+/// True when `from` differs from `to` only in how it stores offsets or encodes
+/// values, so converting it cannot change what the values are. `large_` variants
+/// and views differ in offset width; a dictionary is the same values, encoded.
+fn is_lossless_encoding_difference(from: &ArrowDataType, to: &ArrowDataType) -> bool {
+    use ArrowDataType::*;
+    match (from, to) {
+        (LargeUtf8 | Utf8View, Utf8) => true,
+        (LargeBinary | BinaryView, Binary) => true,
+        (LargeList(f) | List(f), List(t)) => is_same_or_lossless(f.data_type(), t.data_type()),
+        (Dictionary(_, v), to) => is_same_or_lossless(v, to),
+        // Casting a struct relabels its fields to the target's, so the names
+        // have to line up already - otherwise a swap would be converted into
+        // the table's shape and lose which value was which.
+        (Struct(from_fields), Struct(to_fields)) => {
+            from_fields.len() == to_fields.len()
+                && from_fields.iter().zip(to_fields.iter()).all(|(f, t)| {
+                    f.name() == t.name() && is_same_or_lossless(f.data_type(), t.data_type())
+                })
+        }
+        // A map's entries are positional, so only the key and value types are
+        // compared - their names differ between builders.
+        (Map(from_entries, _), Map(to_entries, _)) => {
+            match (from_entries.data_type(), to_entries.data_type()) {
+                (Struct(from_kv), Struct(to_kv)) => {
+                    from_kv.len() == to_kv.len()
+                        && from_kv
+                            .iter()
+                            .zip(to_kv.iter())
+                            .all(|(f, t)| is_same_or_lossless(f.data_type(), t.data_type()))
+                }
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+fn is_same_or_lossless(from: &ArrowDataType, to: &ArrowDataType) -> bool {
+    erase_read_irrelevant(from) == erase_read_irrelevant(to)
+        || is_lossless_encoding_difference(from, to)
+}
+
+/// The same type with every nested field marked nullable, names kept.
+fn relax_nested_nullability(data_type: &ArrowDataType) -> ArrowDataType {
+    let relax = |f: &Arc<Field>| {
+        Arc::new(Field::new(
+            f.name(),
+            relax_nested_nullability(f.data_type()),
+            true,
+        ))
+    };
+    match data_type {
+        ArrowDataType::List(f) => ArrowDataType::List(relax(f)),
+        // Arrow requires a map's entries and its keys to stay non-null, so only
+        // the value side is relaxed.
+        ArrowDataType::Map(entries, sorted) => {
+            let relaxed = match entries.data_type() {
+                ArrowDataType::Struct(kv) if kv.len() == 2 => ArrowDataType::Struct(
+                    vec![
+                        Field::new(
+                            kv[0].name(),
+                            relax_nested_nullability(kv[0].data_type()),
+                            false,
+                        ),
+                        Field::new(
+                            kv[1].name(),
+                            relax_nested_nullability(kv[1].data_type()),
+                            true,
+                        ),
+                    ]
+                    .into(),
+                ),
+                other => other.clone(),
+            };
+            ArrowDataType::Map(
+                Arc::new(Field::new(entries.name(), relaxed, false)),
+                *sorted,
+            )
+        }
+        ArrowDataType::Struct(fields) => {
+            ArrowDataType::Struct(fields.iter().map(relax).collect::<Vec<_>>().into())
+        }
+        other => other.clone(),
+    }
+}
+
+/// Returns `batch` ready to append: checked against `row_type`, and with any
+/// column whose type differs only by encoding converted to the table's. Columns
+/// that already match are passed through untouched, so a batch built against the
+/// table's schema is not copied.
+pub(crate) fn prepare_append_record_batch(
+    batch: &RecordBatch,
+    row_type: &RowType,
+) -> Result<RecordBatch> {
+    check_column_names(batch, row_type)?;
+    let batch = convert_lossless_columns(batch, row_type)?;
+    check_column_types(&batch, row_type)?;
+    TypedBatch::build(&batch, row_type)?.check_not_null(row_type)?;
+    Ok(batch)
+}
+
+fn convert_lossless_columns(batch: &RecordBatch, row_type: &RowType) -> Result<RecordBatch> {
+    let expected = to_arrow_schema(row_type)?;
+    if batch.num_columns() != expected.fields().len() {
+        return Ok(batch.clone());
+    }
+    let needs_convert = |i: usize, want: &ArrowDataType| {
+        let have = batch.column(i).data_type();
+        erase_read_irrelevant(have) != erase_read_irrelevant(want)
+            && is_lossless_encoding_difference(have, want)
+    };
+    if !expected
+        .fields()
+        .iter()
+        .enumerate()
+        .any(|(i, f)| needs_convert(i, f.data_type()))
+    {
+        return Ok(batch.clone());
+    }
+
+    let mut columns = Vec::with_capacity(batch.num_columns());
+    for (i, field) in expected.fields().iter().enumerate() {
+        let column = batch.column(i);
+        if needs_convert(i, field.data_type()) {
+            // Cast to a nullable version of the target: casting straight to a
+            // NOT NULL nested type fails inside Arrow, and `check_not_null`
+            // gives a better message for the same mistake a moment later.
+            columns.push(arrow::compute::cast(
+                column,
+                &relax_nested_nullability(field.data_type()),
+            )?);
+        } else {
+            columns.push(Arc::clone(column));
+        }
+    }
+    Ok(RecordBatch::try_new(
+        Arc::new(arrow_schema::Schema::new(
+            batch
+                .schema()
+                .fields()
+                .iter()
+                .zip(columns.iter())
+                .map(|(f, c)| Field::new(f.name(), c.data_type().clone(), true))
+                .collect::<Vec<_>>(),
+        )),
+        columns,
+    )?)
 }
 
 /// The fixed fields of a log record batch header.
@@ -980,8 +1135,12 @@ pub(crate) fn from_arrow_type(arrow_type: &ArrowDataType) -> Result<DataType> {
         ArrowDataType::UInt64 => DataTypes::bigint(),
         ArrowDataType::Float32 => DataTypes::float(),
         ArrowDataType::Float64 => DataTypes::double(),
-        ArrowDataType::Utf8 | ArrowDataType::LargeUtf8 => DataTypes::string(),
-        ArrowDataType::Binary | ArrowDataType::LargeBinary => DataTypes::bytes(),
+        ArrowDataType::Utf8 | ArrowDataType::LargeUtf8 | ArrowDataType::Utf8View => {
+            DataTypes::string()
+        }
+        ArrowDataType::Binary | ArrowDataType::LargeBinary | ArrowDataType::BinaryView => {
+            DataTypes::bytes()
+        }
         ArrowDataType::Date32 | ArrowDataType::Date64 => DataTypes::date(),
         ArrowDataType::FixedSizeBinary(len) => {
             if *len < 0 {
@@ -1023,7 +1182,13 @@ pub(crate) fn from_arrow_type(arrow_type: &ArrowDataType) -> Result<DataType> {
                 DataTypes::timestamp_with_precision(precision)
             }
         }
-        ArrowDataType::List(field) => DataTypes::array(from_arrow_field(field)?),
+        // Encoding variants of the canonical types. `prepare_append_record_batch`
+        // converts a batch carrying these, so a schema carrying them has to be
+        // accepted too, or a caller could write a column they cannot declare.
+        ArrowDataType::List(field) | ArrowDataType::LargeList(field) => {
+            DataTypes::array(from_arrow_field(field)?)
+        }
+        ArrowDataType::Dictionary(_, value) => from_arrow_type(value)?,
         ArrowDataType::Map(entries_field, _sorted) => {
             let fields = match entries_field.data_type() {
                 ArrowDataType::Struct(f) => f,
@@ -1560,7 +1725,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_append_record_batch_rejects_nulls_in_not_null_column() {
+    fn prepare_append_record_batch_rejects_nulls_in_not_null_column() {
         let row_type = RowType::new(vec![DataField::new(
             "id",
             DataTypes::bigint().as_non_nullable(),
@@ -1648,11 +1813,10 @@ mod tests {
 
     fn assert_rejects_null_in_not_null(row_type: &RowType, poison: &RecordBatch, ok: &RecordBatch) {
         assert_not_null_violation(
-            validate_append_record_batch(poison, row_type)
+            prepare_append_record_batch(poison, row_type)
                 .expect_err("null in NOT NULL nested column must be rejected"),
         );
-        validate_append_record_batch(ok, row_type)
-            .expect("null-free nested batch must be accepted");
+        prepare_append_record_batch(ok, row_type).expect("null-free nested batch must be accepted");
     }
 
     fn list_array(values: ArrayRef, offsets: Vec<i32>, validity: Option<Vec<bool>>) -> ArrayRef {
@@ -1754,16 +1918,16 @@ mod tests {
 
     fn assert_full_and_sliced_not_null(row_type: &RowType, poison: &RecordBatch, ok: &RecordBatch) {
         assert_rejects_null_in_not_null(row_type, poison, ok);
-        validate_append_record_batch(&poison.slice(1, 1), row_type)
+        prepare_append_record_batch(&poison.slice(1, 1), row_type)
             .expect("sliced-away nested null must not reject the live rows");
         assert_not_null_violation(
-            validate_append_record_batch(&poison.slice(0, 1), row_type)
+            prepare_append_record_batch(&poison.slice(0, 1), row_type)
                 .expect_err("live slice that still contains the nested null must reject"),
         );
     }
 
     #[test]
-    fn validate_append_record_batch_rejects_null_nested_container() {
+    fn prepare_append_record_batch_rejects_null_nested_container() {
         // Only the container is null here; the element type is nullable.
         let array_type = RowType::new(vec![DataField::new(
             "tags",
@@ -1788,7 +1952,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_append_record_batch_allows_null_elements_in_not_null_array() {
+    fn prepare_append_record_batch_allows_null_elements_in_not_null_array() {
         let row_type = RowType::new(vec![DataField::new(
             "tags",
             DataTypes::array(DataTypes::int()).as_non_nullable(),
@@ -1798,12 +1962,12 @@ mod tests {
             "tags",
             list_int_array(vec![Some(1), None, Some(3)], vec![0, 3], None),
         );
-        validate_append_record_batch(&batch, &row_type)
+        prepare_append_record_batch(&batch, &row_type)
             .expect("null elements in a non-null ARRAY value must be accepted");
     }
 
     #[test]
-    fn validate_append_record_batch_rejects_nulls_inside_not_null_nested_fields() {
+    fn prepare_append_record_batch_rejects_nulls_inside_not_null_nested_fields() {
         let array_type = RowType::new(vec![DataField::new(
             "tags",
             DataTypes::array(DataTypes::int().as_non_nullable()).as_non_nullable(),
@@ -1862,7 +2026,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_append_record_batch_ignores_nulls_in_sliced_away_nested_values() {
+    fn prepare_append_record_batch_ignores_nulls_in_sliced_away_nested_values() {
         let array_type = RowType::new(vec![DataField::new(
             "tags",
             DataTypes::array(DataTypes::int().as_non_nullable()).as_non_nullable(),
@@ -1876,10 +2040,10 @@ mod tests {
                 None,
             ),
         );
-        validate_append_record_batch(&lists.slice(1, 1), &array_type)
+        prepare_append_record_batch(&lists.slice(1, 1), &array_type)
             .expect("sliced-away ARRAY element nulls must not reject the live rows");
         assert_not_null_violation(
-            validate_append_record_batch(&lists.slice(0, 1), &array_type)
+            prepare_append_record_batch(&lists.slice(0, 1), &array_type)
                 .expect_err("live slice that still contains the element null must reject"),
         );
 
@@ -1898,10 +2062,10 @@ mod tests {
                 None,
             ),
         );
-        validate_append_record_batch(&maps.slice(1, 1), &map_type)
+        prepare_append_record_batch(&maps.slice(1, 1), &map_type)
             .expect("sliced-away MAP value nulls must not reject the live rows");
         assert_not_null_violation(
-            validate_append_record_batch(&maps.slice(0, 1), &map_type)
+            prepare_append_record_batch(&maps.slice(0, 1), &map_type)
                 .expect_err("live slice that still contains the map value null must reject"),
         );
 
@@ -1918,16 +2082,16 @@ mod tests {
             "nested",
             struct_int_string_array(vec![None, Some(2)], vec![Some("x"), Some("y")], None),
         );
-        validate_append_record_batch(&structs.slice(1, 1), &row_col_type)
+        prepare_append_record_batch(&structs.slice(1, 1), &row_col_type)
             .expect("sliced-away ROW field nulls must not reject the live rows");
         assert_not_null_violation(
-            validate_append_record_batch(&structs.slice(0, 1), &row_col_type)
+            prepare_append_record_batch(&structs.slice(0, 1), &row_col_type)
                 .expect_err("live slice that still contains the ROW field null must reject"),
         );
     }
 
     #[test]
-    fn validate_append_record_batch_nested_nested_nullability() {
+    fn prepare_append_record_batch_nested_nested_nullability() {
         // One case per pair of nested containers.
         let array_of_array = RowType::new(vec![DataField::new(
             "tags",
@@ -2780,7 +2944,7 @@ mod tests {
     /// A batch validation accepts must decode; one that fails to decode must be
     /// rejected. Pairing the two verdicts keeps the masking rules out of the test.
     fn assert_validation_matches_reader(label: &str, batch: &RecordBatch, row_type: &RowType) {
-        let accepted = validate_append_record_batch(batch, row_type).is_ok();
+        let accepted = prepare_append_record_batch(batch, row_type).is_ok();
         let bytes = encode_batch_bypassing_validation(batch);
         let read_context = ReadContext::new(
             to_arrow_schema(row_type).expect("arrow schema"),
@@ -3103,12 +3267,14 @@ mod tests {
         }
     }
 
-    /// The batch must be accepted and read back as what it was given. A mistyped
-    /// column decodes fine, it just decodes to a different number.
+    /// The batch must be accepted and read back as what would be written. A
+    /// mistyped column decodes fine, it just decodes to a different number. The
+    /// comparison is against what `prepare` produced, since that is what reaches
+    /// the wire - for a converting column that is not the input.
     fn assert_round_trips(label: &str, batch: &RecordBatch, row_type: &RowType) {
-        validate_append_record_batch(batch, row_type)
+        let prepared = prepare_append_record_batch(batch, row_type)
             .unwrap_or_else(|e| panic!("{label} must be accepted: {e}"));
-        let bytes = encode_batch_bypassing_validation(batch);
+        let bytes = encode_batch_bypassing_validation(&prepared);
         let read_context = ReadContext::new(
             to_arrow_schema(row_type).expect("arrow schema"),
             Arc::new(row_type.clone()),
@@ -3120,9 +3286,9 @@ mod tests {
             .expect("the batch parses")
             .record_batch(&read_context)
             .expect("an accepted batch must decode");
-        for i in 0..batch.num_columns() {
+        for i in 0..prepared.num_columns() {
             assert_eq!(
-                batch.column(i).as_ref(),
+                prepared.column(i).as_ref(),
                 decoded.column(i).as_ref(),
                 "{label}: column {i} changed on the way through"
             );
@@ -3130,7 +3296,7 @@ mod tests {
     }
 
     fn assert_rejected(label: &str, batch: &RecordBatch, row_type: &RowType) {
-        let err = validate_append_record_batch(batch, row_type)
+        let err = prepare_append_record_batch(batch, row_type)
             .expect_err(&format!("{label} must be rejected"));
         assert!(
             err.to_string().contains("but the table declares"),
@@ -3215,6 +3381,240 @@ mod tests {
         );
     }
 
+    /// Types that differ only in offset width or encoding are converted to the
+    /// table's, since converting cannot change the values. A column that already
+    /// matches keeps its buffers.
+    #[test]
+    fn encoding_differences_are_converted_not_rejected() {
+        use arrow::array::{
+            Array, DictionaryArray, Int32Array, LargeBinaryArray, LargeListArray, LargeStringArray,
+            StringViewArray,
+        };
+        use arrow::buffer::OffsetBuffer;
+
+        let string_col = RowType::new(vec![DataField::new("s", DataTypes::string(), None)]);
+        for (label, column) in [
+            (
+                "large_string",
+                Arc::new(LargeStringArray::from(vec!["a", "b"])) as ArrayRef,
+            ),
+            (
+                "string_view",
+                Arc::new(StringViewArray::from(vec!["a", "b"])) as ArrayRef,
+            ),
+            (
+                "dictionary",
+                Arc::new(
+                    vec!["a", "b"]
+                        .into_iter()
+                        .collect::<DictionaryArray<arrow::datatypes::Int32Type>>(),
+                ) as ArrayRef,
+            ),
+        ] {
+            let out = prepare_append_record_batch(&single_col_batch("s", column), &string_col)
+                .unwrap_or_else(|e| panic!("{label} must be accepted: {e}"));
+            assert_eq!(
+                out.column(0).data_type(),
+                &ArrowDataType::Utf8,
+                "{label} must arrive as the table's type"
+            );
+            let strings = out
+                .column(0)
+                .as_any()
+                .downcast_ref::<arrow::array::StringArray>()
+                .expect("converted to StringArray");
+            assert_eq!(strings.value(0), "a");
+            assert_eq!(strings.value(1), "b");
+        }
+
+        let bytes_col = RowType::new(vec![DataField::new("b", DataTypes::bytes(), None)]);
+        let out = prepare_append_record_batch(
+            &single_col_batch("b", Arc::new(LargeBinaryArray::from(vec![&b"hi"[..]]))),
+            &bytes_col,
+        )
+        .expect("large_binary must be accepted");
+        assert_eq!(out.column(0).data_type(), &ArrowDataType::Binary);
+
+        let list_col = RowType::new(vec![DataField::new(
+            "l",
+            DataTypes::array(DataTypes::int()),
+            None,
+        )]);
+        let large_list: ArrayRef = Arc::new(LargeListArray::new(
+            Arc::new(Field::new("item", ArrowDataType::Int32, true)),
+            OffsetBuffer::new(vec![0_i64, 2].into()),
+            Arc::new(Int32Array::from(vec![1, 2])),
+            None,
+        ));
+        let out = prepare_append_record_batch(&single_col_batch("l", large_list), &list_col)
+            .expect("large_list must be accepted");
+        assert!(matches!(out.column(0).data_type(), ArrowDataType::List(_)));
+
+        // A matching column is passed through, not rebuilt.
+        let matching = single_col_batch("s", Arc::new(arrow::array::StringArray::from(vec!["a"])));
+        let out = prepare_append_record_batch(&matching, &string_col).expect("accepted");
+        assert!(
+            Arc::ptr_eq(matching.column(0), out.column(0)),
+            "a column that already matches must keep its buffers"
+        );
+    }
+
+    /// The conversion rebuilds the schema, so the name check has to run before
+    /// it - otherwise a batch containing any convertible column would have its
+    /// names supplied by us and pass trivially.
+    #[test]
+    fn names_are_checked_even_when_a_column_converts() {
+        use arrow::array::{Int32Array, LargeStringArray};
+
+        let row_type = RowType::new(vec![
+            DataField::new("a", DataTypes::int(), None),
+            DataField::new("b", DataTypes::int(), None),
+            DataField::new("s", DataTypes::string(), None),
+        ]);
+        let batch = |first: &str, second: &str| {
+            RecordBatch::try_new(
+                Arc::new(arrow_schema::Schema::new(vec![
+                    Field::new(first, ArrowDataType::Int32, true),
+                    Field::new(second, ArrowDataType::Int32, true),
+                    // needs converting, which rebuilds the schema
+                    Field::new("s", ArrowDataType::LargeUtf8, true),
+                ])),
+                vec![
+                    Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+                    Arc::new(Int32Array::from(vec![999])) as ArrayRef,
+                    Arc::new(LargeStringArray::from(vec!["x"])) as ArrayRef,
+                ],
+            )
+            .expect("batch")
+        };
+
+        assert_round_trips(
+            "names right, one column converts",
+            &batch("a", "b"),
+            &row_type,
+        );
+        let err = prepare_append_record_batch(&batch("b", "a"), &row_type)
+            .expect_err("swapped columns must be rejected even when a column converts");
+        assert!(
+            err.to_string().contains("is named"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// A converting column must still report a NOT NULL violation in our own
+    /// words - casting straight to the table's type fails inside Arrow and would
+    /// surface an internal message for the same mistake.
+    #[test]
+    fn converting_column_reports_not_null_violations_consistently() {
+        use arrow::array::{Int32Array, LargeListArray, ListArray};
+        use arrow::buffer::OffsetBuffer;
+
+        let row_type = RowType::new(vec![DataField::new(
+            "c",
+            DataTypes::array(DataTypes::int().as_non_nullable()),
+            None,
+        )]);
+        let values = || Arc::new(Int32Array::from(vec![Some(1), None]));
+        let plain = single_col_batch(
+            "c",
+            Arc::new(ListArray::new(
+                Arc::new(Field::new("item", ArrowDataType::Int32, true)),
+                OffsetBuffer::new(vec![0_i32, 2].into()),
+                values(),
+                None,
+            )),
+        );
+        let converting = single_col_batch(
+            "c",
+            Arc::new(LargeListArray::new(
+                Arc::new(Field::new("item", ArrowDataType::Int32, true)),
+                OffsetBuffer::new(vec![0_i64, 2].into()),
+                values(),
+                None,
+            )),
+        );
+        let plain_err = prepare_append_record_batch(&plain, &row_type)
+            .expect_err("null element must be rejected")
+            .to_string();
+        let converting_err = prepare_append_record_batch(&converting, &row_type)
+            .expect_err("null element must be rejected when the column also converts")
+            .to_string();
+        assert_eq!(
+            plain_err, converting_err,
+            "the same mistake must report the same way"
+        );
+        assert!(
+            plain_err.contains("declared as non-nullable"),
+            "{plain_err}"
+        );
+    }
+
+    /// Encoding differences nested inside a container are converted too.
+    #[test]
+    fn nested_encoding_differences_are_converted() {
+        use arrow::array::{LargeStringArray, ListArray, StringArray, StructArray};
+        use arrow::buffer::OffsetBuffer;
+
+        // ROW<s STRING> given a large_utf8 child
+        let row_of_string = RowType::new(vec![DataField::new(
+            "r",
+            DataTypes::row(vec![DataField::new("s", DataTypes::string(), None)]),
+            None,
+        )]);
+        let out = prepare_append_record_batch(
+            &single_col_batch(
+                "r",
+                Arc::new(StructArray::from(vec![(
+                    Arc::new(Field::new("s", ArrowDataType::LargeUtf8, true)),
+                    Arc::new(LargeStringArray::from(vec!["deep"])) as ArrayRef,
+                )])),
+            ),
+            &row_of_string,
+        )
+        .expect("ROW with a large_utf8 child must be accepted");
+        assert_eq!(
+            out.column(0).data_type(),
+            to_arrow_schema(&row_of_string)
+                .unwrap()
+                .field(0)
+                .data_type()
+        );
+        assert_round_trips("ROW<STRING> from large_utf8", &out, &row_of_string);
+
+        // ARRAY<STRING> given a list of large_utf8
+        let array_of_string = RowType::new(vec![DataField::new(
+            "l",
+            DataTypes::array(DataTypes::string()),
+            None,
+        )]);
+        let out = prepare_append_record_batch(
+            &single_col_batch(
+                "l",
+                Arc::new(ListArray::new(
+                    Arc::new(Field::new("item", ArrowDataType::LargeUtf8, true)),
+                    OffsetBuffer::new(vec![0_i32, 2].into()),
+                    Arc::new(LargeStringArray::from(vec!["a", "b"])),
+                    None,
+                )),
+            ),
+            &array_of_string,
+        )
+        .expect("list of large_utf8 must be accepted");
+        assert_eq!(
+            out.column(0).data_type(),
+            to_arrow_schema(&array_of_string)
+                .unwrap()
+                .field(0)
+                .data_type()
+        );
+        assert_round_trips(
+            "ARRAY<STRING> from list<large_utf8>",
+            &out,
+            &array_of_string,
+        );
+        let _ = StringArray::from(vec!["x"]);
+    }
+
     /// A ROW's fields are matched by position too, so the same swap is possible
     /// one level down.
     #[test]
@@ -3285,7 +3685,7 @@ mod tests {
             &row_type,
         );
 
-        let err = validate_append_record_batch(&batch("account_id", "user_id"), &row_type)
+        let err = prepare_append_record_batch(&batch("account_id", "user_id"), &row_type)
             .expect_err("swapped columns must be rejected");
         assert!(
             err.to_string().contains("is named"),
@@ -3389,11 +3789,26 @@ mod tests {
             &single_col_batch("attrs", map_of(Arc::new(StringArray::from(vec!["a"])))),
             &map_type,
         );
-        assert_rejected(
-            "MAP<STRING,INT> with large_utf8 keys",
+        // large_utf8 keys differ only in offset width, so they are converted.
+        let converted = prepare_append_record_batch(
             &single_col_batch(
                 "attrs",
                 map_of(Arc::new(arrow::array::LargeStringArray::from(vec!["a"]))),
+            ),
+            &map_type,
+        )
+        .expect("large_utf8 map keys must be converted");
+        assert_eq!(
+            converted.column(0).data_type(),
+            to_arrow_schema(&map_type).unwrap().field(0).data_type()
+        );
+
+        // A genuinely different key type is still refused.
+        assert_rejected(
+            "MAP<STRING,INT> with int keys",
+            &single_col_batch(
+                "attrs",
+                map_of(Arc::new(arrow::array::Int32Array::from(vec![1]))),
             ),
             &map_type,
         );
@@ -3458,7 +3873,7 @@ mod tests {
         for zone in ["UTC", "+00:00", "Etc/UTC", "America/New_York"] {
             let column: ArrayRef =
                 Arc::new(TimestampMicrosecondArray::from(vec![1_i64]).with_timezone(zone));
-            validate_append_record_batch(&single_col_batch("ts", column), &ltz)
+            prepare_append_record_batch(&single_col_batch("ts", column), &ltz)
                 .unwrap_or_else(|e| panic!("zone {zone} must be accepted: {e}"));
         }
 
