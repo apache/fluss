@@ -123,11 +123,9 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.utils.ByteArraySlice;
-import org.apache.fluss.utils.ExecutorUtils;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.clock.Clock;
-import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 import org.apache.fluss.utils.concurrent.Scheduler;
 
 import org.slf4j.Logger;
@@ -154,8 +152,6 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.Lock;
@@ -264,6 +260,7 @@ public class ReplicaManager implements ServerReconfigurable {
             ScannerManager scannerManager,
             Clock clock,
             ExecutorService ioExecutor,
+            ExecutorService replicaTransitionExecutor,
             LocalDiskManager localDiskManager,
             @Nullable PluginManager pluginManager)
             throws IOException {
@@ -292,6 +289,7 @@ public class ReplicaManager implements ServerReconfigurable {
                 scannerManager,
                 clock,
                 ioExecutor,
+                replicaTransitionExecutor,
                 localDiskManager,
                 pluginManager);
     }
@@ -315,6 +313,7 @@ public class ReplicaManager implements ServerReconfigurable {
             ScannerManager scannerManager,
             Clock clock,
             ExecutorService ioExecutor,
+            ExecutorService replicaTransitionExecutor,
             LocalDiskManager localDiskManager,
             @Nullable PluginManager pluginManager)
             throws IOException {
@@ -366,10 +365,7 @@ public class ReplicaManager implements ServerReconfigurable {
         this.userMetrics = userMetrics;
         this.clock = clock;
         this.ioExecutor = ioExecutor;
-        this.replicaTransitionExecutor =
-                Executors.newFixedThreadPool(
-                        conf.get(ConfigOptions.TABLET_SERVER_REPLICA_TRANSITION_THREAD_NUM),
-                        new ExecutorThreadFactory("tablet-server-replica-transition-" + serverId));
+        this.replicaTransitionExecutor = replicaTransitionExecutor;
         this.minInSyncReplicas = conf.get(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER);
         this.scannerManager = checkNotNull(scannerManager, "scannerManager");
         // Historical lookup cache capacity currently uses only the first data volume.
@@ -2582,7 +2578,6 @@ public class ReplicaManager implements ServerReconfigurable {
     public static final class OfflineReplica implements HostedReplica {}
 
     public void shutdown() throws InterruptedException {
-        ExecutorUtils.gracefulShutdown(5, TimeUnit.SECONDS, replicaTransitionExecutor);
         // Close the resources for snapshot kv
         kvSnapshotResource.close();
         historicalPartitionManager.close();
