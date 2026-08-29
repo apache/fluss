@@ -1414,6 +1414,10 @@ public class ReplicaManager implements ServerReconfigurable {
             }
         }
 
+        CompletableFuture.allOf(
+                        makeLeaderFutures.toArray(
+                                new CompletableFuture<?>[makeLeaderFutures.size()]))
+                .join();
         for (CompletableFuture<NotifyLeaderAndIsrResultForBucket> future : makeLeaderFutures) {
             NotifyLeaderAndIsrResultForBucket leaderResult = future.join();
             result.put(leaderResult.getTableBucket(), leaderResult);
