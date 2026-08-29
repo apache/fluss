@@ -21,6 +21,7 @@ use crate::client::{WriteRecord, WriteResultFuture, WriterClient};
 use crate::error::Error::{IllegalArgument, UnexpectedError};
 use crate::error::Result;
 use crate::metadata::{PhysicalTablePath, TableInfo, TablePath};
+use crate::record::validate_append_record_batch;
 use crate::row::encode::{KeyEncoder, KeyEncoderFactory};
 use crate::row::{ColumnarRow, InternalRow};
 use arrow::array::{RecordBatch, UInt32Array};
@@ -174,6 +175,7 @@ impl AppendWriter {
             // Nothing to write; also avoids a keyless send to a bucket-key table.
             return Ok(WriteResultFuture::join(Vec::new()));
         }
+        validate_append_record_batch(&batch, self.table_info.row_type())?;
         let physical_table_path = if self.partition_getter.is_some() {
             let first_row = ColumnarRow::new(
                 Arc::new(batch.clone()),

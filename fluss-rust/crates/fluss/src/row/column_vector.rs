@@ -34,6 +34,80 @@ use arrow::array::{
 use arrow::datatypes::{DataType as ArrowDataType, TimeUnit};
 use std::sync::Arc;
 
+struct AncestorValidity<'a> {
+    array: &'a dyn Array,
+    parent: Option<&'a AncestorValidity<'a>>,
+}
+
+impl AncestorValidity<'_> {
+    fn all_valid(&self) -> bool {
+        self.array.null_count() == 0 && self.parent.is_none_or(Self::all_valid)
+    }
+
+    fn is_valid(&self, index: usize) -> bool {
+        !self.array.is_null(index) && self.parent.is_none_or(|parent| parent.is_valid(index))
+    }
+}
+
+/// True when `array[start..end)` has a null at an index where all ancestors are valid.
+/// `ListArray::values()` / `MapArray::keys()` keep the full child, so a sliced
+/// parent or a null container can leave leftover slots outside the live window;
+/// those must not count.
+fn has_null_in_range(
+    array: &dyn Array,
+    start: usize,
+    end: usize,
+    ancestors: Option<&AncestorValidity<'_>>,
+) -> bool {
+    debug_assert!(start <= end && end <= array.len());
+    if start == end || array.null_count() == 0 {
+        return false;
+    }
+    if let Some(ancestors) = ancestors.filter(|ancestors| !ancestors.all_valid()) {
+        return (start..end).any(|i| array.is_null(i) && ancestors.is_valid(i));
+    }
+    (start == 0 && end == array.len()) || array.slice(start, end - start).null_count() > 0
+}
+
+/// Walks child slots of live list/map rows in `rows` on the already-typed
+/// child. A row is dead when the container itself is null, or when an ancestor
+/// (e.g. the enclosing ROW's struct) is null.
+fn check_offset_window_not_null(
+    child: &TypedColumn,
+    offsets: &[i32],
+    container: &dyn Array,
+    ancestors: Option<&AncestorValidity<'_>>,
+    fluss_type: &DataType,
+    path: String,
+    rows: std::ops::Range<usize>,
+) -> Result<()> {
+    debug_assert!(rows.end <= container.len());
+    let ancestor_all_valid = ancestors.is_none_or(AncestorValidity::all_valid);
+    if container.null_count() == 0 && ancestor_all_valid {
+        return child.check_range_not_null(
+            offsets[rows.start] as usize,
+            offsets[rows.end] as usize,
+            fluss_type,
+            &path,
+            None,
+        );
+    }
+    for i in rows {
+        let dead = container.is_null(i) || ancestors.is_some_and(|a| !a.is_valid(i));
+        if dead {
+            continue;
+        }
+        child.check_range_not_null(
+            offsets[i] as usize,
+            offsets[i + 1] as usize,
+            fluss_type,
+            &path,
+            None,
+        )?;
+    }
+    Ok(())
+}
+
 /// One typed Arrow column.
 #[derive(Debug, Clone)]
 pub(crate) enum TypedColumn {
@@ -116,6 +190,18 @@ impl TypedBatch {
             num_rows: batch.num_rows(),
             record_batch: Some(batch.clone()),
         })
+    }
+
+    /// Rejects nulls on any schema-tree node whose Fluss type is NOT NULL.
+    pub(crate) fn check_not_null(&self, row_type: &RowType) -> Result<()> {
+        for (field, column) in row_type.fields().iter().zip(self.columns.iter()) {
+            column.check_not_null(
+                field.data_type(),
+                &format!("Column '{}'", field.name()),
+                None,
+            )?;
+        }
+        Ok(())
     }
 
     fn from_struct(struct_arr: &StructArray, row_type: &RowType) -> Result<Self> {
@@ -221,6 +307,82 @@ impl TypedColumn {
             Self::Array(a, _) => a,
             Self::Map(a, _, _) => a,
             Self::Row(a, _) => a,
+        }
+    }
+
+    fn check_not_null(
+        &self,
+        fluss_type: &DataType,
+        path: &str,
+        ancestors: Option<&AncestorValidity<'_>>,
+    ) -> Result<()> {
+        self.check_range_not_null(0, self.outer_array().len(), fluss_type, path, ancestors)
+    }
+
+    fn check_range_not_null(
+        &self,
+        start: usize,
+        end: usize,
+        fluss_type: &DataType,
+        path: &str,
+        ancestors: Option<&AncestorValidity<'_>>,
+    ) -> Result<()> {
+        if !fluss_type.is_nullable() && has_null_in_range(self.outer_array(), start, end, ancestors)
+        {
+            return Err(IllegalArgument {
+                message: format!("{path} is declared as non-nullable but contains null values"),
+            });
+        }
+        match (self, fluss_type) {
+            (Self::Array(list_arr, element), DataType::Array(array_type)) => {
+                check_offset_window_not_null(
+                    element,
+                    list_arr.value_offsets(),
+                    list_arr,
+                    ancestors,
+                    array_type.get_element_type(),
+                    format!("{path} element"),
+                    start..end,
+                )
+            }
+            (Self::Map(map_arr, key, value), DataType::Map(map_type)) => {
+                let offsets = map_arr.value_offsets();
+                check_offset_window_not_null(
+                    key,
+                    offsets,
+                    map_arr,
+                    ancestors,
+                    map_type.key_type(),
+                    format!("{path} key"),
+                    start..end,
+                )?;
+                check_offset_window_not_null(
+                    value,
+                    offsets,
+                    map_arr,
+                    ancestors,
+                    map_type.value_type(),
+                    format!("{path} value"),
+                    start..end,
+                )
+            }
+            (Self::Row(struct_arr, inner), DataType::Row(row_type)) => {
+                let row_ancestors = AncestorValidity {
+                    array: struct_arr,
+                    parent: ancestors,
+                };
+                for (field, column) in row_type.fields().iter().zip(inner.columns.iter()) {
+                    column.check_range_not_null(
+                        start,
+                        end,
+                        field.data_type(),
+                        &format!("{path}.{}", field.name()),
+                        Some(&row_ancestors),
+                    )?;
+                }
+                Ok(())
+            }
+            _ => Ok(()),
         }
     }
 
