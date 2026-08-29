@@ -1800,7 +1800,26 @@ class ReplicaManagerTest extends ReplicaTestBase {
     }
 
     @Test
-    void testMakeLeadersInParallel() throws Exception {
+    void testMakeLeadersInParallelWithPartialFailure() throws Exception {
+        TableBucket firstBucket = new TableBucket(DATA1_TABLE_ID, 1);
+        TableBucket secondBucket = new TableBucket(DATA1_TABLE_ID, 2);
+        List<Integer> replicas = Arrays.asList(1, 2, 3);
+        makeLogTableAsLeader(firstBucket.getBucket());
+        replicaManager
+                .getReplicaOrException(firstBucket)
+                .makeLeader(
+                        new NotifyLeaderAndIsrData(
+                                PhysicalTablePath.of(DATA1_TABLE_PATH),
+                                firstBucket,
+                                replicas,
+                                new LeaderAndIsr(
+                                        TABLET_SERVER_ID,
+                                        INITIAL_LEADER_EPOCH,
+                                        replicas,
+                                        Collections.emptyList(),
+                                        INITIAL_COORDINATOR_EPOCH,
+                                        INITIAL_BUCKET_EPOCH + 1)));
+
         ReplicaManager spyingReplicaManager = spy(replicaManager);
         replicaManager = spyingReplicaManager;
 
@@ -1817,8 +1836,6 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 .when(spyingReplicaManager)
                 .makeLeader(any(Replica.class), any(NotifyLeaderAndIsrData.class));
 
-        TableBucket firstBucket = new TableBucket(DATA1_TABLE_ID, 1);
-        TableBucket secondBucket = new TableBucket(DATA1_TABLE_ID, 2);
         CompletableFuture<List<NotifyLeaderAndIsrResultForBucket>> future =
                 new CompletableFuture<>();
         spyingReplicaManager.becomeLeaderOrFollower(
@@ -1827,22 +1844,22 @@ class ReplicaManagerTest extends ReplicaTestBase {
                         new NotifyLeaderAndIsrData(
                                 PhysicalTablePath.of(DATA1_TABLE_PATH),
                                 firstBucket,
-                                Arrays.asList(1, 2, 3),
+                                replicas,
                                 new LeaderAndIsr(
                                         TABLET_SERVER_ID,
                                         INITIAL_LEADER_EPOCH,
-                                        Arrays.asList(1, 2, 3),
+                                        replicas,
                                         Collections.emptyList(),
                                         INITIAL_COORDINATOR_EPOCH,
                                         INITIAL_BUCKET_EPOCH)),
                         new NotifyLeaderAndIsrData(
                                 PhysicalTablePath.of(DATA1_TABLE_PATH),
                                 secondBucket,
-                                Arrays.asList(1, 2, 3),
+                                replicas,
                                 new LeaderAndIsr(
                                         TABLET_SERVER_ID,
                                         INITIAL_LEADER_EPOCH,
-                                        Arrays.asList(1, 2, 3),
+                                        replicas,
                                         Collections.emptyList(),
                                         INITIAL_COORDINATOR_EPOCH,
                                         INITIAL_BUCKET_EPOCH))),
@@ -1850,10 +1867,27 @@ class ReplicaManagerTest extends ReplicaTestBase {
 
         assertThat(future.get())
                 .containsExactlyInAnyOrder(
-                        new NotifyLeaderAndIsrResultForBucket(firstBucket),
+                        new NotifyLeaderAndIsrResultForBucket(
+                                firstBucket,
+                                new ApiError(
+                                        Errors.INVALID_UPDATE_VERSION_EXCEPTION,
+                                        String.format(
+                                                "Skipped the become-leader state change for %s with a lower bucket epoch %s"
+                                                        + " since the leader is already at a newer bucket epoch %s",
+                                                firstBucket,
+                                                INITIAL_BUCKET_EPOCH,
+                                                INITIAL_BUCKET_EPOCH + 1))),
                         new NotifyLeaderAndIsrResultForBucket(secondBucket));
-        assertThat(spyingReplicaManager.getReplicaOrException(firstBucket).isLeader()).isTrue();
-        assertThat(spyingReplicaManager.getReplicaOrException(secondBucket).isLeader()).isTrue();
+        assertReplicaEpochEquals(
+                spyingReplicaManager.getReplicaOrException(firstBucket),
+                true,
+                INITIAL_LEADER_EPOCH,
+                INITIAL_BUCKET_EPOCH + 1);
+        assertReplicaEpochEquals(
+                spyingReplicaManager.getReplicaOrException(secondBucket),
+                true,
+                INITIAL_LEADER_EPOCH,
+                INITIAL_BUCKET_EPOCH);
     }
 
     @Test
