@@ -1821,7 +1821,6 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                         INITIAL_BUCKET_EPOCH + 1)));
 
         ReplicaManager spyingReplicaManager = spy(replicaManager);
-        replicaManager = spyingReplicaManager;
 
         CountDownLatch leadersStarted = new CountDownLatch(2);
         doAnswer(
