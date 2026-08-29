@@ -687,6 +687,19 @@ class KvTabletTest {
                 .hasMessage(
                         "Partial Delete sets the target columns to null, so it requires all target columns "
                                 + "except primary key to be nullable, but target column c is NOT NULL.");
+
+        // b is already null for k2, so the delete removes the whole row and nulls no column
+        kvTablet.putAsLeader(
+                kvRecordBatchFactory.ofRecords(
+                        Collections.singletonList(
+                                recordFactory.ofRecord(
+                                        "k2".getBytes(), new Object[] {2, null, "str"}))),
+                null);
+        KvRecordBatch wholeRowDeleteBatch =
+                kvRecordBatchFactory.ofRecords(
+                        Collections.singletonList(recordFactory.ofRecord("k2".getBytes(), null)));
+        assertThatCode(() -> kvTablet.putAsLeader(wholeRowDeleteBatch, new int[] {0, 2}))
+                .doesNotThrowAnyException();
     }
 
     @Test

@@ -207,7 +207,7 @@ class PartialUpdaterTest {
 
     /**
      * The same bytes as {@link #row}, but typed with {@link #SCHEMA} the way the server types an
-     * incoming record. Reading any field of it deserialises the whole row and fails on the null
+     * incoming record. Reading any field of it deserializes the whole row and fails on the null
      * that {@code c} is not allowed to hold.
      */
     private static BinaryValue asServerTypedRow(int a, String b, String c) {

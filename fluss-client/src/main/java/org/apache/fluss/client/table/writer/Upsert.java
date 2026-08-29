@@ -43,10 +43,12 @@ public interface Upsert {
      *
      * <p>For delete operations, the entire row will not be removed immediately, but only the
      * specified columns except primary key will be set to null. The entire row will be removed when
-     * all columns except primary key are null after a delete operation.
+     * all columns except primary key are null after a delete operation. Such a delete is rejected
+     * when a specified column other than primary key is NOT NULL, since it cannot be set to null.
      *
      * <p>Note: The specified columns must contain all columns of primary key, and all columns
-     * except primary key should be nullable.
+     * omitted from the specified columns should be nullable, since they are set to null when the
+     * row doesn't exist. Specified columns may be declared NOT NULL.
      *
      * @param targetColumns the column indexes to partial update
      */

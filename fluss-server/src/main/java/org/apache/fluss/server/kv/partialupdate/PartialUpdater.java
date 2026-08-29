@@ -154,8 +154,8 @@ public class PartialUpdater {
     }
 
     /**
-     * Rejects a null in a non-nullable slot, which would desynchronise the encoded row. Runs before
-     * any field getter, since a getter deserialises the whole row and would fail first.
+     * Rejects a null in a non-nullable slot, which would corrupt the encoded row. Runs before any
+     * field getter, since a getter deserializes the whole row and would fail first.
      */
     private void checkNotNullTargetCols(BinaryValue partialValue) {
         for (int i = notNullTargetCols.nextSetBit(0);

@@ -155,13 +155,9 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
             autoIncrementColumnSet.set(autoIncrementColumnIndex);
         }
 
-        // The aggregation merge engine returns the new row unchanged on the first write instead of
-        // null filling the omitted columns, so it keeps requiring every column except the primary
-        // key to be nullable. The server enforces the same rule when it builds the merger, and
-        // checking it here keeps the rejection at writer creation instead of at the first write.
-        // OVERWRITE is exempt, since it bypasses the configured merge engine on the server and
-        // merges with the default merger, which null fills the omitted columns like any other
-        // partial update.
+        // the aggregation merge engine does not null fill omitted columns on the first write, so
+        // it keeps requiring every column except the primary key to be nullable, like the server.
+        // OVERWRITE is exempt, since the server merges it with the default merger instead.
         if (mergeEngineType == MergeEngineType.AGGREGATION && mergeMode != MergeMode.OVERWRITE) {
             for (int i = 0; i < rowType.getFieldCount(); i++) {
                 if (!primaryKeys.contains(rowType.getFieldNames().get(i))

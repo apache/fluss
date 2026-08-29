@@ -268,7 +268,7 @@ impl UpsertWriterFactory {
             }
         }
 
-        // an omitted column is written as NULL, so it must be nullable. auto increment columns
+        // an omitted column is written as null, so it must be nullable. auto increment columns
         // are always omitted and only get their value on the server.
         for (i, field) in row_type.fields().iter().enumerate() {
             if !target_column_set[i] && !field.data_type.is_nullable() {
