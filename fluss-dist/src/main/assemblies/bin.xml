@@ -41,6 +41,7 @@
                 <include>org.apache.logging.log4j:log4j-core</include>
                 <include>org.apache.logging.log4j:log4j-slf4j-impl</include>
                 <include>org.apache.logging.log4j:log4j-1.2-api</include>
+                <include>commons-cli:commons-cli</include>
             </includes>
         </dependencySet>
 
@@ -53,6 +54,22 @@
             <source>../fluss-server/target/fluss-server-${project.version}.jar</source>
             <outputDirectory>lib/</outputDirectory>
             <destName>fluss-server-${project.version}.jar</destName>
+            <fileMode>0644</fileMode>
+        </file>
+
+        <!-- copy fluss-cli jar -->
+        <file>
+            <source>../fluss-cli/target/fluss-cli-${project.version}.jar</source>
+            <outputDirectory>lib/</outputDirectory>
+            <destName>fluss-cli-${project.version}.jar</destName>
+            <fileMode>0644</fileMode>
+        </file>
+
+        <!-- copy fluss-client fat jar (required by fluss-cli) -->
+        <file>
+            <source>../fluss-client/target/fluss-client-${project.version}.jar</source>
+            <outputDirectory>lib/</outputDirectory>
+            <destName>fluss-client-${project.version}.jar</destName>
             <fileMode>0644</fileMode>
         </file>
 

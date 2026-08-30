@@ -30,6 +30,7 @@ import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import javax.annotation.Nullable;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -136,12 +137,15 @@ public class CoordinatorMetadataProvider extends ZkBasedMetadataProvider {
                     TableBucket tableBucket = new TableBucket(tableId, partitionId, bucketId);
                     Optional<LeaderAndIsr> optLeaderAndIsr = ctx.getBucketLeaderAndIsr(tableBucket);
                     Integer leader = optLeaderAndIsr.map(LeaderAndIsr::leader).orElse(null);
+                    List<Integer> isr =
+                            optLeaderAndIsr.map(LeaderAndIsr::isr).orElse(Collections.emptyList());
                     BucketMetadata bucketMetadata =
                             new BucketMetadata(
                                     bucketId,
                                     leader,
                                     ctx.getBucketLeaderEpoch(tableBucket),
-                                    serverIds);
+                                    serverIds,
+                                    isr);
                     bucketMetadataList.add(bucketMetadata);
                 });
         return bucketMetadataList;
