@@ -1763,8 +1763,7 @@ public class ConfigOptions {
                     .withDescription(
                             "Whether to enable standby replicas for primary key tables. "
                                     + "Standby replicas maintain recent KV snapshots for fast leader promotion. "
-                                    + "Automatically set to true by the coordinator during table creation for new PK tables. "
-                                    + "Tables created before this option was introduced are treated as disabled. "
+                                    + "Disabled if not configured, including for tables created before this option was introduced. "
                                     + "Can be dynamically enabled via ALTER TABLE.");
 
     public static final ConfigOption<Duration> TABLE_KV_TTL =

@@ -836,11 +836,6 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                     ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION.key(),
                     String.valueOf(layoutVersion));
 
-            // Enable standby replica for new PK tables if not explicitly configured
-            if (!newProperties.containsKey(ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key())) {
-                newProperties.put(ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key(), "true");
-            }
-
             newDescriptor = newDescriptor.withProperties(newProperties);
         }
 

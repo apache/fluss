@@ -113,7 +113,6 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         options.put(
                 ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION.key(),
                 String.valueOf(KvValueLayout.PLAIN.version()));
-        options.put(ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key(), "true");
         expected = expected.withProperties(options);
         assertThat(tableInfo.toTableDescriptor()).isEqualTo(expected);
     }

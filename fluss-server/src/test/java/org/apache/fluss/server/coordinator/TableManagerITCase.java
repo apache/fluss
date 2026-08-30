@@ -513,8 +513,7 @@ class TableManagerITCase {
         tableDescriptor = tableDescriptor.withProperties(properties);
 
         assertThat(TableDescriptor.fromJsonBytes(tableMetadata.getTableJson()))
-                .isEqualTo(
-                        tableDescriptor.withReplicationFactor(1).withStandbyReplicaEnabled(true));
+                .isEqualTo(tableDescriptor.withReplicationFactor(1));
 
         // now, check the table buckets metadata
         assertThat(tableMetadata.getBucketMetadatasCount()).isEqualTo(expectBucketCount);

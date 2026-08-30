@@ -762,7 +762,6 @@ abstract class FlinkCatalogITCase {
             expectedTableProperties.put(
                     ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION.key(),
                     String.valueOf(KvValueLayout.PLAIN.version()));
-            expectedTableProperties.put("table.kv.standby-replica.enabled", "true");
             assertThat(tableInfo.getProperties().toMap()).isEqualTo(expectedTableProperties);
 
             Map<String, String> expectedCustomProperties = new HashMap<>();
@@ -1259,7 +1258,6 @@ abstract class FlinkCatalogITCase {
         actualOptions.remove(ConfigOptions.TABLE_REPLICATION_FACTOR.key());
         actualOptions.remove(ConfigOptions.TABLE_KV_FORMAT_VERSION.key());
         actualOptions.remove(ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION.key());
-        actualOptions.remove(ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key());
         assertThat(actualOptions).isEqualTo(expectedOptions);
     }
 }

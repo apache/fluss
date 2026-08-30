@@ -301,7 +301,6 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         Map<String, String> options = new HashMap<>(tableDescriptor.getProperties());
         options.put(TABLE_KV_FORMAT_VERSION.key(), String.valueOf(CURRENT_KV_FORMAT_VERSION));
         options.put(TABLE_KV_VALUE_LAYOUT_VERSION.key(), String.valueOf(PLAIN.version()));
-        options.put(ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key(), "true");
         assertThat(tableInfo.toTableDescriptor())
                 .isEqualTo(tableDescriptor.withProperties(options));
         assertThat(schemaInfo2).isEqualTo(schemaInfo);
@@ -330,7 +329,6 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         options = new HashMap<>(expected.getProperties());
         options.put(TABLE_KV_FORMAT_VERSION.key(), String.valueOf(CURRENT_KV_FORMAT_VERSION));
         options.put(TABLE_KV_VALUE_LAYOUT_VERSION.key(), String.valueOf(PLAIN.version()));
-        options.put(ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key(), "true");
         assertThat(tableInfo.toTableDescriptor()).isEqualTo(expected.withProperties(options));
         assertThat(schemaInfo2).isEqualTo(schemaInfo);
         // assert created time
@@ -1065,7 +1063,6 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
             Map<String, String> options = new HashMap<>(expected.getProperties());
             options.put(TABLE_KV_FORMAT_VERSION.key(), String.valueOf(CURRENT_KV_FORMAT_VERSION));
             options.put(TABLE_KV_VALUE_LAYOUT_VERSION.key(), String.valueOf(PLAIN.version()));
-            options.put(ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key(), "true");
             assertThat(tableInfo.toTableDescriptor()).isEqualTo(expected.withProperties(options));
         }
     }
