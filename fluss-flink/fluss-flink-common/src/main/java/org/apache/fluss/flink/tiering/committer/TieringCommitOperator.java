@@ -151,6 +151,32 @@ public class TieringCommitOperator<WriteResult, Committable>
                 collectTableAllBucketWriteResult(tableId);
 
         if (committableWriteResults != null) {
+            // Check if the table was dropped during tiering
+            LOG.error(
+                    committableWriteResults.stream()
+                            .map(TableBucketWriteResult::isTableDropped)
+                            .collect(Collectors.toList())
+                            .toString());
+            boolean isTableDropped =
+                    committableWriteResults.stream()
+                            .anyMatch(TableBucketWriteResult::isTableDropped);
+            if (isTableDropped) {
+                LOG.info(
+                        "Skipping commit for dropped table {}, table path {}.",
+                        tableId,
+                        tableBucketWriteResult.tablePath());
+                // TODO: abort the committable to clean up staging data files
+                collectedTableBucketWriteResults.remove(tableId);
+                operatorEventGateway.sendEventToCoordinator(
+                        new SourceEventWrapper(
+                                new FailedTieringEvent(
+                                        tableId,
+                                        FailedTieringEvent.FailureType.TABLE_DROPPED,
+                                        String.format(
+                                                "Table %s was dropped during tiering",
+                                                tableBucketWriteResult.tablePath()))));
+                return;
+            }
             try {
                 CommitResult commitResult =
                         commitWriteResults(

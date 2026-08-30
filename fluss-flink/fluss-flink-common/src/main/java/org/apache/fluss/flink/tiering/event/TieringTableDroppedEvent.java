@@ -19,48 +19,45 @@ package org.apache.fluss.flink.tiering.event;
 
 import org.apache.flink.api.connector.source.SourceEvent;
 
-import static org.apache.fluss.utils.Preconditions.checkNotNull;
+import java.util.Objects;
 
-/** SourceEvent used to represent a Fluss table has failed during tiering. */
-public class FailedTieringEvent implements SourceEvent {
-
-    /** The type of tiering failure. */
-    public enum FailureType {
-        TABLE_DROPPED,
-        COMMIT_FAILURE
-    }
+/**
+ * SourceEvent used to notify TieringSourceReader that a table has been dropped or recreated, and
+ * all pending splits for this table should be skipped.
+ */
+public class TieringTableDroppedEvent implements SourceEvent {
 
     private static final long serialVersionUID = 1L;
 
     private final long tableId;
 
-    private final FailureType failureType;
-
-    private final String failureMessage;
-
-    public FailedTieringEvent(long tableId, String failureMessage) {
-        this(tableId, FailureType.COMMIT_FAILURE, failureMessage);
-    }
-
-    public FailedTieringEvent(long tableId, FailureType failureType, String failureMessage) {
+    public TieringTableDroppedEvent(long tableId) {
         this.tableId = tableId;
-        this.failureType = checkNotNull(failureType);
-        this.failureMessage = failureMessage;
     }
 
     public long getTableId() {
         return tableId;
     }
 
-    public FailureType getFailureType() {
-        return failureType;
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) {
+            return true;
+        }
+        if (!(o instanceof TieringTableDroppedEvent)) {
+            return false;
+        }
+        TieringTableDroppedEvent that = (TieringTableDroppedEvent) o;
+        return tableId == that.tableId;
     }
 
-    public String getFailureMessage() {
-        return failureMessage;
+    @Override
+    public int hashCode() {
+        return Objects.hashCode(tableId);
     }
 
-    public boolean isTableDropped() {
-        return failureType == FailureType.TABLE_DROPPED;
+    @Override
+    public String toString() {
+        return "TieringTableDroppedEvent{" + "tableId=" + tableId + '}';
     }
 }
