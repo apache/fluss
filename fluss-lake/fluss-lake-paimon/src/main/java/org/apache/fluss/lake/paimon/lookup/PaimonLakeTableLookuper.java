@@ -341,7 +341,7 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
         try {
             return localTableQuery.lookup(partition, bucket, key);
         } catch (IOException firstError) {
-            refreshFiles(partition, bucket, filesBeforeLookup);
+            refreshFilesIfUnchanged(partition, bucket, filesBeforeLookup);
             try {
                 return localTableQuery.lookup(partition, bucket, key);
             } catch (IOException retryError) {
@@ -356,10 +356,10 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
         PaimonPartitionBucket partitionBucket = new PaimonPartitionBucket(partition, bucket);
         return registeredFiles.computeIfAbsent(
                 partitionBucket,
-                ignored -> registerFiles(partition, bucket, Collections.emptyList()));
+                ignored -> scanAndUpdateFiles(partition, bucket, Collections.emptyList()));
     }
 
-    private void refreshFiles(
+    private void refreshFilesIfUnchanged(
             org.apache.paimon.data.BinaryRow partition,
             int bucket,
             List<DataFileMeta> filesBeforeLookup) {
@@ -371,12 +371,12 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
                             checkNotNull(
                                     currentFiles, "Partition-bucket files must be initialized.");
                     return files == filesBeforeLookup
-                            ? registerFiles(partition, bucket, filesBeforeLookup)
+                            ? scanAndUpdateFiles(partition, bucket, filesBeforeLookup)
                             : files;
                 });
     }
 
-    private List<DataFileMeta> registerFiles(
+    private List<DataFileMeta> scanAndUpdateFiles(
             org.apache.paimon.data.BinaryRow partition,
             int bucket,
             List<DataFileMeta> filesBeforeRefresh) {
@@ -484,7 +484,7 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
         }
     }
 
-    private final class TrackingMetrics implements AutoCloseable {
+    private static final class TrackingMetrics implements AutoCloseable {
         private final ThreadLocal<Boolean> lookupFileDownloaded;
         private final long startNanoTime;
         private final LookupContext context;
