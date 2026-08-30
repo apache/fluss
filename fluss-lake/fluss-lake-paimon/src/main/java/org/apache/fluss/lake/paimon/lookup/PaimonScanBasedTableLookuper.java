@@ -22,13 +22,9 @@ import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.lake.lakestorage.LakeTableLookuper;
 import org.apache.fluss.lake.paimon.source.FlussRowAsPaimonRow;
-import org.apache.fluss.lake.paimon.utils.PaimonRowAsFlussRow;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.decode.KeyDecoder;
-import org.apache.fluss.row.encode.RowEncoder;
-import org.apache.fluss.row.encode.ValueEncoder;
 import org.apache.fluss.utils.IOUtils;
 
 import org.apache.paimon.catalog.Catalog;
@@ -56,6 +52,7 @@ import java.util.List;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
+import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toFlussValue;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimonPartition;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -204,7 +201,11 @@ public class PaimonScanBasedTableLookuper implements LakeTableLookuper {
                     org.apache.paimon.data.InternalRow row = batch.next();
                     if (row != null) {
                         // Encode while the batch still owns the row's backing storage.
-                        return encodeValue(row, context);
+                        return toFlussValue(
+                                row,
+                                context.schemaId(),
+                                context.valueRowType(),
+                                tableConfig.getKvFormat());
                     }
                 } finally {
                     batch.releaseBatch();
@@ -212,20 +213,5 @@ public class PaimonScanBasedTableLookuper implements LakeTableLookuper {
             }
         }
         return null;
-    }
-
-    private byte[] encodeValue(org.apache.paimon.data.InternalRow row, LookupContext context)
-            throws Exception {
-        PaimonRowAsFlussRow flussRow = new PaimonRowAsFlussRow(row);
-        InternalRow.FieldGetter[] fieldGetters =
-                InternalRow.createFieldGetters(context.valueRowType());
-        try (RowEncoder encoder =
-                RowEncoder.create(tableConfig.getKvFormat(), context.valueRowType())) {
-            encoder.startNewRow();
-            for (int i = 0; i < fieldGetters.length; i++) {
-                encoder.encodeField(i, fieldGetters[i].getFieldOrNull(flussRow));
-            }
-            return ValueEncoder.encodeValue(context.schemaId(), encoder.finishRow());
-        }
     }
 }
