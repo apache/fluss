@@ -1628,9 +1628,6 @@ public class ReplicaManager implements ServerReconfigurable {
                 // metric for kv
                 tableMetrics.incKvMessageIn(entry.getValue().getRecordCount());
                 tableMetrics.incKvBytesIn(entry.getValue().sizeInBytes());
-                // metric for cdc log of kv
-                tableMetrics.incLogBytesIn(appendInfo.validBytes());
-                tableMetrics.incLogMessageIn(appendInfo.numMessages());
             } catch (Exception e) {
                 if (e instanceof StorageBackpressureException) {
                     // Fluss application-layer write rejection (L0 headroom or flush budget
