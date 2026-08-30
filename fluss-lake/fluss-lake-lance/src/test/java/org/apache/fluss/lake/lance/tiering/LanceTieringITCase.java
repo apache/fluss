@@ -25,6 +25,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericArray;
+import org.apache.fluss.row.GenericMap;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.server.zk.data.lake.LakeTable;
 
@@ -411,6 +412,71 @@ class LanceTieringITCase extends FlinkLanceTieringTestBase {
             sb.append("2\tOrder2\t[{\"item_name\":\"Orange\",\"quantity\":7}]\n");
             sb.append(
                     "3\tOrder3\t[{\"item_name\":\"Apple\",\"quantity\":5},{\"item_name\":\"Banana\",\"quantity\":3},{\"item_name\":\"Orange\",\"quantity\":7}]\n");
+        }
+        return sb.toString();
+    }
+
+    @Test
+    void testTieringWithMapType() throws Exception {
+        // Test: Log table with Map type
+        TablePath t1 = TablePath.of(DEFAULT_DB, "logTableWithMap");
+        long t1Id = createLogTableWithMapType(t1);
+        TableBucket t1Bucket = new TableBucket(t1Id, 0);
+
+        // Create map data
+        for (int i = 0; i < 10; i++) {
+            java.util.LinkedHashMap<BinaryString, Integer> map1 = new java.util.LinkedHashMap<>();
+            map1.put(BinaryString.fromString("age"), 25);
+            map1.put(BinaryString.fromString("score"), 100);
+
+            java.util.LinkedHashMap<BinaryString, Integer> map2 = new java.util.LinkedHashMap<>();
+            map2.put(BinaryString.fromString("age"), 30);
+            map2.put(BinaryString.fromString("score"), 95);
+
+            java.util.LinkedHashMap<BinaryString, Integer> map3 = new java.util.LinkedHashMap<>();
+            map3.put(BinaryString.fromString("age"), 35);
+            map3.put(BinaryString.fromString("score"), 88);
+
+            writeRows(
+                    t1,
+                    Arrays.asList(
+                            row(1, "Alice", new GenericMap(map1)),
+                            row(2, "Bob", new GenericMap(map2)),
+                            row(3, "Charlie", new GenericMap(map3))),
+                    true);
+        }
+
+        // then start tiering job
+        JobClient jobClient = buildTieringJob(execEnv);
+
+        // check the status of replica after synced
+        assertReplicaStatus(t1Bucket, 30);
+
+        LanceConfig config1 =
+                LanceConfig.from(
+                        lanceConf.toMap(),
+                        Collections.emptyMap(),
+                        t1.getDatabaseName(),
+                        t1.getTableName());
+
+        // check data in lance using TSV string comparison
+        String expectedTsv1 = buildExpectedTsvForMapTable(30);
+        checkDataInLance(config1, expectedTsv1);
+        checkSnapshotPropertyInLance(config1, Collections.singletonMap(t1Bucket, 30L));
+
+        jobClient.cancel().get();
+    }
+
+    private String buildExpectedTsvForMapTable(int rowCount) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("id\tname\tattributes\n");
+        for (int i = 0; i < rowCount / 3; i++) {
+            sb.append(
+                    "1\tAlice\t[{\"key\":\"score\",\"value\":100},{\"key\":\"age\",\"value\":25}]\n");
+            sb.append(
+                    "2\tBob\t[{\"key\":\"score\",\"value\":95},{\"key\":\"age\",\"value\":30}]\n");
+            sb.append(
+                    "3\tCharlie\t[{\"key\":\"score\",\"value\":88},{\"key\":\"age\",\"value\":35}]\n");
         }
         return sb.toString();
     }
