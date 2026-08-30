@@ -375,4 +375,22 @@ public class DataTypes {
     public static RowType ROW(DataType... fieldTypes) {
         return RowType.builder().fields(fieldTypes).build();
     }
+
+    /**
+     * Data type of a timestamp with nanosecond precision WITHOUT time zone. Iceberg V3 type.
+     *
+     * @see TimestampNanoType
+     */
+    public static TimestampNanoType TIMESTAMP_NS() {
+        return new TimestampNanoType();
+    }
+
+    /**
+     * Data type of a timestamp with nanosecond precision WITH local time zone. Iceberg V3 type.
+     *
+     * @see LocalZonedTimestampNanoType
+     */
+    public static LocalZonedTimestampNanoType TIMESTAMP_NS_LTZ() {
+        return new LocalZonedTimestampNanoType();
+    }
 }

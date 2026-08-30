@@ -1,0 +1,173 @@
+################################################################################
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+################################################################################
+
+# Docker Compose for Fluss E2E Testing with Iceberg V3
+# Usage: docker-compose up -d
+
+version: '3.8'
+
+services:
+  # ZooKeeper for Fluss coordination
+  zookeeper:
+    image: zookeeper:3.8.4
+    container_name: fluss-zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOO_MY_ID: 1
+      ZOO_SERVERS: server.1=zookeeper:2888:3888;2181
+    healthcheck:
+      test: ["CMD", "zkServer.sh", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # MinIO for S3-compatible Iceberg warehouse
+  minio:
+    image: minio/minio:RELEASE.2024-01-16T16-07-38Z
+    container_name: fluss-minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - minio-data:/data
+
+  # MinIO bucket initialization
+  minio-init:
+    image: minio/mc:RELEASE.2024-01-16T16-06-34Z
+    container_name: fluss-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set myminio http://minio:9000 minioadmin minioadmin;
+      mc mb myminio/iceberg-warehouse --ignore-existing;
+      mc mb myminio/fluss-data --ignore-existing;
+      exit 0;
+      "
+
+  # Fluss Coordinator Server
+  coordinator-server:
+    image: ${FLUSS_IMAGE:-fluss/fluss:latest}
+    container_name: fluss-coordinator
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9123:9123"
+    environment:
+      FLUSS_PROPERTIES: |
+        zookeeper.address: zookeeper:2181
+        coordinator.host: coordinator-server
+        coordinator.port: 9123
+        remote.data.dir: s3://fluss-data/
+        datalake.format: ICEBERG
+        datalake.iceberg.warehouse: s3://iceberg-warehouse/
+        datalake.iceberg.type: hadoop
+        datalake.iceberg.s3.endpoint: http://minio:9000
+        datalake.iceberg.s3.access-key-id: minioadmin
+        datalake.iceberg.s3.secret-access-key: minioadmin
+        datalake.iceberg.s3.path-style-access: true
+    command: coordinator-server
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9123/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # Fluss Tablet Server 1
+  tablet-server-1:
+    image: ${FLUSS_IMAGE:-fluss/fluss:latest}
+    container_name: fluss-tablet-1
+    depends_on:
+      coordinator-server:
+        condition: service_healthy
+    ports:
+      - "9124:9124"
+    environment:
+      FLUSS_PROPERTIES: |
+        zookeeper.address: zookeeper:2181
+        tablet-server.host: tablet-server-1
+        tablet-server.port: 9124
+        tablet-server.id: 0
+        data.dir: /tmp/fluss/data
+        remote.data.dir: s3://fluss-data/
+        datalake.format: ICEBERG
+        datalake.iceberg.warehouse: s3://iceberg-warehouse/
+        datalake.iceberg.type: hadoop
+        datalake.iceberg.s3.endpoint: http://minio:9000
+        datalake.iceberg.s3.access-key-id: minioadmin
+        datalake.iceberg.s3.secret-access-key: minioadmin
+        datalake.iceberg.s3.path-style-access: true
+    command: tablet-server
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9124/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # Fluss Tablet Server 2
+  tablet-server-2:
+    image: ${FLUSS_IMAGE:-fluss/fluss:latest}
+    container_name: fluss-tablet-2
+    depends_on:
+      coordinator-server:
+        condition: service_healthy
+    ports:
+      - "9125:9125"
+    environment:
+      FLUSS_PROPERTIES: |
+        zookeeper.address: zookeeper:2181
+        tablet-server.host: tablet-server-2
+        tablet-server.port: 9125
+        tablet-server.id: 1
+        data.dir: /tmp/fluss/data
+        remote.data.dir: s3://fluss-data/
+        datalake.format: ICEBERG
+        datalake.iceberg.warehouse: s3://iceberg-warehouse/
+        datalake.iceberg.type: hadoop
+        datalake.iceberg.s3.endpoint: http://minio:9000
+        datalake.iceberg.s3.access-key-id: minioadmin
+        datalake.iceberg.s3.secret-access-key: minioadmin
+        datalake.iceberg.s3.path-style-access: true
+    command: tablet-server
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9125/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+volumes:
+  minio-data:
+
+networks:
+  default:
+    name: fluss-e2e-network
