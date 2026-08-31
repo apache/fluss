@@ -26,6 +26,10 @@ on:
       - 'fluss-rust/bindings/**'
       - 'fluss-rust/Cargo.toml'
       - 'fluss-rust/Cargo.lock'
+      - 'fluss-rust/DEPENDENCIES.rust.tsv'
+      - 'fluss-rust/LICENSE'
+      - 'fluss-rust/NOTICE'
+      - 'fluss-rust/scripts/**'
       - 'fluss-rust/deny.toml'
       - 'fluss-rust/.licenserc.yaml'
       - 'fluss-rust/rustfmt.toml'
@@ -40,6 +44,10 @@ on:
       - 'fluss-rust/bindings/**'
       - 'fluss-rust/Cargo.toml'
       - 'fluss-rust/Cargo.lock'
+      - 'fluss-rust/DEPENDENCIES.rust.tsv'
+      - 'fluss-rust/LICENSE'
+      - 'fluss-rust/NOTICE'
+      - 'fluss-rust/scripts/**'
       - 'fluss-rust/deny.toml'
       - 'fluss-rust/.licenserc.yaml'
       - 'fluss-rust/rustfmt.toml'
@@ -70,10 +78,28 @@ jobs:
       - name: Install cargo-deny
         uses: taiki-e/install-action@v2
         with:
-          tool: cargo-deny@0.14.22
+          tool: cargo-deny@0.20.2
 
       - name: Check dependency licenses (Apache-compatible)
         run: cargo deny check licenses
+
+      # The inventory ships with the source release, so a stale one is worse than none.
+      - name: Dependency inventory drift check
+        run: |
+          cargo fetch --locked
+          python3 scripts/dependencies.py verify
+
+      # release.sh archives this subtree and nothing else inspects the result;
+      # the crate is covered by rust-release.yml before it publishes.
+      - name: Source release contents
+        run: |
+          git archive --prefix=t/ HEAD | tar -t > "${RUNNER_TEMP}/tarball.txt"
+          for f in LICENSE NOTICE DEPENDENCIES.rust.tsv; do
+            grep -qxF "t/$f" "${RUNNER_TEMP}/tarball.txt" || {
+              echo "::error::source release is missing $f"
+              exit 1
+            }
+          done
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1

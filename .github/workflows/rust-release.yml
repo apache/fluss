@@ -44,10 +44,10 @@ jobs:
 
       # cargo packs only the crate directory, so the LICENSE/NOTICE above it
       # never reach the .crate.
-      - name: Verify LICENSE and NOTICE in the crate
+      - name: Verify LICENSE, NOTICE and the dependency inventory in the crate
         run: |
           FILES=$(cargo package --list --allow-dirty -p fluss-rs)
-          for f in LICENSE NOTICE; do
+          for f in LICENSE NOTICE DEPENDENCIES.rust.tsv; do
             if ! echo "$FILES" | grep -qx "$f"; then
               echo "Error: ${f} is missing from the fluss-rs crate"
               exit 1

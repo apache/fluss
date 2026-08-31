@@ -134,7 +134,7 @@ jobs:
       - name: Install cargo-deny
         uses: taiki-e/install-action@v2
         with:
-          tool: cargo-deny@0.14.22
+          tool: cargo-deny@0.20.2
 
       - name: Check dependency licenses (Apache-compatible)
         run: cargo deny --locked check licenses
