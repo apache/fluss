@@ -195,20 +195,23 @@ public class PaimonConversions {
                 String key = convertFlussPropertyKeyToPaimon(setOption.getKey());
                 validateAlterPaimonOptions(key);
                 schemaChanges.add(SchemaChange.setOption(key, setOption.getValue()));
-                // #4102: keep lakestream.enabled in sync with datalake acceleration state.
-                appendLakeStreamOptionChange(
-                        setOption.getKey(),
-                        Boolean.parseBoolean(setOption.getValue()),
-                        paimonIncludingSystemColumns,
-                        schemaChanges);
+                if (TABLE_DATALAKE_ENABLED.key().equals(setOption.getKey())) {
+                    // #4102: keep lakestream.enabled in sync with datalake acceleration state.
+                    appendLakeStreamOptionChange(
+                            Boolean.parseBoolean(setOption.getValue()),
+                            paimonIncludingSystemColumns,
+                            schemaChanges);
+                }
             } else if (tableChange instanceof TableChange.ResetOption) {
                 TableChange.ResetOption resetOption = (TableChange.ResetOption) tableChange;
                 String key = convertFlussPropertyKeyToPaimon(resetOption.getKey());
                 validateAlterPaimonOptions(key);
                 schemaChanges.add(SchemaChange.removeOption(key));
-                // #4102: resetting datalake.enabled is equivalent to disabling acceleration.
-                appendLakeStreamOptionChange(
-                        resetOption.getKey(), false, paimonIncludingSystemColumns, schemaChanges);
+                if (TABLE_DATALAKE_ENABLED.key().equals(resetOption.getKey())) {
+                    // #4102: resetting datalake.enabled is equivalent to disabling acceleration.
+                    appendLakeStreamOptionChange(
+                            false, paimonIncludingSystemColumns, schemaChanges);
+                }
             } else if (tableChange instanceof TableChange.AddColumn) {
                 TableChange.AddColumn addColumn = (TableChange.AddColumn) tableChange;
 
@@ -369,19 +372,12 @@ public class PaimonConversions {
      * that still carry the Fluss system columns are left untouched. Disabling removes the option
      * instead of persisting {@code false}.
      *
-     * @param flussKey the original (un-prefixed) Fluss change key
      * @param lakeStreamEnabled whether datalake acceleration is enabled after this change
      * @param legacyTable whether the Paimon table uses the legacy system-column layout
      * @param out the schema-change list to append to
      */
     private static void appendLakeStreamOptionChange(
-            String flussKey,
-            boolean lakeStreamEnabled,
-            boolean legacyTable,
-            List<SchemaChange> out) {
-        if (!TABLE_DATALAKE_ENABLED.key().equals(flussKey)) {
-            return;
-        }
+            boolean lakeStreamEnabled, boolean legacyTable, List<SchemaChange> out) {
         // Old-layout tables are outside the scope of this option.
         if (legacyTable) {
             return;
