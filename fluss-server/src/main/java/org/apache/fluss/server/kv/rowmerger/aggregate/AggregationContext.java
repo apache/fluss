@@ -336,8 +336,8 @@ public class AggregationContext {
     /** Collects every column that orders a sequence group of the schema. */
     private static Set<String> sequenceColumnNames(Schema schema) {
         Set<String> names = new HashSet<>();
-        for (Schema.Column column : schema.getColumns()) {
-            column.getSequenceColumns().ifPresent(names::addAll);
+        for (Schema.SequenceGroup group : schema.getSequenceGroups()) {
+            names.addAll(group.getSequenceColumns());
         }
         return names;
     }

@@ -28,11 +28,8 @@ import org.apache.fluss.types.TimestampType;
 import javax.annotation.Nullable;
 
 import java.io.Serializable;
-import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
@@ -109,39 +106,21 @@ public class SequenceGroups implements Serializable {
      */
     @Nullable
     public static SequenceGroups create(Schema schema) {
-        if (!schema.hasSequenceGroup()) {
+        List<Schema.SequenceGroup> declared = schema.getSequenceGroups();
+        if (declared.isEmpty()) {
             return null;
         }
 
         RowType rowType = schema.getRowType();
-        List<Schema.Column> columns = schema.getColumns();
-        int fieldCount = columns.size();
-
-        // columns naming the very same sequence columns belong to one group, keyed by those names
-        // so that the group ids stay stable across equal schemas
-        Map<List<String>, Integer> groupIds = new LinkedHashMap<>();
-        List<List<String>> sequenceColumnsOfGroup = new ArrayList<>();
+        int fieldCount = rowType.getFieldCount();
 
         int[] groupOfField = new int[fieldCount];
         Arrays.fill(groupOfField, NO_GROUP);
 
-        for (int i = 0; i < fieldCount; i++) {
-            List<String> sequenceColumns = columns.get(i).getSequenceColumns().orElse(null);
-            if (sequenceColumns == null) {
-                continue;
-            }
-            Integer groupId = groupIds.get(sequenceColumns);
-            if (groupId == null) {
-                groupId = sequenceColumnsOfGroup.size();
-                groupIds.put(sequenceColumns, groupId);
-                sequenceColumnsOfGroup.add(sequenceColumns);
-            }
-            groupOfField[i] = groupId;
-        }
-
-        SequenceReader[][] readersOfGroup = new SequenceReader[sequenceColumnsOfGroup.size()][];
-        for (int groupId = 0; groupId < sequenceColumnsOfGroup.size(); groupId++) {
-            List<String> sequenceColumns = sequenceColumnsOfGroup.get(groupId);
+        SequenceReader[][] readersOfGroup = new SequenceReader[declared.size()][];
+        for (int groupId = 0; groupId < declared.size(); groupId++) {
+            Schema.SequenceGroup group = declared.get(groupId);
+            List<String> sequenceColumns = group.getSequenceColumns();
             SequenceReader[] readers = new SequenceReader[sequenceColumns.size()];
             for (int i = 0; i < sequenceColumns.size(); i++) {
                 String sequenceColumn = sequenceColumns.get(i);
@@ -158,6 +137,15 @@ public class SequenceGroups implements Serializable {
                 groupOfField[sequenceField] = groupId;
             }
             readersOfGroup[groupId] = readers;
+
+            for (String protectedColumn : group.getProtectedColumns()) {
+                int fieldIndex = rowType.getFieldIndex(protectedColumn);
+                checkArgument(
+                        fieldIndex >= 0,
+                        "The protected column '%s' doesn't exist in schema.",
+                        protectedColumn);
+                groupOfField[fieldIndex] = groupId;
+            }
         }
 
         return new SequenceGroups(groupOfField, readersOfGroup);

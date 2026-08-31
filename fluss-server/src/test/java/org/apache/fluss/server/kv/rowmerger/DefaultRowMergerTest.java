@@ -122,9 +122,11 @@ class DefaultRowMergerTest {
             Schema.newBuilder()
                     .column("id", DataTypes.INT())
                     .column("name", DataTypes.STRING())
-                    .withSequenceColumns("ts")
                     .column("ts", DataTypes.INT())
                     .column("note", DataTypes.STRING())
+                    .sequenceGroup(
+                            java.util.Collections.singletonList("ts"),
+                            java.util.Collections.singletonList("name"))
                     .primaryKey("id")
                     .build();
 

@@ -19,39 +19,34 @@ package org.apache.fluss.server.utils;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.InvalidConfigException;
-import org.apache.fluss.metadata.AggFunctionType;
-import org.apache.fluss.metadata.AggFunctions;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
-import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
-import org.junit.jupiter.params.provider.MethodSource;
 
-import java.util.stream.Stream;
-
+import static java.util.Collections.singletonList;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Tests for the sequence group part of {@link TableDescriptorValidation}, which rejects at table
- * creation what would otherwise be silently ignored or fail while merging.
+ * Table-level rejection tests for sequence groups. These rejections depend on the merge engine or
+ * the table type (log vs primary key), so they live in {@link TableDescriptorValidation}. The
+ * schema-level rejections (existence, types, cross-group relations) are covered by {@code
+ * SchemaSequenceGroupTest}.
  */
 class SequenceGroupValidationTest {
 
-    private static Schema.Builder pkSchema() {
-        return Schema.newBuilder().column("k", DataTypes.INT()).column("a", DataTypes.STRING());
-    }
-
-    /** A schema whose {@code a} is ordered by a {@code g} column of the given type. */
-    private static Schema orderedByG(DataType sequenceType) {
-        return pkSchema()
-                .withSequenceColumns("g")
-                .column("g", sequenceType)
+    /** A primary-key schema whose {@code a} is ordered by {@code g}. */
+    private static Schema orderedByG() {
+        return Schema.newBuilder()
+                .column("k", DataTypes.INT())
+                .column("a", DataTypes.STRING())
+                .column("g", DataTypes.INT())
+                .sequenceGroup(singletonList("g"), singletonList("a"))
                 .primaryKey("k")
                 .build();
     }
@@ -72,23 +67,14 @@ class SequenceGroupValidationTest {
         TableDescriptorValidation.validateTableDescriptor(builder.build(), 1024, null);
     }
 
-    private static Stream<DataType> supportedSequenceTypes() {
-        return Stream.of(
-                DataTypes.INT(),
-                DataTypes.BIGINT(),
-                DataTypes.TIMESTAMP(),
-                DataTypes.TIMESTAMP_LTZ());
-    }
-
-    @ParameterizedTest
-    @MethodSource("supportedSequenceTypes")
-    void testSupportedSequenceColumnTypeIsAccepted(DataType sequenceType) {
-        assertThatCode(() -> validate(orderedByG(sequenceType))).doesNotThrowAnyException();
-    }
-
     @Test
     void testSchemaWithoutSequenceGroupIsNotAffected() {
-        Schema schema = pkSchema().primaryKey("k").build();
+        Schema schema =
+                Schema.newBuilder()
+                        .column("k", DataTypes.INT())
+                        .column("a", DataTypes.STRING())
+                        .primaryKey("k")
+                        .build();
 
         assertThatCode(() -> validate(schema)).doesNotThrowAnyException();
         // a merge engine is only rejected together with a sequence group
@@ -97,36 +83,16 @@ class SequenceGroupValidationTest {
     }
 
     @Test
-    void testEveryColumnOfACompositeSequenceKeyIsChecked() {
-        Schema schema =
-                pkSchema()
-                        .withSequenceColumns("g1", "g2")
-                        .column("g1", DataTypes.INT())
-                        // only the trailing column has an unsupported type
-                        .column("g2", DataTypes.STRING())
-                        .primaryKey("k")
-                        .build();
-
-        assertThatThrownBy(() -> validate(schema))
-                .isInstanceOf(InvalidConfigException.class)
-                .hasMessageContaining(
-                        "The sequence column 'g2' must be one type of "
-                                + "[INT, BIGINT, TIMESTAMP, TIMESTAMP_LTZ], but got STRING");
-    }
-
-    @Test
-    void testUnknownSequenceColumnIsRejected() {
-        Schema schema = pkSchema().withSequenceColumns("missing").primaryKey("k").build();
-
-        assertThatThrownBy(() -> validate(schema))
-                .isInstanceOf(InvalidConfigException.class)
-                .hasMessageContaining("The sequence column 'missing' doesn't exist in schema.");
-    }
-
-    @Test
     void testLogTableIsRejected() {
-        // nothing consults the sequence groups when merging, as there is no merging at all
-        Schema schema = pkSchema().withSequenceColumns("g").column("g", DataTypes.INT()).build();
+        // nothing consults the sequence groups when merging, as there is no merging at all. Since
+        // a log table has no primary key, we build the schema without one.
+        Schema schema =
+                Schema.newBuilder()
+                        .column("k", DataTypes.INT())
+                        .column("a", DataTypes.STRING())
+                        .column("g", DataTypes.INT())
+                        .sequenceGroup(singletonList("g"), singletonList("a"))
+                        .build();
 
         assertThatThrownBy(() -> validate(schema))
                 .isInstanceOf(InvalidConfigException.class)
@@ -139,7 +105,7 @@ class SequenceGroupValidationTest {
             names = {"AGGREGATION"},
             mode = EnumSource.Mode.EXCLUDE)
     void testMergeEngineWithoutSequenceGroupSupportIsRejected(MergeEngineType mergeEngine) {
-        assertThatThrownBy(() -> validate(orderedByG(DataTypes.INT()), mergeEngine))
+        assertThatThrownBy(() -> validate(orderedByG(), mergeEngine))
                 .isInstanceOf(InvalidConfigException.class)
                 .hasMessageContaining(
                         String.format(
@@ -151,70 +117,7 @@ class SequenceGroupValidationTest {
     void testAggregationMergeEngineIsAccepted() {
         // the aggregation engine reads the groups as an ordering key rather than a version filter,
         // so it takes part in the arbitration instead of rejecting it
-        assertThatCode(() -> validate(orderedByG(DataTypes.INT()), MergeEngineType.AGGREGATION))
+        assertThatCode(() -> validate(orderedByG(), MergeEngineType.AGGREGATION))
                 .doesNotThrowAnyException();
-    }
-
-    @Test
-    void testSequenceColumnWithAggregateFunctionIsRejected() {
-        Schema schema =
-                pkSchema()
-                        .withSequenceColumns("g")
-                        .column("g", DataTypes.INT(), AggFunctions.of(AggFunctionType.SUM))
-                        .primaryKey("k")
-                        .build();
-
-        assertThatThrownBy(() -> validate(schema, MergeEngineType.AGGREGATION))
-                .isInstanceOf(InvalidConfigException.class)
-                .hasMessageContaining(
-                        "The sequence column 'g' orders a sequence group, "
-                                + "so it must not have an aggregate function.");
-    }
-
-    @Test
-    void testPrimaryKeyColumnInSequenceGroupIsRejected() {
-        // a primary key holds the same value in both rows being merged, so a group can neither
-        // arbitrate it nor be ordered by it
-        Schema schema =
-                Schema.newBuilder()
-                        .column("k", DataTypes.INT())
-                        .withSequenceColumns("g")
-                        .column("g", DataTypes.INT())
-                        .primaryKey("k")
-                        .build();
-
-        assertThatThrownBy(() -> validate(schema))
-                .isInstanceOf(InvalidConfigException.class)
-                .hasMessageContaining(
-                        "The primary key column 'k' must not be put in a sequence group.");
-    }
-
-    @Test
-    void testPrimaryKeyAsSequenceColumnIsRejected() {
-        Schema schema = pkSchema().withSequenceColumns("k").primaryKey("k").build();
-
-        assertThatThrownBy(() -> validate(schema))
-                .isInstanceOf(InvalidConfigException.class)
-                .hasMessageContaining("The sequence column 'k' must not be a primary key column.");
-    }
-
-    @Test
-    void testSequenceColumnProtectedByAnotherGroupIsRejected() {
-        // a sequence column reports the order of its own group, so following another one would
-        // leave it out of step with the columns it orders
-        Schema schema =
-                pkSchema()
-                        .withSequenceColumns("pay_time")
-                        .column("pay_time", DataTypes.TIMESTAMP())
-                        .withSequenceColumns("ship_time")
-                        .column("ship_time", DataTypes.TIMESTAMP())
-                        .primaryKey("k")
-                        .build();
-
-        assertThatThrownBy(() -> validate(schema))
-                .isInstanceOf(InvalidConfigException.class)
-                .hasMessageContaining(
-                        "The sequence column 'pay_time' orders a sequence group, "
-                                + "so it must not be put into another one.");
     }
 }

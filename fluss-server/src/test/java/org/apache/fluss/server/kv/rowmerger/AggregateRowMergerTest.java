@@ -1018,9 +1018,11 @@ class AggregateRowMergerTest {
             Schema.newBuilder()
                     .column("id", DataTypes.INT())
                     .column("total", DataTypes.BIGINT(), AggFunctions.SUM())
-                    .withSequenceColumns("ts")
                     .column("ts", DataTypes.INT())
                     .column("note", DataTypes.STRING())
+                    .sequenceGroup(
+                            java.util.Collections.singletonList("ts"),
+                            java.util.Collections.singletonList("total"))
                     .primaryKey("id")
                     .build();
 
@@ -1091,11 +1093,15 @@ class AggregateRowMergerTest {
                 Schema.newBuilder()
                         .column("id", DataTypes.INT())
                         .column("paid", DataTypes.BIGINT(), AggFunctions.SUM())
-                        .withSequenceColumns("pay_ts")
                         .column("pay_ts", DataTypes.INT())
                         .column("shipped", DataTypes.BIGINT(), AggFunctions.SUM())
-                        .withSequenceColumns("ship_ts")
                         .column("ship_ts", DataTypes.INT())
+                        .sequenceGroup(
+                                java.util.Collections.singletonList("pay_ts"),
+                                java.util.Collections.singletonList("paid"))
+                        .sequenceGroup(
+                                java.util.Collections.singletonList("ship_ts"),
+                                java.util.Collections.singletonList("shipped"))
                         .primaryKey("id")
                         .build();
         TableConfig tableConfig = new TableConfig(new Configuration());
