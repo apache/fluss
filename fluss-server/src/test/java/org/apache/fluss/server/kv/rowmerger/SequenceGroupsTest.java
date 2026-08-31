@@ -30,9 +30,10 @@ import javax.annotation.Nullable;
 
 import java.util.stream.Stream;
 
+import static java.util.Arrays.asList;
+import static java.util.Collections.singletonList;
 import static org.apache.fluss.testutils.DataTestUtils.compactedRow;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for how {@link SequenceGroups} arbitrates the groups declared on a schema. */
 class SequenceGroupsTest {
@@ -44,11 +45,11 @@ class SequenceGroupsTest {
             Schema.newBuilder()
                     .column("k", DataTypes.INT())
                     .column("a", DataTypes.STRING())
-                    .withSequenceColumns("g1")
                     .column("g1", DataTypes.INT())
                     .column("b", DataTypes.STRING())
-                    .withSequenceColumns("g2")
                     .column("g2", DataTypes.INT())
+                    .sequenceGroup(singletonList("g1"), singletonList("a"))
+                    .sequenceGroup(singletonList("g2"), singletonList("b"))
                     .primaryKey("k")
                     .build();
 
@@ -101,7 +102,7 @@ class SequenceGroupsTest {
                         .column("k", DataTypes.INT())
                         .column("g", DataTypes.INT())
                         .column("a", DataTypes.STRING())
-                        .withSequenceColumns("g")
+                        .sequenceGroup(singletonList("g"), singletonList("a"))
                         .primaryKey("k")
                         .build();
         InternalRow storedFirst =
@@ -119,10 +120,9 @@ class SequenceGroupsTest {
                 Schema.newBuilder()
                         .column("k", DataTypes.INT())
                         .column("a", DataTypes.STRING())
-                        .withSequenceColumns("g")
                         .column("b", DataTypes.STRING())
-                        .withSequenceColumns("g")
                         .column("g", DataTypes.INT())
+                        .sequenceGroup(singletonList("g"), asList("a", "b"))
                         .primaryKey("k")
                         .build();
         InternalRow storedShared =
@@ -158,9 +158,9 @@ class SequenceGroupsTest {
             Schema.newBuilder()
                     .column("k", DataTypes.INT())
                     .column("a", DataTypes.STRING())
-                    .withSequenceColumns("g1", "g2")
                     .column("g1", DataTypes.INT())
                     .column("g2", DataTypes.INT())
+                    .sequenceGroup(asList("g1", "g2"), singletonList("a"))
                     .primaryKey("k")
                     .build();
 
@@ -230,8 +230,8 @@ class SequenceGroupsTest {
                 Schema.newBuilder()
                         .column("k", DataTypes.INT())
                         .column("a", DataTypes.STRING())
-                        .withSequenceColumns("g")
                         .column("g", sequenceType)
+                        .sequenceGroup(singletonList("g"), singletonList("a"))
                         .primaryKey("k")
                         .build();
         SequenceGroups groups = SequenceGroups.create(schema);
@@ -244,32 +244,5 @@ class SequenceGroupsTest {
         assertThat(groups.resolveAcceptance(stored, newerRow)[A]).isTrue();
         assertThat(groups.resolveAcceptance(newerRow, stored)[A]).isFalse();
         assertThat(groups.resolveAcceptance(stored, withoutSequence)[A]).isFalse();
-    }
-
-    @Test
-    void testInvalidSequenceColumnIsRejectedWhenResolving() {
-        // table creation rejects these already, so resolving is only a backstop
-        Schema unsupportedType =
-                Schema.newBuilder()
-                        .column("k", DataTypes.INT())
-                        .column("a", DataTypes.STRING())
-                        .withSequenceColumns("g")
-                        .column("g", DataTypes.STRING())
-                        .primaryKey("k")
-                        .build();
-        assertThatThrownBy(() -> SequenceGroups.create(unsupportedType))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("must be one type of");
-
-        Schema missingColumn =
-                Schema.newBuilder()
-                        .column("k", DataTypes.INT())
-                        .column("a", DataTypes.STRING())
-                        .withSequenceColumns("missing")
-                        .primaryKey("k")
-                        .build();
-        assertThatThrownBy(() -> SequenceGroups.create(missingColumn))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("doesn't exist in schema");
     }
 }

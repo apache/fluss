@@ -62,6 +62,7 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -147,6 +148,16 @@ public class FlinkConversions {
                         column.getName(), column.getAggFunction().get(), newOptions);
             }
         }
+
+        // rebuild the fields.<sequence-columns>.sequence-group options from the schema, so that a
+        // SHOW CREATE TABLE reflects the declarations kept on Schema.sequenceGroups
+        for (Schema.SequenceGroup group : schema.getSequenceGroups()) {
+            String key =
+                    SEQUENCE_GROUP_PREFIX
+                            + String.join(",", group.getSequenceColumns())
+                            + SEQUENCE_GROUP_SUFFIX;
+            newOptions.put(key, String.join(",", group.getProtectedColumns()));
+        }
         List<String> physicalColumns = schema.getColumnNames();
         int columnCount =
                 physicalColumns.size()
@@ -220,21 +231,20 @@ public class FlinkConversions {
         // Check if aggregation merge engine is enabled to optimize parsing
         boolean isAggregationEngine = isAggregationMergeEngine(flinkTableConf);
 
-        // Sequence groups apply to the primary key table without merge engine, so they are parsed
-        // regardless of the merge engine and rejected server side when unsupported
-        Map<String, List<String>> sequenceColumnsOf = parseSequenceGroups(flinkTableConf);
-
         // Build schema with physical columns
         resolvedSchema.getColumns().stream()
                 .filter(Column::isPhysical)
                 .forEachOrdered(
                         column ->
                                 addColumnToSchema(
-                                        schemBuilder,
-                                        column,
-                                        flinkTableConf,
-                                        isAggregationEngine,
-                                        sequenceColumnsOf));
+                                        schemBuilder, column, flinkTableConf, isAggregationEngine));
+
+        // Sequence groups are a cross-column relation, so they are added on the schema itself
+        // rather than on the individual protected columns
+        parseSequenceGroups(flinkTableConf)
+                .forEach(
+                        (sequenceColumns, protectedColumns) ->
+                                schemBuilder.sequenceGroup(sequenceColumns, protectedColumns));
 
         // Configure auto-increment columns based on the 'auto-increment.fields' option.
         if (flinkTableConf.containsKey(AUTO_INCREMENT_FIELDS.key())) {
@@ -755,19 +765,21 @@ public class FlinkConversions {
     }
 
     /**
-     * Parses the sequence groups declared in the table options, keyed by the sequence columns and
-     * listing the columns they protect:
+     * Parses the sequence groups declared in the table options. The key lists the sequence columns
+     * ordering the group and the value lists the columns it protects:
      *
      * <pre>
      * 'fields.g1.sequence-group' = 'a,b'
      * 'fields.g1,g2.sequence-group' = 'c'
      * </pre>
      *
-     * <p>The returned mapping is inverted, giving the sequence columns of each protected column,
-     * which is how {@link Schema.Column} stores the relation.
+     * <p>Returns the groups in a map from ordered sequence columns to protected columns, keeping
+     * the shape declared in the DDL so that the schema can hold it directly.
      */
-    private static Map<String, List<String>> parseSequenceGroups(Configuration tableConf) {
-        Map<String, List<String>> sequenceColumnsOf = new HashMap<>();
+    private static Map<List<String>, List<String>> parseSequenceGroups(Configuration tableConf) {
+        // LinkedHashMap keeps the group order stable across serializations
+        Map<List<String>, List<String>> groups = new LinkedHashMap<>();
+        Map<String, List<String>> sequenceColumnsOfProtected = new HashMap<>();
         for (String key : tableConf.keySet()) {
             if (!key.startsWith(SEQUENCE_GROUP_PREFIX) || !key.endsWith(SEQUENCE_GROUP_SUFFIX)) {
                 continue;
@@ -790,7 +802,8 @@ public class FlinkConversions {
                                     "Invalid option '%s': column '%s' must not be protected by itself.",
                                     key, protectedColumn));
                 }
-                List<String> previous = sequenceColumnsOf.put(protectedColumn, sequenceColumns);
+                List<String> previous =
+                        sequenceColumnsOfProtected.put(protectedColumn, sequenceColumns);
                 if (previous != null) {
                     throw new IllegalArgumentException(
                             String.format(
@@ -798,8 +811,20 @@ public class FlinkConversions {
                                     protectedColumn, previous, sequenceColumns));
                 }
             }
+            groups.merge(
+                    sequenceColumns,
+                    protectedColumns,
+                    (a, b) -> {
+                        List<String> merged = new ArrayList<>(a);
+                        for (String c : b) {
+                            if (!merged.contains(c)) {
+                                merged.add(c);
+                            }
+                        }
+                        return merged;
+                    });
         }
-        return sequenceColumnsOf;
+        return groups;
     }
 
     /**
@@ -841,14 +866,12 @@ public class FlinkConversions {
      * @param column the Flink column
      * @param tableConf the table configuration
      * @param parseAggFunction whether to parse aggregation function from config
-     * @param sequenceColumnsOf the sequence columns ordering each protected column
      */
     private static void addColumnToSchema(
             Schema.Builder schemaBuilder,
             Column column,
             Configuration tableConf,
-            boolean parseAggFunction,
-            Map<String, List<String>> sequenceColumnsOf) {
+            boolean parseAggFunction) {
         String columnName = column.getName();
         DataType flussDataType = toFlussType(column.getDataType());
 
@@ -867,12 +890,6 @@ public class FlinkConversions {
 
         // Add comment if present
         column.getComment().ifPresent(schemaBuilder::withComment);
-
-        // Put the column into the sequence group ordering it, if any
-        List<String> sequenceColumns = sequenceColumnsOf.get(columnName);
-        if (sequenceColumns != null) {
-            schemaBuilder.withSequenceColumns(sequenceColumns.toArray(new String[0]));
-        }
     }
 
     private static Map<String, String> extractCustomProperties(
@@ -883,6 +900,15 @@ public class FlinkConversions {
         // properties.
         customProperties.remove(BUCKET_KEY.key());
         customProperties.remove(BUCKET_NUMBER.key());
+        // Sequence group options are consumed into Schema.sequenceGroups, so they must not be
+        // retained as custom properties as well. Otherwise the table would carry two
+        // representations that could drift apart across ALTER TABLE SET.
+        customProperties
+                .keySet()
+                .removeIf(
+                        key ->
+                                key.startsWith(SEQUENCE_GROUP_PREFIX)
+                                        && key.endsWith(SEQUENCE_GROUP_SUFFIX));
         return customProperties;
     }
 }

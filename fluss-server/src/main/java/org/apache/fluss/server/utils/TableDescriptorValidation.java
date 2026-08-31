@@ -51,7 +51,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.EnumSet;
-import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
@@ -468,13 +467,12 @@ public class TableDescriptorValidation {
      */
     private static void validateSequenceGroups(
             @Nullable MergeEngineType mergeEngine, boolean hasPrimaryKey, Schema schema) {
-        if (!schema.hasSequenceGroup()) {
+        if (schema.getSequenceGroups().isEmpty()) {
             return;
         }
 
-        // both checks reject a configuration that would otherwise be silently ignored, as only the
-        // primary key table without merge engine, or with the aggregation one, consults the
-        // sequence groups when merging
+        // only a primary key table without merge engine, or with the aggregation one, consults
+        // the sequence groups when merging; schema-level invariants already ran at build time
         if (!hasPrimaryKey) {
             throw new InvalidConfigException(
                     "Sequence group is only supported in primary key table.");
@@ -483,75 +481,6 @@ public class TableDescriptorValidation {
             throw new InvalidConfigException(
                     String.format(
                             "Sequence group is not supported for '%s' merge engine.", mergeEngine));
-        }
-
-        RowType rowType = schema.getRowType();
-        List<String> primaryKeyNames = schema.getPrimaryKeyColumnNames();
-        Set<String> protectedColumnNames = new HashSet<>();
-        for (Schema.Column column : schema.getColumns()) {
-            if (column.getSequenceColumns().isPresent()) {
-                protectedColumnNames.add(column.getName());
-            }
-        }
-        EnumSet<DataTypeRoot> supportedTypes =
-                EnumSet.of(
-                        DataTypeRoot.INTEGER,
-                        DataTypeRoot.BIGINT,
-                        DataTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE,
-                        DataTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE);
-
-        for (Schema.Column column : schema.getColumns()) {
-            List<String> sequenceColumns = column.getSequenceColumns().orElse(null);
-            if (sequenceColumns == null) {
-                continue;
-            }
-            // a primary key column holds the same value in both rows being merged, so it can
-            // neither order a group nor be held back by one
-            if (primaryKeyNames.contains(column.getName())) {
-                throw new InvalidConfigException(
-                        String.format(
-                                "The primary key column '%s' must not be put in a sequence group.",
-                                column.getName()));
-            }
-            for (String sequenceColumn : sequenceColumns) {
-                int columnIndex = rowType.getFieldIndex(sequenceColumn);
-                if (columnIndex < 0) {
-                    throw new InvalidConfigException(
-                            String.format(
-                                    "The sequence column '%s' doesn't exist in schema.",
-                                    sequenceColumn));
-                }
-                if (primaryKeyNames.contains(sequenceColumn)) {
-                    throw new InvalidConfigException(
-                            String.format(
-                                    "The sequence column '%s' must not be a primary key column.",
-                                    sequenceColumn));
-                }
-                if (protectedColumnNames.contains(sequenceColumn)) {
-                    throw new InvalidConfigException(
-                            String.format(
-                                    "The sequence column '%s' orders a sequence group, "
-                                            + "so it must not be put into another one.",
-                                    sequenceColumn));
-                }
-                // the group it orders decides when it advances, so an aggregate function on it
-                // would let a stale row move the sequence backwards
-                if (schema.getAggFunction(sequenceColumn).isPresent()) {
-                    throw new InvalidConfigException(
-                            String.format(
-                                    "The sequence column '%s' orders a sequence group, "
-                                            + "so it must not have an aggregate function.",
-                                    sequenceColumn));
-                }
-                DataType columnType = rowType.getTypeAt(columnIndex);
-                if (!supportedTypes.contains(columnType.getTypeRoot())) {
-                    throw new InvalidConfigException(
-                            String.format(
-                                    "The sequence column '%s' must be one type of "
-                                            + "[INT, BIGINT, TIMESTAMP, TIMESTAMP_LTZ], but got %s.",
-                                    sequenceColumn, columnType));
-                }
-            }
         }
     }
 
