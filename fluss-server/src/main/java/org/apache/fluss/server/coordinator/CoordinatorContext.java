@@ -260,7 +260,13 @@ public class CoordinatorContext {
         return offlineReplicas;
     }
 
-    // ---- Pending leader activation tracking (for Cluster Health API) ----
+    // ---- Pending leader activation tracking ----
+    // Also gates leader visibility in UpdateMetadataRequest (see
+    // CoordinatorRequestBatch#addUpdateMetadataRequestForTabletServers): a bucket must not be
+    // advertised to clients as having an active leader until the target tablet server has
+    // actually admitted the replica (NotifyLeaderAndIsrRequest acked), otherwise a client can
+    // observe "server N is leader" before server N's own ReplicaManager agrees, and any request
+    // sent to server N in that window is rejected with NotLeaderOrFollowerException.
 
     public void addPendingLeaderActivation(TableBucket bucket) {
         pendingLeaderActivationBuckets.add(bucket);
@@ -272,6 +278,10 @@ public class CoordinatorContext {
 
     public void clearPendingLeaderActivation(TableBucket bucket) {
         pendingLeaderActivationBuckets.remove(bucket);
+    }
+
+    public boolean isPendingLeaderActivation(TableBucket bucket) {
+        return pendingLeaderActivationBuckets.contains(bucket);
     }
 
     /**

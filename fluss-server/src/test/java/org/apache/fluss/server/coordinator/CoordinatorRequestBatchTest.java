@@ -23,7 +23,6 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
-import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
 import org.apache.fluss.server.zk.ZkEpoch;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
@@ -49,11 +48,18 @@ class CoordinatorRequestBatchTest {
 
     /**
      * When the NotifyLeaderAndIsr request to the actual leader (leader == serverId) fails, the
-     * pending leader activation entry that this request added must be cleared via an
-     * AccessContextEvent dispatched on the event manager.
+     * pending leader activation entry that this request added must be LEFT IN PLACE. The request
+     * never reached serverId (or its response never came back), so serverId's own ReplicaManager
+     * has not admitted the replica; clearing the mark here would let
+     * addUpdateMetadataRequestForTabletServers advertise serverId as leader to clients despite
+     * serverId itself still treating the bucket as NoneReplica (observed in production 2026-08-29:
+     * rolling-restart RPC failures cleared pending state early and NotLeaderOrFollowerException
+     * kept recurring for ~20min). The mark is only cleared by a real ack in
+     * processNotifyLeaderAndIsrResponseReceivedEvent, or by onReplicaBecomeOffline during
+     * heartbeat-timeout-triggered re-election.
      */
     @Test
-    void testNotifyLeaderAndIsrSendFailureClearsLeaderPending() {
+    void testNotifyLeaderAndIsrSendFailureLeavesLeaderPending() {
         long tableId = 100L;
         TableBucket tb = new TableBucket(tableId, 0);
         TablePath tablePath = TablePath.of("db1", "t1");
@@ -67,7 +73,7 @@ class CoordinatorRequestBatchTest {
         coordinatorContext.putBucketLeaderAndIsr(tb, leaderAndIsr);
 
         TestCoordinatorChannelManager failingChannel = newAlwaysFailingChannelManager();
-        EventManager eventManager = newSynchronousAccessContextEventManager();
+        EventManager eventManager = newNoopEventManager();
 
         CoordinatorRequestBatch batch =
                 new CoordinatorRequestBatch(failingChannel, eventManager, coordinatorContext);
@@ -81,13 +87,13 @@ class CoordinatorRequestBatchTest {
 
         batch.sendRequestToTabletServers(0);
 
-        // The failure callback must clear the pending entry that this request added.
-        assertThat(coordinatorContext.getPendingLeaderActivationBuckets()).isEmpty();
+        // The failure callback must leave the pending entry untouched.
+        assertThat(coordinatorContext.getPendingLeaderActivationBuckets()).containsExactly(tb);
     }
 
     /**
      * When the NotifyLeaderAndIsr request to a follower (leader != serverId) fails, the failure
-     * callback must NOT clear any pending leader activation entry. Specifically, it must not remove
+     * callback must NOT touch any pending leader activation entry. Specifically, it must not remove
      * entries added by another in-flight sender targeting the actual leader.
      */
     @Test
@@ -111,13 +117,13 @@ class CoordinatorRequestBatchTest {
         coordinatorContext.addPendingLeaderActivation(otherLeaderTb);
 
         TestCoordinatorChannelManager failingChannel = newAlwaysFailingChannelManager();
-        EventManager eventManager = newSynchronousAccessContextEventManager();
+        EventManager eventManager = newNoopEventManager();
 
         CoordinatorRequestBatch batch =
                 new CoordinatorRequestBatch(failingChannel, eventManager, coordinatorContext);
         // Send to server 1, which is a follower for followerTb (leader is 0). Because
         // leader != serverId, this request does NOT add followerTb to pending, so the failure
-        // callback must short-circuit without dispatching an AccessContextEvent.
+        // callback must be a pure no-op.
         batch.addNotifyLeaderRequestForTabletServers(
                 Collections.singleton(1),
                 PhysicalTablePath.of(tablePath),
@@ -146,15 +152,11 @@ class CoordinatorRequestBatchTest {
     }
 
     /**
-     * Returns an EventManager that synchronously executes {@link AccessContextEvent}s against the
-     * test's CoordinatorContext, mimicking the serial event-thread semantics.
+     * Returns an EventManager that drops every event. The failure callback under test no longer
+     * dispatches anything (see {@link CoordinatorRequestBatch#sendNotifyLeaderAndIsrRequest}), so
+     * these tests only need a valid EventManager instance to construct the batch.
      */
-    private EventManager newSynchronousAccessContextEventManager() {
-        return event -> {
-            if (event instanceof AccessContextEvent) {
-                AccessContextEvent<?> accessContextEvent = (AccessContextEvent<?>) event;
-                accessContextEvent.getAccessFunction().apply(coordinatorContext);
-            }
-        };
+    private EventManager newNoopEventManager() {
+        return event -> {};
     }
 }

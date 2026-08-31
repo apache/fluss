@@ -1199,11 +1199,36 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 succeededBuckets.add(notifyLeaderAndIsrResultForBucket.getTableBucket());
             }
         }
+        Set<TableBucket> reactivatedBuckets = new HashSet<>();
         for (TableBucket tb : succeededBuckets) {
             Optional<LeaderAndIsr> laiOpt = coordinatorContext.getBucketLeaderAndIsr(tb);
             if (laiOpt.isPresent() && laiOpt.get().leader() == serverId) {
                 coordinatorContext.clearPendingLeaderActivation(tb);
+                reactivatedBuckets.add(tb);
             }
+        }
+        if (!reactivatedBuckets.isEmpty()) {
+            // The earlier UpdateMetadataRequest that accompanied this NotifyLeaderAndIsrRequest
+            // withheld these buckets' leader (see
+            // CoordinatorRequestBatch#addUpdateMetadataRequestForTabletServers) because activation
+            // was still pending. Now that server N has acked the replica as Online, push a
+            // follow-up UpdateMetadataRequest so clients see the real leader without having to
+            // wait for some unrelated cluster event to trigger the next broadcast.
+            updateTabletServerMetadataCache(
+                    new HashSet<>(coordinatorContext.getLiveTabletServers().values()),
+                    null,
+                    null,
+                    reactivatedBuckets);
+        }
+        // A bucket whose NotifyLeaderAndIsrRequest came back with a per-bucket error (e.g. fenced
+        // epoch) never reaches the succeededBuckets branch above, so its pending-activation mark
+        // would otherwise never be cleared here. onReplicaBecomeOffline below re-elects a leader
+        // via TableBucketStateMachine, which does not go through
+        // CoordinatorRequestBatch#sendNotifyLeaderAndIsrRequest and therefore never re-marks the
+        // bucket as pending either — so a stale mark left in place would permanently withhold this
+        // bucket's leader from UpdateMetadataRequest even after a successful re-election.
+        for (TableBucketReplica offlineReplica : offlineReplicas) {
+            coordinatorContext.clearPendingLeaderActivation(offlineReplica.getTableBucket());
         }
         if (!offlineReplicas.isEmpty()) {
             // trigger replicas to offline

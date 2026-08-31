@@ -35,7 +35,6 @@ import org.apache.fluss.rpc.messages.PbStopReplicaRespForBucket;
 import org.apache.fluss.rpc.messages.StopReplicaRequest;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.protocol.ApiError;
-import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.DeleteReplicaResponseReceivedEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
 import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrResponseReceivedEvent;
@@ -311,6 +310,23 @@ public class CoordinatorRequestBatch {
                         .put(partitionId, Collections.emptyList());
             } else {
                 // case3, case4, case10, case 11
+                // If this table already has non-empty bucket data queued in the same batch
+                // (added via the tableId==null branch below), this put() silently discards it
+                // since it's a plain Map.put overwrite, not a merge. Only known to happen during
+                // coordinator's own startup batch; log it so a real occurrence is not silent.
+                List<BucketMetadata> existingBucketData =
+                        updateMetadataRequestBucketMap.get(tableId);
+                if (existingBucketData != null && !existingBucketData.isEmpty()) {
+                    LOG.warn(
+                            "Discarding {} already-queued bucket entries for tableId={} in favor "
+                                    + "of an empty bucket list from the same UpdateMetadataRequest "
+                                    + "batch; buckets discarded: {}",
+                            existingBucketData.size(),
+                            tableId,
+                            existingBucketData.stream()
+                                    .map(BucketMetadata::getBucketId)
+                                    .collect(Collectors.toList()));
+                }
                 updateMetadataRequestBucketMap.put(tableId, Collections.emptyList());
             }
         } else {
@@ -323,7 +339,19 @@ public class CoordinatorRequestBatch {
                         coordinatorContext.getBucketLeaderAndIsr(tableBucket);
                 Integer leaderEpoch =
                         bucketLeaderAndIsr.map(LeaderAndIsr::leaderEpoch).orElse(null);
-                Integer leader = bucketLeaderAndIsr.map(LeaderAndIsr::leader).orElse(null);
+                // Withhold the leader from clients until the target tablet server has actually
+                // activated the replica (i.e. processed its NotifyLeaderAndIsrRequest and moved
+                // the local replica from NoneReplica to OnlineReplica). sendRequestToTabletServers
+                // sends NotifyLeaderAndIsrRequest (which populates pendingLeaderActivationBuckets)
+                // strictly before UpdateMetadataRequest, so this check always sees the bucket as
+                // pending for the very same activation round that this metadata push accompanies.
+                // Without this, a client can learn "server N is leader for bucket X" from metadata
+                // before server N's own ReplicaManager has admitted the replica, and any fetchLog
+                // sent to server N in that window is rejected with NotLeaderOrFollowerException.
+                Integer leader =
+                        coordinatorContext.isPendingLeaderActivation(tableBucket)
+                                ? null
+                                : bucketLeaderAndIsr.map(LeaderAndIsr::leader).orElse(null);
                 if (currentPartitionId == null) {
                     Map<Integer, List<Integer>> tableAssignment =
                             coordinatorContext.getTableAssignment(currentTableId);
@@ -416,15 +444,11 @@ public class CoordinatorRequestBatch {
                     makeNotifyLeaderAndIsrRequest(
                             coordinatorEpoch, notifyRequestEntry.getValue().values());
 
-            // Track exactly which buckets THIS request marked as pending leader activation. Only
-            // those entries (where leader == serverId) need to be cleared if the request fails
-            Set<TableBucket> addedToPendingLeaderActivation = new HashSet<>();
             for (Map.Entry<TableBucket, PbNotifyLeaderAndIsrReqForBucket> entry :
                     notifyRequestEntry.getValue().entrySet()) {
                 int leader = entry.getValue().getLeader();
                 if (leader == serverId) {
                     coordinatorContext.addPendingLeaderActivation(entry.getKey());
-                    addedToPendingLeaderActivation.add(entry.getKey());
                 }
             }
 
@@ -444,20 +468,23 @@ public class CoordinatorRequestBatch {
                             // replica in the tablet server as offline. so, in here, if encounter
                             // any error, we just ignore it.
 
-                            // Clear pending state so the health API does not report stale
-                            // RED. The coordinator will detect actual server death via
-                            // heartbeat timeout and trigger re-election separately.
-                            if (!addedToPendingLeaderActivation.isEmpty()) {
-                                eventManager.put(
-                                        new AccessContextEvent<Void>(
-                                                ctx -> {
-                                                    for (TableBucket tb :
-                                                            addedToPendingLeaderActivation) {
-                                                        ctx.clearPendingLeaderActivation(tb);
-                                                    }
-                                                    return null;
-                                                }));
-                            }
+                            // Deliberately leave pendingLeaderActivationBuckets untouched here.
+                            // This request never reached serverId (or its response never came
+                            // back), so serverId's own ReplicaManager has NOT admitted these
+                            // replicas. Clearing the pending mark here would let
+                            // addUpdateMetadataRequestForTabletServers advertise serverId as
+                            // leader to clients despite serverId itself still treating the bucket
+                            // as NoneReplica, reproducing the exact race this mechanism exists to
+                            // prevent: a client could learn "serverId is leader" from metadata
+                            // before serverId's own ReplicaManager agrees, and any request sent to
+                            // serverId in that window would be rejected with
+                            // NotLeaderOrFollowerException until some unrelated coordinator event
+                            // happened to trigger the next broadcast. The mark is only cleared once
+                            // processNotifyLeaderAndIsrResponseReceivedEvent sees a real ack from
+                            // serverId, or once onReplicaBecomeOffline runs during
+                            // heartbeat-timeout-triggered re-election. A transient GetClusterHealth
+                            // RED during this window is expected and reflects genuine uncertainty,
+                            // not a bug.
                             return;
                         }
                         // put the response receive event into the event manager
