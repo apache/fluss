@@ -334,6 +334,12 @@ impl SchemaBuilder {
         let columns = Self::normalize_columns(&self.columns, self.primary_key.as_ref())?;
         let (columns_with_ids, highest_field_id) = Self::assign_all_field_ids(columns)?;
 
+        if !self.auto_increment_col_names.is_empty() && self.primary_key.is_none() {
+            return Err(IllegalArgument {
+                message: "Auto increment column can only be used in primary-key table.".to_string(),
+            });
+        }
+
         let column_names: HashSet<_> = columns_with_ids.iter().map(|c| &c.name).collect();
         for auto_inc_col in &self.auto_increment_col_names {
             if !column_names.contains(auto_inc_col) {
@@ -341,6 +347,29 @@ impl SchemaBuilder {
                     message: format!(
                         "Auto increment column '{auto_inc_col}' is not found in the schema columns."
                     ),
+                });
+            }
+            if self
+                .primary_key
+                .as_ref()
+                .is_some_and(|pk| pk.column_names().contains(auto_inc_col))
+            {
+                return Err(IllegalArgument {
+                    message: "Auto increment column can not be used as the primary key."
+                        .to_string(),
+                });
+            }
+            let auto_inc_type = columns_with_ids
+                .iter()
+                .find(|c| &c.name == auto_inc_col)
+                .map(|c| c.data_type());
+            if !matches!(
+                auto_inc_type,
+                Some(DataType::Int(_)) | Some(DataType::BigInt(_))
+            ) {
+                return Err(IllegalArgument {
+                    message: "The data type of auto increment column must be INT or BIGINT."
+                        .to_string(),
                 });
             }
         }
@@ -1622,6 +1651,67 @@ impl LakeSnapshot {
 mod tests {
     use super::*;
     use crate::metadata::DataTypes;
+
+    #[test]
+    fn auto_increment_column_requires_a_primary_key_table() {
+        let err = Schema::builder()
+            .column("id", DataTypes::int())
+            .column("seq", DataTypes::bigint())
+            .enable_auto_increment("seq")
+            .unwrap()
+            .build()
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Auto increment column can only be used in primary-key table."),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn auto_increment_column_can_not_be_a_primary_key_column() {
+        let err = Schema::builder()
+            .column("id", DataTypes::bigint())
+            .column("name", DataTypes::string())
+            .primary_key(["id"])
+            .enable_auto_increment("id")
+            .unwrap()
+            .build()
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Auto increment column can not be used as the primary key."),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn auto_increment_column_must_be_int_or_bigint() {
+        let err = Schema::builder()
+            .column("id", DataTypes::int())
+            .column("seq", DataTypes::string())
+            .primary_key(["id"])
+            .enable_auto_increment("seq")
+            .unwrap()
+            .build()
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("The data type of auto increment column must be INT or BIGINT."),
+            "unexpected error: {err}"
+        );
+
+        for accepted in [DataTypes::int(), DataTypes::bigint()] {
+            Schema::builder()
+                .column("id", DataTypes::int())
+                .column("seq", accepted)
+                .primary_key(["id"])
+                .enable_auto_increment("seq")
+                .unwrap()
+                .build()
+                .expect("INT and BIGINT auto increment columns should be accepted");
+        }
+    }
 
     #[test]
     fn test_validate() {

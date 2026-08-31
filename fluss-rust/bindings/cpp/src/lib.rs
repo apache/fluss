@@ -191,6 +191,7 @@ mod ffi {
     struct FfiSchema {
         columns: Vec<FfiColumn>,
         primary_keys: Vec<String>,
+        auto_increment_columns: Vec<String>,
     }
 
     struct FfiTableDescriptor {

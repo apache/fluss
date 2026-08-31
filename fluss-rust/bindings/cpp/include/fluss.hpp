@@ -551,6 +551,7 @@ struct Column {
 struct Schema {
     std::vector<Column> columns;
     std::vector<std::string> primary_keys;
+    std::vector<std::string> auto_increment_columns;
 
     class Builder {
        public:
@@ -564,11 +565,20 @@ struct Schema {
             return *this;
         }
 
-        Schema Build() { return Schema{std::move(columns_), std::move(primary_keys_)}; }
+        Builder& SetAutoIncrementColumn(std::string column) {
+            auto_increment_columns_ = {std::move(column)};
+            return *this;
+        }
+
+        Schema Build() {
+            return Schema{std::move(columns_), std::move(primary_keys_),
+                          std::move(auto_increment_columns_)};
+        }
 
        private:
         std::vector<Column> columns_;
         std::vector<std::string> primary_keys_;
+        std::vector<std::string> auto_increment_columns_;
     };
 
     static Builder NewBuilder() { return Builder(); }

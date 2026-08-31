@@ -131,6 +131,37 @@ TEST_F(AdminTest, CreateTable) {
     ASSERT_FALSE(exists);
 }
 
+TEST_F(AdminTest, CreateTableWithAutoIncrementColumn) {
+    auto& adm = admin();
+
+    std::string db_name = "test_auto_increment_cpp_db";
+    ASSERT_OK(adm.CreateDatabase(db_name, fluss::DatabaseDescriptor{}, true));
+
+    fluss::TablePath table_path(db_name, "test_auto_increment_table");
+    auto schema = fluss::Schema::NewBuilder()
+                      .AddColumn("id", fluss::DataType::Int())
+                      .AddColumn("name", fluss::DataType::String())
+                      .AddColumn("seq", fluss::DataType::BigInt())
+                      .SetPrimaryKeys({"id"})
+                      .SetAutoIncrementColumn("seq")
+                      .Build();
+    auto table_descriptor = fluss::TableDescriptor::NewBuilder()
+                                .SetSchema(schema)
+                                .SetBucketCount(1)
+                                .SetBucketKeys({"id"})
+                                .SetProperty("table.replication.factor", "1")
+                                .Build();
+
+    ASSERT_OK(adm.CreateTable(table_path, table_descriptor, false));
+
+    fluss::TableInfo table_info;
+    ASSERT_OK(adm.GetTableInfo(table_path, table_info));
+    EXPECT_EQ(table_info.schema.auto_increment_columns, std::vector<std::string>{"seq"});
+
+    ASSERT_OK(adm.DropTable(table_path, true));
+    ASSERT_OK(adm.DropDatabase(db_name, true, true));
+}
+
 TEST_F(AdminTest, PartitionApis) {
     auto& adm = admin();
 

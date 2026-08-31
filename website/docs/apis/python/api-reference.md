@@ -325,11 +325,12 @@ for record in scan_records:
 
 | Method                                         |  Description               |
 |------------------------------------------------|----------------------------|
-| `Schema(schema: pa.Schema, primary_keys=None)` | Create from PyArrow schema. Field nullability (`pa.field(..., nullable=False)`) is preserved. |
+| `Schema(schema: pa.Schema, primary_keys=None, auto_increment_column=None)` | Create from PyArrow schema. Field nullability (`pa.field(..., nullable=False)`) is preserved. `auto_increment_column` must name an `INT` or `BIGINT` column of a primary-key table that is not itself a primary-key column. |
 | `.get_column_names() -> list[str]`             | Get column names           |
 | `.get_column_types() -> list[str]`             | Get column type names. Non-nullable types include a `" NOT NULL"` suffix (e.g., `"int NOT NULL"`). |
 | `.get_columns() -> list[tuple[str, str]]`      | Get `(name, type)` pairs. Type strings follow the same nullability formatting as `.get_column_types()`. |
 | `.get_primary_keys() -> list[str]`             | Get primary key columns    |
+| `.get_auto_increment_columns() -> list[str]`   | Get auto increment columns, empty if none |
 
 ## `TableDescriptor`
 

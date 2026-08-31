@@ -470,6 +470,7 @@ Read-only result of a prefix lookup — zero or more matched rows. Each row is a
 |------------------------------------------------------------------------|-------------------------|
 | `AddColumn(const std::string& name, const DataType& type) -> Builder&` | Add a column            |
 | `SetPrimaryKeys(const std::vector<std::string>& keys) -> Builder&`     | Set primary key columns |
+| `SetAutoIncrementColumn(std::string column) -> Builder&`               | Set the auto increment column. Must be an `INT` or `BIGINT` column of a primary-key table, and not a primary-key column itself. |
 | `Build() -> Schema`                                                    | Build the schema        |
 
 ## `TableDescriptor`

@@ -198,6 +198,76 @@ mod admin_test {
     }
 
     #[tokio::test]
+    async fn test_create_table_with_auto_increment_column() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin client");
+
+        let test_db_name = "test_auto_increment_db";
+        admin
+            .create_database(test_db_name, None, true)
+            .await
+            .expect("Failed to create test database");
+
+        let table_path = TablePath::new(test_db_name, "test_auto_increment_table");
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("name", DataTypes::string())
+                    .column("seq", DataTypes::bigint())
+                    .primary_key(vec!["id".to_string()])
+                    .enable_auto_increment("seq")
+                    .expect("Failed to enable auto increment")
+                    .build()
+                    .expect("Failed to build table schema"),
+            )
+            .distributed_by(Some(1), vec!["id".to_string()])
+            .property("table.replication.factor", "1")
+            .build()
+            .expect("Failed to build table descriptor");
+
+        admin
+            .create_table(&table_path, &table_descriptor, false)
+            .await
+            .expect("Failed to create test table");
+
+        let table_info = admin
+            .get_table_info(&table_path)
+            .await
+            .expect("Failed to get table info");
+        assert_eq!(
+            table_info.get_schema().auto_increment_col_names(),
+            &vec!["seq".to_string()],
+            "auto increment column should survive create_table and get_table_info"
+        );
+
+        // a full row write is not allowed on an auto increment table
+        let table = connection.get_table(&table_path).await.unwrap();
+        let error = match table
+            .new_upsert()
+            .expect("Failed to create upsert")
+            .create_writer()
+        {
+            Ok(_) => panic!("A full row write should be rejected on an auto increment table"),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains("auto increment column"),
+            "unexpected error: {error}"
+        );
+
+        admin
+            .drop_table(&table_path, true)
+            .await
+            .expect("Failed to drop test table");
+        admin
+            .drop_database(test_db_name, true, true)
+            .await
+            .expect("Failed to drop test database");
+    }
+
+    #[tokio::test]
     async fn test_partition_apis() {
         let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;

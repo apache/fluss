@@ -210,6 +210,12 @@ target_link_libraries(fluss_cpp_kv_example PRIVATE Arrow::arrow_shared)
 target_compile_definitions(fluss_cpp_kv_example PRIVATE ARROW_FOUND)
 target_include_directories(fluss_cpp_kv_example PUBLIC ${CPP_INCLUDE_DIR})
 
+add_executable(fluss_cpp_auto_increment_example examples/auto_increment_example.cpp)
+target_link_libraries(fluss_cpp_auto_increment_example PRIVATE fluss_cpp)
+target_link_libraries(fluss_cpp_auto_increment_example PRIVATE Arrow::arrow_shared)
+target_compile_definitions(fluss_cpp_auto_increment_example PRIVATE ARROW_FOUND)
+target_include_directories(fluss_cpp_auto_increment_example PUBLIC ${CPP_INCLUDE_DIR})
+
 add_executable(fluss_cpp_kv_changelog_example examples/kv_changelog_example.cpp)
 target_link_libraries(fluss_cpp_kv_changelog_example PRIVATE fluss_cpp)
 target_link_libraries(fluss_cpp_kv_changelog_example PRIVATE Arrow::arrow_shared)

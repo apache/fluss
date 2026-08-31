@@ -117,6 +117,39 @@ async def test_create_table(admin):
     assert not await admin.database_exists(db_name)
 
 
+async def test_create_table_with_auto_increment_column(admin):
+    db_name = "py_test_auto_increment_db"
+    await admin.drop_database(db_name, ignore_if_not_exists=True, cascade=True)
+    await admin.create_database(db_name, None, ignore_if_exists=True)
+
+    table_path = fluss.TablePath(db_name, "test_auto_increment_table")
+    schema = fluss.Schema(
+        pa.schema(
+            [
+                pa.field("id", pa.int32()),
+                pa.field("name", pa.string()),
+                pa.field("seq", pa.int64()),
+            ]
+        ),
+        primary_keys=["id"],
+        auto_increment_column="seq",
+    )
+    table_descriptor = fluss.TableDescriptor(
+        schema,
+        bucket_count=1,
+        bucket_keys=["id"],
+        properties={"table.replication.factor": "1"},
+    )
+
+    await admin.create_table(table_path, table_descriptor, ignore_if_exists=False)
+
+    table_info = await admin.get_table_info(table_path)
+    assert table_info.get_schema().get_auto_increment_columns() == ["seq"]
+
+    await admin.drop_table(table_path, ignore_if_not_exists=True)
+    await admin.drop_database(db_name, ignore_if_not_exists=True, cascade=True)
+
+
 async def test_partition_apis(admin):
     """Test partition create, list, and drop lifecycle."""
     db_name = "py_test_partition_apis_db"

@@ -420,3 +420,36 @@ cc_binary(
     }),
     visibility = ["//visibility:public"],
 )
+
+cc_binary(
+    name = "fluss_cpp_auto_increment_example",
+    srcs = [
+        "examples/auto_increment_example.cpp",
+    ],
+    deps = [":fluss_cpp"],
+    copts = [
+        "-std=c++17",
+    ] + select({
+        ":debug_mode": [
+            "-g3",
+            "-O0",
+            "-ggdb",
+            "-fno-omit-frame-pointer",
+            "-DDEBUG",
+        ],
+        ":fastbuild_mode": [
+            "-g",
+            "-O0",
+        ],
+        ":release_mode": [
+            "-O2",
+            "-DNDEBUG",
+        ],
+    }),
+    linkopts = select({
+        ":debug_mode": ["-g"],
+        ":fastbuild_mode": ["-g"],
+        ":release_mode": [],
+    }),
+    visibility = ["//visibility:public"],
+)

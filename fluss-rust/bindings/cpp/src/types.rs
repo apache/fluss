@@ -247,6 +247,10 @@ pub fn ffi_descriptor_to_core(
         schema_builder = schema_builder.primary_key(descriptor.schema.primary_keys.clone());
     }
 
+    for auto_increment_column in &descriptor.schema.auto_increment_columns {
+        schema_builder = schema_builder.enable_auto_increment(auto_increment_column)?;
+    }
+
     build_descriptor(schema_builder.build()?, descriptor)
 }
 
@@ -356,6 +360,7 @@ pub fn core_table_info_to_ffi(info: &fcore::metadata::TableInfo) -> ffi::FfiTabl
         schema: ffi::FfiSchema {
             columns,
             primary_keys,
+            auto_increment_columns: info.get_schema().auto_increment_col_names().clone(),
         },
     }
 }
@@ -382,6 +387,7 @@ pub fn empty_table_info() -> ffi::FfiTableInfo {
         schema: ffi::FfiSchema {
             columns: vec![],
             primary_keys: vec![],
+            auto_increment_columns: vec![],
         },
     }
 }
