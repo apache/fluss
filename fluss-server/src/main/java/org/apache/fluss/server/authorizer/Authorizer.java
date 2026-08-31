@@ -22,6 +22,7 @@ import org.apache.fluss.exception.AuthorizationException;
 import org.apache.fluss.rpc.netty.server.Session;
 import org.apache.fluss.security.acl.AclBinding;
 import org.apache.fluss.security.acl.AclBindingFilter;
+import org.apache.fluss.security.acl.FlussPrincipal;
 import org.apache.fluss.security.acl.OperationType;
 import org.apache.fluss.security.acl.Resource;
 
@@ -72,6 +73,20 @@ public interface Authorizer extends Closeable {
      */
     void authorize(Session session, OperationType operationType, Resource resource)
             throws AuthorizationException;
+
+    /**
+     * Checks whether the given principal is a configured super-user (i.e. is listed in {@code
+     * super.users} and therefore bypasses all ACL checks).
+     *
+     * <p>Used to gate operations that require super-user privileges rather than an ordinary ACL
+     * grant, such as altering security-sensitive dynamic cluster configs.
+     *
+     * @param principal the principal to check
+     * @return true if the principal is a configured super-user, false otherwise
+     */
+    default boolean isSuperUser(FlussPrincipal principal) {
+        return false;
+    }
 
     /**
      * Filters a collection of resource names based on the provided session, operation, resources.

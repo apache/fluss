@@ -178,7 +178,8 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
                         session.getInetAddress().getHostAddress());
     }
 
-    private boolean isSuperUser(FlussPrincipal principal) {
+    @Override
+    public boolean isSuperUser(FlussPrincipal principal) {
         for (FlussPrincipal superUser : superUsers) {
             if (superUser.matches(principal, principalIgnoreCase)) {
                 return true;

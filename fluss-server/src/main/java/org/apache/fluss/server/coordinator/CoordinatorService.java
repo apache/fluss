@@ -27,6 +27,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.exception.ApiException;
+import org.apache.fluss.exception.AuthorizationException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
@@ -242,6 +243,15 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 public final class CoordinatorService extends RpcServiceBase implements CoordinatorGateway {
 
     private static final Logger LOG = LoggerFactory.getLogger(CoordinatorService.class);
+
+    /**
+     * Prefix of security-sensitive dynamic cluster-config keys (e.g. {@code
+     * security.sasl.plain.credentials} and the listener-scoped {@code
+     * security.sasl.listener.name.*} JAAS variants). Altering any key under this prefix at runtime
+     * requires super-user privileges rather than plain cluster {@code ALTER}; see {@link
+     * #alterClusterConfigs}.
+     */
+    private static final String SECURITY_SENSITIVE_CONFIG_KEY_PREFIX = "security.";
 
     private final int defaultBucketNumber;
     private final int defaultReplicationFactor;
@@ -1457,8 +1467,12 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             return CompletableFuture.completedFuture(new AlterClusterConfigsResponse());
         }
 
+        // Baseline authorization must run before any request data is parsed. Capture the session
+        // once so the super-user gate below can reuse it (currentSession() is thread-local).
+        Session session = authorizer != null ? currentSession() : null;
         if (authorizer != null) {
-            authorizer.authorize(currentSession(), OperationType.ALTER, Resource.cluster());
+            // Cluster ALTER is the baseline requirement for any dynamic cluster config.
+            authorizer.authorize(session, OperationType.ALTER, Resource.cluster());
         }
 
         List<AlterConfig> serverConfigChanges =
@@ -1472,6 +1486,26 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                                                         : null,
                                                 AlterConfigOpType.from((byte) info.getOpType())))
                         .collect(Collectors.toList());
+
+        if (authorizer != null) {
+            // Altering security.* keys at runtime additionally requires super-user privileges;
+            // non-security keys keep the plain cluster-ALTER requirement.
+            List<String> securitySensitiveKeys =
+                    serverConfigChanges.stream()
+                            .map(AlterConfig::key)
+                            .filter(CoordinatorService::isSecuritySensitiveConfigKey)
+                            .collect(Collectors.toList());
+            if (!securitySensitiveKeys.isEmpty()
+                    && !authorizer.isSuperUser(session.getPrincipal())) {
+                throw new AuthorizationException(
+                        String.format(
+                                "Principal %s is not a super user and is not authorized to alter "
+                                        + "security-sensitive cluster configs %s. Altering these keys "
+                                        + "requires super-user privileges.",
+                                session.getPrincipal(), securitySensitiveKeys));
+            }
+        }
+
         AccessContextEvent<Void> accessContextEvent =
                 new AccessContextEvent<>(
                         (context) -> {
@@ -1489,6 +1523,16 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                         });
         eventManagerSupplier.get().put(accessContextEvent);
         return future;
+    }
+
+    /**
+     * Whether the given dynamic cluster-config key is security-sensitive and therefore may only be
+     * altered by a super-user. Gating the whole {@code security.} prefix keeps future security
+     * options (and the listener-scoped {@code security.sasl.listener.name.*} JAAS variants) covered
+     * without needing to enumerate them individually.
+     */
+    private static boolean isSecuritySensitiveConfigKey(String configKey) {
+        return configKey != null && configKey.startsWith(SECURITY_SENSITIVE_CONFIG_KEY_PREFIX);
     }
 
     @Override
