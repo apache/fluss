@@ -703,6 +703,69 @@ class KvTabletTest {
     }
 
     @Test
+    void testIgnoreDeleteBehaviorSkipsPartialDeleteRejection() throws Exception {
+        final Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .column("c", new StringType(false))
+                        .primaryKey("a")
+                        .build();
+        Map<String, String> config = new HashMap<>();
+        config.put("table.delete.behavior", "ignore");
+        initLogTabletAndKvTablet(schema, config);
+        KvRecordTestUtils.KvRecordFactory recordFactory =
+                KvRecordTestUtils.KvRecordFactory.of(schema.getRowType());
+        kvTablet.putAsLeader(
+                kvRecordBatchFactory.ofRecords(
+                        Collections.singletonList(
+                                recordFactory.ofRecord(
+                                        "k1".getBytes(), new Object[] {1, "bbb", "str"}))),
+                null);
+
+        // the delete is dropped before the partial delete runs, so the NOT NULL target column c
+        // is never nulled and the row survives untouched
+        KvRecordBatch deleteBatch =
+                kvRecordBatchFactory.ofRecords(
+                        Collections.singletonList(recordFactory.ofRecord("k1".getBytes(), null)));
+        assertThatCode(() -> kvTablet.putAsLeader(deleteBatch, new int[] {0, 2}))
+                .doesNotThrowAnyException();
+        assertThat(kvTablet.getKvPreWriteBuffer().get(Key.of("k1".getBytes()))).isNotNull();
+    }
+
+    @Test
+    void testIgnoreDeleteBehaviorStillRejectsAutoIncrementNotNullTargetColumn() throws Exception {
+        final Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", new StringType(false))
+                        .column("c", DataTypes.BIGINT())
+                        .primaryKey("a")
+                        .enableAutoIncrement("c")
+                        .build();
+        Map<String, String> config = new HashMap<>();
+        config.put("table.delete.behavior", "ignore");
+        initLogTabletAndKvTablet(schema, config);
+        KvRecordTestUtils.KvRecordFactory recordFactory =
+                KvRecordTestUtils.KvRecordFactory.of(schema.getRowType());
+        KvRecordBatch kvRecordBatch =
+                kvRecordBatchFactory.ofRecords(
+                        Collections.singletonList(
+                                recordFactory.ofRecord(
+                                        "k1".getBytes(), new Object[] {1, "b", 1L})));
+
+        // the rejection happens when the target columns are configured, so it fires even though
+        // no delete could ever reach the partial delete path on this table
+        assertThatThrownBy(() -> kvTablet.putAsLeader(kvRecordBatch, new int[] {0, 1}))
+                .isInstanceOf(InvalidTargetColumnException.class)
+                .hasMessage(
+                        "Partial Update on a table with an auto increment column requires all target columns "
+                                + "except the primary key to be nullable, but target column b is NOT NULL, "
+                                + "since the auto increment column is always set and a partial delete could "
+                                + "therefore never succeed.");
+    }
+
+    @Test
     void testPartialUpdateAndDelete() throws Exception {
         initLogTabletAndKvTablet(DATA2_SCHEMA, new HashMap<>());
         RowType rowType = DATA2_SCHEMA.getRowType();

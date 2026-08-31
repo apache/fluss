@@ -61,7 +61,6 @@ public class PartialUpdater {
             primaryKeyCols.set(pkIndex);
         }
         this.fieldDataTypes = schema.getRowType().getChildren().toArray(new DataType[0]);
-        sanityCheck(schema, targetColumns);
         this.fieldNames = schema.getRowType().getFieldNames().toArray(new String[0]);
         for (int i = 0; i < fieldDataTypes.length; i++) {
             if (partialUpdateCols.get(i) && !fieldDataTypes[i].isNullable()) {
@@ -71,6 +70,7 @@ public class PartialUpdater {
                 }
             }
         }
+        sanityCheck(schema, targetColumns);
 
         // getter for the fields in row
         flussFieldGetters = new InternalRow.FieldGetter[fieldDataTypes.length];
@@ -114,6 +114,15 @@ public class PartialUpdater {
                                 "Partial Update requires all columns omitted from the target columns to be nullable, but omitted column %s is NOT NULL.",
                                 columnName));
             }
+        }
+
+        // the auto increment column is always set, so a partial delete could never collapse
+        // the row and would always fail on a NOT NULL non-primary-key target column.
+        if (!autoIncrementCols.isEmpty() && !notNullNonPkTargetCols.isEmpty()) {
+            throw new InvalidTargetColumnException(
+                    String.format(
+                            "Partial Update on a table with an auto increment column requires all target columns except the primary key to be nullable, but target column %s is NOT NULL, since the auto increment column is always set and a partial delete could therefore never succeed.",
+                            fieldNames[notNullNonPkTargetCols.nextSetBit(0)]));
         }
     }
 

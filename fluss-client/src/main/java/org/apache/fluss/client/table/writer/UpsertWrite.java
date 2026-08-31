@@ -59,6 +59,9 @@ public class UpsertWrite {
      * row doesn't exist. A {@link UpsertWriter#delete(InternalRow)} operation that does not remove
      * the entire row also requires the specified columns except primary key to be nullable, since
      * it sets them to null. Removing the entire row sets no column to null and is always allowed.
+     * On a table with an auto increment column the entire row is never removed, since the auto
+     * increment column is always set, so a specified column other than primary key must be nullable
+     * there.
      *
      * @param targetColumns the columns to partial update,
      */

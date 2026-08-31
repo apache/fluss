@@ -289,6 +289,24 @@ impl UpsertWriterFactory {
             }
         }
 
+        // the auto increment column is always set, so a partial delete could never collapse
+        // the row and would always fail on a NOT NULL non-primary-key target column.
+        if auto_increment_column_set.any() {
+            for (i, field) in row_type.fields().iter().enumerate() {
+                if target_column_set[i]
+                    && !primary_keys.iter().any(|key| key.as_str() == field.name())
+                    && !field.data_type.is_nullable()
+                {
+                    return Err(IllegalArgument {
+                        message: format!(
+                            "Partial Update on a table with an auto increment column requires all target columns except the primary key to be nullable, but target column {} is NOT NULL, since the auto increment column is always set and a partial delete could therefore never succeed.",
+                            field.name()
+                        ),
+                    });
+                }
+            }
+        }
+
         Ok(())
     }
 }
@@ -608,6 +626,36 @@ mod tests {
             &auto_increment_col_names,
             &target_columns,
         );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn auto_increment_table_rejects_not_null_target_column() {
+        // the auto increment column is always set, so a partial delete could never collapse
+        // the row and would always fail on the NOT NULL target column
+        let row_type = RowType::new(vec![
+            DataField::new("id", DataTypes::int().as_non_nullable(), None),
+            DataField::new("name", DataTypes::string().as_non_nullable(), None),
+            DataField::new("seq", DataTypes::bigint(), None),
+        ]);
+        let primary_keys = vec!["id".to_string()];
+        let auto_increment_col_names = vec!["seq".to_string()];
+        let target_columns = Some(Arc::new(vec![0usize, 1]));
+
+        let result = UpsertWriterFactory::sanity_check(
+            &row_type,
+            &primary_keys,
+            &auto_increment_col_names,
+            &target_columns,
+        );
+
+        assert!(result.unwrap_err().to_string().contains(
+            "Partial Update on a table with an auto increment column requires all target columns except the primary key to be nullable, but target column name is NOT NULL, since the auto increment column is always set and a partial delete could therefore never succeed."
+        ));
+
+        // the same target columns without an auto increment column are fine
+        let result =
+            UpsertWriterFactory::sanity_check(&row_type, &primary_keys, &vec![], &target_columns);
         assert!(result.is_ok());
     }
 }

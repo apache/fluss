@@ -139,6 +139,46 @@ class PartialUpdaterTest {
                 .doesNotThrowAnyException();
     }
 
+    @Test
+    void testAutoIncrementTableRejectsNotNullTargetColumn() {
+        // the auto increment column is always set, so a partial delete can never collapse the
+        // row and would always fail on the NOT NULL target column b
+        Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", new BigIntType(false))
+                        .column("c", DataTypes.BIGINT())
+                        .primaryKey("a")
+                        .enableAutoIncrement("c")
+                        .build();
+        assertThatThrownBy(() -> createPartialUpdater(schema, new int[] {0, 1}))
+                .isInstanceOf(InvalidTargetColumnException.class)
+                .hasMessage(
+                        "Partial Update on a table with an auto increment column requires all target columns "
+                                + "except the primary key to be nullable, but target column b is NOT NULL, "
+                                + "since the auto increment column is always set and a partial delete could "
+                                + "therefore never succeed.");
+    }
+
+    @Test
+    void testNotNullAutoIncrementColumnIsReportedBeforeTheNotNullTargetColumn() {
+        // both rules apply here, and the auto increment column's own nullability is the more
+        // basic defect, so it has to be the one reported
+        Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", new BigIntType(false))
+                        .column("c", new BigIntType(false))
+                        .primaryKey("a")
+                        .enableAutoIncrement("c")
+                        .build();
+        assertThatThrownBy(() -> createPartialUpdater(schema, new int[] {0, 1}))
+                .isInstanceOf(InvalidTargetColumnException.class)
+                .hasMessage(
+                        "Partial Update requires the auto increment column c to be nullable, "
+                                + "since it is always omitted from the target columns and assigned by the server.");
+    }
+
     @ParameterizedTest
     @EnumSource(KvFormat.class)
     void testUpdateRowKeepsOmittedColumnsAndRejectsNullInNotNullTargetColumn(KvFormat kvFormat) {

@@ -986,7 +986,10 @@ components:
             in every upsert row. Missing or explicit-null nullable targets are written as null, and
             untargeted columns are preserved. Deletes require only primary-key values and clear the
             targeted non-key columns, so Fluss rejects a delete that would null a NOT NULL target
-            column. The row is removed when all non-key columns become null.
+            column. The row is removed when all non-key columns become null. On a table with an
+            auto-increment column a NOT NULL target column outside the primary key is rejected
+            outright, because the auto-increment column is always set and the row can never be
+            removed, so such a delete could never succeed.
           items:
             type: string
           minItems: 1

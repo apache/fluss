@@ -219,6 +219,21 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
                                 columnName));
             }
         }
+
+        // the auto increment column is always set, so a partial delete could never collapse
+        // the row and would always fail on a NOT NULL non-primary-key target column.
+        if (!autoIncrementColumnSet.isEmpty()) {
+            for (int i = 0; i < rowType.getFieldCount(); i++) {
+                if (targetColumnsSet.get(i)
+                        && !primaryKeys.contains(rowType.getFieldNames().get(i))
+                        && !rowType.getTypeAt(i).isNullable()) {
+                    throw new IllegalArgumentException(
+                            String.format(
+                                    "Partial Update on a table with an auto increment column requires all target columns except the primary key to be nullable, but target column %s is NOT NULL, since the auto increment column is always set and a partial delete could therefore never succeed.",
+                                    rowType.getFieldNames().get(i)));
+                }
+            }
+        }
     }
 
     /**

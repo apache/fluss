@@ -314,6 +314,26 @@ fn sparse_targets(
             ));
         }
     }
+    // the auto-increment column is always set, so a partial delete could never collapse the
+    // row and would always fail on a NOT NULL non-primary-key target column.
+    if !auto_increment.is_empty() {
+        for field in fields {
+            if selected.contains(field.name())
+                && !table
+                    .get_primary_keys()
+                    .iter()
+                    .any(|key| key.as_str() == field.name())
+                && !field.data_type().is_nullable()
+            {
+                return Err(RowDecodeError::schema_mismatch(
+                    GatewayError::invalid_argument(format!(
+                        "a partial update on a table with an auto-increment column requires every target column except the primary key to be nullable, but target column `{}` is NOT NULL, since the auto-increment column is always set and a partial delete could never succeed",
+                        field.name()
+                    )),
+                ));
+            }
+        }
+    }
     Ok(Some(columns.to_vec()))
 }
 
@@ -407,7 +427,10 @@ pub struct WriteBody<T> {
     /// in every upsert row. Missing or explicit-null nullable targets are written as null, and
     /// untargeted columns are preserved. Deletes require only primary-key values and clear the
     /// targeted non-key columns, so Fluss rejects a delete that would null a NOT NULL target
-    /// column. The row is removed when all non-key columns become null.
+    /// column. The row is removed when all non-key columns become null. On a table with an
+    /// auto-increment column a NOT NULL target column outside the primary key is rejected
+    /// outright, because the auto-increment column is always set and the row can never be
+    /// removed, so such a delete could never succeed.
     #[serde(default)]
     #[schema(min_items = 1)]
     pub partial_update_columns: Option<Vec<String>>,
@@ -832,6 +855,87 @@ mod tests {
         assert_eq!(
             sparse_targets(&auto_increment_table_info(true), Some(&["id".to_string()])).unwrap(),
             Some(vec!["id".to_string()])
+        );
+    }
+
+    /// A KV table with an auto-increment column `seq` and a NOT NULL non-key column `name`.
+    fn auto_increment_table_with_not_null_column() -> TableInfo {
+        let schema = Schema::builder()
+            .column(
+                "id",
+                DataType::Int(fluss::metadata::IntType::with_nullable(false)),
+            )
+            .column("seq", DataType::BigInt(fluss::metadata::BigIntType::new()))
+            .column(
+                "name",
+                DataType::String(fluss::metadata::StringType::with_nullable(false)),
+            )
+            .primary_key(["id"])
+            .enable_auto_increment("seq")
+            .unwrap()
+            .build()
+            .unwrap();
+        let descriptor = TableDescriptor::builder()
+            .schema(schema)
+            .distributed_by(Some(1), Vec::new())
+            .build()
+            .unwrap();
+        TableInfo::of(TablePath::new("fluss", "counters"), 1, 1, descriptor, 0, 0)
+    }
+
+    /// The auto-increment column is always set, so a partial delete could never collapse the
+    /// row and would always fail on a NOT NULL non-key target column.
+    #[test]
+    fn auto_increment_table_rejects_not_null_target_column() {
+        let table = auto_increment_table_with_not_null_column();
+
+        let error =
+            sparse_targets(&table, Some(&["id".to_string(), "name".to_string()])).unwrap_err();
+        assert!(
+            error.message().contains(
+                "a partial update on a table with an auto-increment column requires every \
+                 target column except the primary key to be nullable, but target column \
+                 `name` is NOT NULL, since the auto-increment column is always set and a \
+                 partial delete could never succeed"
+            ),
+            "got {}",
+            error.message()
+        );
+
+        // the same targets are fine once the auto-increment column is gone
+        let targets = vec!["id".to_string(), "name".to_string()];
+        assert_eq!(
+            sparse_targets(&strict_table_info("strict"), Some(&targets)).unwrap(),
+            Some(targets)
+        );
+    }
+
+    /// Preflight validates the target columns before it looks at any operation, so a delete
+    /// only batch is now rejected too, where it used to decode the primary key and let the
+    /// server judge it per row.
+    #[test]
+    fn auto_increment_table_rejects_a_delete_only_batch_at_preflight() {
+        let table = auto_increment_table_with_not_null_column();
+        let decoder = SchemaDecoder::new(table.row_type().clone()).unwrap();
+        let entries = vec![PreparedEntry {
+            id: "d1".to_string(),
+            operation: Operation::Delete,
+            row_json: br#"{"id":7}"#.to_vec(),
+        }];
+
+        let error = preflight(
+            table,
+            &decoder,
+            &entries,
+            Some(&["id".to_string(), "name".to_string()]),
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .message()
+                .contains("but target column `name` is NOT NULL"),
+            "got {}",
+            error.message()
         );
     }
 

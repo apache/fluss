@@ -85,6 +85,27 @@ Partial delete has a stricter requirement. It sets the target columns other than
 rejected when one of them is `NOT NULL`, unless every column outside the target columns is already `null`, in which
 case the whole row is removed instead.
 
+In practice this means that deletes are not available by default when the target columns include a `NOT NULL` column
+outside the primary key. Every partial delete on such a table is rejected, except in the rare case where every column
+outside the target columns is already `null` and the row collapses into a whole-row removal.
+
+If you do not need deletes on such a table, set the table property `table.delete.behavior` to `ignore` to drop delete
+requests silently, or to `disable` to fail them with a `DeletionDisabledException`. Both settings take effect before
+the partial delete is attempted, so the rejection above no longer occurs. See the
+[storage options](/engine-flink/options.md#storage-options) for details.
+
+When writing with a streaming Flink sink, note that `sink.ignore-delete` defaults to `false`, so the job fails on the
+first `-U` or `-D` record it receives and keeps restarting. Set `sink.ignore-delete` to `true` (see the
+[write options](/engine-flink/options.md#write-options)) to drop those records on the client side, or set
+`table.delete.behavior` to `ignore` to drop them on the server side. Setting it to `disable` does not help here,
+because the job still fails on the delete, only with a different error.
+
+Tables with an auto increment column are stricter. On such a table, a `NOT NULL` target column outside the primary key
+is not allowed at all and is rejected before any data is written, when the writer is created or on the first write
+request. Because the rejection does not depend on a delete being processed, the `table.delete.behavior` workaround
+does not apply here. Note that a Flink sink creates its writer once the job is running, so such a job fails after it
+has been submitted rather than when the statement is planned.
+
 Tables using the `aggregation` merge engine keep the stricter rule for partial update as well, so every column other
 than the primary key must be nullable, including the target columns.
 

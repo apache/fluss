@@ -1007,6 +1007,15 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                     .cause()
                     .isInstanceOf(InvalidTargetColumnException.class)
                     .hasMessageContaining("but target column c is NOT NULL.");
+
+            // the rejected delete leaves the stored row untouched
+            assertThat(lookupRow(lookuper, rowKey))
+                    .isEqualTo(compactedRow(schema.getRowType(), new Object[] {1, "bbb", 200L}));
+
+            // and the writer still works after the rejection
+            upsertWriter.upsert(row(1, null, 300L)).get();
+            assertThat(lookupRow(lookuper, rowKey))
+                    .isEqualTo(compactedRow(schema.getRowType(), new Object[] {1, "bbb", 300L}));
         }
     }
 
@@ -1069,6 +1078,52 @@ class FlussTableITCase extends ClientToServerITCaseBase {
             assertThatThrownBy(() -> table.newUpsert().partialUpdate("a", "c").createWriter())
                     .hasMessage(
                             "Explicitly specifying values for the auto increment column c is not allowed.");
+        }
+
+        // a NOT NULL auto increment column is creatable but rejects any partial update, since
+        // the always omitted auto increment column would have to be written as null first
+        schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.INT())
+                        .column("c", new BigIntType(false))
+                        .primaryKey("a")
+                        .enableAutoIncrement("c")
+                        .build();
+        tableDescriptor = TableDescriptor.builder().schema(schema).distributedBy(3, "a").build();
+        TablePath notNullAutoIncrementPath =
+                TablePath.of("test_db_1", "test_not_null_auto_increment_column_upsert");
+        createTable(notNullAutoIncrementPath, tableDescriptor, true);
+        try (Table table = conn.getTable(notNullAutoIncrementPath)) {
+            assertThatThrownBy(() -> table.newUpsert().partialUpdate("a", "b").createWriter())
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessage(
+                            "Partial Update requires the auto increment column c to be nullable, "
+                                    + "since it is always omitted from the target columns and assigned by the server.");
+        }
+
+        // an auto increment table rejects a NOT NULL non-primary-key target column, since the
+        // always set auto increment column would make every partial delete fail
+        schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", new BigIntType(false))
+                        .column("c", DataTypes.BIGINT())
+                        .primaryKey("a")
+                        .enableAutoIncrement("c")
+                        .build();
+        tableDescriptor = TableDescriptor.builder().schema(schema).distributedBy(3, "a").build();
+        TablePath notNullTargetAutoIncrementPath =
+                TablePath.of("test_db_1", "test_not_null_target_auto_increment_column_upsert");
+        createTable(notNullTargetAutoIncrementPath, tableDescriptor, true);
+        try (Table table = conn.getTable(notNullTargetAutoIncrementPath)) {
+            assertThatThrownBy(() -> table.newUpsert().partialUpdate("a", "b").createWriter())
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessage(
+                            "Partial Update on a table with an auto increment column requires all target columns "
+                                    + "except the primary key to be nullable, but target column b is NOT NULL, "
+                                    + "since the auto increment column is always set and a partial delete could "
+                                    + "therefore never succeed.");
         }
     }
 
