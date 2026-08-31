@@ -98,6 +98,7 @@ import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** ITCase for {@link Sender}. */
 final class SenderTest {
@@ -351,17 +352,18 @@ final class SenderTest {
     }
 
     @Test
-    void testSynchronousGatewayErrorReleasesDrainedKvBatch() throws Exception {
+    void testSynchronousGatewayErrorStopsSenderAndReleasesDrainedKvBatch() throws Exception {
         sender.destroyResources();
 
         Map<TablePath, TableInfo> tableInfos = new HashMap<>();
         tableInfos.put(DATA1_TABLE_PATH, DATA1_TABLE_INFO);
         tableInfos.put(DATA1_TABLE_PATH_PK, DATA1_TABLE_INFO_PK);
+        OutOfMemoryError error = new OutOfMemoryError("Direct buffer memory");
         TestTabletServerGateway failingGateway =
                 new TestTabletServerGateway(false, Collections.emptySet()) {
                     @Override
                     public CompletableFuture<PutKvResponse> putKv(PutKvRequest request) {
-                        throw new OutOfMemoryError("Direct buffer memory");
+                        throw error;
                     }
                 };
         metadataUpdater =
@@ -378,10 +380,11 @@ final class SenderTest {
                 compactedRow(DATA1_ROW_TYPE, new Object[] {1, "a"}),
                 (tb, leo, e) -> future.complete(e));
 
-        sender.runOnce();
+        assertThatThrownBy(sender::run).isSameAs(error);
 
         assertThat(future).isCompleted();
-        assertThat(future.get()).hasMessageContaining("Direct buffer memory");
+        assertThat(future.get()).hasCause(error);
+        assertThat(sender.isRunning()).isFalse();
         assertThat(sender.numOfInFlightBatches(kvBucket)).isZero();
         assertThat(accumulator.hasIncomplete()).isFalse();
     }

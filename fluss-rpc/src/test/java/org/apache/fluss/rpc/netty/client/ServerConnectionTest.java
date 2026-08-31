@@ -63,6 +63,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
@@ -84,9 +85,12 @@ import static org.apache.fluss.metrics.MetricNames.CLIENT_RESPONSES_RATE_AVG;
 import static org.apache.fluss.metrics.MetricNames.CLIENT_RESPONSES_RATE_TOTAL;
 import static org.apache.fluss.rpc.netty.NettyUtils.getClientSocketChannelClass;
 import static org.apache.fluss.rpc.netty.NettyUtils.newEventLoopGroup;
+import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.apache.fluss.utils.NetUtils.getAvailablePort;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /** Test for {@link ServerConnection}. */
 public class ServerConnectionTest {
@@ -197,6 +201,29 @@ public class ServerConnectionTest {
         assertThat(metric.getMetricType()).isEqualTo(MetricType.GAUGE);
         assertThat(((Gauge<?>) metric).getValue()).isEqualTo(2L);
         connection.close().get();
+    }
+
+    @Test
+    void testEncodingErrorRemovesInflightRequest() throws Exception {
+        ServerConnection connection =
+                new ServerConnection(
+                        bootstrap,
+                        serverNode,
+                        TestingClientMetricGroup.newInstance(),
+                        clientAuthenticator,
+                        (con, ignore) -> {});
+        try {
+            retry(Duration.ofSeconds(20), () -> assertThat(connection.isReady()).isTrue());
+
+            OutOfMemoryError error = new OutOfMemoryError("Direct buffer memory");
+            ApiMessage request = mock(ApiMessage.class);
+            when(request.totalSize()).thenThrow(error);
+
+            assertThatThrownBy(() -> connection.send(ApiKeys.LOOKUP, request)).isSameAs(error);
+            assertThat(connection.numInflightRequests()).isZero();
+        } finally {
+            connection.close().get();
+        }
     }
 
     @Test

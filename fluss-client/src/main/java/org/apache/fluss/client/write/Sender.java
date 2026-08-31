@@ -151,30 +151,38 @@ public class Sender implements Runnable {
     public void run() {
         LOG.debug("Starting Fluss write sender thread.");
 
-        // main loop, runs until close is called.
-        while (running) {
-            try {
-                runOnce();
-            } catch (Throwable t) {
-                LOG.error("Uncaught error in Fluss write sender thread: ", t);
+        try {
+            // main loop, runs until close is called.
+            while (running) {
+                try {
+                    runOnce();
+                } catch (Exception e) {
+                    LOG.error("Uncaught error in Fluss write sender thread: ", e);
+                }
             }
-        }
 
-        LOG.debug(
-                "Beginning shutdown of Fluss log record write I/O thread, sending remaining records.");
+            LOG.debug(
+                    "Beginning shutdown of Fluss log record write I/O thread, sending remaining records.");
 
-        // okay we stopped accepting requests but there may still be requests in the accumulator or
-        // waiting for acknowledgment, wait until these are completed.
-        // TODO Check the in flight request count in the accumulator.
-        while (!forceClose && ((accumulator.hasUnDrained()))) {
-            try {
-                runOnce();
-            } catch (Exception e) {
-                LOG.error("Uncaught error in Fluss write sender I/O thread: ", e);
+            // okay we stopped accepting requests but there may still be requests in the accumulator
+            // or waiting for acknowledgment, wait until these are completed.
+            // TODO Check the in flight request count in the accumulator.
+            while (!forceClose && ((accumulator.hasUnDrained()))) {
+                try {
+                    runOnce();
+                } catch (Exception e) {
+                    LOG.error("Uncaught error in Fluss write sender I/O thread: ", e);
+                }
             }
+        } catch (Throwable t) {
+            LOG.error("Fatal error in Fluss write sender thread: ", t);
+            running = false;
+            forceClose = true;
+            maybeAbortBatches(t);
+            ExceptionUtils.rethrow(t);
+        } finally {
+            destroyResources();
         }
-
-        destroyResources();
 
         // TODO if force close failed, add logic to abort incomplete batches.
         LOG.debug("Shutdown of Fluss write sender I/O thread has completed.");
@@ -189,10 +197,13 @@ public class Sender implements Runnable {
             try {
                 idempotenceManager.maybeWaitForWriterId(targetTables);
             } catch (Throwable t) {
+                if (t instanceof Error) {
+                    throw (Error) t;
+                }
                 // TODO: If 'only request to init writer_id when we have valid target tables' have
                 // been down, this if check can be removed.
                 if (!targetTables.isEmpty()) {
-                    maybeAbortBatches((Exception) t);
+                    maybeAbortBatches(t);
                 } else {
                     LOG.trace("No target tables, ignore init writer id error", t);
                 }
@@ -304,10 +315,16 @@ public class Sender implements Runnable {
         }
     }
 
-    private void maybeAbortBatches(Exception exception) {
-        if (accumulator.hasIncomplete()) {
-            LOG.error("Aborting write batches due to fatal error", exception);
-            accumulator.abortAllBatches(exception);
+    private void maybeAbortBatches(Throwable t) {
+        try {
+            if (accumulator.hasIncomplete()) {
+                LOG.error("Aborting write batches due to fatal error", t);
+                accumulator.abortAllBatches(ExceptionUtils.toException(t));
+            }
+        } finally {
+            synchronized (inFlightBatchesLock) {
+                inFlightBatches.clear();
+            }
         }
     }
 
@@ -413,12 +430,15 @@ public class Sender implements Runnable {
                 (tableId, writeBatches) -> {
                     try {
                         sendWriteRequestsForTable(gateway, tableId, acks, writeBatches);
-                    } catch (Throwable t) {
+                    } catch (Error error) {
                         // A gateway may throw before returning a future, for example when RPC
                         // encoding runs out of direct memory. No callback is registered in that
-                        // case, so complete the drained batches to release their buffer pages
-                        // and in-flight state.
-                        handleWriteRequestException(t, writeBatches);
+                        // case. Fail the affected batches with the client-side cause before
+                        // propagating the fatal error to stop the sender.
+                        handleFatalWriteRequestError(error, writeBatches);
+                        throw error;
+                    } catch (Exception e) {
+                        handleWriteRequestException(e, writeBatches);
                     }
                 }
             );
@@ -624,6 +644,12 @@ public class Sender implements Runnable {
     }
 
     private void handleWriteRequestException(Throwable t, List<ReadyWriteBatch> writeBatches) {
+        Throwable cause = Errors.maybeUnwrapException(t);
+        if (cause instanceof Error) {
+            handleFatalWriteRequestError(cause, writeBatches);
+            return;
+        }
+
         ApiError error = ApiError.fromThrowable(t);
 
         // if batch failed because of retrievable exception, we need to retry send all those
@@ -635,6 +661,21 @@ public class Sender implements Runnable {
         }
 
         metadataUpdater.invalidPhysicalTableBucketMeta(invalidMetadataTablesSet);
+    }
+
+    private void handleFatalWriteRequestError(Throwable t, List<ReadyWriteBatch> writeBatches) {
+        running = false;
+        forceClose = true;
+        failWriteBatches(t, writeBatches);
+        maybeAbortBatches(t);
+        wakeup();
+    }
+
+    private void failWriteBatches(Throwable t, List<ReadyWriteBatch> writeBatches) {
+        Exception exception = ExceptionUtils.toException(t);
+        for (ReadyWriteBatch batch : writeBatches) {
+            failBatch(batch, exception, false);
+        }
     }
 
     /** Handle the exception and return a set of tables for which the metadata is invalid. */

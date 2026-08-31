@@ -332,15 +332,19 @@ final class ServerConnection {
             ByteBuf byteBuf;
             try {
                 byteBuf = inflight.toByteBuf(channel.alloc());
-            } catch (Exception e) {
-                LOG.error("Failed to encode request for '{}'.", ApiKeys.forId(inflight.apiKey), e);
+            } catch (Throwable t) {
+                LOG.error("Failed to encode request for '{}'.", ApiKeys.forId(inflight.apiKey), t);
                 inflightRequests.remove(inflight.requestId);
+                if (t instanceof Error) {
+                    responseFuture.completeExceptionally(t);
+                    throw (Error) t;
+                }
                 responseFuture.completeExceptionally(
                         new FlussRuntimeException(
                                 String.format(
                                         "Failed to encode request for '%s'",
                                         ApiKeys.forId(inflight.apiKey)),
-                                e));
+                                t));
                 return responseFuture;
             }
 
@@ -624,5 +628,10 @@ final class ServerConnection {
     @VisibleForTesting
     ConnectionState getConnectionState() {
         return state;
+    }
+
+    @VisibleForTesting
+    int numInflightRequests() {
+        return inflightRequests.size();
     }
 }
