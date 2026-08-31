@@ -161,7 +161,7 @@ jobs:
       FLUSS_VERSION: dev
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: fluss-dev-image
           path: /tmp
@@ -229,7 +229,7 @@ jobs:
       FLUSS_VERSION: dev
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: fluss-dev-image
           path: /tmp
@@ -322,7 +322,7 @@ jobs:
       FLUSS_VERSION: dev
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: fluss-dev-image
           path: /tmp
@@ -379,7 +379,7 @@ jobs:
       FLUSS_VERSION: dev
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: fluss-dev-image
           path: /tmp
