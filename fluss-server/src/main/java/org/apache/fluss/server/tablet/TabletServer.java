@@ -488,16 +488,16 @@ public class TabletServer extends ServerBase {
             }
 
             try {
-                if (replicaStateChangeExecutor != null) {
-                    ExecutorUtils.gracefulShutdown(5, TimeUnit.SECONDS, replicaStateChangeExecutor);
+                if (replicaTransitionExecutor != null) {
+                    ExecutorUtils.gracefulShutdown(5, TimeUnit.SECONDS, replicaTransitionExecutor);
                 }
             } catch (Throwable t) {
                 exception = ExceptionUtils.firstOrSuppressed(t, exception);
             }
 
             try {
-                if (replicaTransitionExecutor != null) {
-                    ExecutorUtils.gracefulShutdown(5, TimeUnit.SECONDS, replicaTransitionExecutor);
+                if (replicaStateChangeExecutor != null) {
+                    ExecutorUtils.gracefulShutdown(5, TimeUnit.SECONDS, replicaStateChangeExecutor);
                 }
             } catch (Throwable t) {
                 exception = ExceptionUtils.firstOrSuppressed(t, exception);
