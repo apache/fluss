@@ -74,7 +74,7 @@ jobs:
       elixir: ${{ steps.filter.outputs.elixir }}
       gateway: ${{ steps.filter.outputs.gateway }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - id: filter
@@ -114,7 +114,7 @@ jobs:
     if: needs.detect-changes.outputs.rust == 'true' || needs.detect-changes.outputs.python == 'true' || needs.detect-changes.outputs.cpp == 'true' || needs.detect-changes.outputs.elixir == 'true' || needs.detect-changes.outputs.gateway == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Cache server image
         id: image-cache
@@ -160,7 +160,7 @@ jobs:
       FLUSS_IMAGE: fluss
       FLUSS_VERSION: dev
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v4
         with:
           name: fluss-dev-image
@@ -228,7 +228,7 @@ jobs:
       FLUSS_IMAGE: fluss
       FLUSS_VERSION: dev
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v4
         with:
           name: fluss-dev-image
@@ -285,7 +285,7 @@ jobs:
       run:
         working-directory: fluss-rust
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -321,7 +321,7 @@ jobs:
       FLUSS_IMAGE: fluss
       FLUSS_VERSION: dev
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v4
         with:
           name: fluss-dev-image
@@ -378,7 +378,7 @@ jobs:
       FLUSS_IMAGE: fluss
       FLUSS_VERSION: dev
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v4
         with:
           name: fluss-dev-image
