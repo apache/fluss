@@ -80,19 +80,24 @@ public class RocksIncrementalSnapshot implements AutoCloseable {
     /** The help class used to upload kv snapshot files. */
     private final KvSnapshotDataUploader kvSnapshotDataUploader;
 
+    /** Whether to retain the latest completed checkpoint for local recovery. */
+    private final boolean localRecoveryEnabled;
+
     public RocksIncrementalSnapshot(
             Map<Long, Collection<KvFileHandleAndLocalPath>> uploadedSstFiles,
             @Nonnull RocksDB db,
             ResourceGuard rocksDBResourceGuard,
             KvSnapshotDataUploader kvSnapshotDataUploader,
             @Nonnull File instanceBasePath,
-            long lastCompletedSnapshotId) {
+            long lastCompletedSnapshotId,
+            boolean localRecoveryEnabled) {
         this.uploadedSstFiles = uploadedSstFiles;
         this.db = db;
         this.rocksDBResourceGuard = rocksDBResourceGuard;
         this.kvSnapshotDataUploader = kvSnapshotDataUploader;
         this.instanceBasePath = instanceBasePath;
         this.lastCompletedSnapshotId = lastCompletedSnapshotId;
+        this.localRecoveryEnabled = localRecoveryEnabled;
     }
 
     public SnapshotResultSupplier asyncSnapshot(
@@ -113,12 +118,18 @@ public class RocksIncrementalSnapshot implements AutoCloseable {
             uploadedSstFiles.keySet().removeIf(snapshotId -> snapshotId < completedSnapshotId);
             lastCompletedSnapshotId = completedSnapshotId;
         }
+        if (localRecoveryEnabled) {
+            // The local checkpoint is useful after an in-place restart. Keep the committed snapshot
+            // and remove older or uncommitted checkpoints only after the remote commit succeeds.
+            LocalKvSnapshotUtils.retainOnly(instanceBasePath, completedSnapshotId);
+        }
     }
 
     public void notifySnapshotAbort(long abortedSnapshotId) {
         synchronized (uploadedSstFiles) {
             uploadedSstFiles.remove(abortedSnapshotId);
         }
+        LocalKvSnapshotUtils.discard(instanceBasePath, abortedSnapshotId);
     }
 
     @Override
@@ -134,11 +145,12 @@ public class RocksIncrementalSnapshot implements AutoCloseable {
 
         takeDBNativeSnapshot(snapshotDirectory);
 
-        return new NativeRocksDBSnapshotResources(snapshotDirectory, previousSnapshot);
+        return new NativeRocksDBSnapshotResources(
+                snapshotDirectory, previousSnapshot, localRecoveryEnabled);
     }
 
     private File prepareLocalSnapshotDirectory(long snapshotId) {
-        return new File(instanceBasePath, "snap-" + snapshotId);
+        return LocalKvSnapshotUtils.getSnapshotDirectory(instanceBasePath, snapshotId);
     }
 
     private PreviousSnapshot getPreviousSnapshot(long snapshotId) {
@@ -315,14 +327,24 @@ public class RocksIncrementalSnapshot implements AutoCloseable {
 
         @Nonnull protected final PreviousSnapshot previousSnapshot;
 
+        private final boolean localRecoveryEnabled;
+
         protected NativeRocksDBSnapshotResources(
-                File snapshotDirectory, PreviousSnapshot previousSnapshot) {
+                File snapshotDirectory,
+                PreviousSnapshot previousSnapshot,
+                boolean localRecoveryEnabled) {
             this.snapshotDirectory = snapshotDirectory;
             this.previousSnapshot = previousSnapshot;
+            this.localRecoveryEnabled = localRecoveryEnabled;
         }
 
         @Override
         public void release() {
+            if (localRecoveryEnabled) {
+                // Its lifecycle is decided after the snapshot commit result is known.
+                return;
+            }
+
             try {
                 if (snapshotDirectory.exists()) {
                     LOG.trace(

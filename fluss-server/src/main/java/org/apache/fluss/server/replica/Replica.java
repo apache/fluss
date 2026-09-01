@@ -59,6 +59,7 @@ import org.apache.fluss.rpc.util.PredicateMessageUtils;
 import org.apache.fluss.server.SequenceIDCounter;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
+import org.apache.fluss.server.exception.KvBuildingException;
 import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.server.kv.KvRecoverHelper;
 import org.apache.fluss.server.kv.KvStateLookupResult;
@@ -817,24 +818,10 @@ public final class Replica {
         long startTime = clock.milliseconds();
         LOG.info("Start to init kv tablet for {} of table {}.", tableBucket, physicalPath);
 
-        // todo: we may need to handle the following cases:
-        // case1: no kv files in local, restore from remote snapshot; and apply
-        // the log;
-        // case2: kv files in local
-        //       - if no remote snapshot, restore from local and apply the log known to the local
-        // files.
-        //       - have snapshot, if the known offset to the local files is much less than(maybe
-        // some value configured)
-        //         the remote snapshot; restore from remote snapshot;
-
-        // currently for simplicity, we'll always download the snapshot files and restore from
-        // the snapshots as kv files won't exist in our current implementation for
-        // when replica become follower, we'll always delete the kv files.
-
-        // get the offset from which, we should restore from. default is 0
+        // Prefer a retained local checkpoint only when it exactly matches the latest committed
+        // snapshot metadata. Historical partitions use the lake snapshot as their durable base
+        // and recover from the WAL instead of restoring a normal KV snapshot.
         long restoreStartOffset = isHistoricalPartition() ? historicalRecoveryStartOffset() : 0;
-        // The lake snapshot is the durable base for a historical overlay. Historical replicas
-        // therefore never restore a normal KV snapshot, even if one exists from older code.
         Optional<CompletedSnapshot> optCompletedSnapshot =
                 isHistoricalPartition() ? Optional.empty() : getLatestSnapshot(tableBucket);
         try {
@@ -847,15 +834,7 @@ public final class Replica {
                         tableBucket,
                         physicalPath);
                 CompletedSnapshot completedSnapshot = optCompletedSnapshot.get();
-                // always create a new dir for the kv tablet
-                File tabletDir =
-                        kvManager.createTabletDir(
-                                logTablet.getDataDir(), physicalPath, tableBucket);
-                // down the snapshot to target tablet dir
-                downloadKvSnapshots(completedSnapshot, tabletDir.toPath());
-
-                // as we have downloaded kv files into the tablet dir, now, we can load it
-                kvTablet = kvManager.loadKv(tabletDir, schemaGetter, this::onKvFlushComplete);
+                kvTablet = restoreKvTablet(completedSnapshot);
 
                 checkNotNull(kvTablet, "kv tablet should not be null.");
                 restoreStartOffset = completedSnapshot.getLogOffset();
@@ -920,6 +899,59 @@ public final class Replica {
         }
 
         return optCompletedSnapshot;
+    }
+
+    private KvTablet restoreKvTablet(CompletedSnapshot completedSnapshot) throws Exception {
+        checkNotNull(kvManager);
+        long start = System.currentTimeMillis();
+        Optional<File> optionalTabletDir =
+                snapshotContext.isLocalRecoveryEnabled()
+                        ? kvManager.restoreKvFromLocalSnapshot(
+                                logTablet.getDataDir(),
+                                physicalPath,
+                                tableBucket,
+                                completedSnapshot)
+                        : Optional.empty();
+        if (optionalTabletDir.isPresent()) {
+            try {
+                KvTablet restoredKvTablet =
+                        kvManager.loadKv(
+                                optionalTabletDir.get(), schemaGetter, this::onKvFlushComplete);
+                LOG.info(
+                        "Rebuilt kv tablet for {} of table {} from retained local snapshot {} that costs {} ms.",
+                        tableBucket,
+                        physicalPath,
+                        completedSnapshot.getSnapshotID(),
+                        System.currentTimeMillis() - start);
+                return restoredKvTablet;
+            } catch (KvBuildingException localRecoveryException) {
+                LOG.warn(
+                        "Failed to load retained local KV snapshot {} for {} of table {}. "
+                                + "Falling back to remote snapshot recovery.",
+                        completedSnapshot.getSnapshotID(),
+                        tableBucket,
+                        physicalPath,
+                        localRecoveryException);
+                try {
+                    return downloadAndLoadKvSnapshot(completedSnapshot);
+                } catch (Exception remoteRecoveryException) {
+                    remoteRecoveryException.addSuppressed(localRecoveryException);
+                    throw remoteRecoveryException;
+                }
+            }
+        }
+
+        return downloadAndLoadKvSnapshot(completedSnapshot);
+    }
+
+    private KvTablet downloadAndLoadKvSnapshot(CompletedSnapshot completedSnapshot)
+            throws Exception {
+        checkNotNull(kvManager);
+        File tabletDir =
+                kvManager.deleteAndCreateTabletDir(
+                        logTablet.getDataDir(), physicalPath, tableBucket);
+        downloadKvSnapshots(completedSnapshot, tabletDir.toPath());
+        return kvManager.loadKv(tabletDir, schemaGetter, this::onKvFlushComplete);
     }
 
     private void downloadKvSnapshots(CompletedSnapshot completedSnapshot, Path kvTabletDir)
@@ -1082,7 +1114,8 @@ public final class Replica {
                     kvTablet.createIncrementalSnapshot(
                             uploadedSstFiles,
                             snapshotContext.getSnapshotDataUploader(),
-                            lastCompletedSnapshotId);
+                            lastCompletedSnapshotId,
+                            snapshotContext.isLocalRecoveryEnabled());
 
             // create snapshot ID counter
             SequenceIDCounter snapshotIDCounter =

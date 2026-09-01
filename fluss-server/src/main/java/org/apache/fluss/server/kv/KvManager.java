@@ -40,6 +40,8 @@ import org.apache.fluss.server.TabletManagerBase;
 import org.apache.fluss.server.kv.autoinc.AutoIncrementManager;
 import org.apache.fluss.server.kv.autoinc.ZkSequenceGeneratorFactory;
 import org.apache.fluss.server.kv.rowmerger.RowMerger;
+import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
+import org.apache.fluss.server.kv.snapshot.LocalKvSnapshotUtils;
 import org.apache.fluss.server.log.LogManager;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
@@ -389,7 +391,7 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
      * @param tableBucket the table bucket
      * @return the tablet directory
      */
-    public File createTabletDir(
+    public File deleteAndCreateTabletDir(
             File dataDir, PhysicalTablePath tablePath, TableBucket tableBucket) {
         File tabletDir = getTabletDir(dataDir, tablePath, tableBucket);
 
@@ -397,6 +399,34 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
         FileUtils.deleteDirectoryQuietly(tabletDir);
         createTabletDirectory(tabletDir);
         return tabletDir;
+    }
+
+    /**
+     * Attempts to rebuild a tablet directory from the matching retained local snapshot.
+     *
+     * @return the rebuilt tablet directory, or empty when the local snapshot is unavailable or
+     *     invalid
+     */
+    public Optional<File> restoreKvFromLocalSnapshot(
+            File dataDir,
+            PhysicalTablePath tablePath,
+            TableBucket tableBucket,
+            CompletedSnapshot completedSnapshot) {
+        if (!tableBucket.equals(completedSnapshot.getTableBucket())) {
+            return Optional.empty();
+        }
+
+        File tabletDir = getTabletDir(dataDir, tablePath, tableBucket);
+        if (!tabletDir.isDirectory()) {
+            LOG.debug(
+                    "Skip retained local snapshot recovery because KV tablet directory {} "
+                            + "does not exist or is not a directory.",
+                    tabletDir);
+            return Optional.empty();
+        }
+        return LocalKvSnapshotUtils.restore(tabletDir, completedSnapshot)
+                ? Optional.of(tabletDir)
+                : Optional.empty();
     }
 
     public Optional<KvTablet> getKv(TableBucket tableBucket) {

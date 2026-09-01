@@ -41,15 +41,18 @@ import org.apache.fluss.record.ProjectionPushdownCache;
 import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.kv.KvFlushScheduler;
+import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.server.kv.KvTablet;
 import org.apache.fluss.server.kv.TestingHoldableKvFlushScheduler;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotDataDownloader;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotDownloadSpec;
+import org.apache.fluss.server.kv.snapshot.LocalKvSnapshotUtils;
 import org.apache.fluss.server.kv.snapshot.TestingCompletedKvSnapshotCommitter;
 import org.apache.fluss.server.log.FetchParams;
 import org.apache.fluss.server.log.LogAppendInfo;
 import org.apache.fluss.server.log.LogReadInfo;
+import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.server.testutils.KvTestUtils;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.testutils.DataTestUtils;
@@ -67,6 +70,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -572,6 +576,7 @@ final class ReplicaTest extends ReplicaTestBase {
 
     @Test
     void testKvReplicaSnapshot(@TempDir File snapshotKvTabletDir) throws Exception {
+        conf.set(ConfigOptions.KV_SNAPSHOT_LOCAL_RECOVERY_ENABLED, true);
         TableBucket tableBucket = new TableBucket(DATA1_TABLE_ID_PK, 1);
 
         // create test context
@@ -631,22 +636,42 @@ final class ReplicaTest extends ReplicaTestBase {
                 completedSnapshot1.getKvSnapshotHandle(),
                 completedSnapshot0.getKvSnapshotHandle(),
                 1);
-        // now, make the replica as follower to make kv can be destroyed
-        makeKvReplicaAsFollower(kvReplica, 1);
+        File localKvTabletDir = checkNotNull(kvReplica.getKvTablet()).getKvTabletDir();
+        File retainedLocalSnapshot =
+                LocalKvSnapshotUtils.getSnapshotDirectory(
+                        localKvTabletDir, completedSnapshot1.getSnapshotID());
+
+        // Restart the KV manager without a role transition. A normal shutdown preserves the tablet
+        // directory, including the retained snapshot checkpoint.
+        restartKvManager();
+        assertThat(retainedLocalSnapshot).isDirectory();
 
         // make a new kv replica
+        AtomicBoolean downloadedRemoteSnapshot = new AtomicBoolean(false);
         testKvSnapshotContext =
-                new TestSnapshotContext(snapshotKvTabletDir.getPath(), kvSnapshotStore);
+                new TestSnapshotContext(snapshotKvTabletDir.getPath(), kvSnapshotStore) {
+                    @Override
+                    public KvSnapshotDataDownloader getSnapshotDataDownloader() {
+                        return new KvSnapshotDataDownloader(executorService) {
+                            @Override
+                            public void transferAllDataToDirectory(
+                                    KvSnapshotDownloadSpec downloadSpec,
+                                    CloseableRegistry closeableRegistry)
+                                    throws Exception {
+                                downloadedRemoteSnapshot.set(true);
+                                super.transferAllDataToDirectory(downloadSpec, closeableRegistry);
+                            }
+                        };
+                    }
+                };
         kvReplica = makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, tableBucket, testKvSnapshotContext);
         scheduledExecutorService = testKvSnapshotContext.scheduledExecutorService;
         kvSnapshotStore = testKvSnapshotContext.testKvSnapshotStore;
-        makeKvReplicaAsFollower(kvReplica, 1);
 
-        // check the kv tablet should be null since it has become follower
-        assertThat(kvReplica.getKvTablet()).isNull();
-
-        // make as leader again, should restore from snapshot
+        // Recover as leader after the in-place restart, without an intervening role transition.
         makeKvReplicaAsLeader(kvReplica, 2);
+        assertThat(downloadedRemoteSnapshot).isFalse();
+        assertThat(retainedLocalSnapshot).isDirectory();
 
         // put some data
         kvRecords =
@@ -667,6 +692,107 @@ final class ReplicaTest extends ReplicaTestBase {
                                 Tuple2.of("k2", new Object[] {4, "bk21"}),
                                 Tuple2.of("k3", new Object[] {5, "k3"})));
         KvTestUtils.checkSnapshot(completedSnapshot2, expectedKeyValues, expectedLogOffset);
+
+        File finalKvTabletDir = checkNotNull(kvReplica.getKvTablet()).getKvTabletDir();
+        File finalLocalSnapshot =
+                LocalKvSnapshotUtils.getSnapshotDirectory(
+                        finalKvTabletDir, completedSnapshot2.getSnapshotID());
+        assertThat(finalLocalSnapshot).isDirectory();
+
+        // Make the retained checkpoint invalid while leaving the remote snapshot intact. Recovery
+        // should reject the local copy and download the committed remote snapshot instead.
+        restartKvManager();
+        Path currentFile = finalLocalSnapshot.toPath().resolve("CURRENT");
+        Files.delete(currentFile);
+        assertThat(currentFile).doesNotExist();
+
+        downloadedRemoteSnapshot.set(false);
+        kvReplica = makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, tableBucket, testKvSnapshotContext);
+        makeKvReplicaAsLeader(kvReplica, 3);
+        assertThat(downloadedRemoteSnapshot).isTrue();
+        assertThat(finalLocalSnapshot).doesNotExist();
+        verifyGetKeyValues(checkNotNull(kvReplica.getKvTablet()), expectedKeyValues);
+
+        File recoveredKvTabletDir = checkNotNull(kvReplica.getKvTablet()).getKvTabletDir();
+        makeKvReplicaAsFollower(kvReplica, 4);
+        assertThat(recoveredKvTabletDir).doesNotExist();
+    }
+
+    @Test
+    void testLocalSnapshotLoadFailureFallsBackToRemote(@TempDir File snapshotKvTabletDir)
+            throws Exception {
+        conf.set(ConfigOptions.KV_SNAPSHOT_LOCAL_RECOVERY_ENABLED, true);
+        TableBucket tableBucket = new TableBucket(DATA1_TABLE_ID_PK, 1);
+        TestSnapshotContext testKvSnapshotContext =
+                new TestSnapshotContext(snapshotKvTabletDir.getPath());
+        TestingCompletedKvSnapshotCommitter kvSnapshotStore =
+                testKvSnapshotContext.testKvSnapshotStore;
+
+        Replica kvReplica =
+                makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, tableBucket, testKvSnapshotContext);
+        makeKvReplicaAsLeader(kvReplica);
+        List<Tuple2<byte[], byte[]>> expectedKeyValues =
+                getKeyValuePairs(
+                        genKvRecords(
+                                Tuple2.of("k1", new Object[] {1, "a"}),
+                                Tuple2.of("k2", new Object[] {2, "b"})));
+        putRecordsToLeader(
+                kvReplica,
+                genKvRecordBatch(
+                        Tuple2.of("k1", new Object[] {1, "a"}),
+                        Tuple2.of("k2", new Object[] {2, "b"})));
+
+        testKvSnapshotContext.scheduledExecutorService.triggerAllNonPeriodicTasks();
+        CompletedSnapshot completedSnapshot =
+                kvSnapshotStore.waitUntilSnapshotComplete(tableBucket, 0);
+        File localKvTabletDir = checkNotNull(kvReplica.getKvTablet()).getKvTabletDir();
+        File retainedLocalSnapshot =
+                LocalKvSnapshotUtils.getSnapshotDirectory(
+                        localKvTabletDir, completedSnapshot.getSnapshotID());
+
+        restartKvManager();
+        assertThat(retainedLocalSnapshot).isDirectory();
+
+        // Keep the file name and size valid for local snapshot validation, but make RocksDB unable
+        // to resolve its manifest when opening the restored checkpoint.
+        Path currentFile = retainedLocalSnapshot.toPath().resolve("CURRENT");
+        long currentFileSize = Files.size(currentFile);
+        Files.write(currentFile, new byte[(int) currentFileSize]);
+        assertThat(Files.size(currentFile)).isEqualTo(currentFileSize);
+
+        AtomicBoolean downloadedRemoteSnapshot = new AtomicBoolean(false);
+        AtomicBoolean handledBrokenSnapshot = new AtomicBoolean(false);
+        testKvSnapshotContext =
+                new TestSnapshotContext(snapshotKvTabletDir.getPath(), kvSnapshotStore) {
+                    @Override
+                    public KvSnapshotDataDownloader getSnapshotDataDownloader() {
+                        return new KvSnapshotDataDownloader(executorService) {
+                            @Override
+                            public void transferAllDataToDirectory(
+                                    KvSnapshotDownloadSpec downloadSpec,
+                                    CloseableRegistry closeableRegistry)
+                                    throws Exception {
+                                downloadedRemoteSnapshot.set(true);
+                                super.transferAllDataToDirectory(downloadSpec, closeableRegistry);
+                            }
+                        };
+                    }
+
+                    @Override
+                    public void handleSnapshotBroken(CompletedSnapshot snapshot) throws Exception {
+                        handledBrokenSnapshot.set(true);
+                        super.handleSnapshotBroken(snapshot);
+                    }
+                };
+        kvReplica = makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, tableBucket, testKvSnapshotContext);
+        makeKvReplicaAsLeader(kvReplica, 2);
+
+        assertThat(downloadedRemoteSnapshot).isTrue();
+        assertThat(handledBrokenSnapshot).isFalse();
+        assertThat(kvSnapshotStore.getLatestCompletedSnapshot(tableBucket))
+                .isEqualTo(completedSnapshot);
+        assertThat(retainedLocalSnapshot).doesNotExist();
+        verifyGetKeyValues(checkNotNull(kvReplica.getKvTablet()), expectedKeyValues);
     }
 
     @Test
@@ -1111,6 +1237,18 @@ final class ReplicaTest extends ReplicaTestBase {
                 ((AbstractMetricGroup) physicalStorageMetricGroup)
                         .getMetrics()
                         .get(MetricNames.BUCKET_PHYSICAL_STORAGE_LOCAL_LOG_SIZE);
+    }
+
+    private void restartKvManager() throws IOException {
+        kvManager.shutdown();
+        kvManager =
+                KvManager.create(
+                        conf,
+                        zkClient,
+                        logManager,
+                        TestingMetricGroups.TABLET_SERVER_METRICS,
+                        localDiskManager);
+        kvManager.startup();
     }
 
     private void makeLogReplicaAsLeader(Replica replica) throws Exception {
