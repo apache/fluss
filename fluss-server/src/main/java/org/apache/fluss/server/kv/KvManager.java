@@ -51,6 +51,7 @@ import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.clock.SystemClock;
+import org.apache.fluss.utils.function.SupplierWithException;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.rocksdb.RateLimiter;
@@ -70,8 +71,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
-
-import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
 
 /**
  * The entry point to the fluss kv management subsystem. The kv manager is responsible for kv tablet
@@ -125,6 +124,8 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
     private final Clock clock;
 
     private final Map<TableBucket, KvTablet> currentKvs = new ConcurrentHashMap<>();
+
+    private final Map<TableBucket, Object> kvLocks = new ConcurrentHashMap<>();
 
     /**
      * For arrow log format. The buffer allocator to allocate memory for arrow write batch of
@@ -331,8 +332,8 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
             ArrowCompressionInfo arrowCompressionInfo,
             @Nullable Runnable flushCompleteListener)
             throws Exception {
-        return inLock(
-                tabletCreationOrDeletionLock,
+        return inKvLock(
+                tableBucket,
                 () -> {
                     if (currentKvs.containsKey(tableBucket)) {
                         return currentKvs.get(tableBucket);
@@ -404,9 +405,16 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
     }
 
     public void dropKv(TableBucket tableBucket) {
-        KvTablet dropKvTablet =
-                inLock(tabletCreationOrDeletionLock, () -> currentKvs.remove(tableBucket));
+        inKvLock(
+                tableBucket,
+                () -> {
+                    doDropKv(tableBucket);
+                    return null;
+                });
+    }
 
+    private void doDropKv(TableBucket tableBucket) {
+        KvTablet dropKvTablet = currentKvs.remove(tableBucket);
         if (dropKvTablet != null) {
             TablePath tablePath = dropKvTablet.getTablePath();
             try {
@@ -443,6 +451,38 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
         Tuple2<PhysicalTablePath, TableBucket> pathAndBucket = FlussPaths.parseTabletDir(tabletDir);
         PhysicalTablePath physicalTablePath = pathAndBucket.f0;
         TableBucket tableBucket = pathAndBucket.f1;
+        return inKvLock(
+                tableBucket,
+                () ->
+                        doLoadKv(
+                                tabletDir,
+                                physicalTablePath,
+                                tableBucket,
+                                schemaGetter,
+                                flushCompleteListener));
+    }
+
+    private KvTablet doLoadKv(
+            File tabletDir,
+            PhysicalTablePath physicalTablePath,
+            TableBucket tableBucket,
+            SchemaGetter schemaGetter,
+            @Nullable Runnable flushCompleteListener)
+            throws Exception {
+        KvTablet currentKv = currentKvs.get(tableBucket);
+        if (currentKv != null) {
+            throw new IllegalStateException(
+                    String.format(
+                            "Duplicate kv tablet directories for bucket %s are found in both %s and %s. "
+                                    + "Recover server from this "
+                                    + "failure by manually deleting one of the two kv directories for this bucket. "
+                                    + "It is recommended to delete the bucket in the kv tablet directory that is "
+                                    + "known to have failed recently.",
+                            tableBucket,
+                            tabletDir.getAbsolutePath(),
+                            currentKv.getKvTabletDir().getAbsolutePath()));
+        }
+
         // get the log tablet for the kv tablet
         LogTablet logTablet =
                 logManager
@@ -490,19 +530,7 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
                         autoIncrementManager,
                         clock,
                         tableConfig);
-        if (this.currentKvs.containsKey(tableBucket)) {
-            throw new IllegalStateException(
-                    String.format(
-                            "Duplicate kv tablet directories for bucket %s are found in both %s and %s. "
-                                    + "Recover server from this "
-                                    + "failure by manually deleting one of the two kv directories for this bucket. "
-                                    + "It is recommended to delete the bucket in the kv tablet directory that is "
-                                    + "known to have failed recently.",
-                            tableBucket,
-                            tabletDir.getAbsolutePath(),
-                            currentKvs.get(tableBucket).getKvTabletDir().getAbsolutePath()));
-        }
-        this.currentKvs.put(tableBucket, kvTablet);
+        currentKvs.put(tableBucket, kvTablet);
 
         return kvTablet;
     }
@@ -572,6 +600,27 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
             // If setting fails, throw ConfigException to trigger rollback
             throw new ConfigException(
                     "Failed to reconfigure shared RocksDB rate limiter: " + e.getMessage(), e);
+        }
+    }
+
+    private <T, E extends Exception> T inKvLock(
+            TableBucket tableBucket, SupplierWithException<T, E> action) throws E {
+        while (true) {
+            Object lock = kvLocks.computeIfAbsent(tableBucket, ignored -> new Object());
+            synchronized (lock) {
+                if (kvLocks.get(tableBucket) != lock) {
+                    continue;
+                }
+                try {
+                    return action.get();
+                } finally {
+                    if (!currentKvs.containsKey(tableBucket)) {
+                        // Retire the lock only after the action completes, while still holding
+                        // its monitor. Threads waiting on this lock must retry with the new one.
+                        kvLocks.remove(tableBucket, lock);
+                    }
+                }
+            }
         }
     }
 }
