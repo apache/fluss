@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
+import org.apache.fluss.metadata.LakeLookupMode;
 import org.apache.fluss.metadata.TablePath;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
@@ -68,22 +69,13 @@ public interface LakeStorage {
                 "Point lookup is not supported for this lake storage.");
     }
 
-    /** Mode used to look up historical data in lake storage. */
-    enum LookupMode {
-        /** Use local lookup files cached from lake storage. */
-        SST,
-
-        /** Scan lake storage with primary-key filters and return at most one row. */
-        SCAN
-    }
-
     /** Runtime context for creating a lake table lookuper. */
     final class LookuperContext {
         private final String ioTmpDir;
         private final TableConfig tableConfig;
         private final long lookupCacheMaxDiskBytes;
         private final Runnable diskWriteGuard;
-        private final LookupMode lookupMode;
+        private final LakeLookupMode lookupMode;
 
         /**
          * Creates a lookuper context.
@@ -128,7 +120,7 @@ public interface LakeStorage {
         }
 
         /** Returns the mode used to look up historical data. */
-        public LookupMode lookupMode() {
+        public LakeLookupMode lookupMode() {
             return lookupMode;
         }
     }

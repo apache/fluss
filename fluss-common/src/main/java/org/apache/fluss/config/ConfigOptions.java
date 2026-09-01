@@ -20,11 +20,11 @@ package org.apache.fluss.config;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.compression.ArrowCompressionType;
-import org.apache.fluss.lake.lakestorage.LakeStorage.LookupMode;
 import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.KvFormat;
+import org.apache.fluss.metadata.LakeLookupMode;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.rpc.protocol.FetchLogReadPreference;
@@ -1935,16 +1935,17 @@ public class ConfigOptions {
                                     + "updated table configuration.");
 
     /** Lookup strategy for historical partitions stored in lake storage. */
-    public static final ConfigOption<LookupMode> TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_MODE =
-            key("table.datalake.historical-partition.lookup-mode")
-                    .enumType(LookupMode.class)
-                    .defaultValue(LookupMode.SST)
-                    .withDescription(
-                            "The lookup mode for historical partitions stored in Paimon. "
-                                    + "SST uses local lookup files cached from lake storage. "
-                                    + "SCAN scans the requested partition and bucket with primary-key filters "
-                                    + "and a limit of one row, without creating local lookup files. "
-                                    + "This option can only be set when creating the table and cannot be altered.");
+    public static final ConfigOption<LakeLookupMode>
+            TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_MODE =
+                    key("table.datalake.historical-partition.lookup-mode")
+                            .enumType(LakeLookupMode.class)
+                            .defaultValue(LakeLookupMode.SST)
+                            .withDescription(
+                                    "The lookup mode for historical partitions stored in Paimon. "
+                                            + "SST uses local lookup files cached from lake storage. "
+                                            + "SCAN scans the requested partition and bucket with primary-key filters "
+                                            + "and a limit of one row, without creating local lookup files. "
+                                            + "This option can only be set when creating the table and cannot be altered.");
 
     public static final ConfigOption<DataLakeFormat> TABLE_DATALAKE_FORMAT =
             key("table.datalake.format")

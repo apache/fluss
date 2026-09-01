@@ -22,13 +22,13 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.DiskWriteLockedException;
-import org.apache.fluss.lake.lakestorage.LakeStorage.LookupMode;
 import org.apache.fluss.lake.lakestorage.LakeStorage.LookuperContext;
 import org.apache.fluss.lake.lakestorage.LakeTableLookuper;
 import org.apache.fluss.lake.lakestorage.TestingLakeCatalogContext;
 import org.apache.fluss.lake.paimon.PaimonLakeCatalog;
 import org.apache.fluss.lake.paimon.PaimonLakeStorage;
 import org.apache.fluss.metadata.KvFormat;
+import org.apache.fluss.metadata.LakeLookupMode;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableChange;
@@ -123,8 +123,8 @@ class PaimonLakeTableLookuperTest {
     }
 
     @ParameterizedTest(name = "lookupMode={0}")
-    @EnumSource(LookupMode.class)
-    void testLookupPartitionedPrimaryKeyTable(LookupMode lookupMode) throws Exception {
+    @EnumSource(LakeLookupMode.class)
+    void testLookupPartitionedPrimaryKeyTable(LakeLookupMode lookupMode) throws Exception {
         TablePath tablePath = TablePath.of(DB, "partitioned_pk");
         Schema schema = pkSchema();
         TableDescriptor tableDescriptor = partitionedPkDescriptor(schema);
@@ -157,14 +157,14 @@ class PaimonLakeTableLookuperTest {
                                     paimonKey(schema, 1, "20240101"),
                                     lookupContext(schema, "20240101", 1, SCHEMA_ID)))
                     .isNull();
-            if (lookupMode == LookupMode.SST) {
+            if (lookupMode == LakeLookupMode.SST) {
                 assertThat(lookuper.lookup(compactedKey(schema, 1, "20240101"), context)).isNull();
             }
 
             // SST creates a local lookup file on the first lookup; SCAN never creates one.
             assertThat(lookupFileDownloads)
                     .containsExactlyElementsOf(
-                            lookupMode == LookupMode.SST
+                            lookupMode == LakeLookupMode.SST
                                     ? Arrays.asList(true, false, false)
                                     : Arrays.asList(false, false));
         }
@@ -208,7 +208,7 @@ class PaimonLakeTableLookuperTest {
                                 paimonConfig,
                                 tablePath,
                                 tempWarehouseDir.getAbsolutePath(),
-                                tableConfig(KvFormat.COMPACTED, 1, LookupMode.SST),
+                                tableConfig(KvFormat.COMPACTED, 1, LakeLookupMode.SST),
                                 LOOKUP_CACHE_MAX_DISK_BYTES,
                                 diskWriteGuard)) {
                     Future<byte[]> firstLookup =
@@ -238,8 +238,9 @@ class PaimonLakeTableLookuperTest {
     }
 
     @ParameterizedTest(name = "lookupMode={0}")
-    @EnumSource(LookupMode.class)
-    void testDiskWriteLockBlocksOnlyLookupFileDownloads(LookupMode lookupMode) throws Exception {
+    @EnumSource(LakeLookupMode.class)
+    void testDiskWriteLockBlocksOnlyLookupFileDownloads(LakeLookupMode lookupMode)
+            throws Exception {
         TablePath tablePath = TablePath.of(DB, "disk_write_lock");
         Schema schema = pkSchema();
         FileStoreTable table = createPaimonTable(tablePath, partitionedPkDescriptor(schema));
@@ -273,7 +274,7 @@ class PaimonLakeTableLookuperTest {
             // rejected. SCAN performs no local writes and is unaffected by the guard.
             assertThat(lookuper.lookup(paimonKey(schema, 1, "20240101"), cachedPartition))
                     .isNotNull();
-            if (lookupMode == LookupMode.SST) {
+            if (lookupMode == LakeLookupMode.SST) {
                 assertThatThrownBy(
                                 () ->
                                         lookuper.lookup(
@@ -292,8 +293,8 @@ class PaimonLakeTableLookuperTest {
     }
 
     @ParameterizedTest(name = "lookupMode={0}")
-    @EnumSource(LookupMode.class)
-    void testLookupPartitionsWithSameHashCode(LookupMode lookupMode) throws Exception {
+    @EnumSource(LakeLookupMode.class)
+    void testLookupPartitionsWithSameHashCode(LakeLookupMode lookupMode) throws Exception {
         // These distinct partition values produce the same BinaryRow hash code, reproducing the
         // mutable-key collision that previously made one partition reuse another partition's files.
         String firstPartition = "b8";
@@ -340,8 +341,8 @@ class PaimonLakeTableLookuperTest {
     }
 
     @ParameterizedTest(name = "lookupMode={0}")
-    @EnumSource(LookupMode.class)
-    void testLookupWithIndexedKvFormat(LookupMode lookupMode) throws Exception {
+    @EnumSource(LakeLookupMode.class)
+    void testLookupWithIndexedKvFormat(LakeLookupMode lookupMode) throws Exception {
         TablePath tablePath = TablePath.of(DB, "indexed_kv_format");
         Schema schema = pkSchema();
         TableDescriptor tableDescriptor =
@@ -371,8 +372,8 @@ class PaimonLakeTableLookuperTest {
     }
 
     @ParameterizedTest(name = "lookupMode={0}")
-    @EnumSource(LookupMode.class)
-    void testLookupKvFormatV2WithNonDefaultBucketKey(LookupMode lookupMode) throws Exception {
+    @EnumSource(LakeLookupMode.class)
+    void testLookupKvFormatV2WithNonDefaultBucketKey(LakeLookupMode lookupMode) throws Exception {
         TablePath tablePath = TablePath.of(DB, "non_default_bucket_key");
         Schema schema =
                 Schema.newBuilder()
@@ -416,8 +417,8 @@ class PaimonLakeTableLookuperTest {
     }
 
     @ParameterizedTest(name = "lookupMode={0}")
-    @EnumSource(LookupMode.class)
-    void testRetriesInitializationAfterLookupKeyConverterFailure(LookupMode lookupMode)
+    @EnumSource(LakeLookupMode.class)
+    void testRetriesInitializationAfterLookupKeyConverterFailure(LakeLookupMode lookupMode)
             throws Exception {
         TablePath tablePath = TablePath.of(DB, "retry_initialization");
         Schema schema =
@@ -480,8 +481,9 @@ class PaimonLakeTableLookuperTest {
     }
 
     @ParameterizedTest(name = "lookupMode={0}")
-    @EnumSource(LookupMode.class)
-    void testLookupAfterCompactionAndSnapshotExpiration(LookupMode lookupMode) throws Exception {
+    @EnumSource(LakeLookupMode.class)
+    void testLookupAfterCompactionAndSnapshotExpiration(LakeLookupMode lookupMode)
+            throws Exception {
         TablePath tablePath = TablePath.of(DB, "compacted_lookup");
         Schema schema = pkSchema();
         FileStoreTable table = createCompactionTable(tablePath, schema);
@@ -509,8 +511,8 @@ class PaimonLakeTableLookuperTest {
     }
 
     @ParameterizedTest(name = "lookupMode={0}")
-    @EnumSource(LookupMode.class)
-    void testLookupsRunConcurrently(LookupMode lookupMode) throws Exception {
+    @EnumSource(LakeLookupMode.class)
+    void testLookupsRunConcurrently(LakeLookupMode lookupMode) throws Exception {
         TablePath tablePath = TablePath.of(DB, "concurrent_lookups");
         Schema schema = pkSchema();
         FileStoreTable table = createPaimonTable(tablePath, partitionedPkDescriptor(schema));
@@ -575,8 +577,8 @@ class PaimonLakeTableLookuperTest {
     }
 
     @ParameterizedTest(name = "lookupMode={0}")
-    @EnumSource(LookupMode.class)
-    void testLookupWithNonStringPartitionKey(LookupMode lookupMode) throws Exception {
+    @EnumSource(LakeLookupMode.class)
+    void testLookupWithNonStringPartitionKey(LakeLookupMode lookupMode) throws Exception {
         TablePath tablePath = TablePath.of(DB, "int_partition_pk");
         Schema schema =
                 Schema.newBuilder()
@@ -618,8 +620,8 @@ class PaimonLakeTableLookuperTest {
     }
 
     @ParameterizedTest(name = "lookupMode={0}")
-    @EnumSource(LookupMode.class)
-    void testRejectAppendOnlyTableAndLookupAfterClose(LookupMode lookupMode) throws Exception {
+    @EnumSource(LakeLookupMode.class)
+    void testRejectAppendOnlyTableAndLookupAfterClose(LakeLookupMode lookupMode) throws Exception {
         TablePath tablePath = TablePath.of(DB, "append_only");
         Schema schema =
                 Schema.newBuilder()
@@ -652,8 +654,8 @@ class PaimonLakeTableLookuperTest {
     }
 
     @ParameterizedTest(name = "lookupMode={0}")
-    @EnumSource(LookupMode.class)
-    void testLookupAfterSchemaEvolutionPadsNewColumnsWithNull(LookupMode lookupMode)
+    @EnumSource(LakeLookupMode.class)
+    void testLookupAfterSchemaEvolutionPadsNewColumnsWithNull(LakeLookupMode lookupMode)
             throws Exception {
         TablePath tablePath = TablePath.of(DB, "schema_evolution_pk");
         Schema oldSchema = pkSchema();
@@ -727,12 +729,12 @@ class PaimonLakeTableLookuperTest {
     }
 
     private LakeTableLookuper createLookuper(
-            LookupMode lookupMode, TablePath tablePath, KvFormat kvFormat) {
+            LakeLookupMode lookupMode, TablePath tablePath, KvFormat kvFormat) {
         return createLookuper(lookupMode, tablePath, kvFormat, 1, NO_OP_DISK_WRITE_GUARD);
     }
 
     private LakeTableLookuper createLookuper(
-            LookupMode lookupMode,
+            LakeLookupMode lookupMode,
             TablePath tablePath,
             KvFormat kvFormat,
             int kvFormatVersion,
@@ -816,7 +818,7 @@ class PaimonLakeTableLookuperTest {
     }
 
     private static TableConfig tableConfig(
-            KvFormat kvFormat, int kvFormatVersion, LookupMode lookupMode) {
+            KvFormat kvFormat, int kvFormatVersion, LakeLookupMode lookupMode) {
         Configuration config = new Configuration();
         config.set(ConfigOptions.TABLE_KV_FORMAT, kvFormat);
         config.set(ConfigOptions.TABLE_KV_FORMAT_VERSION, kvFormatVersion);
