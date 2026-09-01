@@ -30,9 +30,15 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+import static org.apache.fluss.utils.Preconditions.checkArgument;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
+
 /** Utilities of Fluss {@link ConfigOptions}. */
 @Internal
 public class FlussConfigUtils {
+
+    private static final String COLUMN_COMPRESSION_PREFIX = "fields.";
+    private static final String COLUMN_COMPRESSION_SUFFIX = ".compression";
 
     public static final Map<String, ConfigOption<?>> TABLE_OPTIONS;
     public static final Map<String, ConfigOption<?>> CLIENT_OPTIONS;
@@ -62,11 +68,35 @@ public class FlussConfigUtils {
     }
 
     public static boolean isTableStorageConfig(String key) {
-        return key.startsWith(TABLE_PREFIX);
+        return key.startsWith(TABLE_PREFIX) || isColumnCompressionConfig(key);
     }
 
     public static boolean isAlterableTableOption(String key) {
-        return ALTERABLE_TABLE_OPTIONS.contains(key);
+        return ALTERABLE_TABLE_OPTIONS.contains(key) || isColumnCompressionConfig(key);
+    }
+
+    /** Returns the configuration key for a column compression setting. */
+    public static String getColumnCompressionConfigKey(String columnName) {
+        checkNotNull(columnName, "columnName must not be null");
+        checkArgument(!columnName.isEmpty(), "columnName must not be empty");
+        return COLUMN_COMPRESSION_PREFIX + columnName + COLUMN_COMPRESSION_SUFFIX;
+    }
+
+    /** Returns whether the key is a column compression configuration. */
+    public static boolean isColumnCompressionConfig(String key) {
+        return key != null
+                && key.startsWith(COLUMN_COMPRESSION_PREFIX)
+                && key.endsWith(COLUMN_COMPRESSION_SUFFIX)
+                && key.length()
+                        > COLUMN_COMPRESSION_PREFIX.length() + COLUMN_COMPRESSION_SUFFIX.length();
+    }
+
+    /** Returns the column name from a column compression configuration key. */
+    public static String getColumnNameFromCompressionConfig(String key) {
+        checkArgument(isColumnCompressionConfig(key), "Not a column compression config: %s", key);
+        return key.substring(
+                COLUMN_COMPRESSION_PREFIX.length(),
+                key.length() - COLUMN_COMPRESSION_SUFFIX.length());
     }
 
     /**

@@ -443,7 +443,11 @@ class MultiTableWriterImpl implements MultiTableWriter {
                                     tableInfo.getTableConfig().getDataLakeFormat().orElse(null));
             this.kvFormat = tableInfo.getTableConfig().getKvFormat();
             this.kvWriteFormat = WriteFormat.fromKvFormat(this.kvFormat);
-            this.kvRowEncoder = RowEncoder.create(this.kvFormat, rowType);
+            this.kvRowEncoder =
+                    RowEncoder.create(
+                            this.kvFormat,
+                            tableInfo.getSchema(),
+                            tableInfo.getProperties().toMap());
         }
 
         @Override
@@ -499,9 +503,13 @@ class MultiTableWriterImpl implements MultiTableWriter {
         }
 
         private BinaryRow encodeKvRow(InternalRow row) {
-            if (kvFormat == KvFormat.INDEXED && row instanceof IndexedRow) {
+            if (!kvRowEncoder.hasColumnValueEncoding()
+                    && kvFormat == KvFormat.INDEXED
+                    && row instanceof IndexedRow) {
                 return (IndexedRow) row;
-            } else if (kvFormat == KvFormat.COMPACTED && row instanceof CompactedRow) {
+            } else if (!kvRowEncoder.hasColumnValueEncoding()
+                    && kvFormat == KvFormat.COMPACTED
+                    && row instanceof CompactedRow) {
                 return (CompactedRow) row;
             }
             kvRowEncoder.startNewRow();
