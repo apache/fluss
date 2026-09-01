@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
+import org.apache.fluss.metadata.LakeLookupMode;
 import org.apache.fluss.metadata.TablePath;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
@@ -74,6 +75,7 @@ public interface LakeStorage {
         private final TableConfig tableConfig;
         private final long lookupCacheMaxDiskBytes;
         private final Runnable diskWriteGuard;
+        private final LakeLookupMode lookupMode;
 
         /**
          * Creates a lookuper context.
@@ -94,6 +96,7 @@ public interface LakeStorage {
                     lookupCacheMaxDiskBytes > 0, "lookupCacheMaxDiskBytes must be greater than 0.");
             this.lookupCacheMaxDiskBytes = lookupCacheMaxDiskBytes;
             this.diskWriteGuard = checkNotNull(diskWriteGuard, "diskWriteGuard must not be null.");
+            this.lookupMode = tableConfig.getHistoricalLookupMode();
         }
 
         /** Returns the local directory for temporary files used by the lookuper. */
@@ -114,6 +117,11 @@ public interface LakeStorage {
         /** Returns the guard invoked before creating a local lookup cache file. */
         public Runnable diskWriteGuard() {
             return diskWriteGuard;
+        }
+
+        /** Returns the mode used to look up historical data. */
+        public LakeLookupMode lookupMode() {
+            return lookupMode;
         }
     }
 }

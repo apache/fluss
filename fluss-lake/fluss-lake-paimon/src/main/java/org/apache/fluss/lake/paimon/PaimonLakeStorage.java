@@ -21,6 +21,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.lake.lakestorage.LakeStorage;
 import org.apache.fluss.lake.lakestorage.LakeTableLookuper;
 import org.apache.fluss.lake.paimon.lookup.PaimonLakeTableLookuper;
+import org.apache.fluss.lake.paimon.lookup.PaimonScanBasedTableLookuper;
 import org.apache.fluss.lake.paimon.source.PaimonLakeSource;
 import org.apache.fluss.lake.paimon.source.PaimonSplit;
 import org.apache.fluss.lake.paimon.tiering.PaimonCommittable;
@@ -28,6 +29,7 @@ import org.apache.fluss.lake.paimon.tiering.PaimonLakeTieringFactory;
 import org.apache.fluss.lake.paimon.tiering.PaimonWriteResult;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
+import org.apache.fluss.metadata.LakeLookupMode;
 import org.apache.fluss.metadata.TablePath;
 
 /** Paimon implementation of {@link LakeStorage}. */
@@ -56,6 +58,9 @@ public class PaimonLakeStorage implements LakeStorage {
 
     @Override
     public LakeTableLookuper createLakeTableLookuper(TablePath tablePath, LookuperContext context) {
+        if (context.lookupMode() == LakeLookupMode.SCAN) {
+            return new PaimonScanBasedTableLookuper(paimonConfig, tablePath, context.tableConfig());
+        }
         return new PaimonLakeTableLookuper(
                 paimonConfig,
                 tablePath,

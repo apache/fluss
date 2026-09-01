@@ -312,6 +312,7 @@ ALTER TABLE my_table SET ('table.log.tiered.local-segments' = '5');
 **Limits**
 - If lakehouse storage (`table.datalake.enabled`) is already enabled for a table, options with lakehouse format prefixes (e.g., `paimon.*`) cannot be modified again.
 - After changing `table.datalake.historical-partition.enabled`, restart existing lookup jobs that need to look up historical partition data so that their clients load the updated table configuration.
+- `table.datalake.historical-partition.lookup-mode` can only be configured when creating the table and cannot be modified with `ALTER TABLE SET` or `ALTER TABLE RESET`.
 
 
 ### RESET properties

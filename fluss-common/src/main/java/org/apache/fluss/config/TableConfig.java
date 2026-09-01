@@ -23,6 +23,7 @@ import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.KvFormat;
+import org.apache.fluss.metadata.LakeLookupMode;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.utils.AutoPartitionStrategy;
@@ -132,6 +133,11 @@ public class TableConfig {
     /** Whether historical partition lookup is enabled. */
     public boolean isHistoricalPartitionEnabled() {
         return config.get(ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED);
+    }
+
+    /** Gets the lookup mode for historical partitions of the table. */
+    public LakeLookupMode getHistoricalLookupMode() {
+        return config.get(ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_MODE);
     }
 
     /**
