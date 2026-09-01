@@ -167,7 +167,7 @@ INSERT INTO pk_table VALUES
   (123456, 123456, 3, 3);
 ```
 
-To update data record with the primary key (1234, 1234) in a Flink streaming job, use the UPDATE statement as follows:
+To update the data record with the primary key `(1234, 1234)`, use the `UPDATE` statement. `UPDATE` and `DELETE FROM` are only supported in batch mode, and the `WHERE` clause can be any condition (see [UPDATE](writes.md#update) and [DELETE FROM](writes.md#delete-from)):
 
 ```sql title="Flink SQL"
 -- should run in batch mode
