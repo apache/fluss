@@ -15,13 +15,13 @@ for production environments.
 
 ## Quick Start
 
-Build targets are explicit and can be combined before startup:
+Each profile declares the build targets required by its runtime topology:
 
-| Command | Artifacts | Use before |
-|---|---|---|
-| `just build` or `just build core` | Fluss distribution and Flink 1.20 Connector | Any profile |
-| `just build tiering` | Core artifacts plus Lake plugins and the Tiering Job | Iceberg, Paimon, or Lance profiles |
-| `just build gateway` | Fluss Gateway executable | `just up-gateway` |
+| Profile | Build targets |
+|---|---|
+| `core` | Fluss distribution and Flink 1.20 Connector |
+| `gateway` | Core artifacts and the Fluss Gateway executable |
+| `iceberg`, `paimon`, `lance` | Core artifacts, Lake plugins, and the Tiering Job |
 
 Build and start the core development environment:
 
@@ -34,25 +34,22 @@ just up
 For a lake profile, build the tiering artifacts and select a format:
 
 ```bash
-just build tiering
+just build iceberg
 just up iceberg
 ```
 
 Build the Gateway executable from the same checkout and start it with the core environment:
 
 ```bash
-just build
 just build gateway
-just up-gateway
+just up gateway
 curl http://localhost:8080/ready
 ```
 
-`just build gateway` compiles the Gateway in the pinned Rust build environment. `up-gateway`
-mounts the resulting executable read-only into a matching runtime container, following the same
-local-artifact model as the rest of the DevKit without building a Gateway image. It connects the
-Gateway's `default` cluster to the DevKit CoordinatorServer. To combine it with a lake profile, run
-`just build tiering`, `just build gateway`, and then `just up-gateway paimon 3`. The regular
-`just up` path does not start the Gateway.
+The `gateway` profile compiles the Gateway in the pinned Rust build environment and mounts the
+resulting executable read-only into a matching runtime container, following the same local-artifact
+model as the rest of the DevKit without building a Gateway image. It connects the Gateway's
+`default` cluster to the DevKit CoordinatorServer.
 
 `just up` waits for the Fluss and Flink clusters and, for lake profiles, the tiering job to become
 ready. Run `just --list` to see all available commands.
@@ -64,11 +61,11 @@ source change:
 
 | Local content | How it reaches the running container |
 |---|---|
-| Fluss Server changes | `just build` packages `fluss-dist`; `build-target` points to that distribution and is mounted read-only as `/opt/fluss`. The Fluss startup scripts run from this mount. |
-| Flink 1.20 Connector changes | `just build` produces `fluss-flink-1.20/target/fluss-flink-1.20-*.jar`. `just up` stages it as `devkit/.deps/flink/active/lib/fluss-flink-1.20.jar`, mounts that directory into the Flink containers, and copies it to `/opt/flink/lib` during container startup. |
-| Fluss Gateway changes | `just build gateway` produces `devkit/.deps/gateway/debug/fluss-gateway`. `just up-gateway` mounts it read-only into the Gateway runtime container. |
+| Fluss Server changes | `just build <profile>` packages `fluss-dist`; `build-target` points to that distribution and is mounted read-only as `/opt/fluss`. The Fluss startup scripts run from this mount. |
+| Flink 1.20 Connector changes | `just build <profile>` produces `fluss-flink-1.20/target/fluss-flink-1.20-*.jar`. `just up <profile>` stages it as `devkit/.deps/flink/active/lib/fluss-flink-1.20.jar`, mounts that directory into the Flink containers, and copies it to `/opt/flink/lib` during container startup. |
+| Fluss Gateway changes | `just build gateway` produces `devkit/.deps/gateway/debug/fluss-gateway`. `just up gateway` mounts it read-only into the Gateway runtime container. |
 | SQL changes | `just run-sql path/to/query.sql` reads the file from the host and sends it to the SQL Client running in the JobManager container. Flink then plans and executes the job in the Flink cluster. |
-| Lake Tiering changes | `just build tiering` additionally builds the Lake plugin and Tiering Job. `just up <profile>` stages the plugin under Flink `lib/` and submits the local Tiering Job JAR to Flink. |
+| Lake Tiering changes | `just build <lake-profile>` additionally builds the Lake plugin and Tiering Job. `just up <lake-profile>` stages the plugin under Flink `lib/` and submits the local Tiering Job JAR to Flink. |
 
 This means the SQL you write locally is used directly for that invocation, but Java source code is
 used through a built JAR or distribution. After changing Fluss Server or the Flink Connector code,
@@ -80,7 +77,7 @@ just build
 just up core
 
 # Lake Tiering changes
-just build tiering
+just build paimon
 just up paimon                 # or iceberg / lance
 
 # SQL-only changes need no Maven build
@@ -97,6 +94,7 @@ after rebuilding.
 | Profile | Services |
 |---|---|
 | `core` | ZooKeeper, Fluss, and Flink |
+| `gateway` | Core and Fluss Gateway |
 | `iceberg` | Core, RustFS, PostgreSQL JDBC Catalog, Flink, and Iceberg tiering |
 | `paimon` | Core, RustFS, Flink, and Paimon tiering |
 | `lance` | Core, RustFS, Flink, and Lance tiering |
@@ -156,7 +154,7 @@ examples/lake/paimon/
 Run it with a clean environment when starting for the first time:
 
 ```bash
-just build tiering
+just build paimon
 just up paimon
 just run-sql examples/lake/paimon/setup.sql
 just run-sql examples/lake/paimon/union-read.sql
@@ -189,7 +187,7 @@ The validation workflow is intentionally split into SQL files that can be run an
 a time:
 
 ```bash
-just build tiering
+just build paimon
 just up paimon
 just run-sql examples/lake/paimon/setup.sql
 just run-sql examples/lake/paimon/union-read.sql
@@ -276,21 +274,24 @@ override the Gateway host ports.
 
 ## Adding a Profile
 
-Create a directory under `profiles/`. The directory contains one required file and up to four
+Create a directory under `profiles/`. The directory contains two required files and up to four
 optional files:
 
 | File | Purpose |
 |---|---|
 | `server.yaml` | Fluss and lake configuration |
+| `build.targets` | Whitespace-separated `core`, `tiering`, or `gateway` targets required by the profile |
 | `jars.urls` | JARs used by both Fluss Server and Flink |
 | `server.urls` | Additional Fluss Server-only JARs |
 | `flink.urls` | Additional Flink-only JARs |
 | `compose.files` | Compose overlays, relative to `devkit/`, for extra local services |
 
-Put one URL or Compose path on each line; empty lines and `#` comments are ignored. `just up`
-applies the declared JARs and Compose overlays for every profile. Server JARs use a plugin directory
-named after the profile, or after the lake format when `server.yaml` contains `datalake.format`. Lake
-profiles also stage the matching locally built lake plugin and start Flink tiering. Server JARs are
-added across profile switches and removed by `just clean`.
+Put one URL or Compose path on each line; empty lines and `#` comments are ignored. `just build`
+executes the declared build targets, and `just up` applies the declared JARs and Compose overlays.
+Server JARs use a plugin directory named after the profile, or after the lake format when
+`server.yaml` contains `datalake.format`. Lake profiles also stage the matching locally built lake
+plugin and start Flink tiering. Server JARs are added across profile switches and removed by
+`just clean`.
 
-Start the new profile with `just up <profile>`. No `justfile` change is required.
+Build and start the new profile with `just build <profile>` and `just up <profile>`. No `justfile`
+change is required.
