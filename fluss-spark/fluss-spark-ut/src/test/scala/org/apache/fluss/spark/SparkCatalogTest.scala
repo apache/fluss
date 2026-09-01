@@ -36,6 +36,23 @@ class SparkCatalogTest extends FlussSparkTestBase {
 
   protected def lakeFormat: Option[DataLakeFormat] = None
 
+  test("Catalog: add columns") {
+    withTable("t") {
+      sql("CREATE TABLE t (id int, name string)")
+
+      sql("ALTER TABLE t ADD COLUMN age bigint")
+      checkAnswer(
+        sql("DESC t"),
+        Row("id", "int", null) ::
+          Row("name", "string", null) ::
+          Row("age", "bigint", null) :: Nil)
+
+      val table = admin.getTableInfo(createTablePath("t")).get()
+      assertThat(table.getRowType.getFieldCount).isEqualTo(3)
+      assertThat(table.getRowType.getFieldNames).containsExactly("id", "name", "age")
+    }
+  }
+
   test("Catalog: namespaces") {
     // Always a default database 'fluss'.
     checkAnswer(sql("SHOW DATABASES"), Row(DEFAULT_DATABASE) :: Nil)
