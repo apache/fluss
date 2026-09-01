@@ -18,7 +18,6 @@
 package org.apache.fluss.lake.paimon.lookup;
 
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.DiskWriteLockedException;
 import org.apache.fluss.exception.KvStorageException;
@@ -36,7 +35,6 @@ import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.IOUtils;
 
-import org.apache.paimon.CoreOptions;
 import org.apache.paimon.catalog.Catalog;
 import org.apache.paimon.catalog.CatalogContext;
 import org.apache.paimon.catalog.CatalogFactory;
@@ -48,7 +46,6 @@ import org.apache.paimon.io.DataFileMeta;
 import org.apache.paimon.memory.MemorySegment;
 import org.apache.paimon.options.Options;
 import org.apache.paimon.table.FileStoreTable;
-import org.apache.paimon.table.query.LocalTableQuery;
 import org.apache.paimon.table.sink.RowPartitionKeyExtractor;
 import org.apache.paimon.table.source.DataSplit;
 import org.apache.paimon.table.source.InnerTableScan;
@@ -70,15 +67,15 @@ import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_2;
 import static org.apache.fluss.lake.paimon.PaimonLakeCatalog.LEGACY_SYSTEM_COLUMNS;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimonPartition;
-import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /**
  * Paimon implementation of {@link LakeTableLookuper} for primary-key tables.
  *
- * <p>The catalog, table, local query, and I/O manager are initialized lazily on the first lookup.
- * For each partition and bucket, the lookuper scans the latest Paimon snapshot once and registers
- * its data files with {@link LocalTableQuery}. Paimon then creates local lookup files lazily as
+ * <p>The catalog, table, and local query are initialized lazily on the first lookup. The I/O
+ * manager is supplied by the lake storage and may be shared with other table lookupers. For each
+ * partition and bucket, the lookuper scans the latest Paimon snapshot once and registers its data
+ * files with {@link PaimonLocalTableQuery}. Paimon then creates local lookup files lazily as
  * individual remote data files are queried.
  *
  * <p>A cached partition-bucket file set can become stale when Paimon compaction replaces its data
@@ -87,7 +84,7 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  * lookup I/O failure refreshes that partition-bucket with the files from the latest snapshot and
  * retries once.
  *
- * <p>Lookup concurrency is delegated to {@link LocalTableQuery}. Older Paimon versions may
+ * <p>Lookup concurrency is delegated to {@link PaimonLocalTableQuery}. Older Paimon versions may
  * serialize lookups internally, while Paimon 2.0 supports concurrent lookups without an additional
  * Fluss-level lock.
  *
@@ -98,9 +95,10 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
 
     private final Configuration paimonConfig;
     private final TablePath tablePath;
-    private final String ioTmpDir;
+    private final IOManager ioManager;
+    private final SharedLookupFileCache lookupFileCache;
+    private final String cacheNamespace;
     private final TableConfig tableConfig;
-    private final long lookupCacheMaxDiskBytes;
     private final Runnable diskWriteGuard;
 
     private final ThreadLocal<Boolean> lookupFileDownloaded;
@@ -109,34 +107,34 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
 
     private @Nullable Catalog catalog;
     private @Nullable FileStoreTable fileStoreTable;
-    private @Nullable IOManager ioManager;
     private @Nullable List<String> trimmedPrimaryKeys;
 
     // CompactedKeyDecoder contains immutable type metadata and creates all decode state per
     // invocation, so it can be shared by concurrent lookups.
     private @Nullable CompactedKeyDecoder compactedKeyDecoder;
 
-    private volatile @Nullable LocalTableQuery localTableQuery;
+    private volatile @Nullable PaimonLocalTableQuery localTableQuery;
     // Guarded by initializationLock.
     private volatile boolean closed;
 
-    /** Creates a lookuper with the specified local lookup cache limit. */
+    /** Creates a lookuper using an I/O manager shared with other table lookupers. */
     public PaimonLakeTableLookuper(
             Configuration paimonConfig,
             TablePath tablePath,
-            String ioTmpDir,
+            IOManager ioManager,
+            SharedLookupFileCache lookupFileCache,
+            String cacheNamespace,
             TableConfig tableConfig,
-            long lookupCacheMaxDiskBytes,
             Runnable diskWriteGuard) {
         this.paimonConfig = checkNotNull(paimonConfig, "paimonConfig must not be null.");
         this.tablePath = checkNotNull(tablePath, "tablePath must not be null.");
-        this.ioTmpDir = checkNotNull(ioTmpDir, "ioTmpDir must not be null.");
+        this.lookupFileCache = checkNotNull(lookupFileCache, "lookupFileCache must not be null.");
+        this.cacheNamespace = checkNotNull(cacheNamespace, "cacheNamespace must not be null.");
         this.tableConfig = checkNotNull(tableConfig, "tableConfig must not be null.");
-        checkArgument(
-                lookupCacheMaxDiskBytes > 0, "lookupCacheMaxDiskBytes must be greater than 0.");
-        this.lookupCacheMaxDiskBytes = lookupCacheMaxDiskBytes;
         this.diskWriteGuard = checkNotNull(diskWriteGuard, "diskWriteGuard must not be null.");
         this.lookupFileDownloaded = new ThreadLocal<>();
+        this.ioManager =
+                new TrackingIOManager(checkNotNull(ioManager, "ioManager must not be null."));
         this.initializationLock = new Object();
         this.registeredFiles = new ConcurrentHashMap<>();
     }
@@ -168,13 +166,11 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
             }
             closed = true;
             IOUtils.closeQuietly(localTableQuery, "Paimon lookup engine");
-            IOUtils.closeQuietly(ioManager, "Paimon lookup IO manager");
             IOUtils.closeQuietly(catalog, "Paimon catalog");
             registeredFiles.clear();
             localTableQuery = null;
             compactedKeyDecoder = null;
             trimmedPrimaryKeys = null;
-            ioManager = null;
             fileStoreTable = null;
             catalog = null;
         }
@@ -198,16 +194,14 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
 
     private void initialize(RowType valueRowType) throws Exception {
         Catalog newCatalog = null;
-        IOManager newIOManager = null;
-        LocalTableQuery newLocalTableQuery = null;
+        PaimonLocalTableQuery newLocalTableQuery = null;
         boolean initialized = false;
         try {
             newCatalog =
                     CatalogFactory.createCatalog(
                             CatalogContext.create(Options.fromMap(paimonConfig.toMap())));
             FileStoreTable newFileStoreTable =
-                    withLookupCacheOptions(
-                            (FileStoreTable) newCatalog.getTable(toPaimon(tablePath)));
+                    (FileStoreTable) newCatalog.getTable(toPaimon(tablePath));
             if (newFileStoreTable.primaryKeys().isEmpty()) {
                 throw new UnsupportedOperationException(
                         "Point lookup is only supported for primary-key Paimon tables.");
@@ -230,16 +224,13 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
                         CompactedKeyDecoder.createKeyDecoder(valueRowType, newTrimmedPrimaryKeys);
             }
 
-            newIOManager = createIOManager(ioTmpDir);
             newLocalTableQuery =
-                    newFileStoreTable
-                            .newLocalTableQuery()
+                    new PaimonLocalTableQuery(newFileStoreTable, lookupFileCache, cacheNamespace)
                             .withValueProjection(businessFieldProjection(newFileStoreTable))
-                            .withIOManager(newIOManager);
+                            .withIOManager(ioManager);
 
             catalog = newCatalog;
             fileStoreTable = newFileStoreTable;
-            ioManager = newIOManager;
             trimmedPrimaryKeys = newTrimmedPrimaryKeys;
             compactedKeyDecoder = newCompactedKeyDecoder;
             // Keep this volatile write last to publish all initialized fields together.
@@ -248,20 +239,9 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
         } finally {
             if (!initialized) {
                 IOUtils.closeQuietly(newLocalTableQuery, "Paimon local table query");
-                IOUtils.closeQuietly(newIOManager, "Paimon lookup IO manager");
                 IOUtils.closeQuietly(newCatalog, "Paimon catalog");
             }
         }
-    }
-
-    private FileStoreTable withLookupCacheOptions(FileStoreTable table) {
-        String key = CoreOptions.LOOKUP_CACHE_MAX_DISK_SIZE.key();
-        String maxDiskSize = new MemorySize(lookupCacheMaxDiskBytes).toString();
-        return table.copy(Collections.singletonMap(key, maxDiskSize));
-    }
-
-    private IOManager createIOManager(String ioTmpDir) {
-        return new TrackingIOManager(IOManager.create(ioTmpDir));
     }
 
     private static int[] businessFieldProjection(FileStoreTable fileStoreTable) {
@@ -479,8 +459,8 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
         }
 
         @Override
-        public void close() throws Exception {
-            delegate.close();
+        public void close() {
+            // The shared delegate is owned by PaimonLakeStorage.
         }
     }
 
