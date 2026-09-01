@@ -1155,6 +1155,25 @@ public class ConfigOptions {
                                     + "remote log file can be  data file, index file and remote log metadata file. "
                                     + "This option is deprecated. Please use server.io-pool.size instead.");
 
+    public static final ConfigOption<Integer> REMOTE_LOG_UPLOAD_RETRY_MAX_ATTEMPTS =
+            key("remote.log.upload.retry.max-attempts")
+                    .intType()
+                    .defaultValue(3)
+                    .withDescription(
+                            "The maximum number of retry attempts for uploading a single file to "
+                                    + "remote storage. Retries help tolerate transient I/O errors "
+                                    + "(e.g., temporary 5xx from object storage). Set to 0 to disable "
+                                    + "retries.");
+
+    public static final ConfigOption<Duration> REMOTE_LOG_UPLOAD_RETRY_INITIAL_BACKOFF =
+            key("remote.log.upload.retry.initial-backoff")
+                    .durationType()
+                    .defaultValue(Duration.ofMillis(200))
+                    .withDescription(
+                            "The initial backoff delay (in milliseconds) before the first retry "
+                                    + "of a failed file upload to remote storage. The delay increases "
+                                    + "exponentially with subsequent retries.");
+
     // ------------------------------------------------------------------------
     //  Netty Settings
     // ------------------------------------------------------------------------
