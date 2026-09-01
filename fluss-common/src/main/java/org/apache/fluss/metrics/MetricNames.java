@@ -331,4 +331,9 @@ public class MetricNames {
     // for lake tiering metrics - operator level
     public static final String TIERING_SERVICE_READ_BYTES = "readBytes";
     public static final String TIERING_SERVICE_READ_BYTES_RATE = "readBytesPerSecond";
+
+    // for lake tiering enumerator metrics
+    public static final String TIERING_HEARTBEAT_FAILURE = "tiering.heartbeat.failure";
+    public static final String TIERING_REQUEST_TABLE_EMPTY = "tiering.request-table.empty";
+    public static final String TIERING_REQUEST_TABLE_FAILURE = "tiering.request-table.failure";
 }
