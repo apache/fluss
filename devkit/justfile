@@ -40,20 +40,21 @@ TIERING_BUILD_CMD := env_var_or_default("DEVKIT_TIERING_BUILD_CMD", "./mvnw -Dsk
 default:
     @just --list
 
-[doc("Build local artifacts: core (default), tiering, or gateway")]
-build target="core":
+[doc("Build every artifact required by a profile")]
+build profile="core":
     #!/usr/bin/env bash
     set -e
-    case {{ quote(target) }} in
-      core)
+    PROFILE={{ quote(profile) }}
+    just validate-profile "$PROFILE"
+    build_core() {
         cd "{{ FLUSS_DEV_HOME }}"
         {{ BUILD_CMD }}
-        ;;
-      tiering)
+    }
+    build_tiering() {
         cd "{{ FLUSS_DEV_HOME }}"
         {{ TIERING_BUILD_CMD }}
-        ;;
-      gateway)
+    }
+    build_gateway() {
         mkdir -p "{{ DEPS_DIR }}/cargo" "{{ DEPS_DIR }}/gateway"
         docker run --rm \
           --user "$(id -u):$(id -g)" \
@@ -67,12 +68,10 @@ build target="core":
           -w /workspace/fluss-gateway \
           rust:1.88-bookworm \
           cargo build --locked --bin fluss-gateway
-        ;;
-      *)
-        echo "build target must be core, tiering, or gateway"
-        exit 1
-        ;;
-    esac
+    }
+    for TARGET in $(just profile-build-targets "$PROFILE"); do
+      "build_$TARGET"
+    done
 
 [private]
 ensure-dist:
@@ -83,7 +82,7 @@ ensure-dist:
        [ ! -x "$DIST_HOME/bin/tablet-server.sh" ] || \
        [ ! -f "$DIST_HOME/conf/server.yaml" ] || \
        [ ! -d "$DIST_HOME/lib" ]; then
-      echo "Complete local distribution not found. Run: just build"
+      echo "Complete local distribution not found. Run: just build <profile>"
       exit 1
     fi
 
@@ -108,6 +107,24 @@ validate-profile profile:
       echo "Unknown profile: $PROFILE"
       exit 1
     fi
+    if [ ! -f "{{ PROFILES_DIR }}/$PROFILE/build.targets" ]; then
+      echo "Profile $PROFILE does not declare build.targets"
+      exit 1
+    fi
+
+[private]
+profile-build-targets profile:
+    #!/usr/bin/env bash
+    set -e
+    PROFILE={{ quote(profile) }}
+    just validate-profile "$PROFILE"
+    TARGETS=$(sed 's/#.*//; /^[[:space:]]*$/d' "{{ PROFILES_DIR }}/$PROFILE/build.targets")
+    for TARGET in $TARGETS; do
+      case "$TARGET" in
+        core|tiering|gateway) echo "$TARGET" ;;
+        *) echo "Unknown build target in profile $PROFILE: $TARGET" >&2; exit 1 ;;
+      esac
+    done
 
 [private]
 profile-format profile:
@@ -144,7 +161,7 @@ ensure-flink:
     MATCHES=( {{ FLUSS_DEV_HOME }}/fluss-flink/fluss-flink-1.20/target/fluss-flink-1.20-*.jar )
     if [ "${#MATCHES[@]}" -ne 1 ] || [ ! -f "${MATCHES[0]}" ]; then
       echo "Expected one Flink connector artifact"
-      echo "Run: just build"
+      echo "Run: just build <profile>"
       exit 1
     fi
     mkdir -p "$ACTIVE_DIR/lib" "$ACTIVE_DIR/jobs"
@@ -198,7 +215,7 @@ ensure-tiering profile:
       MATCHES=( $PATTERN )
       if [ "${#MATCHES[@]}" -ne 1 ] || [ ! -f "${MATCHES[0]}" ]; then
         echo "Expected one build artifact: $PATTERN"
-        echo "Run: just build tiering"
+        echo "Run: just build $PROFILE"
         exit 1
       fi
       cp "${MATCHES[0]}" "$TARGET"
@@ -219,7 +236,7 @@ ensure-tiering profile:
 
     chmod -R a+rX "$ACTIVE_DIR"
 
-[doc("Start a profile from the profiles directory")]
+[doc("Start a built profile from the profiles directory")]
 up profile="core" nodes="1": ensure-dist ensure-flink
     #!/usr/bin/env bash
     set -e
@@ -232,11 +249,16 @@ up profile="core" nodes="1": ensure-dist ensure-flink
     esac
     PROFILE_DIR="{{ PROFILES_DIR }}/$PROFILE"
     FORMAT=$(just profile-format "$PROFILE")
-    COMPOSE_ARGS=(-f "{{ DEVKIT_DIR }}/docker-compose.yml" -f "{{ DEVKIT_DIR }}/compose/tiering.yml" -f "{{ DEVKIT_DIR }}/compose/gateway.yml")
+    COMPOSE_ARGS=(-f "{{ DEVKIT_DIR }}/docker-compose.yml" -f "{{ DEVKIT_DIR }}/compose/tiering.yml")
     PROFILES=(--profile "$TOPOLOGY" --profile flink)
-    if [ "${DEVKIT_GATEWAY:-false}" = "true" ]; then
-      PROFILES+=(--profile gateway)
-    fi
+    ENABLE_TIERING=false
+    for TARGET in $(just profile-build-targets "$PROFILE"); do
+      case "$TARGET" in
+        core) ;;
+        tiering) ENABLE_TIERING=true ;;
+        gateway) just ensure-gateway; PROFILES+=(--profile gateway) ;;
+      esac
+    done
     if [ -f "$PROFILE_DIR/compose.files" ]; then
       while IFS= read -r FILE; do
         FILE="${FILE%%#*}"
@@ -250,7 +272,7 @@ up profile="core" nodes="1": ensure-dist ensure-flink
       done < "$PROFILE_DIR/compose.files"
     fi
     just stage-profile-jars "$PROFILE"
-    if [ -n "$FORMAT" ]; then
+    if [ "$ENABLE_TIERING" = "true" ]; then
       just ensure-tiering "$PROFILE"
       PROFILES+=(--profile tiering)
     fi
@@ -259,10 +281,6 @@ up profile="core" nodes="1": ensure-dist ensure-flink
     {{ ALL_COMPOSE }} {{ ALL_PROFILES }} down --remove-orphans >/dev/null 2>&1 || true
     docker compose "${COMPOSE_ARGS[@]}" "${PROFILES[@]}" up -d
     just check "$PROFILE"
-
-[doc("Start a built profile with the Fluss Gateway")]
-up-gateway profile="core" nodes="1": ensure-gateway
-    DEVKIT_GATEWAY=true just up {{ quote(profile) }} {{ quote(nodes) }}
 
 [doc("Stop services and keep data")]
 down:
@@ -300,9 +318,15 @@ exec service *CMD:
 [private]
 check profile: check-cluster check-flink
     #!/usr/bin/env bash
-    FORMAT=$(just profile-format {{ quote(profile) }})
-    if [ -n "$FORMAT" ]; then just check-tiering "$FORMAT"; fi
-    if [ "${DEVKIT_GATEWAY:-false}" = "true" ]; then just check-gateway; fi
+    PROFILE={{ quote(profile) }}
+    FORMAT=$(just profile-format "$PROFILE")
+    for TARGET in $(just profile-build-targets "$PROFILE"); do
+      case "$TARGET" in
+        core) ;;
+        tiering) just check-tiering "$FORMAT" ;;
+        gateway) just check-gateway ;;
+      esac
+    done
 
 [private]
 check-cluster:
