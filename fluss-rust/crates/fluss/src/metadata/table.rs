@@ -643,7 +643,9 @@ impl TableDescriptorBuilder {
     }
 
     pub fn build(self) -> Result<TableDescriptor> {
-        let schema = self.schema.expect("Schema must be set");
+        let schema = self.schema.ok_or_else(|| IllegalArgument {
+            message: "Schema must be set".to_string(),
+        })?;
         let table_distribution = TableDescriptor::normalize_distribution(
             &schema,
             &self.partition_keys,
@@ -1766,6 +1768,16 @@ mod tests {
             0,
         );
         assert!(table_info.is_auto_partitioned());
+    }
+
+    #[test]
+    fn table_descriptor_builder_requires_schema() {
+        let result = TableDescriptor::builder().build();
+
+        assert!(matches!(
+            result,
+            Err(Error::IllegalArgument { message }) if message == "Schema must be set"
+        ));
     }
 
     fn stats_table(property: Option<&str>) -> TableInfo {
