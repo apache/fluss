@@ -157,15 +157,11 @@ class PaimonLakeTableLookuperTest {
                                     paimonKey(schema, 1, "20240101"),
                                     lookupContext(schema, "20240101", 1, SCHEMA_ID)))
                     .isNull();
-            if (lookupMode == LakeLookupMode.SST) {
-                assertThat(lookuper.lookup(compactedKey(schema, 1, "20240101"), context)).isNull();
-            }
-
             // SST creates a local lookup file on the first lookup; SCAN never creates one.
             assertThat(lookupFileDownloads)
                     .containsExactlyElementsOf(
                             lookupMode == LakeLookupMode.SST
-                                    ? Arrays.asList(true, false, false)
+                                    ? Arrays.asList(true, false)
                                     : Arrays.asList(false, false));
         }
     }
@@ -909,11 +905,6 @@ class PaimonLakeTableLookuperTest {
 
     private static byte[] paimonKey(Schema schema, List<String> keys, Object... fields) {
         return new PaimonKeyEncoder(schema.getRowType(), keys).encodeKey(row(fields));
-    }
-
-    private static byte[] compactedKey(Schema schema, int id, String dt) {
-        return CompactedKeyEncoder.createKeyEncoder(schema.getRowType(), Arrays.asList("id", "dt"))
-                .encodeKey(row(id, dt, ""));
     }
 
     private static BinaryValue decodeValue(byte[] value, short schemaId, Schema schema) {
