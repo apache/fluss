@@ -265,7 +265,9 @@ public class RebalanceITCase {
                 .rootCause()
                 .isInstanceOf(NoRebalanceInProgressException.class)
                 .hasMessageContaining(
-                        "Rebalance task id unexisted-rebalance-id to list is not the current rebalance task id");
+                        "Rebalance task id unexisted-rebalance-id is neither the current rebalance"
+                                + " task nor in the retained history. Known rebalances are listed"
+                                + " by Admin#listRebalances().");
 
         assertThatThrownBy(() -> admin.cancelRebalance("unexisted-rebalance-id2").get())
                 .rootCause()
