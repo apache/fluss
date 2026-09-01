@@ -26,6 +26,8 @@ import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.scanner.log.ScanRecords;
 import org.apache.fluss.client.table.writer.UpsertWriter;
+import org.apache.fluss.cluster.Endpoint;
+import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
@@ -37,18 +39,26 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.server.coordinator.CoordinatorServer;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.data.CoordinatorAddress;
+import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
+import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.Watcher;
+import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.ZooKeeper;
 import org.apache.fluss.types.RowType;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -60,10 +70,106 @@ import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR_PK;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.InternalRowAssert.assertThatRow;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
+import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** IT case for tests that require manual cluster management. */
 class CustomFlussClusterITCase {
+
+    @Test
+    void testAdminWriteRecoversAfterCoordinatorFailover(@TempDir Path tempDir) throws Exception {
+        final FlussClusterExtension flussClusterExtension =
+                FlussClusterExtension.builder().setNumOfTabletServers(1).build();
+        CoordinatorServer standbyCoordinator = null;
+        try {
+            flussClusterExtension.start();
+            CoordinatorServer firstLeader = flussClusterExtension.getCoordinatorServer();
+            String zooKeeperConnectString =
+                    firstLeader
+                            .getZooKeeperClient()
+                            .getCuratorClient()
+                            .getZookeeperClient()
+                            .getCurrentConnectionString();
+
+            Configuration standbyConf = new Configuration();
+            standbyConf.setString(ConfigOptions.ZOOKEEPER_ADDRESS, zooKeeperConnectString);
+            standbyConf.setString(ConfigOptions.BIND_LISTENERS, "FLUSS://localhost:0");
+            standbyConf.set(
+                    ConfigOptions.REMOTE_DATA_DIR,
+                    tempDir.resolve("standby-remote-data").toString());
+            standbyCoordinator = new CoordinatorServer(standbyConf);
+            standbyCoordinator.start();
+
+            waitUntil(
+                    () ->
+                            flussClusterExtension
+                                            .getZooKeeperClient()
+                                            .getCoordinatorServerList()
+                                            .size()
+                                    == 2,
+                    Duration.ofSeconds(30),
+                    "Standby coordinator did not register");
+
+            try (Connection connection =
+                            ConnectionFactory.createConnection(
+                                    flussClusterExtension.getClientConfig());
+                    Admin admin = connection.getAdmin()) {
+                String databaseName = "test_admin_write_after_coordinator_failover";
+                admin.createDatabase(databaseName, DatabaseDescriptor.EMPTY, false).get();
+                assertThat(admin.listDatabases().get()).contains(databaseName);
+
+                killZooKeeperSession(firstLeader, zooKeeperConnectString);
+                CoordinatorServer newLeader = standbyCoordinator;
+                waitUntil(
+                        () -> {
+                            CoordinatorAddress leaderAddress =
+                                    flussClusterExtension
+                                            .getZooKeeperClient()
+                                            .getCoordinatorLeaderAddress()
+                                            .orElse(null);
+                            return leaderAddress != null
+                                    && leaderAddress.getId().equals(newLeader.getServerId())
+                                    && newLeader.getCoordinatorService().isLeader();
+                        },
+                        Duration.ofMinutes(1),
+                        "Standby coordinator did not become leader");
+
+                Endpoint newLeaderEndpoint =
+                        newLeader.getRpcServer().getBindEndpoints().stream()
+                                .filter(
+                                        endpoint ->
+                                                endpoint.getListenerName()
+                                                        .equals(
+                                                                ConfigOptions.INTERNAL_LISTENER_NAME
+                                                                        .defaultValue()))
+                                .findFirst()
+                                .orElseThrow(IllegalStateException::new);
+                waitUntil(
+                        () -> {
+                            ServerNode cachedCoordinator =
+                                    flussClusterExtension
+                                            .getTabletServerById(0)
+                                            .getMetadataCache()
+                                            .getCoordinatorServer(
+                                                    ConfigOptions.INTERNAL_LISTENER_NAME
+                                                            .defaultValue());
+                            return cachedCoordinator != null
+                                    && cachedCoordinator.host().equals(newLeaderEndpoint.getHost())
+                                    && cachedCoordinator.port() == newLeaderEndpoint.getPort();
+                        },
+                        Duration.ofSeconds(30),
+                        "Tablet server did not learn the new coordinator leader");
+
+                admin.dropDatabase(databaseName, false, false).get();
+                assertThat(admin.listDatabases().get()).doesNotContain(databaseName);
+            }
+        } finally {
+            if (standbyCoordinator != null) {
+                standbyCoordinator.close();
+            }
+            flussClusterExtension.close();
+        }
+    }
 
     @Test
     void testProjectionPushdownWithEmptyBatches() throws Exception {
@@ -325,5 +431,28 @@ class CustomFlussClusterITCase {
 
         conf.set(ConfigOptions.NETTY_CLIENT_NUM_NETWORK_THREADS, 1);
         return conf;
+    }
+
+    private static void killZooKeeperSession(
+            CoordinatorServer server, String zooKeeperConnectString) throws Exception {
+        CuratorFramework curatorClient = server.getZooKeeperClient().getCuratorClient();
+        ZooKeeper zooKeeper = curatorClient.getZookeeperClient().getZooKeeper();
+        CountDownLatch connectedLatch = new CountDownLatch(1);
+        ZooKeeper duplicateSession =
+                new ZooKeeper(
+                        zooKeeperConnectString,
+                        1000,
+                        event -> {
+                            if (event.getState() == Watcher.Event.KeeperState.SyncConnected) {
+                                connectedLatch.countDown();
+                            }
+                        },
+                        zooKeeper.getSessionId(),
+                        zooKeeper.getSessionPasswd());
+        if (!connectedLatch.await(10, TimeUnit.SECONDS)) {
+            duplicateSession.close();
+            throw new IllegalStateException("Failed to connect duplicate ZooKeeper session");
+        }
+        duplicateSession.close();
     }
 }

@@ -31,6 +31,7 @@ import java.lang.reflect.Proxy;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Predicate;
 
 /**
  * A proxy that wraps an existing {@link RpcGateway} proxy and adds automatic retry with metadata
@@ -68,6 +69,7 @@ public class RetryableGatewayClientProxy implements InvocationHandler {
     private final Object delegate;
     private final Runnable metadataRefreshAction;
     private final Executor refreshExecutor;
+    private final Predicate<Throwable> retryPredicate;
 
     /**
      * Holds the currently in-flight metadata refresh, if any. Concurrent retriers piggyback on this
@@ -78,10 +80,14 @@ public class RetryableGatewayClientProxy implements InvocationHandler {
             new AtomicReference<>();
 
     RetryableGatewayClientProxy(
-            Object delegate, Runnable metadataRefreshAction, Executor refreshExecutor) {
+            Object delegate,
+            Runnable metadataRefreshAction,
+            Executor refreshExecutor,
+            Predicate<Throwable> retryPredicate) {
         this.delegate = delegate;
         this.metadataRefreshAction = metadataRefreshAction;
         this.refreshExecutor = refreshExecutor;
+        this.retryPredicate = retryPredicate;
     }
 
     /**
@@ -102,6 +108,33 @@ public class RetryableGatewayClientProxy implements InvocationHandler {
             Runnable metadataRefreshAction,
             Executor refreshExecutor,
             Class<T> gatewayClass) {
+        return createRetryableGatewayProxy(
+                delegate,
+                metadataRefreshAction,
+                refreshExecutor,
+                RetriableException.class::isInstance,
+                gatewayClass);
+    }
+
+    /**
+     * Creates a retryable proxy wrapping an existing gateway proxy. When an error matches {@code
+     * retryPredicate}, the proxy will invoke {@code metadataRefreshAction} and retry the failed RPC
+     * call once.
+     *
+     * @param delegate the underlying gateway proxy to wrap
+     * @param metadataRefreshAction callback to refresh metadata (e.g., update cluster info)
+     * @param refreshExecutor executor on which {@code metadataRefreshAction} is run
+     * @param retryPredicate predicate that selects errors safe to retry
+     * @param gatewayClass the gateway interface class
+     * @param <T> the gateway type
+     * @return a retryable gateway proxy
+     */
+    public static <T extends RpcGateway> T createRetryableGatewayProxy(
+            T delegate,
+            Runnable metadataRefreshAction,
+            Executor refreshExecutor,
+            Predicate<Throwable> retryPredicate,
+            Class<T> gatewayClass) {
         ClassLoader classLoader = gatewayClass.getClassLoader();
 
         @SuppressWarnings("unchecked")
@@ -111,7 +144,10 @@ public class RetryableGatewayClientProxy implements InvocationHandler {
                                 classLoader,
                                 new Class<?>[] {gatewayClass},
                                 new RetryableGatewayClientProxy(
-                                        delegate, metadataRefreshAction, refreshExecutor));
+                                        delegate,
+                                        metadataRefreshAction,
+                                        refreshExecutor,
+                                        retryPredicate));
         return proxy;
     }
 
@@ -143,7 +179,7 @@ public class RetryableGatewayClientProxy implements InvocationHandler {
                         return;
                     }
                     Throwable cause = ExceptionUtils.stripCompletionException(throwable);
-                    if (!(cause instanceof RetriableException) || !retry) {
+                    if (!retry || !retryPredicate.test(cause)) {
                         resultFuture.completeExceptionally(cause);
                         return;
                     }

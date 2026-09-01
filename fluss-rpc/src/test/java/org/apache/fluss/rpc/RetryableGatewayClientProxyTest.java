@@ -18,6 +18,7 @@
 package org.apache.fluss.rpc;
 
 import org.apache.fluss.exception.NetworkException;
+import org.apache.fluss.exception.NotCoordinatorLeaderException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.rpc.messages.ApiVersionsRequest;
 import org.apache.fluss.rpc.messages.ApiVersionsResponse;
@@ -144,6 +145,29 @@ class RetryableGatewayClientProxyTest {
                 .isInstanceOf(TableNotExistException.class)
                 .hasMessageContaining("table does not exist");
         // Should only be called once - no retries for non-retriable exceptions
+        assertThat(callCount.get()).isEqualTo(1);
+        assertThat(refreshCount.get()).isEqualTo(0);
+    }
+
+    @Test
+    void testCustomRetryPredicateExcludesNetworkErrors() {
+        AtomicInteger callCount = new AtomicInteger(0);
+        AtomicInteger refreshCount = new AtomicInteger(0);
+
+        RpcGateway delegate = createGateway(callCount, 1);
+        RpcGateway proxy =
+                RetryableGatewayClientProxy.createRetryableGatewayProxy(
+                        delegate,
+                        refreshCount::incrementAndGet,
+                        REFRESH_EXECUTOR,
+                        NotCoordinatorLeaderException.class::isInstance,
+                        RpcGateway.class);
+
+        CompletableFuture<ApiVersionsResponse> result = proxy.apiVersions(new ApiVersionsRequest());
+        assertThatThrownBy(result::get)
+                .isInstanceOf(ExecutionException.class)
+                .rootCause()
+                .isInstanceOf(NetworkException.class);
         assertThat(callCount.get()).isEqualTo(1);
         assertThat(refreshCount.get()).isEqualTo(0);
     }
