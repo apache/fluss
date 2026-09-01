@@ -28,8 +28,9 @@ CACHE_DIR := DEPS_DIR + "/cache"
 
 COMPOSE := "docker compose -f " + DEVKIT_DIR + "/docker-compose.yml"
 COMPOSE_TIERING := COMPOSE + " -f " + DEVKIT_DIR + "/compose/tiering.yml"
-ALL_COMPOSE := COMPOSE_TIERING + " -f " + DEVKIT_DIR + "/compose/lake-common.yml -f " + DEVKIT_DIR + "/compose/iceberg.yml"
-ALL_PROFILES := "--profile single --profile cluster --profile flink --profile tiering"
+COMPOSE_GATEWAY := COMPOSE_TIERING + " -f " + DEVKIT_DIR + "/compose/gateway.yml"
+ALL_COMPOSE := COMPOSE_GATEWAY + " -f " + DEVKIT_DIR + "/compose/lake-common.yml -f " + DEVKIT_DIR + "/compose/iceberg.yml"
+ALL_PROFILES := "--profile single --profile cluster --profile flink --profile tiering --profile gateway"
 
 # --- Build commands -----------------------------------------------------------
 
@@ -46,6 +47,24 @@ build:
 [doc("Build the local distribution and lake tiering artifacts")]
 build-tiering:
     cd "{{ FLUSS_DEV_HOME }}" && {{ TIERING_BUILD_CMD }}
+
+[doc("Build the local Fluss Gateway executable")]
+build-gateway:
+    #!/usr/bin/env bash
+    set -e
+    mkdir -p "{{ DEPS_DIR }}/cargo" "{{ DEPS_DIR }}/gateway"
+    docker run --rm \
+      --user "$(id -u):$(id -g)" \
+      -e CARGO_HOME=/cache \
+      -e CARGO_TARGET_DIR=/output \
+      -e HOME=/tmp \
+      -e RUSTUP_TOOLCHAIN=1.88.0 \
+      -v "{{ FLUSS_DEV_HOME }}:/workspace:ro" \
+      -v "{{ DEPS_DIR }}/cargo:/cache" \
+      -v "{{ DEPS_DIR }}/gateway:/output" \
+      -w /workspace/fluss-gateway \
+      rust:1.88-bookworm \
+      cargo build --locked --bin fluss-gateway
 
 [private]
 ensure-dist:
@@ -197,8 +216,11 @@ up profile="core" nodes="1": ensure-dist ensure-flink
     esac
     PROFILE_DIR="{{ PROFILES_DIR }}/$PROFILE"
     FORMAT=$(just profile-format "$PROFILE")
-    COMPOSE_ARGS=(-f "{{ DEVKIT_DIR }}/docker-compose.yml" -f "{{ DEVKIT_DIR }}/compose/tiering.yml")
+    COMPOSE_ARGS=(-f "{{ DEVKIT_DIR }}/docker-compose.yml" -f "{{ DEVKIT_DIR }}/compose/tiering.yml" -f "{{ DEVKIT_DIR }}/compose/gateway.yml")
     PROFILES=(--profile "$TOPOLOGY" --profile flink)
+    if [ "${DEVKIT_GATEWAY:-false}" = "true" ]; then
+      PROFILES+=(--profile gateway)
+    fi
     if [ -f "$PROFILE_DIR/compose.files" ]; then
       while IFS= read -r FILE; do
         FILE="${FILE%%#*}"
@@ -221,6 +243,10 @@ up profile="core" nodes="1": ensure-dist ensure-flink
     {{ ALL_COMPOSE }} {{ ALL_PROFILES }} down --remove-orphans >/dev/null 2>&1 || true
     docker compose "${COMPOSE_ARGS[@]}" "${PROFILES[@]}" up -d
     just check "$PROFILE"
+
+[doc("Build and start a profile with the Fluss Gateway")]
+up-gateway profile="core" nodes="1": build-gateway
+    DEVKIT_GATEWAY=true just up {{ quote(profile) }} {{ quote(nodes) }}
 
 [doc("Stop services and keep data")]
 down:
@@ -260,6 +286,7 @@ check profile: check-cluster check-flink
     #!/usr/bin/env bash
     FORMAT=$(just profile-format {{ quote(profile) }})
     if [ -n "$FORMAT" ]; then just check-tiering "$FORMAT"; fi
+    if [ "${DEVKIT_GATEWAY:-false}" = "true" ]; then just check-gateway; fi
 
 [private]
 check-cluster:
@@ -287,6 +314,20 @@ check-flink:
     done
     {{ COMPOSE_TIERING }} --profile flink logs --tail=200 jobmanager taskmanager
     echo "Flink cluster did not become ready"
+    exit 1
+
+[private]
+check-gateway:
+    #!/usr/bin/env bash
+    set -e
+    for _ in {1..40}; do
+      if curl -fsS --max-time 5 "http://localhost:${GATEWAY_REST_PORT:-8080}/ready" >/dev/null; then
+        exit 0
+      fi
+      sleep 3
+    done
+    {{ COMPOSE_GATEWAY }} --profile gateway logs --tail=200 gateway
+    echo "Fluss Gateway did not become ready"
     exit 1
 
 [private]
