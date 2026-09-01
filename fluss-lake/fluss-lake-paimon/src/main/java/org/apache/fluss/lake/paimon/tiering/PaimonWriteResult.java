@@ -20,19 +20,29 @@ package org.apache.fluss.lake.paimon.tiering;
 import org.apache.paimon.table.sink.CommitMessage;
 
 import java.io.Serializable;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
+import static org.apache.fluss.utils.Preconditions.checkArgument;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** The write result of Paimon lake writer to pass to committer to commit. */
-public class PaimonWriteResult implements Serializable {
+public final class PaimonWriteResult implements Serializable {
 
     private static final long serialVersionUID = 1L;
 
-    private final CommitMessage commitMessage;
+    private final List<CommitMessage> commitMessages;
 
-    public PaimonWriteResult(CommitMessage commitMessage) {
-        this.commitMessage = commitMessage;
+    /** Creates a write result containing all commit messages produced by one lake writer. */
+    public PaimonWriteResult(List<CommitMessage> commitMessages) {
+        checkNotNull(commitMessages, "commitMessages must not be null");
+        checkArgument(!commitMessages.isEmpty(), "commitMessages must not be empty");
+        this.commitMessages = Collections.unmodifiableList(new ArrayList<>(commitMessages));
     }
 
-    public CommitMessage commitMessage() {
-        return commitMessage;
+    /** Returns all commit messages produced by the lake writer. */
+    public List<CommitMessage> commitMessages() {
+        return commitMessages;
     }
 }

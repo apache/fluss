@@ -1165,6 +1165,9 @@ pub struct PbProduceLogReqForBucket {
     pub bucket_id: i32,
     #[prost(bytes = "bytes", required, tag = "3")]
     pub records: ::prost::bytes::Bytes,
+    /// The original partition name for a historical write; unset for a normal write.
+    #[prost(string, optional, tag = "4")]
+    pub original_partition_name: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PbProduceLogRespForBucket {
@@ -1178,6 +1181,9 @@ pub struct PbProduceLogRespForBucket {
     pub error_message: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(int64, optional, tag = "5")]
     pub base_offset: ::core::option::Option<i64>,
+    /// The original partition name echoed from a historical write request; unset for a normal write.
+    #[prost(string, optional, tag = "6")]
+    pub original_partition_name: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PbFetchLogReqForTable {

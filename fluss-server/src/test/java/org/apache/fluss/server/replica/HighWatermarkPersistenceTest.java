@@ -18,25 +18,18 @@
 package org.apache.fluss.server.replica;
 
 import org.apache.fluss.config.ConfigOptions;
-import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.coordinator.TestCoordinatorGateway;
-import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.log.checkpoint.OffsetCheckpointFile;
-import org.apache.fluss.server.zk.data.LeaderAndIsr;
 
 import org.junit.jupiter.api.Test;
 
 import java.io.File;
 import java.time.Duration;
-import java.util.Collections;
 
 import static org.apache.fluss.record.TestData.ANOTHER_DATA1;
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
-import static org.apache.fluss.record.TestData.DATA2_TABLE_ID;
-import static org.apache.fluss.record.TestData.DATA2_TABLE_PATH;
-import static org.apache.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
 import static org.apache.fluss.server.replica.ReplicaManager.HIGH_WATERMARK_CHECKPOINT_FILE_NAME;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
@@ -92,23 +85,9 @@ final class HighWatermarkPersistenceTest extends ReplicaTestBase {
         assertThat(highWatermark0).isEqualTo(10L);
         assertThat(replica0.getLogTablet().getHighWatermark()).isEqualTo(10L);
 
-        // add another replica and set highWatermark.
-        TableBucket tableBucket1 = new TableBucket(DATA2_TABLE_ID, 0);
-        replicaManager.becomeLeaderOrFollower(
-                INITIAL_COORDINATOR_EPOCH,
-                Collections.singletonList(
-                        new NotifyLeaderAndIsrData(
-                                PhysicalTablePath.of(DATA2_TABLE_PATH),
-                                tableBucket1,
-                                Collections.singletonList(TABLET_SERVER_ID),
-                                new LeaderAndIsr(
-                                        TABLET_SERVER_ID,
-                                        LeaderAndIsr.INITIAL_LEADER_EPOCH,
-                                        Collections.singletonList(TABLET_SERVER_ID),
-                                        Collections.emptyList(),
-                                        INITIAL_COORDINATOR_EPOCH,
-                                        LeaderAndIsr.INITIAL_BUCKET_EPOCH))),
-                result -> {});
+        // Add another append-only replica and set its high watermark.
+        TableBucket tableBucket1 = new TableBucket(DATA1_TABLE_ID, 1);
+        makeLogTableAsLeader(tableBucket1.getBucket());
 
         replicaManager.checkpointHighWatermarks();
         long highWatermark1 = highWatermarkFor(tableBucket1);

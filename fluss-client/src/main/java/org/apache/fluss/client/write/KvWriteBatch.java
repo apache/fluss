@@ -63,6 +63,7 @@ public class KvWriteBatch extends WriteBatch {
             AbstractPagedOutputView outputView,
             @Nullable int[] targetColumns,
             MergeMode mergeMode,
+            @Nullable String originalPartitionName,
             long createdMs) {
         super(
                 tableId,
@@ -70,6 +71,7 @@ public class KvWriteBatch extends WriteBatch {
                 physicalTablePath,
                 schemaId,
                 WriteFormat.fromKvFormat(kvFormat),
+                originalPartitionName,
                 createdMs);
         this.outputView = outputView;
         this.recordsBuilder =

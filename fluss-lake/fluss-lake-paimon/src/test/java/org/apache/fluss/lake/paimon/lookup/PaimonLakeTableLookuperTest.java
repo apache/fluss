@@ -232,6 +232,101 @@ class PaimonLakeTableLookuperTest {
     }
 
     @Test
+    void testRefreshesFilesWhenLakeSnapshotChanges() throws Exception {
+        TablePath tablePath = TablePath.of(DB, "refresh_registered_files");
+        Schema schema = pkSchema();
+        FileStoreTable table = createPaimonTable(tablePath, partitionedPkDescriptor(schema));
+        writeAndCommitData(
+                table,
+                Collections.singletonMap(
+                        0,
+                        Arrays.asList(
+                                paimonRow(1, "20240101", "Alice"),
+                                paimonRow(2, "20240102", "Bob"))));
+
+        try (LakeTableLookuper lookuper =
+                new PaimonLakeTableLookuper(
+                        paimonConfig,
+                        tablePath,
+                        tempWarehouseDir.getAbsolutePath(),
+                        tableConfig(KvFormat.COMPACTED),
+                        LOOKUP_CACHE_MAX_DISK_BYTES,
+                        NO_OP_DISK_WRITE_GUARD)) {
+            LakeTableLookuper.LookupContext firstPartition =
+                    lookupContext(schema, "20240101", 0, SCHEMA_ID);
+            LakeTableLookuper.LookupContext secondPartition =
+                    lookupContext(schema, "20240102", 0, SCHEMA_ID);
+            // Register two partition-buckets and populate their local lookup files.
+            assertThat(lookuper.lookup(paimonKey(schema, 1, "20240101"), firstPartition))
+                    .isNotNull();
+            assertThat(lookuper.lookup(paimonKey(schema, 2, "20240102"), secondPartition))
+                    .isNotNull();
+
+            writeAndCommitData(
+                    table,
+                    Collections.singletonMap(
+                            0, Collections.singletonList(paimonRow(3, "20240101", "Carol"))));
+            // The newly committed file is not registered before the explicit refresh.
+            assertThat(lookuper.lookup(paimonKey(schema, 3, "20240101"), firstPartition)).isNull();
+
+            List<Boolean> newFileDownloads = new ArrayList<>();
+            List<Boolean> retainedFileDownloads = new ArrayList<>();
+            List<Boolean> unchangedPartitionDownloads = new ArrayList<>();
+            lookuper.refresh();
+
+            BinaryValue newFileValue =
+                    decodeValue(
+                            lookuper.lookup(
+                                    paimonKey(schema, 3, "20240101"),
+                                    lookupContext(
+                                            schema,
+                                            "20240101",
+                                            0,
+                                            SCHEMA_ID,
+                                            (lookupTimeNanos, lookupFileDownloaded) ->
+                                                    newFileDownloads.add(lookupFileDownloaded))),
+                            SCHEMA_ID,
+                            schema);
+            BinaryValue retainedFileValue =
+                    decodeValue(
+                            lookuper.lookup(
+                                    paimonKey(schema, 1, "20240101"),
+                                    lookupContext(
+                                            schema,
+                                            "20240101",
+                                            0,
+                                            SCHEMA_ID,
+                                            (lookupTimeNanos, lookupFileDownloaded) ->
+                                                    retainedFileDownloads.add(
+                                                            lookupFileDownloaded))),
+                            SCHEMA_ID,
+                            schema);
+            BinaryValue unchangedValue =
+                    decodeValue(
+                            lookuper.lookup(
+                                    paimonKey(schema, 2, "20240102"),
+                                    lookupContext(
+                                            schema,
+                                            "20240102",
+                                            0,
+                                            SCHEMA_ID,
+                                            (lookupTimeNanos, lookupFileDownloaded) ->
+                                                    unchangedPartitionDownloads.add(
+                                                            lookupFileDownloaded))),
+                            SCHEMA_ID,
+                            schema);
+
+            assertRow(newFileValue.row, 3, "20240101", "Carol");
+            assertRow(retainedFileValue.row, 1, "20240101", "Alice");
+            assertRow(unchangedValue.row, 2, "20240102", "Bob");
+            // Only the new data file needs a local lookup-file download after the bulk refresh.
+            assertThat(newFileDownloads).containsExactly(true);
+            assertThat(retainedFileDownloads).containsExactly(false);
+            assertThat(unchangedPartitionDownloads).containsExactly(false);
+        }
+    }
+
+    @Test
     void testDiskWriteLockBlocksOnlyLookupFileDownloads() throws Exception {
         TablePath tablePath = TablePath.of(DB, "disk_write_lock");
         Schema schema = pkSchema();

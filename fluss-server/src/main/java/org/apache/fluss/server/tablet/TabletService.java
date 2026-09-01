@@ -36,6 +36,7 @@ import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.entity.LookupResultForBucket;
 import org.apache.fluss.rpc.entity.PrefixLookupResultForBucket;
+import org.apache.fluss.rpc.entity.ProduceLogResultForBucket;
 import org.apache.fluss.rpc.entity.ResultForBucket;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
@@ -92,6 +93,7 @@ import org.apache.fluss.server.entity.NotifyKvSnapshotOffsetData;
 import org.apache.fluss.server.entity.NotifyLakeTableOffsetData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.entity.NotifyRemoteLogOffsetsData;
+import org.apache.fluss.server.entity.ProduceLogDataForBucket;
 import org.apache.fluss.server.entity.PutKvDataForBucket;
 import org.apache.fluss.server.entity.StopReplicaData;
 import org.apache.fluss.server.entity.UserContext;
@@ -125,6 +127,7 @@ import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.hasHistoricalLookup;
+import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.hasHistoricalProduce;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.hasHistoricalPut;
 import static org.apache.fluss.security.acl.OperationType.DESCRIBE;
 import static org.apache.fluss.security.acl.OperationType.READ;
@@ -137,7 +140,6 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getNotifyLakeT
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getNotifyLeaderAndIsrRequestData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getNotifyRemoteLogOffsetsData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getNotifySnapshotOffsetData;
-import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getProduceLogData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getStopReplicaData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getTableFilterInfoMap;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getTableStatsRequestData;
@@ -157,6 +159,7 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeStopReplic
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toHistoricalLookupData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toLookupData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toPrefixLookupData;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toProduceLogDataForBuckets;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toPutKvDataForBuckets;
 
 /** An RPC Gateway service for tablet server. */
@@ -216,13 +219,29 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     public CompletableFuture<ProduceLogResponse> produceLog(ProduceLogRequest request) {
         authorizeTable(WRITE, request.getTableId());
         CompletableFuture<ProduceLogResponse> response = new CompletableFuture<>();
-        Map<TableBucket, MemoryLogRecords> produceLogData = getProduceLogData(request);
-        replicaManager.appendRecordsToLog(
-                request.getTimeoutMs(),
-                request.getAcks(),
-                produceLogData,
-                new UserContext(currentSession().getPrincipal()),
-                bucketResponseMap -> response.complete(makeProduceLogResponse(bucketResponseMap)));
+        List<ProduceLogDataForBucket> produceLogData = toProduceLogDataForBuckets(request);
+        UserContext userContext = new UserContext(currentSession().getPrincipal());
+        Consumer<List<ProduceLogResultForBucket>> responseCallback =
+                results -> response.complete(makeProduceLogResponse(results));
+        if (hasHistoricalProduce(request)) {
+            replicaManager.appendHistoricalRecordsToLog(
+                    request.getTimeoutMs(),
+                    request.getAcks(),
+                    produceLogData,
+                    userContext,
+                    responseCallback);
+        } else {
+            Map<TableBucket, MemoryLogRecords> recordsByBucket = new HashMap<>();
+            for (ProduceLogDataForBucket bucketData : produceLogData) {
+                recordsByBucket.put(bucketData.tableBucket(), bucketData.records());
+            }
+            replicaManager.appendRecordsToLog(
+                    request.getTimeoutMs(),
+                    request.getAcks(),
+                    recordsByBucket,
+                    userContext,
+                    responseCallback);
+        }
         return response;
     }
 

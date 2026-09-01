@@ -886,6 +886,8 @@ message PbProduceLogReqForBucket {
   optional int64 partition_id = 1;
   required int32 bucket_id = 2;
   required bytes records = 3;
+  // The original partition name for a historical write; unset for a normal write.
+  optional string original_partition_name = 4;
 }
 
 message PbProduceLogRespForBucket {
@@ -894,6 +896,8 @@ message PbProduceLogRespForBucket {
   optional int32 error_code = 3;
   optional string error_message = 4;
   optional int64 base_offset = 5;
+  // The original partition name echoed from a historical write request; unset for a normal write.
+  optional string original_partition_name = 6;
 }
 
 message PbFetchLogReqForTable {

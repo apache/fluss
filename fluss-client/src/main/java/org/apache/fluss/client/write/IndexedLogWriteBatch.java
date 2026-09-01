@@ -24,6 +24,7 @@ import org.apache.fluss.record.MemoryLogRecordsIndexedBuilder;
 import org.apache.fluss.row.indexed.IndexedRow;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.NotThreadSafe;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
@@ -45,6 +46,7 @@ public final class IndexedLogWriteBatch extends AbstractRowLogWriteBatch<Indexed
             int schemaId,
             int writeLimit,
             AbstractPagedOutputView outputView,
+            @Nullable String originalPartitionName,
             long createdMs) {
         super(
                 tableId,
@@ -52,6 +54,7 @@ public final class IndexedLogWriteBatch extends AbstractRowLogWriteBatch<Indexed
                 physicalTablePath,
                 schemaId,
                 WriteFormat.INDEXED_LOG,
+                originalPartitionName,
                 createdMs,
                 outputView,
                 MemoryLogRecordsIndexedBuilder.builder(schemaId, writeLimit, outputView, true),

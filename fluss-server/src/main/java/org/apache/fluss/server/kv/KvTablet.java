@@ -41,7 +41,7 @@ import org.apache.fluss.row.encode.ValueEncoder;
 import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.server.kv.autoinc.AutoIncIDRange;
 import org.apache.fluss.server.kv.autoinc.AutoIncrementManager;
-import org.apache.fluss.server.kv.historical.HistoricalValueLookup;
+import org.apache.fluss.server.kv.historical.HistoricalWritePreviousValues;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.PreparedFlush;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKv;
@@ -655,33 +655,35 @@ public final class KvTablet {
      * Puts records for one original partition into this historical KV tablet.
      *
      * <p>The original partition name namespaces the physical primary keys because one historical
-     * bucket can contain records from multiple original partitions. The supplied fallback may only
-     * read lake results already resolved for this request; it must not perform lake I/O while the
-     * tablet lock is held.
+     * bucket can contain records from multiple original partitions. The supplied previous values
+     * must be fully resolved before the tablet lock is acquired.
      */
     public LogAppendInfo putHistoricalAsLeader(
             KvRecordBatch kvRecords,
             @Nullable int[] targetColumns,
             MergeMode mergeMode,
             String originalPartitionName,
-            HistoricalValueLookup memoizedLakeLookup)
+            HistoricalWritePreviousValues previousValues)
             throws Exception {
         checkState(historicalPartition, "%s is not a historical KV tablet", tableBucket);
+        HistoricalWritePreviousValues checkedPreviousValues =
+                checkNotNull(previousValues, "Historical write previous values must not be null");
+        checkedPreviousValues.ensureFullyResolved();
         return putAsLeader(
                 kvRecords,
                 targetColumns,
                 mergeMode,
                 checkNotNull(originalPartitionName, "originalPartitionName must not be null"),
-                checkNotNull(memoizedLakeLookup, "memoizedLakeLookup must not be null"));
+                checkedPreviousValues);
     }
 
     /**
-     * Finds keys whose historical write requires an old value that is absent from local state.
+     * Probes the local previous values required by a historical write.
      *
      * <p>This method only reads KV entries and uses the tablet read lock. Lake I/O must be
      * performed by the caller after this method releases the tablet lock.
      */
-    public List<byte[]> findKeysRequiringLakeLookup(
+    public HistoricalWritePreviousValues probePreviousValues(
             KvRecordBatch kvRecords,
             @Nullable int[] targetColumns,
             MergeMode mergeMode,
@@ -692,7 +694,7 @@ public final class KvTablet {
                 kvLock,
                 () -> {
                     rocksDBKv.checkIfRocksDBClosed();
-                    return kvWriteProcessor.findKeysRequiringLakeLookup(
+                    return kvWriteProcessor.probePreviousValues(
                             kvRecords,
                             targetColumns,
                             mergeMode,
@@ -708,7 +710,7 @@ public final class KvTablet {
             @Nullable int[] targetColumns,
             MergeMode mergeMode,
             @Nullable String originalPartitionName,
-            @Nullable HistoricalValueLookup memoizedLakeLookup)
+            @Nullable HistoricalWritePreviousValues previousValues)
             throws Exception {
         return inWriteLock(
                 kvLock,
@@ -737,7 +739,7 @@ public final class KvTablet {
                             mergeMode,
                             kvStateAccessor,
                             originalPartitionName,
-                            memoizedLakeLookup);
+                            previousValues);
                 });
     }
 

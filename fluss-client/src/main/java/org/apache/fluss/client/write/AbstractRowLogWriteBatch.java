@@ -26,6 +26,8 @@ import org.apache.fluss.record.MemoryLogRecordsRowBuilder;
 import org.apache.fluss.record.bytesview.BytesView;
 import org.apache.fluss.row.InternalRow;
 
+import javax.annotation.Nullable;
+
 import java.io.IOException;
 import java.util.List;
 
@@ -49,11 +51,19 @@ abstract class AbstractRowLogWriteBatch<R> extends WriteBatch {
             PhysicalTablePath physicalTablePath,
             int schemaId,
             WriteFormat writeFormat,
+            @Nullable String originalPartitionName,
             long createdMs,
             AbstractPagedOutputView outputView,
             MemoryLogRecordsRowBuilder<R> recordsBuilder,
             String buildErrorMessage) {
-        super(tableId, bucketId, physicalTablePath, schemaId, writeFormat, createdMs);
+        super(
+                tableId,
+                bucketId,
+                physicalTablePath,
+                schemaId,
+                writeFormat,
+                originalPartitionName,
+                createdMs);
         this.outputView = outputView;
         this.recordsBuilder = recordsBuilder;
         this.buildErrorMessage = buildErrorMessage;

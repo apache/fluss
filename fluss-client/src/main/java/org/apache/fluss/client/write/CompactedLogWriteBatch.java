@@ -25,6 +25,7 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.compacted.CompactedRow;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.NotThreadSafe;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
@@ -46,6 +47,7 @@ public final class CompactedLogWriteBatch extends AbstractRowLogWriteBatch<Compa
             int schemaId,
             int writeLimit,
             AbstractPagedOutputView outputView,
+            @Nullable String originalPartitionName,
             long createdMs) {
         super(
                 tableId,
@@ -53,6 +55,7 @@ public final class CompactedLogWriteBatch extends AbstractRowLogWriteBatch<Compa
                 physicalTablePath,
                 schemaId,
                 WriteFormat.COMPACTED_LOG,
+                originalPartitionName,
                 createdMs,
                 outputView,
                 MemoryLogRecordsCompactedBuilder.builder(schemaId, writeLimit, outputView, true),

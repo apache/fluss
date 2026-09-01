@@ -187,6 +187,7 @@ import org.apache.fluss.server.entity.NotifyLakeTableOffsetData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 import org.apache.fluss.server.entity.NotifyRemoteLogOffsetsData;
+import org.apache.fluss.server.entity.ProduceLogDataForBucket;
 import org.apache.fluss.server.entity.PutKvDataForBucket;
 import org.apache.fluss.server.entity.StopReplicaData;
 import org.apache.fluss.server.entity.StopReplicaResultForBucket;
@@ -231,6 +232,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.hasHistoricalProduce;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toByteBuffer;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toPbAclInfo;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -892,12 +894,20 @@ public class ServerRpcMessageUtils {
         return stopReplicaResponse;
     }
 
-    public static Map<TableBucket, MemoryLogRecords> getProduceLogData(
+    /** Converts produce-log requests while preserving their historical partition context. */
+    public static List<ProduceLogDataForBucket> toProduceLogDataForBuckets(
             ProduceLogRequest produceRequest) {
         long tableId = produceRequest.getTableId();
-        Map<TableBucket, MemoryLogRecords> produceEntryData = new HashMap<>();
+        List<ProduceLogDataForBucket> produceLogData =
+                new ArrayList<>(produceRequest.getBucketsReqsCount());
+        Map<TableBucket, Set<String>> originalPartitionsByBucket = new HashMap<>();
+        boolean historicalWriteRequest = hasHistoricalProduce(produceRequest);
         for (PbProduceLogReqForBucket produceLogReqForBucket :
                 produceRequest.getBucketsReqsList()) {
+            if (produceLogReqForBucket.hasOriginalPartitionName() != historicalWriteRequest) {
+                throw new IllegalArgumentException(
+                        "Normal and historical writes cannot be mixed in the same request.");
+            }
             ByteBuffer recordBuffer = toByteBuffer(produceLogReqForBucket.getRecordsSlice());
             MemoryLogRecords logRecords = MemoryLogRecords.pointToByteBuffer(recordBuffer);
             TableBucket tb =
@@ -907,9 +917,23 @@ public class ServerRpcMessageUtils {
                                     ? produceLogReqForBucket.getPartitionId()
                                     : null,
                             produceLogReqForBucket.getBucketId());
-            produceEntryData.put(tb, logRecords);
+            String originalPartitionName =
+                    produceLogReqForBucket.hasOriginalPartitionName()
+                            ? produceLogReqForBucket.getOriginalPartitionName()
+                            : null;
+            Set<String> originalPartitions =
+                    originalPartitionsByBucket.computeIfAbsent(tb, ignored -> new HashSet<>());
+            if (!originalPartitions.add(originalPartitionName)) {
+                throw new IllegalArgumentException(
+                        "A ProduceLog request contains duplicate table bucket "
+                                + tb
+                                + " and original partition "
+                                + originalPartitionName
+                                + '.');
+            }
+            produceLogData.add(new ProduceLogDataForBucket(tb, logRecords, originalPartitionName));
         }
-        return produceEntryData;
+        return produceLogData;
     }
 
     public static ProduceLogResponse makeProduceLogResponse(
@@ -922,6 +946,9 @@ public class ServerRpcMessageUtils {
             TableBucket tableBucket = bucketResult.getTableBucket();
             if (tableBucket.getPartitionId() != null) {
                 producedBucket.setPartitionId(tableBucket.getPartitionId());
+            }
+            if (bucketResult.getOriginalPartitionName() != null) {
+                producedBucket.setOriginalPartitionName(bucketResult.getOriginalPartitionName());
             }
 
             if (bucketResult.failed()) {

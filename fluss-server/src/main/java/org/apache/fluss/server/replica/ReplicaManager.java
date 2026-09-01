@@ -82,6 +82,7 @@ import org.apache.fluss.server.entity.NotifyLakeTableOffsetData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 import org.apache.fluss.server.entity.NotifyRemoteLogOffsetsData;
+import org.apache.fluss.server.entity.ProduceLogDataForBucket;
 import org.apache.fluss.server.entity.PutKvDataForBucket;
 import org.apache.fluss.server.entity.StopReplicaData;
 import org.apache.fluss.server.entity.StopReplicaResultForBucket;
@@ -126,6 +127,7 @@ import org.apache.fluss.utils.ByteArraySlice;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.clock.Clock;
+import org.apache.fluss.utils.concurrent.FutureUtils;
 import org.apache.fluss.utils.concurrent.Scheduler;
 
 import org.slf4j.Logger;
@@ -686,6 +688,47 @@ public class ReplicaManager implements ServerReconfigurable {
         // maybe do delay write operation.
         maybeAddDelayedWrite(
                 timeoutMs, requiredAcks, entriesPerBucket.size(), appendResult, responseCallback);
+    }
+
+    /** Appends historical log batches while preserving each original partition in the response. */
+    public void appendHistoricalRecordsToLog(
+            int timeoutMs,
+            int requiredAcks,
+            Collection<ProduceLogDataForBucket> entriesPerBucket,
+            @Nullable UserContext userContext,
+            Consumer<List<ProduceLogResultForBucket>> responseCallback) {
+        List<CompletableFuture<ProduceLogResultForBucket>> resultFutures =
+                new ArrayList<>(entriesPerBucket.size());
+        for (ProduceLogDataForBucket bucketData : entriesPerBucket) {
+            CompletableFuture<ProduceLogResultForBucket> resultFuture = new CompletableFuture<>();
+            resultFutures.add(resultFuture);
+            String originalPartitionName =
+                    checkNotNull(
+                            bucketData.originalPartitionName(),
+                            "originalPartitionName must not be null");
+            appendRecordsToLog(
+                    timeoutMs,
+                    requiredAcks,
+                    Collections.singletonMap(bucketData.tableBucket(), bucketData.records()),
+                    userContext,
+                    bucketResults -> {
+                        ProduceLogResultForBucket result = bucketResults.get(0);
+                        ProduceLogResultForBucket historicalResult =
+                                result.failed()
+                                        ? ProduceLogResultForBucket.historicalFailure(
+                                                result.getTableBucket(),
+                                                result.getError(),
+                                                originalPartitionName)
+                                        : ProduceLogResultForBucket.historicalSuccess(
+                                                result.getTableBucket(),
+                                                result.getBaseOffset(),
+                                                result.getWriteLogEndOffset(),
+                                                originalPartitionName);
+                        resultFuture.complete(historicalResult);
+                    });
+        }
+        FutureUtils.combineAll(resultFutures)
+                .thenAccept(results -> responseCallback.accept(new ArrayList<>(results)));
     }
 
     /**
@@ -1425,22 +1468,22 @@ public class ReplicaManager implements ServerReconfigurable {
                 LakeTableSnapshot lakeTableSnapshot = optLakeTableSnapshot.get();
                 long snapshotId = optLakeTableSnapshot.get().getSnapshotId();
                 replica.getLogTablet().updateLakeTableSnapshotId(snapshotId);
-                if (replica.isHistoricalPartition()) {
-                    // The historical overlay will be rebuilt from this snapshot's lake offset.
-                    // Refresh a cached lookuper before it becomes the fallback for data omitted
-                    // from the rebuilt overlay.
-                    historicalPartitionManager.requireLakeSnapshot(
-                            replica.getTableBucket().getTableId(), snapshotId);
-                }
                 lakeTableSnapshot
                         .getLogEndOffset(tb)
                         .ifPresent(replica.getLogTablet()::updateLakeLogEndOffset);
+                if (replica.isHistoricalPartition()) {
+                    // Local historical KV state will be rebuilt from this snapshot's lake offset.
+                    // Refresh a cached lookuper before it becomes the fallback for data omitted
+                    // from the rebuilt local state.
+                    historicalPartitionManager.requireLakeSnapshot(
+                            replica.getTableBucket().getTableId(), snapshotId);
+                }
             }
         } catch (Exception e) {
             if (replica.isHistoricalPartition()) {
                 // Historical recovery uses the lake offset as its durable base and replays the
                 // retained WAL from that offset. Reject leader activation if the latest lake
-                // progress cannot be loaded, instead of rebuilding the overlay from stale state.
+                // progress cannot be loaded, instead of rebuilding local KV from stale state.
                 throw e;
             }
             // Lake commit cleanup can race with this best-effort refresh and remove the

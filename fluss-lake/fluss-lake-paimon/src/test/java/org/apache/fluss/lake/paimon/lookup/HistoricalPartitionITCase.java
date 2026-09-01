@@ -38,12 +38,15 @@ import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.types.DataTypes;
 
 import org.apache.flink.core.execution.JobClient;
+import org.apache.paimon.utils.CloseableIterator;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -56,8 +59,8 @@ import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** End-to-end IT case for looking up expired Fluss partitions from Paimon. */
-class HistoricalPartitionLookupITCase extends FlinkPaimonTieringTestBase {
+/** End-to-end IT case for historical partition writes, tiering, recovery, and lookup. */
+class HistoricalPartitionITCase extends FlinkPaimonTieringTestBase {
 
     private static final String EXPIRED_PARTITION_NAME = "20240101";
     private static final String SECOND_EXPIRED_PARTITION_NAME = "20240102";
@@ -76,6 +79,91 @@ class HistoricalPartitionLookupITCase extends FlinkPaimonTieringTestBase {
         FlinkPaimonTieringTestBase.beforeAll(FLUSS_CLUSTER_EXTENSION.getClientConfig());
     }
 
+    @Test
+    void testWriteAndTierHistoricalKvToPaimon() throws Exception {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "historical_write_tiering");
+        Schema schema = partitionedPkSchema(true);
+        long tableId =
+                createTable(
+                        tablePath,
+                        partitionedDescriptor(schema, true, EXPIRED_PARTITION_RETENTION));
+
+        try {
+            long historicalPartitionId = waitUntilHistoricalPartitionReady(tablePath, tableId);
+
+            InternalRow tieredRow = dataRow(true, 1, "unused", "Alice");
+            assertThat(admin.listPartitionInfos(tablePath).get())
+                    .noneMatch(p -> EXPIRED_PARTITION_NAME.equals(p.getPartitionName()));
+            writeRows(tablePath, Collections.singletonList(tieredRow), false);
+            // Historical writes must not recreate the expired original partition.
+            assertThat(admin.listPartitionInfos(tablePath).get())
+                    .noneMatch(p -> EXPIRED_PARTITION_NAME.equals(p.getPartitionName()));
+
+            TableBucket historicalBucket = new TableBucket(tableId, historicalPartitionId, 0);
+            assertThat(getLeaderReplica(historicalBucket).getLocalLogEndOffset()).isEqualTo(1);
+            tierAndVerifyPaimonRows(
+                    tablePath, historicalBucket, 1L, "1|" + EXPIRED_PARTITION_NAME + "|Alice");
+
+            // Leave an untiered update after the Paimon snapshot. Restart recovery must apply this
+            // changelog over the tiered row.
+            InternalRow updatedRow = dataRow(true, 1, "unused", "Alice-updated");
+            writeRows(tablePath, Collections.singletonList(updatedRow), false);
+            // FULL changelog emits UPDATE_BEFORE and UPDATE_AFTER for the update.
+            assertThat(getLeaderReplica(historicalBucket).getLocalLogEndOffset()).isEqualTo(3);
+            assertThat(getLeaderReplica(historicalBucket).getLakeLogEndOffset()).isEqualTo(1);
+
+            restartLeaderAndVerifyLookup(tablePath, historicalBucket, schema, updatedRow);
+
+            // Verify that the recovered local state can resolve the previous value for another
+            // update, and that a newly started tiering job can synchronize the resulting changelog.
+            InternalRow postRecoveryRow = dataRow(true, 1, "unused", "Alice-after-recovery");
+            writeRows(tablePath, Collections.singletonList(postRecoveryRow), false);
+            assertThat(getLeaderReplica(historicalBucket).getLocalLogEndOffset()).isEqualTo(5);
+            assertThat(getLeaderReplica(historicalBucket).getLakeLogEndOffset()).isEqualTo(1);
+            tierAndVerifyPaimonRows(
+                    tablePath,
+                    historicalBucket,
+                    5L,
+                    "1|" + EXPIRED_PARTITION_NAME + "|Alice-after-recovery");
+        } finally {
+            dropTable(tablePath);
+        }
+    }
+
+    @Test
+    void testWriteAndTierHistoricalLogToPaimon() throws Exception {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "historical_log_write_tiering");
+        long tableId =
+                createTable(
+                        tablePath,
+                        partitionedDescriptor(
+                                partitionedLogSchema(), true, EXPIRED_PARTITION_RETENTION));
+
+        try {
+            long historicalPartitionId = waitUntilHistoricalPartitionReady(tablePath, tableId);
+            List<InternalRow> rows =
+                    Arrays.asList(
+                            row(1, EXPIRED_PARTITION_NAME, "Alice"),
+                            row(2, EXPIRED_PARTITION_NAME, "Bob"));
+
+            writeRows(tablePath, rows, true);
+            // Historical writes must not recreate the expired original partition.
+            assertThat(admin.listPartitionInfos(tablePath).get())
+                    .noneMatch(p -> EXPIRED_PARTITION_NAME.equals(p.getPartitionName()));
+
+            TableBucket historicalBucket = new TableBucket(tableId, historicalPartitionId, 0);
+            assertThat(getLeaderReplica(historicalBucket).getLocalLogEndOffset()).isEqualTo(2);
+            tierAndVerifyPaimonRows(
+                    tablePath,
+                    historicalBucket,
+                    2L,
+                    "1|" + EXPIRED_PARTITION_NAME + "|Alice",
+                    "2|" + EXPIRED_PARTITION_NAME + "|Bob");
+        } finally {
+            dropTable(tablePath);
+        }
+    }
+
     @ParameterizedTest(name = "defaultBucketKey={0}")
     @ValueSource(booleans = {true, false})
     void testLookupExpiredPartitionFromPaimon(boolean defaultBucketKey) throws Exception {
@@ -86,7 +174,7 @@ class HistoricalPartitionLookupITCase extends FlinkPaimonTieringTestBase {
                                 ? "historical_lookup_default_bucket"
                                 : "historical_lookup_bucket_subset");
         Schema oldSchema = partitionedPkSchema(defaultBucketKey);
-        long tableId = createTable(tablePath, partitionedPkDescriptor(oldSchema));
+        long tableId = createTable(tablePath, partitionedDescriptor(oldSchema, false));
 
         // Enable historical lookup through ALTER TABLE to cover dynamic creation of the
         // coordinator-owned historical system partition.
@@ -232,6 +320,76 @@ class HistoricalPartitionLookupITCase extends FlinkPaimonTieringTestBase {
         return FLUSS_CLUSTER_EXTENSION;
     }
 
+    private static long waitUntilHistoricalPartitionReady(TablePath tablePath, long tableId)
+            throws Exception {
+        Optional<PartitionRegistration> historicalPartition =
+                FLUSS_CLUSTER_EXTENSION
+                        .getZooKeeperClient()
+                        .getPartition(tablePath, HISTORICAL_PARTITION_VALUE);
+        assertThat(historicalPartition).isPresent();
+        long partitionId = historicalPartition.get().getPartitionId();
+        FLUSS_CLUSTER_EXTENSION.waitUntilTablePartitionReady(tableId, partitionId);
+        return partitionId;
+    }
+
+    private List<String> readPaimonRows(TablePath tablePath) throws Exception {
+        List<String> actualRows = new ArrayList<>();
+        try (CloseableIterator<org.apache.paimon.data.InternalRow> rows =
+                getPaimonRowCloseableIterator(tablePath)) {
+            while (rows.hasNext()) {
+                org.apache.paimon.data.InternalRow row = rows.next();
+                actualRows.add(row.getInt(0) + "|" + row.getString(1) + "|" + row.getString(2));
+            }
+        }
+        return actualRows;
+    }
+
+    private void tierAndVerifyPaimonRows(
+            TablePath tablePath,
+            TableBucket historicalBucket,
+            long expectedLogEndOffset,
+            String... expectedRows)
+            throws Exception {
+        JobClient jobClient = buildTieringJob(execEnv);
+        try {
+            assertReplicaStatus(historicalBucket, expectedLogEndOffset);
+            checkFlussOffsetsInSnapshot(
+                    tablePath, Collections.singletonMap(historicalBucket, expectedLogEndOffset));
+            assertThat(readPaimonRows(tablePath)).containsExactlyInAnyOrder(expectedRows);
+        } finally {
+            jobClient.cancel().get();
+        }
+    }
+
+    private void restartLeaderAndVerifyLookup(
+            TablePath tablePath,
+            TableBucket historicalBucket,
+            Schema schema,
+            InternalRow expectedRow)
+            throws Exception {
+        int tabletServerId = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(historicalBucket);
+        FLUSS_CLUSTER_EXTENSION.stopTabletServer(tabletServerId);
+        try {
+            FLUSS_CLUSTER_EXTENSION.startTabletServer(tabletServerId);
+            FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(historicalBucket);
+
+            try (Connection connection = ConnectionFactory.createConnection(clientConf);
+                    Table table = connection.getTable(tablePath)) {
+                InternalRow actualRow =
+                        table.newLookup()
+                                .createLookuper()
+                                .lookup(lookupKey(true, 1, "unused"))
+                                .get()
+                                .getSingletonRow();
+                assertThatRow(actualRow).withSchema(schema.getRowType()).isEqualTo(expectedRow);
+            }
+        } finally {
+            if (FLUSS_CLUSTER_EXTENSION.getTabletServerById(tabletServerId) == null) {
+                FLUSS_CLUSTER_EXTENSION.startTabletServer(tabletServerId);
+            }
+        }
+    }
+
     private static Schema partitionedPkSchema(boolean defaultBucketKey) {
         if (defaultBucketKey) {
             return Schema.newBuilder()
@@ -247,6 +405,14 @@ class HistoricalPartitionLookupITCase extends FlinkPaimonTieringTestBase {
                 .column("dt", DataTypes.STRING())
                 .column("name", DataTypes.STRING())
                 .primaryKey("id", "sub_id", "dt")
+                .build();
+    }
+
+    private static Schema partitionedLogSchema() {
+        return Schema.newBuilder()
+                .column("id", DataTypes.INT())
+                .column("dt", DataTypes.STRING())
+                .column("name", DataTypes.STRING())
                 .build();
     }
 
@@ -270,23 +436,36 @@ class HistoricalPartitionLookupITCase extends FlinkPaimonTieringTestBase {
                 .build();
     }
 
-    private static TableDescriptor partitionedPkDescriptor(Schema schema) {
-        return TableDescriptor.builder()
-                .schema(schema)
-                // This is the default bucket key for (id, dt), and a strict subset of the physical
-                // primary key for (id, sub_id, dt).
-                .distributedBy(1, "id")
-                .partitionedBy("dt")
-                .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
-                .property(ConfigOptions.TABLE_AUTO_PARTITION_KEY, "dt")
-                .property(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, AutoPartitionTimeUnit.DAY)
-                .property(
-                        ConfigOptions.TABLE_AUTO_PARTITION_NUM_RETENTION,
-                        INITIAL_PARTITION_RETENTION)
-                .property(ConfigOptions.TABLE_AUTO_PARTITION_TIMEZONE, "UTC")
-                .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
-                .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500))
-                .build();
+    private static TableDescriptor partitionedDescriptor(
+            Schema schema, boolean historicalPartitionEnabled) {
+        return partitionedDescriptor(
+                schema, historicalPartitionEnabled, INITIAL_PARTITION_RETENTION);
+    }
+
+    private static TableDescriptor partitionedDescriptor(
+            Schema schema, boolean historicalPartitionEnabled, int partitionRetention) {
+        TableDescriptor.Builder builder =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        // For primary-key tables, id is the default bucket key for (id, dt) and a
+                        // strict subset of the physical primary key for (id, sub_id, dt).
+                        .distributedBy(1, "id")
+                        .partitionedBy("dt")
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_KEY, "dt")
+                        .property(
+                                ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
+                                AutoPartitionTimeUnit.DAY)
+                        .property(
+                                ConfigOptions.TABLE_AUTO_PARTITION_NUM_RETENTION,
+                                partitionRetention)
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_TIMEZONE, "UTC")
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500));
+        if (historicalPartitionEnabled) {
+            builder.property(ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED, true);
+        }
+        return builder.build();
     }
 
     private static InternalRow dataRow(

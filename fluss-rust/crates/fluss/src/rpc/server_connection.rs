@@ -1196,7 +1196,7 @@ mod tests {
                 min_version: 0,
                 max_version: 3,
             },
-            // ProduceLog: server v0..v2, client v0 only → negotiated v0
+            // ProduceLog: server v0..v2, client v0..v1 → negotiated v1
             PbApiVersion {
                 api_key: 1014,
                 min_version: 0,
@@ -1238,7 +1238,7 @@ mod tests {
             negotiated
                 .highest_available_version(ApiKey::ProduceLog)
                 .unwrap(),
-            ApiVersion(0)
+            ApiVersion(1)
         );
 
         // Disjoint range → error
