@@ -516,6 +516,7 @@ public class IndexedRow implements BinaryRow, NullAwareGetters {
             case ARRAY:
             case MAP:
             case ROW:
+            case VECTOR:
                 return false;
             case DECIMAL:
                 return Decimal.isCompact(((DecimalType) dataType).getPrecision());

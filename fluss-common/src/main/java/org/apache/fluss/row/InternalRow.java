@@ -135,6 +135,9 @@ public interface InternalRow extends DataGetters {
                 return InternalMap.class;
             case ROW:
                 return InternalRow.class;
+            case VECTOR:
+                // VECTOR values are stored as InternalArray of FLOAT32 elements.
+                return InternalArray.class;
             default:
                 throw new IllegalArgumentException("Illegal type: " + type);
         }
@@ -224,6 +227,10 @@ public interface InternalRow extends DataGetters {
                 final int numFields = ((RowType) fieldType).getFieldCount();
                 fieldGetter = row -> row.getRow(fieldPos, numFields);
                 break;
+            case VECTOR:
+                // VECTOR values are InternalArray of FLOAT32 elements.
+                fieldGetter = row -> row.getArray(fieldPos);
+                break;
             default:
                 throw new IllegalArgumentException("Illegal type: " + fieldType);
         }
@@ -299,6 +306,13 @@ public interface InternalRow extends DataGetters {
                                         i, nestedFieldGetters[i].getFieldOrNull(nestedRow));
                             }
                             return genericRow;
+                        };
+                break;
+            case VECTOR:
+                fieldGetter =
+                        row -> {
+                            InternalArray array = row.getArray(fieldPos);
+                            return new GenericArray(array.toFloatArray());
                         };
                 break;
             default:

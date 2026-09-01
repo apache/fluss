@@ -515,11 +515,12 @@ public class PredicateMessageUtils {
         TIMESTAMP_WITHOUT_TIME_ZONE(12, DataTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE),
         TIMESTAMP_WITH_LOCAL_TIME_ZONE(13, DataTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE),
         BINARY(14, DataTypeRoot.BINARY),
-        BYTES(15, DataTypeRoot.BYTES);
+        BYTES(15, DataTypeRoot.BYTES),
+        VECTOR(16, DataTypeRoot.VECTOR);
 
         private final int value;
         private final DataTypeRoot dataTypeRoot;
-        private static final DataTypeRootCode[] VALUES = new DataTypeRootCode[16];
+        private static final DataTypeRootCode[] VALUES = new DataTypeRootCode[17];
         private static final Map<DataTypeRoot, DataTypeRootCode> ROOT_MAP = new HashMap<>();
 
         static {
