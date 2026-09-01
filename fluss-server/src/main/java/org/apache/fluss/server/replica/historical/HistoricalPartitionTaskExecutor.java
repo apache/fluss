@@ -202,14 +202,6 @@ public final class HistoricalPartitionTaskExecutor implements AutoCloseable {
                 newConf.get(ConfigOptions.NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS);
         int newMaxThreadPoolSize =
                 newConf.get(ConfigOptions.SERVER_HISTORICAL_PARTITION_THREAD_POOL_MAX_SIZE);
-        checkArgument(
-                newMaxQueuedHistoricalRequests > 0,
-                "%s must be greater than 0.",
-                ConfigOptions.NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS.key());
-        checkArgument(
-                newMaxThreadPoolSize > 0,
-                "%s must be greater than 0.",
-                ConfigOptions.SERVER_HISTORICAL_PARTITION_THREAD_POOL_MAX_SIZE.key());
 
         if (newMaxThreadPoolSize != maxThreadPoolSize) {
             resizeThreadPool(newMaxThreadPoolSize);
