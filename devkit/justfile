@@ -40,31 +40,39 @@ TIERING_BUILD_CMD := env_var_or_default("DEVKIT_TIERING_BUILD_CMD", "./mvnw -Dsk
 default:
     @just --list
 
-[doc("Build the local Fluss distribution and Flink connector")]
-build:
-    cd "{{ FLUSS_DEV_HOME }}" && {{ BUILD_CMD }}
-
-[doc("Build the local distribution and lake tiering artifacts")]
-build-tiering:
-    cd "{{ FLUSS_DEV_HOME }}" && {{ TIERING_BUILD_CMD }}
-
-[doc("Build the local Fluss Gateway executable")]
-build-gateway:
+[doc("Build local artifacts: core (default), tiering, or gateway")]
+build target="core":
     #!/usr/bin/env bash
     set -e
-    mkdir -p "{{ DEPS_DIR }}/cargo" "{{ DEPS_DIR }}/gateway"
-    docker run --rm \
-      --user "$(id -u):$(id -g)" \
-      -e CARGO_HOME=/cache \
-      -e CARGO_TARGET_DIR=/output \
-      -e HOME=/tmp \
-      -e RUSTUP_TOOLCHAIN=1.88.0 \
-      -v "{{ FLUSS_DEV_HOME }}:/workspace:ro" \
-      -v "{{ DEPS_DIR }}/cargo:/cache" \
-      -v "{{ DEPS_DIR }}/gateway:/output" \
-      -w /workspace/fluss-gateway \
-      rust:1.88-bookworm \
-      cargo build --locked --bin fluss-gateway
+    case {{ quote(target) }} in
+      core)
+        cd "{{ FLUSS_DEV_HOME }}"
+        {{ BUILD_CMD }}
+        ;;
+      tiering)
+        cd "{{ FLUSS_DEV_HOME }}"
+        {{ TIERING_BUILD_CMD }}
+        ;;
+      gateway)
+        mkdir -p "{{ DEPS_DIR }}/cargo" "{{ DEPS_DIR }}/gateway"
+        docker run --rm \
+          --user "$(id -u):$(id -g)" \
+          -e CARGO_HOME=/cache \
+          -e CARGO_TARGET_DIR=/output \
+          -e HOME=/tmp \
+          -e RUSTUP_TOOLCHAIN=1.88.0 \
+          -v "{{ FLUSS_DEV_HOME }}:/workspace:ro" \
+          -v "{{ DEPS_DIR }}/cargo:/cache" \
+          -v "{{ DEPS_DIR }}/gateway:/output" \
+          -w /workspace/fluss-gateway \
+          rust:1.88-bookworm \
+          cargo build --locked --bin fluss-gateway
+        ;;
+      *)
+        echo "build target must be core, tiering, or gateway"
+        exit 1
+        ;;
+    esac
 
 [private]
 ensure-dist:
@@ -76,6 +84,14 @@ ensure-dist:
        [ ! -f "$DIST_HOME/conf/server.yaml" ] || \
        [ ! -d "$DIST_HOME/lib" ]; then
       echo "Complete local distribution not found. Run: just build"
+      exit 1
+    fi
+
+[private]
+ensure-gateway:
+    #!/usr/bin/env bash
+    if [ ! -x "{{ DEPS_DIR }}/gateway/debug/fluss-gateway" ]; then
+      echo "Local Gateway executable not found. Run: just build gateway"
       exit 1
     fi
 
@@ -182,7 +198,7 @@ ensure-tiering profile:
       MATCHES=( $PATTERN )
       if [ "${#MATCHES[@]}" -ne 1 ] || [ ! -f "${MATCHES[0]}" ]; then
         echo "Expected one build artifact: $PATTERN"
-        echo "Run: just build-tiering"
+        echo "Run: just build tiering"
         exit 1
       fi
       cp "${MATCHES[0]}" "$TARGET"
@@ -244,8 +260,8 @@ up profile="core" nodes="1": ensure-dist ensure-flink
     docker compose "${COMPOSE_ARGS[@]}" "${PROFILES[@]}" up -d
     just check "$PROFILE"
 
-[doc("Build and start a profile with the Fluss Gateway")]
-up-gateway profile="core" nodes="1": build-gateway
+[doc("Start a built profile with the Fluss Gateway")]
+up-gateway profile="core" nodes="1": ensure-gateway
     DEVKIT_GATEWAY=true just up {{ quote(profile) }} {{ quote(nodes) }}
 
 [doc("Stop services and keep data")]

@@ -15,6 +15,14 @@ for production environments.
 
 ## Quick Start
 
+Build targets are explicit and can be combined before startup:
+
+| Command | Artifacts | Use before |
+|---|---|---|
+| `just build` or `just build core` | Fluss distribution and Flink 1.20 Connector | Any profile |
+| `just build tiering` | Core artifacts plus Lake plugins and the Tiering Job | Iceberg, Paimon, or Lance profiles |
+| `just build gateway` | Fluss Gateway executable | `just up-gateway` |
+
 Build and start the core development environment:
 
 ```bash
@@ -26,23 +34,25 @@ just up
 For a lake profile, build the tiering artifacts and select a format:
 
 ```bash
-just build-tiering
+just build tiering
 just up iceberg
 ```
 
 Build the Gateway executable from the same checkout and start it with the core environment:
 
 ```bash
+just build
+just build gateway
 just up-gateway
 curl http://localhost:8080/ready
 ```
 
-`up-gateway` compiles the Gateway in the pinned Rust build environment and mounts the resulting
-executable read-only into a matching runtime container, following the same local-artifact model as
-the rest of the DevKit without building a Gateway image. It connects the Gateway's `default`
-cluster to the DevKit CoordinatorServer. Pass a profile and node count to override the defaults,
-for example `just up-gateway paimon 3`. The regular `just up` path does not build or start the
-Gateway.
+`just build gateway` compiles the Gateway in the pinned Rust build environment. `up-gateway`
+mounts the resulting executable read-only into a matching runtime container, following the same
+local-artifact model as the rest of the DevKit without building a Gateway image. It connects the
+Gateway's `default` cluster to the DevKit CoordinatorServer. To combine it with a lake profile, run
+`just build tiering`, `just build gateway`, and then `just up-gateway paimon 3`. The regular
+`just up` path does not start the Gateway.
 
 `just up` waits for the Fluss and Flink clusters and, for lake profiles, the tiering job to become
 ready. Run `just --list` to see all available commands.
@@ -56,8 +66,9 @@ source change:
 |---|---|
 | Fluss Server changes | `just build` packages `fluss-dist`; `build-target` points to that distribution and is mounted read-only as `/opt/fluss`. The Fluss startup scripts run from this mount. |
 | Flink 1.20 Connector changes | `just build` produces `fluss-flink-1.20/target/fluss-flink-1.20-*.jar`. `just up` stages it as `devkit/.deps/flink/active/lib/fluss-flink-1.20.jar`, mounts that directory into the Flink containers, and copies it to `/opt/flink/lib` during container startup. |
+| Fluss Gateway changes | `just build gateway` produces `devkit/.deps/gateway/debug/fluss-gateway`. `just up-gateway` mounts it read-only into the Gateway runtime container. |
 | SQL changes | `just run-sql path/to/query.sql` reads the file from the host and sends it to the SQL Client running in the JobManager container. Flink then plans and executes the job in the Flink cluster. |
-| Lake Tiering changes | `just build-tiering` additionally builds the Lake plugin and Tiering Job. `just up <profile>` stages the plugin under Flink `lib/` and submits the local Tiering Job JAR to Flink. |
+| Lake Tiering changes | `just build tiering` additionally builds the Lake plugin and Tiering Job. `just up <profile>` stages the plugin under Flink `lib/` and submits the local Tiering Job JAR to Flink. |
 
 This means the SQL you write locally is used directly for that invocation, but Java source code is
 used through a built JAR or distribution. After changing Fluss Server or the Flink Connector code,
@@ -69,7 +80,7 @@ just build
 just up core
 
 # Lake Tiering changes
-just build-tiering
+just build tiering
 just up paimon                 # or iceberg / lance
 
 # SQL-only changes need no Maven build
@@ -145,7 +156,7 @@ examples/lake/paimon/
 Run it with a clean environment when starting for the first time:
 
 ```bash
-just build-tiering
+just build tiering
 just up paimon
 just run-sql examples/lake/paimon/setup.sql
 just run-sql examples/lake/paimon/union-read.sql
@@ -178,7 +189,7 @@ The validation workflow is intentionally split into SQL files that can be run an
 a time:
 
 ```bash
-just build-tiering
+just build tiering
 just up paimon
 just run-sql examples/lake/paimon/setup.sql
 just run-sql examples/lake/paimon/union-read.sql
