@@ -22,6 +22,7 @@ services:
     restart: unless-stopped
     stop_grace_period: 35s
     entrypoint: ["/opt/fluss/bin/fluss-gateway"]
+    command: ["--config", "/opt/fluss/conf/gateway.yaml"]
     depends_on:
       coordinator-server:
         condition: service_healthy
@@ -31,6 +32,7 @@ services:
       FLUSS_GATEWAY__CLUSTER__DEFAULT__BOOTSTRAP__SERVERS: coordinator-server:19123
     volumes:
       - ../devkit/.deps/gateway/debug/fluss-gateway:/opt/fluss/bin/fluss-gateway:ro
+      - ../fluss-gateway/conf/gateway.yaml:/opt/fluss/conf/gateway.yaml:ro
     ports:
       - "${GATEWAY_REST_PORT:-8080}:8080"
       - "${GATEWAY_METRICS_PORT:-9095}:9095"

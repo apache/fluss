@@ -111,6 +111,10 @@ validate-profile profile:
       echo "Profile $PROFILE does not declare build.targets"
       exit 1
     fi
+    if [ ! -f "{{ PROFILES_DIR }}/$PROFILE/runtime.targets" ]; then
+      echo "Profile $PROFILE does not declare runtime.targets"
+      exit 1
+    fi
 
 [private]
 profile-build-targets profile:
@@ -123,6 +127,20 @@ profile-build-targets profile:
       case "$TARGET" in
         core|tiering|gateway) echo "$TARGET" ;;
         *) echo "Unknown build target in profile $PROFILE: $TARGET" >&2; exit 1 ;;
+      esac
+    done
+
+[private]
+profile-runtime-targets profile:
+    #!/usr/bin/env bash
+    set -e
+    PROFILE={{ quote(profile) }}
+    just validate-profile "$PROFILE"
+    TARGETS=$(sed 's/#.*//; /^[[:space:]]*$/d' "{{ PROFILES_DIR }}/$PROFILE/runtime.targets")
+    for TARGET in $TARGETS; do
+      case "$TARGET" in
+        core|flink|gateway|tiering) echo "$TARGET" ;;
+        *) echo "Unknown runtime target in profile $PROFILE: $TARGET" >&2; exit 1 ;;
       esac
     done
 
@@ -190,6 +208,7 @@ stage-profile-jars profile:
       done < <(sed 's/#.*//; s/[[:space:]]//g; /^$/d' "$FILE")
     }
     ACTIVE_DIR="{{ DEPS_DIR }}/flink/active"
+    mkdir -p "$ACTIVE_DIR/lib" "$ACTIVE_DIR/jobs"
     just deps "$PROFILE"
     copy_urls "$PROFILE_DIR/jars.urls" "$SERVER_PLUGIN_DIR" "devkit-"
     copy_urls "$PROFILE_DIR/jars.urls" "$ACTIVE_DIR/lib"
@@ -237,7 +256,7 @@ ensure-tiering profile:
     chmod -R a+rX "$ACTIVE_DIR"
 
 [doc("Start a built profile from the profiles directory")]
-up profile="core" nodes="1": ensure-dist ensure-flink
+up profile="core" nodes="1":
     #!/usr/bin/env bash
     set -e
     PROFILE={{ quote(profile) }}
@@ -249,14 +268,23 @@ up profile="core" nodes="1": ensure-dist ensure-flink
     esac
     PROFILE_DIR="{{ PROFILES_DIR }}/$PROFILE"
     FORMAT=$(just profile-format "$PROFILE")
-    COMPOSE_ARGS=(-f "{{ DEVKIT_DIR }}/docker-compose.yml" -f "{{ DEVKIT_DIR }}/compose/tiering.yml")
-    PROFILES=(--profile "$TOPOLOGY" --profile flink)
+    COMPOSE_ARGS=(-f "{{ DEVKIT_DIR }}/docker-compose.yml")
+    PROFILES=(--profile "$TOPOLOGY")
     ENABLE_TIERING=false
-    for TARGET in $(just profile-build-targets "$PROFILE"); do
+    for TARGET in $(just profile-runtime-targets "$PROFILE"); do
       case "$TARGET" in
-        core) ;;
+        core) just ensure-dist ;;
+        flink)
+          just ensure-flink
+          COMPOSE_ARGS+=(-f "{{ DEVKIT_DIR }}/compose/tiering.yml")
+          PROFILES+=(--profile flink)
+          ;;
         tiering) ENABLE_TIERING=true ;;
-        gateway) just ensure-gateway; PROFILES+=(--profile gateway) ;;
+        gateway)
+          just ensure-gateway
+          COMPOSE_ARGS+=(-f "{{ DEVKIT_DIR }}/compose/gateway.yml")
+          PROFILES+=(--profile gateway)
+          ;;
       esac
     done
     if [ -f "$PROFILE_DIR/compose.files" ]; then
@@ -316,13 +344,14 @@ exec service *CMD:
     @{{ ALL_COMPOSE }} {{ ALL_PROFILES }} exec "{{ service }}" {{ CMD }}
 
 [private]
-check profile: check-cluster check-flink
+check profile:
     #!/usr/bin/env bash
     PROFILE={{ quote(profile) }}
     FORMAT=$(just profile-format "$PROFILE")
-    for TARGET in $(just profile-build-targets "$PROFILE"); do
+    for TARGET in $(just profile-runtime-targets "$PROFILE"); do
       case "$TARGET" in
-        core) ;;
+        core) just check-cluster ;;
+        flink) just check-flink ;;
         tiering) just check-tiering "$FORMAT" ;;
         gateway) just check-gateway ;;
       esac
