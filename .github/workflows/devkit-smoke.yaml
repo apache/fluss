@@ -70,7 +70,8 @@ jobs:
           set -euo pipefail
           trap 'just clean >/dev/null 2>&1 || true' EXIT
           just build-tiering
-          just up core
+          just up-gateway core
+          curl --fail --silent --show-error http://localhost:8080/v1/clusters/default/databases
           just down
           just up paimon
           just run-sql examples/lake/paimon/setup.sql

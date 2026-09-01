@@ -30,6 +30,20 @@ just build-tiering
 just up iceberg
 ```
 
+Build the Gateway executable from the same checkout and start it with the core environment:
+
+```bash
+just up-gateway
+curl http://localhost:8080/ready
+```
+
+`up-gateway` compiles the Gateway in the pinned Rust build environment and mounts the resulting
+executable read-only into a matching runtime container, following the same local-artifact model as
+the rest of the DevKit without building a Gateway image. It connects the Gateway's `default`
+cluster to the DevKit CoordinatorServer. Pass a profile and node count to override the defaults,
+for example `just up-gateway paimon 3`. The regular `just up` path does not build or start the
+Gateway.
+
 `just up` waits for the Fluss and Flink clusters and, for lake profiles, the tiering job to become
 ready. Run `just --list` to see all available commands.
 
@@ -232,6 +246,8 @@ Default endpoints:
 | CoordinatorServer metrics | `http://localhost:9249/metrics` |
 | TabletServer metrics | `http://localhost:9250/metrics` to `http://localhost:9252/metrics` |
 | Flink UI | `http://localhost:8083` |
+| Fluss Gateway REST API | `http://localhost:8080` |
+| Fluss Gateway metrics | `http://localhost:9095/metrics` |
 | RustFS S3 API | `http://localhost:9000` |
 | RustFS Console | `http://localhost:9001` |
 
@@ -244,7 +260,8 @@ another Java 17 runtime. Flink defaults to `flink:1.20.3-scala_2.12-java17`, mat
 1.20 Connector and Tiering build baseline; set `FLUSS_DEVKIT_FLINK_IMAGE` to use another compatible
 image. Port environment variables in the Compose files can override the default addresses, for
 example `COORDINATOR_DEBUG_PORT=5005 just up` or
-`TABLET_SERVER_0_METRICS_PORT=9300 just up`.
+`TABLET_SERVER_0_METRICS_PORT=9300 just up`. Use `GATEWAY_REST_PORT` and `GATEWAY_METRICS_PORT` to
+override the Gateway host ports.
 
 ## Adding a Profile
 
