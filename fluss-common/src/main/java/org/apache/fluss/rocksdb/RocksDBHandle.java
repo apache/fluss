@@ -19,11 +19,11 @@ package org.apache.fluss.rocksdb;
 
 import org.apache.fluss.utils.IOUtils;
 
-import org.rocksdb.ColumnFamilyDescriptor;
-import org.rocksdb.ColumnFamilyHandle;
-import org.rocksdb.ColumnFamilyOptions;
-import org.rocksdb.DBOptions;
-import org.rocksdb.RocksDB;
+import io.github.fluss_contrib.rocksdb.ColumnFamilyDescriptor;
+import io.github.fluss_contrib.rocksdb.ColumnFamilyHandle;
+import io.github.fluss_contrib.rocksdb.ColumnFamilyOptions;
+import io.github.fluss_contrib.rocksdb.DBOptions;
+import io.github.fluss_contrib.rocksdb.RocksDB;
 
 import java.io.File;
 import java.io.IOException;

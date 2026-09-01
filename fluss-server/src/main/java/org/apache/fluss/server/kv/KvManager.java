@@ -53,9 +53,9 @@ import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.types.Tuple2;
 
-import org.rocksdb.RateLimiter;
-import org.rocksdb.RateLimiterMode;
-import org.rocksdb.RocksDB;
+import io.github.fluss_contrib.rocksdb.RateLimiter;
+import io.github.fluss_contrib.rocksdb.RateLimiterMode;
+import io.github.fluss_contrib.rocksdb.RocksDB;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

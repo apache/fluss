@@ -26,21 +26,22 @@ import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.IOUtils;
 
-import org.rocksdb.BlockBasedTableConfig;
-import org.rocksdb.BloomFilter;
-import org.rocksdb.Cache;
-import org.rocksdb.ColumnFamilyOptions;
-import org.rocksdb.CompactionStyle;
-import org.rocksdb.CompressionType;
-import org.rocksdb.DBOptions;
-import org.rocksdb.InfoLogLevel;
-import org.rocksdb.LRUCache;
-import org.rocksdb.PlainTableConfig;
-import org.rocksdb.RateLimiter;
-import org.rocksdb.ReadOptions;
-import org.rocksdb.Statistics;
-import org.rocksdb.TableFormatConfig;
-import org.rocksdb.WriteOptions;
+import io.github.fluss_contrib.rocksdb.BlockBasedTableConfig;
+import io.github.fluss_contrib.rocksdb.BloomFilter;
+import io.github.fluss_contrib.rocksdb.Cache;
+import io.github.fluss_contrib.rocksdb.ChecksumType;
+import io.github.fluss_contrib.rocksdb.ColumnFamilyOptions;
+import io.github.fluss_contrib.rocksdb.CompactionStyle;
+import io.github.fluss_contrib.rocksdb.CompressionType;
+import io.github.fluss_contrib.rocksdb.DBOptions;
+import io.github.fluss_contrib.rocksdb.InfoLogLevel;
+import io.github.fluss_contrib.rocksdb.LRUCache;
+import io.github.fluss_contrib.rocksdb.PlainTableConfig;
+import io.github.fluss_contrib.rocksdb.RateLimiter;
+import io.github.fluss_contrib.rocksdb.ReadOptions;
+import io.github.fluss_contrib.rocksdb.Statistics;
+import io.github.fluss_contrib.rocksdb.TableFormatConfig;
+import io.github.fluss_contrib.rocksdb.WriteOptions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -71,6 +72,8 @@ public class RocksDBResourceContainer implements AutoCloseable {
 
     // the filename length limit is 255 on most operating systems
     private static final int INSTANCE_PATH_LENGTH_LIMIT = 255 - "_LOG".length();
+
+    private static final int FROCKSDB_COMPATIBLE_FORMAT_VERSION = 5;
 
     @Nullable private final File instanceRocksDBPath;
 
@@ -299,6 +302,11 @@ public class RocksDBResourceContainer implements AutoCloseable {
                 blockBasedTableConfig = (BlockBasedTableConfig) tableFormatConfig;
             }
         }
+
+        // Keep snapshots readable by FRocksDB 6.20.3.
+        blockBasedTableConfig
+                .setFormatVersion(FROCKSDB_COMPATIBLE_FORMAT_VERSION)
+                .setChecksumType(ChecksumType.kCRC32c);
 
         blockBasedTableConfig.setBlockSize(
                 internalGetOption(ConfigOptions.KV_BLOCK_SIZE).getBytes());

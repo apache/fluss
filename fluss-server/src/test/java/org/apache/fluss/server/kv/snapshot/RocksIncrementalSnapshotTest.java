@@ -21,18 +21,21 @@ import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.local.LocalFileSystem;
 import org.apache.fluss.server.kv.rocksdb.RocksDBExtension;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKv;
+import org.apache.fluss.server.kv.rocksdb.RocksDBKvBuilder;
 import org.apache.fluss.server.testutils.KvTestUtils;
 import org.apache.fluss.server.utils.ResourceGuard;
+import org.apache.fluss.server.utils.TestProcessBuilder;
 import org.apache.fluss.utils.CloseableRegistry;
 import org.apache.fluss.utils.FlussPaths;
 
+import io.github.fluss_contrib.rocksdb.RocksDB;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.api.io.TempDir;
-import org.rocksdb.RocksDB;
 
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.Collection;
 import java.util.HashMap;
@@ -40,6 +43,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.server.testutils.KvTestUtils.checkSnapshotIncrementWithNewlyFiles;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -146,6 +150,69 @@ class RocksIncrementalSnapshotTest {
                 assertThat(rocksDBKv.get("key3".getBytes())).isEqualTo("val3".getBytes());
             }
         }
+    }
+
+    @Test
+    void testSnapshotCanBeReadByFrocksDB(
+            @TempDir Path snapshotBaseDir, @TempDir Path snapshotDownDir) throws Exception {
+        FsPath testingTabletDir = FsPath.fromLocalFile(snapshotBaseDir.toFile());
+        SnapshotLocation snapshotLocation =
+                new SnapshotLocation(
+                        LocalFileSystem.getSharedInstance(),
+                        FlussPaths.remoteKvSnapshotDir(testingTabletDir, 1L),
+                        FlussPaths.remoteKvSharedDir(testingTabletDir),
+                        1024);
+
+        try (CloseableRegistry closeableRegistry = new CloseableRegistry();
+                RocksIncrementalSnapshot incrementalSnapshot = createIncrementalSnapshot()) {
+            RocksDB rocksDB = rocksDBExtension.getRocksDb();
+            rocksDB.put(
+                    "key1".getBytes(StandardCharsets.UTF_8),
+                    "val1".getBytes(StandardCharsets.UTF_8));
+            rocksDB.put(
+                    "key2".getBytes(StandardCharsets.UTF_8),
+                    "val2".getBytes(StandardCharsets.UTF_8));
+
+            KvSnapshotHandle snapshotHandle =
+                    snapshot(1L, incrementalSnapshot, snapshotLocation, closeableRegistry);
+            incrementalSnapshot.notifySnapshotComplete(1L);
+
+            Path restoredDbPath = snapshotDownDir.resolve(RocksDBKvBuilder.DB_INSTANCE_DIR_STRING);
+            KvSnapshotDataDownloader snapshotDataDownloader =
+                    new KvSnapshotDataDownloader(dataTransferThreadPool);
+            snapshotDataDownloader.transferAllDataToDirectory(
+                    new KvSnapshotDownloadSpec(snapshotHandle, restoredDbPath), closeableRegistry);
+
+            TestProcessBuilder.TestProcess frocksDBReader = null;
+            try {
+                frocksDBReader =
+                        new TestProcessBuilder(FrocksDBSnapshotReader.class.getName())
+                                .addMainClassArg(restoredDbPath.toString())
+                                .addMainClassArg("key1")
+                                .addMainClassArg("val1")
+                                .addMainClassArg("key2")
+                                .addMainClassArg("val2")
+                                .start();
+
+                boolean exited = frocksDBReader.getProcess().waitFor(1, TimeUnit.MINUTES);
+                assertThat(exited)
+                        .describedAs(
+                                "FRocksDB reader process output: %s", processOutput(frocksDBReader))
+                        .isTrue();
+                assertThat(frocksDBReader.getProcess().exitValue())
+                        .describedAs(
+                                "FRocksDB reader process output: %s", processOutput(frocksDBReader))
+                        .isZero();
+            } finally {
+                if (frocksDBReader != null && frocksDBReader.getProcess().isAlive()) {
+                    frocksDBReader.destroy();
+                }
+            }
+        }
+    }
+
+    private String processOutput(TestProcessBuilder.TestProcess process) {
+        return process.getProcessOutput().toString() + process.getErrorOutput().toString();
     }
 
     private void verifyShareFileEqual(

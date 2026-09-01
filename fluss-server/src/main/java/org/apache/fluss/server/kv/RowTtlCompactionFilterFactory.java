@@ -22,8 +22,8 @@ import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.server.utils.RowTtlUtils;
 import org.apache.fluss.utils.clock.Clock;
 
-import org.rocksdb.FlinkCompactionFilter;
-import org.rocksdb.RocksDB;
+import io.github.fluss_contrib.rocksdb.FlussTtlCompactionFilter;
+import io.github.fluss_contrib.rocksdb.RocksDB;
 
 import java.time.Duration;
 
@@ -38,13 +38,13 @@ public final class RowTtlCompactionFilterFactory {
     private RowTtlCompactionFilterFactory() {}
 
     /** Creates a configured native compaction filter factory for row TTL cleanup. */
-    public static FlinkCompactionFilter.FlinkCompactionFilterFactory create(
+    public static FlussTtlCompactionFilter.FlussTtlCompactionFilterFactory create(
             KvValueLayout kvValueLayout, Duration ttl, Clock clock) {
         return create(kvValueLayout, ttl, QUERY_TIME_AFTER_NUM_ENTRIES, clock);
     }
 
     @VisibleForTesting
-    static FlinkCompactionFilter.FlinkCompactionFilterFactory create(
+    static FlussTtlCompactionFilter.FlussTtlCompactionFilterFactory create(
             KvValueLayout kvValueLayout, Duration ttl, long queryTimeAfterNumEntries, Clock clock) {
         long ttlMillis = RowTtlUtils.validateAndConvertTtlDurationToMillis(ttl);
         checkNotNull(kvValueLayout, "kvValueLayout must not be null.");
@@ -55,11 +55,11 @@ public final class RowTtlCompactionFilterFactory {
                 "queryTimeAfterNumEntries must be greater than zero.");
 
         RocksDB.loadLibrary();
-        FlinkCompactionFilter.FlinkCompactionFilterFactory factory =
-                new FlinkCompactionFilter.FlinkCompactionFilterFactory(clock::milliseconds);
+        FlussTtlCompactionFilter.FlussTtlCompactionFilterFactory factory =
+                new FlussTtlCompactionFilter.FlussTtlCompactionFilterFactory(clock::milliseconds);
         factory.configure(
-                FlinkCompactionFilter.Config.createNotList(
-                        FlinkCompactionFilter.StateType.Value,
+                FlussTtlCompactionFilter.Config.createNotList(
+                        FlussTtlCompactionFilter.StateType.Value,
                         kvValueLayout.valueTagOffset(),
                         ttlMillis,
                         queryTimeAfterNumEntries));

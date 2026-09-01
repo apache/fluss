@@ -108,6 +108,7 @@
 
         <fluss.hadoop.version>3.4.0</fluss.hadoop.version>
         <frocksdb.version>6.20.3-ververica-2.0</frocksdb.version>
+        <fluss-rocksdb.version>11.8.1-fluss-3</fluss-rocksdb.version>
         <slf4j.version>1.7.36</slf4j.version>
         <log4j.version>2.25.4</log4j.version>
         <jaxb.api.version>2.3.1</jaxb.api.version>
@@ -367,9 +368,9 @@
             </dependency>
 
             <dependency>
-                <groupId>com.ververica</groupId>
-                <artifactId>frocksdbjni</artifactId>
-                <version>${frocksdb.version}</version>
+                <groupId>io.github.fluss-contrib</groupId>
+                <artifactId>fluss-rocksdbjni</artifactId>
+                <version>${fluss-rocksdb.version}</version>
             </dependency>
 
             <dependency>
