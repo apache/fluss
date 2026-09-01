@@ -56,6 +56,13 @@ public class S3FileSystemPlugin implements FileSystemPlugin {
 
     private static final String ROLE_ARN_KEY = "fs.s3a.assumed.role.arn";
 
+    /**
+     * The Hadoop S3A AssumedRoleCredentialProvider class that uses the configured role ARN to
+     * assume an IAM role for S3 access.
+     */
+    private static final String ASSUMED_ROLE_CREDENTIAL_PROVIDER =
+            "org.apache.hadoop.fs.s3a.auth.AssumedRoleCredentialProvider";
+
     private static final String[][] MIRRORED_CONFIG_KEYS = {
         {"fs.s3a.access-key", "fs.s3a.access.key"},
         {"fs.s3a.secret-key", "fs.s3a.secret.key"},
@@ -163,10 +170,16 @@ public class S3FileSystemPlugin implements FileSystemPlugin {
         }
 
         if (hasStaticKeys || hasRoleArn) {
-            LOG.info(
-                    hasStaticKeys
-                            ? "Using provided static credentials."
-                            : "Using default AWS credential chain with AssumeRole.");
+            if (hasRoleArn && !hasStaticKeys) {
+                // When only role ARN is configured, use the AssumedRoleCredentialProvider
+                // to assume the role for all S3 operations (reads/writes).
+                hadoopConfig.set(PROVIDER_CONFIG_NAME, ASSUMED_ROLE_CREDENTIAL_PROVIDER);
+                LOG.info(
+                        "Using AssumedRoleCredentialProvider with role ARN for S3 access: {}",
+                        hadoopConfig.get(ROLE_ARN_KEY));
+            } else {
+                LOG.info("Using provided static credentials.");
+            }
             return;
         }
 
