@@ -95,9 +95,10 @@ async def _full_row_write_is_rejected(table):
     print("\n--- Full-row write ---")
     try:
         table.new_upsert().create_writer()
-        raise AssertionError("expected a full-row writer to be rejected")
-    except Exception as error:
+    except fluss.FlussError as error:
         print(f"Rejected: {error}")
+    else:
+        raise AssertionError("expected a full-row writer to be rejected")
 
 
 async def _partial_update_assigns_the_value(table):

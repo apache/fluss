@@ -662,7 +662,7 @@ mod tests {
     use crate::protocol::rest::{RestOptions, test_support};
     use axum::body::Body;
     use axum::http::{Request as HttpRequest, StatusCode};
-    use fluss::metadata::{DataType, Schema, TableDescriptor};
+    use fluss::metadata::{DataType, JsonSerde, Schema, TableDescriptor};
     use http_body_util::BodyExt;
     use std::sync::Arc;
     use tower::ServiceExt;
@@ -767,6 +767,62 @@ mod tests {
         let error =
             sparse_targets(&table, Some(&["id".to_string(), "name".to_string()])).unwrap_err();
         assert!(error.message().contains("column `name` is NOT NULL"));
+    }
+
+    /// The gateway only ever sees a table decoded from the server's JSON, so its auto-increment
+    /// guards are reachable only if the column survives that round trip.
+    #[test]
+    fn auto_increment_guards_fire_on_a_table_loaded_from_json() {
+        let schema = Schema::builder()
+            .column(
+                "uid",
+                DataType::String(fluss::metadata::StringType::with_nullable(false)),
+            )
+            .column(
+                "region",
+                DataType::String(fluss::metadata::StringType::with_nullable(true)),
+            )
+            .column(
+                "uid_int",
+                DataType::BigInt(fluss::metadata::BigIntType::with_nullable(true)),
+            )
+            .primary_key(["uid"])
+            .enable_auto_increment("uid_int")
+            .unwrap()
+            .build()
+            .unwrap();
+        let descriptor = TableDescriptor::builder()
+            .schema(schema)
+            .distributed_by(Some(1), Vec::new())
+            .build()
+            .unwrap();
+
+        let json = descriptor.serialize_json().unwrap();
+        let decoded = TableDescriptor::deserialize_json(&json).unwrap();
+        let table = TableInfo::of(TablePath::new("fluss", "autoinc"), 1, 1, decoded, 0, 0);
+        assert_eq!(
+            table.get_schema().auto_increment_col_names(),
+            &vec!["uid_int".to_string()]
+        );
+
+        let missing = sparse_targets(&table, None).unwrap_err();
+        assert!(
+            missing
+                .message()
+                .contains("partial_update_columns is required"),
+            "unexpected error: {}",
+            missing.message()
+        );
+
+        let targeted =
+            sparse_targets(&table, Some(&["uid".to_string(), "uid_int".to_string()])).unwrap_err();
+        assert!(
+            targeted
+                .message()
+                .contains("auto-increment column `uid_int` cannot be targeted"),
+            "unexpected error: {}",
+            targeted.message()
+        );
     }
 
     async fn post(app: &axum::Router, path: &str, body: &str) -> (StatusCode, serde_json::Value) {
