@@ -1563,7 +1563,8 @@ public class ConfigOptions {
                     .intType()
                     .defaultValue(128)
                     .withDescription(
-                            "The maximum batch size of merging lookup operations to one lookup request.");
+                            "The maximum number of lookup operations drained into one send batch. "
+                                    + "The send batch may be split into multiple RPC requests by destination and lookup type.");
 
     public static final ConfigOption<Integer> CLIENT_LOOKUP_MAX_INFLIGHT_SIZE =
             key("client.lookup.max-inflight-requests")
@@ -1571,6 +1572,14 @@ public class ConfigOptions {
                     .defaultValue(128)
                     .withDescription(
                             "The maximum number of unacknowledged lookup requests for lookup operations.");
+
+    public static final ConfigOption<Integer> CLIENT_LOOKUP_MAX_INFLIGHT_REQUESTS_PER_BUCKET =
+            key("client.lookup.max-inflight-requests-per-bucket")
+                    .intType()
+                    .defaultValue(5)
+                    .withDescription(
+                            "The maximum number of send batches per bucket that have been drained but have not completed, including batches waiting to be sent. "
+                                    + "A bucket at this limit is skipped while other buckets can still be drained.");
 
     public static final ConfigOption<Duration> CLIENT_LOOKUP_BATCH_TIMEOUT =
             key("client.lookup.batch-timeout")
