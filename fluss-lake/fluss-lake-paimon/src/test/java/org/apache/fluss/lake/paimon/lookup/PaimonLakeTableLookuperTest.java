@@ -17,6 +17,7 @@
 
 package org.apache.fluss.lake.paimon.lookup;
 
+import org.apache.fluss.bucketing.PaimonBucketingFunction;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
@@ -163,6 +164,54 @@ class PaimonLakeTableLookuperTest {
                             lookupMode == LakeLookupMode.SST
                                     ? Arrays.asList(true, false)
                                     : Arrays.asList(false, false));
+        }
+    }
+
+    @ParameterizedTest(name = "lookupMode={0}")
+    @EnumSource(LakeLookupMode.class)
+    void testLookupKeysInComputedBuckets(LakeLookupMode lookupMode) throws Exception {
+        TablePath tablePath = TablePath.of(DB, "computed_buckets");
+        Schema schema = pkSchema();
+        FileStoreTable table = createPaimonTable(tablePath, partitionedPkDescriptor(schema));
+        PaimonKeyEncoder bucketKeyEncoder =
+                new PaimonKeyEncoder(schema.getRowType(), Collections.singletonList("id"));
+        PaimonBucketingFunction bucketingFunction = new PaimonBucketingFunction();
+        int firstBucket =
+                bucketingFunction.bucketing(
+                        bucketKeyEncoder.encodeKey(row(1, "20240101", "Alice")), 2);
+        int secondBucket =
+                bucketingFunction.bucketing(
+                        bucketKeyEncoder.encodeKey(row(3, "20240101", "Bob")), 2);
+        assertThat(firstBucket).isNotEqualTo(secondBucket);
+
+        writeAndCommitData(
+                table,
+                Collections.singletonMap(
+                        firstBucket, Collections.singletonList(paimonRow(1, "20240101", "Alice"))));
+        writeAndCommitData(
+                table,
+                Collections.singletonMap(
+                        secondBucket, Collections.singletonList(paimonRow(3, "20240101", "Bob"))));
+
+        try (LakeTableLookuper lookuper =
+                createLookuper(lookupMode, tablePath, KvFormat.COMPACTED)) {
+            BinaryValue firstValue =
+                    decodeValue(
+                            lookuper.lookup(
+                                    paimonKey(schema, 1, "20240101"),
+                                    lookupContext(schema, "20240101", firstBucket, SCHEMA_ID)),
+                            SCHEMA_ID,
+                            schema);
+            BinaryValue secondValue =
+                    decodeValue(
+                            lookuper.lookup(
+                                    paimonKey(schema, 3, "20240101"),
+                                    lookupContext(schema, "20240101", secondBucket, SCHEMA_ID)),
+                            SCHEMA_ID,
+                            schema);
+
+            assertRow(firstValue.row, 1, "20240101", "Alice");
+            assertRow(secondValue.row, 3, "20240101", "Bob");
         }
     }
 
