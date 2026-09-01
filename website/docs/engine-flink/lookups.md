@@ -248,7 +248,8 @@ PARTITIONED BY (`dt`)
 WITH (
     'bucket.key' = 'c_custkey',
     'table.auto-partition.enabled' = 'true',
-    'table.auto-partition.time-unit' = 'year'
+    'table.auto-partition.time-unit' = 'year',
+    'table.datalake.historical-partition.lookup-mode' = 'SCAN'
 );
 ```
 
@@ -283,6 +284,10 @@ ALTER TABLE customer_partitioned_with_bucket_key SET (
   'table.datalake.historical-partition.enabled' = 'true'
 );
 ```
+
+The lookup mode can be configured only when the table is created and cannot be altered later.
+`SST`, the default, creates and caches local lookup files. `SCAN` applies primary-key filters while
+scanning Paimon and does not create local lookup files.
 
 This option is disabled by default and currently supports only Paimon primary-key tables with auto
 partitioning enabled and exactly one partition key. When enabled, the Coordinator creates and
