@@ -25,6 +25,7 @@ import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.InvalidTargetColumnException;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
 import org.apache.fluss.exception.StorageBackpressureException;
+import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.memory.TestingMemorySegmentPool;
 import org.apache.fluss.metadata.AggFunctions;
 import org.apache.fluss.metadata.KvFormat;
@@ -35,6 +36,7 @@ import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.BinaryValue;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.FileLogProjection;
 import org.apache.fluss.record.KvRecord;
@@ -51,6 +53,8 @@ import org.apache.fluss.record.TestData;
 import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.record.bytesview.MultiBytesView;
 import org.apache.fluss.row.BinaryRow;
+import org.apache.fluss.row.encode.KvValueLayout;
+import org.apache.fluss.row.encode.ValueDecoder;
 import org.apache.fluss.row.encode.ValueEncoder;
 import org.apache.fluss.server.kv.autoinc.AutoIncrementManager;
 import org.apache.fluss.server.kv.autoinc.TestingSequenceGeneratorFactory;
@@ -75,7 +79,11 @@ import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.types.StringType;
+import org.apache.fluss.utils.ByteArraySlice;
 import org.apache.fluss.utils.CloseableIterator;
+import org.apache.fluss.utils.IOUtils;
+import org.apache.fluss.utils.clock.Clock;
+import org.apache.fluss.utils.clock.ManualClock;
 import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.concurrent.FlussScheduler;
 
@@ -92,6 +100,7 @@ import javax.annotation.Nullable;
 
 import java.io.File;
 import java.lang.reflect.Field;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -151,27 +160,42 @@ class KvTabletTest {
 
     @AfterEach
     void afterEach() throws Exception {
-        if (kvTablet != null) {
-            kvTablet.close();
-        }
-        if (logTablet != null) {
-            logTablet.close();
-        }
-        if (executor != null) {
-            executor.shutdown();
-        }
+        IOUtils.closeAll(
+                () -> {
+                    if (kvTablet != null) {
+                        kvTablet.close();
+                    }
+                },
+                () -> {
+                    if (logTablet != null) {
+                        logTablet.close();
+                    }
+                },
+                executor::shutdown);
     }
 
     private void initLogTabletAndKvTablet(Schema schema, Map<String, String> tableConfig)
             throws Exception {
-        initLogTabletAndKvTablet(TablePath.of("testDb", "t1"), schema, tableConfig);
+        initLogTabletAndKvTablet(
+                TablePath.of("testDb", "t1"), schema, tableConfig, SystemClock.getInstance());
+    }
+
+    private void initLogTabletAndKvTablet(
+            Schema schema, Map<String, String> tableConfig, Clock clock) throws Exception {
+        initLogTabletAndKvTablet(TablePath.of("testDb", "t1"), schema, tableConfig, clock);
     }
 
     private void initLogTabletAndKvTablet(
             TablePath tablePath, Schema schema, Map<String, String> tableConfig) throws Exception {
+        initLogTabletAndKvTablet(tablePath, schema, tableConfig, SystemClock.getInstance());
+    }
+
+    private void initLogTabletAndKvTablet(
+            TablePath tablePath, Schema schema, Map<String, String> tableConfig, Clock clock)
+            throws Exception {
         PhysicalTablePath physicalTablePath = PhysicalTablePath.of(tablePath);
         schemaGetter = new TestingSchemaGetter(new SchemaInfo(schema, schemaId));
-        logTablet = createLogTablet(tempLogDir, 0L, physicalTablePath);
+        logTablet = createLogTablet(tempLogDir, 0L, physicalTablePath, clock);
         TableBucket tableBucket = logTablet.getTableBucket();
         kvTablet =
                 createKvTablet(
@@ -180,10 +204,17 @@ class KvTabletTest {
                         logTablet,
                         tmpKvDir,
                         schemaGetter,
-                        tableConfig);
+                        tableConfig,
+                        clock);
     }
 
     private LogTablet createLogTablet(File tempLogDir, long tableId, PhysicalTablePath tablePath)
+            throws Exception {
+        return createLogTablet(tempLogDir, tableId, tablePath, SystemClock.getInstance());
+    }
+
+    private LogTablet createLogTablet(
+            File tempLogDir, long tableId, PhysicalTablePath tablePath, Clock clock)
             throws Exception {
         File logTabletDir =
                 LogTestUtils.makeRandomLogTabletDir(
@@ -201,7 +232,7 @@ class KvTabletTest {
                 LogFormat.ARROW,
                 1,
                 true,
-                SystemClock.getInstance(),
+                clock,
                 true);
     }
 
@@ -214,7 +245,14 @@ class KvTabletTest {
             Map<String, String> tableConfig)
             throws Exception {
         return createKvTablet(
-                tablePath, tableBucket, logTablet, tmpKvDir, schemaGetter, tableConfig, null);
+                tablePath,
+                tableBucket,
+                logTablet,
+                tmpKvDir,
+                schemaGetter,
+                tableConfig,
+                null,
+                SystemClock.getInstance());
     }
 
     private KvTablet createKvTablet(
@@ -224,7 +262,48 @@ class KvTabletTest {
             File tmpKvDir,
             SchemaGetter schemaGetter,
             Map<String, String> tableConfig,
-            @Nullable KvFlushScheduler kvFlushScheduler)
+            Clock clock)
+            throws Exception {
+        return createKvTablet(
+                tablePath,
+                tableBucket,
+                logTablet,
+                tmpKvDir,
+                schemaGetter,
+                tableConfig,
+                null,
+                clock);
+    }
+
+    private KvTablet createKvTablet(
+            PhysicalTablePath tablePath,
+            TableBucket tableBucket,
+            LogTablet logTablet,
+            File tmpKvDir,
+            SchemaGetter schemaGetter,
+            Map<String, String> tableConfig,
+            KvFlushScheduler kvFlushScheduler)
+            throws Exception {
+        return createKvTablet(
+                tablePath,
+                tableBucket,
+                logTablet,
+                tmpKvDir,
+                schemaGetter,
+                tableConfig,
+                kvFlushScheduler,
+                SystemClock.getInstance());
+    }
+
+    private KvTablet createKvTablet(
+            PhysicalTablePath tablePath,
+            TableBucket tableBucket,
+            LogTablet logTablet,
+            File tmpKvDir,
+            SchemaGetter schemaGetter,
+            Map<String, String> tableConfig,
+            @Nullable KvFlushScheduler kvFlushScheduler,
+            Clock clock)
             throws Exception {
         TableConfig tableConf = new TableConfig(Configuration.fromMap(tableConfig));
         RowMerger rowMerger = RowMerger.create(tableConf, KvFormat.COMPACTED, schemaGetter);
@@ -251,7 +330,9 @@ class KvTabletTest {
                     schemaGetter,
                     tableConf.getChangelogImage(),
                     KvManager.getDefaultRateLimiter(),
-                    autoIncrementManager);
+                    autoIncrementManager,
+                    clock,
+                    tableConf);
         }
         return KvTablet.create(
                 tablePath,
@@ -268,9 +349,254 @@ class KvTabletTest {
                 schemaGetter,
                 tableConf.getChangelogImage(),
                 KvManager.getDefaultRateLimiter(),
+                null,
                 kvFlushScheduler,
                 null,
-                autoIncrementManager);
+                autoIncrementManager,
+                clock,
+                tableConf);
+    }
+
+    @Test
+    void testRowTtlProcessTimeValueTimestampUsesClock() throws Exception {
+        long writeTimestampMs = 123456789L;
+        long walTimestampFloorMs = writeTimestampMs + 1000L;
+        ManualClock clock = new ManualClock(walTimestampFloorMs);
+        initLogTabletAndKvTablet(DATA1_SCHEMA_PK, kvTtlProcessTimeConfig(), clock);
+        logTablet.appendAsLeader(
+                logRecords(
+                        0L,
+                        Collections.singletonList(ChangeType.INSERT),
+                        Collections.singletonList(new Object[] {0, "seed"})));
+        clock.advanceTime(Duration.ofMillis(writeTimestampMs - walTimestampFloorMs));
+
+        KvRecord record = kvRecordFactory.ofRecord("k1".getBytes(), new Object[] {1, "a"});
+        LogAppendInfo appendInfo =
+                kvTablet.putAsLeader(
+                        kvRecordBatchFactory.ofRecords(Collections.singletonList(record)), null);
+        flushAndWait(kvTablet, Long.MAX_VALUE);
+
+        byte[] value = readRawValue("k1");
+        BinaryValue decoded = decodeTaggedValue(value);
+
+        assertThat(readTaggedValueTag(value)).isEqualTo(writeTimestampMs);
+        assertThat(appendInfo.maxTimestamp()).isEqualTo(walTimestampFloorMs);
+        assertThat(decoded.row.getInt(0)).isEqualTo(1);
+        assertThat(decoded.row.getString(1).toString()).isEqualTo("a");
+    }
+
+    @Test
+    void testReadApisReturnValueBodySlices() throws Exception {
+        initLogTabletAndKvTablet(
+                DATA1_SCHEMA_PK, kvTtlProcessTimeConfig(), new ManualClock(123456789L));
+
+        byte[] key = "slice-key".getBytes();
+        kvTablet.putAsLeader(
+                kvRecordBatchFactory.ofRecords(
+                        kvRecordFactory.ofRecord(key, new Object[] {1, "value"})),
+                null);
+
+        ByteArraySlice bufferedValue =
+                kvTablet.multiGetFromBufferOrKv(Collections.singletonList(key)).get(0);
+
+        flushAndWait(kvTablet, Long.MAX_VALUE);
+        ByteArraySlice lookupValue = kvTablet.multiGet(Collections.singletonList(key)).get(0);
+        ByteArraySlice prefixLookupValue = kvTablet.prefixLookup(key).get(0);
+        ByteArraySlice limitScanValue = kvTablet.limitScan(1).get(0);
+        byte[] expectedValue =
+                ValueEncoder.encodeValue(
+                        schemaId, compactedRow(baseRowType, new Object[] {1, "value"}));
+
+        assertValueBodySlice(bufferedValue, expectedValue);
+        assertValueBodySlice(lookupValue, expectedValue);
+        assertValueBodySlice(prefixLookupValue, expectedValue);
+        assertValueBodySlice(limitScanValue, expectedValue);
+    }
+
+    @Test
+    void testRowTtlEventTimeValueTimestampUsesTimeColumn() throws Exception {
+        Schema eventTimeSchema = eventTimeSchema();
+        Map<String, String> tableConfig = kvTtlEventTimeConfig();
+        initLogTabletAndKvTablet(eventTimeSchema, tableConfig, new ManualClock(123456789L));
+
+        KvRecordTestUtils.KvRecordFactory eventTimeRecordFactory =
+                KvRecordTestUtils.KvRecordFactory.of(eventTimeSchema.getRowType());
+        KvRecord record =
+                eventTimeRecordFactory.ofRecord(
+                        "k1".getBytes(), new Object[] {1, 1234L, "event-time-row"});
+        kvTablet.putAsLeader(
+                kvRecordBatchFactory.ofRecords(Collections.singletonList(record)), null);
+        flushAndWait(kvTablet, Long.MAX_VALUE);
+
+        byte[] value = readRawValue("k1");
+        BinaryValue decoded = decodeTaggedValue(value);
+
+        assertThat(readTaggedValueTag(value)).isEqualTo(1234L);
+        assertThat(decoded.row.getInt(0)).isEqualTo(1);
+        assertThat(decoded.row.getLong(1)).isEqualTo(1234L);
+        assertThat(decoded.row.getString(2).toString()).isEqualTo("event-time-row");
+    }
+
+    @Test
+    void testRowTtlNullEventTimeValueNeverExpires() throws Exception {
+        Schema eventTimeSchema = eventTimeSchema();
+        Map<String, String> tableConfig = kvTtlEventTimeConfig();
+        ManualClock clock = new ManualClock(123456789L);
+        initLogTabletAndKvTablet(eventTimeSchema, tableConfig, clock);
+
+        KvRecordTestUtils.KvRecordFactory eventTimeRecordFactory =
+                KvRecordTestUtils.KvRecordFactory.of(eventTimeSchema.getRowType());
+        KvRecord record =
+                eventTimeRecordFactory.ofRecord(
+                        "k1".getBytes(), new Object[] {1, null, "null-event-time-row"});
+        kvTablet.putAsLeader(
+                kvRecordBatchFactory.ofRecords(Collections.singletonList(record)), null);
+        flushAndWait(kvTablet, Long.MAX_VALUE);
+
+        byte[] value = readRawValue("k1");
+        BinaryValue decoded = decodeTaggedValue(value);
+
+        assertThat(readTaggedValueTag(value))
+                .isEqualTo(RowTtlTimestampProvider.NEVER_EXPIRE_TIMESTAMP_MS);
+        assertThat(decoded.row.getInt(0)).isEqualTo(1);
+        assertThat(decoded.row.isNullAt(1)).isTrue();
+        assertThat(decoded.row.getString(2).toString()).isEqualTo("null-event-time-row");
+
+        clock.advanceTime(Duration.ofHours(2L));
+        kvTablet.getRocksDBKv().getDb().compactRange();
+
+        assertThat(kvTablet.multiGet(Collections.singletonList("k1".getBytes())).get(0))
+                .isNotNull();
+    }
+
+    @Test
+    void testPartialUpdateFromNullEventTimeExpiresWholeRowAfterCompaction() throws Exception {
+        long eventTimestampMs = 1000L;
+        ManualClock clock = new ManualClock(eventTimestampMs);
+        Schema eventTimeSchema = eventTimeSchema();
+        initLogTabletAndKvTablet(eventTimeSchema, kvTtlEventTimeConfig(), clock);
+
+        String key = "partial-event-time";
+        KvRecordTestUtils.KvRecordFactory eventTimeRecordFactory =
+                KvRecordTestUtils.KvRecordFactory.of(eventTimeSchema.getRowType());
+        kvTablet.putAsLeader(
+                kvRecordBatchFactory.ofRecords(
+                        eventTimeRecordFactory.ofRecord(
+                                key.getBytes(), new Object[] {1, null, "retained-name"})),
+                null);
+        // Persist the never-expiring version before overwriting it with a partial update.
+        flushAndWait(kvTablet, Long.MAX_VALUE);
+
+        kvTablet.putAsLeader(
+                kvRecordBatchFactory.ofRecords(
+                        eventTimeRecordFactory.ofRecord(
+                                key.getBytes(),
+                                new Object[] {1, eventTimestampMs, "ignored-name"})),
+                new int[] {0, 1});
+        flushAndWait(kvTablet, Long.MAX_VALUE);
+
+        byte[] value = readRawValue(key);
+        BinaryValue updatedValue = decodeTaggedValue(value);
+        assertThat(readTaggedValueTag(value)).isEqualTo(eventTimestampMs);
+        assertThat(updatedValue.row.getLong(1)).isEqualTo(eventTimestampMs);
+        assertThat(updatedValue.row.getString(2).toString()).isEqualTo("retained-name");
+
+        clock.advanceTime(Duration.ofHours(2L));
+        kvTablet.getRocksDBKv().getDb().compactRange();
+
+        assertThat(kvTablet.multiGet(Collections.singletonList(key.getBytes())).get(0)).isNull();
+    }
+
+    @Test
+    void testPartialUpdateWithoutEventTimeRetainsTimestampForCompaction() throws Exception {
+        long eventTimestampMs = 1000L;
+        ManualClock clock = new ManualClock(eventTimestampMs);
+        Schema eventTimeSchema = eventTimeSchema();
+        initLogTabletAndKvTablet(eventTimeSchema, kvTtlEventTimeConfig(), clock);
+
+        String key = "retained-event-time";
+        KvRecordTestUtils.KvRecordFactory eventTimeRecordFactory =
+                KvRecordTestUtils.KvRecordFactory.of(eventTimeSchema.getRowType());
+        kvTablet.putAsLeader(
+                kvRecordBatchFactory.ofRecords(
+                        eventTimeRecordFactory.ofRecord(
+                                key.getBytes(), new Object[] {1, eventTimestampMs, "old-name"})),
+                null);
+        flushAndWait(kvTablet, Long.MAX_VALUE);
+
+        kvTablet.putAsLeader(
+                kvRecordBatchFactory.ofRecords(
+                        eventTimeRecordFactory.ofRecord(
+                                key.getBytes(), new Object[] {1, null, "new-name"})),
+                new int[] {0, 2});
+        flushAndWait(kvTablet, Long.MAX_VALUE);
+
+        byte[] value = readRawValue(key);
+        BinaryValue updatedValue = decodeTaggedValue(value);
+        assertThat(readTaggedValueTag(value)).isEqualTo(eventTimestampMs);
+        assertThat(updatedValue.row.getLong(1)).isEqualTo(eventTimestampMs);
+        assertThat(updatedValue.row.getString(2).toString()).isEqualTo("new-name");
+
+        clock.advanceTime(Duration.ofHours(2L));
+        kvTablet.getRocksDBKv().getDb().compactRange();
+
+        assertThat(kvTablet.multiGet(Collections.singletonList(key.getBytes())).get(0)).isNull();
+    }
+
+    @Test
+    void testKvTTLCompactionRemovesExpiredRowsFromLookupAndScan() throws Exception {
+        long writeTimestampMs = 1000L;
+        ManualClock clock = new ManualClock(writeTimestampMs);
+        initLogTabletAndKvTablet(DATA1_SCHEMA_PK, kvTtlProcessTimeConfig(), clock);
+
+        String expiredKey = "mm-expired-target";
+        kvTablet.putAsLeader(
+                kvRecordBatchFactory.ofRecords(
+                        kvRecordFactory.ofRecord(
+                                expiredKey.getBytes(), new Object[] {0, "expired-target"})),
+                null);
+        flushAndWait(kvTablet, Long.MAX_VALUE);
+
+        clock.advanceTime(Duration.ofHours(2L));
+        List<KvRecord> freshRows = new ArrayList<>();
+        // These keys precede the expired key and cross the filter's 1000-entry clock refresh.
+        int freshPrefixRows = 1001;
+        for (int i = 0; i < freshPrefixRows; i++) {
+            String key = String.format("aa-fresh-%04d", i);
+            freshRows.add(
+                    kvRecordFactory.ofRecord(
+                            key.getBytes(), new Object[] {i + 1, "fresh-prefix-" + i}));
+        }
+        String freshKey = "zz-fresh";
+        freshRows.add(kvRecordFactory.ofRecord(freshKey.getBytes(), new Object[] {2000, "fresh"}));
+        kvTablet.putAsLeader(kvRecordBatchFactory.ofRecords(freshRows), null);
+        flushAndWait(kvTablet, Long.MAX_VALUE);
+
+        kvTablet.getRocksDBKv().getDb().compactRange();
+
+        List<ByteArraySlice> lookupValues =
+                kvTablet.multiGet(Arrays.asList(expiredKey.getBytes(), freshKey.getBytes()));
+        assertThat(lookupValues.get(0)).isNull();
+        assertThat(lookupValues.get(1)).isNotNull();
+
+        ValueDecoder valueDecoder =
+                new ValueDecoder(schemaGetter, KvFormat.COMPACTED, KvValueLayout.TAGGED);
+        OpenScanResult result = kvTablet.openScan("scanner-row-ttl", -1L, 0L);
+        ScannerContext context = result.getContext();
+        assertThat(context).isNotNull();
+        List<String> scannedNames = new ArrayList<>();
+        while (context.isValid()) {
+            BinaryValue value = valueDecoder.decodeValue(context.currentValue());
+            scannedNames.add(value.row.getString(1).toString());
+            context.advance();
+        }
+        context.checkIteratorStatus();
+        context.close();
+
+        assertThat(scannedNames)
+                .hasSize(freshPrefixRows + 1)
+                .doesNotContain("expired-target")
+                .contains("fresh");
     }
 
     @Test
@@ -1834,7 +2160,7 @@ class KvTabletTest {
                 ValueEncoder.encodeValue(
                         schemaId, compactedRow(baseRowType, new Object[] {1, "new"}));
         assertThat(kvTablet.getFlushedLogOffset()).isEqualTo(secondFlushOffset);
-        assertThat(kvTablet.multiGet(Collections.singletonList(key)))
+        assertThat(kvTablet.multiGet(Collections.singletonList(key)).get(0).toByteArray())
                 .containsExactly(expectedValue);
         assertThat(kvTablet.getKvPreWriteBuffer().pendingFlushBytes()).isEqualTo(0);
         assertThat(kvTablet.getFlushState()).isEqualTo(KvTablet.FlushState.IDLE);
@@ -1968,6 +2294,14 @@ class KvTabletTest {
         assertThat(statistics.getTotalMemoryUsage())
                 .isGreaterThan(0); // Block cache is pre-allocated
 
+        kvTablet.getRocksDBKv().put("key".getBytes(), "value".getBytes());
+        assertThat(statistics.getMemTableUnFlushedMemoryUsage()).isPositive();
+        assertThat(statistics.getTotalMemoryUsage())
+                .isEqualTo(
+                        statistics.getMemTableMemoryUsage()
+                                + statistics.getTableReadersMemoryUsage()
+                                + statistics.getBlockCacheMemoryUsage());
+
         // ========== Phase 1: Write and Flush ==========
         int numRecords = 10000;
         List<KvRecord> rows = new ArrayList<>();
@@ -2014,7 +2348,7 @@ class KvTabletTest {
         for (int i = 0; i < 100; i++) {
             keysToRead.add(String.valueOf(i).getBytes());
         }
-        List<byte[]> readValues = kvTablet.multiGet(keysToRead);
+        List<ByteArraySlice> readValues = kvTablet.multiGet(keysToRead);
         assertThat(readValues).hasSize(100);
 
         // After reads: get latency must be tracked
@@ -2206,6 +2540,53 @@ class KvTabletTest {
         kvTablet.close();
     }
 
+    private byte[] readRawValue(String key) throws Exception {
+        return kvTablet.getRocksDBKv().multiGet(Collections.singletonList(key.getBytes())).get(0);
+    }
+
+    private static void assertValueBodySlice(ByteArraySlice slice, byte[] expectedValue) {
+        assertThat(slice.offset()).isEqualTo(Long.BYTES);
+        assertThat(slice.length()).isEqualTo(slice.array().length - Long.BYTES);
+        assertThat(slice.toByteArray()).containsExactly(expectedValue);
+    }
+
+    private BinaryValue decodeTaggedValue(byte[] value) {
+        return new ValueDecoder(schemaGetter, KvFormat.COMPACTED, KvValueLayout.TAGGED)
+                .decodeValue(value);
+    }
+
+    private static long readTaggedValueTag(byte[] value) {
+        return KvValueLayout.TAGGED.readValueTag(MemorySegment.wrap(value));
+    }
+
+    private static Schema eventTimeSchema() {
+        return Schema.newBuilder()
+                .column("id", DataTypes.INT())
+                .column("event_time", DataTypes.BIGINT())
+                .column("name", DataTypes.STRING())
+                .primaryKey("id")
+                .build();
+    }
+
+    private static Map<String, String> kvTtlEventTimeConfig() {
+        Map<String, String> tableConfig = new HashMap<>();
+        tableConfig.put(ConfigOptions.TABLE_KV_TTL.key(), "1 h");
+        tableConfig.put(
+                ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION.key(),
+                String.valueOf(KvValueLayout.TAGGED.version()));
+        tableConfig.put(ConfigOptions.TABLE_KV_TTL_TIME_COLUMN.key(), "event_time");
+        return tableConfig;
+    }
+
+    private static Map<String, String> kvTtlProcessTimeConfig() {
+        Map<String, String> tableConfig = new HashMap<>();
+        tableConfig.put(ConfigOptions.TABLE_KV_TTL.key(), "1 h");
+        tableConfig.put(
+                ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION.key(),
+                String.valueOf(KvValueLayout.TAGGED.version()));
+        return tableConfig;
+    }
+
     @Test
     void testRowCountWithUpsert() throws Exception {
         initLogTabletAndKvTablet(DATA1_SCHEMA_PK, new HashMap<>());
@@ -2258,6 +2639,24 @@ class KvTabletTest {
         assertThatThrownBy(() -> kvTablet.getRowCount())
                 .isInstanceOf(InvalidTableException.class)
                 .hasMessageContaining("Row count is disabled for this table");
+
+        kvTablet.close();
+    }
+
+    @Test
+    void testRowCountDisabledForKvTTL() throws Exception {
+        initLogTabletAndKvTablet(DATA1_SCHEMA_PK, kvTtlProcessTimeConfig());
+
+        KvRecordBatch batch =
+                kvRecordBatchFactory.ofRecords(
+                        kvRecordFactory.ofRecord("key1", new Object[] {1, "val1"}));
+        kvTablet.putAsLeader(batch, null);
+        flushAndWait(kvTablet, Long.MAX_VALUE);
+
+        assertThatThrownBy(() -> kvTablet.getRowCount())
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining("row TTL");
+        assertThat(kvTablet.getTabletState().getRowCount()).isNull();
 
         kvTablet.close();
     }

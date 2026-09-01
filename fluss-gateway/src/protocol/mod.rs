@@ -16,5 +16,8 @@
 // under the License.
 
 //! The gateway's REST API surface.
+//!
+//! The adapter is blind to how the backend reaches Fluss: it resolves a cluster, validates the request,
+//! calls a [`crate::backend::FlussBackend`] method, and maps the returned error to a status.
 
 pub mod rest;

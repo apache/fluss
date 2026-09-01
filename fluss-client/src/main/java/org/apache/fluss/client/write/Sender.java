@@ -375,6 +375,23 @@ public class Sender implements Runnable {
             return;
         }
 
+        // Snapshot each idempotent batch's send-time lastAckedBatchSequence, so a later
+        // out-of-order response can be recognized as stale (and retried) if the acked sequence
+        // has advanced while the batch was in flight.
+        if (idempotenceManager.idempotenceEnabled()) {
+            for (ReadyWriteBatch batch : batches) {
+                if (batch.writeBatch().hasBatchSequence()) {
+                    batch.writeBatch()
+                            .setLastAckedSequenceAtSend(
+                                    idempotenceManager
+                                            .lastAckedBatchSequence(batch.tableBucket())
+                                            .orElse(
+                                                    IdempotenceBucketEntry
+                                                            .NO_LAST_ACKED_BATCH_SEQUENCE));
+                }
+            }
+        }
+
         // group record batch by table id.
         Map<Long, List<ReadyWriteBatch>> writeBatchByTable = new HashMap<>();
         batches.forEach(

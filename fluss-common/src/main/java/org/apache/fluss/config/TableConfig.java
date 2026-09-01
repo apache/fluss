@@ -78,6 +78,18 @@ public class TableConfig {
     }
 
     /**
+     * Gets the physical KV value layout version persisted with the table.
+     *
+     * <p>The KV format version controls the key encoding strategy, while the value layout version
+     * controls the fixed header surrounding the BinaryRow payload in RocksDB. An empty value
+     * identifies tables created before value layouts were versioned; those tables use the plain
+     * layout.
+     */
+    public Optional<Integer> getKvValueLayoutVersion() {
+        return config.getOptional(ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION);
+    }
+
+    /**
      * Whether standby replicas are enabled for this primary key table. Returns false for legacy
      * tables that were created before this option was introduced.
      */
@@ -88,6 +100,16 @@ public class TableConfig {
     /** Gets the log TTL of the table. */
     public long getLogTTLMs() {
         return config.get(ConfigOptions.TABLE_LOG_TTL).toMillis();
+    }
+
+    /** Gets the row-level TTL of the table. */
+    public Optional<Duration> getKvTTL() {
+        return config.getOptional(ConfigOptions.TABLE_KV_TTL);
+    }
+
+    /** Gets the optional row-level TTL time column of the table. */
+    public Optional<String> getKvTTLTimeColumn() {
+        return config.getOptional(ConfigOptions.TABLE_KV_TTL_TIME_COLUMN);
     }
 
     /** Gets the local segments to retain for tiered log of the table. */

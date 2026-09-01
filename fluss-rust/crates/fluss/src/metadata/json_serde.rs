@@ -449,6 +449,7 @@ impl JsonSerde for Column {
 impl Schema {
     const COLUMNS_NAME: &'static str = "columns";
     const PRIMARY_KEY_NAME: &'static str = "primary_key";
+    const AUTO_INCREMENT_COLUMN_NAME: &'static str = "auto_increment_column";
     const HIGHEST_FIELD_ID: &'static str = "highest_field_id";
     const VERSION_KEY: &'static str = "version";
     const VERSION: u32 = 1;
@@ -477,6 +478,13 @@ impl JsonSerde for Schema {
                 .map(|name| json!(name))
                 .collect();
             obj.insert(Self::PRIMARY_KEY_NAME.to_string(), json!(pk_values));
+        }
+
+        if !self.auto_increment_col_names().is_empty() {
+            obj.insert(
+                Self::AUTO_INCREMENT_COLUMN_NAME.to_string(),
+                json!(self.auto_increment_col_names()),
+            );
         }
 
         obj.insert(
@@ -520,6 +528,19 @@ impl JsonSerde for Schema {
             }
 
             schema_builder = schema_builder.primary_key(primary_keys);
+        }
+
+        if let Some(auto_increment_node) = node.get(Self::AUTO_INCREMENT_COLUMN_NAME) {
+            let auto_increment_array = auto_increment_node
+                .as_array()
+                .ok_or_else(|| Error::invalid_table("Auto increment column must be an array"))?;
+
+            for name_node in auto_increment_array {
+                let name = name_node.as_str().ok_or_else(|| {
+                    Error::invalid_table("Auto increment column element must be a string")
+                })?;
+                schema_builder = schema_builder.enable_auto_increment(name)?;
+            }
         }
 
         schema_builder.build()
@@ -734,6 +755,86 @@ mod tests {
             .unwrap();
         let ids: Vec<i32> = preserved.columns().iter().map(|c| c.id()).collect();
         assert_eq!(ids, vec![3, 7]);
+    }
+
+    #[test]
+    fn schema_auto_increment_column_round_trips_through_json() {
+        let schema = Schema::builder()
+            .column("id", DataTypes::int())
+            .column("seq", DataTypes::bigint())
+            .primary_key(["id"])
+            .enable_auto_increment("seq")
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let json = schema.serialize_json().unwrap();
+        assert_eq!(
+            json.get("auto_increment_column")
+                .and_then(|v| v.as_array())
+                .map(|v| v.len()),
+            Some(1)
+        );
+
+        let round_tripped = Schema::deserialize_json(&json).unwrap();
+        assert_eq!(
+            round_tripped.auto_increment_col_names(),
+            &vec!["seq".to_string()]
+        );
+        assert_eq!(round_tripped, schema);
+    }
+
+    #[test]
+    fn schema_without_auto_increment_column_omits_the_key() {
+        let schema = Schema::builder()
+            .column("id", DataTypes::int())
+            .primary_key(["id"])
+            .build()
+            .unwrap();
+
+        let json = schema.serialize_json().unwrap();
+        assert!(json.get("auto_increment_column").is_none());
+    }
+
+    #[test]
+    fn schema_reads_auto_increment_column_written_by_the_java_serde() {
+        let java_written = json!({
+            "version": 1,
+            "columns": [
+                {"name": "id", "data_type": {"type": "INTEGER", "nullable": false}, "id": 0},
+                {"name": "seq", "data_type": {"type": "BIGINT"}, "id": 1}
+            ],
+            "primary_key": ["id"],
+            "auto_increment_column": ["seq"],
+            "highest_field_id": 1
+        });
+
+        let schema = Schema::deserialize_json(&java_written).unwrap();
+        assert_eq!(schema.auto_increment_col_names(), &vec!["seq".to_string()]);
+    }
+
+    #[test]
+    fn schema_rejects_malformed_auto_increment_column() {
+        let not_an_array = json!({
+            "columns": [{"name": "id", "data_type": {"type": "INTEGER"}, "id": 0}],
+            "auto_increment_column": "seq",
+            "highest_field_id": 0
+        });
+        assert!(Schema::deserialize_json(&not_an_array).is_err());
+
+        let not_a_string = json!({
+            "columns": [{"name": "id", "data_type": {"type": "INTEGER"}, "id": 0}],
+            "auto_increment_column": [7],
+            "highest_field_id": 0
+        });
+        assert!(Schema::deserialize_json(&not_a_string).is_err());
+
+        let unknown_column = json!({
+            "columns": [{"name": "id", "data_type": {"type": "INTEGER"}, "id": 0}],
+            "auto_increment_column": ["missing"],
+            "highest_field_id": 0
+        });
+        assert!(Schema::deserialize_json(&unknown_column).is_err());
     }
 
     #[test]

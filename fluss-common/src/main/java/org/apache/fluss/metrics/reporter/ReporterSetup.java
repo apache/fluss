@@ -19,6 +19,9 @@ package org.apache.fluss.metrics.reporter;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.metrics.filter.DefaultMetricFilter;
+import org.apache.fluss.metrics.filter.MetricFilter;
+import org.apache.fluss.metrics.groups.ReporterScopedSettings;
 import org.apache.fluss.plugin.PluginManager;
 import org.apache.fluss.shaded.guava32.com.google.common.collect.Iterators;
 import org.apache.fluss.utils.CollectionUtils;
@@ -39,15 +42,15 @@ import java.util.ServiceConfigurationError;
 import java.util.ServiceLoader;
 import java.util.Set;
 
-/**
- * Encapsulates everything needed for the instantiation and configuration of a {@link
- * MetricReporter}.
- */
+/** Loads and initializes metric reporters and their settings from configuration. */
 public class ReporterSetup {
 
     private static final Logger LOG = LoggerFactory.getLogger(ReporterSetup.class);
 
-    public static List<MetricReporter> fromConfiguration(
+    private ReporterSetup() {}
+
+    /** Creates reporters and their settings from the configuration. */
+    public static List<ReporterAndSettings> fromConfiguration(
             final Configuration configuration, @Nullable final PluginManager pluginManager) {
         List<String> reporters = configuration.get(ConfigOptions.METRICS_REPORTERS);
         if (reporters == null || reporters.isEmpty()) {
@@ -112,11 +115,11 @@ public class ReporterSetup {
         return Iterators.concat(iteratorPlugins, pluginIteratorSPI);
     }
 
-    private static List<MetricReporter> setUpReporters(
+    private static List<ReporterAndSettings> setUpReporters(
             Set<String> configuredReporters,
             Map<String, MetricReporterPlugin> discoveredReporterPlugins,
             Configuration reporterConfig) {
-        List<MetricReporter> reporters = new ArrayList<>(configuredReporters.size());
+        List<ReporterAndSettings> reporters = new ArrayList<>(configuredReporters.size());
         for (String reporterName : configuredReporters) {
             if (!discoveredReporterPlugins.containsKey(reporterName)) {
                 LOG.warn(
@@ -126,12 +129,16 @@ public class ReporterSetup {
                 continue;
             }
             try {
+                MetricFilter filter =
+                        DefaultMetricFilter.fromConfiguration(reporterConfig, reporterName);
                 MetricReporterPlugin metricReporterPlugin =
                         discoveredReporterPlugins.get(reporterName);
                 MetricReporter reporter = metricReporterPlugin.createMetricReporter(reporterConfig);
                 Configuration metricConfig = new Configuration(reporterConfig);
                 reporter.open(metricConfig);
-                reporters.add(reporter);
+                reporters.add(
+                        new ReporterAndSettings(
+                                reporter, new ReporterScopedSettings(reporters.size(), filter)));
             } catch (Throwable t) {
                 LOG.error(
                         "Could not instantiate {} with name {}. Metrics might not be exposed/reported.",

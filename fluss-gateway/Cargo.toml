@@ -24,19 +24,21 @@ resolver = "3"
 [package]
 name = "fluss-gateway"
 edition = "2024"
-version = "1.0.0"
+# Maven's 1.0-SNAPSHOT maps to Cargo's SemVer-compatible 1.0.0-SNAPSHOT.
+version = "1.0.0-SNAPSHOT"
 license = "Apache-2.0"
-# The shipped dependency set only needs 1.85; the declared floor stays at 1.88 to match fluss-rust,
-# which the gateway depends on once the FlussBackend capability lands.
+# The floor matches fluss-rust, which the native backend links against.
 rust-version = "1.88"
 authors = ["Apache Fluss <dev@fluss.apache.org>"]
 repository = "https://github.com/apache/fluss"
 # The gateway ships as an executable, not a library on crates.io, so `rust-release.yml` does not
-# apply to it.
-# TODO: add a release path for the gateway's own artifacts (Linux binary, container image) and the
-# dependency inventory that goes with them; no workflow publishes them today.
+# apply to it. Linux binary archives and the container image are released with the main Fluss
+# version from the repository-level release tooling.
 publish = false
 description = "Stateless REST gateway for Apache Fluss"
+
+[features]
+integration_tests = []
 
 [[bin]]
 name = "fluss-gateway"
@@ -47,10 +49,16 @@ path = "src/main.rs"
 name = "fluss_gateway"
 
 [dependencies]
+# `FlussBackend` is used behind `Arc<dyn ...>`, which native `async fn` in traits cannot be.
+async-trait = "0.1"
 axum = { version = "0.8", default-features = false, features = ["http1", "matched-path", "tokio"] }
+# Encodes the self-describing keyset page token; already in the graph transitively.
+base64 = "0.22"
 clap = { version = "4.5.37", features = ["derive"] }
 # Only FutureExt/join_all are used; avoid the larger futures facade crate.
 futures-util = "0.3"
+# The native backend and the connection settings owned by the Gateway.
+fluss = { package = "fluss-rs", path = "../fluss-rust/crates/fluss" }
 # The listeners follow axum's official serve-with-hyper example: axum::serve does not expose the
 # hyper builder that the header read timeout lives on. The plain http1 builder (not auto) has no
 # HTTP/2 preface sniffing, so the header timer covers a connection from its first byte.
@@ -58,7 +66,7 @@ hyper = { version = "1", default-features = false, features = ["http1", "server"
 # GracefulShutdown and the tower-to-hyper service adapter for the serve loop above. `http1` gates
 # the `GracefulConnection` impl `graceful.watch` needs, so it is requested rather than inherited.
 hyper-util = { version = "0.1", default-features = false, features = ["http1", "server-graceful", "service", "tokio"] }
-# Process CPU/RSS/fd sampling for the FIP-49 process_* metric families.
+# Process CPU/RSS/fd sampling for the process_* metric families.
 libc = "0.2"
 log = "0.4"
 metrics = "0.24"
@@ -66,10 +74,10 @@ metrics = "0.24"
 # graph through `hyper-util/server-auto`; `deny.toml` guards the consequence.
 metrics-exporter-prometheus = { version = "0.17", default-features = false }
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+serde_json = { version = "1.0", features = ["raw_value"] }
 # Preserves the nested typed field path after file, env, and CLI values are merged.
 serde_path_to_error = "0.1"
-# The gateway.yaml configuration file is YAML with flat dotted keys (FIP-49).
+# The gateway.yaml configuration file is YAML with flat dotted keys.
 # serde_yaml_ng is the maintained, API-compatible fork of the archived serde_yaml crate.
 serde_yaml_ng = "0.10"
 # Runtime capabilities used by the server; test-only I/O/time controls are enabled below.
@@ -90,6 +98,10 @@ tower = { version = "0.5", features = ["util"] }
 
 [[test]]
 name = "http_api"
+
+[[test]]
+name = "e2e_cluster"
+required-features = ["integration_tests"]
 
 [[test]]
 name = "process"

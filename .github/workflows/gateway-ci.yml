@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# Gateway-only CI: gateway changes never build the fluss-rust workspace and vice versa.
+# Gateway CI also follows the native Rust client sources used by its configuration adapter.
 # `uses:` step inputs are relative to the repository root.
 name: Gateway CI
 
@@ -23,14 +23,35 @@ on:
   push:
     branches:
       - main
+      - release-**
+      - ci-**
     paths:
       - 'fluss-gateway/**'
+      - 'fluss-rust/Cargo.toml'
+      - 'fluss-rust/crates/fluss/**'
+      - 'fluss-rpc/src/main/proto/**'
+      - 'LICENSE'
+      - 'NOTICE'
+      - 'docker/fluss-gateway/**'
+      - '.dockerignore'
+      - 'tools/releasing/create_gateway_release.sh'
+      - 'tools/releasing/update_branch_version.sh'
       - '.github/workflows/gateway-ci.yml'
   pull_request:
     branches:
       - main
+      - release-**
     paths:
       - 'fluss-gateway/**'
+      - 'fluss-rust/Cargo.toml'
+      - 'fluss-rust/crates/fluss/**'
+      - 'fluss-rpc/src/main/proto/**'
+      - 'LICENSE'
+      - 'NOTICE'
+      - 'docker/fluss-gateway/**'
+      - '.dockerignore'
+      - 'tools/releasing/create_gateway_release.sh'
+      - 'tools/releasing/update_branch_version.sh'
       - '.github/workflows/gateway-ci.yml'
   workflow_dispatch:
 
@@ -65,7 +86,7 @@ jobs:
       - name: Build
         run: cargo build --locked --all-targets
 
-      - name: Unit Test
+      - name: Unit and Integration Tests
         run: cargo test --locked --all-targets
         env:
           RUST_LOG: DEBUG
@@ -113,7 +134,7 @@ jobs:
       - name: Install cargo-deny
         uses: taiki-e/install-action@v2
         with:
-          tool: cargo-deny@0.14.22
+          tool: cargo-deny@0.20.2
 
       - name: Check dependency licenses (Apache-compatible)
         run: cargo deny --locked check licenses
@@ -124,8 +145,11 @@ jobs:
       # The inventory ships with the source release, so a stale one is worse than none.
       - name: Dependency inventory drift check
         run: |
-          cargo deny --locked list -f tsv -t 0.6 > DEPENDENCIES.rust.tsv
+          cargo deny --locked list -f tsv -t 0.6 | sed 's/[[:space:]]*$//' > DEPENDENCIES.rust.tsv
           git diff --exit-code DEPENDENCIES.rust.tsv
+
+      - name: Binary LICENSE and NOTICE drift check
+        run: python3 scripts/generate_binary_license.py --check
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
@@ -142,3 +166,47 @@ jobs:
         run: cargo doc --locked --no-deps
         env:
           RUSTDOCFLAGS: -D warnings
+
+      - name: Check distribution shell scripts
+        run: |
+          bash -n bin/fluss-gateway.sh
+          bash -n ../docker/fluss-gateway/build.sh
+          bash -n ../docker/fluss-gateway/prepare_build.sh
+          bash -n ../docker/fluss-gateway/smoke-test.sh
+          bash -n ../tools/releasing/create_gateway_release.sh
+          bash -n ../tools/releasing/update_branch_version.sh
+
+  container-smoke-test:
+    name: "Gateway Distribution and Container (${{ matrix.arch }})"
+    timeout-minutes: 90
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v6
+
+      # The ASF enterprise only permits third-party actions that its allowlist pins to
+      # an exact commit, so a moving tag such as @v3 fails the whole run before any job
+      # starts. This commit is the revision other ASF projects already build images with.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Build and smoke test the distribution and image
+        env:
+          FLUSS_VERSION: smoke
+          GATEWAY_ARCH: ${{ matrix.arch }}
+          GATEWAY_BUILD_CACHE_FROM: type=gha,scope=fluss-gateway-${{ matrix.arch }}
+          GATEWAY_BUILD_CACHE_TO: type=gha,mode=max,scope=fluss-gateway-${{ matrix.arch }}
+          GATEWAY_IMAGE: fluss-gateway:smoke-${{ matrix.arch }}
+          RUN_SMOKE: "true"
+          VCS_REF: ${{ github.sha }}
+        run: docker/fluss-gateway/build.sh

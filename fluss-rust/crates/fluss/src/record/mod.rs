@@ -24,8 +24,13 @@ use std::collections::HashMap;
 mod arrow;
 mod error;
 pub mod kv;
+mod log_record_batch;
+mod statistics;
+
+pub(crate) use statistics::is_supported_statistics_type;
 
 pub use arrow::*;
+pub(crate) use log_record_batch::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ChangeType {

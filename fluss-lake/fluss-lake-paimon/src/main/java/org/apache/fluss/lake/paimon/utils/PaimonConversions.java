@@ -51,6 +51,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.function.Function;
 
+import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_ENABLED;
 import static org.apache.fluss.lake.paimon.PaimonLakeCatalog.LEGACY_SYSTEM_COLUMNS;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
@@ -64,6 +65,14 @@ public class PaimonConversions {
     // again
     /** Option controlling whether Paimon uses legacy partition value encoding. */
     public static final String PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY = "partition.legacy-name";
+
+    /**
+     * Native Paimon table option maintained by Fluss to mark whether the (clean-layout) Paimon
+     * table is currently accelerated by Fluss LakeStream. Managed only for new-layout tables that
+     * do not carry the Fluss system columns; legacy tables are left untouched. Disabling lake
+     * acceleration removes the option instead of persisting {@code false}.
+     */
+    public static final String LAKESTREAM_ENABLED_OPTION_KEY = "lakestream.enabled";
 
     // for fluss config
     public static final String FLUSS_CONF_PREFIX = "fluss.";
@@ -186,11 +195,23 @@ public class PaimonConversions {
                 String key = convertFlussPropertyKeyToPaimon(setOption.getKey());
                 validateAlterPaimonOptions(key);
                 schemaChanges.add(SchemaChange.setOption(key, setOption.getValue()));
+                if (TABLE_DATALAKE_ENABLED.key().equals(setOption.getKey())) {
+                    // #4102: keep lakestream.enabled in sync with datalake acceleration state.
+                    appendLakeStreamOptionChange(
+                            Boolean.parseBoolean(setOption.getValue()),
+                            paimonIncludingSystemColumns,
+                            schemaChanges);
+                }
             } else if (tableChange instanceof TableChange.ResetOption) {
                 TableChange.ResetOption resetOption = (TableChange.ResetOption) tableChange;
                 String key = convertFlussPropertyKeyToPaimon(resetOption.getKey());
                 validateAlterPaimonOptions(key);
                 schemaChanges.add(SchemaChange.removeOption(key));
+                if (TABLE_DATALAKE_ENABLED.key().equals(resetOption.getKey())) {
+                    // #4102: resetting datalake.enabled is equivalent to disabling acceleration.
+                    appendLakeStreamOptionChange(
+                            false, paimonIncludingSystemColumns, schemaChanges);
+                }
             } else if (tableChange instanceof TableChange.AddColumn) {
                 TableChange.AddColumn addColumn = (TableChange.AddColumn) tableChange;
 
@@ -306,6 +327,13 @@ public class PaimonConversions {
         tableDescriptor
                 .getCustomProperties()
                 .forEach((k, v) -> setFlussPropertyToPaimon(k, v, options));
+
+        // #4102: newly created lake tables are always clean (system columns are rejected above), so
+        // a lake-enabled table must advertise its LakeStream state to Paimon.
+        if (isDataLakeEnabled(tableDescriptor)) {
+            options.set(LAKESTREAM_ENABLED_OPTION_KEY, Boolean.TRUE.toString());
+        }
+
         schemaBuilder.options(options.toMap());
 
         // currently we only support string type, todo
@@ -331,6 +359,35 @@ public class PaimonConversions {
         tableDescriptor.getComment().ifPresent(schemaBuilder::comment);
 
         return schemaBuilder.build();
+    }
+
+    private static boolean isDataLakeEnabled(TableDescriptor tableDescriptor) {
+        return Boolean.parseBoolean(
+                tableDescriptor.getProperties().get(TABLE_DATALAKE_ENABLED.key()));
+    }
+
+    /**
+     * Maintains the {@code lakestream.enabled} Paimon option together with the {@code
+     * table.datalake.enabled} lifecycle. Only new-layout (clean) tables are managed; legacy tables
+     * that still carry the Fluss system columns are left untouched. Disabling removes the option
+     * instead of persisting {@code false}.
+     *
+     * @param lakeStreamEnabled whether datalake acceleration is enabled after this change
+     * @param legacyTable whether the Paimon table uses the legacy system-column layout
+     * @param out the schema-change list to append to
+     */
+    private static void appendLakeStreamOptionChange(
+            boolean lakeStreamEnabled, boolean legacyTable, List<SchemaChange> out) {
+        // Old-layout tables are outside the scope of this option.
+        if (legacyTable) {
+            return;
+        }
+        if (lakeStreamEnabled) {
+            out.add(SchemaChange.setOption(LAKESTREAM_ENABLED_OPTION_KEY, Boolean.TRUE.toString()));
+        } else {
+            // Disabling (SetOption "false") or resetting removes the option entirely.
+            out.add(SchemaChange.removeOption(LAKESTREAM_ENABLED_OPTION_KEY));
+        }
     }
 
     private static void validatePaimonOptions(Map<String, String> properties) {

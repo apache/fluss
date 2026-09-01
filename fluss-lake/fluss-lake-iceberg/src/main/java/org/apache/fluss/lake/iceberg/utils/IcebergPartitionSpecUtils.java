@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.metadata.TableDescriptor;
 
+import org.apache.iceberg.PartitionField;
 import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.Schema;
 
@@ -82,12 +83,35 @@ public final class IcebergPartitionSpecUtils {
         }
 
         if (bucketKeys.isEmpty()) {
-            // __offset and __timestamp are system data columns, but only __bucket is a
-            // partition field when the Fluss table has no bucket key.
-            builder.identity(BUCKET_COLUMN_NAME);
+            // FIP-27: a bucket-unaware table is partitioned by the __bucket system column only for
+            // legacy tables that still carry it. Clean tables have no __bucket column, so they are
+            // left unpartitioned (IcebergSplitPlanner treats an empty/partition-less spec as
+            // bucket-unaware).
+            if (icebergSchema.findField(BUCKET_COLUMN_NAME) != null) {
+                builder.identity(BUCKET_COLUMN_NAME);
+            }
         } else {
             builder.bucket(bucketKeys.get(0), bucketCount);
         }
         return builder.build();
+    }
+
+    /** Returns whether the partition field uses an Iceberg bucket transform. */
+    public static boolean isBucketTransform(PartitionField partitionField) {
+        return partitionField.transform().toString().startsWith("bucket[");
+    }
+
+    /**
+     * Returns whether the partition field is the trailing physical bucket field maintained by
+     * Fluss.
+     *
+     * <p>For bucket-aware tables, this is {@code bucket(bucketKey)}. For legacy bucket-unaware
+     * tables, this is {@code identity(__bucket)}.
+     */
+    public static boolean isFlussBucketField(Schema icebergSchema, PartitionField partitionField) {
+        return isBucketTransform(partitionField)
+                || (partitionField.transform().isIdentity()
+                        && BUCKET_COLUMN_NAME.equals(
+                                icebergSchema.findColumnName(partitionField.sourceId())));
     }
 }

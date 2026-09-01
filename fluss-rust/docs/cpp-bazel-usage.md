@@ -25,7 +25,6 @@ Current simplification scope:
 
 Version baseline references currently used by examples:
 
-- `protobuf/protoc`: `3.25.5`
 - `arrow-cpp`: `19.0.1`
 
 ## Common Consumer `BUILD.bazel`
@@ -44,10 +43,8 @@ cc_binary(
 
 ## Mode 1: `system` (Recommended in preinstalled environments)
 
-Use this mode when your environment already provides:
-
-- `protoc`
-- Arrow C++ (headers + shared libraries)
+Use this mode when your environment already provides Arrow C++
+(headers + shared libraries).
 
 ### Consumer `MODULE.bazel` (pattern)
 
@@ -60,7 +57,6 @@ bazel_dep(name = "fluss-cpp", version = "<released-version>")
 fluss_cpp = use_extension("@fluss-cpp//bindings/cpp/bazel/cpp:deps.bzl", "cpp_sdk")
 fluss_cpp.config(
     mode = "system",
-    protobuf_version = "3.25.5",
     arrow_cpp_version = "19.0.1",
     # Adjust Arrow paths for your environment
     system_arrow_prefix = "/usr",
@@ -71,16 +67,14 @@ fluss_cpp.config(
 use_repo(fluss_cpp, "apache_arrow_cpp")
 ```
 
-### Build and run (consumer workspace pattern)
+### Build and run (consumer workspace pattern, system mode)
 
 Run from your consumer workspace root (the directory containing
 `MODULE.bazel` and your top-level `BUILD.bazel`).
 
 ```bash
-PROTOC_BIN="$(command -v protoc)"
 CARGO_BIN="$(command -v cargo)"
 bazel run \
-  --action_env=PROTOC="$PROTOC_BIN" \
   --action_env=CARGO="$CARGO_BIN" \
   --action_env=PATH="$(dirname "$CARGO_BIN"):$PATH" \
   //:fluss_reader
@@ -92,10 +86,8 @@ bazel run \
 
 ```bash
 cd bindings/cpp/examples/bazel-consumer/system
-PROTOC_BIN="$(command -v protoc)"
 CARGO_BIN="$(command -v cargo)"
 bazel run \
-  --action_env=PROTOC="$PROTOC_BIN" \
   --action_env=CARGO="$CARGO_BIN" \
   --action_env=PATH="$(dirname "$CARGO_BIN"):$PATH" \
   //:consumer_system
@@ -117,7 +109,6 @@ bazel_dep(name = "fluss-cpp", version = "<released-version>")
 fluss_cpp = use_extension("@fluss-cpp//bindings/cpp/bazel/cpp:deps.bzl", "cpp_sdk")
 fluss_cpp.config(
     mode = "build",
-    protobuf_version = "3.25.5",
     arrow_cpp_version = "19.0.1",
 )
 use_repo(fluss_cpp, "apache_arrow_cpp")
@@ -125,23 +116,12 @@ use_repo(fluss_cpp, "apache_arrow_cpp")
 
 Notes:
 
-- `build` mode in the core Bazel integration still uses `PROTOC` (env / PATH).
-- To auto-download a pinned `protoc` for `build` mode, use
-  `bindings/cpp/scripts/ensure_protoc.sh` and pass the result via `--action_env=PROTOC=...`.
-- `ensure_protoc.sh` auto-detects host OS/arch (`linux`/`osx`, `x86_64`/`aarch_64`).
 - Some environments may require `ep_cmake_ar/ranlib/nm` overrides.
 
-### Build and run (consumer workspace pattern, with auto-downloaded `protoc`)
-
-Run from the `fluss-rust` repository root, or adjust the script path if you
-copied it elsewhere.
+### Build and run (consumer workspace pattern, build mode)
 
 ```bash
-PROTOC_BIN="$(bash bindings/cpp/scripts/ensure_protoc.sh --print-path)"
-```
-
-```bash
-bazel run --action_env=PROTOC="$PROTOC_BIN" //:fluss_reader
+bazel run //:fluss_reader
 ```
 
 If `cargo` is not on Bazel action `PATH`, also pass:
@@ -149,7 +129,6 @@ If `cargo` is not on Bazel action `PATH`, also pass:
 ```bash
 CARGO_BIN="$(command -v cargo)"
 bazel run \
-  --action_env=PROTOC="$PROTOC_BIN" \
   --action_env=CARGO="$CARGO_BIN" \
   --action_env=PATH="$(dirname "$CARGO_BIN"):$PATH" \
   //:fluss_reader
@@ -161,10 +140,8 @@ bazel run \
 
 ```bash
 cd bindings/cpp/examples/bazel-consumer/build
-PROTOC_BIN="$(bash ../../../scripts/ensure_protoc.sh --print-path)"
 CARGO_BIN="$(command -v cargo)"
 bazel run \
-  --action_env=PROTOC="$PROTOC_BIN" \
   --action_env=CARGO="$CARGO_BIN" \
   --action_env=PATH="$(dirname "$CARGO_BIN"):$PATH" \
   //:consumer_build
@@ -206,7 +183,6 @@ unset all_proxy ALL_PROXY
 
 ```bash
 cd bindings/cpp/examples/bazel-consumer/build
-PROTOC_BIN="$(bash ../../../scripts/ensure_protoc.sh --print-path)"
 CARGO_BIN="$(command -v cargo)"
 bazel --ignore_all_rc_files run \
   --registry=https://bcr.bazel.build \
@@ -221,7 +197,6 @@ bazel --ignore_all_rc_files run \
   --action_env=HTTPS_PROXY="${HTTPS_PROXY:-}" \
   --action_env=all_proxy= \
   --action_env=ALL_PROXY= \
-  --action_env=PROTOC="$PROTOC_BIN" \
   --action_env=CARGO="$CARGO_BIN" \
   --action_env=PATH="$(dirname "$CARGO_BIN"):$PATH" \
   --strategy=CcCmakeMakeRule=local \
@@ -247,7 +222,6 @@ sed -i \
   -e 's|system_arrow_runtime_glob = "lib/x86_64-linux-gnu/libarrow.so\\*"|system_arrow_runtime_glob = "lib/libarrow.so*"|' \
   "$tmp_dir/MODULE.bazel"
 cd "$tmp_dir"
-PROTOC_BIN="$(command -v protoc)"
 CARGO_BIN="$(command -v cargo)"
 bazel --ignore_all_rc_files run \
   --registry=https://bcr.bazel.build \
@@ -262,7 +236,6 @@ bazel --ignore_all_rc_files run \
   --action_env=HTTPS_PROXY="${HTTPS_PROXY:-}" \
   --action_env=all_proxy= \
   --action_env=ALL_PROXY= \
-  --action_env=PROTOC="$PROTOC_BIN" \
   --action_env=CARGO="$CARGO_BIN" \
   --action_env=PATH="$(dirname "$CARGO_BIN"):$PATH" \
   //:consumer_system
@@ -273,7 +246,7 @@ On macOS (BSD `sed`), replace `sed -i` with `sed -i ''` in the patch step above.
 ## Upgrade Procedure
 
 1. Update `bazel_dep(name = "fluss-cpp", version = "...")`
-2. Update mode version settings if needed (`protobuf_version`, `arrow_cpp_version`)
+2. Update mode version settings if needed (`arrow_cpp_version`)
 3. Run `bazel mod tidy`
 4. Commit `MODULE.bazel` and `MODULE.bazel.lock`
 5. Run build + tests

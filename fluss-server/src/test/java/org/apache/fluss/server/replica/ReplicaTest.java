@@ -55,6 +55,7 @@ import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.testutils.DataTestUtils;
 import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.utils.ByteArraySlice;
 import org.apache.fluss.utils.CloseableRegistry;
 import org.apache.fluss.utils.concurrent.Executors;
 import org.apache.fluss.utils.function.FunctionWithException;
@@ -1235,7 +1236,11 @@ final class ReplicaTest extends ReplicaTestBase {
             keys.add(expectedKeyValue.f0);
             expectValues.add(expectedKeyValue.f1);
         }
-        assertThat(kvTablet.multiGet(keys)).containsExactlyElementsOf(expectValues);
+        assertThat(
+                        kvTablet.multiGet(keys).stream()
+                                .map(ByteArraySlice::toByteArray)
+                                .collect(Collectors.toList()))
+                .containsExactlyElementsOf(expectValues);
     }
 
     /** A scheduledExecutorService that will execute the scheduled task immediately. */

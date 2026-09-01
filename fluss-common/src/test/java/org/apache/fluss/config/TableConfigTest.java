@@ -61,4 +61,14 @@ class TableConfigTest {
         conf.removeConfig(ConfigOptions.TABLE_LOG_LOCAL_TTL);
         assertThat(tableConfig.getLocalLogTTLMs()).isEqualTo(Duration.ofDays(3).toMillis());
     }
+
+    @Test
+    void testKvValueLayoutVersion() {
+        Configuration conf = new Configuration();
+        TableConfig tableConfig = new TableConfig(conf);
+
+        assertThat(tableConfig.getKvValueLayoutVersion()).isEmpty();
+        conf.set(ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION, 2);
+        assertThat(tableConfig.getKvValueLayoutVersion()).hasValue(2);
+    }
 }

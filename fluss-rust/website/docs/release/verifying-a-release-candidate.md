@@ -62,7 +62,7 @@ fluss-rust-0.1.0.tgz: OK
 
 ## Verifying build
 
-Extract the source release archive and verify that it builds (and optionally that tests pass). You need **Rust** (see [rust-toolchain.toml](https://github.com/apache/fluss/blob/main/fluss-rust/rust-toolchain.toml) for the expected version) and, for full builds, **protobuf** and **Python 3.9+** for bindings.
+Extract the source release archive and verify that it builds (and optionally that tests pass). You need **Rust** (see [rust-toolchain.toml](https://github.com/apache/fluss/blob/main/fluss-rust/rust-toolchain.toml) for the expected version) and, for full builds, **Python 3.9+** for bindings.
 
 ```bash
 tar -xzf fluss-rust-${RELEASE_VERSION}.tgz
@@ -87,6 +87,16 @@ Unzip the source release archive and verify that:
 4. Compatible non-ASL 2.0 licenses are documented (e.g. in NOTICE or in dependency audit files such as `DEPENDENCIES*.tsv`).
 
 The project uses [cargo-deny](https://embarkstudios.github.io/cargo-deny/) for license checks; see [Creating a Fluss Rust Client Release](create-release.md) for how the dependency list is generated before a release.
+
+The wheel, the sdist and the crate carry their own copies, since none of them is rooted at the repository root:
+
+```shell
+unzip -l pyfluss-*.whl | grep -E 'dist-info/licenses/(LICENSE|NOTICE)'
+tar -tzf pyfluss-*.tar.gz | grep -E '^[^/]+/(LICENSE|NOTICE)$'
+tar -tzf fluss-rs-*.crate | grep -E '^[^/]+/(LICENSE|NOTICE)$'
+```
+
+The C++ client ships only inside the source archive, so its LICENSE and NOTICE are the ones at the archive root.
 
 ## Testing features
 

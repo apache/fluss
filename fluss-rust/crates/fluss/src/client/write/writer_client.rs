@@ -25,9 +25,10 @@ use crate::client::write::bucket_assigner::{
 };
 use crate::client::write::sender::Sender;
 use crate::client::{RecordAccumulator, ResultHandle, WriteRecord};
+use crate::cluster::Cluster;
 use crate::config::Config;
 use crate::config::NoKeyAssigner;
-use crate::error::{Error, Result};
+use crate::error::{Error, FlussError, Result};
 use crate::metadata::{PhysicalTablePath, TableInfo};
 use crate::metrics::WriterMetrics;
 use bytes::Bytes;
@@ -119,10 +120,24 @@ impl WriterClient {
         }
         let physical_table_path = &record.physical_table_path;
         let cluster = self.metadata.get_cluster();
+        // A dropped table is missing here once its metadata is evicted. Report the
+        // same error its pending writes got, before the bucket assigner panics.
+        let table_path = physical_table_path.get_table_path();
+        cluster.get_table(table_path).map_err(|e| {
+            if e.api_error() == Some(FlussError::InvalidTableException) {
+                Error::table_not_exist(format!("Table not found: {table_path}"))
+            } else {
+                e
+            }
+        })?;
         let bucket_key = record.bucket_key.as_ref();
 
-        let (bucket_assigner, bucket_id) =
-            self.assign_bucket(&record.table_info, bucket_key, physical_table_path)?;
+        let (bucket_assigner, bucket_id) = self.assign_bucket(
+            &record.table_info,
+            bucket_key,
+            physical_table_path,
+            &cluster,
+        )?;
 
         let mut result = self.accumulate.append(
             record,
@@ -149,8 +164,8 @@ impl WriterClient {
         table_info: &Arc<TableInfo>,
         bucket_key: Option<&Bytes>,
         table_path: &Arc<PhysicalTablePath>,
+        cluster: &Arc<Cluster>,
     ) -> Result<(Arc<dyn BucketAssigner>, BucketId)> {
-        let cluster = self.metadata.get_cluster();
         let bucket_assigner = {
             if let Some(assigner) = self.bucket_assigners.get(table_path) {
                 assigner.clone()
@@ -162,7 +177,7 @@ impl WriterClient {
                 assigner
             }
         };
-        let bucket_id = bucket_assigner.assign_bucket(bucket_key, &cluster)?;
+        let bucket_id = bucket_assigner.assign_bucket(bucket_key, cluster)?;
         Ok((bucket_assigner, bucket_id))
     }
 

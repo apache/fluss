@@ -25,6 +25,7 @@ import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.decode.FixedSchemaDecoder;
+import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.utils.CopyOnWriteMap;
 import org.apache.fluss.utils.concurrent.FutureUtils;
 
@@ -85,7 +86,7 @@ abstract class AbstractLookuper implements Lookuper {
                 continue;
             }
             MemorySegment memorySegment = MemorySegment.wrap(valueBytes);
-            short schemaId = memorySegment.getShort(0);
+            short schemaId = KvValueLayout.PLAIN.readSchemaId(memorySegment);
             if (targetSchemaId != schemaId) {
                 allTargetSchema = false;
                 if (!decoders.containsKey(schemaId)) {
@@ -141,7 +142,7 @@ abstract class AbstractLookuper implements Lookuper {
     protected LookupResult processSchemaMismatchedRows(List<MemorySegment> valueList) {
         List<InternalRow> rowList = new ArrayList<>(valueList.size());
         for (MemorySegment value : valueList) {
-            short schemaId = value.getShort(0);
+            short schemaId = KvValueLayout.PLAIN.readSchemaId(value);
             FixedSchemaDecoder decoder = decoders.get(schemaId);
             checkArgument(decoder != null, "Decoder for schema id %s not found", schemaId);
             InternalRow row = decoder.decode(value);
@@ -161,7 +162,7 @@ abstract class AbstractLookuper implements Lookuper {
         // process the value list to convert to target schema
         List<InternalRow> rowList = new ArrayList<>(valueList.size());
         for (MemorySegment value : valueList) {
-            short schemaId = value.getShort(0);
+            short schemaId = KvValueLayout.PLAIN.readSchemaId(value);
             FixedSchemaDecoder decoder =
                     decoders.computeIfAbsent(
                             schemaId,

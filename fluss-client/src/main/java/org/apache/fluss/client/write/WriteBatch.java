@@ -57,6 +57,10 @@ public abstract class WriteBatch {
     protected boolean reopened;
     protected int recordCount;
     private long drainedMs;
+    // Snapshot of the bucket's lastAckedBatchSequence taken when this attempt was sent, used to
+    // tell a stale/reordered OutOfOrderSequence response (state advanced while in flight) apart
+    // from a genuine one (no progress since send).
+    private int lastAckedSequenceAtSend = IdempotenceBucketEntry.NO_LAST_ACKED_BATCH_SEQUENCE;
 
     public WriteBatch(
             long tableId,
@@ -171,6 +175,14 @@ public abstract class WriteBatch {
 
     public boolean sequenceHasBeenReset() {
         return reopened;
+    }
+
+    public void setLastAckedSequenceAtSend(int lastAckedSequenceAtSend) {
+        this.lastAckedSequenceAtSend = lastAckedSequenceAtSend;
+    }
+
+    public int lastAckedSequenceAtSend() {
+        return lastAckedSequenceAtSend;
     }
 
     public int bucketId() {

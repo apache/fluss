@@ -23,6 +23,7 @@ import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.BinaryValue;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.record.LogRecordBatch;
@@ -31,11 +32,13 @@ import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.RowPartitionGetter;
 import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.row.encode.RowEncoder;
 import org.apache.fluss.row.encode.ValueEncoder;
 import org.apache.fluss.row.indexed.IndexedRow;
 import org.apache.fluss.server.kv.autoinc.AutoIncIDRange;
+import org.apache.fluss.server.kv.historical.HistoricalKvKeyEncoder;
 import org.apache.fluss.server.log.FetchIsolation;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.zk.ZooKeeperClient;
@@ -53,6 +56,9 @@ import javax.annotation.Nullable;
 import java.util.List;
 
 import static org.apache.fluss.server.TabletManagerBase.getTableInfo;
+import static org.apache.fluss.server.kv.KvStateAccessor.HISTORICAL_TOMBSTONE;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** A helper for recovering Kv from log. */
 public class KvRecoverHelper {
@@ -67,6 +73,7 @@ public class KvRecoverHelper {
     private final KvFormat kvFormat;
     private final LogFormat logFormat;
     private final RemoteLogFetcher remoteLogFetcher;
+    private final boolean historicalPartition;
 
     // will be initialized when first encounter a log record during recovering from log
     private Integer currentSchemaId;
@@ -74,9 +81,12 @@ public class KvRecoverHelper {
 
     private KeyEncoder keyEncoder;
     private RowEncoder rowEncoder;
+    private final ValueEncoder valueEncoder;
+    @Nullable private final RowTtlTimestampProvider rowTtlTimestampProvider;
     private final SchemaGetter schemaGetter;
 
     private InternalRow.FieldGetter[] currentFieldGetters;
+    private @Nullable RowPartitionGetter historicalPartitionGetter;
 
     public KvRecoverHelper(
             KvTablet kvTablet,
@@ -88,7 +98,8 @@ public class KvRecoverHelper {
             KvFormat kvFormat,
             LogFormat logFormat,
             SchemaGetter schemaGetter,
-            RemoteLogFetcher remoteLogFetcher) {
+            RemoteLogFetcher remoteLogFetcher,
+            boolean historicalPartition) {
         this.kvTablet = kvTablet;
         this.logTablet = logTablet;
         this.recoverPointOffset = recoverPointOffset;
@@ -98,7 +109,10 @@ public class KvRecoverHelper {
         this.kvFormat = kvFormat;
         this.logFormat = logFormat;
         this.schemaGetter = schemaGetter;
+        this.valueEncoder = kvTablet.getValueEncoder();
+        this.rowTtlTimestampProvider = kvTablet.getRowTtlTimestampProvider();
         this.remoteLogFetcher = remoteLogFetcher;
+        this.historicalPartition = historicalPartition;
     }
 
     public void recover() throws Exception {
@@ -134,7 +148,11 @@ public class KvRecoverHelper {
             ThrowingConsumer<KeyValueAndLogOffset, Exception> resumeRecordApplier =
                     (resumeRecord) -> {
                         if (resumeRecord.value == null) {
-                            kvBatchWriter.delete(resumeRecord.key);
+                            if (historicalPartition) {
+                                kvBatchWriter.put(resumeRecord.key, HISTORICAL_TOMBSTONE);
+                            } else {
+                                kvBatchWriter.delete(resumeRecord.key);
+                            }
                         } else {
                             kvBatchWriter.put(resumeRecord.key, resumeRecord.value);
                         }
@@ -254,6 +272,9 @@ public class KvRecoverHelper {
             AutoIncIDRangeUpdater autoIncIdRangeUpdater,
             ThrowingConsumer<KeyValueAndLogOffset, Exception> resumeRecordConsumer)
             throws Exception {
+        if (rowTtlTimestampProvider != null) {
+            rowTtlTimestampProvider.prepareForBatch(logRecordBatch.commitTimestamp());
+        }
         try (CloseableIterator<LogRecord> logRecordIter = logRecordBatch.records(readContext)) {
             while (logRecordIter.hasNext()) {
                 LogRecord logRecord = logRecordIter.next();
@@ -263,12 +284,21 @@ public class KvRecoverHelper {
                 if (changeType != ChangeType.UPDATE_BEFORE) {
                     InternalRow logRow = logRecord.getRow();
                     byte[] key = keyEncoder.encodeKey(logRow);
+                    if (historicalPartition) {
+                        key =
+                                HistoricalKvKeyEncoder.encode(
+                                        checkNotNull(historicalPartitionGetter)
+                                                .getPartition(logRow),
+                                        key);
+                    }
                     byte[] value = null;
                     if (changeType != ChangeType.DELETE) {
                         // the log row format may not compatible with kv row format,
                         // e.g, arrow vs. compacted, thus needs a conversion here.
                         BinaryRow row = toKvRow(logRow);
-                        value = ValueEncoder.encodeValue(currentSchemaId.shortValue(), row);
+                        value =
+                                valueEncoder.encodeValue(
+                                        new BinaryValue(currentSchemaId.shortValue(), row));
                     }
                     resumeRecordConsumer.accept(
                             new KeyValueAndLogOffset(
@@ -331,6 +361,15 @@ public class KvRecoverHelper {
                         tableInfo.getPhysicalPrimaryKeys(),
                         tableInfo.getTableConfig(),
                         tableInfo.isDefaultBucketKey());
+        if (historicalPartition) {
+            List<String> partitionKeys = tableInfo.getPartitionKeys();
+            checkArgument(
+                    !partitionKeys.isEmpty(),
+                    "Historical KV recovery requires at least one partition key.");
+            historicalPartitionGetter = new RowPartitionGetter(currentRowType, partitionKeys);
+        } else {
+            historicalPartitionGetter = null;
+        }
         rowEncoder = RowEncoder.create(kvFormat, dataTypes);
         currentFieldGetters = new InternalRow.FieldGetter[currentRowType.getFieldCount()];
         for (int i = 0; i < currentRowType.getFieldCount(); i++) {

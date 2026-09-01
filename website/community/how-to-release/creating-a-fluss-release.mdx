@@ -205,8 +205,8 @@ Next, add a new version item for the next release version in the `website/fluss-
   "fullVersion": "1.1-SNAPSHOT",
   "shortVersion": "1.1",
   "dockerVersion": "1.1-SNAPSHOT",
-  "paimonVersion": "1.3.1",
-  "paimonVersionShort": "1.3",
+  "paimonVersion": "2.0.0",
+  "paimonVersionShort": "2.0",
   "released": false
 }
 ```
@@ -219,8 +219,8 @@ Additionally, update the `fullVersion`, `shortVersion`, and `dockerVersion` fiel
     "fullVersion": "1.0.0",
     "shortVersion": "1.0",
     "dockerVersion": "1.0.0",
-    "paimonVersion": "1.3.1",
-    "paimonVersionShort": "1.3",
+    "paimonVersion": "2.0.0",
+    "paimonVersionShort": "2.0",
     "released": false
  }
 ```
@@ -337,6 +337,7 @@ Tag the release commit:
 
 ```bash
 git tag -s ${TAG} -m "${TAG}"
+RELEASE_COMMIT="$(git rev-parse "${TAG}^{}")"
 ```
 
 ### 2. Create source release files
@@ -360,6 +361,26 @@ tools $ RELEASE_VERSION=$RELEASE_VERSION releasing/create_binary_release.sh
 
 This command creates a binary tarball and signs it under `tools/releasing/release` directory.
 
+Create the Linux Gateway convenience binaries on native `amd64` and `arm64`
+Docker buildx nodes. The script uses the pinned `rust:1.88-bookworm` builder
+and therefore defines Debian Bookworm (glibc 2.36) as the supported binary
+baseline. Run each command on a builder with a native node for that platform;
+do not compile the other architecture through QEMU:
+
+```bash
+tools $ RELEASE_VERSION=$RELEASE_VERSION GATEWAY_ARCH=amd64 releasing/create_gateway_release.sh
+tools $ RELEASE_VERSION=$RELEASE_VERSION GATEWAY_ARCH=arm64 releasing/create_gateway_release.sh
+```
+
+If the commands run on separate machines, copy both archives, signatures, and
+checksums into the same `tools/releasing/release/` directory before continuing.
+
+The Gateway archive follows the Java distribution layout (`bin/`, `conf/`,
+`LICENSE`, and `NOTICE`) and also includes its OpenAPI document and checked-in
+Rust dependency inventory. Like the Java distribution, its `LICENSE` and
+`NOTICE` come from component-specific binary versions rather than the source
+release files.
+
 ### 4. Create Helm Chart package
 
 Then, we create the Helm Chart packages:
@@ -379,6 +400,12 @@ releasing/release
 ├── fluss-1.0.0-bin.tgz
 ├── fluss-1.0.0-bin.tgz.asc
 ├── fluss-1.0.0-bin.tgz.sha512
+├── fluss-gateway-1.0.0-bin-linux-amd64.tgz
+├── fluss-gateway-1.0.0-bin-linux-amd64.tgz.asc
+├── fluss-gateway-1.0.0-bin-linux-amd64.tgz.sha512
+├── fluss-gateway-1.0.0-bin-linux-arm64.tgz
+├── fluss-gateway-1.0.0-bin-linux-arm64.tgz.asc
+├── fluss-gateway-1.0.0-bin-linux-arm64.tgz.sha512
 ├── fluss-1.0.0-src.tgz
 ├── fluss-1.0.0-src.tgz.asc
 ├── fluss-1.0.0-src.tgz.sha512
@@ -392,7 +419,7 @@ releasing/release
     │     └── fluss-1.0.0.tgz.sha512
     └── index.yaml
 
-3 directories, 13 files
+3 directories, 19 files
 ```
 
 
@@ -463,7 +490,7 @@ Close the staging repository on Apache Nexus. When prompted for a description, e
 ### 7. Stage Docker images
 
 :::note
-Make sure that you are authenticated with your Docker ID, and that your Docker ID has access to `apache/fluss`: `docker login -u <username>`. If you do not have access, you should seek help via the dev mailing list.
+Make sure that you are authenticated with your Docker ID, and that your Docker ID has access to `apache/fluss`, `apache/fluss-gateway`, and `apache/fluss-quickstart-flink`: `docker login -u <username>`. If you do not have access, you should seek help via the dev mailing list.
 
 If you can't login Docker ID in your region because of network issues, you can find a cloud machine that can access Docker Hub, and perform the following steps there.
 :::
@@ -481,16 +508,52 @@ $ cd docker/fluss
 docker/fluss $ docker buildx build --push --platform linux/arm64/v8,linux/amd64 --tag apache/fluss:${RELEASE_VERSION}-rc${RC_NUM} .
 ```
 
+Like the Java image, the Gateway image consumes a prepared binary distribution
+instead of compiling project sources in buildx, so both voted archives have to be
+unpacked into `docker/fluss-gateway/build-target/` first. Step 5 moved them out of
+`tools/releasing/release/`, so point `GATEWAY_RELEASE_DIR` at the staging working
+copy that now holds them:
+
+```bash
+docker/fluss $ cd ../..
+$ RELEASE_VERSION=$RELEASE_VERSION \
+    GATEWAY_RELEASE_DIR=tools/target/fluss/fluss-${RELEASE_VERSION}-rc${RC_NUM} \
+    docker/fluss-gateway/prepare_build.sh
+```
+
+If you build the images on a different machine than the one that created the
+archives, download both `fluss-gateway-${RELEASE_VERSION}-bin-linux-*.tgz` files
+from `https://dist.apache.org/repos/dist/dev/fluss/fluss-${RELEASE_VERSION}-rc${RC_NUM}/`
+into any directory and point `GATEWAY_RELEASE_DIR` there instead. Only the `.tgz`
+files are needed. Also copy the `RELEASE_COMMIT` value recorded when the RC tag
+was created and export it on the image-build machine; do not derive it from that
+machine's checkout.
+
+The Dockerfile selects the matching `build-target/<arch>` directory for each
+target platform:
+
+```bash
+$ cd docker/fluss-gateway
+docker/fluss-gateway $ docker buildx build \
+    --push \
+    --platform linux/arm64,linux/amd64 \
+    --build-arg FLUSS_VERSION=${RELEASE_VERSION} \
+    --build-arg VCS_REF=${RELEASE_COMMIT} \
+    --tag apache/fluss-gateway:${RELEASE_VERSION}-rc${RC_NUM} \
+    .
+```
+
 Then, run the following commands to build and push the flink, a customized Apache Flink image that includes all necessary libraries and JARs for the Fluss Quickstart guide:
 
 ```bash
-docker/fluss $ cd ../quickstart-flink
+docker/fluss-gateway $ cd ../quickstart-flink
 docker/quickstart-flink $ ./prepare_build.sh
 docker/quickstart-flink $ docker buildx build --push --platform linux/arm64/v8,linux/amd64 --tag apache/fluss-quickstart-flink:1.20-${RELEASE_VERSION}-rc${RC_NUM} .
 ```
 
 Verify the RC images are present:
 - https://hub.docker.com/r/apache/fluss/tags
+- https://hub.docker.com/r/apache/fluss-gateway/tags
 - https://hub.docker.com/r/apache/fluss-quickstart-flink/tags
 
 Then, update the `dockerVersion` field for the current release RC version in the `website/fluss-versions.json` file on the `main` branch to the value of `${RELEASE_VERSION}-rc${RC_NUM}` (which includes the RC suffix, e.g., `1.0.0-rc1`). This update should be committed and pushed to the `main` branch.
@@ -521,7 +584,7 @@ fluss-rust/scripts/bump-version.sh <previous_version> ${RELEASE_VERSION}
 Pushing the **RC tag** (`v${RELEASE_VERSION}-rc${RC_NUM}`) triggers the client workflows:
 
 - `python-release.yml` builds the wheels + sdist and publishes them to **TestPyPI**.
-- `rust-release.yml` runs `cargo publish --dry-run` to validate the crate. The canonical proto is vendored into the crate automatically (`fluss-rust/scripts/vendor-proto.sh`), because `build.rs` reads it from the in-repo `fluss-rpc`.
+- `rust-release.yml` runs `cargo publish --dry-run` to validate the crate. The generated protobuf code and the proto it came from are checked in under `fluss-rust/crates/fluss/`, so the crate publishes standalone with no extra preparation.
 
 The final publish to **crates.io** and **PyPI** happens when the release tag is pushed (see the **Git tag** step under [Finalize the release](#finalize-the-release)). Publishing uses the CI secrets `CARGO_REGISTRY_TOKEN`, `PYPI_API_TOKEN`, and `TEST_PYPI_API_TOKEN`.
 
@@ -531,7 +594,7 @@ The final publish to **crates.io** and **PyPI** happens when the release tag is 
 
 - Source & binary & helm-chart distribution deployed to the dev repository of [dist.apache.org](https://dist.apache.org/repos/dist/dev/fluss/)
 - Maven artifacts deployed to the staging repository of [repository.apache.org](https://repository.apache.org/content/repositories/)
-- RC Docker images pushed to DockerHub ([apache/fluss](https://hub.docker.com/r/apache/fluss/tags), [apache/fluss-quickstart-flink](https://hub.docker.com/r/apache/fluss-quickstart-flink/tags))
+- RC Docker images pushed to DockerHub ([apache/fluss](https://hub.docker.com/r/apache/fluss/tags), [apache/fluss-gateway](https://hub.docker.com/r/apache/fluss-gateway/tags), [apache/fluss-quickstart-flink](https://hub.docker.com/r/apache/fluss-quickstart-flink/tags))
 - RC tag pushed to the [official repository](https://github.com/apache/fluss/tags)
 - Updated `dockerVersion` in `fluss-versions.json` on `main` branch
 - Client RC artifacts published to TestPyPI, and `cargo publish --dry-run` for `fluss-rs` is green
@@ -591,6 +654,7 @@ Upgrade note for the new release:
 
 Docker images for the release candidate:
 * fluss
+* fluss-gateway
 * quickstart-flink
 
 Please download, verify and test. To learn more about how to verify:
@@ -711,11 +775,13 @@ Pushing the `v${RELEASE_VERSION}` tag also triggers the client release workflows
 ### 5. Publish Docker Images
 
 :::note
-Make sure that you are authenticated with your Docker ID, and that your Docker ID has access to `apache/fluss`: `docker login -u <username>`. If you do not have access, you should seek help via the dev mailing list.
+Make sure that you are authenticated with your Docker ID, and that your Docker ID has access to `apache/fluss`, `apache/fluss-gateway`, and `apache/fluss-quickstart-flink`: `docker login -u <username>`. If you do not have access, you should seek help via the dev mailing list.
 :::
 
 ```bash
 docker buildx imagetools create apache/fluss:${RELEASE_VERSION}-rc${RC_NUM} --tag apache/fluss:${RELEASE_VERSION}
+
+docker buildx imagetools create apache/fluss-gateway:${RELEASE_VERSION}-rc${RC_NUM} --tag apache/fluss-gateway:${RELEASE_VERSION}
 
 docker buildx imagetools create apache/fluss-quickstart-flink:1.20-${RELEASE_VERSION}-rc${RC_NUM} --tag apache/fluss-quickstart-flink:1.20-${RELEASE_VERSION}
 ```
@@ -750,7 +816,7 @@ In [GitHub Milestones](https://github.com/apache/fluss/milestones), mark the cur
 - Helm Chart package available in the release repository of https://dist.apache.org/repos/dist/release/fluss/helm-chart/
 - Dev repository https://dist.apache.org/repos/dist/dev/fluss/ is empty
 - Release tagged in the source code repository
-- Docker images for the release pushed to DockerHub ([apache/fluss](https://hub.docker.com/r/apache/fluss/tags), [apache/fluss-quickstart-flink](https://hub.docker.com/r/apache/fluss-quickstart-flink/tags))
+- Docker images for the release pushed to DockerHub ([apache/fluss](https://hub.docker.com/r/apache/fluss/tags), [apache/fluss-gateway](https://hub.docker.com/r/apache/fluss-gateway/tags), [apache/fluss-quickstart-flink](https://hub.docker.com/r/apache/fluss-quickstart-flink/tags))
 - Milestone marked as released in GitHub
 
 ## Promote the release

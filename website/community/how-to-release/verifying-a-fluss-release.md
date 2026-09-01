@@ -9,7 +9,7 @@ sidebar_position: 3
 
 Release vote email includes links to:
 
-- Distribution archives (source, admin, server) on dist.apache.org
+- Distribution archives (source, Java server, Gateway) on dist.apache.org
 - Signature files (.asc)
 - Checksum files (.sha512)
 - KEYS file
@@ -51,6 +51,7 @@ If the verification is successful, you will see a message like this:
 
 ```
 fluss-1.0.0-bin.tgz.sha512: OK
+fluss-gateway-1.0.0-bin-linux-amd64.tgz.sha512: OK
 fluss-1.0.0-src.tgz.sha512: OK
 ```
 
@@ -90,6 +91,51 @@ Per-language verification:
 
 The Rust workspace's dependency licenses are checked with [cargo-deny](https://embarkstudios.github.io/cargo-deny/); the release manager regenerates the dependency audit before the release.
 
+## Verifying the Gateway distribution
+
+Extract the Gateway archive on the matching Linux architecture and check its
+version, configuration, health endpoint, and graceful shutdown:
+
+```bash
+tar -xzf fluss-gateway-${RELEASE_VERSION}-bin-linux-amd64.tgz
+cd fluss-gateway-${RELEASE_VERSION}-bin-linux-amd64
+
+bin/fluss-gateway --version
+bin/fluss-gateway.sh --bind-address 127.0.0.1:8080 &
+GATEWAY_PID=$!
+
+curl --fail --silent --show-error http://127.0.0.1:8080/health
+
+kill -TERM ${GATEWAY_PID}
+wait ${GATEWAY_PID}
+```
+
+Confirm that the process exits with status `0`, and review `LICENSE`, `NOTICE`,
+and `DEPENDENCIES.rust.tsv` against the packaged contents. Repeat the same
+verification for the `arm64` archive on an `arm64` Linux host.
+
+The convenience binaries are built with the pinned Rust 1.88 Debian Bookworm
+builder and support Debian Bookworm's glibc 2.36 baseline or newer.
+
+Confirm that the release-candidate image contains both architectures:
+
+```bash
+docker buildx imagetools inspect \
+  apache/fluss-gateway:${RELEASE_VERSION}-rc${RC_NUM}
+```
+
+Then verify the image on matching `amd64` and `arm64` Docker hosts:
+
+```bash
+docker pull apache/fluss-gateway:${RELEASE_VERSION}-rc${RC_NUM}
+
+# Run the checked-in smoke test from the root of the extracted Fluss source
+# release, not from the Gateway binary distribution used above.
+cd /path/to/fluss-${RELEASE_VERSION}
+GATEWAY_IMAGE=apache/fluss-gateway:${RELEASE_VERSION}-rc${RC_NUM} \
+  docker/fluss-gateway/smoke-test.sh
+```
+
 ## Release artifacts and publish targets
 
 A release publishes to several registries; confirm each one carries the release version:
@@ -101,7 +147,8 @@ A release publishes to several registries; confirm each one carries the release 
 | Python | [PyPI](https://pypi.org/project/pyfluss/) (RC → [TestPyPI](https://test.pypi.org/project/pyfluss/)) | `pyfluss` |
 | C++ | source archive only (no registry) | — |
 | Elixir | Hex.pm (post-1.0; not yet published) | `fluss` |
-| Docker | Docker Hub | `apache/fluss`, `apache/fluss-quickstart-flink` |
+| Gateway | dist.apache.org | `fluss-gateway-<version>-bin-linux-<arch>.tgz` |
+| Docker | Docker Hub | `apache/fluss`, `apache/fluss-gateway`, `apache/fluss-quickstart-flink` |
 
 Source archives, signatures, and checksums are on [dist.apache.org](https://dist.apache.org/repos/dist/dev/fluss/) (dev) and, after the vote, on [downloads.apache.org](https://downloads.apache.org/fluss/).
 

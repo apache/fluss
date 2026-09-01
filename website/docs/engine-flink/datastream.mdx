@@ -97,6 +97,8 @@ The `FlussSourceBuilder` provides several methods for configuring the source con
 * **setFilter(Predicate filter):** Sets a predicate for server-side record batch filtering
 * **setScanPartitionDiscoveryIntervalMs(long intervalMs):** Sets the interval for discovering new partitions (default: from configuration)
 * **setStartingOffsets(OffsetsInitializer initializer):** Sets the strategy for determining starting offsets (default: `OffsetsInitializer.full()`)
+* **setBatch():** Selects the Fluss batch-read path; if stopping offsets are not specified, the source stops at the latest offsets captured when it starts
+* **setStoppingOffsets(OffsetsInitializer initializer):** Sets the strategy for determining stopping offsets (see [Read Mode and Offset Range](#read-mode-and-offset-range))
 * **setFlussConfig(Configuration flussConf):** Sets custom Fluss configuration properties
 
 ### Offset Initializers
@@ -126,6 +128,35 @@ FlussSource<Order> source = FlussSource.<Order>builder()
 // Start reading from a specific timestamp
 FlussSource<Order> source = FlussSource.<Order>builder()
     .setStartingOffsets(OffsetsInitializer.timestamp(System.currentTimeMillis() - 3600 * 1000))
+    // other configuration...
+    .build();
+```
+
+### Read Mode and Offset Range
+The read mode and offset range are configured independently:
+
+* `setBatch()` selects the Fluss batch-read path. If no stopping offsets are specified, batch reads stop at the latest offsets captured when the source starts.
+* `setStartingOffsets(OffsetsInitializer)` sets the beginning of the offset range.
+* `setStoppingOffsets(OffsetsInitializer)` sets the end of the offset range. In streaming mode, configuring stopping offsets makes the source bounded. In batch mode, it overrides the default latest stopping offsets for log-table reads.
+
+The deprecated `setBounded()` method is retained as a compatibility alias for `setBatch()`.
+
+Supported stopping offsets initializers are `OffsetsInitializer.latest()` and `OffsetsInitializer.timestamp(long)`. Explicit stopping offsets are supported for log tables and the changelog of primary key tables (earliest/latest/timestamp starting offsets), but not for the full startup mode of primary key tables or the datalake union read.
+
+**Example:**
+```java
+// Replay a bounded time range in streaming mode
+FlussSource<Order> timeRangeSource = FlussSource.<Order>builder()
+    .setStartingOffsets(OffsetsInitializer.timestamp(System.currentTimeMillis() - 3600 * 1000))
+    .setStoppingOffsets(OffsetsInitializer.timestamp(System.currentTimeMillis()))
+    // other configuration...
+    .build();
+
+// Read the same kind of offset range through the Fluss batch-read path
+FlussSource<Order> batchRangeSource = FlussSource.<Order>builder()
+    .setBatch()
+    .setStartingOffsets(OffsetsInitializer.earliest())
+    .setStoppingOffsets(OffsetsInitializer.timestamp(System.currentTimeMillis()))
     // other configuration...
     .build();
 ```

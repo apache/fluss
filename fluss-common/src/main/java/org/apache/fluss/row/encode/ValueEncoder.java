@@ -17,25 +17,67 @@
 
 package org.apache.fluss.row.encode;
 
+import org.apache.fluss.record.BinaryValue;
 import org.apache.fluss.row.BinaryRow;
-import org.apache.fluss.utils.UnsafeUtils;
+
+import java.util.function.ToLongFunction;
+
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** An encoder to encode {@link BinaryRow} with a schema id as value to be stored in kv store. */
-public class ValueEncoder {
+public final class ValueEncoder {
 
-    public static final int SCHEMA_ID_LENGTH = 2;
+    private static final ValueEncoder PLAIN_ENCODER = new ValueEncoder(KvValueLayout.PLAIN, null);
 
-    /**
-     * Encode the {@code row} with a {@code schemaId} to a byte array value to be expected persisted
-     * to kv store.
-     *
-     * @param schemaId the schema id of the row
-     * @param row the row to encode
-     */
-    public static byte[] encodeValue(short schemaId, BinaryRow row) {
-        byte[] values = new byte[SCHEMA_ID_LENGTH + row.getSizeInBytes()];
-        UnsafeUtils.putShort(values, 0, schemaId);
-        row.copyTo(values, SCHEMA_ID_LENGTH);
+    private final KvValueLayout kvValueLayout;
+    private final ToLongFunction<BinaryRow> valueTagProvider;
+
+    private ValueEncoder(KvValueLayout kvValueLayout, ToLongFunction<BinaryRow> valueTagProvider) {
+        this.kvValueLayout = kvValueLayout;
+        this.valueTagProvider = valueTagProvider;
+    }
+
+    /** Returns an encoder for a layout without an internal value tag. */
+    public static ValueEncoder forLayout(KvValueLayout kvValueLayout) {
+        checkNotNull(kvValueLayout, "kvValueLayout must not be null.");
+        if (kvValueLayout != KvValueLayout.PLAIN) {
+            throw new IllegalArgumentException(
+                    "A value tag provider is required for this KV value layout.");
+        }
+        return PLAIN_ENCODER;
+    }
+
+    /** Returns an encoder for a layout with an internal value tag. */
+    public static ValueEncoder forLayout(
+            KvValueLayout kvValueLayout, ToLongFunction<BinaryRow> valueTagProvider) {
+        checkNotNull(kvValueLayout, "kvValueLayout must not be null.");
+        checkNotNull(valueTagProvider, "valueTagProvider must not be null.");
+        if (!kvValueLayout.hasValueTag()) {
+            throw new IllegalArgumentException(
+                    "A value tag provider is not supported for this KV value layout.");
+        }
+        return new ValueEncoder(kvValueLayout, valueTagProvider);
+    }
+
+    /** Returns whether this encoder writes an internal value tag before the row bytes. */
+    public boolean hasValueTag() {
+        return kvValueLayout.hasValueTag();
+    }
+
+    /** Encodes a binary value using the layout bound to this encoder. */
+    public byte[] encodeValue(BinaryValue value) {
+        int rowPayloadOffset = kvValueLayout.rowPayloadOffset();
+        byte[] values = new byte[rowPayloadOffset + value.row.getSizeInBytes()];
+        kvValueLayout.writeSchemaId(values, value.schemaId);
+        if (valueTagProvider != null) {
+            kvValueLayout.writeValueTag(values, valueTagProvider.applyAsLong(value.row));
+        }
+        value.row.copyTo(values, rowPayloadOffset);
         return values;
+    }
+
+    /** Encodes a plain binary value for callers that do not select a layout explicitly. */
+    public static byte[] encodeValue(short schemaId, BinaryRow row) {
+        return PLAIN_ENCODER.encodeValue(new BinaryValue(schemaId, row));
     }
 }

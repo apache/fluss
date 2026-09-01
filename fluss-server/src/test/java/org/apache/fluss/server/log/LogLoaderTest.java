@@ -320,6 +320,37 @@ final class LogLoaderTest extends LogTestBase {
     }
 
     @Test
+    void testWriterStateRecoveryAcceptsBatchSequenceGap() throws Exception {
+        LogTablet log = createLogTablet(true);
+        long writerId = 1L;
+
+        log.appendAsFollower(
+                genMemoryLogRecordsWithWriterId(
+                        Collections.singletonList(new Object[] {1, "a"}), writerId, 10, 0L));
+        log.appendAsFollower(
+                genMemoryLogRecordsWithWriterId(
+                        Collections.singletonList(new Object[] {2, "b"}), writerId, 11, 1L));
+        log.roll(Optional.empty());
+
+        MemoryLogRecords recordsWithSequenceGap =
+                genMemoryLogRecordsWithWriterId(
+                        Collections.singletonList(new Object[] {3, "c"}), writerId, 100, 2L);
+        log.activeLogSegment().append(2L, clock.milliseconds(), 2L, recordsWithSequenceGap);
+        log.close();
+
+        log = createLogTablet(false);
+        assertThat(log.localLogEndOffset()).isEqualTo(3L);
+        assertThat(log.writerStateManager().activeWriters().get(writerId).lastBatchSequence())
+                .isEqualTo(100);
+
+        // The recovered state should be persisted in the new snapshot and survive another restart.
+        log.close();
+        log = createLogTablet(false);
+        assertThat(log.writerStateManager().activeWriters().get(writerId).lastBatchSequence())
+                .isEqualTo(100);
+    }
+
+    @Test
     void testWriterSnapshotsRecoveryAfterCleanShutdown() throws Exception {
         LogTablet log = createLogTablet(true);
         assertThat(log.writerStateManager().oldestSnapshotOffset()).isEmpty();

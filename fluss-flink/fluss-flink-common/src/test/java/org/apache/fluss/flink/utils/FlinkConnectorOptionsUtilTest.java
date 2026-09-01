@@ -17,8 +17,13 @@
 
 package org.apache.fluss.flink.utils;
 
+import org.apache.fluss.client.initializer.LatestOffsetsInitializer;
+import org.apache.fluss.client.initializer.NoStoppingOffsetsInitializer;
+import org.apache.fluss.client.initializer.TimestampOffsetsInitializer;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.flink.FlinkConnectorOptions.ScanBoundedMode;
 
+import org.apache.flink.api.connector.source.Boundedness;
 import org.apache.flink.table.api.ValidationException;
 import org.junit.jupiter.api.Test;
 
@@ -81,6 +86,34 @@ class FlinkConnectorOptionsUtilTest {
                         () -> FlinkConnectorOptionsUtils.validateTableSourceOptions(tableOptions))
                 .isInstanceOf(ValidationException.class)
                 .hasMessage("'scan.split.assignment.batch-size' must be positive, but was 0.");
+    }
+
+    @Test
+    void testStoppingOffsetsAndBoundedness() {
+        FlinkConnectorOptionsUtils.BoundedOptions boundedOptions =
+                FlinkConnectorOptionsUtils.BoundedOptions.unbounded();
+
+        assertThat(FlinkConnectorOptionsUtils.toStoppingOffsetsInitializer(boundedOptions))
+                .isInstanceOf(NoStoppingOffsetsInitializer.class);
+        assertThat(FlinkConnectorOptionsUtils.toStoppingOffsetsInitializer(false, boundedOptions))
+                .isInstanceOf(LatestOffsetsInitializer.class);
+        assertThat(FlinkConnectorOptionsUtils.toBoundedness(true, boundedOptions))
+                .isEqualTo(Boundedness.CONTINUOUS_UNBOUNDED);
+        assertThat(FlinkConnectorOptionsUtils.toBoundedness(false, boundedOptions))
+                .isEqualTo(Boundedness.BOUNDED);
+
+        boundedOptions = FlinkConnectorOptionsUtils.BoundedOptions.latestOffset();
+        assertThat(boundedOptions.getBoundedMode()).isEqualTo(ScanBoundedMode.LATEST_OFFSET);
+        assertThat(FlinkConnectorOptionsUtils.toStoppingOffsetsInitializer(true, boundedOptions))
+                .isInstanceOf(LatestOffsetsInitializer.class);
+        assertThat(FlinkConnectorOptionsUtils.toBoundedness(true, boundedOptions))
+                .isEqualTo(Boundedness.BOUNDED);
+
+        boundedOptions = FlinkConnectorOptionsUtils.BoundedOptions.timestamp(123L);
+        assertThat(boundedOptions.getBoundedMode()).isEqualTo(ScanBoundedMode.TIMESTAMP);
+        assertThat(boundedOptions.getBoundedTimestampMs()).isEqualTo(123L);
+        assertThat(FlinkConnectorOptionsUtils.toStoppingOffsetsInitializer(true, boundedOptions))
+                .isInstanceOf(TimestampOffsetsInitializer.class);
     }
 
     @Test

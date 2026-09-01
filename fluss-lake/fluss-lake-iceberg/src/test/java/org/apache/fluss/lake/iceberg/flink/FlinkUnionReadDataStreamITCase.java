@@ -235,8 +235,8 @@ public class FlinkUnionReadDataStreamITCase extends FlinkUnionReadTestBase {
     }
 
     @Test
-    void testBoundedRequiresFullStartupModeFailsFast() throws Exception {
-        String tableName = "ds_bounded_invalid_startup";
+    void testBatchRequiresFullStartupModeFailsFast() throws Exception {
+        String tableName = "ds_batch_invalid_startup";
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
         createPkTable(tablePath, false);
 
@@ -246,13 +246,13 @@ public class FlinkUnionReadDataStreamITCase extends FlinkUnionReadTestBase {
                         .setDatabase(DEFAULT_DB)
                         .setTable(tableName)
                         .setStartingOffsets(OffsetsInitializer.earliest())
-                        .setBounded()
+                        .setBatch()
                         .setDeserializationSchema(new RowDataDeserializationSchema());
 
         assertThatThrownBy(builder::build)
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining(
-                        "Bounded (batch) read on primary-key tables requires full mode");
+                        "Batch read on primary-key tables requires full startup mode");
     }
 
     @Test
@@ -283,7 +283,7 @@ public class FlinkUnionReadDataStreamITCase extends FlinkUnionReadTestBase {
                         .setDatabase(DEFAULT_DB)
                         .setTable(tableName)
                         .setStartingOffsets(OffsetsInitializer.full())
-                        .setBounded()
+                        .setBatch()
                         .setDeserializationSchema(new RowDataDeserializationSchema())
                         .build();
         List<Row> actual = collectBounded(batchEnv, source, FULL_COLS);

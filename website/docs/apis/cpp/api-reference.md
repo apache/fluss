@@ -121,6 +121,7 @@ Complete API reference for the Fluss C++ client.
 | `NewPrefixLookup(std::vector<std::string> cols, PrefixLookuper& out) -> Result` | Create a prefix (bucket-key) lookuper |
 | `NewScan() -> TableScan`      | Create a scan builder                    |
 | `GetTableInfo() -> TableInfo` | Get table metadata                       |
+| `GetArrowSchema(std::shared_ptr<arrow::Schema>& out) -> Result` | The Arrow schema `AppendArrowBatch` expects |
 | `GetTablePath() -> TablePath` | Get the table path                       |
 | `HasPrimaryKey() -> bool`     | Check if the table has a primary key     |
 
@@ -469,6 +470,7 @@ Read-only result of a prefix lookup — zero or more matched rows. Each row is a
 |------------------------------------------------------------------------|-------------------------|
 | `AddColumn(const std::string& name, const DataType& type) -> Builder&` | Add a column            |
 | `SetPrimaryKeys(const std::vector<std::string>& keys) -> Builder&`     | Set primary key columns |
+| `SetAutoIncrementColumn(std::string column) -> Builder&`               | Set the auto increment column. Must be an `INT` or `BIGINT` column of a primary-key table, and not a primary-key column itself. |
 | `Build() -> Schema`                                                    | Build the schema        |
 
 ## `TableDescriptor`

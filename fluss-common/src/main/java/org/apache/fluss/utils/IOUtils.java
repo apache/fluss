@@ -25,6 +25,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.PrintStream;
 import java.nio.ByteBuffer;
+import java.util.Arrays;
 
 /* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -105,6 +106,13 @@ public class IOUtils {
     public static long copyBytes(final InputStream in, final OutputStream out, final boolean close)
             throws IOException {
         return copyBytes(in, out, BLOCKSIZE, close);
+    }
+
+    /**
+     * Closes all non-null {@link AutoCloseable} objects in the parameter, suppressing exceptions.
+     */
+    public static void closeAll(AutoCloseable... closeables) throws Exception {
+        closeAll(Arrays.asList(closeables));
     }
 
     /**

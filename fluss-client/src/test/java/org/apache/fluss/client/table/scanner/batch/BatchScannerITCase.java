@@ -25,6 +25,7 @@ import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.RemoteFileDownloader;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.client.write.HashBucketAssigner;
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
@@ -123,6 +124,23 @@ class BatchScannerITCase extends ClientToServerITCaseBase {
         FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshots(expectedRowByBuckets.keySet());
 
         // test read snapshot
+        testSnapshotRead(tablePath, expectedRowByBuckets);
+    }
+
+    @Test
+    void testScanTaggedSnapshot() throws Exception {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "test-tagged-table-snapshot");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(DEFAULT_SCHEMA)
+                        .distributedBy(DEFAULT_BUCKET_NUM, "id")
+                        .property(ConfigOptions.TABLE_KV_TTL.key(), "1 h")
+                        .build();
+        long tableId = createTable(tablePath, tableDescriptor, true);
+
+        Map<TableBucket, List<InternalRow>> expectedRowByBuckets = putRows(tableId, tablePath, 10);
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshots(expectedRowByBuckets.keySet());
+
         testSnapshotRead(tablePath, expectedRowByBuckets);
     }
 

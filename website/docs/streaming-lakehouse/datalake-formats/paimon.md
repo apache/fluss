@@ -32,18 +32,26 @@ Verify downloaded JARs using the [verification instructions](/downloads#verifyin
 
 ## Version Compatibility
 
-| Use Case        | Required/Tested Versions                           |
-|-----------------|----------------------------------------------------|
-| Tiering Service | Paimon **1.3** (required)                          |
-| Union Read      | Paimon 1.1, 1.2, 1.3 (tested and verified to work) |
+| Use Case        | Required/Tested Versions                                     |
+|-----------------|--------------------------------------------------------------|
+| Tiering Service | Paimon 1.4, 2.0 (tested and verified to work)                 |
+| Union Read      | Paimon 1.1, 1.2, 1.3, 1.4, 2.0 (tested and verified to work) |
+| Java Runtime    | Java 11 or later; Paimon 2.0 adds no higher requirement      |
 
 ## Configure Paimon as LakeHouse Storage
 
 For general guidance on configuring Paimon as the lakehouse storage, you can refer to [Deploying Streaming Lakehouse](../../install-deploy/deploying-streaming-lakehouse.md) documentation. When starting the tiering service, make sure to use Paimon-specific configurations as parameters.
 
 When a table is created or altered with the option `'table.datalake.enabled' = 'true'`, Fluss will automatically create a corresponding Paimon table with the same table path.
-The schema of the Paimon table matches that of the Fluss table, except for the addition of three system columns at the end: `__bucket`, `__offset`, and `__timestamp`.  
-These system columns help Fluss clients consume data from Paimon in a streaming fashion, such as seeking by a specific bucket using an offset or timestamp.
+Newly created Paimon tables (**clean** tables) contain only the user-defined columns of the Fluss table. Fluss no longer appends the `__bucket`, `__offset`, and `__timestamp` system columns to the physical schema.
+
+:::note
+Paimon tables created by earlier Fluss versions (**legacy** tables) still carry the three trailing system columns. These tables are **not** migrated and remain fully readable and writable. Fluss detects the layout from the physical schema — a table is treated as legacy when it carries the system columns, and clean otherwise — so both layouts are supported side by side without any manual migration.
+
+The names `__bucket`, `__offset`, and `__timestamp` remain reserved for Fluss internal use, so user columns must not use these names.
+
+For the rolling-upgrade requirements when moving to a Fluss version that creates clean tables, see [Upgrade Notes](../../maintenance/operations/upgrade-notes-1.0.md).
+:::
 
 ```sql title="Flink SQL"
 USE CATALOG fluss_catalog;
@@ -178,6 +186,25 @@ SELECT COUNT(*) FROM paimon_catalog.fluss.orders;
 -- Query the system tables to view snapshots of the table
 SELECT * FROM paimon_catalog.fluss.enriched_orders$snapshots;
 ```
+
+## Schema Evolution
+
+The schema of a Paimon table managed by Fluss must always be evolved through Fluss. When you add columns to a Fluss table with `ALTER TABLE ... ADD` (see [Add Columns](../../engine-flink/ddl.md#add-columns)), the new columns are appended at the end as nullable columns, and Fluss applies the same change to the Paimon table as part of the `ALTER TABLE` statement, so the two schemas stay in sync.
+
+:::warning External schema changes stall tiering
+Do not change the schema of a Fluss-managed Paimon table through an external engine, for example by adding a column on the Paimon table from Spark or Doris. The tiering service requires the user columns of the Paimon table to match the Fluss table schema. Once the Paimon table contains a column that the Fluss table does not have, tiering the table's records can fail with an error like the following:
+
+```
+Caused by: java.io.IOException: Failed to write Fluss record to Paimon.
+Caused by: java.lang.IllegalStateException: Field 18 is NULL because Paimon schema is wider than Fluss record.
+```
+
+The tiering job then fails and restarts in a loop until the schemas match again, cycling between the RUNNING and RESTARTING states in the Flink UI. The restart loop also interrupts tiering progress for the other tables served by the same job. Adding a column is the most common trigger, but any external change that makes the schemas diverge stops tiering in the same way, possibly with a different error message.
+
+No data is lost or corrupted, and the records that could not be tiered remain readable in Fluss. However, Fluss keeps log data until it has been tiered, so log retention for the table is effectively paused and storage usage grows until the schemas match again. Fix the mismatch promptly.
+
+To recover, make the two schemas consistent again. To keep the externally added column, run a matching `ALTER TABLE ... ADD` statement on the Fluss table. When the Paimon table already contains the column in the expected position, Fluss completes the change without touching the Paimon table. If Fluss rejects the statement because the schemas cannot be reconciled, drop the externally added column from the Paimon table and, if you still need it, add it through Fluss afterwards. Once the schemas match, the tiering job recovers on its next automatic restart and the pending records are tiered completely. If you cancelled the tiering job in the meantime, resubmit it.
+:::
 
 ## Data Type Mapping
 

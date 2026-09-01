@@ -19,6 +19,7 @@ package org.apache.fluss.server.kv;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.metadata.KvFormat;
@@ -44,6 +45,7 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.utils.ByteArraySlice;
 import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.concurrent.FlussScheduler;
 
@@ -163,6 +165,28 @@ final class KvManagerTest {
         return Arrays.asList(null, "2024");
     }
 
+    @Test
+    void testPositiveSharedBlockCacheSizeEnablesSharedCache() throws Exception {
+        kvManager.shutdown();
+        kvManager = null;
+        conf.set(ConfigOptions.KV_SHARED_BLOCK_CACHE_SIZE, MemorySize.parse("64mb"));
+        kvManager =
+                KvManager.create(
+                        conf,
+                        zkClient,
+                        logManager,
+                        TestingMetricGroups.TABLET_SERVER_METRICS,
+                        localDiskManager);
+        kvManager.startup();
+
+        initTableBuckets(null);
+        KvTablet firstKv = getOrCreateKv(tablePath1, null, tableBucket1);
+        KvTablet secondKv = getOrCreateKv(tablePath2, null, tableBucket2);
+
+        assertThat(firstKv.getRocksDBKv().getBlockCache())
+                .isSameAs(secondKv.getRocksDBKv().getBlockCache());
+    }
+
     @ParameterizedTest
     @MethodSource("partitionProvider")
     void testCreateKv(String partitionName) throws Exception {
@@ -229,9 +253,9 @@ final class KvManagerTest {
         }
 
         // check kv1
-        assertThat(kv1.multiGet(kv1Keys)).containsExactlyElementsOf(kv1Values);
+        assertThat(toByteArrays(kv1.multiGet(kv1Keys))).containsExactlyElementsOf(kv1Values);
         // check kv2
-        assertThat(kv2.multiGet(kv2Keys)).containsExactlyElementsOf(kv2Values);
+        assertThat(toByteArrays(kv2.multiGet(kv2Keys))).containsExactlyElementsOf(kv2Values);
     }
 
     @ParameterizedTest
@@ -253,7 +277,7 @@ final class KvManagerTest {
         kvManager.startup();
 
         KvTablet reopened = getOrCreateKv(tablePath1, partitionName, tableBucket1);
-        assertThat(reopened.multiGet(Collections.singletonList(key)))
+        assertThat(toByteArrays(reopened.multiGet(Collections.singletonList(key))))
                 .containsExactly((byte[]) null);
     }
 
@@ -313,7 +337,7 @@ final class KvManagerTest {
         }
 
         // check kv1
-        assertThat(kv1.multiGet(kvKeys)).containsExactlyElementsOf(kvValues);
+        assertThat(toByteArrays(kv1.multiGet(kvKeys))).containsExactlyElementsOf(kvValues);
     }
 
     @ParameterizedTest
@@ -351,7 +375,8 @@ final class KvManagerTest {
 
         kv1 = getOrCreateKv(tablePath1, partitionName, tableBucket1);
         assertThat(kv1.getKvTabletDir()).exists();
-        assertThat(kv1.multiGet(Collections.singletonList(key))).containsExactly((byte[]) null);
+        assertThat(toByteArrays(kv1.multiGet(Collections.singletonList(key))))
+                .containsExactly((byte[]) null);
         assertThat(kvManager.getKv(tableBucket1)).isPresent();
     }
 
@@ -542,7 +567,15 @@ final class KvManagerTest {
 
     private void verifyMultiGet(KvTablet kvTablet, byte[] key, byte[] expectedValue)
             throws IOException {
-        List<byte[]> gotValues = kvTablet.multiGet(Collections.singletonList(key));
+        List<byte[]> gotValues = toByteArrays(kvTablet.multiGet(Collections.singletonList(key)));
         assertThat(gotValues).containsExactly(expectedValue);
+    }
+
+    private static List<byte[]> toByteArrays(List<ByteArraySlice> slices) {
+        List<byte[]> values = new ArrayList<>(slices.size());
+        for (ByteArraySlice slice : slices) {
+            values.add(slice == null ? null : slice.toByteArray());
+        }
+        return values;
     }
 }

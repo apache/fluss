@@ -46,7 +46,8 @@ class HudiRowAsFlussRowTest {
         GenericRowData nestedRow = new GenericRowData(1);
         nestedRow.setField(0, StringData.fromString("nested"));
 
-        GenericRowData rowData = new GenericRowData(19);
+        // FIP-27: a clean Hudi row has only user columns (no trailing system columns).
+        GenericRowData rowData = new GenericRowData(16);
         rowData.setField(0, true);
         rowData.setField(1, (byte) 1);
         rowData.setField(2, (short) 2);
@@ -67,9 +68,6 @@ class HudiRowAsFlussRowTest {
                         Collections.singletonMap(
                                 StringData.fromString("key"), StringData.fromString("value"))));
         rowData.setField(15, nestedRow);
-        rowData.setField(16, 0);
-        rowData.setField(17, 1L);
-        rowData.setField(18, TimestampData.fromEpochMillis(3000L));
 
         HudiRowAsFlussRow row = new HudiRowAsFlussRow(rowData);
 

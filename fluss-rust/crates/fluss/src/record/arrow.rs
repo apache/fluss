@@ -21,11 +21,11 @@ use crate::compression::{
 };
 use crate::error::{Error, Result};
 use crate::metadata::{DataField, DataType, RowType, UNEXIST_MAPPING};
-use crate::record::{ChangeType, ScanRecord};
+use crate::record::ScanRecord;
 use crate::row::column_vector::TypedBatch;
 use crate::row::column_writer::{ColumnWriter, round_up_to_8};
 use crate::row::{ColumnarRow, InternalRow};
-use arrow::array::{ArrayBuilder, ArrayRef, new_null_array};
+use arrow::array::{Array, ArrayBuilder, ArrayRef, new_null_array};
 use arrow::{
     array::RecordBatch,
     buffer::Buffer,
@@ -41,117 +41,19 @@ use arrow_schema::SchemaRef;
 use arrow_schema::{DataType as ArrowDataType, Field};
 use byteorder::WriteBytesExt;
 use byteorder::{ByteOrder, LittleEndian};
-use bytes::Bytes;
 use crc32c::crc32c;
 use std::{
     cell::Cell,
     collections::HashMap,
-    fs::File,
-    io::{Cursor, Read, Seek, SeekFrom, Write},
-    path::PathBuf,
+    io::{Cursor, Write},
     sync::Arc,
 };
 
+use super::log_record_batch::*;
 use crate::error::Error::IllegalArgument;
+use crate::record::statistics::{estimated_serialized_size, serialize_statistics};
 use arrow::ipc::writer::IpcWriteOptions;
-/// const for record batch
-pub const BASE_OFFSET_LENGTH: usize = 8;
-pub const LENGTH_LENGTH: usize = 4;
-pub const MAGIC_LENGTH: usize = 1;
-pub const COMMIT_TIMESTAMP_LENGTH: usize = 8;
-pub const CRC_LENGTH: usize = 4;
-pub const SCHEMA_ID_LENGTH: usize = 2;
-pub const ATTRIBUTE_LENGTH: usize = 1;
-pub const LAST_OFFSET_DELTA_LENGTH: usize = 4;
-pub const WRITE_CLIENT_ID_LENGTH: usize = 8;
-pub const BATCH_SEQUENCE_LENGTH: usize = 4;
-pub const RECORDS_COUNT_LENGTH: usize = 4;
-
-pub const BASE_OFFSET_OFFSET: usize = 0;
-pub const LENGTH_OFFSET: usize = BASE_OFFSET_OFFSET + BASE_OFFSET_LENGTH;
-pub const MAGIC_OFFSET: usize = LENGTH_OFFSET + LENGTH_LENGTH;
-pub const COMMIT_TIMESTAMP_OFFSET: usize = MAGIC_OFFSET + MAGIC_LENGTH;
-pub const CRC_OFFSET: usize = COMMIT_TIMESTAMP_OFFSET + COMMIT_TIMESTAMP_LENGTH;
-pub const SCHEMA_ID_OFFSET: usize = CRC_OFFSET + CRC_LENGTH;
-pub const ATTRIBUTES_OFFSET: usize = SCHEMA_ID_OFFSET + SCHEMA_ID_LENGTH;
-pub const LAST_OFFSET_DELTA_OFFSET: usize = ATTRIBUTES_OFFSET + ATTRIBUTE_LENGTH;
-pub const WRITE_CLIENT_ID_OFFSET: usize = LAST_OFFSET_DELTA_OFFSET + LAST_OFFSET_DELTA_LENGTH;
-pub const BATCH_SEQUENCE_OFFSET: usize = WRITE_CLIENT_ID_OFFSET + WRITE_CLIENT_ID_LENGTH;
-pub const RECORDS_COUNT_OFFSET: usize = BATCH_SEQUENCE_OFFSET + BATCH_SEQUENCE_LENGTH;
-pub const RECORDS_OFFSET: usize = RECORDS_COUNT_OFFSET + RECORDS_COUNT_LENGTH;
-
-pub const RECORD_BATCH_HEADER_SIZE: usize = RECORDS_OFFSET;
-pub const ARROW_CHANGETYPE_OFFSET: usize = RECORD_BATCH_HEADER_SIZE;
-pub const LOG_OVERHEAD: usize = LENGTH_OFFSET + LENGTH_LENGTH;
-
-/// Bit 0 of the attributes byte. When set, the batch is append-only and carries
-/// no change-type vector; when clear, a `record_count`-byte change-type vector
-/// precedes the Arrow IPC payload (the changelog of a primary-key table). Shares
-/// the wire layout of the Java client's `DefaultLogRecordBatch`.
-pub const APPEND_ONLY_FLAG_MASK: u8 = 0x01;
-
-/// Maximum batch size matches Java's Integer.MAX_VALUE limit.
-/// Java uses int type for batch size, so max value is 2^31 - 1 = 2,147,483,647 bytes (~2GB).
-/// This is the implicit limit in FileLogRecords.java and other Java components.
-pub const MAX_BATCH_SIZE: usize = i32::MAX as usize; // 2,147,483,647 bytes (~2GB)
-
-/// const for record
-/// The "magic" values.
-#[derive(Debug, Clone, Copy)]
-pub enum LogMagicValue {
-    V0 = 0,
-}
-
-/// Safely convert batch size from i32 to usize with validation.
-///
-/// Validates that:
-/// - batch_size_bytes is non-negative
-/// - batch_size_bytes + LOG_OVERHEAD doesn't overflow
-/// - Result is within reasonable bounds
-fn validate_batch_size(batch_size_bytes: i32) -> Result<usize> {
-    // Check for negative size (corrupted data)
-    if batch_size_bytes < 0 {
-        return Err(Error::UnexpectedError {
-            message: format!("Invalid negative batch size: {batch_size_bytes}"),
-            source: None,
-        });
-    }
-
-    let batch_size_u = batch_size_bytes as usize;
-
-    // Check for overflow when adding LOG_OVERHEAD
-    let total_size =
-        batch_size_u
-            .checked_add(LOG_OVERHEAD)
-            .ok_or_else(|| Error::UnexpectedError {
-                message: format!(
-                    "Batch size {batch_size_u} + LOG_OVERHEAD {LOG_OVERHEAD} would overflow"
-                ),
-                source: None,
-            })?;
-
-    // Sanity check: reject unreasonably large batches
-    if total_size > MAX_BATCH_SIZE {
-        return Err(Error::UnexpectedError {
-            message: format!(
-                "Batch size {total_size} exceeds maximum allowed size {MAX_BATCH_SIZE}"
-            ),
-            source: None,
-        });
-    }
-
-    Ok(total_size)
-}
-
-// NOTE: Rust layout/offsets currently match Java only for V0.
-// TODO: Add V1 layout/offsets to keep parity with Java's V1 format.
-pub const CURRENT_LOG_MAGIC_VALUE: u8 = LogMagicValue::V0 as u8;
-
-/// Value used if writer ID is not available or non-idempotent.
-pub const NO_WRITER_ID: i64 = -1;
-
-/// Value used if batch sequence is not available.
-pub const NO_BATCH_SEQUENCE: i32 = -1;
+use bytes::Bytes;
 
 pub const BUILDER_DEFAULT_OFFSET: i64 = 0;
 
@@ -163,7 +65,7 @@ const INITIAL_ROW_CAPACITY: usize = 1024;
 /// Matching Java's `ArrowWriter.BUFFER_USAGE_RATIO`.
 const BUFFER_USAGE_RATIO: f32 = 0.95;
 
-pub struct MemoryLogRecordsArrowBuilder {
+pub(crate) struct MemoryLogRecordsArrowBuilder {
     base_log_offset: i64,
     schema_id: i32,
     magic: u8,
@@ -188,6 +90,22 @@ pub struct MemoryLogRecordsArrowBuilder {
     /// Matching Java's `ArrowWriter.estimatedCompressionRatio` which is
     /// cached per batch and only refreshed on `reset()`.
     estimated_compression_ratio: f32,
+    /// Statistics columns with their row type; `Some` upgrades the batch to V1.
+    statistics: Option<(RowType, Vec<usize>)>,
+    /// Per-schema estimate of the serialized statistics size.
+    estimated_statistics_size: usize,
+}
+
+/// Table-level configuration for building Arrow log batches, shared by
+/// `ArrowLogWriteBatch` and `MemoryLogRecordsArrowBuilder`.
+pub(crate) struct ArrowBatchConfig {
+    pub schema_id: i32,
+    pub row_type: RowType,
+    /// Statistics column mapping; `Some` upgrades batches to V1.
+    pub stats_index_mapping: Option<Vec<usize>>,
+    pub compression: ArrowCompressionInfo,
+    pub write_limit: usize,
+    pub compression_ratio_estimator: Arc<ArrowCompressionRatioEstimator>,
 }
 
 pub trait ArrowRecordBatchInnerBuilder: Send {
@@ -207,10 +125,20 @@ pub trait ArrowRecordBatchInnerBuilder: Send {
     fn estimated_size_in_bytes(&self) -> usize;
 }
 
-#[derive(Default)]
-pub struct PrebuiltRecordBatchBuilder {
+pub(crate) struct PrebuiltRecordBatchBuilder {
+    row_type: RowType,
     arrow_record_batch: Option<Arc<RecordBatch>>,
     records_count: i32,
+}
+
+impl PrebuiltRecordBatchBuilder {
+    fn new(row_type: RowType) -> Self {
+        Self {
+            row_type,
+            arrow_record_batch: None,
+            records_count: 0,
+        }
+    }
 }
 
 impl ArrowRecordBatchInnerBuilder for PrebuiltRecordBatchBuilder {
@@ -227,6 +155,10 @@ impl ArrowRecordBatchInnerBuilder for PrebuiltRecordBatchBuilder {
         if self.arrow_record_batch.is_some() {
             return Ok(false);
         }
+        let record_batch = Arc::new(prepare_append_record_batch(
+            record_batch.as_ref(),
+            &self.row_type,
+        )?);
         self.records_count = record_batch.num_rows() as i32;
         self.arrow_record_batch = Some(record_batch);
         Ok(true)
@@ -363,30 +295,54 @@ impl ArrowRecordBatchInnerBuilder for RowAppendRecordBatchBuilder {
 // the previous batch (recordsCount / 2) for a warm start, avoiding the first-record
 // size check on every new batch.
 impl MemoryLogRecordsArrowBuilder {
-    pub fn new(
-        schema_id: i32,
-        row_type: &RowType,
-        to_append_record_batch: bool,
-        arrow_compression_info: ArrowCompressionInfo,
-        write_limit: usize,
-        compression_ratio_estimator: Arc<ArrowCompressionRatioEstimator>,
-    ) -> Result<Self> {
+    pub(crate) fn new(config: ArrowBatchConfig, to_append_record_batch: bool) -> Result<Self> {
+        let ArrowBatchConfig {
+            schema_id,
+            row_type,
+            stats_index_mapping,
+            compression: arrow_compression_info,
+            write_limit,
+            compression_ratio_estimator,
+        } = config;
         let arrow_batch_builder: Box<dyn ArrowRecordBatchInnerBuilder> = {
             if to_append_record_batch {
-                Box::new(PrebuiltRecordBatchBuilder::default())
+                Box::new(PrebuiltRecordBatchBuilder::new(row_type.clone()))
             } else {
-                Box::new(RowAppendRecordBatchBuilder::new(row_type)?)
+                Box::new(RowAppendRecordBatchBuilder::new(&row_type)?)
             }
         };
-        let schema = to_arrow_schema(row_type)?;
+        let schema = to_arrow_schema(&row_type)?;
         let ipc_overhead =
             estimate_arrow_ipc_overhead(&schema, arrow_compression_info.get_compression_type())?;
         let effective_limit = (write_limit as f32 * BUFFER_USAGE_RATIO) as usize;
         let estimated_compression_ratio = compression_ratio_estimator.estimation();
+
+        // Validate the mapping as Java does when building the collector's
+        // stats row type.
+        let field_count = row_type.fields().len();
+        if let Some(mapping) = &stats_index_mapping {
+            if let Some(&index) = mapping.iter().find(|&&index| index >= field_count) {
+                return Err(IllegalArgument {
+                    message: format!(
+                        "Statistics column index {index} is out of range for {field_count} fields"
+                    ),
+                });
+            }
+        }
+        let magic = if stats_index_mapping.is_some() {
+            LOG_MAGIC_VALUE_V1
+        } else {
+            LOG_MAGIC_VALUE_V0
+        };
+        let estimated_statistics_size = stats_index_mapping
+            .as_ref()
+            .map_or(0, |mapping| estimated_serialized_size(&row_type, mapping));
+        let statistics = stats_index_mapping.map(|mapping| (row_type, mapping));
+
         Ok(MemoryLogRecordsArrowBuilder {
             base_log_offset: BUILDER_DEFAULT_OFFSET,
             schema_id,
-            magic: CURRENT_LOG_MAGIC_VALUE,
+            magic,
             writer_id: NO_WRITER_ID,
             batch_sequence: NO_BATCH_SEQUENCE,
             is_closed: false,
@@ -397,7 +353,17 @@ impl MemoryLogRecordsArrowBuilder {
             estimated_max_records_count: Cell::new(-1),
             compression_ratio_estimator,
             estimated_compression_ratio,
+            statistics,
+            estimated_statistics_size,
         })
+    }
+
+    fn header_size(&self) -> usize {
+        if self.magic >= LOG_MAGIC_VALUE_V1 {
+            V1_RECORD_BATCH_HEADER_SIZE
+        } else {
+            RECORD_BATCH_HEADER_SIZE
+        }
     }
 
     pub fn append(&mut self, record: &WriteRecord) -> Result<bool> {
@@ -472,6 +438,9 @@ impl MemoryLogRecordsArrowBuilder {
     }
 
     pub fn build(&mut self) -> Result<Vec<u8>> {
+        // The header and CRC offsets below assume the V0/V1 layout without V2's leader epoch.
+        debug_assert!(self.magic < LOG_MAGIC_VALUE_V2);
+
         // Capture uncompressed body size before serialization for compression ratio update.
         let uncompressed_body_size = self.arrow_record_batch_builder.estimated_size_in_bytes();
 
@@ -508,14 +477,35 @@ impl MemoryLogRecordsArrowBuilder {
                 .update_estimation(actual_ratio);
         }
 
-        // now, write batch header and arrow batch
-        let mut batch_bytes = vec![0u8; RECORD_BATCH_HEADER_SIZE + real_arrow_batch_bytes.len()];
-        // write batch header
-        self.write_batch_header(&mut batch_bytes[..])?;
+        let statistics_bytes = match &self.statistics {
+            Some((row_type, mapping)) => {
+                match serialize_statistics(record_batch.as_ref(), row_type, mapping) {
+                    Ok(Some(bytes)) => bytes,
+                    // Unlike Java's 27-byte empty block, an empty mapping
+                    // writes length 0, which both parsers read as no statistics.
+                    Ok(None) => Vec::new(),
+                    // A failure degrades to an empty section rather than
+                    // failing the batch, matching Java's builder.
+                    Err(error) => {
+                        log::error!("Failed to serialize statistics for record batch: {error}");
+                        Vec::new()
+                    }
+                }
+            }
+            None => Vec::new(),
+        };
 
-        // write arrow batch bytes
+        // now, write batch header, statistics and arrow batch
+        let header_size = self.header_size();
+        let mut batch_bytes =
+            vec![0u8; header_size + statistics_bytes.len() + real_arrow_batch_bytes.len()];
+        // write batch header
+        self.write_batch_header(&mut batch_bytes[..], statistics_bytes.len())?;
+
+        // write statistics and arrow batch bytes
         let mut cursor = Cursor::new(&mut batch_bytes[..]);
-        cursor.set_position(RECORD_BATCH_HEADER_SIZE as u64);
+        cursor.set_position(header_size as u64);
+        cursor.write_all(&statistics_bytes)?;
         cursor.write_all(real_arrow_batch_bytes)?;
 
         let calcute_crc_bytes = &cursor.get_ref()[SCHEMA_ID_OFFSET..];
@@ -527,31 +517,19 @@ impl MemoryLogRecordsArrowBuilder {
         Ok(batch_bytes.to_vec())
     }
 
-    fn write_batch_header(&self, buffer: &mut [u8]) -> Result<()> {
-        let total_len = buffer.len();
-        let mut cursor = Cursor::new(buffer);
-        cursor.write_i64::<LittleEndian>(self.base_log_offset)?;
-        cursor
-            .write_i32::<LittleEndian>((total_len - BASE_OFFSET_LENGTH - LENGTH_LENGTH) as i32)?;
-        cursor.write_u8(self.magic)?;
-        cursor.write_i64::<LittleEndian>(0)?; // timestamp placeholder
-        cursor.write_u32::<LittleEndian>(0)?; // crc placeholder
-        cursor.write_i16::<LittleEndian>(self.schema_id as i16)?;
-
-        let record_count = self.arrow_record_batch_builder.records_count();
-        // todo: curerntly, always is append only
-        let append_only = true;
-        cursor.write_u8(if append_only { 1 } else { 0 })?;
-        cursor.write_i32::<LittleEndian>(if record_count > 0 {
-            record_count - 1
-        } else {
-            0
-        })?;
-
-        cursor.write_i64::<LittleEndian>(self.writer_id)?;
-        cursor.write_i32::<LittleEndian>(self.batch_sequence)?;
-        cursor.write_i32::<LittleEndian>(record_count)?;
-        Ok(())
+    fn write_batch_header(&self, buffer: &mut [u8], statistics_length: usize) -> Result<()> {
+        write_batch_header_fields(
+            buffer,
+            BatchHeaderFields {
+                base_log_offset: self.base_log_offset,
+                magic: self.magic,
+                schema_id: self.schema_id,
+                writer_id: self.writer_id,
+                batch_sequence: self.batch_sequence,
+                record_count: self.arrow_record_batch_builder.records_count(),
+                statistics_length,
+            },
+        )
     }
 
     pub fn set_writer_state(&mut self, writer_id: i64, batch_base_sequence: i32) {
@@ -559,13 +537,12 @@ impl MemoryLogRecordsArrowBuilder {
         self.batch_sequence = batch_base_sequence;
     }
 
-    /// Get an estimate of the number of bytes written to the underlying buffer.
-    /// Includes Fluss record batch header + Arrow IPC metadata + estimated
-    /// compressed body size.
+    /// Estimated bytes written: header, statistics estimate (V1), Arrow IPC
+    /// metadata and estimated compressed body.
     pub fn estimated_size_in_bytes(&self) -> usize {
         let body = self.arrow_record_batch_builder.estimated_size_in_bytes();
         let estimated_body = self.estimated_compressed_size(body);
-        RECORD_BATCH_HEADER_SIZE + self.ipc_overhead + estimated_body
+        self.header_size() + self.estimated_statistics_size + self.ipc_overhead + estimated_body
     }
 
     /// Number of records appended so far. Used for writer throughput metrics.
@@ -635,487 +612,6 @@ pub trait ToArrow {
     fn append_to(&self, builder: &mut dyn ArrayBuilder) -> Result<()>;
 }
 
-/// In-memory log record source.
-/// Used for local tablet server fetches (existing path).
-struct MemorySource {
-    data: Bytes,
-}
-
-impl MemorySource {
-    fn new(data: Vec<u8>) -> Self {
-        Self {
-            data: Bytes::from(data),
-        }
-    }
-
-    fn read_batch_header(&mut self, pos: usize) -> Result<(i64, usize)> {
-        if pos + LOG_OVERHEAD > self.data.len() {
-            return Err(Error::UnexpectedError {
-                message: format!(
-                    "Position {} + LOG_OVERHEAD {} exceeds data size {}",
-                    pos,
-                    LOG_OVERHEAD,
-                    self.data.len()
-                ),
-                source: None,
-            });
-        }
-
-        let base_offset = LittleEndian::read_i64(&self.data[pos + BASE_OFFSET_OFFSET..]);
-        let batch_size_bytes = LittleEndian::read_i32(&self.data[pos + LENGTH_OFFSET..]);
-
-        // Validate batch size to prevent integer overflow and corruption
-        let batch_size = validate_batch_size(batch_size_bytes)?;
-
-        Ok((base_offset, batch_size))
-    }
-
-    fn read_batch_data(&mut self, pos: usize, size: usize) -> Result<Bytes> {
-        if pos + size > self.data.len() {
-            return Err(Error::UnexpectedError {
-                message: format!(
-                    "Read beyond data size: {} + {} > {}",
-                    pos,
-                    size,
-                    self.data.len()
-                ),
-                source: None,
-            });
-        }
-        // Zero-copy slice (Bytes is Arc-based)
-        Ok(self.data.slice(pos..pos + size))
-    }
-
-    fn total_size(&self) -> usize {
-        self.data.len()
-    }
-}
-
-/// RAII guard that deletes a file when dropped.
-/// Used to ensure file deletion happens AFTER the file handle is closed.
-struct FileCleanupGuard {
-    file_path: PathBuf,
-}
-
-impl Drop for FileCleanupGuard {
-    fn drop(&mut self) {
-        // File handle is already closed (this guard drops after the file field)
-        if let Err(e) = std::fs::remove_file(&self.file_path) {
-            log::warn!(
-                "Failed to delete remote log file {}: {}",
-                self.file_path.display(),
-                e
-            );
-        } else {
-            log::debug!("Deleted remote log file: {}", self.file_path.display());
-        }
-    }
-}
-
-/// File-backed log record source.
-/// Used for remote log segments downloaded to local disk.
-/// Streams data on-demand instead of loading entire file into memory.
-///
-/// Uses seek + read_exact for cross-platform compatibility.
-/// Access pattern is sequential iteration (single consumer).
-struct FileSource {
-    file: File,
-    file_size: usize,
-    base_offset: usize,
-    _cleanup: Option<FileCleanupGuard>, // Drops AFTER file (field order matters!)
-}
-
-impl FileSource {
-    /// Create a new FileSource.
-    ///
-    /// The file at `file_path` will be deleted when this FileSource is dropped.
-    fn new(file: File, base_offset: usize, file_path: PathBuf) -> Result<Self> {
-        let file_size = file.metadata()?.len() as usize;
-
-        // Validate base_offset to prevent underflow in total_size()
-        if base_offset > file_size {
-            return Err(Error::UnexpectedError {
-                message: format!("base_offset ({base_offset}) exceeds file_size ({file_size})"),
-                source: None,
-            });
-        }
-
-        Ok(Self {
-            file,
-            file_size,
-            base_offset,
-            _cleanup: Some(FileCleanupGuard { file_path }),
-        })
-    }
-
-    /// Read data at a specific position using seek + read_exact.
-    /// This is cross-platform and adequate for sequential access patterns.
-    fn read_at(&mut self, pos: u64, buf: &mut [u8]) -> Result<()> {
-        self.file.seek(SeekFrom::Start(pos))?;
-        self.file.read_exact(buf)?;
-        Ok(())
-    }
-
-    fn read_batch_header(&mut self, pos: usize) -> Result<(i64, usize)> {
-        let actual_pos = self.base_offset + pos;
-        if actual_pos + LOG_OVERHEAD > self.file_size {
-            return Err(Error::UnexpectedError {
-                message: format!(
-                    "Position {} exceeds file size {}",
-                    actual_pos, self.file_size
-                ),
-                source: None,
-            });
-        }
-
-        // Read only the header to extract base_offset and batch_size
-        let mut header_buf = vec![0u8; LOG_OVERHEAD];
-        self.read_at(actual_pos as u64, &mut header_buf)?;
-
-        let base_offset = LittleEndian::read_i64(&header_buf[BASE_OFFSET_OFFSET..]);
-        let batch_size_bytes = LittleEndian::read_i32(&header_buf[LENGTH_OFFSET..]);
-
-        // Validate batch size to prevent integer overflow and corruption
-        let batch_size = validate_batch_size(batch_size_bytes)?;
-
-        Ok((base_offset, batch_size))
-    }
-
-    fn read_batch_data(&mut self, pos: usize, size: usize) -> Result<Bytes> {
-        let actual_pos = self.base_offset + pos;
-        if actual_pos + size > self.file_size {
-            return Err(Error::UnexpectedError {
-                message: format!(
-                    "Read beyond file size: {} + {} > {}",
-                    actual_pos, size, self.file_size
-                ),
-                source: None,
-            });
-        }
-
-        // Read the full batch data
-        let mut batch_buf = vec![0u8; size];
-        self.read_at(actual_pos as u64, &mut batch_buf)?;
-
-        Ok(Bytes::from(batch_buf))
-    }
-
-    fn total_size(&self) -> usize {
-        self.file_size - self.base_offset
-    }
-}
-
-/// Enum for different log record sources.
-enum LogRecordsSource {
-    Memory(MemorySource),
-    File(FileSource),
-}
-
-impl LogRecordsSource {
-    fn read_batch_header(&mut self, pos: usize) -> Result<(i64, usize)> {
-        match self {
-            Self::Memory(s) => s.read_batch_header(pos),
-            Self::File(s) => s.read_batch_header(pos),
-        }
-    }
-
-    fn read_batch_data(&mut self, pos: usize, size: usize) -> Result<Bytes> {
-        match self {
-            Self::Memory(s) => s.read_batch_data(pos, size),
-            Self::File(s) => s.read_batch_data(pos, size),
-        }
-    }
-
-    fn total_size(&self) -> usize {
-        match self {
-            Self::Memory(s) => s.total_size(),
-            Self::File(s) => s.total_size(),
-        }
-    }
-}
-
-pub struct LogRecordsBatches {
-    source: LogRecordsSource,
-    current_pos: usize,
-    remaining_bytes: usize,
-}
-
-impl LogRecordsBatches {
-    /// Create from in-memory Vec (existing path - backward compatible).
-    pub fn new(data: Vec<u8>) -> Self {
-        let source = LogRecordsSource::Memory(MemorySource::new(data));
-        let remaining_bytes = source.total_size();
-        Self {
-            source,
-            current_pos: 0,
-            remaining_bytes,
-        }
-    }
-
-    /// Create from file.
-    /// Enables streaming without loading entire file into memory.
-    ///
-    /// The file at `file_path` will be deleted when dropped.
-    /// This ensures the file is closed before deletion.
-    pub fn from_file(file: File, base_offset: usize, file_path: PathBuf) -> Result<Self> {
-        let source = FileSource::new(file, base_offset, file_path)?;
-        let remaining_bytes = source.total_size();
-        Ok(Self {
-            source: LogRecordsSource::File(source),
-            current_pos: 0,
-            remaining_bytes,
-        })
-    }
-
-    /// Try to get the size of the next batch.
-    fn next_batch_size(&mut self) -> Result<Option<usize>> {
-        if self.remaining_bytes < LOG_OVERHEAD {
-            return Ok(None);
-        }
-
-        // Read only header to get size
-        match self.source.read_batch_header(self.current_pos) {
-            Ok((_base_offset, batch_size)) => {
-                if batch_size > self.remaining_bytes {
-                    Ok(None)
-                } else {
-                    Ok(Some(batch_size))
-                }
-            }
-            Err(e) => Err(e),
-        }
-    }
-}
-
-impl Iterator for LogRecordsBatches {
-    type Item = Result<LogRecordBatch>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self.next_batch_size() {
-            Ok(Some(batch_size)) => {
-                // Read full batch data on-demand
-                match self.source.read_batch_data(self.current_pos, batch_size) {
-                    Ok(data) => {
-                        let record_batch = LogRecordBatch::new(data);
-                        self.current_pos += batch_size;
-                        self.remaining_bytes -= batch_size;
-                        Some(Ok(record_batch))
-                    }
-                    Err(e) => Some(Err(e)),
-                }
-            }
-            Ok(None) => None,
-            Err(e) => Some(Err(e)),
-        }
-    }
-}
-
-pub struct LogRecordBatch {
-    data: Bytes,
-}
-
-#[allow(dead_code)]
-impl LogRecordBatch {
-    pub fn new(data: Bytes) -> Self {
-        LogRecordBatch { data }
-    }
-
-    pub fn magic(&self) -> u8 {
-        self.data[MAGIC_OFFSET]
-    }
-
-    pub fn commit_timestamp(&self) -> i64 {
-        let offset = COMMIT_TIMESTAMP_OFFSET;
-        LittleEndian::read_i64(&self.data[offset..offset + COMMIT_TIMESTAMP_LENGTH])
-    }
-
-    pub fn writer_id(&self) -> i64 {
-        let offset = WRITE_CLIENT_ID_OFFSET;
-        LittleEndian::read_i64(&self.data[offset..offset + WRITE_CLIENT_ID_LENGTH])
-    }
-
-    pub fn batch_sequence(&self) -> i32 {
-        let offset = BATCH_SEQUENCE_OFFSET;
-        LittleEndian::read_i32(&self.data[offset..offset + BATCH_SEQUENCE_LENGTH])
-    }
-
-    pub fn ensure_valid(&self) -> Result<()> {
-        // TODO enable validation once checksum handling is corrected.
-        Ok(())
-    }
-
-    pub fn is_valid(&self) -> bool {
-        self.size_in_bytes() >= RECORD_BATCH_HEADER_SIZE
-            && self.checksum() == self.compute_checksum()
-    }
-
-    fn compute_checksum(&self) -> u32 {
-        let start = SCHEMA_ID_OFFSET;
-        crc32c(&self.data[start..])
-    }
-
-    fn attributes(&self) -> u8 {
-        self.data[ATTRIBUTES_OFFSET]
-    }
-
-    /// Whether this batch is append-only (see [`APPEND_ONLY_FLAG_MASK`]).
-    fn is_append_only(&self) -> bool {
-        self.attributes() & APPEND_ONLY_FLAG_MASK != 0
-    }
-
-    pub fn next_log_offset(&self) -> i64 {
-        self.last_log_offset() + 1
-    }
-
-    pub fn checksum(&self) -> u32 {
-        let offset = CRC_OFFSET;
-        LittleEndian::read_u32(&self.data[offset..offset + CRC_LENGTH])
-    }
-
-    pub fn schema_id(&self) -> i16 {
-        let offset = SCHEMA_ID_OFFSET;
-        LittleEndian::read_i16(&self.data[offset..offset + SCHEMA_ID_LENGTH])
-    }
-
-    pub fn base_log_offset(&self) -> i64 {
-        let offset = BASE_OFFSET_OFFSET;
-        LittleEndian::read_i64(&self.data[offset..offset + BASE_OFFSET_LENGTH])
-    }
-
-    pub fn last_log_offset(&self) -> i64 {
-        self.base_log_offset() + self.last_offset_delta() as i64
-    }
-
-    fn last_offset_delta(&self) -> i32 {
-        let offset = LAST_OFFSET_DELTA_OFFSET;
-        LittleEndian::read_i32(&self.data[offset..offset + LAST_OFFSET_DELTA_LENGTH])
-    }
-
-    pub fn size_in_bytes(&self) -> usize {
-        let offset = LENGTH_OFFSET;
-        LittleEndian::read_i32(&self.data[offset..offset + LENGTH_LENGTH]) as usize + LOG_OVERHEAD
-    }
-
-    pub fn record_count(&self) -> i32 {
-        let offset = RECORDS_COUNT_OFFSET;
-        LittleEndian::read_i32(&self.data[offset..offset + RECORDS_COUNT_LENGTH])
-    }
-
-    /// Splits the batch body into its per-record change types and the trailing
-    /// Arrow IPC payload (see [`APPEND_ONLY_FLAG_MASK`] for the layout).
-    fn decode_change_types(&self) -> Result<(BatchChangeTypes, &[u8])> {
-        let body = self
-            .data
-            .get(RECORDS_OFFSET..)
-            .ok_or_else(|| Error::UnexpectedError {
-                message: format!(
-                    "Corrupt log record batch: data length {} is less than RECORDS_OFFSET {}",
-                    self.data.len(),
-                    RECORDS_OFFSET
-                ),
-                source: None,
-            })?;
-
-        if self.is_append_only() {
-            return Ok((BatchChangeTypes::Uniform(ChangeType::AppendOnly), body));
-        }
-
-        let record_count = self.record_count();
-        if record_count < 0 {
-            return Err(Error::UnexpectedError {
-                message: format!("Corrupt changelog batch: negative record count {record_count}"),
-                source: None,
-            });
-        }
-        let record_count = record_count as usize;
-        let (change_type_bytes, arrow_data) =
-            body.split_at_checked(record_count)
-                .ok_or_else(|| Error::UnexpectedError {
-                    message: format!(
-                        "Corrupt changelog batch: body length {} is smaller than its \
-                         {record_count}-record change-type vector",
-                        body.len()
-                    ),
-                    source: None,
-                })?;
-
-        let mut change_types = Vec::with_capacity(record_count);
-        for &byte in change_type_bytes {
-            let change_type =
-                ChangeType::from_byte_value(byte).map_err(|message| Error::UnexpectedError {
-                    message,
-                    source: None,
-                })?;
-            change_types.push(change_type);
-        }
-
-        Ok((BatchChangeTypes::PerRecord(change_types), arrow_data))
-    }
-
-    pub fn records(&self, read_context: &ReadContext) -> Result<LogRecordIterator> {
-        if self.record_count() == 0 {
-            return Ok(LogRecordIterator::empty());
-        }
-
-        let (change_types, arrow_data) = self.decode_change_types()?;
-        let record_batch = read_context.record_batch(arrow_data)?;
-        let arrow_reader = ArrowReader::new_with_fluss_row_type(
-            Arc::new(record_batch),
-            read_context.row_type.clone(),
-            read_context.fluss_row_type().cloned(),
-        )?;
-        let iterator = ArrowLogRecordIterator::new(
-            arrow_reader,
-            self.base_log_offset(),
-            self.commit_timestamp(),
-            change_types,
-        )?;
-
-        Ok(LogRecordIterator::Arrow(iterator))
-    }
-
-    pub fn records_for_remote_log(&self, read_context: &ReadContext) -> Result<LogRecordIterator> {
-        if self.record_count() == 0 {
-            return Ok(LogRecordIterator::empty());
-        }
-
-        let (change_types, arrow_data) = self.decode_change_types()?;
-        let record_batch = read_context.record_batch_for_remote_log(arrow_data)?;
-        let log_record_iterator = match record_batch {
-            None => LogRecordIterator::empty(),
-            Some(record_batch) => {
-                let arrow_reader = ArrowReader::new_with_fluss_row_type(
-                    Arc::new(record_batch),
-                    read_context.row_type.clone(),
-                    read_context.fluss_row_type().cloned(),
-                )?;
-                let iterator = ArrowLogRecordIterator::new(
-                    arrow_reader,
-                    self.base_log_offset(),
-                    self.commit_timestamp(),
-                    change_types,
-                )?;
-                LogRecordIterator::Arrow(iterator)
-            }
-        };
-        Ok(log_record_iterator)
-    }
-
-    /// Returns the record batch directly without creating an iterator.
-    /// This is more efficient when you need the entire batch rather than
-    /// iterating row-by-row.
-    pub fn record_batch(&self, read_context: &ReadContext) -> Result<RecordBatch> {
-        if self.record_count() == 0 {
-            // Return empty batch with correct schema
-            return Ok(RecordBatch::new_empty(read_context.target_schema.clone()));
-        }
-
-        // Batch access drops the change-type vector; use `records()` for CDC.
-        let (_, arrow_data) = self.decode_change_types()?;
-        read_context.record_batch(arrow_data)
-    }
-}
-
 /// Parse an Arrow IPC message from a byte slice.
 ///
 /// Server returns RecordBatch message (without Schema message) in the encapsulated message format.
@@ -1136,7 +632,7 @@ impl LogRecordBatch {
 /// Returns `Err(arrow_error)` on errors
 /// - `arrow_error`: Error details e.g. malformed, too short or bad continuation marker.
 fn parse_ipc_message(
-    data: &[u8],
+    data: &Bytes,
 ) -> Result<(
     arrow::ipc::RecordBatch<'_>,
     Buffer,
@@ -1173,10 +669,296 @@ fn parse_ipc_message(
 
     let metadata_padded_size = (metadata_size + 7) & !7;
     let body_start = 8 + metadata_padded_size;
-    let body_data = &data[body_start..];
-    let body_buffer = Buffer::from(body_data);
+    // Slicing the `Bytes` bumps a refcount; `Buffer::from(&[u8])` would copy.
+    let body_buffer = Buffer::from(data.slice(body_start..));
 
     Ok((batch_metadata, body_buffer, message.version()))
+}
+
+/// Drops what does not change how a value is read: nested field names, which
+/// readers take by position, nullability, which `check_not_null` covers, and the
+/// name of a timestamp's zone.
+fn erase_read_irrelevant(data_type: &ArrowDataType) -> ArrowDataType {
+    // Arrow names the list element and the map entries struct itself; builders
+    // disagree on what to call them, and nothing is identified by them.
+    let anonymous =
+        |f: &Arc<Field>| Arc::new(Field::new("", erase_read_irrelevant(f.data_type()), true));
+    // A field the table named. Its name says which value it is, so it is kept.
+    let named = |f: &Arc<Field>| {
+        Arc::new(Field::new(
+            f.name(),
+            erase_read_irrelevant(f.data_type()),
+            true,
+        ))
+    };
+    match data_type {
+        ArrowDataType::List(f) => ArrowDataType::List(anonymous(f)),
+        // A map's key and value are Arrow's own names and builders disagree on
+        // them (`keys`/`values` vs `key`/`value`), so they are dropped too. That
+        // leaves a swap undetectable when key and value share a type - callers
+        // must build entries as (key, value).
+        ArrowDataType::Map(f, _) => {
+            let entries = match f.data_type() {
+                ArrowDataType::Struct(kv) => {
+                    ArrowDataType::Struct(kv.iter().map(anonymous).collect::<Vec<_>>().into())
+                }
+                other => erase_read_irrelevant(other),
+            };
+            ArrowDataType::Map(Arc::new(Field::new("", entries, true)), false)
+        }
+        ArrowDataType::Struct(fields) => {
+            ArrowDataType::Struct(fields.iter().map(named).collect::<Vec<_>>().into())
+        }
+        // Zoned or not is a real difference; which zone it names is not, since
+        // the stored value is the same instant either way.
+        ArrowDataType::Timestamp(unit, zone) => {
+            ArrowDataType::Timestamp(*unit, zone.as_ref().map(|_| "".into()))
+        }
+        other => other.clone(),
+    }
+}
+
+/// A mismatched Arrow type is reread as something else - `timestamp[ns]` in a
+/// `TIMESTAMP(3)` column comes back as milliseconds, `decimal(10,4)` in a
+/// `DECIMAL(10,2)` shifts two digits.
+/// Columns are matched by position, so a batch whose columns are in a different
+/// order would silently write into the wrong ones. Checked before any conversion,
+/// which rebuilds the schema and would otherwise supply the names itself.
+fn check_column_names(batch: &RecordBatch, row_type: &RowType) -> Result<()> {
+    let expected = to_arrow_schema(row_type)?;
+    if batch.num_columns() != expected.fields().len() {
+        return Err(IllegalArgument {
+            message: format!(
+                "RecordBatch has {} columns but the table has {}",
+                batch.num_columns(),
+                expected.fields().len()
+            ),
+        });
+    }
+    for (i, field) in expected.fields().iter().enumerate() {
+        let actual_name = batch.schema().field(i).name().clone();
+        if actual_name != *field.name() {
+            return Err(IllegalArgument {
+                message: format!(
+                    "Column {i} is named '{actual_name}' but the table declares '{}'",
+                    field.name()
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn check_column_types(batch: &RecordBatch, row_type: &RowType) -> Result<()> {
+    let expected = to_arrow_schema(row_type)?;
+    for (i, field) in expected.fields().iter().enumerate() {
+        let actual = batch.column(i).data_type();
+        if erase_read_irrelevant(actual) != erase_read_irrelevant(field.data_type()) {
+            return Err(IllegalArgument {
+                message: format!(
+                    "Column '{}' has Arrow type {} but the table declares {}",
+                    field.name(),
+                    actual,
+                    field.data_type()
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// True when `from` differs from `to` only in how it stores offsets or encodes
+/// values, so converting it cannot change what the values are. `large_` variants
+/// and views differ in offset width; a dictionary is the same values, encoded.
+fn is_lossless_encoding_difference(from: &ArrowDataType, to: &ArrowDataType) -> bool {
+    use ArrowDataType::*;
+    match (from, to) {
+        (LargeUtf8 | Utf8View, Utf8) => true,
+        (LargeBinary | BinaryView, Binary) => true,
+        (LargeList(f) | List(f), List(t)) => is_same_or_lossless(f.data_type(), t.data_type()),
+        (Dictionary(_, v), to) => is_same_or_lossless(v, to),
+        // Casting a struct relabels its fields to the target's, so the names
+        // have to line up already - otherwise a swap would be converted into
+        // the table's shape and lose which value was which.
+        (Struct(from_fields), Struct(to_fields)) => {
+            from_fields.len() == to_fields.len()
+                && from_fields.iter().zip(to_fields.iter()).all(|(f, t)| {
+                    f.name() == t.name() && is_same_or_lossless(f.data_type(), t.data_type())
+                })
+        }
+        // A map's entries are positional, so only the key and value types are
+        // compared - their names differ between builders.
+        (Map(from_entries, _), Map(to_entries, _)) => {
+            match (from_entries.data_type(), to_entries.data_type()) {
+                (Struct(from_kv), Struct(to_kv)) => {
+                    from_kv.len() == to_kv.len()
+                        && from_kv
+                            .iter()
+                            .zip(to_kv.iter())
+                            .all(|(f, t)| is_same_or_lossless(f.data_type(), t.data_type()))
+                }
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+fn is_same_or_lossless(from: &ArrowDataType, to: &ArrowDataType) -> bool {
+    erase_read_irrelevant(from) == erase_read_irrelevant(to)
+        || is_lossless_encoding_difference(from, to)
+}
+
+/// The same type with every nested field marked nullable, names kept.
+fn relax_nested_nullability(data_type: &ArrowDataType) -> ArrowDataType {
+    let relax = |f: &Arc<Field>| {
+        Arc::new(Field::new(
+            f.name(),
+            relax_nested_nullability(f.data_type()),
+            true,
+        ))
+    };
+    match data_type {
+        ArrowDataType::List(f) => ArrowDataType::List(relax(f)),
+        // Arrow requires a map's entries and its keys to stay non-null, so only
+        // the value side is relaxed.
+        ArrowDataType::Map(entries, sorted) => {
+            let relaxed = match entries.data_type() {
+                ArrowDataType::Struct(kv) if kv.len() == 2 => ArrowDataType::Struct(
+                    vec![
+                        Field::new(
+                            kv[0].name(),
+                            relax_nested_nullability(kv[0].data_type()),
+                            false,
+                        ),
+                        Field::new(
+                            kv[1].name(),
+                            relax_nested_nullability(kv[1].data_type()),
+                            true,
+                        ),
+                    ]
+                    .into(),
+                ),
+                other => other.clone(),
+            };
+            ArrowDataType::Map(
+                Arc::new(Field::new(entries.name(), relaxed, false)),
+                *sorted,
+            )
+        }
+        ArrowDataType::Struct(fields) => {
+            ArrowDataType::Struct(fields.iter().map(relax).collect::<Vec<_>>().into())
+        }
+        other => other.clone(),
+    }
+}
+
+/// Returns `batch` ready to append: checked against `row_type`, and with any
+/// column whose type differs only by encoding converted to the table's. Columns
+/// that already match are passed through untouched, so a batch built against the
+/// table's schema is not copied.
+pub(crate) fn prepare_append_record_batch(
+    batch: &RecordBatch,
+    row_type: &RowType,
+) -> Result<RecordBatch> {
+    check_column_names(batch, row_type)?;
+    let batch = convert_lossless_columns(batch, row_type)?;
+    check_column_types(&batch, row_type)?;
+    TypedBatch::build(&batch, row_type)?.check_not_null(row_type)?;
+    Ok(batch)
+}
+
+fn convert_lossless_columns(batch: &RecordBatch, row_type: &RowType) -> Result<RecordBatch> {
+    let expected = to_arrow_schema(row_type)?;
+    if batch.num_columns() != expected.fields().len() {
+        return Ok(batch.clone());
+    }
+    let needs_convert = |i: usize, want: &ArrowDataType| {
+        let have = batch.column(i).data_type();
+        erase_read_irrelevant(have) != erase_read_irrelevant(want)
+            && is_lossless_encoding_difference(have, want)
+    };
+    if !expected
+        .fields()
+        .iter()
+        .enumerate()
+        .any(|(i, f)| needs_convert(i, f.data_type()))
+    {
+        return Ok(batch.clone());
+    }
+
+    let mut columns = Vec::with_capacity(batch.num_columns());
+    for (i, field) in expected.fields().iter().enumerate() {
+        let column = batch.column(i);
+        if needs_convert(i, field.data_type()) {
+            // Cast to a nullable version of the target: casting straight to a
+            // NOT NULL nested type fails inside Arrow, and `check_not_null`
+            // gives a better message for the same mistake a moment later.
+            columns.push(arrow::compute::cast(
+                column,
+                &relax_nested_nullability(field.data_type()),
+            )?);
+        } else {
+            columns.push(Arc::clone(column));
+        }
+    }
+    Ok(RecordBatch::try_new(
+        Arc::new(arrow_schema::Schema::new(
+            batch
+                .schema()
+                .fields()
+                .iter()
+                .zip(columns.iter())
+                .map(|(f, c)| Field::new(f.name(), c.data_type().clone(), true))
+                .collect::<Vec<_>>(),
+        )),
+        columns,
+    )?)
+}
+
+/// The fixed fields of a log record batch header.
+pub(crate) struct BatchHeaderFields {
+    pub base_log_offset: i64,
+    pub magic: u8,
+    pub schema_id: i32,
+    pub writer_id: i64,
+    pub batch_sequence: i32,
+    pub record_count: i32,
+    /// Only written for V1 and above.
+    pub statistics_length: usize,
+}
+
+/// `buffer` must be the whole batch. Timestamp and CRC are left for the caller.
+pub(crate) fn write_batch_header_fields(
+    buffer: &mut [u8],
+    fields: BatchHeaderFields,
+) -> Result<()> {
+    let total_len = buffer.len();
+    let mut cursor = Cursor::new(buffer);
+    cursor.write_i64::<LittleEndian>(fields.base_log_offset)?;
+    cursor.write_i32::<LittleEndian>((total_len - BASE_OFFSET_LENGTH - LENGTH_LENGTH) as i32)?;
+    cursor.write_u8(fields.magic)?;
+    cursor.write_i64::<LittleEndian>(0)?; // timestamp placeholder
+    cursor.write_u32::<LittleEndian>(0)?; // crc placeholder
+    cursor.write_i16::<LittleEndian>(fields.schema_id as i16)?;
+
+    // todo: curerntly, always is append only
+    let append_only = true;
+    cursor.write_u8(if append_only { 1 } else { 0 })?;
+    cursor.write_i32::<LittleEndian>(if fields.record_count > 0 {
+        fields.record_count - 1
+    } else {
+        0
+    })?;
+
+    cursor.write_i64::<LittleEndian>(fields.writer_id)?;
+    cursor.write_i32::<LittleEndian>(fields.batch_sequence)?;
+    cursor.write_i32::<LittleEndian>(fields.record_count)?;
+
+    if fields.magic >= LOG_MAGIC_VALUE_V1 {
+        cursor.write_i32::<LittleEndian>(fields.statistics_length as i32)?;
+    }
+    Ok(())
 }
 
 pub fn to_arrow_schema(fluss_schema: &RowType) -> Result<SchemaRef> {
@@ -1354,8 +1136,12 @@ pub(crate) fn from_arrow_type(arrow_type: &ArrowDataType) -> Result<DataType> {
         ArrowDataType::UInt64 => DataTypes::bigint(),
         ArrowDataType::Float32 => DataTypes::float(),
         ArrowDataType::Float64 => DataTypes::double(),
-        ArrowDataType::Utf8 | ArrowDataType::LargeUtf8 => DataTypes::string(),
-        ArrowDataType::Binary | ArrowDataType::LargeBinary => DataTypes::bytes(),
+        ArrowDataType::Utf8 | ArrowDataType::LargeUtf8 | ArrowDataType::Utf8View => {
+            DataTypes::string()
+        }
+        ArrowDataType::Binary | ArrowDataType::LargeBinary | ArrowDataType::BinaryView => {
+            DataTypes::bytes()
+        }
         ArrowDataType::Date32 | ArrowDataType::Date64 => DataTypes::date(),
         ArrowDataType::FixedSizeBinary(len) => {
             if *len < 0 {
@@ -1397,7 +1183,13 @@ pub(crate) fn from_arrow_type(arrow_type: &ArrowDataType) -> Result<DataType> {
                 DataTypes::timestamp_with_precision(precision)
             }
         }
-        ArrowDataType::List(field) => DataTypes::array(from_arrow_field(field)?),
+        // Encoding variants of the canonical types. `prepare_append_record_batch`
+        // converts a batch carrying these, so a schema carrying them has to be
+        // accepted too, or a caller could write a column they cannot declare.
+        ArrowDataType::List(field) | ArrowDataType::LargeList(field) => {
+            DataTypes::array(from_arrow_field(field)?)
+        }
+        ArrowDataType::Dictionary(_, value) => from_arrow_type(value)?,
         ArrowDataType::Map(entries_field, _sorted) => {
             let fields = match entries_field.data_type() {
                 ArrowDataType::Struct(f) => f,
@@ -1635,8 +1427,8 @@ impl ReadContext {
             .map(|p| p.ordered_fields.as_slice())
     }
 
-    pub fn record_batch(&self, data: &[u8]) -> Result<RecordBatch> {
-        let (batch_metadata, body_buffer, version) = parse_ipc_message(data)?;
+    pub(crate) fn record_batch(&self, data: Bytes) -> Result<RecordBatch> {
+        let (batch_metadata, body_buffer, version) = parse_ipc_message(&data)?;
 
         let resolve_schema = {
             // if from remote, no projection, need to use full schema
@@ -1704,8 +1496,8 @@ impl ReadContext {
         Ok(record_batch)
     }
 
-    pub fn record_batch_for_remote_log(&self, data: &[u8]) -> Result<Option<RecordBatch>> {
-        let (batch_metadata, body_buffer, version) = parse_ipc_message(data)?;
+    pub(crate) fn record_batch_for_remote_log(&self, data: Bytes) -> Result<Option<RecordBatch>> {
+        let (batch_metadata, body_buffer, version) = parse_ipc_message(&data)?;
 
         let record_batch = read_record_batch(
             &body_buffer,
@@ -1758,50 +1550,6 @@ fn align_record_batch_to_schema(
     Ok(RecordBatch::try_new(target_schema, columns)?)
 }
 
-pub enum LogRecordIterator {
-    Empty,
-    Arrow(ArrowLogRecordIterator),
-}
-
-impl LogRecordIterator {
-    pub fn empty() -> Self {
-        LogRecordIterator::Empty
-    }
-}
-
-impl Iterator for LogRecordIterator {
-    type Item = ScanRecord;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self {
-            LogRecordIterator::Empty => None,
-            LogRecordIterator::Arrow(iter) => iter.next(),
-        }
-    }
-}
-
-/// Per-record change types decoded from a log batch.
-///
-/// Append-only batches carry no change-type vector on the wire, so a single
-/// `AppendOnly` value covers every record without allocating. Changelog batches
-/// (the CDC stream of a primary-key table) decode one change type per record,
-/// in record order.
-enum BatchChangeTypes {
-    /// Every record shares this change type (append-only batches).
-    Uniform(ChangeType),
-    /// One change type per record, indexed by row id (changelog batches).
-    PerRecord(Vec<ChangeType>),
-}
-
-impl BatchChangeTypes {
-    fn get(&self, row_id: usize) -> ChangeType {
-        match self {
-            BatchChangeTypes::Uniform(change_type) => *change_type,
-            BatchChangeTypes::PerRecord(change_types) => change_types[row_id],
-        }
-    }
-}
-
 pub struct ArrowLogRecordIterator {
     reader: ArrowReader,
     base_offset: i64,
@@ -1811,7 +1559,7 @@ pub struct ArrowLogRecordIterator {
 }
 
 impl ArrowLogRecordIterator {
-    fn new(
+    pub(crate) fn new(
         reader: ArrowReader,
         base_offset: i64,
         timestamp: i64,
@@ -1895,12 +1643,17 @@ pub struct MyVec<T>(pub StreamReader<T>);
 mod tests {
     use super::*;
     use crate::client::WriteRecord;
-    use crate::compression::{
-        ArrowCompressionInfo, ArrowCompressionType, DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
-    };
     use crate::metadata::{DataField, DataTypes, PhysicalTablePath, RowType, TablePath};
     use crate::row::{DataGetters, GenericRow};
-    use crate::test_utils::build_table_info;
+    use crate::test_utils::{
+        build_append_only_batch, build_table_info, uncompressed_arrow_batch_config,
+    };
+    use arrow::array::{
+        Decimal128Array, FixedSizeBinaryArray, Int32Builder, ListBuilder, MapBuilder,
+        StringBuilder, StructArray, Time32MillisecondArray, Time64MicrosecondArray,
+        TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+    };
+    use bytes::Bytes;
 
     #[test]
     fn nonnullable_append_builder_roundtrips_for_both_append_modes() {
@@ -1915,15 +1668,8 @@ mod tests {
 
         for to_append_record_batch in [false, true] {
             let mut builder = MemoryLogRecordsArrowBuilder::new(
-                1,
-                &row_type,
+                uncompressed_arrow_batch_config(1, &row_type, usize::MAX),
                 to_append_record_batch,
-                ArrowCompressionInfo {
-                    compression_type: ArrowCompressionType::None,
-                    compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
-                },
-                usize::MAX,
-                Arc::new(ArrowCompressionRatioEstimator::default()),
             )
             .expect("NOT NULL builder should construct");
 
@@ -1977,6 +1723,508 @@ mod tests {
                 .expect("build should succeed for NOT NULL column");
             assert!(!bytes.is_empty());
         }
+    }
+
+    #[test]
+    fn prepare_append_record_batch_rejects_nulls_in_not_null_column() {
+        let row_type = RowType::new(vec![DataField::new(
+            "id",
+            DataTypes::bigint().as_non_nullable(),
+            None,
+        )]);
+
+        // Caller marks the Arrow field nullable (common from pyarrow) and includes a null.
+        let poison = single_col_batch(
+            "id",
+            Arc::new(arrow::array::Int64Array::from(vec![
+                Some(1_i64),
+                None,
+                Some(3_i64),
+            ])),
+        );
+        let ok_batch = single_col_batch(
+            "id",
+            Arc::new(arrow::array::Int64Array::from(vec![1_i64, 2_i64])),
+        );
+        assert_rejects_null_in_not_null(&row_type, &poison, &ok_batch);
+    }
+
+    #[test]
+    fn prebuilt_builder_rejects_nulls_in_not_null_column() {
+        let row_type = RowType::new(vec![DataField::new(
+            "id",
+            DataTypes::bigint().as_non_nullable(),
+            None,
+        )]);
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = Arc::new(build_table_info(table_path.clone(), 1, 1));
+        let physical_table_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path)));
+
+        let mut builder = MemoryLogRecordsArrowBuilder::new(
+            uncompressed_arrow_batch_config(1, &row_type, usize::MAX),
+            true,
+        )
+        .expect("NOT NULL prebuilt builder should construct");
+
+        let batch_schema = Arc::new(arrow_schema::Schema::new(vec![Field::new(
+            "id",
+            arrow_schema::DataType::Int64,
+            true,
+        )]));
+        let poison = RecordBatch::try_new(
+            batch_schema,
+            vec![
+                Arc::new(arrow::array::Int64Array::from(vec![Some(1_i64), None]))
+                    as arrow::array::ArrayRef,
+            ],
+        )
+        .expect("poison batch");
+        let record = WriteRecord::for_append_record_batch(
+            Arc::clone(&table_info),
+            physical_table_path,
+            1,
+            poison,
+        );
+        assert_not_null_violation(
+            builder
+                .append(&record)
+                .expect_err("prebuilt append must reject null in NOT NULL"),
+        );
+    }
+
+    fn assert_not_null_violation(err: impl std::fmt::Display) {
+        let text = err.to_string();
+        assert!(
+            text.contains("declared as non-nullable but contains null values"),
+            "unexpected error: {text}"
+        );
+    }
+
+    fn single_col_batch(name: &str, array: ArrayRef) -> RecordBatch {
+        RecordBatch::try_new(
+            Arc::new(arrow_schema::Schema::new(vec![Field::new(
+                name,
+                array.data_type().clone(),
+                true,
+            )])),
+            vec![array],
+        )
+        .expect("single-column batch")
+    }
+
+    fn assert_rejects_null_in_not_null(row_type: &RowType, poison: &RecordBatch, ok: &RecordBatch) {
+        assert_not_null_violation(
+            prepare_append_record_batch(poison, row_type)
+                .expect_err("null in NOT NULL nested column must be rejected"),
+        );
+        prepare_append_record_batch(ok, row_type).expect("null-free nested batch must be accepted");
+    }
+
+    fn list_array(values: ArrayRef, offsets: Vec<i32>, validity: Option<Vec<bool>>) -> ArrayRef {
+        use arrow::array::ListArray;
+        use arrow::buffer::{NullBuffer, OffsetBuffer};
+
+        Arc::new(ListArray::new(
+            Arc::new(Field::new("item", values.data_type().clone(), true)),
+            OffsetBuffer::new(offsets.into()),
+            values,
+            validity.map(NullBuffer::from),
+        ))
+    }
+
+    fn list_int_array(
+        values: Vec<Option<i32>>,
+        offsets: Vec<i32>,
+        validity: Option<Vec<bool>>,
+    ) -> ArrayRef {
+        list_array(
+            Arc::new(arrow::array::Int32Array::from(values)),
+            offsets,
+            validity,
+        )
+    }
+
+    fn map_string_array(
+        keys: Vec<&str>,
+        values: ArrayRef,
+        offsets: Vec<i32>,
+        validity: Option<Vec<bool>>,
+    ) -> ArrayRef {
+        use arrow::array::{MapArray, StringArray, StructArray};
+        use arrow::buffer::{NullBuffer, OffsetBuffer};
+
+        let key_field = Arc::new(Field::new("key", ArrowDataType::Utf8, false));
+        let value_field = Arc::new(Field::new("value", values.data_type().clone(), true));
+        let entries = StructArray::from(vec![
+            (key_field, Arc::new(StringArray::from(keys)) as ArrayRef),
+            (value_field, values),
+        ]);
+        Arc::new(MapArray::new(
+            Arc::new(Field::new("entries", entries.data_type().clone(), false)),
+            OffsetBuffer::new(offsets.into()),
+            entries,
+            validity.map(NullBuffer::from),
+            false,
+        ))
+    }
+
+    fn map_string_int_array(
+        keys: Vec<&str>,
+        values: Vec<Option<i32>>,
+        offsets: Vec<i32>,
+        validity: Option<Vec<bool>>,
+    ) -> ArrayRef {
+        map_string_array(
+            keys,
+            Arc::new(arrow::array::Int32Array::from(values)),
+            offsets,
+            validity,
+        )
+    }
+
+    fn struct_with_field(name: &str, child: ArrayRef, validity: Option<Vec<bool>>) -> ArrayRef {
+        use arrow::array::StructArray;
+        use arrow::buffer::NullBuffer;
+
+        let fields =
+            arrow_schema::Fields::from(vec![Field::new(name, child.data_type().clone(), true)]);
+        Arc::new(StructArray::new(
+            fields,
+            vec![child],
+            validity.map(NullBuffer::from),
+        ))
+    }
+
+    fn struct_int_string_array(
+        seq: Vec<Option<i32>>,
+        label: Vec<Option<&str>>,
+        validity: Option<Vec<bool>>,
+    ) -> ArrayRef {
+        use arrow::array::{StringArray, StructArray};
+        use arrow::buffer::NullBuffer;
+
+        let fields = arrow_schema::Fields::from(vec![
+            Field::new("seq", ArrowDataType::Int32, true),
+            Field::new("label", ArrowDataType::Utf8, true),
+        ]);
+        Arc::new(StructArray::new(
+            fields,
+            vec![
+                Arc::new(arrow::array::Int32Array::from(seq)) as ArrayRef,
+                Arc::new(StringArray::from(label)) as ArrayRef,
+            ],
+            validity.map(NullBuffer::from),
+        ))
+    }
+
+    fn assert_full_and_sliced_not_null(row_type: &RowType, poison: &RecordBatch, ok: &RecordBatch) {
+        assert_rejects_null_in_not_null(row_type, poison, ok);
+        prepare_append_record_batch(&poison.slice(1, 1), row_type)
+            .expect("sliced-away nested null must not reject the live rows");
+        assert_not_null_violation(
+            prepare_append_record_batch(&poison.slice(0, 1), row_type)
+                .expect_err("live slice that still contains the nested null must reject"),
+        );
+    }
+
+    #[test]
+    fn prepare_append_record_batch_rejects_null_nested_container() {
+        // Only the container is null here; the element type is nullable.
+        let array_type = RowType::new(vec![DataField::new(
+            "tags",
+            DataTypes::array(DataTypes::int()).as_non_nullable(),
+            None,
+        )]);
+        assert_rejects_null_in_not_null(
+            &array_type,
+            &single_col_batch(
+                "tags",
+                list_int_array(
+                    vec![Some(1), Some(2)],
+                    vec![0, 2, 2],
+                    Some(vec![true, false]),
+                ),
+            ),
+            &single_col_batch(
+                "tags",
+                list_int_array(vec![Some(1), Some(2), Some(3)], vec![0, 2, 3], None),
+            ),
+        );
+    }
+
+    #[test]
+    fn prepare_append_record_batch_allows_null_elements_in_not_null_array() {
+        let row_type = RowType::new(vec![DataField::new(
+            "tags",
+            DataTypes::array(DataTypes::int()).as_non_nullable(),
+            None,
+        )]);
+        let batch = single_col_batch(
+            "tags",
+            list_int_array(vec![Some(1), None, Some(3)], vec![0, 3], None),
+        );
+        prepare_append_record_batch(&batch, &row_type)
+            .expect("null elements in a non-null ARRAY value must be accepted");
+    }
+
+    #[test]
+    fn prepare_append_record_batch_rejects_nulls_inside_not_null_nested_fields() {
+        let array_type = RowType::new(vec![DataField::new(
+            "tags",
+            DataTypes::array(DataTypes::int().as_non_nullable()).as_non_nullable(),
+            None,
+        )]);
+        assert_rejects_null_in_not_null(
+            &array_type,
+            &single_col_batch(
+                "tags",
+                list_int_array(vec![Some(1), None, Some(3)], vec![0, 3], None),
+            ),
+            &single_col_batch(
+                "tags",
+                list_int_array(vec![Some(1), Some(2), Some(3)], vec![0, 3], None),
+            ),
+        );
+
+        let map_type = RowType::new(vec![DataField::new(
+            "attrs",
+            DataTypes::map(DataTypes::string(), DataTypes::int().as_non_nullable())
+                .as_non_nullable(),
+            None,
+        )]);
+        assert_rejects_null_in_not_null(
+            &map_type,
+            &single_col_batch(
+                "attrs",
+                map_string_int_array(vec!["a", "b"], vec![Some(1), None], vec![0, 2], None),
+            ),
+            &single_col_batch(
+                "attrs",
+                map_string_int_array(vec!["a", "b"], vec![Some(1), Some(2)], vec![0, 2], None),
+            ),
+        );
+
+        let row_col_type = RowType::new(vec![DataField::new(
+            "nested",
+            DataTypes::row(vec![
+                DataField::new("seq", DataTypes::int().as_non_nullable(), None),
+                DataField::new("label", DataTypes::string(), None),
+            ])
+            .as_non_nullable(),
+            None,
+        )]);
+        assert_rejects_null_in_not_null(
+            &row_col_type,
+            &single_col_batch(
+                "nested",
+                struct_int_string_array(vec![Some(1), None], vec![Some("x"), Some("y")], None),
+            ),
+            &single_col_batch(
+                "nested",
+                struct_int_string_array(vec![Some(1), Some(2)], vec![Some("x"), Some("y")], None),
+            ),
+        );
+    }
+
+    #[test]
+    fn prepare_append_record_batch_ignores_nulls_in_sliced_away_nested_values() {
+        let array_type = RowType::new(vec![DataField::new(
+            "tags",
+            DataTypes::array(DataTypes::int().as_non_nullable()).as_non_nullable(),
+            None,
+        )]);
+        let lists = single_col_batch(
+            "tags",
+            list_int_array(
+                vec![Some(1), None, Some(3), Some(4), Some(5)],
+                vec![0, 3, 5],
+                None,
+            ),
+        );
+        prepare_append_record_batch(&lists.slice(1, 1), &array_type)
+            .expect("sliced-away ARRAY element nulls must not reject the live rows");
+        assert_not_null_violation(
+            prepare_append_record_batch(&lists.slice(0, 1), &array_type)
+                .expect_err("live slice that still contains the element null must reject"),
+        );
+
+        let map_type = RowType::new(vec![DataField::new(
+            "attrs",
+            DataTypes::map(DataTypes::string(), DataTypes::int().as_non_nullable())
+                .as_non_nullable(),
+            None,
+        )]);
+        let maps = single_col_batch(
+            "attrs",
+            map_string_int_array(
+                vec!["a", "b", "c"],
+                vec![Some(1), None, Some(2)],
+                vec![0, 2, 3],
+                None,
+            ),
+        );
+        prepare_append_record_batch(&maps.slice(1, 1), &map_type)
+            .expect("sliced-away MAP value nulls must not reject the live rows");
+        assert_not_null_violation(
+            prepare_append_record_batch(&maps.slice(0, 1), &map_type)
+                .expect_err("live slice that still contains the map value null must reject"),
+        );
+
+        let row_col_type = RowType::new(vec![DataField::new(
+            "nested",
+            DataTypes::row(vec![
+                DataField::new("seq", DataTypes::int().as_non_nullable(), None),
+                DataField::new("label", DataTypes::string(), None),
+            ])
+            .as_non_nullable(),
+            None,
+        )]);
+        let structs = single_col_batch(
+            "nested",
+            struct_int_string_array(vec![None, Some(2)], vec![Some("x"), Some("y")], None),
+        );
+        prepare_append_record_batch(&structs.slice(1, 1), &row_col_type)
+            .expect("sliced-away ROW field nulls must not reject the live rows");
+        assert_not_null_violation(
+            prepare_append_record_batch(&structs.slice(0, 1), &row_col_type)
+                .expect_err("live slice that still contains the ROW field null must reject"),
+        );
+    }
+
+    #[test]
+    fn prepare_append_record_batch_nested_nested_nullability() {
+        // One case per pair of nested containers.
+        let array_of_array = RowType::new(vec![DataField::new(
+            "tags",
+            DataTypes::array(DataTypes::array(DataTypes::int().as_non_nullable()))
+                .as_non_nullable(),
+            None,
+        )]);
+        assert_full_and_sliced_not_null(
+            &array_of_array,
+            &single_col_batch(
+                "tags",
+                list_array(
+                    list_int_array(vec![Some(1), None, Some(4), Some(5)], vec![0, 2, 4], None),
+                    vec![0, 1, 2],
+                    None,
+                ),
+            ),
+            &single_col_batch(
+                "tags",
+                list_array(
+                    list_int_array(
+                        vec![Some(1), Some(2), Some(4), Some(5)],
+                        vec![0, 2, 4],
+                        None,
+                    ),
+                    vec![0, 1, 2],
+                    None,
+                ),
+            ),
+        );
+
+        let row_of_array = RowType::new(vec![DataField::new(
+            "nested",
+            DataTypes::row(vec![DataField::new(
+                "tags",
+                DataTypes::array(DataTypes::int().as_non_nullable()),
+                None,
+            )])
+            .as_non_nullable(),
+            None,
+        )]);
+        assert_full_and_sliced_not_null(
+            &row_of_array,
+            &single_col_batch(
+                "nested",
+                struct_with_field(
+                    "tags",
+                    list_int_array(vec![Some(1), None, Some(4), Some(5)], vec![0, 2, 4], None),
+                    None,
+                ),
+            ),
+            &single_col_batch(
+                "nested",
+                struct_with_field(
+                    "tags",
+                    list_int_array(
+                        vec![Some(1), Some(2), Some(4), Some(5)],
+                        vec![0, 2, 4],
+                        None,
+                    ),
+                    None,
+                ),
+            ),
+        );
+
+        let array_of_row = RowType::new(vec![DataField::new(
+            "nested",
+            DataTypes::array(DataTypes::row(vec![
+                DataField::new("seq", DataTypes::int().as_non_nullable(), None),
+                DataField::new("label", DataTypes::string(), None),
+            ]))
+            .as_non_nullable(),
+            None,
+        )]);
+        assert_full_and_sliced_not_null(
+            &array_of_row,
+            &single_col_batch(
+                "nested",
+                list_array(
+                    struct_int_string_array(vec![None, Some(2)], vec![Some("x"), Some("y")], None),
+                    vec![0, 1, 2],
+                    None,
+                ),
+            ),
+            &single_col_batch(
+                "nested",
+                list_array(
+                    struct_int_string_array(
+                        vec![Some(1), Some(2)],
+                        vec![Some("x"), Some("y")],
+                        None,
+                    ),
+                    vec![0, 1, 2],
+                    None,
+                ),
+            ),
+        );
+
+        let map_of_array = RowType::new(vec![DataField::new(
+            "attrs",
+            DataTypes::map(
+                DataTypes::string(),
+                DataTypes::array(DataTypes::int().as_non_nullable()),
+            )
+            .as_non_nullable(),
+            None,
+        )]);
+        assert_full_and_sliced_not_null(
+            &map_of_array,
+            &single_col_batch(
+                "attrs",
+                map_string_array(
+                    vec!["a", "b"],
+                    list_int_array(vec![Some(1), None, Some(4), Some(5)], vec![0, 2, 4], None),
+                    vec![0, 1, 2],
+                    None,
+                ),
+            ),
+            &single_col_batch(
+                "attrs",
+                map_string_array(
+                    vec!["a", "b"],
+                    list_int_array(
+                        vec![Some(1), Some(2), Some(4), Some(5)],
+                        vec![0, 2, 4],
+                        None,
+                    ),
+                    vec![0, 1, 2],
+                    None,
+                ),
+            ),
+        );
     }
 
     fn single_int_read_context() -> (ReadContext, SchemaRef) {
@@ -2215,8 +2463,8 @@ mod tests {
 
     #[test]
     fn test_parse_ipc_message() {
-        let empty_body: &[u8] = &le_bytes(&[0xFFFFFFFF, 0x00000000]);
-        let result = parse_ipc_message(empty_body);
+        let empty_body = Bytes::from(le_bytes(&[0xFFFFFFFF, 0x00000000]));
+        let result = parse_ipc_message(&empty_body);
         assert_eq!(
             result.unwrap_err().to_string(),
             String::from(
@@ -2224,17 +2472,17 @@ mod tests {
             )
         );
 
-        let invalid_data = &[];
+        let invalid_data = Bytes::new();
         assert_eq!(
-            parse_ipc_message(invalid_data).unwrap_err().to_string(),
+            parse_ipc_message(&invalid_data).unwrap_err().to_string(),
             String::from(
                 "Fluss hitting Arrow error Parser error: Invalid data length: 0: ParseError(\"Invalid data length: 0\")."
             )
         );
 
-        let data_with_invalid_continuation: &[u8] = &le_bytes(&[0x00000001, 0x00000000]);
+        let data_with_invalid_continuation = Bytes::from(le_bytes(&[0x00000001, 0x00000000]));
         assert_eq!(
-            parse_ipc_message(data_with_invalid_continuation)
+            parse_ipc_message(&data_with_invalid_continuation)
                 .unwrap_err()
                 .to_string(),
             String::from(
@@ -2242,9 +2490,9 @@ mod tests {
             )
         );
 
-        let data_with_invalid_length: &[u8] = &le_bytes(&[0xFFFFFFFF, 0x00000001]);
+        let data_with_invalid_length = Bytes::from(le_bytes(&[0xFFFFFFFF, 0x00000001]));
         assert_eq!(
-            parse_ipc_message(data_with_invalid_length)
+            parse_ipc_message(&data_with_invalid_length)
                 .unwrap_err()
                 .to_string(),
             String::from(
@@ -2252,9 +2500,9 @@ mod tests {
             )
         );
 
-        let data_with_invalid_length = &le_bytes(&[0xFFFFFFFF, 0x00000004, 0x00000000]);
+        let data_with_invalid_length = Bytes::from(le_bytes(&[0xFFFFFFFF, 0x00000004, 0x00000000]));
         assert_eq!(
-            parse_ipc_message(data_with_invalid_length)
+            parse_ipc_message(&data_with_invalid_length)
                 .unwrap_err()
                 .to_string(),
             String::from(
@@ -2274,27 +2522,6 @@ mod tests {
             ReadContext::with_projection_pushdown(schema, Arc::new(row_type), vec![0, 2], false);
 
         assert!(matches!(result, Err(IllegalArgument { .. })));
-    }
-
-    #[test]
-    fn checksum_and_schema_id_read_minimum_header() {
-        // Header-only batches with record_count == 0 are valid; this covers the minimal bytes
-        // needed for checksum/schema_id access.
-        let mut data = vec![0u8; SCHEMA_ID_OFFSET + SCHEMA_ID_LENGTH];
-        let crc = 0xA1B2C3D4u32;
-        let schema_id = 42i16;
-        LittleEndian::write_u32(&mut data[CRC_OFFSET..CRC_OFFSET + CRC_LENGTH], crc);
-        LittleEndian::write_i16(
-            &mut data[SCHEMA_ID_OFFSET..SCHEMA_ID_OFFSET + SCHEMA_ID_LENGTH],
-            schema_id,
-        );
-
-        let batch = LogRecordBatch::new(Bytes::from(data));
-        assert_eq!(batch.checksum(), crc);
-        assert_eq!(batch.schema_id(), schema_id);
-
-        let expected = crc32c(&batch.data[SCHEMA_ID_OFFSET..]);
-        assert_eq!(batch.compute_checksum(), expected);
     }
 
     fn le_bytes(vals: &[u32]) -> Vec<u8> {
@@ -2378,49 +2605,6 @@ mod tests {
                 .to_string()
                 .contains("precision overflow")
         );
-
-        Ok(())
-    }
-
-    // Tests for file-backed streaming
-
-    #[test]
-    fn test_file_source_streaming() -> Result<()> {
-        use tempfile::NamedTempFile;
-
-        // Test 1: Basic file reads work
-        let test_data = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
-        let mut tmp_file = NamedTempFile::new()?;
-        tmp_file.write_all(&test_data)?;
-        tmp_file.flush()?;
-
-        let file_path = tmp_file.path().to_path_buf();
-        let file = File::open(&file_path)?;
-        let mut source = FileSource::new(file, 0, file_path)?;
-
-        // Read full data
-        let data = source.read_batch_data(0, 10)?;
-        assert_eq!(data.to_vec(), test_data);
-
-        // Read partial data
-        let partial = source.read_batch_data(2, 5)?;
-        assert_eq!(partial.to_vec(), vec![3, 4, 5, 6, 7]);
-
-        // Test 2: base_offset works (critical for remote logs with pos_in_log_segment)
-        let prefix = vec![0xFF; 100];
-        let actual_data = vec![1, 2, 3, 4, 5];
-        let mut tmp_file2 = NamedTempFile::new()?;
-        tmp_file2.write_all(&prefix)?;
-        tmp_file2.write_all(&actual_data)?;
-        tmp_file2.flush()?;
-
-        let file_path2 = tmp_file2.path().to_path_buf();
-        let file2 = File::open(&file_path2)?;
-        let mut source2 = FileSource::new(file2, 100, file_path2)?; // Skip first 100 bytes
-
-        assert_eq!(source2.total_size(), 5); // Only counts data after offset
-        let data2 = source2.read_batch_data(0, 5)?;
-        assert_eq!(data2.to_vec(), actual_data);
 
         Ok(())
     }
@@ -2561,17 +2745,24 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_log_records_batches_from_file() -> Result<()> {
-        use crate::client::WriteRecord;
-        use crate::compression::{
-            ArrowCompressionInfo, ArrowCompressionType, DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
-        };
-        use crate::metadata::{PhysicalTablePath, TablePath};
-        use crate::row::GenericRow;
-        use tempfile::NamedTempFile;
+    /// An `(id INT, name STRING)` builder collecting statistics for `mapping`.
+    fn builder_with_statistics(
+        row_type: &RowType,
+        mapping: Option<Vec<usize>>,
+        to_append_record_batch: bool,
+    ) -> MemoryLogRecordsArrowBuilder {
+        MemoryLogRecordsArrowBuilder::new(
+            ArrowBatchConfig {
+                stats_index_mapping: mapping,
+                ..uncompressed_arrow_batch_config(1, row_type, usize::MAX)
+            },
+            to_append_record_batch,
+        )
+        .expect("builder should construct")
+    }
 
-        // Integration test: Real log record batch streamed from file
+    #[test]
+    fn statistics_upgrade_the_batch_to_v1() -> Result<()> {
         let row_type = RowType::new(vec![
             DataField::new("id".to_string(), DataTypes::int(), None),
             DataField::new("name".to_string(), DataTypes::string(), None),
@@ -2580,213 +2771,1129 @@ mod tests {
         let table_info = Arc::new(build_table_info(table_path.clone(), 1, 1));
         let physical_table_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path)));
 
-        let mut builder = MemoryLogRecordsArrowBuilder::new(
-            1,
-            &row_type,
-            false,
-            ArrowCompressionInfo {
-                compression_type: ArrowCompressionType::None,
-                compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
-            },
-            usize::MAX,
-            Arc::new(ArrowCompressionRatioEstimator::default()),
+        // The block the batch must carry, derived independently of the writer.
+        let expected_batch = RecordBatch::try_new(
+            to_arrow_schema(&row_type)?,
+            vec![
+                Arc::new(arrow::array::Int32Array::from(vec![1, 2])) as ArrayRef,
+                Arc::new(arrow::array::StringArray::from(vec!["alice", "bob"])) as ArrayRef,
+            ],
         )?;
+        let expected_statistics = serialize_statistics(&expected_batch, &row_type, &[0, 1])?
+            .expect("two rows must produce statistics");
 
+        for to_append_record_batch in [false, true] {
+            let mut builder =
+                builder_with_statistics(&row_type, Some(vec![0, 1]), to_append_record_batch);
+            if to_append_record_batch {
+                let record = WriteRecord::for_append_record_batch(
+                    Arc::clone(&table_info),
+                    physical_table_path.clone(),
+                    1,
+                    expected_batch.clone(),
+                );
+                builder.append(&record)?;
+            } else {
+                for (id, name) in [(1, "alice"), (2, "bob")] {
+                    let mut row = GenericRow::new(2);
+                    row.set_field(0, id);
+                    row.set_field(1, name);
+                    let record = WriteRecord::for_append(
+                        Arc::clone(&table_info),
+                        physical_table_path.clone(),
+                        1,
+                        &row,
+                    );
+                    builder.append(&record)?;
+                }
+            }
+
+            let bytes = builder.build()?;
+            let batch = LogRecordBatch::new(Bytes::from(bytes.clone()));
+            assert_eq!(batch.magic(), LOG_MAGIC_VALUE_V1);
+            assert!(batch.is_valid(), "the CRC must cover the statistics");
+
+            let statistics_length = LittleEndian::read_i32(
+                &bytes[V1_STATISTICS_LENGTH_OFFSET..V1_STATISTICS_DATA_OFFSET],
+            ) as usize;
+            assert_eq!(statistics_length, expected_statistics.len());
+            assert_eq!(
+                &bytes[V1_STATISTICS_DATA_OFFSET..V1_STATISTICS_DATA_OFFSET + statistics_length],
+                &expected_statistics[..]
+            );
+
+            let read_context = ReadContext::new(
+                to_arrow_schema(&row_type)?,
+                Arc::new(row_type.clone()),
+                false,
+            );
+            let records: Vec<_> = batch.records(&read_context)?.collect();
+            let mut ids = Vec::new();
+            for record in &records {
+                ids.push(record.row().get_int(0)?);
+            }
+            assert_eq!(ids, vec![1, 2]);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn no_statistics_mapping_keeps_the_v0_format() {
+        let (_, append_only) = build_append_only_batch(&[(1, "alice")]);
+        let batch = LogRecordBatch::new(Bytes::from(append_only));
+        assert_eq!(batch.magic(), LOG_MAGIC_VALUE_V0);
+    }
+
+    #[test]
+    fn empty_statistics_mapping_writes_a_v1_batch_with_no_statistics() -> Result<()> {
+        // A table can enable statistics while no column supports them.
+        let row_type = RowType::new(vec![
+            DataField::new("id".to_string(), DataTypes::int(), None),
+            DataField::new("name".to_string(), DataTypes::string(), None),
+        ]);
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = Arc::new(build_table_info(table_path.clone(), 1, 1));
+        let physical_table_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path)));
+
+        let mut builder = builder_with_statistics(&row_type, Some(Vec::new()), false);
         let mut row = GenericRow::new(2);
         row.set_field(0, 1_i32);
         row.set_field(1, "alice");
-        let record = WriteRecord::for_append(
-            Arc::clone(&table_info),
-            physical_table_path.clone(),
-            1,
-            &row,
-        );
+        let record = WriteRecord::for_append(table_info, physical_table_path, 1, &row);
         builder.append(&record)?;
 
-        let mut row2 = GenericRow::new(2);
-        row2.set_field(0, 2_i32);
-        row2.set_field(1, "bob");
-        let record2 =
-            WriteRecord::for_append(Arc::clone(&table_info), physical_table_path, 2, &row2);
-        builder.append(&record2)?;
+        let bytes = builder.build()?;
+        let batch = LogRecordBatch::new(Bytes::from(bytes.clone()));
+        assert_eq!(batch.magic(), LOG_MAGIC_VALUE_V1);
+        let statistics_length =
+            LittleEndian::read_i32(&bytes[V1_STATISTICS_LENGTH_OFFSET..V1_STATISTICS_DATA_OFFSET]);
+        assert_eq!(statistics_length, 0);
 
-        let data = builder.build()?;
-
-        // Write to file
-        let mut tmp_file = NamedTempFile::new()?;
-        tmp_file.write_all(&data)?;
-        tmp_file.flush()?;
-
-        // Create file-backed LogRecordsBatches (should stream, not load all into memory)
-        let file_path = tmp_file.path().to_path_buf();
-        let file = File::open(&file_path)?;
-        let mut batches = LogRecordsBatches::from_file(file, 0, file_path)?;
-
-        // Iterate through batches (should work just like in-memory)
-        let batch = batches.next().expect("Should have at least one batch")?;
-        assert!(batch.size_in_bytes() > 0);
-        assert_eq!(batch.record_count(), 2);
-
+        let read_context = ReadContext::new(to_arrow_schema(&row_type)?, Arc::new(row_type), false);
+        assert_eq!(batch.record_batch(&read_context)?.num_rows(), 1);
         Ok(())
     }
 
-    /// Builds an append-only `(id INT, name STRING)` Arrow log batch from `rows`.
-    /// The writer always emits append-only batches, so changelog tests derive
-    /// their bytes from this with [`splice_change_type_vector`].
-    fn build_append_only_batch(rows: &[(i32, &str)]) -> (RowType, Vec<u8>) {
+    #[test]
+    fn estimated_size_reserves_room_for_the_statistics() {
         let row_type = RowType::new(vec![
             DataField::new("id".to_string(), DataTypes::int(), None),
             DataField::new("name".to_string(), DataTypes::string(), None),
         ]);
-        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
-        let table_info = Arc::new(build_table_info(table_path.clone(), 1, 1));
-        let physical_table_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path)));
+        let with_statistics = builder_with_statistics(&row_type, Some(vec![0, 1]), false);
+        let without_statistics = builder_with_statistics(&row_type, None, false);
+        assert_eq!(
+            with_statistics.estimated_size_in_bytes()
+                - without_statistics.estimated_size_in_bytes(),
+            STATISTICS_LENGTH_LENGTH + estimated_serialized_size(&row_type, &[0, 1])
+        );
+    }
 
-        let mut builder = MemoryLogRecordsArrowBuilder::new(
-            1,
-            &row_type,
-            false,
-            ArrowCompressionInfo {
-                compression_type: ArrowCompressionType::None,
-                compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
+    #[test]
+    fn builder_rejects_an_out_of_range_statistics_index() {
+        let row_type = RowType::new(vec![DataField::new(
+            "id".to_string(),
+            DataTypes::int(),
+            None,
+        )]);
+        let err = MemoryLogRecordsArrowBuilder::new(
+            ArrowBatchConfig {
+                stats_index_mapping: Some(vec![5]),
+                ..uncompressed_arrow_batch_config(1, &row_type, usize::MAX)
             },
-            usize::MAX,
-            Arc::new(ArrowCompressionRatioEstimator::default()),
+            false,
         )
-        .unwrap();
-
-        for (id, name) in rows {
-            let mut row = GenericRow::new(2);
-            row.set_field(0, *id);
-            row.set_field(1, *name);
-            let record = WriteRecord::for_append(
-                Arc::clone(&table_info),
-                physical_table_path.clone(),
-                1,
-                &row,
-            );
-            builder.append(&record).unwrap();
-        }
-
-        (row_type, builder.build().unwrap())
+        .err()
+        .expect("an out-of-range statistics index must be rejected");
+        assert!(err.to_string().contains("out of range"));
     }
 
-    /// Turns an append-only batch into a wire-valid changelog batch: clears the
-    /// append-only flag, splices one change-type byte per record between the
-    /// header and the Arrow payload, then fixes up the length field and CRC.
-    fn splice_change_type_vector(append_only: &[u8], change_types: &[ChangeType]) -> Vec<u8> {
-        let mut data = append_only.to_vec();
-        data[ATTRIBUTES_OFFSET] &= !APPEND_ONLY_FLAG_MASK;
-        let change_bytes = change_types.iter().map(|ct| ct.to_byte_value());
-        data.splice(RECORDS_OFFSET..RECORDS_OFFSET, change_bytes);
+    /// Encodes `batch` without going through `MemoryLogRecordsArrowBuilder`, so a
+    /// batch that validation rejects can still be handed to the reader.
+    fn encode_batch_bypassing_validation(batch: &RecordBatch) -> Vec<u8> {
+        use arrow::ipc::writer::StreamWriter;
 
-        let new_length = (data.len() - LOG_OVERHEAD) as i32;
-        data[LENGTH_OFFSET..LENGTH_OFFSET + LENGTH_LENGTH]
-            .copy_from_slice(&new_length.to_le_bytes());
+        let mut ipc = Vec::new();
+        let mut writer =
+            StreamWriter::try_new(&mut ipc, batch.schema().as_ref()).expect("ipc writer");
+        let schema_message_len = writer.get_ref().len();
+        writer.write(batch).expect("write batch");
+        drop(writer);
+        let payload = &ipc[schema_message_len..];
 
-        let crc = crc32c(&data[SCHEMA_ID_OFFSET..]);
-        data[CRC_OFFSET..CRC_OFFSET + CRC_LENGTH].copy_from_slice(&crc.to_le_bytes());
-        data
+        let mut bytes = vec![0u8; RECORD_BATCH_HEADER_SIZE + payload.len()];
+        write_batch_header_fields(
+            &mut bytes,
+            BatchHeaderFields {
+                base_log_offset: BUILDER_DEFAULT_OFFSET,
+                magic: CURRENT_LOG_MAGIC_VALUE,
+                schema_id: 1,
+                writer_id: NO_WRITER_ID,
+                batch_sequence: NO_BATCH_SEQUENCE,
+                record_count: batch.num_rows() as i32,
+                statistics_length: 0,
+            },
+        )
+        .expect("write header");
+        bytes[RECORD_BATCH_HEADER_SIZE..].copy_from_slice(payload);
+
+        let crc = crc32c(&bytes[SCHEMA_ID_OFFSET..]);
+        bytes[CRC_OFFSET..CRC_OFFSET + CRC_LENGTH].copy_from_slice(&crc.to_le_bytes());
+        bytes
+    }
+
+    /// A batch validation accepts must decode; one that fails to decode must be
+    /// rejected. Pairing the two verdicts keeps the masking rules out of the test.
+    fn assert_validation_matches_reader(label: &str, batch: &RecordBatch, row_type: &RowType) {
+        let accepted = prepare_append_record_batch(batch, row_type).is_ok();
+        let bytes = encode_batch_bypassing_validation(batch);
+        let read_context = ReadContext::new(
+            to_arrow_schema(row_type).expect("arrow schema"),
+            Arc::new(row_type.clone()),
+            false,
+        );
+        let decodes = LogRecordsBatches::new(bytes)
+            .next()
+            .expect("a batch was written")
+            .expect("the batch parses")
+            .records(&read_context)
+            .map(|records| records.count())
+            .is_ok();
+
+        assert_eq!(
+            accepted,
+            decodes,
+            "{label}: validation {} but the reader {}",
+            if accepted { "accepted" } else { "rejected" },
+            if decodes {
+                "decoded it"
+            } else {
+                "could not decode it"
+            }
+        );
     }
 
     #[test]
-    fn decode_changelog_batch_applies_per_record_change_types() -> Result<()> {
-        let (row_type, append_only) =
-            build_append_only_batch(&[(1, "alice"), (2, "bob"), (3, "carol")]);
-        let read_context = ReadContext::new(to_arrow_schema(&row_type)?, Arc::new(row_type), false);
+    fn validation_agrees_with_reader_on_nested_nullability() {
+        let array_of_not_null = RowType::new(vec![DataField::new(
+            "tags",
+            DataTypes::array(DataTypes::int().as_non_nullable()),
+            None,
+        )]);
+        let row_of_not_null_array = RowType::new(vec![DataField::new(
+            "nested",
+            DataTypes::row(vec![DataField::new(
+                "tags",
+                DataTypes::array(DataTypes::int().as_non_nullable()),
+                None,
+            )]),
+            None,
+        )]);
+        let row_of_not_null_field = RowType::new(vec![DataField::new(
+            "nested",
+            DataTypes::row(vec![DataField::new(
+                "seq",
+                DataTypes::int().as_non_nullable(),
+                None,
+            )]),
+            None,
+        )]);
 
-        // Append-only batch: every record decodes as AppendOnly (regression guard).
-        let batch = LogRecordsBatches::new(append_only.clone())
-            .next()
-            .expect("append-only batch")?;
-        assert!(batch.is_append_only());
-        let records: Vec<_> = batch.records(&read_context)?.collect();
-        assert_eq!(records.len(), 3);
-        assert!(
-            records
-                .iter()
-                .all(|r| *r.change_type() == ChangeType::AppendOnly)
+        assert_validation_matches_reader(
+            "poison on a live list row",
+            &single_col_batch(
+                "tags",
+                list_int_array(vec![Some(1), None], vec![0, 2], None),
+            ),
+            &array_of_not_null,
+        );
+        assert_validation_matches_reader(
+            "leftover under a null list row",
+            &single_col_batch(
+                "tags",
+                list_int_array(vec![Some(1), None], vec![0, 1, 2], Some(vec![true, false])),
+            ),
+            &array_of_not_null,
+        );
+        assert_validation_matches_reader(
+            "null list row owning no elements",
+            &single_col_batch(
+                "tags",
+                list_int_array(vec![Some(1)], vec![0, 1, 1], Some(vec![true, false])),
+            ),
+            &array_of_not_null,
+        );
+        assert_validation_matches_reader(
+            "null ROW row masking its own field",
+            &single_col_batch(
+                "nested",
+                struct_with_field(
+                    "seq",
+                    Arc::new(arrow::array::Int32Array::from(vec![None, Some(2)])) as ArrayRef,
+                    Some(vec![false, true]),
+                ),
+            ),
+            &row_of_not_null_field,
+        );
+        assert_validation_matches_reader(
+            "null ROW row above a live list",
+            &single_col_batch(
+                "nested",
+                struct_with_field(
+                    "tags",
+                    list_int_array(vec![None, Some(7)], vec![0, 1, 2], None),
+                    Some(vec![false, true]),
+                ),
+            ),
+            &row_of_not_null_array,
+        );
+        assert_validation_matches_reader(
+            "poison removed by a slice",
+            &single_col_batch(
+                "tags",
+                list_int_array(vec![None, Some(7), Some(8)], vec![0, 1, 3], None),
+            )
+            .slice(1, 1),
+            &array_of_not_null,
+        );
+    }
+
+    #[test]
+    fn validation_agrees_with_reader_on_maps_and_deeper_nesting() {
+        let map_of_not_null_value = RowType::new(vec![DataField::new(
+            "attrs",
+            DataTypes::map(DataTypes::string(), DataTypes::int().as_non_nullable()),
+            None,
+        )]);
+        assert_validation_matches_reader(
+            "MAP: poison on a live entry",
+            &single_col_batch(
+                "attrs",
+                map_string_int_array(vec!["a", "b"], vec![Some(1), None], vec![0, 2], None),
+            ),
+            &map_of_not_null_value,
+        );
+        assert_validation_matches_reader(
+            "MAP: leftover under a null entry",
+            &single_col_batch(
+                "attrs",
+                map_string_int_array(
+                    vec!["a", "b"],
+                    vec![Some(1), None],
+                    vec![0, 1, 2],
+                    Some(vec![true, false]),
+                ),
+            ),
+            &map_of_not_null_value,
+        );
+        assert_validation_matches_reader(
+            "MAP: null entry owning nothing",
+            &single_col_batch(
+                "attrs",
+                map_string_int_array(
+                    vec!["a"],
+                    vec![Some(1)],
+                    vec![0, 1, 1],
+                    Some(vec![true, false]),
+                ),
+            ),
+            &map_of_not_null_value,
         );
 
-        // Changelog variant: the spliced change-type vector drives per-record types.
-        let change_types = [
-            ChangeType::Insert,
-            ChangeType::UpdateAfter,
-            ChangeType::Delete,
+        let array_of_array = RowType::new(vec![DataField::new(
+            "grid",
+            DataTypes::array(DataTypes::array(DataTypes::int().as_non_nullable())),
+            None,
+        )]);
+        let inner_with_poison = || list_int_array(vec![None, Some(4)], vec![0, 1, 2], None);
+        assert_validation_matches_reader(
+            "ARRAY<ARRAY>: poison on a live outer row",
+            &single_col_batch("grid", list_array(inner_with_poison(), vec![0, 2], None)),
+            &array_of_array,
+        );
+        assert_validation_matches_reader(
+            "ARRAY<ARRAY>: poison sliced away",
+            &single_col_batch("grid", list_array(inner_with_poison(), vec![0, 1, 2], None))
+                .slice(1, 1),
+            &array_of_array,
+        );
+
+        let array_of_row = RowType::new(vec![DataField::new(
+            "items",
+            DataTypes::array(DataTypes::row(vec![
+                DataField::new("seq", DataTypes::int().as_non_nullable(), None),
+                DataField::new("label", DataTypes::string(), None),
+            ])),
+            None,
+        )]);
+        assert_validation_matches_reader(
+            "ARRAY<ROW>: poison on a live list row",
+            &single_col_batch(
+                "items",
+                list_array(
+                    struct_int_string_array(vec![None, Some(2)], vec![Some("x"), Some("y")], None),
+                    vec![0, 2],
+                    None,
+                ),
+            ),
+            &array_of_row,
+        );
+        assert_validation_matches_reader(
+            "ARRAY<ROW>: leftover under a null list row",
+            &single_col_batch(
+                "items",
+                list_array(
+                    struct_int_string_array(vec![None, Some(2)], vec![Some("x"), Some("y")], None),
+                    vec![0, 1, 2],
+                    Some(vec![false, true]),
+                ),
+            ),
+            &array_of_row,
+        );
+
+        let row_of_row = RowType::new(vec![DataField::new(
+            "outer",
+            DataTypes::row(vec![DataField::new(
+                "inner",
+                DataTypes::row(vec![DataField::new(
+                    "seq",
+                    DataTypes::int().as_non_nullable(),
+                    None,
+                )]),
+                None,
+            )]),
+            None,
+        )]);
+        // A null ROW row above a live MAP.
+        assert_validation_matches_reader(
+            "ROW<MAP>: null ROW row above a live map",
+            &single_col_batch(
+                "nested",
+                struct_with_field(
+                    "attrs",
+                    map_string_int_array(vec!["a", "b"], vec![Some(1), None], vec![0, 2], None),
+                    Some(vec![false]),
+                ),
+            ),
+            &RowType::new(vec![DataField::new(
+                "nested",
+                DataTypes::row(vec![DataField::new(
+                    "attrs",
+                    DataTypes::map(DataTypes::string(), DataTypes::int().as_non_nullable()),
+                    None,
+                )]),
+                None,
+            )]),
+        );
+
+        assert_validation_matches_reader(
+            "ROW<ROW>: null outer over a live inner",
+            &single_col_batch(
+                "outer",
+                struct_with_field(
+                    "inner",
+                    struct_with_field(
+                        "seq",
+                        Arc::new(arrow::array::Int32Array::from(vec![None, Some(2)])) as ArrayRef,
+                        None,
+                    ),
+                    Some(vec![false, true]),
+                ),
+            ),
+            &row_of_row,
+        );
+    }
+
+    #[test]
+    fn validation_agrees_with_reader_across_element_types() {
+        use arrow::array::{Float64Array, StringArray, TimestampMillisecondArray};
+
+        let cases: Vec<(&str, DataType, ArrayRef, ArrayRef)> = vec![
+            (
+                "STRING",
+                DataTypes::string().as_non_nullable(),
+                Arc::new(StringArray::from(vec![Some("a"), None])),
+                Arc::new(StringArray::from(vec!["a", "b"])),
+            ),
+            (
+                "DOUBLE",
+                DataTypes::double().as_non_nullable(),
+                Arc::new(Float64Array::from(vec![Some(1.5), None])),
+                Arc::new(Float64Array::from(vec![1.5, 2.5])),
+            ),
+            (
+                "TIMESTAMP",
+                DataTypes::timestamp_with_precision(3).as_non_nullable(),
+                Arc::new(TimestampMillisecondArray::from(vec![
+                    Some(1_700_000_000_000),
+                    None,
+                ])),
+                Arc::new(TimestampMillisecondArray::from(vec![
+                    1_700_000_000_000_i64,
+                    1_700_000_000_001,
+                ])),
+            ),
+            (
+                "BIGINT",
+                DataTypes::bigint().as_non_nullable(),
+                Arc::new(arrow::array::Int64Array::from(vec![Some(7_i64), None])),
+                Arc::new(arrow::array::Int64Array::from(vec![7_i64, 8])),
+            ),
         ];
-        let changelog = splice_change_type_vector(&append_only, &change_types);
-        let batch = LogRecordsBatches::new(changelog)
-            .next()
-            .expect("changelog batch")?;
-        assert!(!batch.is_append_only());
-        assert_eq!(batch.record_count(), 3);
 
-        let records: Vec<_> = batch.records(&read_context)?.collect();
-        let got: Vec<ChangeType> = records.iter().map(|r| *r.change_type()).collect();
-        assert_eq!(got, change_types.to_vec());
-
-        // The row payload and offsets survive the splice unchanged.
-        let mut ids = Vec::new();
-        for record in &records {
-            ids.push(record.row().get_int(0)?);
+        for (name, element_type, values, clean) in cases {
+            let row_type = RowType::new(vec![DataField::new(
+                "tags",
+                DataTypes::array(element_type),
+                None,
+            )]);
+            assert_validation_matches_reader(
+                &format!("ARRAY<{name} NOT NULL>: poison on a live row"),
+                &single_col_batch("tags", list_array(Arc::clone(&values), vec![0, 2], None)),
+                &row_type,
+            );
+            assert_validation_matches_reader(
+                &format!("ARRAY<{name} NOT NULL>: leftover under a null row"),
+                &single_col_batch(
+                    "tags",
+                    list_array(values, vec![0, 1, 2], Some(vec![true, false])),
+                ),
+                &row_type,
+            );
+            assert_validation_matches_reader(
+                &format!("ARRAY<{name} NOT NULL>: no nulls"),
+                &single_col_batch("tags", list_array(clean, vec![0, 2], None)),
+                &row_type,
+            );
         }
-        assert_eq!(ids, vec![1, 2, 3]);
-        let offsets: Vec<i64> = records.iter().map(|r| r.offset()).collect();
-        assert_eq!(offsets, vec![0, 1, 2]);
+    }
 
-        // Batch-level access skips the change-type vector and still decodes rows.
-        let batch = LogRecordsBatches::new(splice_change_type_vector(&append_only, &change_types))
+    /// The batch must be accepted and read back as what would be written. A
+    /// mistyped column decodes fine, it just decodes to a different number. The
+    /// comparison is against what `prepare` produced, since that is what reaches
+    /// the wire - for a converting column that is not the input.
+    fn assert_round_trips(label: &str, batch: &RecordBatch, row_type: &RowType) {
+        let prepared = prepare_append_record_batch(batch, row_type)
+            .unwrap_or_else(|e| panic!("{label} must be accepted: {e}"));
+        let bytes = encode_batch_bypassing_validation(&prepared);
+        let read_context = ReadContext::new(
+            to_arrow_schema(row_type).expect("arrow schema"),
+            Arc::new(row_type.clone()),
+            false,
+        );
+        let decoded = LogRecordsBatches::new(bytes)
             .next()
-            .expect("changelog batch")?;
-        assert_eq!(batch.record_batch(&read_context)?.num_rows(), 3);
+            .expect("a batch was written")
+            .expect("the batch parses")
+            .record_batch(&read_context)
+            .expect("an accepted batch must decode");
+        for i in 0..prepared.num_columns() {
+            assert_eq!(
+                prepared.column(i).as_ref(),
+                decoded.column(i).as_ref(),
+                "{label}: column {i} changed on the way through"
+            );
+        }
+    }
 
-        Ok(())
+    fn assert_rejected(label: &str, batch: &RecordBatch, row_type: &RowType) {
+        let err = prepare_append_record_batch(batch, row_type)
+            .expect_err(&format!("{label} must be rejected"));
+        assert!(
+            err.to_string().contains("but the table declares"),
+            "{label}: unexpected error {err}"
+        );
     }
 
     #[test]
-    fn decode_changelog_batch_rejects_invalid_change_type_byte() {
-        let (row_type, append_only) = build_append_only_batch(&[(1, "a"), (2, "b")]);
-        let read_context = ReadContext::new(
-            to_arrow_schema(&row_type).unwrap(),
-            Arc::new(row_type),
-            false,
+    fn column_types_must_match_the_table() {
+        let ts3 = RowType::new(vec![DataField::new(
+            "ts",
+            DataTypes::timestamp_with_precision(3),
+            None,
+        )]);
+        assert_round_trips(
+            "timestamp[ms] into TIMESTAMP(3)",
+            &single_col_batch(
+                "ts",
+                Arc::new(TimestampMillisecondArray::from(vec![1_700_i64])),
+            ),
+            &ts3,
+        );
+        assert_rejected(
+            "timestamp[ns] into TIMESTAMP(3)",
+            &single_col_batch(
+                "ts",
+                Arc::new(TimestampNanosecondArray::from(vec![1_700_i64])),
+            ),
+            &ts3,
+        );
+        assert_rejected(
+            "timestamp[us] into TIMESTAMP(3)",
+            &single_col_batch(
+                "ts",
+                Arc::new(TimestampMicrosecondArray::from(vec![1_700_i64])),
+            ),
+            &ts3,
         );
 
-        let mut changelog =
-            splice_change_type_vector(&append_only, &[ChangeType::Insert, ChangeType::Insert]);
-        // Corrupt the second change-type byte to an out-of-range value.
-        changelog[RECORDS_OFFSET + 1] = 99;
+        let dec = RowType::new(vec![DataField::new("d", DataTypes::decimal(10, 2), None)]);
+        let decimal = |p, s| {
+            single_col_batch(
+                "d",
+                Arc::new(
+                    Decimal128Array::from(vec![1_234_567_i128])
+                        .with_precision_and_scale(p, s)
+                        .unwrap(),
+                ),
+            )
+        };
+        assert_round_trips("decimal(10,2) into DECIMAL(10,2)", &decimal(10, 2), &dec);
+        assert_rejected("decimal(10,4) into DECIMAL(10,2)", &decimal(10, 4), &dec);
+        assert_rejected("decimal(12,2) into DECIMAL(10,2)", &decimal(12, 2), &dec);
 
-        let batch = LogRecordBatch::new(Bytes::from(changelog));
-        let err = batch
-            .records(&read_context)
-            .err()
-            .expect("expected decode to reject an invalid change-type byte");
-        assert!(matches!(err, Error::UnexpectedError { .. }));
-        assert!(err.to_string().contains("change type"));
+        let time3 = RowType::new(vec![DataField::new(
+            "t",
+            DataTypes::time_with_precision(3),
+            None,
+        )]);
+        assert_round_trips(
+            "time32[ms] into TIME(3)",
+            &single_col_batch("t", Arc::new(Time32MillisecondArray::from(vec![1_000]))),
+            &time3,
+        );
+        assert_rejected(
+            "time64[us] into TIME(3)",
+            &single_col_batch("t", Arc::new(Time64MicrosecondArray::from(vec![1_000_i64]))),
+            &time3,
+        );
+
+        let bin8 = RowType::new(vec![DataField::new("b", DataTypes::binary(8), None)]);
+        assert_rejected(
+            "fixed_size_binary(4) into BINARY(8)",
+            &single_col_batch(
+                "b",
+                Arc::new(
+                    FixedSizeBinaryArray::try_from_iter(vec![vec![1_u8, 2, 3, 4]].into_iter())
+                        .unwrap(),
+                ),
+            ),
+            &bin8,
+        );
+    }
+
+    /// Types that differ only in offset width or encoding are converted to the
+    /// table's, since converting cannot change the values. A column that already
+    /// matches keeps its buffers.
+    #[test]
+    fn encoding_differences_are_converted_not_rejected() {
+        use arrow::array::{
+            Array, DictionaryArray, Int32Array, LargeBinaryArray, LargeListArray, LargeStringArray,
+            StringViewArray,
+        };
+        use arrow::buffer::OffsetBuffer;
+
+        let string_col = RowType::new(vec![DataField::new("s", DataTypes::string(), None)]);
+        for (label, column) in [
+            (
+                "large_string",
+                Arc::new(LargeStringArray::from(vec!["a", "b"])) as ArrayRef,
+            ),
+            (
+                "string_view",
+                Arc::new(StringViewArray::from(vec!["a", "b"])) as ArrayRef,
+            ),
+            (
+                "dictionary",
+                Arc::new(
+                    vec!["a", "b"]
+                        .into_iter()
+                        .collect::<DictionaryArray<arrow::datatypes::Int32Type>>(),
+                ) as ArrayRef,
+            ),
+        ] {
+            let out = prepare_append_record_batch(&single_col_batch("s", column), &string_col)
+                .unwrap_or_else(|e| panic!("{label} must be accepted: {e}"));
+            assert_eq!(
+                out.column(0).data_type(),
+                &ArrowDataType::Utf8,
+                "{label} must arrive as the table's type"
+            );
+            let strings = out
+                .column(0)
+                .as_any()
+                .downcast_ref::<arrow::array::StringArray>()
+                .expect("converted to StringArray");
+            assert_eq!(strings.value(0), "a");
+            assert_eq!(strings.value(1), "b");
+        }
+
+        let bytes_col = RowType::new(vec![DataField::new("b", DataTypes::bytes(), None)]);
+        let out = prepare_append_record_batch(
+            &single_col_batch("b", Arc::new(LargeBinaryArray::from(vec![&b"hi"[..]]))),
+            &bytes_col,
+        )
+        .expect("large_binary must be accepted");
+        assert_eq!(out.column(0).data_type(), &ArrowDataType::Binary);
+
+        let list_col = RowType::new(vec![DataField::new(
+            "l",
+            DataTypes::array(DataTypes::int()),
+            None,
+        )]);
+        let large_list: ArrayRef = Arc::new(LargeListArray::new(
+            Arc::new(Field::new("item", ArrowDataType::Int32, true)),
+            OffsetBuffer::new(vec![0_i64, 2].into()),
+            Arc::new(Int32Array::from(vec![1, 2])),
+            None,
+        ));
+        let out = prepare_append_record_batch(&single_col_batch("l", large_list), &list_col)
+            .expect("large_list must be accepted");
+        assert!(matches!(out.column(0).data_type(), ArrowDataType::List(_)));
+
+        // A matching column is passed through, not rebuilt.
+        let matching = single_col_batch("s", Arc::new(arrow::array::StringArray::from(vec!["a"])));
+        let out = prepare_append_record_batch(&matching, &string_col).expect("accepted");
+        assert!(
+            Arc::ptr_eq(matching.column(0), out.column(0)),
+            "a column that already matches must keep its buffers"
+        );
+    }
+
+    /// The conversion rebuilds the schema, so the name check has to run before
+    /// it - otherwise a batch containing any convertible column would have its
+    /// names supplied by us and pass trivially.
+    #[test]
+    fn names_are_checked_even_when_a_column_converts() {
+        use arrow::array::{Int32Array, LargeStringArray};
+
+        let row_type = RowType::new(vec![
+            DataField::new("a", DataTypes::int(), None),
+            DataField::new("b", DataTypes::int(), None),
+            DataField::new("s", DataTypes::string(), None),
+        ]);
+        let batch = |first: &str, second: &str| {
+            RecordBatch::try_new(
+                Arc::new(arrow_schema::Schema::new(vec![
+                    Field::new(first, ArrowDataType::Int32, true),
+                    Field::new(second, ArrowDataType::Int32, true),
+                    // needs converting, which rebuilds the schema
+                    Field::new("s", ArrowDataType::LargeUtf8, true),
+                ])),
+                vec![
+                    Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+                    Arc::new(Int32Array::from(vec![999])) as ArrayRef,
+                    Arc::new(LargeStringArray::from(vec!["x"])) as ArrayRef,
+                ],
+            )
+            .expect("batch")
+        };
+
+        assert_round_trips(
+            "names right, one column converts",
+            &batch("a", "b"),
+            &row_type,
+        );
+        let err = prepare_append_record_batch(&batch("b", "a"), &row_type)
+            .expect_err("swapped columns must be rejected even when a column converts");
+        assert!(
+            err.to_string().contains("is named"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// A converting column must still report a NOT NULL violation in our own
+    /// words - casting straight to the table's type fails inside Arrow and would
+    /// surface an internal message for the same mistake.
+    #[test]
+    fn converting_column_reports_not_null_violations_consistently() {
+        use arrow::array::{Int32Array, LargeListArray, ListArray};
+        use arrow::buffer::OffsetBuffer;
+
+        let row_type = RowType::new(vec![DataField::new(
+            "c",
+            DataTypes::array(DataTypes::int().as_non_nullable()),
+            None,
+        )]);
+        let values = || Arc::new(Int32Array::from(vec![Some(1), None]));
+        let plain = single_col_batch(
+            "c",
+            Arc::new(ListArray::new(
+                Arc::new(Field::new("item", ArrowDataType::Int32, true)),
+                OffsetBuffer::new(vec![0_i32, 2].into()),
+                values(),
+                None,
+            )),
+        );
+        let converting = single_col_batch(
+            "c",
+            Arc::new(LargeListArray::new(
+                Arc::new(Field::new("item", ArrowDataType::Int32, true)),
+                OffsetBuffer::new(vec![0_i64, 2].into()),
+                values(),
+                None,
+            )),
+        );
+        let plain_err = prepare_append_record_batch(&plain, &row_type)
+            .expect_err("null element must be rejected")
+            .to_string();
+        let converting_err = prepare_append_record_batch(&converting, &row_type)
+            .expect_err("null element must be rejected when the column also converts")
+            .to_string();
+        assert_eq!(
+            plain_err, converting_err,
+            "the same mistake must report the same way"
+        );
+        assert!(
+            plain_err.contains("declared as non-nullable"),
+            "{plain_err}"
+        );
+    }
+
+    /// Encoding differences nested inside a container are converted too.
+    #[test]
+    fn nested_encoding_differences_are_converted() {
+        use arrow::array::{LargeStringArray, ListArray, StringArray, StructArray};
+        use arrow::buffer::OffsetBuffer;
+
+        // ROW<s STRING> given a large_utf8 child
+        let row_of_string = RowType::new(vec![DataField::new(
+            "r",
+            DataTypes::row(vec![DataField::new("s", DataTypes::string(), None)]),
+            None,
+        )]);
+        let out = prepare_append_record_batch(
+            &single_col_batch(
+                "r",
+                Arc::new(StructArray::from(vec![(
+                    Arc::new(Field::new("s", ArrowDataType::LargeUtf8, true)),
+                    Arc::new(LargeStringArray::from(vec!["deep"])) as ArrayRef,
+                )])),
+            ),
+            &row_of_string,
+        )
+        .expect("ROW with a large_utf8 child must be accepted");
+        assert_eq!(
+            out.column(0).data_type(),
+            to_arrow_schema(&row_of_string)
+                .unwrap()
+                .field(0)
+                .data_type()
+        );
+        assert_round_trips("ROW<STRING> from large_utf8", &out, &row_of_string);
+
+        // ARRAY<STRING> given a list of large_utf8
+        let array_of_string = RowType::new(vec![DataField::new(
+            "l",
+            DataTypes::array(DataTypes::string()),
+            None,
+        )]);
+        let out = prepare_append_record_batch(
+            &single_col_batch(
+                "l",
+                Arc::new(ListArray::new(
+                    Arc::new(Field::new("item", ArrowDataType::LargeUtf8, true)),
+                    OffsetBuffer::new(vec![0_i32, 2].into()),
+                    Arc::new(LargeStringArray::from(vec!["a", "b"])),
+                    None,
+                )),
+            ),
+            &array_of_string,
+        )
+        .expect("list of large_utf8 must be accepted");
+        assert_eq!(
+            out.column(0).data_type(),
+            to_arrow_schema(&array_of_string)
+                .unwrap()
+                .field(0)
+                .data_type()
+        );
+        assert_round_trips(
+            "ARRAY<STRING> from list<large_utf8>",
+            &out,
+            &array_of_string,
+        );
+        let _ = StringArray::from(vec!["x"]);
+    }
+
+    /// A ROW's fields are matched by position too, so the same swap is possible
+    /// one level down.
+    #[test]
+    fn row_field_names_must_match_the_table() {
+        use arrow::array::StructArray;
+
+        let row_type = RowType::new(vec![DataField::new(
+            "person",
+            DataTypes::row(vec![
+                DataField::new("name_id", DataTypes::int(), None),
+                DataField::new("surname_id", DataTypes::int(), None),
+            ]),
+            None,
+        )]);
+        let person = |first: &str, second: &str| {
+            single_col_batch(
+                "person",
+                Arc::new(StructArray::from(vec![
+                    (
+                        Arc::new(Field::new(first, ArrowDataType::Int32, true)),
+                        Arc::new(arrow::array::Int32Array::from(vec![1])) as ArrayRef,
+                    ),
+                    (
+                        Arc::new(Field::new(second, ArrowDataType::Int32, true)),
+                        Arc::new(arrow::array::Int32Array::from(vec![999])) as ArrayRef,
+                    ),
+                ])),
+            )
+        };
+
+        assert_round_trips(
+            "ROW fields in table order",
+            &person("name_id", "surname_id"),
+            &row_type,
+        );
+        assert_rejected(
+            "ROW fields swapped",
+            &person("surname_id", "name_id"),
+            &row_type,
+        );
+    }
+
+    /// Columns are matched by position. Two same-typed columns supplied in the
+    /// wrong order would otherwise be written into each other's place.
+    #[test]
+    fn column_names_must_match_the_table() {
+        let row_type = RowType::new(vec![
+            DataField::new("user_id", DataTypes::int(), None),
+            DataField::new("account_id", DataTypes::int(), None),
+        ]);
+        let batch = |first: &str, second: &str| {
+            RecordBatch::try_new(
+                Arc::new(arrow_schema::Schema::new(vec![
+                    Field::new(first, ArrowDataType::Int32, true),
+                    Field::new(second, ArrowDataType::Int32, true),
+                ])),
+                vec![
+                    Arc::new(arrow::array::Int32Array::from(vec![1])) as ArrayRef,
+                    Arc::new(arrow::array::Int32Array::from(vec![999])) as ArrayRef,
+                ],
+            )
+            .expect("batch")
+        };
+
+        assert_round_trips(
+            "columns in table order",
+            &batch("user_id", "account_id"),
+            &row_type,
+        );
+
+        let err = prepare_append_record_batch(&batch("account_id", "user_id"), &row_type)
+            .expect_err("swapped columns must be rejected");
+        assert!(
+            err.to_string().contains("is named"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
-    fn decode_changelog_batch_rejects_truncated_change_type_vector() {
-        let (row_type, append_only) = build_append_only_batch(&[(1, "a"), (2, "b")]);
-        let read_context = ReadContext::new(
-            to_arrow_schema(&row_type).unwrap(),
-            Arc::new(row_type),
-            false,
+    fn nested_column_types_must_match_the_table() {
+        use arrow::array::{ListArray, MapArray, StringArray, StructArray};
+        use arrow::buffer::OffsetBuffer;
+
+        // ARRAY<TIMESTAMP(3)> given a list of ns.
+        let list_of = |values: ArrayRef| -> ArrayRef {
+            Arc::new(ListArray::new(
+                Arc::new(Field::new("item", values.data_type().clone(), true)),
+                OffsetBuffer::new(vec![0_i32, 1].into()),
+                values,
+                None,
+            ))
+        };
+        let array_of_ts3 = RowType::new(vec![DataField::new(
+            "tags",
+            DataTypes::array(DataTypes::timestamp_with_precision(3)),
+            None,
+        )]);
+        assert_round_trips(
+            "ARRAY<TIMESTAMP(3)> of ms",
+            &single_col_batch(
+                "tags",
+                list_of(Arc::new(TimestampMillisecondArray::from(vec![1_700_i64]))),
+            ),
+            &array_of_ts3,
+        );
+        assert_rejected(
+            "ARRAY<TIMESTAMP(3)> of ns",
+            &single_col_batch(
+                "tags",
+                list_of(Arc::new(TimestampNanosecondArray::from(vec![1_700_i64]))),
+            ),
+            &array_of_ts3,
         );
 
-        // Clear the append-only flag, then cut the body shorter than the
-        // record_count change-type bytes the decoder now expects.
-        let mut data = append_only;
-        data[ATTRIBUTES_OFFSET] &= !APPEND_ONLY_FLAG_MASK;
-        data.truncate(RECORDS_OFFSET + 1);
+        // ROW<d DECIMAL(10,2)> given decimal(10,4).
+        let struct_of = |value: ArrayRef| -> ArrayRef {
+            Arc::new(StructArray::from(vec![(
+                Arc::new(Field::new("d", value.data_type().clone(), true)),
+                value,
+            )]))
+        };
+        let decimal = |p, s| {
+            Arc::new(
+                Decimal128Array::from(vec![1_234_i128])
+                    .with_precision_and_scale(p, s)
+                    .unwrap(),
+            ) as ArrayRef
+        };
+        let row_of_decimal = RowType::new(vec![DataField::new(
+            "nested",
+            DataTypes::row(vec![DataField::new("d", DataTypes::decimal(10, 2), None)]),
+            None,
+        )]);
+        assert_round_trips(
+            "ROW<DECIMAL(10,2)> of (10,2)",
+            &single_col_batch("nested", struct_of(decimal(10, 2))),
+            &row_of_decimal,
+        );
+        assert_rejected(
+            "ROW<DECIMAL(10,2)> of (10,4)",
+            &single_col_batch("nested", struct_of(decimal(10, 4))),
+            &row_of_decimal,
+        );
 
-        let batch = LogRecordBatch::new(Bytes::from(data));
-        assert_eq!(batch.record_count(), 2);
-        let err = batch
-            .records(&read_context)
-            .err()
-            .expect("expected decode to reject a truncated change-type vector");
-        assert!(matches!(err, Error::UnexpectedError { .. }));
+        // MAP<STRING,INT> given a large_string key.
+        let map_of = |keys: ArrayRef| -> ArrayRef {
+            let entries = StructArray::from(vec![
+                (
+                    Arc::new(Field::new("key", keys.data_type().clone(), false)),
+                    keys,
+                ),
+                (
+                    Arc::new(Field::new("value", ArrowDataType::Int32, true)),
+                    Arc::new(arrow::array::Int32Array::from(vec![1])) as ArrayRef,
+                ),
+            ]);
+            Arc::new(MapArray::new(
+                Arc::new(Field::new("entries", entries.data_type().clone(), false)),
+                OffsetBuffer::new(vec![0_i32, 1].into()),
+                entries,
+                None,
+                false,
+            ))
+        };
+        let map_type = RowType::new(vec![DataField::new(
+            "attrs",
+            DataTypes::map(DataTypes::string(), DataTypes::int()),
+            None,
+        )]);
+        assert_round_trips(
+            "MAP<STRING,INT> with utf8 keys",
+            &single_col_batch("attrs", map_of(Arc::new(StringArray::from(vec!["a"])))),
+            &map_type,
+        );
+        // large_utf8 keys differ only in offset width, so they are converted.
+        let converted = prepare_append_record_batch(
+            &single_col_batch(
+                "attrs",
+                map_of(Arc::new(arrow::array::LargeStringArray::from(vec!["a"]))),
+            ),
+            &map_type,
+        )
+        .expect("large_utf8 map keys must be converted");
+        assert_eq!(
+            converted.column(0).data_type(),
+            to_arrow_schema(&map_type).unwrap().field(0).data_type()
+        );
+
+        // A genuinely different key type is still refused.
+        assert_rejected(
+            "MAP<STRING,INT> with int keys",
+            &single_col_batch(
+                "attrs",
+                map_of(Arc::new(arrow::array::Int32Array::from(vec![1]))),
+            ),
+            &map_type,
+        );
+    }
+
+    /// `MapBuilder` emits `keys`/`values` where Fluss uses `key`/`value`, so
+    /// builder output must not trip the check.
+    #[test]
+    fn builder_produced_batches_are_accepted() {
+        let mut lists = ListBuilder::new(Int32Builder::new());
+        lists.values().append_value(1);
+        lists.values().append_value(2);
+        lists.append(true);
+        assert_round_trips(
+            "ListBuilder output",
+            &single_col_batch("tags", Arc::new(lists.finish())),
+            &RowType::new(vec![DataField::new(
+                "tags",
+                DataTypes::array(DataTypes::int()),
+                None,
+            )]),
+        );
+
+        let mut maps = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
+        maps.keys().append_value("a");
+        maps.values().append_value(1);
+        maps.append(true).unwrap();
+        assert_round_trips(
+            "MapBuilder output",
+            &single_col_batch("attrs", Arc::new(maps.finish())),
+            &RowType::new(vec![DataField::new(
+                "attrs",
+                DataTypes::map(DataTypes::string(), DataTypes::int()),
+                None,
+            )]),
+        );
+
+        let structs = StructArray::from(vec![(
+            Arc::new(Field::new("seq", ArrowDataType::Int32, true)),
+            Arc::new(arrow::array::Int32Array::from(vec![1])) as ArrayRef,
+        )]);
+        assert_round_trips(
+            "StructArray built from the table's field names",
+            &single_col_batch("nested", Arc::new(structs)),
+            &RowType::new(vec![DataField::new(
+                "nested",
+                DataTypes::row(vec![DataField::new("seq", DataTypes::int(), None)]),
+                None,
+            )]),
+        );
+    }
+
+    /// A `TIMESTAMP_LTZ` value is an instant, so the zone is a label rather than
+    /// part of the value. Zoned against naive is still a real difference.
+    #[test]
+    fn timestamp_zone_name_is_not_a_type_difference() {
+        let ltz = RowType::new(vec![DataField::new(
+            "ts",
+            DataTypes::timestamp_ltz_with_precision(6),
+            None,
+        )]);
+        for zone in ["UTC", "+00:00", "Etc/UTC", "America/New_York"] {
+            let column: ArrayRef =
+                Arc::new(TimestampMicrosecondArray::from(vec![1_i64]).with_timezone(zone));
+            prepare_append_record_batch(&single_col_batch("ts", column), &ltz)
+                .unwrap_or_else(|e| panic!("zone {zone} must be accepted: {e}"));
+        }
+
+        assert_rejected(
+            "naive timestamp into TIMESTAMP_LTZ",
+            &single_col_batch("ts", Arc::new(TimestampMicrosecondArray::from(vec![1_i64]))),
+            &ltz,
+        );
+        assert_rejected(
+            "zoned timestamp into TIMESTAMP",
+            &single_col_batch(
+                "ts",
+                Arc::new(TimestampMicrosecondArray::from(vec![1_i64]).with_timezone("UTC")),
+            ),
+            &RowType::new(vec![DataField::new(
+                "ts",
+                DataTypes::timestamp_with_precision(6),
+                None,
+            )]),
+        );
     }
 }

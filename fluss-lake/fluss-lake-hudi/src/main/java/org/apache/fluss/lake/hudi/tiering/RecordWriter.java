@@ -61,8 +61,7 @@ public abstract class RecordWriter implements AutoCloseable {
             HudiWriteTableInfo hudiTableInfo,
             CkpMetadata ckpMetadata) {
         this.bucketNum = writerInitContext.tableBucket().getBucket();
-        this.flussRecordAsHudiRecord =
-                new FlussRecordAsHudiRow(bucketNum, hudiTableInfo.getRowType());
+        this.flussRecordAsHudiRecord = new FlussRecordAsHudiRow(hudiTableInfo.getRowType());
         this.hudiTableInfo = hudiTableInfo;
         this.ckpMetadata = ckpMetadata;
         this.recordWriteBuffer =

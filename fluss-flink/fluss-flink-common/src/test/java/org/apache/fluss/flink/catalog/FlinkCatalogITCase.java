@@ -32,6 +32,7 @@ import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.testutils.common.MultiVersionTest;
 
@@ -758,7 +759,9 @@ abstract class FlinkCatalogITCase {
             expectedTableProperties.put("table.replication.factor", "1");
             expectedTableProperties.put(
                     "table.kv.format-version", String.valueOf(CURRENT_KV_FORMAT_VERSION));
-            expectedTableProperties.put("table.kv.standby-replica.enabled", "true");
+            expectedTableProperties.put(
+                    ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION.key(),
+                    String.valueOf(KvValueLayout.PLAIN.version()));
             assertThat(tableInfo.getProperties().toMap()).isEqualTo(expectedTableProperties);
 
             Map<String, String> expectedCustomProperties = new HashMap<>();
@@ -1254,7 +1257,7 @@ abstract class FlinkCatalogITCase {
         actualOptions.remove(ConfigOptions.BOOTSTRAP_SERVERS.key());
         actualOptions.remove(ConfigOptions.TABLE_REPLICATION_FACTOR.key());
         actualOptions.remove(ConfigOptions.TABLE_KV_FORMAT_VERSION.key());
-        actualOptions.remove(ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key());
+        actualOptions.remove(ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION.key());
         assertThat(actualOptions).isEqualTo(expectedOptions);
     }
 }

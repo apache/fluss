@@ -149,7 +149,7 @@ public class HudiArrayAsFlussArray implements InternalArray {
     @Override
     public InternalRow getRow(int pos, int numFields) {
         RowData nestedRow = hudiArray.getRow(pos, numFields);
-        return nestedRow == null ? null : new HudiRowAsFlussRow(nestedRow, false);
+        return nestedRow == null ? null : new HudiRowAsFlussRow(nestedRow);
     }
 
     @Override

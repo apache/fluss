@@ -18,6 +18,7 @@
 
 package org.apache.fluss.lake.iceberg.source;
 
+import org.apache.fluss.lake.iceberg.utils.IcebergUtils;
 import org.apache.fluss.lake.source.RecordReader;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.GenericRecord;
@@ -37,13 +38,11 @@ import org.apache.iceberg.types.Types;
 import javax.annotation.Nullable;
 
 import java.io.IOException;
-import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.IntStream;
 
-import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
-import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
+import static org.apache.fluss.lake.iceberg.IcebergSchemaUtils.LEGACY_SYSTEM_COLUMNS;
 
 /**
  * Iceberg record reader. The filter is applied during the plan phase of IcebergSplitPlanner, so the
@@ -53,6 +52,10 @@ import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
  * org.apache.iceberg.Scan#ignoreResiduals()} for details.
  */
 public class IcebergRecordReader implements RecordReader {
+
+    /** Sentinel value emitted when the lake table has no per-record offset/timestamp. */
+    private static final long NO_SYSTEM_COLUMN_VALUE = -1L;
+
     protected IcebergRecordAsFlussRecordIterator iterator;
     protected @Nullable int[][] project;
     protected Types.StructType struct;
@@ -74,14 +77,14 @@ public class IcebergRecordReader implements RecordReader {
 
     private TableScan applyProject(TableScan tableScan, int[][] projects) {
         Types.StructType structType = tableScan.schema().asStruct();
-        List<Types.NestedField> cols = new ArrayList<>(projects.length + 2);
-
+        List<Types.NestedField> cols = new ArrayList<>(projects.length);
+        // The projected column ids reference the user (business) columns; the log offset /
+        // timestamp
+        // are not read from the lake table (a clean table has none, and for a legacy table we no
+        // longer read them), so no system column needs to be projected.
         for (int[] project : projects) {
             cols.add(structType.fields().get(project[0]));
         }
-
-        cols.add(structType.field(OFFSET_COLUMN_NAME));
-        cols.add(structType.field(TIMESTAMP_COLUMN_NAME));
         return tableScan.project(new Schema(cols));
     }
 
@@ -93,17 +96,18 @@ public class IcebergRecordReader implements RecordReader {
         private final ProjectedRow projectedRow;
         private final IcebergRecordAsFlussRow icebergRecordAsFlussRow;
 
-        private final int logOffsetColIndex;
-        private final int timestampColIndex;
-
         public IcebergRecordAsFlussRecordIterator(
                 CloseableIterable<Record> icebergRecordIterator, Types.StructType struct) {
             this.icebergRecordIterator = icebergRecordIterator.iterator();
-            this.logOffsetColIndex = struct.fields().indexOf(struct.field(OFFSET_COLUMN_NAME));
-            this.timestampColIndex = struct.fields().indexOf(struct.field(TIMESTAMP_COLUMN_NAME));
 
-            int[] project = IntStream.range(0, struct.fields().size() - 2).toArray();
-            projectedRow = ProjectedRow.from(project);
+            // A legacy table read without projection still exposes its three trailing system
+            // columns; trim them so only the business columns are emitted. A clean table (or any
+            // projected read) has no system columns to trim.
+            int businessFieldCount =
+                    IcebergUtils.isLegacyTable(new Schema(struct.fields()))
+                            ? struct.fields().size() - LEGACY_SYSTEM_COLUMNS.size()
+                            : struct.fields().size();
+            projectedRow = ProjectedRow.from(IntStream.range(0, businessFieldCount).toArray());
             icebergRecordAsFlussRow = new IcebergRecordAsFlussRow();
         }
 
@@ -124,16 +128,13 @@ public class IcebergRecordReader implements RecordReader {
         @Override
         public LogRecord next() {
             Record icebergRecord = icebergRecordIterator.next();
-            long offset = icebergRecord.get(logOffsetColIndex, Long.class);
-            long timestamp =
-                    icebergRecord
-                            .get(timestampColIndex, OffsetDateTime.class)
-                            .toInstant()
-                            .toEpochMilli();
-
+            // The lake table does not carry a per-record log offset / timestamp (a clean table has
+            // no system columns, and for a legacy table we no longer read them), so a sentinel -1
+            // is
+            // emitted, consistent with the Paimon reader and the LakeRecordRecordEmitter contract.
             return new GenericRecord(
-                    offset,
-                    timestamp,
+                    NO_SYSTEM_COLUMN_VALUE,
+                    NO_SYSTEM_COLUMN_VALUE,
                     ChangeType.INSERT,
                     projectedRow.replaceRow(
                             icebergRecordAsFlussRow.replaceIcebergRecord(icebergRecord)));

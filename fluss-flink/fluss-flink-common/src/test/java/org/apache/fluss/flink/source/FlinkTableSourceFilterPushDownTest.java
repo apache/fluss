@@ -96,6 +96,7 @@ public class FlinkTableSourceFilterPushDownTest {
                             false, // insert if not exists
                             null, // cache
                             1000L, // scan partition discovery interval
+                            FlinkConnectorOptions.SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE.defaultValue(),
                             false, // is data lake enabled
                             null, // merge engine type
                             Maps.newHashMap(),

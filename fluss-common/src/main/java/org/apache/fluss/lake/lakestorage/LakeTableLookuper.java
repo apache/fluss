@@ -54,7 +54,8 @@ public interface LakeTableLookuper extends AutoCloseable {
      *
      * @param key lake-format encoded primary key bytes
      * @param context lookup context
-     * @return Fluss value bytes, or null if the key does not exist
+     * @return plain Fluss value bytes encoded as {@code [schema-id][BinaryRow]}, or null if the key
+     *     does not exist
      */
     @Nullable
     byte[] lookup(byte[] key, LookupContext context) throws Exception;

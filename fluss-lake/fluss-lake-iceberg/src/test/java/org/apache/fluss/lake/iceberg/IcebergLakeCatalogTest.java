@@ -23,6 +23,7 @@ import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
+import org.apache.fluss.lake.iceberg.testutils.IcebergTestUtils;
 import org.apache.fluss.lake.lakestorage.TestingLakeCatalogContext;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableChange;
@@ -37,8 +38,6 @@ import org.apache.iceberg.FileFormat;
 import org.apache.iceberg.PartitionField;
 import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.RowLevelOperationMode;
-import org.apache.iceberg.SortDirection;
-import org.apache.iceberg.SortField;
 import org.apache.iceberg.SortOrder;
 import org.apache.iceberg.Table;
 import org.apache.iceberg.TableProperties;
@@ -160,13 +159,7 @@ class IcebergLakeCatalogTest {
                         Arrays.asList(
                                 Types.NestedField.required(1, "id", Types.IntegerType.get()),
                                 Types.NestedField.optional(
-                                        2, "name", Types.StringType.get(), "field name"),
-                                Types.NestedField.required(
-                                        3, BUCKET_COLUMN_NAME, Types.IntegerType.get()),
-                                Types.NestedField.required(
-                                        4, OFFSET_COLUMN_NAME, Types.LongType.get()),
-                                Types.NestedField.required(
-                                        5, TIMESTAMP_COLUMN_NAME, Types.TimestampType.withZone())),
+                                        2, "name", Types.StringType.get(), "field name")),
                         Collections.singleton(1));
 
         assertThat(createdTable.schema().toString()).isEqualTo(expectIcebergSchema.toString());
@@ -222,13 +215,7 @@ class IcebergLakeCatalogTest {
                                 Types.NestedField.optional(
                                         4, "num_orders", Types.IntegerType.get()),
                                 Types.NestedField.required(
-                                        5, "total_amount", Types.IntegerType.get()),
-                                Types.NestedField.required(
-                                        6, BUCKET_COLUMN_NAME, Types.IntegerType.get()),
-                                Types.NestedField.required(
-                                        7, OFFSET_COLUMN_NAME, Types.LongType.get()),
-                                Types.NestedField.required(
-                                        8, TIMESTAMP_COLUMN_NAME, Types.TimestampType.withZone())),
+                                        5, "total_amount", Types.IntegerType.get())),
                         identifierFieldIds);
         assertThat(createdTable.schema().toString()).isEqualTo(expectIcebergSchema.toString());
 
@@ -246,12 +233,8 @@ class IcebergLakeCatalogTest {
         assertThat(partitionField2.transform().toString()).isEqualTo("bucket[10]");
         assertThat(partitionField2.sourceId()).isEqualTo(2);
 
-        // Verify sort order
-        assertThat(createdTable.sortOrder().fields()).hasSize(1);
-        SortField sortField = createdTable.sortOrder().fields().get(0);
-        assertThat(sortField.sourceId())
-                .isEqualTo(createdTable.schema().findField(OFFSET_COLUMN_NAME).fieldId());
-        assertThat(sortField.direction()).isEqualTo(SortDirection.ASC);
+        // Verify sort order (FIP-27: clean tables are unsorted)
+        assertThat(createdTable.sortOrder().isUnsorted()).isTrue();
 
         // Verify  table properties
         assertThat(createdTable.properties())
@@ -325,29 +308,103 @@ class IcebergLakeCatalogTest {
                                 Types.NestedField.optional(1, "id", Types.LongType.get()),
                                 Types.NestedField.optional(2, "name", Types.StringType.get()),
                                 Types.NestedField.optional(3, "amount", Types.IntegerType.get()),
-                                Types.NestedField.optional(4, "address", Types.StringType.get()),
-                                Types.NestedField.required(
-                                        5, BUCKET_COLUMN_NAME, Types.IntegerType.get()),
-                                Types.NestedField.required(
-                                        6, OFFSET_COLUMN_NAME, Types.LongType.get()),
-                                Types.NestedField.required(
-                                        7, TIMESTAMP_COLUMN_NAME, Types.TimestampType.withZone())));
+                                Types.NestedField.optional(4, "address", Types.StringType.get())));
 
-        // Verify iceberg table schema
+        // Verify iceberg table schema (FIP-27: clean layout, no system columns)
         assertThat(createdTable.schema().toString()).isEqualTo(expectIcebergSchema.toString());
 
-        // Verify partition field and transform
-        assertThat(createdTable.spec().fields()).hasSize(1);
-        PartitionField partitionField = createdTable.spec().fields().get(0);
-        assertThat(partitionField.name()).isEqualTo(BUCKET_COLUMN_NAME);
-        assertThat(partitionField.transform().toString()).isEqualTo("identity");
+        // FIP-27: a clean bucket-unaware table is unpartitioned and unsorted.
+        assertThat(createdTable.spec().isUnpartitioned()).isTrue();
+        assertThat(createdTable.sortOrder().isUnsorted()).isTrue();
+    }
 
-        // Verify sort field and order
-        assertThat(createdTable.sortOrder().fields()).hasSize(1);
-        SortField sortField = createdTable.sortOrder().fields().get(0);
-        assertThat(sortField.sourceId())
-                .isEqualTo(createdTable.schema().findField(OFFSET_COLUMN_NAME).fieldId());
-        assertThat(sortField.direction()).isEqualTo(SortDirection.ASC);
+    @Test
+    void testEnableLakeTableWithLegacySystemTimestampColumn() {
+        // FIP-27: a legacy table (created before FIP-27, carrying the three trailing system columns
+        // with an identity(__bucket) partition and asc(__offset) sort order) must survive
+        // disable-then-re-enable tiering. Re-enabling goes through createTable() on the existing
+        // physical table; the clean-layout expectations are rebuilt in the legacy layout before the
+        // compatibility checks, so this must not throw and must preserve the legacy layout.
+        String database = "test_db";
+        String tableName = "legacy_log_table";
+        TablePath tablePath = TablePath.of(database, tableName);
+
+        TableDescriptor td =
+                TableDescriptor.builder().schema(FLUSS_SCHEMA).distributedBy(3).build();
+
+        // Create the table clean, then turn it into a legacy table (simulating a pre-FIP-27 table).
+        flussIcebergCatalog.createTable(tablePath, td, new TestingLakeCatalogContext());
+        IcebergTestUtils.adjustToLegacyV1Table(
+                flussIcebergCatalog.getIcebergCatalog(), TableIdentifier.of(database, tableName));
+
+        // Sanity: the table is now legacy (has __timestamp, identity(__bucket), asc(__offset)).
+        Table legacy =
+                flussIcebergCatalog
+                        .getIcebergCatalog()
+                        .loadTable(TableIdentifier.of(database, tableName));
+        assertThat(legacy.schema().findField(TIMESTAMP_COLUMN_NAME)).isNotNull();
+        assertThat(legacy.spec().isUnpartitioned()).isFalse();
+        assertThat(legacy.sortOrder().isUnsorted()).isFalse();
+
+        // Re-enabling tiering (createTable on the existing legacy table) must be accepted.
+        flussIcebergCatalog.createTable(tablePath, td, new TestingLakeCatalogContext());
+
+        // The legacy physical layout must be preserved.
+        Table reloaded =
+                flussIcebergCatalog
+                        .getIcebergCatalog()
+                        .loadTable(TableIdentifier.of(database, tableName));
+        assertThat(reloaded.schema().findField(TIMESTAMP_COLUMN_NAME)).isNotNull();
+        assertThat(reloaded.spec().isUnpartitioned()).isFalse();
+        assertThat(reloaded.sortOrder().isUnsorted()).isFalse();
+    }
+
+    @Test
+    void testAddColumnForLegacyTableWithSystemColumns() {
+        // FIP-27: adding a business column to a legacy table must insert it before the trailing
+        // system columns, so the __bucket/__offset/__timestamp columns stay last. (Clean tables
+        // append the new column last; that path is covered by testAlterTableAddColumnLastNullable.)
+        String database = "test_db";
+        String tableName = "legacy_add_col_table";
+        TablePath tablePath = TablePath.of(database, tableName);
+
+        // Create clean, then convert to legacy layout.
+        flussIcebergCatalog.createTable(
+                tablePath,
+                TableDescriptor.builder().schema(FLUSS_SCHEMA).distributedBy(3).build(),
+                new TestingLakeCatalogContext());
+        IcebergTestUtils.adjustToLegacyV1Table(
+                flussIcebergCatalog.getIcebergCatalog(), TableIdentifier.of(database, tableName));
+
+        List<TableChange> changes =
+                Collections.singletonList(
+                        TableChange.addColumn(
+                                "new_col",
+                                DataTypes.INT(),
+                                "new_col comment",
+                                TableChange.ColumnPosition.last()));
+        flussIcebergCatalog.alterTable(
+                tablePath, changes, getLakeCatalogContext(FLUSS_SCHEMA, changes));
+
+        Table table =
+                flussIcebergCatalog
+                        .getIcebergCatalog()
+                        .loadTable(TableIdentifier.of(database, tableName));
+        List<String> fieldNames =
+                table.schema().columns().stream()
+                        .map(Types.NestedField::name)
+                        .collect(Collectors.toList());
+        // The new column goes before the trailing system columns.
+        assertThat(fieldNames)
+                .containsExactly(
+                        "id",
+                        "name",
+                        "amount",
+                        "address",
+                        "new_col",
+                        BUCKET_COLUMN_NAME,
+                        OFFSET_COLUMN_NAME,
+                        TIMESTAMP_COLUMN_NAME);
     }
 
     @Test
@@ -384,33 +441,20 @@ class IcebergLakeCatalogTest {
                                 Types.NestedField.optional(1, "id", Types.LongType.get()),
                                 Types.NestedField.optional(2, "name", Types.StringType.get()),
                                 Types.NestedField.optional(3, "amount", Types.IntegerType.get()),
-                                Types.NestedField.optional(4, "order_type", Types.StringType.get()),
-                                Types.NestedField.required(
-                                        5, BUCKET_COLUMN_NAME, Types.IntegerType.get()),
-                                Types.NestedField.required(
-                                        6, OFFSET_COLUMN_NAME, Types.LongType.get()),
-                                Types.NestedField.required(
-                                        7, TIMESTAMP_COLUMN_NAME, Types.TimestampType.withZone())));
+                                Types.NestedField.optional(
+                                        4, "order_type", Types.StringType.get())));
 
-        // Verify iceberg table schema
+        // Verify iceberg table schema (FIP-27: clean layout, no system columns)
         assertThat(createdTable.schema().toString()).isEqualTo(expectIcebergSchema.toString());
 
-        // Verify partition field and transform
-        assertThat(createdTable.spec().fields()).hasSize(2);
+        // Verify partition field and transform (FIP-27: only the partition key, no __bucket)
+        assertThat(createdTable.spec().fields()).hasSize(1);
         PartitionField firstPartitionField = createdTable.spec().fields().get(0);
         assertThat(firstPartitionField.name()).isEqualTo("order_type");
         assertThat(firstPartitionField.transform().toString()).isEqualTo("identity");
 
-        PartitionField secondPartitionField = createdTable.spec().fields().get(1);
-        assertThat(secondPartitionField.name()).isEqualTo(BUCKET_COLUMN_NAME);
-        assertThat(secondPartitionField.transform().toString()).isEqualTo("identity");
-
-        // Verify sort field and order
-        assertThat(createdTable.sortOrder().fields()).hasSize(1);
-        SortField sortField = createdTable.sortOrder().fields().get(0);
-        assertThat(sortField.sourceId())
-                .isEqualTo(createdTable.schema().findField(OFFSET_COLUMN_NAME).fieldId());
-        assertThat(sortField.direction()).isEqualTo(SortDirection.ASC);
+        // Verify sort order (FIP-27: clean tables are unsorted)
+        assertThat(createdTable.sortOrder().isUnsorted()).isTrue();
     }
 
     @Test
@@ -673,16 +717,7 @@ class IcebergLakeCatalogTest {
                 table.schema().columns().stream()
                         .map(Types.NestedField::name)
                         .collect(Collectors.toList());
-        assertThat(fieldNames)
-                .containsExactly(
-                        "id",
-                        "name",
-                        "amount",
-                        "address",
-                        "new_col",
-                        BUCKET_COLUMN_NAME,
-                        OFFSET_COLUMN_NAME,
-                        TIMESTAMP_COLUMN_NAME);
+        assertThat(fieldNames).containsExactly("id", "name", "amount", "address", "new_col");
 
         // Verify the new column's type and nullability
         Types.NestedField newCol = table.schema().findField("new_col");
@@ -860,15 +895,7 @@ class IcebergLakeCatalogTest {
                 table.schema().columns().stream()
                         .map(Types.NestedField::name)
                         .collect(Collectors.toList());
-        assertThat(fieldNames)
-                .containsExactly(
-                        "id",
-                        "tags",
-                        "metadata",
-                        "new_col",
-                        BUCKET_COLUMN_NAME,
-                        OFFSET_COLUMN_NAME,
-                        TIMESTAMP_COLUMN_NAME);
+        assertThat(fieldNames).containsExactly("id", "tags", "metadata", "new_col");
 
         // Verify the new column
         Types.NestedField newCol = table.schema().findField("new_col");
@@ -939,7 +966,7 @@ class IcebergLakeCatalogTest {
         assertThat(listType.elementId()).isNotEqualTo(field.fieldId());
         assertThat(table.schema().columns())
                 .extracting(Types.NestedField::name)
-                .containsSubsequence("new_arr", BUCKET_COLUMN_NAME);
+                .containsExactly("id", "name", "amount", "address", "new_arr");
     }
 
     @Test
@@ -1600,8 +1627,10 @@ class IcebergLakeCatalogTest {
                                         tablePath, td, new TestingLakeCatalogContext()))
                 .isInstanceOf(TableAlreadyExistException.class)
                 .hasMessageContaining("sort order is not compatible")
-                .hasMessageContaining("ASC(__offset)")
-                .hasMessageContaining("pre-create the Iceberg table without a custom sort order");
+                .hasMessageContaining("pre-create the Iceberg table without a custom sort order")
+                // FIP-27: this is a clean table (no __offset), so the guidance must not tell the
+                // user to pre-create with ASC(__offset) — that only applies to legacy tables.
+                .hasMessageNotContaining("ASC(__offset)");
     }
 
     /**

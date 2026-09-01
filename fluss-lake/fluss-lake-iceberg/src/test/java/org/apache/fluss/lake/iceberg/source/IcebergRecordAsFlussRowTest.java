@@ -125,6 +125,44 @@ class IcebergRecordAsFlussRowTest {
     }
 
     @Test
+    void testGetFieldCountCleanRecord() {
+        // A clean record (FIP-27) has no system columns; the business field count is the full size.
+        Schema cleanSchema =
+                new Schema(
+                        required(1, "id", Types.LongType.get()),
+                        optional(2, "name", Types.StringType.get()),
+                        optional(3, "age", Types.IntegerType.get()));
+        Record cleanRecord = GenericRecord.create(cleanSchema);
+        cleanRecord.setField("id", 1L);
+        cleanRecord.setField("name", "John");
+        cleanRecord.setField("age", 30);
+
+        icebergRecordAsFlussRow.replaceIcebergRecord(cleanRecord);
+
+        assertThat(icebergRecordAsFlussRow.getFieldCount()).isEqualTo(3);
+    }
+
+    @Test
+    void testGetFieldCountLegacyProjectedRecord() {
+        // A projected legacy record carries only the system columns that were projected. The reader
+        // projects __offset and __timestamp (but not __bucket), so a single projected business
+        // column yields [id, __offset, __timestamp]; the business field count must be 1, not 0.
+        Schema projectedSchema =
+                new Schema(
+                        required(1, "id", Types.LongType.get()),
+                        required(23, "__offset", Types.LongType.get()),
+                        required(24, "__timestamp", Types.TimestampType.withZone()));
+        Record projectedRecord = GenericRecord.create(projectedSchema);
+        projectedRecord.setField("id", 1L);
+        projectedRecord.setField("__offset", 100L);
+        projectedRecord.setField("__timestamp", OffsetDateTime.now(ZoneOffset.UTC));
+
+        icebergRecordAsFlussRow.replaceIcebergRecord(projectedRecord);
+
+        assertThat(icebergRecordAsFlussRow.getFieldCount()).isEqualTo(1);
+    }
+
+    @Test
     void testIsNullAt() {
         record.setField("id", 1L);
         record.setField("name", null); // null value

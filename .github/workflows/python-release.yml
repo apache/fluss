@@ -48,14 +48,6 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
-      # Vendor the canonical proto so the sdist builds standalone from source.
-      - name: Vendor canonical proto into the crate
-        working-directory: fluss-rust
-        run: scripts/vendor-proto.sh
-
       - uses: PyO3/maturin-action@v1
         with:
           working-directory: fluss-rust/bindings/python
@@ -82,20 +74,6 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Install protoc (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
-      - name: Install protoc (macOS)
-        if: runner.os == 'macOS'
-        run: brew install protobuf
-
-      - name: Install protoc (Windows)
-        if: runner.os == 'Windows'
-        run: choco install protoc -y
-        shell: pwsh
-
-      # Install protoc in manylinux container (x86_64/aarch64); script shared via YAML anchor
       - uses: PyO3/maturin-action@v1
         with:
           working-directory: fluss-rust/bindings/python
@@ -103,20 +81,6 @@ jobs:
           command: build
           args: --release -o dist -i python3.9
           manylinux: ${{ matrix.manylinux || 'auto' }}
-          before-script-linux: &protoc-install |
-            set -e
-            ARCH=$(uname -m)
-            case "$ARCH" in
-              x86_64)  ZIP=protoc-27.1-linux-x86_64.zip ;;
-              aarch64) ZIP=protoc-27.1-linux-aarch_64.zip ;;
-              *) echo "Unsupported arch $ARCH"; exit 1 ;;
-            esac
-            curl -sLO "https://github.com/protocolbuffers/protobuf/releases/download/v27.1/${ZIP}"
-            python3 -c "import zipfile; zipfile.ZipFile('${ZIP}').extractall('/tmp/protoc_install')"
-            chmod +x /tmp/protoc_install/bin/protoc
-            rm -f "${ZIP}"
-            export PATH="/tmp/protoc_install/bin:$PATH"
-            export PROTOC=/tmp/protoc_install/bin/protoc
       - uses: PyO3/maturin-action@v1
         with:
           working-directory: fluss-rust/bindings/python
@@ -124,7 +88,6 @@ jobs:
           command: build
           args: --release -o dist -i python3.10
           manylinux: ${{ matrix.manylinux || 'auto' }}
-          before-script-linux: *protoc-install
       - uses: PyO3/maturin-action@v1
         with:
           working-directory: fluss-rust/bindings/python
@@ -132,7 +95,6 @@ jobs:
           command: build
           args: --release -o dist -i python3.11
           manylinux: ${{ matrix.manylinux || 'auto' }}
-          before-script-linux: *protoc-install
       - uses: PyO3/maturin-action@v1
         with:
           working-directory: fluss-rust/bindings/python
@@ -140,7 +102,6 @@ jobs:
           command: build
           args: --release -o dist -i python3.12
           manylinux: ${{ matrix.manylinux || 'auto' }}
-          before-script-linux: *protoc-install
 
       - name: Upload wheels
         uses: actions/upload-artifact@v7
@@ -148,12 +109,43 @@ jobs:
           name: wheels-${{ matrix.os }}-${{ matrix.target || 'native' }}
           path: fluss-rust/bindings/python/dist
 
+  verify-license:
+    name: Verify LICENSE and NOTICE
+    runs-on: ubuntu-latest
+    needs: [sdist, wheels]
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: wheels-*
+          merge-multiple: true
+          path: dist
+
+      # maturin ships these only when [project].license-files lists them.
+      - name: Check the sdist and every wheel
+        run: |
+          SDIST=$(ls dist/*.tar.gz)
+          PREFIX=$(basename "$SDIST" .tar.gz)
+          for f in LICENSE NOTICE; do
+            if [ -z "$(tar -xzOf "$SDIST" "${PREFIX}/${f}" 2>/dev/null)" ]; then
+              echo "Error: ${f} is missing or empty at the root of ${SDIST}"
+              exit 1
+            fi
+          done
+          for whl in dist/*.whl; do
+            for f in LICENSE NOTICE; do
+              if ! unzip -p "$whl" "*.dist-info/licenses/${f}" 2>/dev/null | grep -q .; then
+                echo "Error: ${f} is missing or empty in ${whl}"
+                exit 1
+              fi
+            done
+          done
+
   release:
     name: Publish to PyPI
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    needs: [version-check, sdist, wheels]
+    needs: [version-check, sdist, wheels, verify-license]
     if: startsWith(github.ref, 'refs/tags/')
     steps:
       - uses: actions/download-artifact@v8

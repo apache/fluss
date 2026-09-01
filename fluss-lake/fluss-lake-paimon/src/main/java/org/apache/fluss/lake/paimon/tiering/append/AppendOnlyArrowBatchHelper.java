@@ -53,6 +53,9 @@ import java.util.List;
  */
 class AppendOnlyArrowBatchHelper implements AutoCloseable {
 
+    // Fluss and its Arrow schema preserve column-name case, so use exact field matching.
+    private static final boolean CASE_SENSITIVE = true;
+
     private final FileStoreTable fileStoreTable;
     private final TableWriteImpl<InternalRow> tableWrite;
     private final RowType tableRowType;
@@ -115,7 +118,7 @@ class AppendOnlyArrowBatchHelper implements AutoCloseable {
             // Clean tables contain only user columns, so the incoming Arrow batch already matches
             // the Paimon table schema. Write it directly without enriching system columns.
             ArrowBundleRecords cleanRecords =
-                    new ArrowBundleRecords(originalRoot, tableRowType, false);
+                    new ArrowBundleRecords(originalRoot, tableRowType, CASE_SENSITIVE);
             tableWrite.writeBundle(partition, writtenBucket, cleanRecords);
             return;
         }
@@ -128,7 +131,7 @@ class AppendOnlyArrowBatchHelper implements AutoCloseable {
         updateEnrichedVectorSchemaRoot(writtenBucket, baseOffset, timestamp, rowCount);
 
         ArrowBundleRecords arrowBundleRecords =
-                new ArrowBundleRecords(enrichedRoot, tableRowType, false);
+                new ArrowBundleRecords(enrichedRoot, tableRowType, CASE_SENSITIVE);
 
         tableWrite.writeBundle(partition, writtenBucket, arrowBundleRecords);
     }

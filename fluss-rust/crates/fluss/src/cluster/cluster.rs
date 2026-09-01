@@ -122,6 +122,45 @@ impl Cluster {
         )
     }
 
+    /// Returns a copy without `table_path`'s id, info, partitions and bucket
+    /// locations. Used once the table is known to be dropped or recreated.
+    pub fn evict_table(&self, table_path: &TablePath) -> Self {
+        let table_paths = HashSet::from([table_path]);
+        let (available_locations_by_path, available_locations_by_bucket) =
+            self.filter_bucket_locations_by_path(&table_paths);
+
+        let table_id_by_path = self
+            .table_id_by_path
+            .iter()
+            .filter(|&(path, _)| path != table_path)
+            .map(|(path, table_id)| (path.clone(), *table_id))
+            .collect();
+
+        let table_info_by_path = self
+            .table_info_by_path
+            .iter()
+            .filter(|&(path, _)| path != table_path)
+            .map(|(path, table_info)| (path.clone(), table_info.clone()))
+            .collect();
+
+        let partitions_id_by_path = self
+            .partitions_id_by_path
+            .iter()
+            .filter(|&(path, _)| path.get_table_path() != table_path)
+            .map(|(path, partition_id)| (Arc::clone(path), *partition_id))
+            .collect();
+
+        Cluster::new(
+            self.coordinator_server.clone(),
+            self.alive_tablet_servers_by_id.clone(),
+            available_locations_by_path,
+            available_locations_by_bucket,
+            table_id_by_path,
+            table_info_by_path,
+            partitions_id_by_path,
+        )
+    }
+
     pub fn update(&mut self, cluster: Cluster) {
         let Cluster {
             coordinator_server,
@@ -618,6 +657,97 @@ mod tests {
         assert_eq!(
             updated_cluster
                 .get_available_buckets_for_table_path(partition_2.as_ref())
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn test_evict_table_removes_all_table_state() {
+        let table_path_a = Arc::new(TablePath::new("db", "table_a"));
+        let table_path_b = Arc::new(TablePath::new("db", "table_b"));
+        let partition_a = Arc::new(PhysicalTablePath::of_partitioned(
+            Arc::clone(&table_path_a),
+            Some("p1".to_string()),
+        ));
+        let physical_b = Arc::new(PhysicalTablePath::of(Arc::clone(&table_path_b)));
+        let bucket_a = TableBucket::new_with_partition(1, Some(10), 0);
+        let bucket_b = TableBucket::new(2, 0);
+        let leader = ServerNode::new(1, "ts1-host".to_string(), 9124, ServerType::TabletServer);
+        let location_a = BucketLocation::new(
+            bucket_a.clone(),
+            Some(leader.clone()),
+            Arc::clone(&partition_a),
+        );
+        let location_b = BucketLocation::new(
+            bucket_b.clone(),
+            Some(leader.clone()),
+            Arc::clone(&physical_b),
+        );
+        let cluster = Cluster::new(
+            None,
+            HashMap::from([(leader.id(), leader)]),
+            HashMap::from([
+                (Arc::clone(&partition_a), vec![location_a.clone()]),
+                (Arc::clone(&physical_b), vec![location_b.clone()]),
+            ]),
+            HashMap::from([
+                (bucket_a.clone(), location_a),
+                (bucket_b.clone(), location_b),
+            ]),
+            HashMap::from([
+                (table_path_a.as_ref().clone(), 1),
+                (table_path_b.as_ref().clone(), 2),
+            ]),
+            HashMap::from([
+                (
+                    table_path_a.as_ref().clone(),
+                    crate::test_utils::build_table_info(table_path_a.as_ref().clone(), 1, 1),
+                ),
+                (
+                    table_path_b.as_ref().clone(),
+                    crate::test_utils::build_table_info(table_path_b.as_ref().clone(), 2, 1),
+                ),
+            ]),
+            HashMap::from([(Arc::clone(&partition_a), 10)]),
+        );
+
+        let updated_cluster = cluster.evict_table(table_path_a.as_ref());
+
+        assert!(
+            updated_cluster
+                .get_table_id(table_path_a.as_ref())
+                .is_none()
+        );
+        assert!(
+            updated_cluster
+                .opt_get_table(table_path_a.as_ref())
+                .is_none()
+        );
+        assert!(updated_cluster.get_table_path_by_id(1).is_none());
+        assert!(
+            updated_cluster
+                .get_partition_id(partition_a.as_ref())
+                .is_none()
+        );
+        assert!(updated_cluster.get_partition_name(10).is_none());
+        assert!(updated_cluster.leader_for(&bucket_a).is_none());
+        assert!(
+            updated_cluster
+                .get_available_buckets_for_table_path(partition_a.as_ref())
+                .is_empty()
+        );
+
+        assert_eq!(updated_cluster.get_table_id(table_path_b.as_ref()), Some(2));
+        assert!(
+            updated_cluster
+                .opt_get_table(table_path_b.as_ref())
+                .is_some()
+        );
+        assert!(updated_cluster.leader_for(&bucket_b).is_some());
+        assert_eq!(
+            updated_cluster
+                .get_available_buckets_for_table_path(physical_b.as_ref())
                 .len(),
             1
         );

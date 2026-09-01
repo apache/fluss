@@ -40,6 +40,48 @@ class LogTableTest : public ::testing::Test {
     }
 };
 
+TEST_F(LogTableTest, GetArrowSchemaMatchesAppendArrowBatch) {
+    auto& adm = admin();
+    auto& conn = connection();
+
+    fluss::TablePath table_path("fluss", "test_get_arrow_schema_cpp");
+
+    auto schema = fluss::Schema::NewBuilder()
+                      .AddColumn("id", DataType::Int())
+                      .AddColumn("ts", DataType::Timestamp(3))
+                      .Build();
+    auto table_descriptor = fluss::TableDescriptor::NewBuilder()
+                                .SetSchema(schema)
+                                .SetProperty("table.replication.factor", "1")
+                                .Build();
+    fluss_test::CreateTable(adm, table_path, table_descriptor);
+
+    fluss::Table table;
+    ASSERT_OK(conn.GetTable(table_path, table));
+
+    std::shared_ptr<arrow::Schema> arrow_schema;
+    ASSERT_OK(table.GetArrowSchema(arrow_schema));
+    ASSERT_NE(arrow_schema, nullptr);
+    ASSERT_EQ(arrow_schema->num_fields(), 2);
+    EXPECT_EQ(arrow_schema->field(0)->name(), "id");
+    EXPECT_TRUE(arrow_schema->field(0)->type()->Equals(arrow::int32()));
+    EXPECT_TRUE(arrow_schema->field(1)->type()->Equals(arrow::timestamp(arrow::TimeUnit::MILLI)));
+
+    auto table_append = table.NewAppend();
+    fluss::AppendWriter append_writer;
+    ASSERT_OK(table_append.CreateWriter(append_writer));
+
+    auto id = arrow::Int32Builder();
+    id.AppendValues({1}).ok();
+    auto ts = arrow::TimestampBuilder(arrow::timestamp(arrow::TimeUnit::MILLI),
+                                      arrow::default_memory_pool());
+    ts.AppendValues({1700000000000}).ok();
+    auto batch = arrow::RecordBatch::Make(arrow_schema, 1,
+                                          {id.Finish().ValueOrDie(), ts.Finish().ValueOrDie()});
+    ASSERT_OK(append_writer.AppendArrowBatch(batch));
+    ASSERT_OK(append_writer.Flush());
+}
+
 TEST_F(LogTableTest, AppendRecordBatchAndScan) {
     auto& adm = admin();
     auto& conn = connection();
@@ -169,6 +211,294 @@ TEST_F(LogTableTest, AppendRecordBatchAndScan) {
     auto unsub_result = log_scanner.UnsubscribePartition(0, 0);
     ASSERT_FALSE(unsub_result.Ok())
         << "unsubscribe_partition should fail on a non-partitioned table";
+
+    ASSERT_OK(adm.DropTable(table_path, false));
+}
+
+TEST_F(LogTableTest, RecordBatchLogReaderUntilOffsets) {
+    auto& adm = admin();
+    auto& conn = connection();
+
+    constexpr int32_t kNumBuckets = 3;
+    // The stopping offset below is deliberately unreachable, so this only
+    // controls how quickly the timeout path is exercised.
+    constexpr int64_t kCollectAllTimeoutMs = 200;
+    fluss::TablePath table_path("fluss", "test_record_batch_log_reader_offsets_cpp");
+    auto schema = fluss::Schema::NewBuilder()
+                      .AddColumn("c1", DataType::Int())
+                      .AddColumn("c2", DataType::String())
+                      .Build();
+    auto table_descriptor = fluss::TableDescriptor::NewBuilder()
+                                .SetSchema(schema)
+                                .SetBucketCount(kNumBuckets)
+                                .SetBucketKeys({"c1"})
+                                .SetProperty("table.replication.factor", "1")
+                                .Build();
+    fluss_test::CreateTable(adm, table_path, table_descriptor);
+
+    fluss::Table table;
+    ASSERT_OK(conn.GetTable(table_path, table));
+    auto table_append = table.NewAppend();
+    fluss::AppendWriter append_writer;
+    ASSERT_OK(table_append.CreateWriter(append_writer));
+
+    auto c1 = arrow::Int32Builder();
+    auto c2 = arrow::StringBuilder();
+    for (int32_t value = 1; value <= 60; ++value) {
+        ASSERT_TRUE(c1.Append(value).ok());
+        ASSERT_TRUE(c2.Append("v" + std::to_string(value)).ok());
+    }
+    auto batch = arrow::RecordBatch::Make(
+        arrow::schema({arrow::field("c1", arrow::int32()), arrow::field("c2", arrow::utf8())}), 60,
+        {c1.Finish().ValueOrDie(), c2.Finish().ValueOrDie()});
+    ASSERT_OK(append_writer.AppendArrowBatch(batch));
+    ASSERT_OK(append_writer.Flush());
+
+    const int64_t table_id = table.GetTableInfo().table_id;
+    std::vector<int32_t> bucket_ids;
+    for (int32_t bucket_id = 0; bucket_id < kNumBuckets; ++bucket_id) {
+        bucket_ids.push_back(bucket_id);
+    }
+
+    std::unordered_map<int32_t, int64_t> latest_offsets;
+    ASSERT_OK(adm.ListOffsets(table_path, bucket_ids, fluss::OffsetSpec::Latest(), latest_offsets));
+    ASSERT_EQ(latest_offsets.size(), bucket_ids.size());
+
+    std::vector<fluss::RecordBatchLogReadRange> ranges;
+    std::vector<int64_t> expected_rows_by_bucket(kNumBuckets);
+    for (int32_t bucket_id : bucket_ids) {
+        const int64_t stopping_offset = latest_offsets.at(bucket_id);
+        ASSERT_GT(stopping_offset, 1)
+            << "Bucket " << bucket_id << " should contain rows after starting offset 1";
+        ranges.push_back({fluss::TableBucket{table_id, bucket_id}, 1, stopping_offset});
+        expected_rows_by_bucket[bucket_id] = stopping_offset - 1;
+    }
+
+    fluss::RecordBatchLogReader reader;
+    ASSERT_OK(table.NewScan().CreateRecordBatchLogReader(ranges, reader));
+
+    std::vector<int64_t> actual_rows_by_bucket(kNumBuckets);
+    int timeout_count = 0;
+    while (true) {
+        fluss::RecordBatchReadResult result;
+        ASSERT_OK(reader.NextBatch(1000, result));
+        if (result.status == fluss::BoundedReadStatus::TimedOut) {
+            ASSERT_LT(++timeout_count, 10);
+            continue;
+        }
+        if (result.status == fluss::BoundedReadStatus::Finished) {
+            break;
+        }
+
+        ASSERT_NE(result.batch, nullptr);
+        const int32_t bucket_id = result.batch->GetBucketId();
+        ASSERT_GE(bucket_id, 0);
+        ASSERT_LT(bucket_id, kNumBuckets);
+        EXPECT_GE(result.batch->GetBaseOffset(), 1);
+        EXPECT_LT(result.batch->GetLastOffset(), latest_offsets.at(bucket_id));
+        actual_rows_by_bucket[bucket_id] += result.batch->NumRows();
+    }
+    for (int32_t bucket_id : bucket_ids) {
+        EXPECT_EQ(actual_rows_by_bucket[bucket_id], expected_rows_by_bucket[bucket_id])
+            << "Unexpected row count for bucket " << bucket_id;
+    }
+
+    fluss::RecordBatchReadResult eof_result;
+    ASSERT_OK(reader.NextBatch(1000, eof_result));
+    EXPECT_EQ(eof_result.batch, nullptr);
+    EXPECT_EQ(eof_result.status, fluss::BoundedReadStatus::Finished);
+
+    // A bounded reader whose stopping offset is not available yet should return
+    // TimedOut without becoming exhausted, so query engines can check cancellation
+    // and retry.
+    {
+        const int64_t start_offset = latest_offsets.at(0);
+        fluss::RecordBatchLogReader waiting_reader;
+        ASSERT_OK(table.NewScan().CreateRecordBatchLogReader(
+            {{fluss::TableBucket{table_id, 0}, start_offset, start_offset + 1}}, waiting_reader));
+
+        fluss::RecordBatchReadResult timeout_result;
+        ASSERT_OK(waiting_reader.NextBatch(100, timeout_result));
+        EXPECT_EQ(timeout_result.batch, nullptr);
+        EXPECT_EQ(timeout_result.status, fluss::BoundedReadStatus::TimedOut);
+
+        // The stopping offset cannot be reached without another append.
+        // CollectAllBatches must return when its timeout budget expires.
+        fluss::ArrowRecordBatches partial;
+        auto collect_result =
+            waiting_reader.CollectAllBatches(kCollectAllTimeoutMs, partial);
+        EXPECT_FALSE(collect_result.Ok());
+        EXPECT_EQ(collect_result.error_code, fluss::ErrorCode::REQUEST_TIME_OUT);
+        EXPECT_TRUE(collect_result.IsRetriable());
+        // The reader survives the timeout, so callers may resume or cancel.
+        EXPECT_TRUE(waiting_reader.Available());
+    }
+
+    // An unavailable reader must not report TimedOut: callers that only inspect
+    // the status would otherwise retry an unretriable failure forever.
+    {
+        fluss::RecordBatchLogReader unavailable_reader;
+        ASSERT_FALSE(unavailable_reader.Available());
+
+        fluss::RecordBatchReadResult result;
+        result.status = fluss::BoundedReadStatus::BatchAvailable;
+        auto next_result = unavailable_reader.NextBatch(100, result);
+        EXPECT_FALSE(next_result.Ok());
+        EXPECT_EQ(result.status, fluss::BoundedReadStatus::Finished);
+        EXPECT_EQ(result.batch, nullptr);
+    }
+
+    // Completion takes precedence over timeout. An empty bounded range is
+    // already complete, so a zero budget must return Ok without polling.
+    {
+        fluss::RecordBatchLogReader complete_reader;
+        ASSERT_OK(table.NewScan().CreateRecordBatchLogReader({}, complete_reader));
+
+        fluss::ArrowRecordBatches complete;
+        ASSERT_OK(complete_reader.CollectAllBatches(0, complete));
+        EXPECT_TRUE(complete.Empty());
+    }
+
+    // CollectAllBatches appends to the output instead of clearing batches that
+    // the caller collected earlier.
+    {
+        const std::vector<fluss::RecordBatchLogReadRange> bucket_range = {
+            {fluss::TableBucket{table_id, 0}, 1, latest_offsets.at(0)}};
+
+        fluss::ArrowRecordBatches accumulated;
+        fluss::RecordBatchLogReader first_reader;
+        ASSERT_OK(table.NewScan().CreateRecordBatchLogReader(bucket_range, first_reader));
+        ASSERT_OK(first_reader.CollectAllBatches(30000, accumulated));
+        const size_t after_first = accumulated.Size();
+        ASSERT_GT(after_first, 0u);
+
+        fluss::RecordBatchLogReader second_reader;
+        ASSERT_OK(table.NewScan().CreateRecordBatchLogReader(bucket_range, second_reader));
+        ASSERT_OK(second_reader.CollectAllBatches(30000, accumulated));
+        EXPECT_GT(accumulated.Size(), after_first)
+            << "CollectAllBatches must append to out, not overwrite it";
+    }
+
+    ASSERT_OK(adm.DropTable(table_path, false));
+}
+
+TEST_F(LogTableTest, RecordBatchLogReaderUntilLatest) {
+    auto& adm = admin();
+    auto& conn = connection();
+
+    fluss::TablePath table_path("fluss", "test_record_batch_log_reader_latest_cpp");
+    auto schema = fluss::Schema::NewBuilder().AddColumn("c1", DataType::Int()).Build();
+    auto table_descriptor = fluss::TableDescriptor::NewBuilder()
+                                .SetSchema(schema)
+                                .SetBucketCount(1)
+                                .SetBucketKeys({"c1"})
+                                .SetProperty("table.replication.factor", "1")
+                                .Build();
+    fluss_test::CreateTable(adm, table_path, table_descriptor);
+
+    fluss::Table table;
+    ASSERT_OK(conn.GetTable(table_path, table));
+    auto table_append = table.NewAppend();
+    fluss::AppendWriter append_writer;
+    ASSERT_OK(table_append.CreateWriter(append_writer));
+
+    auto c1 = arrow::Int32Builder();
+    ASSERT_TRUE(c1.AppendValues({1, 2, 3}).ok());
+    auto batch = arrow::RecordBatch::Make(arrow::schema({arrow::field("c1", arrow::int32())}), 3,
+                                          {c1.Finish().ValueOrDie()});
+    ASSERT_OK(append_writer.AppendArrowBatch(batch));
+    ASSERT_OK(append_writer.Flush());
+
+    fluss::RecordBatchLogScanner scanner;
+    ASSERT_OK(table.NewScan().CreateRecordBatchLogScanner(scanner));
+    ASSERT_OK(scanner.Subscribe(0, 0));
+
+    fluss::RecordBatchLogReader reader;
+    ASSERT_OK(std::move(scanner).CreateRecordBatchLogReaderUntilLatest(adm, reader));
+    EXPECT_FALSE(scanner.Available());
+
+    fluss::RecordBatchReadResult read_result;
+    ASSERT_OK(reader.NextBatch(5000, read_result));
+    ASSERT_EQ(read_result.status, fluss::BoundedReadStatus::BatchAvailable);
+    ASSERT_NE(read_result.batch, nullptr);
+    auto ids = std::static_pointer_cast<arrow::Int32Array>(
+        read_result.batch->GetArrowRecordBatch()->column(0));
+    ASSERT_EQ(ids->length(), 3);
+    EXPECT_EQ(ids->Value(0), 1);
+    EXPECT_EQ(ids->Value(1), 2);
+    EXPECT_EQ(ids->Value(2), 3);
+
+    fluss::RecordBatchReadResult eof_result;
+    ASSERT_OK(reader.NextBatch(1000, eof_result));
+    EXPECT_EQ(eof_result.batch, nullptr);
+    EXPECT_EQ(eof_result.status, fluss::BoundedReadStatus::Finished);
+
+    ASSERT_OK(adm.DropTable(table_path, false));
+}
+
+TEST_F(LogTableTest, RecordBatchLogReaderTimestampRange) {
+    auto& adm = admin();
+    auto& conn = connection();
+
+    fluss::TablePath table_path("fluss", "test_record_batch_log_reader_timestamp_cpp");
+    auto schema = fluss::Schema::NewBuilder().AddColumn("c1", DataType::Int()).Build();
+    auto table_descriptor = fluss::TableDescriptor::NewBuilder()
+                                .SetSchema(schema)
+                                .SetBucketCount(1)
+                                .SetBucketKeys({"c1"})
+                                .SetProperty("table.replication.factor", "1")
+                                .Build();
+    fluss_test::CreateTable(adm, table_path, table_descriptor);
+
+    fluss::Table table;
+    ASSERT_OK(conn.GetTable(table_path, table));
+    fluss::AppendWriter writer;
+    ASSERT_OK(table.NewAppend().CreateWriter(writer));
+
+    const auto starting_timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                           std::chrono::system_clock::now().time_since_epoch())
+                                           .count();
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+
+    auto c1 = arrow::Int32Builder();
+    ASSERT_TRUE(c1.AppendValues({1, 2, 3}).ok());
+    auto batch = arrow::RecordBatch::Make(arrow::schema({arrow::field("c1", arrow::int32())}), 3,
+                                          {c1.Finish().ValueOrDie()});
+    ASSERT_OK(writer.AppendArrowBatch(batch));
+    ASSERT_OK(writer.Flush());
+
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    const auto stopping_timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                           std::chrono::system_clock::now().time_since_epoch())
+                                           .count();
+
+    const auto info = table.GetTableInfo();
+    fluss::RecordBatchLogReader timestamp_reader;
+    ASSERT_OK(table.NewScan().CreateRecordBatchLogReader(
+        adm, {fluss::TableBucket{info.table_id, 0}},
+        fluss::TimestampRange{starting_timestamp_ms, stopping_timestamp_ms}, timestamp_reader));
+
+    std::vector<int32_t> ids;
+    int timeout_count = 0;
+    while (true) {
+        fluss::RecordBatchReadResult result;
+        ASSERT_OK(timestamp_reader.NextBatch(1000, result));
+        if (result.status == fluss::BoundedReadStatus::TimedOut) {
+            ASSERT_LT(++timeout_count, 10);
+            continue;
+        }
+        if (result.status == fluss::BoundedReadStatus::Finished) {
+            break;
+        }
+
+        ASSERT_NE(result.batch, nullptr);
+        auto id_array = std::static_pointer_cast<arrow::Int32Array>(
+            result.batch->GetArrowRecordBatch()->column(0));
+        for (int64_t i = 0; i < id_array->length(); ++i) {
+            ids.push_back(id_array->Value(i));
+        }
+    }
+    EXPECT_EQ(ids, std::vector<int32_t>({1, 2, 3}));
 
     ASSERT_OK(adm.DropTable(table_path, false));
 }
@@ -356,6 +686,14 @@ TEST_F(LogTableTest, LimitScanErrors) {
         EXPECT_FALSE(table.NewScan().Limit(5).CreateLogScanner(s).Ok());
         fluss::LogScanner s2;
         EXPECT_FALSE(table.NewScan().Limit(5).CreateRecordBatchLogScanner(s2).Ok());
+    }
+    {
+        fluss::BatchScanner s;
+        EXPECT_FALSE(table.NewScan()
+                         .Filter(fluss::Col("c1").GreaterThan(0))
+                         .Limit(1)
+                         .CreateBucketBatchScanner(fluss::TableBucket{table_id, 0}, s)
+                         .Ok());
     }
     ASSERT_OK(adm.DropTable(table_path, false));
 
@@ -704,6 +1042,184 @@ TEST_F(LogTableTest, TestPollBatches) {
     ASSERT_OK(adm.DropTable(table_path, false));
 }
 
+TEST_F(LogTableTest, FilterPushdownWithProjection) {
+    auto& adm = admin();
+    auto& conn = connection();
+
+    fluss::TablePath table_path("fluss", "test_filter_pushdown_cpp");
+    auto schema = fluss::Schema::NewBuilder()
+                      .AddColumn("id", DataType::Int())
+                      .AddColumn("name", DataType::String())
+                      .Build();
+    auto table_descriptor = fluss::TableDescriptor::NewBuilder()
+                                .SetSchema(schema)
+                                .SetBucketCount(1)
+                                .SetBucketKeys({"id"})
+                                .SetProperty("table.replication.factor", "1")
+                                .SetProperty("table.statistics.columns", "id,name")
+                                .Build();
+    fluss_test::CreateTable(adm, table_path, table_descriptor);
+
+    fluss::Table table;
+    ASSERT_OK(conn.GetTable(table_path, table));
+    fluss::AppendWriter writer;
+    ASSERT_OK(table.NewAppend().CreateWriter(writer));
+
+    auto make_batch = [](std::vector<int32_t> ids, std::vector<std::string> names) {
+        arrow::Int32Builder id_builder;
+        id_builder.AppendValues(ids).ok();
+        arrow::StringBuilder name_builder;
+        name_builder.AppendValues(names).ok();
+        return arrow::RecordBatch::Make(
+            arrow::schema(
+                {arrow::field("id", arrow::int32()), arrow::field("name", arrow::utf8())}),
+            static_cast<int64_t>(ids.size()),
+            {id_builder.Finish().ValueOrDie(), name_builder.Finish().ValueOrDie()});
+    };
+
+    ASSERT_OK(writer.AppendArrowBatch(make_batch({1, 2}, {"low-1", "low-2"})));
+    ASSERT_OK(writer.Flush());
+    ASSERT_OK(writer.AppendArrowBatch(make_batch({6, 7}, {"high-6", "high-7"})));
+    ASSERT_OK(writer.Flush());
+
+    fluss::RecordBatchLogScanner scanner;
+    ASSERT_OK(
+        table.NewScan()
+            .Filter(fluss::Col("id").GreaterThan(5).And(fluss::Col("name").StartsWith("high")))
+            .ProjectByName({"name"})
+            .CreateRecordBatchLogScanner(scanner));
+    ASSERT_OK(scanner.Subscribe(0, fluss::EARLIEST_OFFSET));
+
+    auto extract_names = [](const fluss::ArrowRecordBatches& batches) {
+        std::vector<std::string> names;
+        for (const auto& batch : batches) {
+            auto array = std::static_pointer_cast<arrow::StringArray>(
+                batch->GetArrowRecordBatch()->column(0));
+            for (int64_t i = 0; i < array->length(); ++i) {
+                names.push_back(array->GetString(i));
+            }
+        }
+        return names;
+    };
+
+    std::vector<std::string> names;
+    fluss_test::PollRecordBatches(scanner, 2, extract_names, names);
+    EXPECT_EQ(names, (std::vector<std::string>{"high-6", "high-7"}));
+
+    fluss::RecordBatchLogScanner invalid_scanner;
+    auto invalid_result = table.NewScan()
+                              .Filter(fluss::Col("missing").Equal(1))
+                              .CreateRecordBatchLogScanner(invalid_scanner);
+    EXPECT_FALSE(invalid_result.Ok());
+    EXPECT_NE(invalid_result.error_message.find("missing"), std::string::npos);
+
+    ASSERT_OK(adm.DropTable(table_path, false));
+}
+
+TEST_F(LogTableTest, FilterPushdownLiteralTypes) {
+    auto& adm = admin();
+    auto& conn = connection();
+
+    fluss::TablePath table_path("fluss", "test_filter_pushdown_literals_cpp");
+    auto schema = fluss::Schema::NewBuilder()
+                      .AddColumn("id", DataType::Int())
+                      .AddColumn("amount", DataType::Decimal(10, 2))
+                      .AddColumn("event_time", DataType::Timestamp(9))
+                      .AddColumn("event_time_ltz", DataType::TimestampLtz(9))
+                      .Build();
+    auto table_descriptor =
+        fluss::TableDescriptor::NewBuilder()
+            .SetSchema(schema)
+            .SetBucketCount(1)
+            .SetBucketKeys({"id"})
+            .SetProperty("table.replication.factor", "1")
+            .SetProperty("table.statistics.columns", "id,amount,event_time,event_time_ltz")
+            .Build();
+    fluss_test::CreateTable(adm, table_path, table_descriptor);
+
+    fluss::Table table;
+    ASSERT_OK(conn.GetTable(table_path, table));
+
+    const auto boundary = fluss::Timestamp::FromMillisNanos(1769163227123, 456000);
+    const auto before_boundary = fluss::Timestamp::FromMillisNanos(1769163227000, 123000);
+    const auto after_boundary = fluss::Timestamp::FromMillisNanos(1769163228000, 789000);
+
+    fluss::AppendWriter writer;
+    ASSERT_OK(table.NewAppend().CreateWriter(writer));
+    {
+        fluss::GenericRow row(4);
+        row.SetInt32(0, 1);
+        row.SetDecimal(1, "10.00");
+        row.SetTimestampNtz(2, before_boundary);
+        row.SetTimestampLtz(3, after_boundary);
+        ASSERT_OK(writer.Append(row));
+        ASSERT_OK(writer.Flush());
+    }
+    {
+        fluss::GenericRow row(4);
+        row.SetInt32(0, 2);
+        row.SetDecimal(1, "12.34");
+        row.SetTimestampNtz(2, after_boundary);
+        row.SetTimestampLtz(3, before_boundary);
+        ASSERT_OK(writer.Append(row));
+        ASSERT_OK(writer.Flush());
+    }
+
+    auto extract_ids = [](const fluss::ArrowRecordBatches& batches) {
+        std::vector<int32_t> ids;
+        for (const auto& batch : batches) {
+            auto array = std::static_pointer_cast<arrow::Int32Array>(
+                batch->GetArrowRecordBatch()->column(0));
+            for (int64_t i = 0; i < array->length(); ++i) {
+                ids.push_back(array->Value(i));
+            }
+        }
+        return ids;
+    };
+
+    auto expect_only_second_row = [&](fluss::Predicate predicate) {
+        fluss::RecordBatchLogScanner scanner;
+        ASSERT_OK(table.NewScan()
+                      .Filter(std::move(predicate))
+                      .ProjectByName({"id"})
+                      .CreateRecordBatchLogScanner(scanner));
+        ASSERT_OK(scanner.Subscribe(0, fluss::EARLIEST_OFFSET));
+
+        std::vector<int32_t> ids;
+        fluss_test::PollRecordBatches(scanner, 1, extract_ids, ids);
+        EXPECT_EQ(ids, (std::vector<int32_t>{2}));
+    };
+
+    expect_only_second_row(fluss::Col("amount").Equal(fluss::PredicateLiteral::Decimal("12.34")));
+    expect_only_second_row(
+        fluss::Col("event_time").GreaterOrEqual(fluss::PredicateLiteral::TimestampNtz(boundary)));
+    expect_only_second_row(
+        fluss::Col("event_time_ltz").LessOrEqual(fluss::PredicateLiteral::TimestampLtz(boundary)));
+    expect_only_second_row(fluss::Col("id").Equal(2L).Or(fluss::Col("id").Equal(2u)));
+
+    fluss::RecordBatchLogScanner decimal_scanner;
+    auto decimal_result =
+        table.NewScan()
+            .Filter(fluss::Col("amount").Equal(fluss::PredicateLiteral::Decimal("12.345")))
+            .CreateRecordBatchLogScanner(decimal_scanner);
+    EXPECT_FALSE(decimal_result.Ok());
+    EXPECT_NE(decimal_result.error_message.find("cannot be represented exactly"),
+              std::string::npos);
+
+    fluss::RecordBatchLogScanner timestamp_scanner;
+    auto timestamp_result =
+        table.NewScan()
+            .Filter(
+                fluss::Col("event_time_ltz").Equal(fluss::PredicateLiteral::TimestampNtz(boundary)))
+            .CreateRecordBatchLogScanner(timestamp_scanner);
+    EXPECT_FALSE(timestamp_result.Ok());
+    EXPECT_NE(timestamp_result.error_message.find("does not match"), std::string::npos);
+
+    EXPECT_THROW(fluss::Col("id").Equal(std::numeric_limits<uint64_t>::max()), std::out_of_range);
+
+    ASSERT_OK(adm.DropTable(table_path, false));
+}
+
 TEST_F(LogTableTest, AllSupportedDatatypes) {
     auto& adm = admin();
     auto& conn = connection();
@@ -890,6 +1406,11 @@ TEST_F(LogTableTest, PartitionedTableAppendScan) {
     fluss::AppendWriter append_writer;
     ASSERT_OK(table_append.CreateWriter(append_writer));
 
+    const auto starting_timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                           std::chrono::system_clock::now().time_since_epoch())
+                                           .count();
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+
     // Append rows
     struct TestData {
         int32_t id;
@@ -947,6 +1468,11 @@ TEST_F(LogTableTest, PartitionedTableAppendScan) {
     }
     ASSERT_OK(append_writer.Flush());
 
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    const auto stopping_timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                           std::chrono::system_clock::now().time_since_epoch())
+                                           .count();
+
     // Test list partition offsets
     std::unordered_map<int32_t, int64_t> us_offsets;
     ASSERT_OK(adm.ListPartitionOffsets(table_path, "US", {0}, fluss::OffsetSpec::Latest(),
@@ -987,6 +1513,65 @@ TEST_F(LogTableTest, PartitionedTableAppendScan) {
                                     {4, "EU", 400},  {5, "US", 500},  {6, "US", 600},
                                     {7, "EU", 700},  {8, "EU", 800}};
     EXPECT_EQ(collected, expected);
+
+    // Test bounded record-batch reading across partition buckets.
+    {
+        fluss::Table bounded_table;
+        ASSERT_OK(conn.GetTable(table_path, bounded_table));
+        std::vector<fluss::RecordBatchLogReadRange> ranges;
+        for (const auto& pi : partition_infos) {
+            ranges.push_back(
+                {fluss::TableBucket{bounded_table.GetTableInfo().table_id, 0, pi.partition_id}, 1,
+                 3});
+        }
+
+        fluss::RecordBatchLogReader reader;
+        ASSERT_OK(bounded_table.NewScan().CreateRecordBatchLogReader(ranges, reader));
+
+        fluss::ArrowRecordBatches batches;
+        ASSERT_OK(reader.CollectAllBatches(30000, batches));
+
+        std::vector<int32_t> ids;
+        for (const auto& bounded_batch : batches) {
+            auto id_array = std::static_pointer_cast<arrow::Int32Array>(
+                bounded_batch->GetArrowRecordBatch()->column(0));
+            for (int64_t row = 0; row < id_array->length(); ++row) {
+                ids.push_back(id_array->Value(row));
+            }
+        }
+        std::sort(ids.begin(), ids.end());
+        EXPECT_EQ(ids, std::vector<int32_t>({2, 4, 5, 7}));
+    }
+
+    // Test timestamp-bounded reading across partition buckets.
+    {
+        fluss::Table timestamp_table;
+        ASSERT_OK(conn.GetTable(table_path, timestamp_table));
+
+        std::vector<fluss::TableBucket> buckets;
+        for (const auto& pi : partition_infos) {
+            buckets.push_back({timestamp_table.GetTableInfo().table_id, 0, pi.partition_id});
+        }
+
+        fluss::RecordBatchLogReader reader;
+        ASSERT_OK(timestamp_table.NewScan().CreateRecordBatchLogReader(
+            adm, buckets, fluss::TimestampRange{starting_timestamp_ms, stopping_timestamp_ms},
+            reader));
+
+        fluss::ArrowRecordBatches batches;
+        ASSERT_OK(reader.CollectAllBatches(30000, batches));
+
+        std::vector<int32_t> ids;
+        for (const auto& bounded_batch : batches) {
+            auto id_array = std::static_pointer_cast<arrow::Int32Array>(
+                bounded_batch->GetArrowRecordBatch()->column(0));
+            for (int64_t row = 0; row < id_array->length(); ++row) {
+                ids.push_back(id_array->Value(row));
+            }
+        }
+        std::sort(ids.begin(), ids.end());
+        EXPECT_EQ(ids, std::vector<int32_t>({1, 2, 3, 4, 5, 6, 7, 8}));
+    }
 
     // Test unsubscribe_partition: unsubscribe EU, should only get US data
     {

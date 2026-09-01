@@ -232,6 +232,14 @@ Publishing is automated by the `rust-release.yml` and `python-release.yml` workf
 
 Regenerating the Rust dependency/license list (an ASF requirement) needs the toolchain in `fluss-rust/rust-toolchain.toml`, [cargo-deny](https://embarkstudios.github.io/cargo-deny/), and Python 3.11+ (for `fluss-rust/scripts/dependencies.py`).
 
+## Docker Hub access
+
+Before the first Gateway release, file an ASF Infra request to create and
+authorize the `apache/fluss-gateway` Docker Hub repository. Confirm that the
+release manager can push to `apache/fluss`, `apache/fluss-gateway`, and
+`apache/fluss-quickstart-flink`; the Gateway image cannot be staged until the
+new repository exists.
+
 ## Further reading
 
 It's recommended but not mandatory to read following documents before making a release to know more details about apache release:
@@ -242,4 +250,3 @@ It's recommended but not mandatory to read following documents before making a r
 - Release publish: https://infra.apache.org/release-publishing.html
 - Release download pages: https://infra.apache.org/release-download-pages.html
 - Publishing maven artifacts: https://infra.apache.org/publishing-maven-artifacts.html
-

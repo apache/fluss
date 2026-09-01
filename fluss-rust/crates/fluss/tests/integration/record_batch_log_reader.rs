@@ -21,10 +21,12 @@
 mod reader_test {
     use crate::integration::utils::{
         create_partitions, create_table, extract_ids_from_batches, get_shared_cluster,
-        wait_for_partitions_ready,
+        poll_until_count, wait_for_partitions_ready,
     };
     use arrow::array::record_batch;
-    use fluss::client::{EARLIEST_OFFSET, FlussConnection, RecordBatchLogReader};
+    use fluss::client::{
+        BoundedLogReadRange, EARLIEST_OFFSET, FlussConnection, RecordBatchLogReader,
+    };
     use fluss::config::{Config, NoKeyAssigner};
     use fluss::metadata::{DataTypes, Schema, TableBucket, TableDescriptor, TablePath};
     use fluss::rpc::message::OffsetSpec;
@@ -150,10 +152,14 @@ mod reader_test {
 
         let table_id = table.get_table_info().table_id;
         let mut reader = RecordBatchLogReader::new_until_offsets(
-            scanner,
+            scanner.new_shared_handle(),
             HashMap::from([(TableBucket::new(table_id, 0), 1)]),
         )
         .expect("Failed to create record batch reader");
+        assert!(
+            scanner.get_subscribed_buckets().is_empty(),
+            "an empty range should be unsubscribed as soon as the reader is created"
+        );
 
         let batches = tokio::time::timeout(Duration::from_secs(10), reader.collect_all_batches())
             .await
@@ -164,6 +170,111 @@ mod reader_test {
             batches.is_empty(),
             "reader should return no batches when start and stop offsets are equal"
         );
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
+    }
+
+    #[tokio::test]
+    async fn collect_with_expired_budget_reports_already_complete_reader() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss", "test_reader_collect_already_complete");
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .build()
+                    .expect("Failed to build schema"),
+            )
+            .build()
+            .expect("Failed to build table");
+        create_table(&admin, &table_path, &table_descriptor).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+        let scanner = table
+            .new_scan()
+            .create_record_batch_log_scanner()
+            .expect("Failed to create record batch scanner");
+        let mut reader = RecordBatchLogReader::new_until_offsets(scanner, HashMap::new())
+            .expect("Failed to create already-complete reader");
+
+        let outcome = reader
+            .collect_all_batches_with_timeout(Duration::ZERO)
+            .await
+            .expect("Failed to collect already-complete reader");
+
+        assert!(
+            outcome.complete,
+            "an already-complete reader must not be reported as timed out"
+        );
+        assert!(
+            outcome.batches.is_empty(),
+            "an already-complete reader should not return any batches"
+        );
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
+    }
+
+    #[tokio::test]
+    async fn failed_range_construction_releases_reader_guard() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss", "test_reader_guard_release");
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .build()
+                    .expect("Failed to build schema"),
+            )
+            .build()
+            .expect("Failed to build table");
+        create_table(&admin, &table_path, &table_descriptor).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+        let table_id = table.get_table_info().table_id;
+        let scanner = table
+            .new_scan()
+            .create_record_batch_log_scanner()
+            .expect("Failed to create record batch scanner");
+        scanner
+            .subscribe(0, EARLIEST_OFFSET)
+            .await
+            .expect("Failed to create the existing subscription");
+
+        let result = RecordBatchLogReader::new_from_ranges(
+            scanner.new_shared_handle(),
+            vec![BoundedLogReadRange {
+                bucket: TableBucket::new(table_id, 0),
+                starting_offset: 0,
+                stopping_offset: 1,
+            }],
+        )
+        .await;
+        assert!(
+            result.is_err(),
+            "range construction must reject a scanner with existing subscriptions"
+        );
+        scanner
+            .unsubscribe(0)
+            .await
+            .expect("failed construction must release the reader guard");
 
         admin
             .drop_table(&table_path, false)
@@ -515,6 +626,144 @@ mod reader_test {
             ids,
             vec![1, 2, 3, 4],
             "latest-offset reader should read all records present in subscribed partitions"
+        );
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
+    }
+
+    #[tokio::test]
+    async fn between_timestamps_reads_partitioned_table() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss", "test_reader_partitioned_timestamp_range");
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("region", DataTypes::string())
+                    .column("value", DataTypes::bigint())
+                    .build()
+                    .expect("Failed to build schema"),
+            )
+            .partitioned_by(vec!["region"])
+            .build()
+            .expect("Failed to build table");
+
+        create_table(&admin, &table_path, &table_descriptor).await;
+        create_partitions(&admin, &table_path, "region", &["US", "EU"]).await;
+        wait_for_partitions_ready(&admin, &table_path, &["US", "EU"]).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+        let writer = table
+            .new_append()
+            .expect("Failed to create append")
+            .create_writer()
+            .expect("Failed to create writer");
+        writer
+            .append_arrow_batch(
+                record_batch!(
+                    ("id", Int32, [1, 2]),
+                    ("region", Utf8, ["US", "US"]),
+                    ("value", Int64, [100, 200])
+                )
+                .unwrap(),
+            )
+            .expect("Failed to append US batch");
+        writer
+            .append_arrow_batch(
+                record_batch!(
+                    ("id", Int32, [3, 4]),
+                    ("region", Utf8, ["EU", "EU"]),
+                    ("value", Int64, [300, 400])
+                )
+                .unwrap(),
+            )
+            .expect("Failed to append EU batch");
+        writer.flush().await.expect("Failed to flush");
+
+        let table_id = table.get_table_info().table_id;
+        let partition_infos = admin
+            .list_partition_infos(&table_path)
+            .await
+            .expect("Failed to list partition infos");
+        let buckets: Vec<TableBucket> = partition_infos
+            .iter()
+            .map(|partition| {
+                TableBucket::new_with_partition(table_id, Some(partition.get_partition_id()), 0)
+            })
+            .collect();
+
+        // Read the server-assigned timestamps first, avoiding assumptions
+        // about clock synchronization between the test and the cluster.
+        let timestamp_scanner = table
+            .new_scan()
+            .create_log_scanner()
+            .expect("Failed to create timestamp scanner");
+        for bucket in &buckets {
+            timestamp_scanner
+                .subscribe_partition(
+                    bucket
+                        .partition_id()
+                        .expect("Partition id should be present"),
+                    bucket.bucket_id(),
+                    EARLIEST_OFFSET,
+                )
+                .await
+                .expect("Failed to subscribe timestamp scanner");
+        }
+        let timestamps = poll_until_count(
+            4,
+            Duration::from_secs(10),
+            Duration::from_millis(500),
+            async |timeout| {
+                timestamp_scanner
+                    .poll(timeout)
+                    .await
+                    .expect("Failed to poll timestamps")
+                    .into_records_by_buckets()
+                    .into_values()
+                    .flatten()
+                    .map(|record| record.timestamp())
+                    .collect()
+            },
+        )
+        .await;
+        assert_eq!(timestamps.len(), 4, "Expected four server timestamps");
+        let starting_timestamp_ms = timestamps.iter().min().copied().unwrap() - 1;
+        let stopping_timestamp_ms = timestamps.iter().max().copied().unwrap() + 1;
+
+        let scanner = table
+            .new_scan()
+            .create_record_batch_log_scanner()
+            .expect("Failed to create record batch scanner");
+        let mut reader = RecordBatchLogReader::new_between_timestamps(
+            scanner,
+            &admin,
+            &buckets,
+            starting_timestamp_ms,
+            stopping_timestamp_ms,
+        )
+        .await
+        .expect("Failed to create timestamp-range reader");
+        let batches = tokio::time::timeout(Duration::from_secs(10), reader.collect_all_batches())
+            .await
+            .expect("Timed out collecting timestamp-range batches")
+            .expect("Failed to collect timestamp-range batches");
+
+        let mut ids = extract_ids_from_batches(&batches);
+        ids.sort();
+        assert_eq!(
+            ids,
+            vec![1, 2, 3, 4],
+            "timestamp-range reader should resolve and read both partitions"
         );
 
         admin

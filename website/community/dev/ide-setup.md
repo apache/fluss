@@ -227,6 +227,6 @@ run configuration, or create a test that calls the `main()` method of the exampl
 For the Rust client under `fluss-rust/`, we recommend [RustRover](https://www.jetbrains.com/rust/).
 
 1. Open RustRover, choose **Open**, and select the `fluss-rust/` directory as the project root so Cargo resolves the workspace.
-2. RustRover uses the toolchain pinned in `fluss-rust/rust-toolchain.toml` (install it with `rustup` if prompted). You also need **protoc** on your `PATH` — see [Building the Rust client](/community/dev/building).
+2. RustRover uses the toolchain pinned in `fluss-rust/rust-toolchain.toml` (install it with `rustup` if prompted).
 3. Enable **Rustfmt** and **Clippy** under Settings → Rust so local formatting and lints match CI (`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`).
 4. Apply the Apache license header to new files — the boilerplate is in `fluss-rust/copyright.txt`; configure it under Settings → Editor → Copyright.

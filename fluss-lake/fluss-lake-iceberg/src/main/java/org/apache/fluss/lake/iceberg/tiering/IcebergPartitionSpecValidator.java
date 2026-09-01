@@ -20,6 +20,7 @@ package org.apache.fluss.lake.iceberg.tiering;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.lake.iceberg.IcebergSchemaUtils;
 import org.apache.fluss.lake.iceberg.utils.IcebergPartitionSpecUtils;
+import org.apache.fluss.lake.iceberg.utils.IcebergUtils;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 
@@ -38,8 +39,13 @@ final class IcebergPartitionSpecValidator {
     static void validate(Table icebergTable, TableInfo tableInfo) {
         TableDescriptor tableDescriptor = tableInfo.toTableDescriptor();
         Schema icebergSchema = icebergTable.schema();
+        // FIP-27: use a legacy expected schema when the physical table is legacy (has system cols)
         Schema expectedSchema =
-                IcebergSchemaUtils.createIcebergSchema(tableDescriptor, tableInfo.hasPrimaryKey());
+                IcebergUtils.isLegacyTable(icebergSchema)
+                        ? IcebergSchemaUtils.createLegacyIcebergSchema(
+                                tableDescriptor, tableInfo.hasPrimaryKey())
+                        : IcebergSchemaUtils.createIcebergSchema(
+                                tableDescriptor, tableInfo.hasPrimaryKey());
         if (!IcebergSchemaUtils.compatibleWith(icebergSchema, expectedSchema)) {
             throw new InvalidTableException(
                     String.format(

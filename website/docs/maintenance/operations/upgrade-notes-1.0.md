@@ -50,3 +50,43 @@ After `datalake.enabled` is later set to `true`, tables created under this confi
 If your existing deployment or internal scripts only set `datalake.format`, they will continue to work with the legacy behavior as long as `datalake.enabled` remains unset.
 
 For new configuration examples and operational guidance, we recommend explicitly configuring `datalake.enabled` together with `datalake.format`.
+
+## Lake Table Schema Changes (FIP-27)
+
+Starting from this version, Fluss creates lake tables with a **clean** physical schema that contains only the user-defined columns. Earlier versions appended three trailing system columns (`__bucket`, `__offset`, `__timestamp`) to every lake table; these are no longer added to newly created tables.
+
+This applies to the Paimon and Iceberg lake formats. The Hudi lake storage was never exposed in a publicly released version, so it only ever uses the clean layout and the compatibility considerations below do not apply to it.
+
+### Clean and Legacy Layouts
+
+- **Clean layout**: newly created lake tables contain only user columns.
+- **Legacy layout**: lake tables created by earlier Fluss versions still carry the three trailing system columns.
+
+Existing legacy tables are **not** migrated and remain fully readable and writable. Fluss detects the layout directly from the physical schema — a table is treated as legacy when it carries the system columns, and clean otherwise — so both layouts are supported side by side. The tiering service keeps writing the legacy layout for a table that already has the system columns, and writes the clean layout for newly created tables.
+
+The names `__bucket`, `__offset`, and `__timestamp` remain reserved for Fluss internal use. System columns are disabled by default; any future opt-in behavior to re-enable them is outside the scope of FIP-27.
+
+### Compatibility Matrix
+
+| Component | Legacy tables | Clean tables |
+|-----------|---------------|--------------|
+| New lake storage plugins / lake-reading Flink connectors | Readable | Readable |
+| New tiering service | Writes legacy layout | Writes clean layout |
+| Old tiering service | Supported | **Not supported** — must not process clean tables |
+| Old Flink connectors using `FULL` startup mode | Readable | **Not readable** |
+
+Old Flink connectors that use `FULL` startup mode assume the presence of the system columns and therefore cannot read newly created clean lake tables. Note that `FULL` is the **default** value of `scan.startup.mode`, so an old connector that does not explicitly set a startup mode is also affected — when auditing jobs before an upgrade, do not look only for jobs that explicitly configure `FULL`. A lake-reading Flink connector must be upgraded together with its matching lake storage plugin.
+
+### Required Upgrade Order
+
+To move to a version that creates clean lake tables safely, upgrade the components in this order:
+
+1. **Lake-reading Flink connectors and lake storage plugins** — so that readers can handle both the legacy and clean layouts before any clean table exists.
+2. **Tiering service** — so that it starts producing clean tables only after the readers can consume them.
+3. **Fluss cluster**.
+
+Upgrading in a different order can leave an old reader or an old tiering service facing a clean table it cannot handle.
+
+### Rollback Limitations
+
+Once a clean lake table has been created, rolling back to an older tiering service or older lake-reading connectors is **not** safe: those components assume the system columns are present and cannot correctly read or write the clean table. Plan the upgrade with this in mind, since a clean table cannot be transparently rolled back to the legacy layout.

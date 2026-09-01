@@ -21,6 +21,7 @@
 
 #include <cassert>
 #include <ctime>
+#include <functional>
 
 #include "ffi_converter.hpp"
 #include "fluss.hpp"
@@ -80,6 +81,160 @@ int Date::Day() const {
     std::time_t epoch_seconds = static_cast<std::time_t>(days_since_epoch) * kSecondsPerDay;
     std::tm tm = gmtime_utc(epoch_seconds);
     return tm.tm_mday;
+}
+
+PredicateLiteral::PredicateLiteral(bool value)
+    : literal_type_(ffi::FfiPredicateLiteralType::Boolean), boolean_value_(value) {}
+
+PredicateLiteral::PredicateLiteral(int32_t value)
+    : literal_type_(ffi::FfiPredicateLiteralType::Int32), integer_value_(value) {}
+
+PredicateLiteral::PredicateLiteral(int64_t value)
+    : literal_type_(ffi::FfiPredicateLiteralType::Int64), integer_value_(value) {}
+
+PredicateLiteral::PredicateLiteral(float value)
+    : literal_type_(ffi::FfiPredicateLiteralType::Float32), floating_value_(value) {}
+
+PredicateLiteral::PredicateLiteral(double value)
+    : literal_type_(ffi::FfiPredicateLiteralType::Float64), floating_value_(value) {}
+
+PredicateLiteral::PredicateLiteral(const char* value) : PredicateLiteral(std::string(value)) {}
+
+PredicateLiteral::PredicateLiteral(std::string value)
+    : literal_type_(ffi::FfiPredicateLiteralType::String), string_value_(std::move(value)) {}
+
+PredicateLiteral::PredicateLiteral(std::vector<uint8_t> value)
+    : literal_type_(ffi::FfiPredicateLiteralType::Bytes), bytes_value_(std::move(value)) {}
+
+PredicateLiteral::PredicateLiteral(Date value)
+    : literal_type_(ffi::FfiPredicateLiteralType::Date), integer_value_(value.days_since_epoch) {}
+
+PredicateLiteral::PredicateLiteral(Time value)
+    : literal_type_(ffi::FfiPredicateLiteralType::Time),
+      integer_value_(value.millis_since_midnight) {}
+
+PredicateLiteral::PredicateLiteral(ffi::FfiPredicateLiteralType literal_type)
+    : literal_type_(literal_type) {}
+
+PredicateLiteral PredicateLiteral::Null() {
+    return PredicateLiteral(ffi::FfiPredicateLiteralType::Null);
+}
+
+PredicateLiteral PredicateLiteral::Decimal(std::string value) {
+    PredicateLiteral literal(ffi::FfiPredicateLiteralType::Decimal);
+    literal.string_value_ = std::move(value);
+    return literal;
+}
+
+PredicateLiteral PredicateLiteral::TimestampNtz(Timestamp value) {
+    PredicateLiteral literal(ffi::FfiPredicateLiteralType::TimestampNtz);
+    literal.timestamp_value_ = value;
+    return literal;
+}
+
+PredicateLiteral PredicateLiteral::TimestampLtz(Timestamp value) {
+    PredicateLiteral literal(ffi::FfiPredicateLiteralType::TimestampLtz);
+    literal.timestamp_value_ = value;
+    return literal;
+}
+
+struct Predicate::Node {
+    ffi::FfiPredicateNodeType node_type{ffi::FfiPredicateNodeType::Leaf};
+    ffi::FfiPredicateLeafFunction leaf_function{ffi::FfiPredicateLeafFunction::Equal};
+    ffi::FfiPredicateCompoundFunction compound_function{ffi::FfiPredicateCompoundFunction::And};
+    std::string field;
+    std::vector<PredicateLiteral> literals;
+    std::vector<std::shared_ptr<const Node>> children;
+};
+
+Predicate::Predicate(std::shared_ptr<const Node> root) : root_(std::move(root)) {}
+
+Predicate Predicate::And(Predicate other) const {
+    auto node = std::make_shared<Node>();
+    node->node_type = ffi::FfiPredicateNodeType::Compound;
+    node->compound_function = ffi::FfiPredicateCompoundFunction::And;
+    if (root_->node_type == ffi::FfiPredicateNodeType::Compound &&
+        root_->compound_function == node->compound_function) {
+        node->children = root_->children;
+    } else {
+        node->children.push_back(root_);
+    }
+    node->children.push_back(std::move(other.root_));
+    return Predicate(std::move(node));
+}
+
+Predicate Predicate::Or(Predicate other) const {
+    auto node = std::make_shared<Node>();
+    node->node_type = ffi::FfiPredicateNodeType::Compound;
+    node->compound_function = ffi::FfiPredicateCompoundFunction::Or;
+    if (root_->node_type == ffi::FfiPredicateNodeType::Compound &&
+        root_->compound_function == node->compound_function) {
+        node->children = root_->children;
+    } else {
+        node->children.push_back(root_);
+    }
+    node->children.push_back(std::move(other.root_));
+    return Predicate(std::move(node));
+}
+
+Predicate ColumnRef::Leaf(ffi::FfiPredicateLeafFunction function,
+                          std::vector<PredicateLiteral> literals) const {
+    auto node = std::make_shared<Predicate::Node>();
+    node->node_type = ffi::FfiPredicateNodeType::Leaf;
+    node->leaf_function = function;
+    node->field = name_;
+    node->literals = std::move(literals);
+    return Predicate(std::move(node));
+}
+
+Predicate ColumnRef::Equal(PredicateLiteral value) const {
+    return Leaf(ffi::FfiPredicateLeafFunction::Equal, {std::move(value)});
+}
+
+Predicate ColumnRef::NotEqual(PredicateLiteral value) const {
+    return Leaf(ffi::FfiPredicateLeafFunction::NotEqual, {std::move(value)});
+}
+
+Predicate ColumnRef::LessThan(PredicateLiteral value) const {
+    return Leaf(ffi::FfiPredicateLeafFunction::LessThan, {std::move(value)});
+}
+
+Predicate ColumnRef::LessOrEqual(PredicateLiteral value) const {
+    return Leaf(ffi::FfiPredicateLeafFunction::LessOrEqual, {std::move(value)});
+}
+
+Predicate ColumnRef::GreaterThan(PredicateLiteral value) const {
+    return Leaf(ffi::FfiPredicateLeafFunction::GreaterThan, {std::move(value)});
+}
+
+Predicate ColumnRef::GreaterOrEqual(PredicateLiteral value) const {
+    return Leaf(ffi::FfiPredicateLeafFunction::GreaterOrEqual, {std::move(value)});
+}
+
+Predicate ColumnRef::IsNull() const { return Leaf(ffi::FfiPredicateLeafFunction::IsNull, {}); }
+
+Predicate ColumnRef::IsNotNull() const {
+    return Leaf(ffi::FfiPredicateLeafFunction::IsNotNull, {});
+}
+
+Predicate ColumnRef::StartsWith(std::string prefix) const {
+    return Leaf(ffi::FfiPredicateLeafFunction::StartsWith, {PredicateLiteral(std::move(prefix))});
+}
+
+Predicate ColumnRef::Contains(std::string infix) const {
+    return Leaf(ffi::FfiPredicateLeafFunction::Contains, {PredicateLiteral(std::move(infix))});
+}
+
+Predicate ColumnRef::EndsWith(std::string suffix) const {
+    return Leaf(ffi::FfiPredicateLeafFunction::EndsWith, {PredicateLiteral(std::move(suffix))});
+}
+
+Predicate ColumnRef::In(std::vector<PredicateLiteral> values) const {
+    return Leaf(ffi::FfiPredicateLeafFunction::In, std::move(values));
+}
+
+Predicate ColumnRef::NotIn(std::vector<PredicateLiteral> values) const {
+    return Leaf(ffi::FfiPredicateLeafFunction::NotIn, std::move(values));
 }
 
 // NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
@@ -1082,6 +1237,28 @@ TableInfo Table::GetTableInfo() const {
     return utils::from_ffi_table_info(ffi_info);
 }
 
+Result Table::GetArrowSchema(std::shared_ptr<arrow::Schema>& out) const {
+    if (!Available()) {
+        return utils::make_client_error("Table not available");
+    }
+    // Ours, so no allocation crosses the boundary: Rust fills it in and
+    // ImportSchema releases it.
+    struct ArrowSchema c_schema {};
+    auto result = utils::from_ffi_result(
+        table_->get_arrow_schema(reinterpret_cast<size_t>(&c_schema)));
+    if (!result.Ok()) {
+        return result;
+    }
+
+    auto imported = arrow::ImportSchema(&c_schema);
+    if (!imported.ok()) {
+        return utils::make_client_error("Failed to import Arrow schema: " +
+                                        imported.status().ToString());
+    }
+    out = *imported;
+    return Result{};
+}
+
 TablePath Table::GetTablePath() const {
     if (!Available()) {
         return TablePath{};
@@ -1222,6 +1399,11 @@ TableScan& TableScan::ProjectByName(std::vector<std::string> column_names) {
     return *this;
 }
 
+TableScan& TableScan::Filter(Predicate predicate) {
+    predicate_ = std::move(predicate);
+    return *this;
+}
+
 std::vector<size_t> TableScan::ResolveNameProjection() const {
     auto ffi_info = table_->get_table_info_from_table();
     const auto& columns = ffi_info.schema.columns;
@@ -1245,6 +1427,16 @@ std::vector<size_t> TableScan::ResolveNameProjection() const {
 
 Result TableScan::CreateLogScanner(LogScanner& out) { return DoCreateScanner(out, false); }
 
+Result TableScan::CreateRecordBatchLogScanner(RecordBatchLogScanner& out) {
+    LogScanner scanner;
+    auto result = DoCreateScanner(scanner, true);
+    if (result.Ok()) {
+        out = RecordBatchLogScanner(scanner.scanner_);
+        scanner.scanner_ = nullptr;
+    }
+    return result;
+}
+
 Result TableScan::CreateRecordBatchLogScanner(LogScanner& out) {
     return DoCreateScanner(out, true);
 }
@@ -1264,7 +1456,43 @@ Result TableScan::DoCreateScanner(LogScanner& out, bool is_record_batch) {
         for (size_t idx : resolved_indices) {
             rust_indices.push_back(idx);
         }
-        auto ffi_result = table_->create_scanner(std::move(rust_indices), is_record_batch);
+
+        rust::Vec<ffi::FfiPredicateNode> rust_predicate;
+        if (predicate_.has_value()) {
+            std::function<void(const std::shared_ptr<const Predicate::Node>&)> append_node;
+            append_node = [&](const std::shared_ptr<const Predicate::Node>& node) {
+                ffi::FfiPredicateNode ffi_node;
+                ffi_node.node_type = node->node_type;
+                ffi_node.leaf_function = node->leaf_function;
+                ffi_node.compound_function = node->compound_function;
+                ffi_node.field = rust::String(node->field);
+                ffi_node.child_count = static_cast<uint32_t>(node->children.size());
+
+                for (const auto& literal : node->literals) {
+                    ffi::FfiPredicateLiteral ffi_literal;
+                    ffi_literal.literal_type = literal.literal_type_;
+                    ffi_literal.boolean_value = literal.boolean_value_;
+                    ffi_literal.integer_value = literal.integer_value_;
+                    ffi_literal.floating_value = literal.floating_value_;
+                    ffi_literal.string_value = rust::String(literal.string_value_);
+                    for (uint8_t value : literal.bytes_value_) {
+                        ffi_literal.bytes_value.push_back(value);
+                    }
+                    ffi_literal.timestamp_millis = literal.timestamp_value_.epoch_millis;
+                    ffi_literal.timestamp_nanos = literal.timestamp_value_.nano_of_millisecond;
+                    ffi_node.literals.push_back(std::move(ffi_literal));
+                }
+
+                rust_predicate.push_back(std::move(ffi_node));
+                for (const auto& child : node->children) {
+                    append_node(child);
+                }
+            };
+            append_node(predicate_->root_);
+        }
+
+        auto ffi_result = table_->create_scanner(std::move(rust_indices), std::move(rust_predicate),
+                                                 is_record_batch);
         auto result = utils::from_ffi_result(ffi_result.result);
         if (result.Ok()) {
             out.scanner_ = utils::ptr_from_ffi<ffi::LogScanner>(ffi_result);
@@ -1276,6 +1504,28 @@ Result TableScan::DoCreateScanner(LogScanner& out, bool is_record_batch) {
     }
 }
 
+Result TableScan::CreateRecordBatchLogReader(const std::vector<RecordBatchLogReadRange>& ranges,
+                                             RecordBatchLogReader& out) {
+    RecordBatchLogScanner scanner;
+    auto result = CreateRecordBatchLogScanner(scanner);
+    if (!result.Ok()) {
+        return result;
+    }
+    return std::move(scanner).CreateRecordBatchLogReaderFromRanges(ranges, out);
+}
+
+Result TableScan::CreateRecordBatchLogReader(Admin& admin, const std::vector<TableBucket>& buckets,
+                                             const TimestampRange& range,
+                                             RecordBatchLogReader& out) {
+    RecordBatchLogScanner scanner;
+    auto result = CreateRecordBatchLogScanner(scanner);
+    if (!result.Ok()) {
+        return result;
+    }
+    return std::move(scanner).CreateRecordBatchLogReaderBetweenTimestamps(admin, buckets, range,
+                                                                          out);
+}
+
 TableScan& TableScan::Limit(int32_t row_number) {
     limit_ = row_number;
     return *this;
@@ -1284,6 +1534,9 @@ TableScan& TableScan::Limit(int32_t row_number) {
 Result TableScan::CreateBucketBatchScanner(const TableBucket& bucket, BatchScanner& out) {
     if (table_ == nullptr) {
         return utils::make_client_error("Table not available");
+    }
+    if (predicate_.has_value()) {
+        return utils::make_client_error("CreateBucketBatchScanner doesn't support filter pushdown");
     }
     if (!limit_.has_value()) {
         return utils::make_client_error(
@@ -1823,6 +2076,10 @@ namespace detail {
 struct ArrowBatchImporter {
     static Result Import(ffi::FfiArrowRecordBatches& src, ArrowRecordBatches& out) {
         out.batches.clear();
+        return ImportAppend(src, out);
+    }
+
+    static Result ImportAppend(ffi::FfiArrowRecordBatches& src, ArrowRecordBatches& out) {
         for (const auto& ffi_batch : src.batches) {
             auto* c_array = reinterpret_cast<struct ArrowArray*>(ffi_batch.array_ptr);
             auto* c_schema = reinterpret_cast<struct ArrowSchema*>(ffi_batch.schema_ptr);
@@ -1841,6 +2098,20 @@ struct ArrowBatchImporter {
         }
         return utils::make_ok();
     }
+
+    static Result ImportOne(ffi::FfiArrowRecordBatches& src,
+                            std::unique_ptr<ArrowRecordBatch>& out) {
+        ArrowRecordBatches batches;
+        auto result = Import(src, batches);
+        if (!result.Ok()) {
+            return result;
+        }
+        if (batches.Size() > 1) {
+            return utils::make_client_error("Bounded reader returned more than one record batch");
+        }
+        out = batches.Empty() ? nullptr : std::move(batches.batches.front());
+        return utils::make_ok();
+    }
 };
 }  // namespace detail
 
@@ -1855,6 +2126,306 @@ Result LogScanner::PollRecordBatch(int64_t timeout_ms, ArrowRecordBatches& out) 
         return result;
     }
     return detail::ArrowBatchImporter::Import(ffi_result.arrow_batches, out);
+}
+
+// ============================================================================
+// RecordBatchLogScanner
+// ============================================================================
+
+RecordBatchLogScanner::RecordBatchLogScanner() noexcept = default;
+
+RecordBatchLogScanner::RecordBatchLogScanner(ffi::LogScanner* scanner) noexcept
+    : scanner_(scanner) {}
+
+RecordBatchLogScanner::~RecordBatchLogScanner() noexcept = default;
+
+RecordBatchLogScanner::RecordBatchLogScanner(RecordBatchLogScanner&& other) noexcept = default;
+
+RecordBatchLogScanner& RecordBatchLogScanner::operator=(RecordBatchLogScanner&& other) noexcept =
+    default;
+
+bool RecordBatchLogScanner::Available() const { return scanner_.Available(); }
+
+Result RecordBatchLogScanner::Subscribe(int32_t bucket_id, int64_t start_offset) {
+    return scanner_.Subscribe(bucket_id, start_offset);
+}
+
+Result RecordBatchLogScanner::Subscribe(const std::vector<BucketSubscription>& bucket_offsets) {
+    return scanner_.Subscribe(bucket_offsets);
+}
+
+Result RecordBatchLogScanner::SubscribePartitionBuckets(int64_t partition_id, int32_t bucket_id,
+                                                        int64_t start_offset) {
+    return scanner_.SubscribePartitionBuckets(partition_id, bucket_id, start_offset);
+}
+
+Result RecordBatchLogScanner::SubscribePartitionBuckets(
+    const std::vector<PartitionBucketSubscription>& subscriptions) {
+    return scanner_.SubscribePartitionBuckets(subscriptions);
+}
+
+Result RecordBatchLogScanner::Unsubscribe(int32_t bucket_id) {
+    return scanner_.Unsubscribe(bucket_id);
+}
+
+Result RecordBatchLogScanner::UnsubscribePartition(int64_t partition_id, int32_t bucket_id) {
+    return scanner_.UnsubscribePartition(partition_id, bucket_id);
+}
+
+Result RecordBatchLogScanner::Poll(int64_t timeout_ms, ArrowRecordBatches& out) {
+    return scanner_.PollRecordBatch(timeout_ms, out);
+}
+
+Result RecordBatchLogScanner::CreateRecordBatchLogReaderUntilLatest(const Admin& admin,
+                                                                    RecordBatchLogReader& out) && {
+    auto result = scanner_.CreateRecordBatchLogReaderUntilLatest(admin, out);
+    if (result.Ok()) {
+        scanner_ = LogScanner();
+    }
+    return result;
+}
+
+Result RecordBatchLogScanner::CreateRecordBatchLogReaderUntilOffsets(
+    const std::vector<ReaderStopOffset>& offsets, RecordBatchLogReader& out) && {
+    auto result = scanner_.CreateRecordBatchLogReaderUntilOffsets(offsets, out);
+    if (result.Ok()) {
+        scanner_ = LogScanner();
+    }
+    return result;
+}
+
+Result RecordBatchLogScanner::CreateRecordBatchLogReaderFromRanges(
+    const std::vector<RecordBatchLogReadRange>& ranges, RecordBatchLogReader& out) && {
+    auto result = scanner_.CreateRecordBatchLogReaderFromRanges(ranges, out);
+    if (result.Ok()) {
+        scanner_ = LogScanner();
+    }
+    return result;
+}
+
+Result RecordBatchLogScanner::CreateRecordBatchLogReaderBetweenTimestamps(
+    const Admin& admin, const std::vector<TableBucket>& buckets, const TimestampRange& range,
+    RecordBatchLogReader& out) && {
+    auto result =
+        scanner_.CreateRecordBatchLogReaderBetweenTimestamps(admin, buckets, range, out);
+    if (result.Ok()) {
+        scanner_ = LogScanner();
+    }
+    return result;
+}
+
+// ============================================================================
+// RecordBatchLogReader
+// ============================================================================
+
+Result LogScanner::CreateRecordBatchLogReaderUntilLatest(const Admin& admin,
+                                                         RecordBatchLogReader& out) {
+    if (!Available()) {
+        return utils::make_client_error("LogScanner not available");
+    }
+    if (!admin.Available()) {
+        return utils::make_client_error("Admin not available");
+    }
+
+    auto ffi_result = scanner_->create_record_batch_log_reader_until_latest(*admin.admin_);
+    auto result = utils::from_ffi_result(ffi_result.result);
+    if (result.Ok()) {
+        out.Destroy();
+        out.reader_ = utils::ptr_from_ffi<ffi::RecordBatchLogReader>(ffi_result);
+    }
+    return result;
+}
+
+Result LogScanner::CreateRecordBatchLogReaderUntilOffsets(
+    const std::vector<ReaderStopOffset>& offsets, RecordBatchLogReader& out) {
+    if (!Available()) {
+        return utils::make_client_error("LogScanner not available");
+    }
+
+    rust::Vec<ffi::FfiReaderStopOffset> ffi_offsets;
+    for (const auto& offset : offsets) {
+        ffi::FfiReaderStopOffset ffi_offset;
+        ffi_offset.table_id = offset.bucket.table_id;
+        ffi_offset.has_partition_id = offset.bucket.partition_id.has_value();
+        ffi_offset.partition_id = offset.bucket.partition_id.value_or(0);
+        ffi_offset.bucket_id = offset.bucket.bucket_id;
+        ffi_offset.offset = offset.offset;
+        ffi_offsets.push_back(ffi_offset);
+    }
+
+    auto ffi_result =
+        scanner_->create_record_batch_log_reader_until_offsets(std::move(ffi_offsets));
+    auto result = utils::from_ffi_result(ffi_result.result);
+    if (result.Ok()) {
+        out.Destroy();
+        out.reader_ = utils::ptr_from_ffi<ffi::RecordBatchLogReader>(ffi_result);
+    }
+    return result;
+}
+
+Result LogScanner::CreateRecordBatchLogReaderFromRanges(
+    const std::vector<RecordBatchLogReadRange>& ranges, RecordBatchLogReader& out) {
+    if (!Available()) {
+        return utils::make_client_error("LogScanner not available");
+    }
+
+    rust::Vec<ffi::FfiBoundedLogReadRange> ffi_ranges;
+    for (const auto& range : ranges) {
+        ffi::FfiBoundedLogReadRange ffi_range;
+        ffi_range.table_id = range.bucket.table_id;
+        ffi_range.has_partition_id = range.bucket.partition_id.has_value();
+        ffi_range.partition_id = range.bucket.partition_id.value_or(0);
+        ffi_range.bucket_id = range.bucket.bucket_id;
+        ffi_range.starting_offset = range.starting_offset;
+        ffi_range.stopping_offset = range.stopping_offset;
+        ffi_ranges.push_back(ffi_range);
+    }
+
+    auto ffi_result = scanner_->create_record_batch_log_reader_from_ranges(std::move(ffi_ranges));
+    auto result = utils::from_ffi_result(ffi_result.result);
+    if (result.Ok()) {
+        out.Destroy();
+        out.reader_ = utils::ptr_from_ffi<ffi::RecordBatchLogReader>(ffi_result);
+    }
+    return result;
+}
+
+Result LogScanner::CreateRecordBatchLogReaderBetweenTimestamps(
+    const Admin& admin, const std::vector<TableBucket>& buckets, const TimestampRange& range,
+    RecordBatchLogReader& out) {
+    if (!Available()) {
+        return utils::make_client_error("LogScanner not available");
+    }
+    if (!admin.Available()) {
+        return utils::make_client_error("Admin not available");
+    }
+
+    rust::Vec<ffi::FfiReaderBucket> ffi_buckets;
+    for (const auto& bucket : buckets) {
+        ffi::FfiReaderBucket ffi_bucket;
+        ffi_bucket.table_id = bucket.table_id;
+        ffi_bucket.has_partition_id = bucket.partition_id.has_value();
+        ffi_bucket.partition_id = bucket.partition_id.value_or(0);
+        ffi_bucket.bucket_id = bucket.bucket_id;
+        ffi_buckets.push_back(ffi_bucket);
+    }
+
+    auto ffi_result = scanner_->create_record_batch_log_reader_between_timestamps(
+        *admin.admin_, std::move(ffi_buckets), range.starting_timestamp_ms,
+        range.stopping_timestamp_ms);
+    auto result = utils::from_ffi_result(ffi_result.result);
+    if (result.Ok()) {
+        out.Destroy();
+        out.reader_ = utils::ptr_from_ffi<ffi::RecordBatchLogReader>(ffi_result);
+    }
+    return result;
+}
+
+RecordBatchLogReader::RecordBatchLogReader() noexcept = default;
+
+RecordBatchLogReader::RecordBatchLogReader(ffi::RecordBatchLogReader* reader) noexcept
+    : reader_(reader) {}
+
+RecordBatchLogReader::~RecordBatchLogReader() noexcept { Destroy(); }
+
+void RecordBatchLogReader::Destroy() noexcept {
+    if (reader_) {
+        ffi::delete_record_batch_log_reader(reader_);
+        reader_ = nullptr;
+    }
+}
+
+RecordBatchLogReader::RecordBatchLogReader(RecordBatchLogReader&& other) noexcept
+    : reader_(other.reader_) {
+    other.reader_ = nullptr;
+}
+
+RecordBatchLogReader& RecordBatchLogReader::operator=(RecordBatchLogReader&& other) noexcept {
+    if (this != &other) {
+        Destroy();
+        reader_ = other.reader_;
+        other.reader_ = nullptr;
+    }
+    return *this;
+}
+
+bool RecordBatchLogReader::Available() const { return reader_ != nullptr; }
+
+Result RecordBatchLogReader::NextBatch(int64_t timeout_ms, RecordBatchReadResult& out) {
+    // Default to Finished so that a caller which ignores the returned Result
+    // and only inspects out.status still terminates instead of spinning on a
+    // stale TimedOut value. Only a fully successful call writes the real
+    // terminal status back to `out`.
+    out.status = BoundedReadStatus::Finished;
+    out.batch.reset();
+
+    if (!Available()) {
+        return utils::make_client_error("RecordBatchLogReader not available");
+    }
+
+    auto ffi_result = reader_->record_batch_log_reader_next_batch(timeout_ms);
+    auto result = utils::from_ffi_result(ffi_result.result);
+    if (!result.Ok()) {
+        return result;
+    }
+    BoundedReadStatus status;
+    switch (ffi_result.status) {
+        case 0:
+            status = BoundedReadStatus::BatchAvailable;
+            break;
+        case 1:
+            status = BoundedReadStatus::TimedOut;
+            break;
+        case 2:
+            status = BoundedReadStatus::Finished;
+            break;
+        default:
+            return utils::make_client_error("Unknown bounded read status: " +
+                                            std::to_string(ffi_result.status));
+    }
+    std::unique_ptr<ArrowRecordBatch> batch;
+    result = detail::ArrowBatchImporter::ImportOne(ffi_result.arrow_batches, batch);
+    if (!result.Ok()) {
+        return result;
+    }
+    if (status == BoundedReadStatus::BatchAvailable && !batch) {
+        return utils::make_client_error("Bounded reader reported a batch without returning one");
+    }
+    if (status != BoundedReadStatus::BatchAvailable && batch) {
+        return utils::make_client_error("Bounded reader returned a batch for a terminal status");
+    }
+    out.status = status;
+    out.batch = std::move(batch);
+    return utils::make_ok();
+}
+
+Result RecordBatchLogReader::CollectAllBatches(int64_t timeout_ms, ArrowRecordBatches& out) {
+    if (!Available()) {
+        return utils::make_client_error("RecordBatchLogReader not available");
+    }
+
+    auto ffi_result = reader_->record_batch_log_reader_collect_all_batches(timeout_ms);
+    auto result = utils::from_ffi_result(ffi_result.result);
+    if (!result.Ok()) {
+        return result;
+    }
+    // Batches collected before the budget expired are part of the result, so
+    // they are appended even when the collection is incomplete.
+    result = detail::ArrowBatchImporter::ImportAppend(ffi_result.arrow_batches, out);
+    if (!result.Ok()) {
+        return result;
+    }
+    switch (ffi_result.status) {
+        case static_cast<int32_t>(BoundedReadStatus::Finished):
+            return utils::make_ok();
+        case static_cast<int32_t>(BoundedReadStatus::TimedOut):
+            return utils::make_error(
+                ErrorCode::REQUEST_TIME_OUT,
+                "CollectAllBatches timed out before every stopping offset was reached");
+        default:
+            return utils::make_client_error("Unknown bounded read status: " +
+                                           std::to_string(ffi_result.status));
+    }
 }
 
 // ============================================================================

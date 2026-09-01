@@ -562,12 +562,10 @@ class HudiLakeCatalogTest {
 
     private org.apache.flink.table.api.Schema buildExpectedHudiSchema(
             DataType idType, String primaryKeyName) {
+        // FIP-27: newly created tables are clean and carry only user columns.
         return org.apache.flink.table.api.Schema.newBuilder()
                 .column("id", idType)
                 .column("name", org.apache.flink.table.api.DataTypes.STRING())
-                .column("__bucket", org.apache.flink.table.api.DataTypes.INT())
-                .column("__offset", org.apache.flink.table.api.DataTypes.BIGINT())
-                .column("__timestamp", org.apache.flink.table.api.DataTypes.TIMESTAMP(6))
                 .primaryKeyNamed(primaryKeyName, "id")
                 .build();
     }

@@ -36,4 +36,6 @@ header:
     - '**/*.md'
     - 'fluss-rust/**/DEPENDENCIES.*.tsv'
     - 'fluss-rust/**/*.env'
+    # Cross-language encoding fixtures.
+    - 'fluss-rust/**/testdata/*.hex'
   comment: on-failure

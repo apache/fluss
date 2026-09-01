@@ -146,6 +146,7 @@ series are shared by `AppendWriter` (log tables) and `UpsertWriter` (PK tables).
 | `fn project(self, indices: &[usize]) -> Result<Self>`                       | Project columns by index                |
 | `fn project_by_name(self, names: &[&str]) -> Result<Self>`                  | Project columns by name                 |
 | `fn limit(self, n: i32) -> Result<Self>`                                    | Set a row limit (enables `create_bucket_batch_scanner`; rejected by log scanners) |
+| `fn filter(self, predicate: Predicate) -> Result<Self>`                     | Push a predicate down to log scanners; whole batches are pruned by statistics, and returned batches can still hold non-matching rows (see [Filter Pushdown](example/filter-pushdown.md); rejected by `create_bucket_batch_scanner`) |
 | `fn create_log_scanner(self) -> Result<LogScanner>`                         | Create a record-based log scanner; on a primary-key table, subscribes to its CDC changelog (per-record `ChangeType`) |
 | `fn create_record_batch_log_scanner(self) -> Result<RecordBatchLogScanner>` | Create an Arrow batch-based log scanner (log tables only — no per-record change types) |
 | `fn create_bucket_batch_scanner(self, bucket: TableBucket) -> Result<LimitBatchScanner>` | Bounded scan of one bucket (requires `limit`; runs on first `next_batch`) |
@@ -194,10 +195,26 @@ Unlike `RecordBatchLogScanner` which polls indefinitely, this reader stops autom
 |-------------------------------------------------------------------------------------------------------------|----------------------------------------------------------|
 | `async fn new_until_latest(scanner: RecordBatchLogScanner, admin: &FlussAdmin) -> Result<Self>`              | Read until the latest offsets at time of creation         |
 | `fn new_until_offsets(scanner: RecordBatchLogScanner, stopping_offsets: HashMap<TableBucket, i64>) -> Result<Self>` | Read until custom stopping offsets per bucket             |
+| `async fn new_from_ranges(scanner: RecordBatchLogScanner, ranges: Vec<BoundedLogReadRange>) -> Result<Self>` | Subscribe and read explicit per-bucket offset ranges |
+| `async fn new_between_timestamps(scanner: RecordBatchLogScanner, admin: &FlussAdmin, buckets: &[TableBucket], starting_timestamp_ms: i64, stopping_timestamp_ms: i64) -> Result<Self>` | Resolve and read a timestamp range per bucket |
 | `async fn next_batch(&mut self) -> Result<Option<ScanBatch>>`                                                | Get the next batch with bucket/offset metadata, or `None` when all buckets caught up |
+| `async fn next_batch_with_timeout(&mut self, timeout: Duration) -> Result<RecordBatchReadOutcome>`           | Get a batch, timeout, or completion without exhausting the reader |
 | `async fn collect_all_batches(&mut self) -> Result<Vec<ScanBatch>>`                                          | Drain all batches (with metadata) until stopping offsets are satisfied |
+| `async fn collect_all_batches_with_timeout(&mut self, timeout: Duration) -> Result<BoundedCollectOutcome>`   | Drain batches using one whole-operation timeout budget |
 | `fn schema(&self) -> SchemaRef`                                                                              | Arrow schema for produced batches                        |
 | `fn to_record_batch_reader(self, handle: tokio::runtime::Handle) -> SyncRecordBatchLogReader`                | Sync adapter implementing `arrow::RecordBatchReader` (see below) |
+
+`new_from_ranges` requires a scanner without existing subscriptions. It validates table identity,
+partition mode, duplicate and out-of-range bucket ids, range ordering, and non-negative stopping
+offsets before subscribing. `new_until_offsets` requires one stopping offset for every scanner
+subscription; starting offsets must be non-negative or `EARLIEST_OFFSET`. Timestamp offset lookups
+for independent partitions are issued concurrently.
+
+`collect_all_batches_with_timeout` returns batches collected before the budget expires and sets
+`BoundedCollectOutcome::complete` to indicate whether every stopping offset was reached. Once the
+budget is exhausted, it does not wait for additional scanner data, but it still drains buffered
+batches and observes completion before reporting an incomplete result. An already-complete reader
+therefore returns `complete = true` even with a zero timeout.
 
 ## `SyncRecordBatchLogReader`
 

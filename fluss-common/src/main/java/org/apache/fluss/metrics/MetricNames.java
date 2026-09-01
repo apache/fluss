@@ -232,6 +232,17 @@ public class MetricNames {
     /** Total memory usage across all RocksDB instances in this server (Sum aggregation). */
     public static final String ROCKSDB_MEMORY_USAGE_TOTAL = "rocksdbMemoryUsageTotal";
 
+    /** Memory usage of the shared RocksDB block cache in this server. */
+    public static final String ROCKSDB_SHARED_BLOCK_CACHE_USAGE = "rocksdbSharedBlockCacheUsage";
+
+    /** Configured capacity of the shared RocksDB block cache in this server. */
+    public static final String ROCKSDB_SHARED_BLOCK_CACHE_CAPACITY =
+            "rocksdbSharedBlockCacheCapacity";
+
+    /** Pinned memory usage of the shared RocksDB block cache in this server. */
+    public static final String ROCKSDB_SHARED_BLOCK_CACHE_PINNED_USAGE =
+            "rocksdbSharedBlockCachePinnedUsage";
+
     // Table-level RocksDB memory metrics (Sum aggregation)
     /** Total memtable memory usage across all buckets of this table. */
     public static final String ROCKSDB_MEMTABLE_MEMORY_USAGE_TOTAL =

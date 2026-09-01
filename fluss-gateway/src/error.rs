@@ -26,10 +26,9 @@
 //! and the OpenAPI `ErrorCode` schema is generated from it, so the published contract cannot drift from the
 //! taxonomy.
 //!
-//! FIP-49 error-model notes: the FIP's `database_not_empty` (409) condition is carried by
-//! [`ErrorKind::FailedPrecondition`], and its `*_not_found` / `*_already_exists` families are the
-//! [`ErrorKind::NotFound`] / [`ErrorKind::AlreadyExists`] kinds qualified by a [`Resource`], keeping one
-//! stable code per condition.
+//! `database_not_empty` (409) uses [`ErrorKind::FailedPrecondition`]. The `*_not_found` and
+//! `*_already_exists` families use [`ErrorKind::NotFound`] and [`ErrorKind::AlreadyExists`]
+//! qualified by a [`Resource`].
 
 use serde::Serialize;
 use std::any::Any;
@@ -80,8 +79,7 @@ macro_rules! error_kinds {
                 }
             }
 
-            /// Whether a response carrying this kind advertises `Retry-After`, which FIP-49 requires of
-            /// every 429 and which the gateway also sends for a transient backend outage.
+            /// Whether responses advertise `Retry-After`: all 429s and transient backend outages.
             pub fn retry_after(self) -> bool {
                 match self {
                     $( Self::$variant => $retry_after, )+
@@ -114,6 +112,8 @@ error_kinds! {
     UnsupportedMediaType => 415, "unsupported_media_type", retry_after: false;
     /// A bounded resource (per-user act-as connections) is at capacity.
     ResourceExhausted => 429, "resource_exhausted", retry_after: true;
+    /// A KV write the store refused under backpressure after client retries.
+    StorageBackpressure => 429, "storage_backpressure", retry_after: true;
     /// Work was cancelled by the caller or by shutdown.
     Cancelled => 499, "cancelled", retry_after: false;
     /// The Fluss backend failed in a way the gateway cannot classify further, distinguishable from a
@@ -129,7 +129,7 @@ error_kinds! {
     DeadlineExceeded => 504, "timeout", retry_after: false;
 }
 
-/// A resource a failure can name, selecting the FIP-49 resource-specific wire code.
+/// A resource a failure can name, selecting a resource-specific wire code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Resource {
     Cluster,
@@ -138,10 +138,7 @@ pub enum Resource {
     Partition,
 }
 
-/// The FIP-49 resource-specific codes.
-///
-/// Only the combinations the FIP names appear here; any other kind/resource pair keeps the kind's generic
-/// code, so the gateway never invents a code for a condition the contract does not describe.
+/// Resource-specific codes; unlisted pairs keep the kind's generic code.
 const RESOURCE_CODES: &[(ErrorKind, Resource, &str)] = &[
     (ErrorKind::NotFound, Resource::Cluster, "cluster_not_found"),
     (
@@ -175,7 +172,7 @@ const RESOURCE_CODES: &[(ErrorKind, Resource, &str)] = &[
         Resource::Partition,
         "partition_already_exists",
     ),
-    // The one precondition the FIP names: dropping a non-empty database.
+    // Dropping a non-empty database has its own precondition code.
     (
         ErrorKind::FailedPrecondition,
         Resource::Database,
@@ -223,6 +220,9 @@ impl PartialSchema for ErrorCode {
 
 impl ToSchema for ErrorCode {}
 
+/// The result of any gateway operation that can fail with a client-visible condition.
+pub type GatewayResult<T> = Result<T, GatewayError>;
+
 /// Gateway-internal error: a condition kind plus a client-safe message.
 ///
 /// Messages must never contain stack traces, internal addresses, or wire payloads. Operational detail belongs
@@ -231,8 +231,7 @@ impl ToSchema for ErrorCode {}
 pub struct GatewayError {
     kind: ErrorKind,
     message: String,
-    /// Selects the resource-specific wire code. Never serialized: the resource is already named in the
-    /// message, and FIP-49's envelope carries no structured details.
+    /// Selects a resource-specific wire code without adding a field to the error envelope.
     resource: Option<Resource>,
 }
 
@@ -307,8 +306,7 @@ impl GatewayError {
         Self::new(ErrorKind::Unavailable, message)
     }
 
-    /// A Fluss backend failure the gateway cannot classify further. Answered with HTTP 500 and the
-    /// FIP-49 `backend` code, so callers can tell it from a gateway-internal failure.
+    /// An unclassified Fluss failure, returned as HTTP 500 with the `backend` code.
     pub fn backend(message: impl Into<String>) -> Self {
         Self::new(ErrorKind::Backend, message)
     }
@@ -330,12 +328,15 @@ impl GatewayError {
 
     /// Stable code carried in the error envelope.
     ///
-    /// An error that names a resource answers the resource-specific code that FIP-49 defines for the pair;
-    /// any other error keeps its kind's generic code.
+    /// Unlisted kind/resource pairs fall back to the kind's generic code.
     pub fn code(&self) -> &'static str {
         self.resource
             .and_then(|resource| resource_code(self.kind, resource))
             .unwrap_or_else(|| self.kind.code())
+    }
+
+    pub(crate) fn resource(&self) -> Option<Resource> {
+        self.resource
     }
 
     /// Names the resource this error is about, selecting the resource-specific code.
@@ -408,10 +409,9 @@ impl ErrorEnvelope {
 mod tests {
     use super::*;
 
-    /// The mappings FIP-49 pins down. The table generates every accessor, so this guards the table's own
-    /// rows against an accidental edit.
+    /// Keeps published status and error-code mappings stable.
     #[test]
-    fn the_fip_mappings_are_frozen() {
+    fn http_status_and_error_code_mappings_are_stable() {
         for (kind, status, code) in [
             (ErrorKind::InvalidArgument, 400, "invalid_argument"),
             (ErrorKind::Unauthenticated, 401, "unauthenticated"),
@@ -449,7 +449,12 @@ mod tests {
             // `Retry-After` is meaningful only where the caller is meant to come back.
             assert_eq!(
                 kind.retry_after(),
-                matches!(kind, ErrorKind::ResourceExhausted | ErrorKind::Unavailable),
+                matches!(
+                    kind,
+                    ErrorKind::ResourceExhausted
+                        | ErrorKind::StorageBackpressure
+                        | ErrorKind::Unavailable
+                ),
                 "retry_after for {code}"
             );
             codes.push(code);
@@ -476,8 +481,7 @@ mod tests {
         );
     }
 
-    /// The FIP-49 vocabulary: an error naming a resource answers the resource-specific code; one without a
-    /// resource keeps its kind's generic code.
+    /// An error naming a resource uses its specific code, falling back to the generic code otherwise.
     #[test]
     fn resource_context_specialises_the_wire_code() {
         let cases: [(GatewayError, Resource, &str); 5] = [
@@ -524,7 +528,7 @@ mod tests {
                 .code(),
             "failed_precondition"
         );
-        // Backend and internal stay distinguishable (FIP-49 `backend` / `internal`).
+        // Backend and internal failures stay distinguishable.
         assert_eq!(GatewayError::backend("x").code(), "backend");
         assert_eq!(GatewayError::internal("x").code(), "internal");
     }
@@ -545,8 +549,5 @@ mod tests {
             "wire codes are unique across kinds and resource forms"
         );
         assert!(codes.windows(2).all(|pair| pair[0] < pair[1]), "sorted");
-        // The write path's entry-level `storage_backpressure` is not a request status and arrives with the
-        // capability that emits it.
-        assert!(!codes.contains(&"storage_backpressure"));
     }
 }

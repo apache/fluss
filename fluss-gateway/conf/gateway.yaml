@@ -1,0 +1,139 @@
+################################################################################
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+################################################################################
+
+# Apache Fluss Gateway configuration.
+#
+# The format follows conf/server.yaml: flat, dot-separated keys with durations
+# and memory sizes written as human-readable values. Environment variables
+# override this file. For example:
+#
+# gateway.cluster.default.bootstrap.servers
+#   -> FLUSS_GATEWAY__CLUSTER__DEFAULT__BOOTSTRAP__SERVERS
+#
+# Do not store credentials in this file when it is baked into an image. Mount a
+# separate file or inject the corresponding FLUSS_GATEWAY__* variables.
+
+# Optional stable identity used in logs and metrics. When omitted, the Gateway
+# does not invent a persistent identity.
+# gateway.instance-id: gateway-1
+
+#==============================================================================
+# REST Server
+#==============================================================================
+
+# Bind to loopback by default, matching the Java distribution's server.yaml.
+# The container image overrides this value through the typed environment
+# variable FLUSS_GATEWAY__REST__LISTEN.
+gateway.rest.listen: 127.0.0.1:8080
+
+# Maximum time allowed for receiving the complete HTTP request headers.
+gateway.rest.header-read-timeout: 10s
+
+# Server-side deadline for one REST request.
+gateway.rest.request-timeout: 30s
+
+# Maximum accepted request body size.
+gateway.rest.write.max-request-bytes: 32MiB
+
+#==============================================================================
+# Fluss Clusters
+#==============================================================================
+
+# Comma-separated logical cluster IDs. Each ID owns a gateway.cluster.<id>.*
+# namespace.
+gateway.clusters: default
+
+# Comma-separated Fluss client bootstrap servers in host:port form.
+gateway.cluster.default.bootstrap.servers: 127.0.0.1:9123
+
+# Timeout for establishing the native Fluss client connection.
+gateway.cluster.default.connect-timeout: 10s
+
+# Use plaintext or sasl. SASL requires both service account and service secret.
+gateway.cluster.default.connection.security.protocol: plaintext
+
+# Service mode shares one connection authenticated with the configured service
+# account. It is the only supported mode today; user mode is reserved for
+# per-caller identity propagation and is rejected at startup.
+gateway.cluster.default.connection.identity-mode: service
+
+# Configure both values when the Fluss cluster requires SASL/PLAIN.
+# gateway.cluster.default.connection.service.account: gateway-service
+# gateway.cluster.default.connection.service.secret: change-me
+
+# Reserved for the unsupported connection.identity-mode: user.
+# gateway.cluster.default.connection.max: 512
+# gateway.cluster.default.connection.idle-timeout: 10m
+
+#==============================================================================
+# HTTP Caller Authentication
+#==============================================================================
+
+# Only trust mode is implemented today. The password, token, and trusted-header
+# values are reserved for the caller-authentication follow-up and do not protect
+# requests in this release. Trust mode is suitable only for local development or
+# a deployment protected by a trusted network boundary.
+gateway.security.authentication: trust
+
+# Reserved password-mode user table.
+# gateway.security.users: alice:change-me
+
+# Reserved token-mode token table.
+# gateway.security.tokens: change-me:alice
+
+# Reserved trusted-header-mode header name.
+# gateway.security.trusted-header.name: x-forwarded-user
+
+#==============================================================================
+# Request Admission
+#==============================================================================
+
+# Maximum number of concurrent metadata requests accessing Fluss.
+gateway.rest.metadata.max-concurrent-requests: 16
+
+gateway.rest.write.max-rows: 10000
+gateway.rest.write.max-concurrent-requests: 64
+gateway.rest.write.rate-limit.enabled: false
+gateway.rest.write.rate-limit.requests-per-second: 1000
+gateway.rest.write.rate-limit.bytes-per-second: 64MiB
+
+gateway.rest.lookup.max-keys: 128
+gateway.rest.lookup.max-key-bytes: 1MiB
+gateway.rest.lookup.max-concurrent-requests: 64
+
+gateway.rest.prefix-lookup.max-prefixes: 16
+gateway.rest.prefix-lookup.max-rows-per-prefix: 1000
+gateway.rest.prefix-lookup.max-concurrent-requests: 32
+
+#==============================================================================
+# Metrics
+#==============================================================================
+
+gateway.metrics.enabled: true
+gateway.metrics.exporters: prometheus
+# The container image overrides this value through
+# FLUSS_GATEWAY__METRICS__EXPORTER__PROMETHEUS__LISTEN.
+gateway.metrics.exporter.prometheus.listen: 127.0.0.1:9095
+
+#==============================================================================
+# Shutdown
+#==============================================================================
+
+# Whole-process drain budget. Container stop timeouts must be greater than this
+# value so Docker or Kubernetes does not send SIGKILL during the drain.
+gateway.shutdown.drain-timeout: 30s

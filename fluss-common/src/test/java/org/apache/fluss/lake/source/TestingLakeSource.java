@@ -33,6 +33,8 @@ import java.util.List;
 /** A testing implementation of {@link LakeSource}. */
 public class TestingLakeSource implements LakeSource<LakeSplit> {
 
+    private static final long serialVersionUID = 1L;
+
     // bucket num of source table
     private final int bucketNum;
 
@@ -47,6 +49,17 @@ public class TestingLakeSource implements LakeSource<LakeSplit> {
     public TestingLakeSource(int bucketNum, List<PartitionInfo> partitionInfos) {
         this.bucketNum = bucketNum;
         this.partitionInfos = partitionInfos;
+    }
+
+    private TestingLakeSource(TestingLakeSource source) {
+        this.bucketNum = source.bucketNum;
+        this.partitionInfos =
+                source.partitionInfos == null ? null : new ArrayList<>(source.partitionInfos);
+    }
+
+    @Override
+    public TestingLakeSource copy() {
+        return new TestingLakeSource(this);
     }
 
     @Override

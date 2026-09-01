@@ -37,6 +37,7 @@ import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.predicate.Predicate;
+import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.types.RowType;
 
 import javax.annotation.Nullable;
@@ -208,6 +209,7 @@ public class TableScan implements Scan {
         }
         String scannerTmpDir =
                 conn.getConfiguration().getString(ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR);
+        KvValueLayout kvValueLayout = KvValueLayout.fromTableConfig(tableInfo.getTableConfig());
         Admin admin = conn.getAdmin();
         final KvSnapshotMetadata snapshotMeta;
         try {
@@ -228,6 +230,7 @@ public class TableScan implements Scan {
                 snapshotMeta.getSnapshotFiles(),
                 projectedColumns,
                 scannerTmpDir,
+                kvValueLayout,
                 tableInfo.getTableConfig().getKvFormat(),
                 conn.getOrCreateRemoteFileDownloader());
     }

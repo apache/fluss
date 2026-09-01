@@ -26,9 +26,24 @@ build:
 build-release:
     cargo build --release
 
+# Build the host-architecture Gateway distribution and image using the pinned
+# Linux builder.
+image image="fluss-gateway:dev":
+    GATEWAY_IMAGE={{image}} ../docker/fluss-gateway/build.sh
+
+# Build and exercise the Gateway distribution and image.
+image-smoke:
+    RUN_SMOKE=true ../docker/fluss-gateway/build.sh
+
 # Run all unit and protocol tests of the gateway.
 test:
     cargo test --all-targets
+
+# Run the full HTTP-to-Fluss integration test. Requires Docker and a locally available Fluss image;
+# FLUSS_IMAGE and FLUSS_VERSION select it (the client integration CI uses fluss:dev).
+test-e2e:
+    cargo build --manifest-path ../fluss-rust/Cargo.toml -p fluss-test-cluster
+    FLUSS_TEST_CLUSTER_BIN=../fluss-rust/target/debug/fluss-test-cluster cargo test --features integration_tests --test e2e_cluster
 
 # Format the gateway sources in place.
 fmt:
@@ -63,4 +78,8 @@ licenses:
 
 # Regenerate the checked-in dependency license inventory.
 deps:
-    cargo deny --locked list -f tsv -t 0.6 > DEPENDENCIES.rust.tsv
+    cargo deny --locked list -f tsv -t 0.6 | sed 's/[[:space:]]*$//' > DEPENDENCIES.rust.tsv
+
+# Regenerate the LICENSE and NOTICE used by the Linux binary distribution.
+binary-license:
+    python3 scripts/generate_binary_license.py

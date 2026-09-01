@@ -42,19 +42,23 @@ jobs:
 
       - uses: ./.github/actions/verify-tag-version
 
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
-      # build.rs reads the canonical proto from the in-repo fluss-rpc, which is
-      # outside the published crate; vendor it so the crate publishes standalone.
-      - name: Vendor canonical proto into the crate
-        run: scripts/vendor-proto.sh
+      # cargo packs only the crate directory, so the LICENSE/NOTICE above it
+      # never reach the .crate.
+      - name: Verify LICENSE, NOTICE and the dependency inventory in the crate
+        run: |
+          FILES=$(cargo package --list --allow-dirty -p fluss-rs)
+          for f in LICENSE NOTICE DEPENDENCIES.rust.tsv; do
+            if ! echo "$FILES" | grep -qx "$f"; then
+              echo "Error: ${f} is missing from the fluss-rs crate"
+              exit 1
+            fi
+          done
 
       - name: Dry run (crates/fluss)
-        run: cargo publish -p fluss-rs --dry-run --allow-dirty
+        run: cargo publish -p fluss-rs --dry-run --locked
 
       - name: Publish fluss-rs to crates.io
         if: startsWith(github.ref, 'refs/tags/') && !contains(github.ref, '-')
-        run: cargo publish -p fluss-rs --allow-dirty
+        run: cargo publish -p fluss-rs --locked
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

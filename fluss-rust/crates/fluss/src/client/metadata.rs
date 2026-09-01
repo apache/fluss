@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::PartitionId;
 use crate::cluster::{Cluster, ServerNode, ServerType};
 use crate::error::{Error, FlussError, Result};
 use crate::metadata::{PhysicalTablePath, TableBucket, TablePath};
 use crate::proto::MetadataResponse;
-use crate::rpc::message::UpdateMetadataRequest;
+use crate::rpc::message::{GetTableRequest, UpdateMetadataRequest};
 use crate::rpc::{RpcClient, ServerConnection};
+use crate::{PartitionId, TableId};
 use log::{info, warn};
 use parking_lot::RwLock;
 use std::collections::HashSet;
@@ -267,6 +267,39 @@ impl Metadata {
             let mut cluster_guard = self.cluster.write();
             let updated_cluster =
                 cluster_guard.invalidate_physical_table_meta(physical_tables_to_invalid);
+            *cluster_guard = Arc::new(updated_cluster);
+        }
+        self.notify_cluster_changed();
+    }
+
+    /// Fetches the table id from the cluster, bypassing the local cache.
+    /// Returns `Ok(None)` when the table does not exist. Unlike the metadata
+    /// refresh, which wraps a missing table in a generic server error, this
+    /// reports `TableNotExist` so callers can tell a dropped table apart from
+    /// a transient failure.
+    pub async fn fetch_table_id(&self, table_path: &TablePath) -> Result<Option<TableId>> {
+        let maybe_server = {
+            let guard = self.cluster.read();
+            guard.get_one_available_server().cloned()
+        };
+        let server = maybe_server.ok_or_else(|| Error::UnexpectedError {
+            message: "No available server to fetch table metadata".to_string(),
+            source: None,
+        })?;
+
+        let conn = self.connections.get_connection(&server).await?;
+        match conn.request(GetTableRequest::new(table_path)).await {
+            Ok(response) => Ok(Some(response.table_id)),
+            Err(e) if e.api_error() == Some(FlussError::TableNotExist) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Drops the cached id, info, partitions and bucket locations of `table_path`.
+    pub fn evict_table_metadata(&self, table_path: &TablePath) {
+        {
+            let mut cluster_guard = self.cluster.write();
+            let updated_cluster = cluster_guard.evict_table(table_path);
             *cluster_guard = Arc::new(updated_cluster);
         }
         self.notify_cluster_changed();
@@ -625,6 +658,18 @@ mod tests {
         metadata.invalidate_server(&1, vec![1]);
         let cluster = metadata.get_cluster();
         assert!(cluster.get_tablet_server(1).is_none());
+    }
+
+    #[test]
+    fn evict_table_metadata_purges_cluster() {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let cluster = build_cluster_arc(&table_path, 1, 1);
+        let metadata = Metadata::new_for_test(cluster);
+        metadata.evict_table_metadata(&table_path);
+        let cluster = metadata.get_cluster();
+        assert!(cluster.get_table_id(&table_path).is_none());
+        assert!(cluster.opt_get_table(&table_path).is_none());
+        assert!(cluster.leader_for(&TableBucket::new(1, 0)).is_none());
     }
 
     #[test]

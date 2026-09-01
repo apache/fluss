@@ -17,14 +17,20 @@
 
 package org.apache.fluss.record;
 
+import org.apache.fluss.metadata.KvFormat;
+import org.apache.fluss.row.BinaryRow;
+import org.apache.fluss.row.encode.KvValueLayout;
+import org.apache.fluss.row.encode.ValueEncoder;
+
 import org.junit.jupiter.api.Test;
 
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
+import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static org.apache.fluss.testutils.DataTestUtils.compactedRow;
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Test for {@link DefaultValueRecordBatch}. */
+/** Tests for {@link DefaultValueRecordBatch}. */
 class DefaultValueRecordBatchTest {
 
     @Test
@@ -65,5 +71,31 @@ class DefaultValueRecordBatchTest {
         builder.append(DEFAULT_SCHEMA_ID, compactedRow(DATA1_ROW_TYPE, new Object[] {1, "a1"}));
         builder.append(DEFAULT_SCHEMA_ID, compactedRow(DATA1_ROW_TYPE, new Object[] {2, "a2"}));
         return builder.build();
+    }
+
+    @Test
+    void testAppendStorageValueSliceDecodesOriginalRpcRow() throws Exception {
+        BinaryRow row = compactedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
+        KvValueLayout layout = KvValueLayout.TAGGED;
+        byte[] storageValue =
+                ValueEncoder.forLayout(layout, ignored -> 123L)
+                        .encodeValue(new BinaryValue(DEFAULT_SCHEMA_ID, row));
+
+        DefaultValueRecordBatch.Builder builder = DefaultValueRecordBatch.builder();
+        builder.append(
+                storageValue,
+                layout.valueBodyOffset(),
+                layout.valueBodyLength(storageValue.length));
+
+        ValueRecord record =
+                builder.build()
+                        .records(
+                                ValueRecordReadContext.createReadContext(
+                                        new TestingSchemaGetter(DEFAULT_SCHEMA_ID, DATA1_SCHEMA),
+                                        KvFormat.COMPACTED))
+                        .iterator()
+                        .next();
+        assertThat(record.schemaId()).isEqualTo(DEFAULT_SCHEMA_ID);
+        assertThat(record.getRow()).isEqualTo(row);
     }
 }

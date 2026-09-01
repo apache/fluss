@@ -38,6 +38,7 @@ public class ValueRecordReadContext implements ValueRecordBatch.ReadContext {
         this.kvFormat = kvFormat;
     }
 
+    /** Creates a read context for raw RPC values. */
     public static ValueRecordReadContext createReadContext(
             SchemaGetter schemaGetter, KvFormat kvFormat) {
         return new ValueRecordReadContext(schemaGetter, kvFormat);

@@ -1,5 +1,415 @@
 components:
   schemas:
+    AlterTableBody:
+      additionalProperties: false
+      description: Body of `PATCH /v1/clusters/{cluster}/databases/{database}/tables/{table}`.
+      properties:
+        changes:
+          description: The server currently rejects mixing schema and config changes.
+          items:
+            $ref: '#/components/schemas/TableChangeBody'
+          type: array
+      required:
+      - changes
+      type: object
+    ClustersResponse:
+      description: 'Response of `GET /v1/clusters`: the IDs used in the cluster-scoped paths of the other APIs.'
+      properties:
+        clusters:
+          items:
+            type: string
+          type: array
+      required:
+      - clusters
+      type: object
+    ColumnBody:
+      additionalProperties: false
+      description: One column; top-level nullability belongs here, not inside `data_type`.
+      properties:
+        comment:
+          type:
+          - string
+          - 'null'
+        data_type:
+          $ref: '#/components/schemas/ColumnDataType'
+        name:
+          type: string
+        nullable:
+          description: Primary-key columns default to false and reject true; other columns default to true.
+          type:
+          - boolean
+          - 'null'
+      required:
+      - name
+      - data_type
+      type: object
+    ColumnDataType:
+      description: A Fluss column type; top-level nullability is declared by the column.
+      oneOf:
+      - additionalProperties: false
+        properties:
+          type:
+            enum:
+            - BOOLEAN
+            type: string
+        required:
+        - type
+        type: object
+      - additionalProperties: false
+        properties:
+          type:
+            enum:
+            - TINYINT
+            type: string
+        required:
+        - type
+        type: object
+      - additionalProperties: false
+        properties:
+          type:
+            enum:
+            - SMALLINT
+            type: string
+        required:
+        - type
+        type: object
+      - additionalProperties: false
+        properties:
+          type:
+            enum:
+            - INTEGER
+            type: string
+        required:
+        - type
+        type: object
+      - additionalProperties: false
+        properties:
+          type:
+            enum:
+            - BIGINT
+            type: string
+        required:
+        - type
+        type: object
+      - additionalProperties: false
+        properties:
+          type:
+            enum:
+            - FLOAT
+            type: string
+        required:
+        - type
+        type: object
+      - additionalProperties: false
+        properties:
+          type:
+            enum:
+            - DOUBLE
+            type: string
+        required:
+        - type
+        type: object
+      - additionalProperties: false
+        properties:
+          length:
+            format: int32
+            minimum: 0
+            type: integer
+          type:
+            enum:
+            - CHAR
+            type: string
+        required:
+        - length
+        - type
+        type: object
+      - additionalProperties: false
+        properties:
+          type:
+            enum:
+            - STRING
+            type: string
+        required:
+        - type
+        type: object
+      - additionalProperties: false
+        properties:
+          precision:
+            format: int32
+            maximum: 38
+            minimum: 1
+            type: integer
+          scale:
+            format: int32
+            maximum: 38
+            minimum: 0
+            type: integer
+          type:
+            enum:
+            - DECIMAL
+            type: string
+        required:
+        - precision
+        - scale
+        - type
+        type: object
+      - additionalProperties: false
+        properties:
+          type:
+            enum:
+            - DATE
+            type: string
+        required:
+        - type
+        type: object
+      - additionalProperties: false
+        properties:
+          precision:
+            format: int32
+            maximum: 9
+            minimum: 0
+            type: integer
+          type:
+            enum:
+            - TIME_WITHOUT_TIME_ZONE
+            type: string
+        required:
+        - precision
+        - type
+        type: object
+      - additionalProperties: false
+        properties:
+          precision:
+            format: int32
+            maximum: 9
+            minimum: 0
+            type: integer
+          type:
+            enum:
+            - TIMESTAMP_WITHOUT_TIME_ZONE
+            type: string
+        required:
+        - precision
+        - type
+        type: object
+      - additionalProperties: false
+        properties:
+          precision:
+            format: int32
+            maximum: 9
+            minimum: 0
+            type: integer
+          type:
+            enum:
+            - TIMESTAMP_WITH_LOCAL_TIME_ZONE
+            type: string
+        required:
+        - precision
+        - type
+        type: object
+      - additionalProperties: false
+        properties:
+          type:
+            enum:
+            - BYTES
+            type: string
+        required:
+        - type
+        type: object
+      - additionalProperties: false
+        properties:
+          length:
+            minimum: 0
+            type: integer
+          type:
+            enum:
+            - BINARY
+            type: string
+        required:
+        - length
+        - type
+        type: object
+      - additionalProperties: false
+        properties:
+          element_type:
+            $ref: '#/components/schemas/WireDataType'
+          type:
+            enum:
+            - ARRAY
+            type: string
+        required:
+        - element_type
+        - type
+        type: object
+      - additionalProperties: false
+        properties:
+          key_type:
+            $ref: '#/components/schemas/WireDataType'
+          type:
+            enum:
+            - MAP
+            type: string
+          value_type:
+            $ref: '#/components/schemas/WireDataType'
+        required:
+        - key_type
+        - value_type
+        - type
+        type: object
+      - additionalProperties: false
+        properties:
+          fields:
+            items:
+              $ref: '#/components/schemas/WireRowField'
+            type: array
+          type:
+            enum:
+            - ROW
+            type: string
+        required:
+        - fields
+        - type
+        type: object
+    ColumnResponse:
+      description: One column of a table schema.
+      properties:
+        comment:
+          type: string
+        data_type:
+          $ref: '#/components/schemas/ColumnDataType'
+        name:
+          type: string
+        nullable:
+          type: boolean
+      required:
+      - name
+      - data_type
+      - nullable
+      type: object
+    CreateDatabaseBody:
+      additionalProperties: false
+      description: Body of `POST /v1/clusters/{cluster}/databases`.
+      properties:
+        database:
+          type: string
+      required:
+      - database
+      type: object
+    CreatePartitionBody:
+      additionalProperties: false
+      description: Body of `POST .../tables/{table}/partitions`.
+      properties:
+        partition:
+          additionalProperties:
+            type: string
+          propertyNames:
+            type: string
+          type: object
+      required:
+      - partition
+      type: object
+    CreateTableBody:
+      additionalProperties: false
+      description: Body of `POST /v1/clusters/{cluster}/databases/{database}/tables`.
+      properties:
+        columns:
+          items:
+            $ref: '#/components/schemas/ColumnBody'
+          type: array
+        comment:
+          type:
+          - string
+          - 'null'
+        configs:
+          additionalProperties:
+            type: string
+          description: Fluss table properties, validated by the server.
+          propertyNames:
+            type: string
+          type: object
+        custom_properties:
+          additionalProperties:
+            type: string
+          description: Custom table metadata; keys must not use the reserved `table.` prefix.
+          propertyNames:
+            type: string
+          type: object
+        distribution:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/DistributionBody'
+        partitioned_by:
+          items:
+            type: string
+          type: array
+        primary_key:
+          description: Primary-key columns; omit for a log table.
+          items:
+            type: string
+          type:
+          - array
+          - 'null'
+        table_name:
+          type: string
+        validate_only:
+          description: Build and validate the definition locally without creating anything.
+          type: boolean
+      required:
+      - table_name
+      - columns
+      type: object
+    DatabaseResponse:
+      description: Response of a database creation.
+      properties:
+        database:
+          type: string
+      required:
+      - database
+      type: object
+    DatabasesResponse:
+      description: Response of `GET /v1/clusters/{cluster}/databases`.
+      properties:
+        databases:
+          items:
+            type: string
+          type: array
+        next_page_token:
+          description: Present only while more entries follow.
+          type: string
+      required:
+      - databases
+      type: object
+    DistributionBody:
+      additionalProperties: false
+      description: The bucket distribution of a table definition.
+      properties:
+        bucket_count:
+          format: int32
+          minimum: 1
+          type: integer
+        bucket_keys:
+          items:
+            type: string
+          type: array
+      required:
+      - bucket_count
+      - bucket_keys
+      type: object
+    DistributionResponse:
+      description: The bucket distribution of a table.
+      properties:
+        bucket_count:
+          format: int32
+          minimum: 1
+          type: integer
+        bucket_keys:
+          items:
+            type: string
+          type: array
+      required:
+      - bucket_count
+      - bucket_keys
+      type: object
     ErrorBody:
       description: Body of the REST error envelope.
       properties:
@@ -37,6 +447,7 @@ components:
       - partition_already_exists
       - partition_not_found
       - resource_exhausted
+      - storage_backpressure
       - table_already_exists
       - table_not_found
       - timeout
@@ -60,7 +471,7 @@ components:
       - error
       type: object
     HealthResponse:
-      description: 'Response of `GET /health` (FIP-49): liveness plus process uptime.'
+      description: 'Response of `GET /health`: liveness plus process uptime.'
       properties:
         status:
           type: string
@@ -73,6 +484,53 @@ components:
       - status
       - uptime_ms
       type: object
+    PartitionEntry:
+      description: One partition in a listing.
+      properties:
+        name:
+          description: Native partition name; percent-encode it as a path segment when deleting.
+          type: string
+        partition:
+          additionalProperties:
+            type: string
+          propertyNames:
+            type: string
+          type: object
+      required:
+      - name
+      - partition
+      type: object
+    PartitionResponse:
+      description: Response of a partition creation.
+      properties:
+        database:
+          type: string
+        partition:
+          additionalProperties:
+            type: string
+          propertyNames:
+            type: string
+          type: object
+        table:
+          type: string
+      required:
+      - database
+      - table
+      - partition
+      type: object
+    PartitionsResponse:
+      description: Response of `GET /v1/clusters/{cluster}/databases/{database}/tables/{table}/partitions`.
+      properties:
+        next_page_token:
+          description: Present only while more entries follow.
+          type: string
+        partitions:
+          items:
+            $ref: '#/components/schemas/PartitionEntry'
+          type: array
+      required:
+      - partitions
+      type: object
     ReadyResponse:
       description: 'Response of `GET /ready`: the gateway accepts application traffic.'
       properties:
@@ -81,13 +539,526 @@ components:
       required:
       - status
       type: object
+    TableChangeBody:
+      description: |-
+        One supported table change. Config keys under `table.` address Fluss table properties;
+        other keys address custom properties.
+      oneOf:
+      - description: 'An added column must be nullable: existing rows have no value for it.'
+        properties:
+          comment:
+            type:
+            - string
+            - 'null'
+          data_type:
+            $ref: '#/components/schemas/ColumnDataType'
+          kind:
+            enum:
+            - add_column
+            type: string
+          name:
+            type: string
+        required:
+        - name
+        - data_type
+        - kind
+        type: object
+      - properties:
+          key:
+            type: string
+          kind:
+            enum:
+            - set_config
+            type: string
+          value:
+            type: string
+        required:
+        - key
+        - value
+        - kind
+        type: object
+      - description: Removes the explicitly configured value.
+        properties:
+          key:
+            type: string
+          kind:
+            enum:
+            - reset_config
+            type: string
+        required:
+        - key
+        - kind
+        type: object
+    TableResponse:
+      description: Response of `GET /v1/clusters/{cluster}/databases/{database}/tables/{table}`.
+      properties:
+        columns:
+          items:
+            $ref: '#/components/schemas/ColumnResponse'
+          type: array
+        comment:
+          type: string
+        configs:
+          additionalProperties:
+            type: string
+          description: Fluss table properties.
+          propertyNames:
+            type: string
+          type: object
+        custom_properties:
+          additionalProperties:
+            type: string
+          description: Custom table metadata.
+          propertyNames:
+            type: string
+          type: object
+        database:
+          type: string
+        distribution:
+          $ref: '#/components/schemas/DistributionResponse'
+        partitioned_by:
+          items:
+            type: string
+          type: array
+        primary_key:
+          items:
+            type: string
+          type: array
+        table:
+          type: string
+      required:
+      - database
+      - table
+      - columns
+      type: object
+    TablesResponse:
+      description: Response of `GET /v1/clusters/{cluster}/databases/{database}/tables`.
+      properties:
+        next_page_token:
+          description: Present only while more entries follow.
+          type: string
+        tables:
+          items:
+            type: string
+          type: array
+      required:
+      - tables
+      type: object
+    ValidateOnlyResponse:
+      description: The result of a successful local `validate_only` dry run.
+      properties:
+        column_count:
+          minimum: 0
+          type: integer
+        database:
+          type: string
+        primary_key:
+          items:
+            type: string
+          type: array
+        table:
+          type: string
+        validate_only:
+          type: boolean
+      required:
+      - validate_only
+      - database
+      - table
+      - column_count
+      - primary_key
+      type: object
+    WireDataType:
+      description: The exact recursive Fluss type as it appears on the wire.
+      oneOf:
+      - additionalProperties: false
+        properties:
+          nullable:
+            type: boolean
+          type:
+            enum:
+            - BOOLEAN
+            type: string
+        required:
+        - type
+        type: object
+      - additionalProperties: false
+        properties:
+          nullable:
+            type: boolean
+          type:
+            enum:
+            - TINYINT
+            type: string
+        required:
+        - type
+        type: object
+      - additionalProperties: false
+        properties:
+          nullable:
+            type: boolean
+          type:
+            enum:
+            - SMALLINT
+            type: string
+        required:
+        - type
+        type: object
+      - additionalProperties: false
+        properties:
+          nullable:
+            type: boolean
+          type:
+            enum:
+            - INTEGER
+            type: string
+        required:
+        - type
+        type: object
+      - additionalProperties: false
+        properties:
+          nullable:
+            type: boolean
+          type:
+            enum:
+            - BIGINT
+            type: string
+        required:
+        - type
+        type: object
+      - additionalProperties: false
+        properties:
+          nullable:
+            type: boolean
+          type:
+            enum:
+            - FLOAT
+            type: string
+        required:
+        - type
+        type: object
+      - additionalProperties: false
+        properties:
+          nullable:
+            type: boolean
+          type:
+            enum:
+            - DOUBLE
+            type: string
+        required:
+        - type
+        type: object
+      - additionalProperties: false
+        properties:
+          length:
+            format: int32
+            minimum: 0
+            type: integer
+          nullable:
+            type: boolean
+          type:
+            enum:
+            - CHAR
+            type: string
+        required:
+        - length
+        - type
+        type: object
+      - additionalProperties: false
+        properties:
+          nullable:
+            type: boolean
+          type:
+            enum:
+            - STRING
+            type: string
+        required:
+        - type
+        type: object
+      - additionalProperties: false
+        properties:
+          nullable:
+            type: boolean
+          precision:
+            format: int32
+            maximum: 38
+            minimum: 1
+            type: integer
+          scale:
+            format: int32
+            maximum: 38
+            minimum: 0
+            type: integer
+          type:
+            enum:
+            - DECIMAL
+            type: string
+        required:
+        - precision
+        - scale
+        - type
+        type: object
+      - additionalProperties: false
+        properties:
+          nullable:
+            type: boolean
+          type:
+            enum:
+            - DATE
+            type: string
+        required:
+        - type
+        type: object
+      - additionalProperties: false
+        properties:
+          nullable:
+            type: boolean
+          precision:
+            format: int32
+            maximum: 9
+            minimum: 0
+            type: integer
+          type:
+            enum:
+            - TIME_WITHOUT_TIME_ZONE
+            type: string
+        required:
+        - precision
+        - type
+        type: object
+      - additionalProperties: false
+        properties:
+          nullable:
+            type: boolean
+          precision:
+            format: int32
+            maximum: 9
+            minimum: 0
+            type: integer
+          type:
+            enum:
+            - TIMESTAMP_WITHOUT_TIME_ZONE
+            type: string
+        required:
+        - precision
+        - type
+        type: object
+      - additionalProperties: false
+        properties:
+          nullable:
+            type: boolean
+          precision:
+            format: int32
+            maximum: 9
+            minimum: 0
+            type: integer
+          type:
+            enum:
+            - TIMESTAMP_WITH_LOCAL_TIME_ZONE
+            type: string
+        required:
+        - precision
+        - type
+        type: object
+      - additionalProperties: false
+        properties:
+          nullable:
+            type: boolean
+          type:
+            enum:
+            - BYTES
+            type: string
+        required:
+        - type
+        type: object
+      - additionalProperties: false
+        properties:
+          length:
+            minimum: 0
+            type: integer
+          nullable:
+            type: boolean
+          type:
+            enum:
+            - BINARY
+            type: string
+        required:
+        - length
+        - type
+        type: object
+      - additionalProperties: false
+        properties:
+          element_type:
+            $ref: '#/components/schemas/WireDataType'
+          nullable:
+            type: boolean
+          type:
+            enum:
+            - ARRAY
+            type: string
+        required:
+        - element_type
+        - type
+        type: object
+      - additionalProperties: false
+        properties:
+          key_type:
+            $ref: '#/components/schemas/WireDataType'
+          nullable:
+            type: boolean
+          type:
+            enum:
+            - MAP
+            type: string
+          value_type:
+            $ref: '#/components/schemas/WireDataType'
+        required:
+        - key_type
+        - value_type
+        - type
+        type: object
+      - additionalProperties: false
+        properties:
+          fields:
+            items:
+              $ref: '#/components/schemas/WireRowField'
+            type: array
+          nullable:
+            type: boolean
+          type:
+            enum:
+            - ROW
+            type: string
+        required:
+        - fields
+        - type
+        type: object
+    WireRowField:
+      additionalProperties: false
+      description: One `ROW` field. Server-assigned field IDs are not exposed.
+      properties:
+        description:
+          type: string
+        field_type:
+          $ref: '#/components/schemas/WireDataType'
+        name:
+          type: string
+      required:
+      - name
+      - field_type
+      type: object
+    WriteBodyEntry_Value:
+      additionalProperties: false
+      description: |-
+        One request entry. Exactly one of `append`, `upsert`, or `delete` is required, and its value is
+        the row object.
+      properties:
+        append:
+          type: object
+        delete:
+          type: object
+        id:
+          description: Opaque caller correlation value, unique within the request, echoed by every outcome.
+          type: string
+        upsert:
+          type: object
+      required:
+      - id
+      type: object
+    WriteBody_Value:
+      additionalProperties: false
+      description: |-
+        The write request body.
+
+        The row objects stay as raw JSON so that number lexemes survive to schema-aware decoding: a
+        BIGINT or DECIMAL sent as a base-10 string must not pass through an `f64`.
+      properties:
+        entries:
+          items:
+            $ref: '#/components/schemas/WriteBodyEntry_Value'
+          minItems: 1
+          type: array
+        partial_update_columns:
+          description: |-
+            Columns targeted by every entry in this batch. KV tables only.
+
+            Every primary-key column must be included, and every non-primary-key,
+            non-auto-increment column in the table must be nullable. Missing or explicit-null nullable
+            targets are written as null; untargeted columns are preserved. Deletes require only
+            primary-key values and clear the targeted non-key columns; the row is removed when all
+            non-key columns become null.
+          items:
+            type: string
+          minItems: 1
+          type:
+          - array
+          - 'null'
+      required:
+      - entries
+      type: object
+    WriteFailureResponse:
+      properties:
+        error_code:
+          description: |-
+            A stable error code, plus `storage_backpressure` — a KV write the store refused under
+            backpressure. `timeout` marks an indeterminate outcome: the row may already be applied.
+          type: string
+        id:
+          type: string
+        message:
+          type: string
+      required:
+      - id
+      - error_code
+      - message
+      type: object
+    WriteResponse:
+      description: Ordered, entry-correlated outcomes of one batch.
+      properties:
+        error_count:
+          format: int64
+          minimum: 0
+          type: integer
+        failures:
+          description: |-
+            Failures in input order. A verdict can be shared by entries that landed in one accumulator
+            batch.
+          items:
+            $ref: '#/components/schemas/WriteFailureResponse'
+          type: array
+        row_count:
+          format: int64
+          minimum: 0
+          type: integer
+        success_count:
+          format: int64
+          minimum: 0
+          type: integer
+        successes:
+          description: Successes in input order.
+          items:
+            $ref: '#/components/schemas/WriteSuccessResponse'
+          type: array
+      required:
+      - row_count
+      - success_count
+      - error_count
+      - successes
+      - failures
+      type: object
+    WriteSuccessResponse:
+      properties:
+        id:
+          type: string
+      required:
+      - id
+      type: object
 info:
   description: Stateless REST gateway for Apache Fluss
   license:
     name: Apache-2.0
     url: https://www.apache.org/licenses/LICENSE-2.0
   title: fluss-gateway
-  version: 1.0.0
+  version: 1.0.0-SNAPSHOT
 openapi: 3.1.0
 paths:
   /health:
@@ -100,13 +1071,19 @@ paths:
               schema:
                 $ref: '#/components/schemas/HealthResponse'
           description: Gateway liveness and uptime
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: This operation accepts no query parameters
         '405':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
           description: Wrong method for this route
-      summary: 'The FIP-49 health summary: `{status, uptime_ms}`, always 200 while the process answers.'
+      summary: Returns process liveness and uptime without a backend RPC.
       tags:
       - health
   /ready:
@@ -124,6 +1101,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ReadyResponse'
           description: The gateway accepts application traffic
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: This operation accepts no query parameters
         '405':
           content:
             application/json:
@@ -139,12 +1122,1120 @@ paths:
       summary: Readiness for load balancers and readiness probes.
       tags:
       - health
+  /v1/clusters:
+    get:
+      description: |-
+        This is a configuration echo: it touches no connection, so it answers at the same speed whether
+        Fluss is up or down, and a caller polling it cannot turn into a burst of connection attempts. It
+        deliberately carries **no** reachability field — the gateway has no background probe, so any such
+        field would report the outcome of some earlier request rather than the current state. Whether a
+        cluster can be served shows up in the errors of its own requests and in the `connections_*` metrics.
+      operationId: listClusters
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClustersResponse'
+          description: Configured cluster IDs in lexical order
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: This operation accepts no query parameters
+        '405':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Wrong method for this route
+        '413':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Request body above the configured limit
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Gateway starting or shutting down
+        '504':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Request deadline exceeded
+      summary: Lists the configured clusters.
+      tags:
+      - metadata
+  /v1/clusters/{cluster}/databases:
+    get:
+      operationId: listDatabases
+      parameters:
+      - description: Configured cluster ID
+        in: path
+        name: cluster
+        required: true
+        schema:
+          type: string
+      - description: Maximum entries to return. Defaults to 100, capped at 1000.
+        in: query
+        name: max_results
+        required: false
+        schema:
+          maximum: 1000
+          minimum: 1
+          type: integer
+      - description: Opaque token from the `next_page_token` of the previous response.
+        in: query
+        name: page_token
+        required: false
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DatabasesResponse'
+          description: Databases in lexical order
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Invalid page parameter or page token
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unknown cluster
+        '413':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Request body above the configured limit
+        '429':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Metadata concurrency limit exceeded
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Fluss backend failure
+        '501':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Fluss does not support the operation or API version
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Fluss is unavailable, or the gateway is starting or shutting down
+        '504':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Request deadline exceeded
+      summary: Lists the databases of one configured cluster.
+      tags:
+      - metadata
+    post:
+      operationId: createDatabase
+      parameters:
+      - description: Configured cluster ID
+        in: path
+        name: cluster
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateDatabaseBody'
+        required: true
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DatabaseResponse'
+          description: The created database
+          headers:
+            Location:
+              description: Created database URL
+              schema:
+                type: string
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Malformed body or invalid definition
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unknown cluster
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: The database already exists
+        '413':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Request body above the configured limit
+        '415':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: The body is not JSON
+        '429':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Metadata concurrency limit exceeded
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Fluss backend failure
+        '501':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Fluss does not support the operation or API version
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Fluss is unavailable, or the gateway is starting or shutting down
+        '504':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Request deadline exceeded
+      summary: Creates one database.
+      tags:
+      - ddl
+  /v1/clusters/{cluster}/databases/{database}:
+    delete:
+      operationId: dropDatabase
+      parameters:
+      - description: Configured cluster ID
+        in: path
+        name: cluster
+        required: true
+        schema:
+          type: string
+      - description: Database name
+        in: path
+        name: database
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: The database was dropped
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unsupported query parameter
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unknown cluster or database
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: The database still holds tables
+        '413':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Request body above the configured limit
+        '429':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Metadata concurrency limit exceeded
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Fluss backend failure
+        '501':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Fluss does not support the operation or API version
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Fluss is unavailable, or the gateway is starting or shutting down
+        '504':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Request deadline exceeded
+      summary: Drops a database only if it contains no tables.
+      tags:
+      - ddl
+  /v1/clusters/{cluster}/databases/{database}/tables:
+    get:
+      operationId: listTables
+      parameters:
+      - description: Configured cluster ID
+        in: path
+        name: cluster
+        required: true
+        schema:
+          type: string
+      - description: Database name
+        in: path
+        name: database
+        required: true
+        schema:
+          type: string
+      - description: Maximum entries to return. Defaults to 100, capped at 1000.
+        in: query
+        name: max_results
+        required: false
+        schema:
+          maximum: 1000
+          minimum: 1
+          type: integer
+      - description: Opaque token from the `next_page_token` of the previous response.
+        in: query
+        name: page_token
+        required: false
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TablesResponse'
+          description: Tables in lexical order
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Invalid page parameter or page token
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unknown cluster or database
+        '413':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Request body above the configured limit
+        '429':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Metadata concurrency limit exceeded
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Fluss backend failure
+        '501':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Fluss does not support the operation or API version
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Fluss is unavailable, or the gateway is starting or shutting down
+        '504':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Request deadline exceeded
+      summary: Lists the tables of one database.
+      tags:
+      - metadata
+    post:
+      operationId: createTable
+      parameters:
+      - description: Configured cluster ID
+        in: path
+        name: cluster
+        required: true
+        schema:
+          type: string
+      - description: Database name
+        in: path
+        name: database
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTableBody'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidateOnlyResponse'
+          description: 'Dry run: fluss-rs accepted the definition and nothing was created'
+        '201':
+          description: The table was created; GET Location to read its metadata
+          headers:
+            Location:
+              description: Created table URL
+              schema:
+                type: string
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Malformed body or invalid definition
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unknown cluster or database
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: The table already exists
+        '413':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Request body above the configured limit
+        '415':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: The body is not JSON
+        '429':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Metadata concurrency limit exceeded
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Fluss backend failure
+        '501':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Fluss does not support the operation or API version
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Fluss is unavailable, or the gateway is starting or shutting down
+        '504':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Request deadline exceeded
+      summary: Creates one table, or validates its definition without creating it.
+      tags:
+      - ddl
+  /v1/clusters/{cluster}/databases/{database}/tables/{table}:
+    delete:
+      operationId: dropTable
+      parameters:
+      - description: Configured cluster ID
+        in: path
+        name: cluster
+        required: true
+        schema:
+          type: string
+      - description: Database name
+        in: path
+        name: database
+        required: true
+        schema:
+          type: string
+      - description: Table name
+        in: path
+        name: table
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: The table was dropped
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unsupported query parameter
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unknown cluster, database, or table
+        '413':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Request body above the configured limit
+        '429':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Metadata concurrency limit exceeded
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Fluss backend failure
+        '501':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Fluss does not support the operation or API version
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Fluss is unavailable, or the gateway is starting or shutting down
+        '504':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Request deadline exceeded
+      summary: Drops one table.
+      tags:
+      - ddl
+    get:
+      operationId: describeTable
+      parameters:
+      - description: Configured cluster ID
+        in: path
+        name: cluster
+        required: true
+        schema:
+          type: string
+      - description: Database name
+        in: path
+        name: database
+        required: true
+        schema:
+          type: string
+      - description: Table name
+        in: path
+        name: table
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TableResponse'
+          description: The table metadata
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unsupported query parameter
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unknown cluster, database, or table
+        '413':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Request body above the configured limit
+        '429':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Metadata concurrency limit exceeded
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Fluss backend failure
+        '501':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Fluss does not support the operation or API version
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Fluss is unavailable, or the gateway is starting or shutting down
+        '504':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Request deadline exceeded
+      summary: 'Describes one table: its schema, keys, distribution, partitioning, and properties.'
+      tags:
+      - metadata
+    patch:
+      operationId: alterTable
+      parameters:
+      - description: Configured cluster ID
+        in: path
+        name: cluster
+        required: true
+        schema:
+          type: string
+      - description: Database name
+        in: path
+        name: database
+        required: true
+        schema:
+          type: string
+      - description: Table name
+        in: path
+        name: table
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AlterTableBody'
+        required: true
+      responses:
+        '204':
+          description: The table was altered; GET the same URL to read its metadata
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Malformed body or invalid change
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unknown cluster, database, or table
+        '413':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Request body above the configured limit
+        '415':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: The body is not JSON
+        '429':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Metadata concurrency limit exceeded
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Fluss backend failure
+        '501':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Fluss does not support the operation or API version
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Fluss is unavailable, or the gateway is starting or shutting down
+        '504':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Request deadline exceeded
+      summary: Applies one group of schema or config changes to a table.
+      tags:
+      - ddl
+  /v1/clusters/{cluster}/databases/{database}/tables/{table}/partitions:
+    get:
+      operationId: listPartitions
+      parameters:
+      - description: Configured cluster ID
+        in: path
+        name: cluster
+        required: true
+        schema:
+          type: string
+      - description: Database name
+        in: path
+        name: database
+        required: true
+        schema:
+          type: string
+      - description: Table name
+        in: path
+        name: table
+        required: true
+        schema:
+          type: string
+      - description: Maximum entries to return. Defaults to 100, capped at 1000.
+        in: query
+        name: max_results
+        required: false
+        schema:
+          maximum: 1000
+          minimum: 1
+          type: integer
+      - description: Opaque token from the `next_page_token` of the previous response.
+        in: query
+        name: page_token
+        required: false
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PartitionsResponse'
+          description: Partitions in partition-name order
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Invalid page parameter or page token
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unknown cluster, database, or table
+        '413':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Request body above the configured limit
+        '429':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Metadata concurrency limit exceeded
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Fluss backend failure
+        '501':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Fluss does not support the operation or API version
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Fluss is unavailable, or the gateway is starting or shutting down
+        '504':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Request deadline exceeded
+      summary: Lists the partitions of one partitioned table.
+      tags:
+      - metadata
+    post:
+      operationId: createPartition
+      parameters:
+      - description: Configured cluster ID
+        in: path
+        name: cluster
+        required: true
+        schema:
+          type: string
+      - description: Database name
+        in: path
+        name: database
+        required: true
+        schema:
+          type: string
+      - description: Table name
+        in: path
+        name: table
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePartitionBody'
+        required: true
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PartitionResponse'
+          description: The created partition
+          headers:
+            Location:
+              description: Created partition URL
+              schema:
+                type: string
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Malformed body, or a spec that does not match the partition keys
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unknown cluster, database, or table
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: The partition already exists or the table's partition limit was reached
+        '413':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Request body above the configured limit
+        '415':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: The body is not JSON
+        '429':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Metadata concurrency limit exceeded
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Fluss backend failure
+        '501':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Fluss does not support the operation or API version
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Fluss is unavailable, or the gateway is starting or shutting down
+        '504':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Request deadline exceeded
+      summary: Creates one partition of a partitioned table.
+      tags:
+      - ddl
+  /v1/clusters/{cluster}/databases/{database}/tables/{table}/partitions/{partition}:
+    delete:
+      operationId: dropPartition
+      parameters:
+      - description: Configured cluster ID
+        in: path
+        name: cluster
+        required: true
+        schema:
+          type: string
+      - description: Database name
+        in: path
+        name: database
+        required: true
+        schema:
+          type: string
+      - description: Table name
+        in: path
+        name: table
+        required: true
+        schema:
+          type: string
+      - description: Fluss partition name; values follow partition-key order and are joined by `$`
+        in: path
+        name: partition
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: The partition was dropped
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unsupported query parameter, or a name that does not match the partition keys
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unknown cluster, database, table, or partition
+        '413':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Request body above the configured limit
+        '429':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Metadata concurrency limit exceeded
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Fluss backend failure
+        '501':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Fluss does not support the operation or API version
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Fluss is unavailable, or the gateway is starting or shutting down
+        '504':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Request deadline exceeded
+      summary: Drops one partition by its Fluss name.
+      tags:
+      - ddl
+  /v1/clusters/{cluster}/databases/{database}/tables/{table}/records:
+    post:
+      description: 'Writes a batch in input order after validating every row against the table schema. A validation failure rejects the whole batch with 400 before anything is submitted. Delivery is at least once from the caller''s perspective: the gateway never resubmits after submission, but client retries and caller retries can duplicate log appends. An entry whose code is `timeout` may have been applied, and entries sharing one accumulator batch can share a verdict.'
+      operationId: writeRecords
+      parameters:
+      - description: Configured cluster ID
+        in: path
+        name: cluster
+        required: true
+        schema:
+          type: string
+      - description: Exact database name
+        in: path
+        name: database
+        required: true
+        schema:
+          type: string
+      - description: Exact table name
+        in: path
+        name: table
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WriteBody_Value'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WriteResponse'
+          description: Ordered entry outcomes; completion can be indeterminate after submission
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Malformed request, or preflight rejected the whole batch
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unknown cluster or table
+        '406':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: A JSON response is not acceptable
+        '413':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Body or row limit exceeded
+        '415':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unsupported request media type
+        '429':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: The write concurrency gate or rate limit is exhausted; retry after the `Retry-After` pause
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Fluss backend failure
+        '501':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Fluss does not support the operation or API version
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Fluss is unavailable, the gateway is starting or shutting down, or the table/schema changed before submission
+        '504':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: The request deadline passed; writes may still complete after submission
+      summary: Writes a batch of records to a table
+      tags:
+      - records
   /v1/openapi.json:
     get:
       operationId: getOpenApi
       responses:
         '200':
           description: OpenAPI 3.1 document
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: This operation accepts no query parameters
         '405':
           content:
             application/json:

@@ -22,6 +22,7 @@ use crate::metadata::DataLakeFormat;
 use crate::metadata::datatype::{
     DataField, DataType, RowType, UNASSIGNED_FIELD_ID, reassign_field_ids,
 };
+use crate::record::is_supported_statistics_type;
 use crate::{BucketId, PartitionId, SnapshotId, TableId};
 use core::fmt;
 use serde::{Deserialize, Serialize};
@@ -32,6 +33,10 @@ use strum_macros::EnumString;
 
 /// Sentinel for a column whose stable id has not yet been assigned.
 pub const UNKNOWN_COLUMN_ID: i32 = -1;
+
+/// Table property selecting the columns that written batches collect statistics
+/// for, either `*` or a comma-separated list.
+pub const TABLE_STATISTICS_COLUMNS: &str = "table.statistics.columns";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Column {
@@ -329,6 +334,12 @@ impl SchemaBuilder {
         let columns = Self::normalize_columns(&self.columns, self.primary_key.as_ref())?;
         let (columns_with_ids, highest_field_id) = Self::assign_all_field_ids(columns)?;
 
+        if !self.auto_increment_col_names.is_empty() && self.primary_key.is_none() {
+            return Err(IllegalArgument {
+                message: "Auto increment column can only be used in primary-key table.".to_string(),
+            });
+        }
+
         let column_names: HashSet<_> = columns_with_ids.iter().map(|c| &c.name).collect();
         for auto_inc_col in &self.auto_increment_col_names {
             if !column_names.contains(auto_inc_col) {
@@ -336,6 +347,29 @@ impl SchemaBuilder {
                     message: format!(
                         "Auto increment column '{auto_inc_col}' is not found in the schema columns."
                     ),
+                });
+            }
+            if self
+                .primary_key
+                .as_ref()
+                .is_some_and(|pk| pk.column_names().contains(auto_inc_col))
+            {
+                return Err(IllegalArgument {
+                    message: "Auto increment column can not be used as the primary key."
+                        .to_string(),
+                });
+            }
+            let auto_inc_type = columns_with_ids
+                .iter()
+                .find(|c| &c.name == auto_inc_col)
+                .map(|c| c.data_type());
+            if !matches!(
+                auto_inc_type,
+                Some(DataType::Int(_)) | Some(DataType::BigInt(_))
+            ) {
+                return Err(IllegalArgument {
+                    message: "The data type of auto increment column must be INT or BIGINT."
+                        .to_string(),
                 });
             }
         }
@@ -638,7 +672,9 @@ impl TableDescriptorBuilder {
     }
 
     pub fn build(self) -> Result<TableDescriptor> {
-        let schema = self.schema.expect("Schema must be set");
+        let schema = self.schema.ok_or_else(|| IllegalArgument {
+            message: "Schema must be set".to_string(),
+        })?;
         let table_distribution = TableDescriptor::normalize_distribution(
             &schema,
             &self.partition_keys,
@@ -1044,6 +1080,38 @@ impl Display for PhysicalTablePath {
     }
 }
 
+/// Resolves `table.statistics.columns` against `row_type`, keeping any failure
+/// as a message so that it can be surfaced later without breaking construction.
+fn resolve_stats_index_mapping(
+    table_config: &TableConfig,
+    row_type: &RowType,
+) -> std::result::Result<Vec<usize>, String> {
+    let names = match table_config.get_statistics_columns() {
+        StatisticsColumns::Disabled => return Ok(Vec::new()),
+        StatisticsColumns::All => {
+            return Ok(row_type
+                .fields()
+                .iter()
+                .enumerate()
+                .filter(|(_, field)| is_supported_statistics_type(field.data_type()))
+                .map(|(index, _)| index)
+                .collect());
+        }
+        StatisticsColumns::Specified(names) => names,
+    };
+
+    names
+        .iter()
+        .map(|name| {
+            row_type
+                .fields()
+                .iter()
+                .position(|field| field.name() == name)
+                .ok_or_else(|| format!("Statistics column '{name}' not found in table schema"))
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone)]
 pub struct TableInfo {
     pub table_path: TablePath,
@@ -1062,6 +1130,9 @@ pub struct TableInfo {
     pub comment: Option<String>,
     pub created_time: i64,
     pub modified_time: i64,
+    /// Resolved once at construction. The failure is held rather than raised so
+    /// that a malformed property only breaks writers, not metadata loading.
+    stats_index_mapping: std::result::Result<Vec<usize>, String>,
 }
 
 impl TableInfo {
@@ -1199,6 +1270,41 @@ impl TableConfig {
     pub fn get_auto_partition_strategy(&self) -> AutoPartitionStrategy {
         AutoPartitionStrategy::from(&self.properties)
     }
+
+    /// Reads `table.statistics.columns`, which decides whether written batches
+    /// carry the statistics the server prunes by.
+    pub fn get_statistics_columns(&self) -> StatisticsColumns {
+        match self.properties.get(TABLE_STATISTICS_COLUMNS) {
+            None => StatisticsColumns::Disabled,
+            Some(value) if value == "*" => StatisticsColumns::All,
+            Some(value) => StatisticsColumns::Specified(
+                value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .map(str::to_string)
+                    .collect(),
+            ),
+        }
+    }
+}
+
+/// Which columns a table collects statistics for, mirroring Java's
+/// `StatisticsColumnsConfig`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StatisticsColumns {
+    /// The property is unset, so batches stay in the V0 format.
+    Disabled,
+    /// `*`, meaning every column whose type supports statistics.
+    All,
+    /// An explicit column list, taken as given.
+    Specified(Vec<String>),
+}
+
+impl StatisticsColumns {
+    pub fn is_enabled(&self) -> bool {
+        !matches!(self, StatisticsColumns::Disabled)
+    }
 }
 
 impl TableInfo {
@@ -1262,6 +1368,7 @@ impl TableInfo {
         let physical_primary_keys =
             Self::generate_physical_primary_key(&primary_keys, &partition_keys);
         let table_config = TableConfig::from_properties(properties.clone());
+        let stats_index_mapping = resolve_stats_index_mapping(&table_config, &row_type);
 
         TableInfo {
             table_path,
@@ -1280,6 +1387,7 @@ impl TableInfo {
             comment,
             created_time,
             modified_time,
+            stats_index_mapping,
         }
     }
 
@@ -1353,6 +1461,24 @@ impl TableInfo {
 
     pub fn get_properties(&self) -> &HashMap<String, String> {
         &self.properties
+    }
+
+    /// Column indices, in order, that written batches collect statistics for.
+    ///
+    /// Empty when the table has not enabled statistics. `*` keeps only the
+    /// columns whose type supports statistics, while an explicit list is taken
+    /// as given: the server already rejects an unsupported type when the table
+    /// is created or altered, so the client trusts it as Java's does.
+    ///
+    /// # Errors
+    /// Returns an error if a named column is absent from the table schema.
+    pub fn get_stats_index_mapping(&self) -> Result<&[usize]> {
+        match &self.stats_index_mapping {
+            Ok(mapping) => Ok(mapping),
+            Err(message) => Err(IllegalArgument {
+                message: message.clone(),
+            }),
+        }
     }
 
     pub fn get_table_config(&self) -> &TableConfig {
@@ -1529,6 +1655,67 @@ mod tests {
     use crate::metadata::DataTypes;
 
     #[test]
+    fn auto_increment_column_requires_a_primary_key_table() {
+        let err = Schema::builder()
+            .column("id", DataTypes::int())
+            .column("seq", DataTypes::bigint())
+            .enable_auto_increment("seq")
+            .unwrap()
+            .build()
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Auto increment column can only be used in primary-key table."),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn auto_increment_column_can_not_be_a_primary_key_column() {
+        let err = Schema::builder()
+            .column("id", DataTypes::bigint())
+            .column("name", DataTypes::string())
+            .primary_key(["id"])
+            .enable_auto_increment("id")
+            .unwrap()
+            .build()
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Auto increment column can not be used as the primary key."),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn auto_increment_column_must_be_int_or_bigint() {
+        let err = Schema::builder()
+            .column("id", DataTypes::int())
+            .column("seq", DataTypes::string())
+            .primary_key(["id"])
+            .enable_auto_increment("seq")
+            .unwrap()
+            .build()
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("The data type of auto increment column must be INT or BIGINT."),
+            "unexpected error: {err}"
+        );
+
+        for accepted in [DataTypes::int(), DataTypes::bigint()] {
+            Schema::builder()
+                .column("id", DataTypes::int())
+                .column("seq", accepted)
+                .primary_key(["id"])
+                .enable_auto_increment("seq")
+                .unwrap()
+                .build()
+                .expect("INT and BIGINT auto increment columns should be accepted");
+        }
+    }
+
+    #[test]
     fn test_validate() {
         // assert valid name
         let path = TablePath::new("db_2-abc3".to_string(), "table-1_abc_2".to_string());
@@ -1671,5 +1858,85 @@ mod tests {
             0,
         );
         assert!(table_info.is_auto_partitioned());
+    }
+
+    #[test]
+    fn table_descriptor_builder_requires_schema() {
+        let result = TableDescriptor::builder().build();
+
+        assert!(matches!(
+            result,
+            Err(Error::IllegalArgument { message }) if message == "Schema must be set"
+        ));
+    }
+
+    fn stats_table(property: Option<&str>) -> TableInfo {
+        let schema = Schema::builder()
+            .column("id", DataTypes::int())
+            .column("name", DataTypes::string())
+            .column("payload", DataTypes::bytes())
+            .build()
+            .expect("schema");
+        let mut descriptor = TableDescriptor::builder()
+            .schema(schema)
+            .distributed_by(Some(1), vec![]);
+        if let Some(value) = property {
+            descriptor = descriptor.property(TABLE_STATISTICS_COLUMNS, value);
+        }
+        TableInfo::of(
+            TablePath::new("db", "tbl"),
+            1,
+            1,
+            descriptor.build().expect("descriptor"),
+            0,
+            0,
+        )
+    }
+
+    #[test]
+    fn statistics_are_disabled_without_the_property() {
+        let table = stats_table(None);
+        assert_eq!(
+            table.get_table_config().get_statistics_columns(),
+            StatisticsColumns::Disabled
+        );
+        assert!(table.get_stats_index_mapping().expect("mapping").is_empty());
+    }
+
+    #[test]
+    fn star_keeps_only_columns_whose_type_supports_statistics() {
+        let table = stats_table(Some("*"));
+        assert_eq!(
+            table.get_table_config().get_statistics_columns(),
+            StatisticsColumns::All
+        );
+        // BYTES has no statistics support, so the payload column drops out.
+        assert_eq!(
+            table.get_stats_index_mapping().expect("mapping"),
+            vec![0, 1]
+        );
+    }
+
+    #[test]
+    fn a_named_list_is_taken_as_given_and_trimmed() {
+        let table = stats_table(Some(" name , id "));
+        assert_eq!(
+            table.get_table_config().get_statistics_columns(),
+            StatisticsColumns::Specified(vec!["name".to_string(), "id".to_string()])
+        );
+        // Order follows the property, not the schema.
+        assert_eq!(
+            table.get_stats_index_mapping().expect("mapping"),
+            vec![1, 0]
+        );
+    }
+
+    #[test]
+    fn an_unknown_statistics_column_is_rejected() {
+        let table = stats_table(Some("nope"));
+        assert!(matches!(
+            table.get_stats_index_mapping(),
+            Err(Error::IllegalArgument { .. })
+        ));
     }
 }

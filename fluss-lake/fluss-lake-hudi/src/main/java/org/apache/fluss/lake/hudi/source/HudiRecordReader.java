@@ -55,10 +55,7 @@ import java.util.Map;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
-import static org.apache.fluss.lake.hudi.HudiLakeCatalog.SYSTEM_COLUMNS;
 import static org.apache.fluss.lake.hudi.utils.HudiConversions.toChangeType;
-import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
-import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
 
 /** Record reader for Hudi tables. */
 public class HudiRecordReader implements RecordReader {
@@ -126,10 +123,7 @@ public class HudiRecordReader implements RecordReader {
                     unifiedHudiTableReader.readFileSlice(fileSlice);
             this.iterator =
                     new HudiRecordAsFlussRecordIterator(
-                            hudiRecordIterator,
-                            requiredSchema,
-                            metadataFieldCount,
-                            SYSTEM_COLUMNS.size());
+                            hudiRecordIterator, requiredSchema, metadataFieldCount);
         }
     }
 
@@ -164,22 +158,16 @@ public class HudiRecordReader implements RecordReader {
             return IntStream.range(0, schema.getFields().size()).toArray();
         }
 
+        // FIP-27: Hudi lake tables contain only user columns, so the selected fields are the Hudi
+        // metadata columns followed by the projected business columns.
         int[] hudiMetadataFields = IntStream.range(0, metadataFieldCount).toArray();
         int[] projectedDataFields =
                 Arrays.stream(project)
                         .filter(projectPath -> projectPath.length > 0)
                         .mapToInt(projectPath -> projectPath[0] + metadataFieldCount)
                         .toArray();
-        int[] systemFields =
-                SYSTEM_COLUMNS.keySet().stream()
-                        .mapToInt(systemColumn -> requiredFieldPosition(schema, systemColumn))
-                        .toArray();
 
-        return IntStream.concat(
-                        IntStream.concat(
-                                IntStream.of(hudiMetadataFields),
-                                IntStream.of(projectedDataFields)),
-                        IntStream.of(systemFields))
+        return IntStream.concat(IntStream.of(hudiMetadataFields), IntStream.of(projectedDataFields))
                 .toArray();
     }
 
@@ -216,42 +204,29 @@ public class HudiRecordReader implements RecordReader {
                 .bridgedTo(RowData.class);
     }
 
-    private static int requiredFieldPosition(Schema schema, String fieldName) {
-        Schema.Field field = schema.getField(fieldName);
-        if (field == null) {
-            throw new IllegalArgumentException(
-                    String.format(
-                            "Required Hudi system column '%s' does not exist in Hudi schema.",
-                            fieldName));
-        }
-        return field.pos();
-    }
-
     /** Iterator for Hudi {@link RowData} as Fluss {@link LogRecord}. */
     public static class HudiRecordAsFlussRecordIterator implements CloseableIterator<LogRecord> {
+
+        /** Sentinel offset / timestamp emitted for rows read from a lake table. */
+        private static final long NO_SYSTEM_COLUMN_VALUE = -1L;
 
         private final ClosableIterator<RowData> hudiRecordIterator;
         private final ProjectedRow projectedRow;
         private final HudiRowAsFlussRow hudiRowAsFlussRow;
-        private final int logOffsetColIndex;
-        private final int timestampColIndex;
 
         private boolean closed;
 
         public HudiRecordAsFlussRecordIterator(
                 ClosableIterator<RowData> hudiRecordIterator,
                 Schema schema,
-                int metadataFieldCount,
-                int systemFieldCount) {
+                int metadataFieldCount) {
             this.hudiRecordIterator = hudiRecordIterator;
-            this.logOffsetColIndex = requiredFieldPosition(schema, OFFSET_COLUMN_NAME);
-            this.timestampColIndex = requiredFieldPosition(schema, TIMESTAMP_COLUMN_NAME);
             this.hudiRowAsFlussRow = new HudiRowAsFlussRow();
+            // FIP-27: the physical schema is metadata columns followed by user columns only; strip
+            // the Hudi metadata columns so only the business columns are emitted.
             this.projectedRow =
                     ProjectedRow.from(
-                            IntStream.range(
-                                            metadataFieldCount,
-                                            schema.getFields().size() - systemFieldCount)
+                            IntStream.range(metadataFieldCount, schema.getFields().size())
                                     .toArray());
         }
 
@@ -278,12 +253,12 @@ public class HudiRecordReader implements RecordReader {
         public LogRecord next() {
             RowData rowData = hudiRecordIterator.next();
             ChangeType changeType = toChangeType(rowData.getRowKind());
-            long offset = rowData.getLong(logOffsetColIndex);
-            long timestamp = rowData.getTimestamp(timestampColIndex, 6).getMillisecond();
-
+            // The lake table does not carry a per-record log offset / timestamp meaningful to
+            // downstream consumers, so a sentinel -1 is emitted, consistent with the Paimon and
+            // Iceberg readers and the LakeRecordRecordEmitter contract.
             return new GenericRecord(
-                    offset,
-                    timestamp,
+                    NO_SYSTEM_COLUMN_VALUE,
+                    NO_SYSTEM_COLUMN_VALUE,
                     changeType,
                     projectedRow.replaceRow(hudiRowAsFlussRow.replaceRow(rowData)));
         }

@@ -41,7 +41,6 @@ import java.util.List;
 import java.util.Map;
 
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_ENABLED;
-import static org.apache.fluss.lake.iceberg.IcebergSchemaUtils.SYSTEM_COLUMNS;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test class for {@link FlinkCatalog}. */
@@ -71,7 +70,7 @@ class FlinkCatalogLakeTest extends FlinkIcebergTieringTestBase {
         CatalogBaseTable lakeTable =
                 catalog.getTable(new ObjectPath(DEFAULT_DB, "lake_table$lake"));
         Schema schema = lakeTable.getUnresolvedSchema();
-        assertThat(schema.getColumns().size()).isEqualTo(3 + SYSTEM_COLUMNS.size());
+        assertThat(schema.getColumns().size()).isEqualTo(3);
         assertThat(schema.getPrimaryKey().isPresent()).isTrue();
         assertThat(schema.getPrimaryKey().get().getColumnNames()).isEqualTo(List.of("first"));
     }

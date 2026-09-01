@@ -272,6 +272,12 @@ inline ffi::FfiSchema to_ffi_schema(const Schema& schema) {
     }
     ffi_schema.primary_keys = std::move(pks);
 
+    rust::Vec<rust::String> auto_increment_columns;
+    for (const auto& column : schema.auto_increment_columns) {
+        auto_increment_columns.push_back(rust::String(column));
+    }
+    ffi_schema.auto_increment_columns = std::move(auto_increment_columns);
+
     return ffi_schema;
 }
 
@@ -336,6 +342,10 @@ inline Schema from_ffi_schema(const ffi::FfiSchema& ffi_schema) {
 
     for (const auto& pk : ffi_schema.primary_keys) {
         schema.primary_keys.push_back(std::string(pk));
+    }
+
+    for (const auto& column : ffi_schema.auto_increment_columns) {
+        schema.auto_increment_columns.push_back(std::string(column));
     }
 
     return schema;

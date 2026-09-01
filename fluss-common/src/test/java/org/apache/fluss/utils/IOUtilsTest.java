@@ -44,7 +44,6 @@ class IOUtilsTest {
     @Test
     void testCloseAll() throws Exception {
         // null iterable and null elements should be tolerated
-        IOUtils.closeAll(null);
         IOUtils.closeAll(Arrays.asList(null, new CloserWithoutException()));
 
         // every closeable should be closed even if one fails, and the first

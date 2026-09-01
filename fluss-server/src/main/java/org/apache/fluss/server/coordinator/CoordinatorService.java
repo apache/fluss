@@ -29,7 +29,6 @@ import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidAlterTableException;
-import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidDatabaseException;
 import org.apache.fluss.exception.InvalidPartitionException;
@@ -59,6 +58,7 @@ import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.AcquireKvSnapshotLeaseRequest;
 import org.apache.fluss.rpc.messages.AcquireKvSnapshotLeaseResponse;
@@ -372,13 +372,20 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         return tablePath;
     }
 
-    private void validateKvTable(long tableId) {
+    @Override
+    protected TableInfo getTableInfo(long tableId) {
+        TablePath tablePath = getTablePathById(tableId);
+        return metadataManager.getTable(tablePath);
+    }
+
+    private TableInfo validateKvTable(long tableId) {
         TablePath tablePath = getTablePathById(tableId);
         TableInfo tableInfo = metadataManager.getTable(tablePath);
         if (!tableInfo.hasPrimaryKey()) {
             throw new NonPrimaryKeyTableException(
                     "Table '" + tablePath + "' is not a primary key table");
         }
+        return tableInfo;
     }
 
     @Override
@@ -812,27 +819,22 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
         if (newDescriptor.hasPrimaryKey()) {
             Map<String, String> newProperties = new HashMap<>(newDescriptor.getProperties());
-            Integer formatVersion =
-                    Configuration.fromMap(newProperties).get(ConfigOptions.TABLE_KV_FORMAT_VERSION);
+            Configuration newTableConf = Configuration.fromMap(newProperties);
+            Integer formatVersion = newTableConf.get(ConfigOptions.TABLE_KV_FORMAT_VERSION);
+            // The option has no default so that its absence continues to identify legacy tables.
             if (formatVersion == null) {
-                // set current kv format version for default
                 newProperties.put(
                         ConfigOptions.TABLE_KV_FORMAT_VERSION.key(),
                         String.valueOf(CURRENT_KV_FORMAT_VERSION));
-            } else {
-                if (formatVersion > CURRENT_KV_FORMAT_VERSION) {
-                    throw new InvalidConfigException(
-                            String.format(
-                                    "Unsupported kv format version %d. "
-                                            + "The maximum supported version is %d.",
-                                    formatVersion, CURRENT_KV_FORMAT_VERSION));
-                }
             }
 
-            // Enable standby replica for new PK tables if not explicitly configured
-            if (!newProperties.containsKey(ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key())) {
-                newProperties.put(ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key(), "true");
-            }
+            int layoutVersion =
+                    newTableConf.getOptional(ConfigOptions.TABLE_KV_TTL).isPresent()
+                            ? KvValueLayout.TAGGED.version()
+                            : KvValueLayout.PLAIN.version();
+            newProperties.put(
+                    ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION.key(),
+                    String.valueOf(layoutVersion));
 
             newDescriptor = newDescriptor.withProperties(newProperties);
         }

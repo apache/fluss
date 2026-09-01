@@ -38,4 +38,9 @@ class ApiKeysTest {
             assertThat(api.highestSupportedVersion).isGreaterThanOrEqualTo((short) 0);
         }
     }
+
+    @Test
+    void testSnapshotMetadataSupportsLayoutAwareClient() {
+        assertThat(ApiKeys.GET_KV_SNAPSHOT_METADATA.highestSupportedVersion).isEqualTo((short) 1);
+    }
 }

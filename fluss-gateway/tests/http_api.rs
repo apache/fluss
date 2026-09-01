@@ -70,7 +70,7 @@ async fn an_unknown_route_returns_the_shared_error_envelope() {
     assert_eq!(
         body["error"].as_object().expect("error object").len(),
         3,
-        "the FIP-49 envelope carries code, message, and the correlating request id: {body}"
+        "the error envelope carries code, message, and the correlating request id: {body}"
     );
 
     gateway.shutdown().await.expect("clean shutdown");
@@ -144,6 +144,51 @@ async fn an_oversized_body_is_rejected_with_413_and_never_429() {
         "expected 413, got: {response}"
     );
     assert!(response.contains("limit_exceeded"), "got: {response}");
+
+    gateway.shutdown().await.expect("clean shutdown");
+}
+
+/// The gateway serves while Fluss is unreachable: cluster discovery answers from configuration, the
+/// process reports itself ready, and only a request that actually needs the cluster fails — with 503,
+/// on the cold connection path.
+///
+/// This is the property that lets a gateway be deployed before, or independently of, its clusters.
+#[tokio::test]
+async fn metadata_discovery_serves_while_fluss_is_unreachable() {
+    use fluss_gateway::config::{ConfigDuration, GatewayConfig};
+
+    let mut config = GatewayConfig::default();
+    config.server.rest.bind_address = "127.0.0.1:0".parse().expect("valid");
+    config.server.metrics.enabled = false;
+    // Port 1 has no listener, so every connection attempt fails fast.
+    let cluster = config.clusters.get_mut("default").expect("default cluster");
+    cluster.bootstrap_servers = "127.0.0.1:1".to_string();
+    cluster.connect_timeout = ConfigDuration::from_millis(200);
+
+    let gateway = fluss_gateway::lifecycle::start(config)
+        .await
+        .expect("the gateway starts without Fluss");
+    let api = Api::new(format!("http://{}", gateway.local_addr()));
+
+    // Discovery is a configuration echo: the ID array carries no reachability field.
+    assert_eq!(
+        api.get_ok("/v1/clusters").await,
+        serde_json::json!({"clusters": ["default"]})
+    );
+    assert_eq!(api.get_ok("/ready").await["status"], "ready");
+
+    let response = api.get("/v1/clusters/default/databases").await;
+    assert_eq!(response.status(), 503);
+    let body: serde_json::Value = response.json().await.expect("JSON body");
+    assert_eq!(body["error"]["code"], "unavailable");
+    // The failure names the operation without leaking the bootstrap address.
+    let message = body["error"]["message"].as_str().expect("a message");
+    assert!(!message.contains("127.0.0.1"), "{message}");
+
+    // An unconfigured cluster is a 404 that never touches a connection.
+    assert_eq!(api.get("/v1/clusters/other/databases").await.status(), 404);
+    // The gateway is still serving after all of that.
+    assert_eq!(api.get_ok("/ready").await["status"], "ready");
 
     gateway.shutdown().await.expect("clean shutdown");
 }

@@ -102,10 +102,14 @@ class AbstractMetricGroupTest {
             assertThat(testRegistry.getNumberReporters())
                     .withFailMessage("Reporters were not properly instantiated")
                     .isEqualTo(2);
-            assertThat(reporter1.findAdded(counterName).group.getLogicalScope(reporter1, '-'))
-                    .isEqualTo("test-X-C");
-            assertThat(reporter2.findAdded(counterName).group.getLogicalScope(reporter2, ','))
-                    .isEqualTo("test,B,X");
+            MetricGroup group1 = reporter1.findAdded(counterName).group;
+            MetricGroup group2 = reporter2.findAdded(counterName).group;
+            String scope1 = group1.getLogicalScope(reporter1, '-');
+            String scope2 = group2.getLogicalScope(reporter2, ',');
+            assertThat(scope1).isEqualTo("test-X-C");
+            assertThat(scope2).isEqualTo("test,B,X");
+            assertThat(group1.getLogicalScope(reporter1, '-')).isSameAs(scope1);
+            assertThat(group2.getLogicalScope(reporter2, ',')).isSameAs(scope2);
         } finally {
             testRegistry.closeAsync().get();
         }

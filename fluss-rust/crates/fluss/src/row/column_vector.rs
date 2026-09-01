@@ -34,6 +34,44 @@ use arrow::array::{
 use arrow::datatypes::{DataType as ArrowDataType, TimeUnit};
 use std::sync::Arc;
 
+/// True when `array[start..end)` is null anywhere `parent` is valid.
+fn has_null_in_range(
+    array: &dyn Array,
+    start: usize,
+    end: usize,
+    parent: Option<&dyn Array>,
+) -> bool {
+    debug_assert!(start <= end && end <= array.len());
+    if start == end || array.null_count() == 0 {
+        return false;
+    }
+    if let Some(parent) = parent.filter(|parent| parent.null_count() > 0) {
+        return (start..end).any(|i| array.is_null(i) && !parent.is_null(i));
+    }
+    (start == 0 && end == array.len()) || array.slice(start, end - start).null_count() > 0
+}
+
+/// Checks the child slots `rows` covers. A null list/map entry does not hide the
+/// values in its range - Arrow checks them against the element type either way -
+/// so only the offset window matters, and IPC compacts a sliced parent away.
+fn check_offset_window_not_null(
+    child: &TypedColumn,
+    offsets: &[i32],
+    container: &dyn Array,
+    fluss_type: &DataType,
+    path: String,
+    rows: std::ops::Range<usize>,
+) -> Result<()> {
+    debug_assert!(rows.end <= container.len());
+    child.check_range_not_null(
+        offsets[rows.start] as usize,
+        offsets[rows.end] as usize,
+        fluss_type,
+        &path,
+        None,
+    )
+}
+
 /// One typed Arrow column.
 #[derive(Debug, Clone)]
 pub(crate) enum TypedColumn {
@@ -116,6 +154,18 @@ impl TypedBatch {
             num_rows: batch.num_rows(),
             record_batch: Some(batch.clone()),
         })
+    }
+
+    /// Rejects nulls on any schema-tree node whose Fluss type is NOT NULL.
+    pub(crate) fn check_not_null(&self, row_type: &RowType) -> Result<()> {
+        for (field, column) in row_type.fields().iter().zip(self.columns.iter()) {
+            column.check_not_null(
+                field.data_type(),
+                &format!("Column '{}'", field.name()),
+                None,
+            )?;
+        }
+        Ok(())
     }
 
     fn from_struct(struct_arr: &StructArray, row_type: &RowType) -> Result<Self> {
@@ -221,6 +271,74 @@ impl TypedColumn {
             Self::Array(a, _) => a,
             Self::Map(a, _, _) => a,
             Self::Row(a, _) => a,
+        }
+    }
+
+    fn check_not_null(
+        &self,
+        fluss_type: &DataType,
+        path: &str,
+        parent: Option<&dyn Array>,
+    ) -> Result<()> {
+        self.check_range_not_null(0, self.outer_array().len(), fluss_type, path, parent)
+    }
+
+    fn check_range_not_null(
+        &self,
+        start: usize,
+        end: usize,
+        fluss_type: &DataType,
+        path: &str,
+        parent: Option<&dyn Array>,
+    ) -> Result<()> {
+        if !fluss_type.is_nullable() && has_null_in_range(self.outer_array(), start, end, parent) {
+            return Err(IllegalArgument {
+                message: format!("{path} is declared as non-nullable but contains null values"),
+            });
+        }
+        match (self, fluss_type) {
+            (Self::Array(list_arr, element), DataType::Array(array_type)) => {
+                check_offset_window_not_null(
+                    element,
+                    list_arr.value_offsets(),
+                    list_arr,
+                    array_type.get_element_type(),
+                    format!("{path} element"),
+                    start..end,
+                )
+            }
+            (Self::Map(map_arr, key, value), DataType::Map(map_type)) => {
+                let offsets = map_arr.value_offsets();
+                check_offset_window_not_null(
+                    key,
+                    offsets,
+                    map_arr,
+                    map_type.key_type(),
+                    format!("{path} key"),
+                    start..end,
+                )?;
+                check_offset_window_not_null(
+                    value,
+                    offsets,
+                    map_arr,
+                    map_type.value_type(),
+                    format!("{path} value"),
+                    start..end,
+                )
+            }
+            (Self::Row(struct_arr, inner), DataType::Row(row_type)) => {
+                for (field, column) in row_type.fields().iter().zip(inner.columns.iter()) {
+                    column.check_range_not_null(
+                        start,
+                        end,
+                        field.data_type(),
+                        &format!("{path}.{}", field.name()),
+                        Some(struct_arr),
+                    )?;
+                }
+                Ok(())
+            }
+            _ => Ok(()),
         }
     }
 

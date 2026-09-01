@@ -81,6 +81,33 @@ TEST(DataTypeTest, NotNullPreservesPrecisionScale) {
 
 // --- Node-arena round trips ---
 
+TEST(FfiConverterTest, SchemaAutoIncrementColumnRoundTrip) {
+    auto schema = fluss::Schema::NewBuilder()
+                      .AddColumn("id", DataType::Int())
+                      .AddColumn("seq", DataType::BigInt())
+                      .SetPrimaryKeys({"id"})
+                      .SetAutoIncrementColumn("seq")
+                      .Build();
+    ASSERT_EQ(schema.auto_increment_columns.size(), 1u);
+    EXPECT_EQ(schema.auto_increment_columns[0], "seq");
+
+    auto back = fluss::utils::from_ffi_schema(fluss::utils::to_ffi_schema(schema));
+    ASSERT_EQ(back.auto_increment_columns.size(), 1u);
+    EXPECT_EQ(back.auto_increment_columns[0], "seq");
+    EXPECT_EQ(back.primary_keys, schema.primary_keys);
+}
+
+TEST(FfiConverterTest, SchemaWithoutAutoIncrementColumnRoundTrip) {
+    auto schema = fluss::Schema::NewBuilder()
+                      .AddColumn("id", DataType::Int())
+                      .SetPrimaryKeys({"id"})
+                      .Build();
+    EXPECT_TRUE(schema.auto_increment_columns.empty());
+
+    auto back = fluss::utils::from_ffi_schema(fluss::utils::to_ffi_schema(schema));
+    EXPECT_TRUE(back.auto_increment_columns.empty());
+}
+
 TEST(FfiConverterTest, ScalarRoundTrip) {
     Column col{"id", DataType::Int(), "primary id"};
     auto back = RoundTrip(col);

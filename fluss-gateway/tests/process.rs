@@ -23,6 +23,7 @@
 
 mod support;
 
+use std::io::Read;
 use std::time::Duration;
 use support::{ChildGuard, await_http_ok, binary, free_port, write_config};
 
@@ -38,6 +39,125 @@ async fn an_invalid_configuration_fails_before_binding_with_exit_code_2() {
         stderr.contains("gateway.unknown.key"),
         "stderr names the offending key: {stderr}"
     );
+}
+
+#[tokio::test]
+async fn invalid_bootstrap_servers_fail_before_binding_with_exit_code_2() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    for (bootstrap_servers, detail) in [
+        (" , ", "must configure at least one server"),
+        ("host", "expected host:port"),
+        ("host:99999", "expected host:port"),
+        ("http://host:9123", "expected host:port"),
+    ] {
+        std::fs::write(
+            &path,
+            format!(
+                "gateway.rest.listen: 127.0.0.1:0\n\
+                 gateway.metrics.enabled: false\n\
+                 gateway.cluster.default.bootstrap.servers: {bootstrap_servers:?}\n"
+            ),
+        )
+        .expect("write");
+
+        let output = binary().arg("--config").arg(&path).output().expect("run");
+        assert_eq!(output.status.code(), Some(2), "{bootstrap_servers}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("gateway.cluster.default.bootstrap.servers") && stderr.contains(detail),
+            "{bootstrap_servers}: {stderr}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_native_client_override_fails_before_binding_without_leaking_credentials() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    std::fs::write(
+        &path,
+        "gateway.cluster.default.connection.security.protocol: sasl\n\
+         gateway.cluster.default.connection.service.account: gateway-user\n\
+         gateway.cluster.default.connection.service.secret: canonical-secret\n\
+         gateway.security.authentication: token\n\
+         gateway.security.tokens: token-secret:alice\n\
+         gateway.cluster.default.client.writer.batch-size: client-secret-value\n",
+    )
+    .expect("write");
+
+    let output = binary().arg("--config").arg(&path).output().expect("run");
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("gateway.cluster.default.client.writer.batch-size"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("not supported yet"), "{stderr}");
+    for credential in ["canonical-secret", "token-secret", "client-secret-value"] {
+        assert!(
+            !stderr.contains(credential),
+            "stderr leaked {credential}: {stderr}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn canonical_credentials_are_redacted_from_startup_diagnostics() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let port = free_port();
+    let path = dir.path().join("gateway.yaml");
+    std::fs::write(
+        &path,
+        format!(
+            "gateway.rest.listen: 127.0.0.1:{port}\n\
+             gateway.metrics.enabled: false\n\
+             gateway.cluster.default.connection.security.protocol: sasl\n\
+             gateway.cluster.default.connection.service.account: canonical-user\n\
+             gateway.cluster.default.connection.service.secret: canonical-secret\n\
+             gateway.security.authentication: token\n\
+             gateway.security.tokens: token-secret:alice\n"
+        ),
+    )
+    .expect("write");
+
+    let child = binary()
+        .arg("--config")
+        .arg(&path)
+        .env("RUST_LOG", "debug")
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    let mut guard = ChildGuard(child);
+    assert!(
+        await_http_ok(
+            &format!("http://127.0.0.1:{port}/health"),
+            Duration::from_secs(15)
+        )
+        .await,
+        "health"
+    );
+    guard.send_sigterm();
+    let status = guard.wait_for_exit(Duration::from_secs(35)).await;
+    assert_eq!(status.code(), Some(0));
+
+    let mut stderr = String::new();
+    guard
+        .0
+        .stderr
+        .take()
+        .expect("piped stderr")
+        .read_to_string(&mut stderr)
+        .expect("read stderr");
+    assert!(stderr.contains("effective configuration"), "{stderr}");
+    assert!(stderr.contains("method=GET route=/health"), "{stderr}");
+    assert!(stderr.contains("canonical-user"), "{stderr}");
+    for credential in ["canonical-secret", "token-secret"] {
+        assert!(
+            !stderr.contains(credential),
+            "stderr leaked {credential}: {stderr}"
+        );
+    }
 }
 
 #[tokio::test]

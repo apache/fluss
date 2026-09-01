@@ -27,6 +27,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -47,6 +48,7 @@ struct Table;
 struct AppendWriter;
 struct WriteResult;
 struct LogScanner;
+struct RecordBatchLogReader;
 struct BatchScanner;
 struct UpsertWriter;
 struct Lookuper;
@@ -58,6 +60,8 @@ struct PrefixLookupResultInner;
 struct ArrayWriterInner;
 struct MapWriterInner;
 struct ValueInner;
+enum class FfiPredicateLiteralType : int32_t;
+enum class FfiPredicateLeafFunction : int32_t;
 }  // namespace ffi
 
 /// Named constants for Fluss API error codes.
@@ -261,6 +265,116 @@ struct Timestamp {
     }
 };
 
+/// Scalar literal used by a log-scan predicate.
+///
+/// Integer literals are coerced to the scanned column's integer type by the
+/// Rust client, with range checks. Decimal and timestamp literals use the
+/// explicit factories below to preserve their Fluss logical type.
+class PredicateLiteral {
+   public:
+    PredicateLiteral(bool value);
+    PredicateLiteral(int32_t value);
+    PredicateLiteral(int64_t value);
+    template <typename T, std::enable_if_t<std::is_integral_v<std::decay_t<T>> &&
+                                               !std::is_same_v<std::decay_t<T>, bool> &&
+                                               !std::is_same_v<std::decay_t<T>, int32_t> &&
+                                               !std::is_same_v<std::decay_t<T>, int64_t>,
+                                           int> = 0>
+    PredicateLiteral(T value) : PredicateLiteral(ToInt64(value)) {}
+    PredicateLiteral(float value);
+    PredicateLiteral(double value);
+    PredicateLiteral(const char* value);
+    PredicateLiteral(std::string value);
+    PredicateLiteral(std::vector<uint8_t> value);
+    PredicateLiteral(Date value);
+    PredicateLiteral(Time value);
+
+    static PredicateLiteral Null();
+    static PredicateLiteral Decimal(std::string value);
+    static PredicateLiteral TimestampNtz(Timestamp value);
+    static PredicateLiteral TimestampLtz(Timestamp value);
+
+   private:
+    explicit PredicateLiteral(ffi::FfiPredicateLiteralType literal_type);
+
+    template <typename T>
+    static int64_t ToInt64(T value) {
+        using ValueType = std::decay_t<T>;
+        static_assert(sizeof(ValueType) <= sizeof(int64_t), "Integer literal is wider than INT64");
+        if constexpr (std::is_unsigned_v<ValueType>) {
+            if (value >
+                static_cast<std::make_unsigned_t<int64_t>>(std::numeric_limits<int64_t>::max())) {
+                throw std::out_of_range("Unsigned predicate literal does not fit INT64");
+            }
+        }
+        return static_cast<int64_t>(value);
+    }
+
+    ffi::FfiPredicateLiteralType literal_type_;
+    bool boolean_value_{false};
+    int64_t integer_value_{0};
+    double floating_value_{0};
+    std::string string_value_;
+    std::vector<uint8_t> bytes_value_;
+    Timestamp timestamp_value_;
+
+    friend class Predicate;
+    friend class TableScan;
+};
+
+/// Filter expression for server-side Arrow log RecordBatch pruning.
+///
+/// Filter pushdown is conservative: a returned RecordBatch may still
+/// contain non-matching rows, so callers must evaluate the predicate again.
+class Predicate {
+   public:
+    Predicate(const Predicate&) = default;
+    Predicate& operator=(const Predicate&) = default;
+    Predicate(Predicate&&) noexcept = default;
+    Predicate& operator=(Predicate&&) noexcept = default;
+
+    Predicate And(Predicate other) const;
+    Predicate Or(Predicate other) const;
+
+   private:
+    struct Node;
+
+    explicit Predicate(std::shared_ptr<const Node> root);
+
+    std::shared_ptr<const Node> root_;
+
+    friend class ColumnRef;
+    friend class TableScan;
+};
+
+/// Column reference used to build a Predicate.
+class ColumnRef {
+   public:
+    explicit ColumnRef(std::string name) : name_(std::move(name)) {}
+
+    Predicate Equal(PredicateLiteral value) const;
+    Predicate NotEqual(PredicateLiteral value) const;
+    Predicate LessThan(PredicateLiteral value) const;
+    Predicate LessOrEqual(PredicateLiteral value) const;
+    Predicate GreaterThan(PredicateLiteral value) const;
+    Predicate GreaterOrEqual(PredicateLiteral value) const;
+    Predicate IsNull() const;
+    Predicate IsNotNull() const;
+    Predicate StartsWith(std::string prefix) const;
+    Predicate Contains(std::string infix) const;
+    Predicate EndsWith(std::string suffix) const;
+    Predicate In(std::vector<PredicateLiteral> values) const;
+    Predicate NotIn(std::vector<PredicateLiteral> values) const;
+
+   private:
+    Predicate Leaf(ffi::FfiPredicateLeafFunction function,
+                   std::vector<PredicateLiteral> literals) const;
+
+    std::string name_;
+};
+
+inline ColumnRef Col(std::string name) { return ColumnRef(std::move(name)); }
+
 enum class ChangeType {
     AppendOnly = 0,
     Insert = 1,
@@ -437,6 +551,7 @@ struct Column {
 struct Schema {
     std::vector<Column> columns;
     std::vector<std::string> primary_keys;
+    std::vector<std::string> auto_increment_columns;
 
     class Builder {
        public:
@@ -450,11 +565,20 @@ struct Schema {
             return *this;
         }
 
-        Schema Build() { return Schema{std::move(columns_), std::move(primary_keys_)}; }
+        Builder& SetAutoIncrementColumn(std::string column) {
+            auto_increment_columns_ = {std::move(column)};
+            return *this;
+        }
+
+        Schema Build() {
+            return Schema{std::move(columns_), std::move(primary_keys_),
+                          std::move(auto_increment_columns_)};
+        }
 
        private:
         std::vector<Column> columns_;
         std::vector<std::string> primary_keys_;
+        std::vector<std::string> auto_increment_columns_;
     };
 
     static Builder NewBuilder() { return Builder(); }
@@ -1238,6 +1362,46 @@ struct PartitionBucketSubscription {
     int64_t offset;
 };
 
+/// Stopping offset for one bucket subscribed on a record-batch log scanner.
+struct ReaderStopOffset {
+    TableBucket bucket;
+    int64_t offset;
+};
+
+/// One bounded log range. Records are returned for
+/// [starting_offset, stopping_offset). `stopping_offset` must be non-negative,
+/// `starting_offset` must be non-negative or `EARLIEST_OFFSET`, and the bucket
+/// id must be within the table's configured bucket count.
+struct RecordBatchLogReadRange {
+    TableBucket bucket;
+    int64_t starting_offset;
+    int64_t stopping_offset;
+};
+
+/// A half-open log timestamp range [starting_timestamp_ms,
+/// stopping_timestamp_ms) in epoch milliseconds. Each requested bucket
+/// resolves the two timestamps to offsets before the reader is created.
+struct TimestampRange {
+    int64_t starting_timestamp_ms;
+    int64_t stopping_timestamp_ms;
+};
+
+/// Outcome of a bounded record-batch read.
+enum class BoundedReadStatus {
+    BatchAvailable = 0,
+    TimedOut = 1,
+    Finished = 2,
+};
+
+/// Outcome of one bounded record-batch read. Meaningful only when the
+/// accompanying `Result` is `Ok()`; on a non-Ok `Result` the status is reset to
+/// `Finished` so callers that skip the error check terminate instead of
+/// retrying a failed read forever.
+struct RecordBatchReadResult {
+    BoundedReadStatus status{BoundedReadStatus::Finished};
+    std::unique_ptr<ArrowRecordBatch> batch;
+};
+
 struct LakeSnapshot {
     int64_t snapshot_id;
     std::vector<BucketOffset> bucket_offsets;
@@ -1341,6 +1505,8 @@ class Lookuper;
 class PrefixLookuper;
 class WriteResult;
 class LogScanner;
+class RecordBatchLogScanner;
+class RecordBatchLogReader;
 class BatchScanner;
 class Admin;
 class Table;
@@ -1507,6 +1673,7 @@ class Admin {
                          const std::string* partition_name = nullptr);
 
     friend class Connection;
+    friend class LogScanner;
     Admin(ffi::Admin* admin) noexcept;
 
     void Destroy() noexcept;
@@ -1537,6 +1704,12 @@ class Table {
     Result NewPrefixLookup(std::vector<std::string> lookup_columns, PrefixLookuper& out);
 
     TableInfo GetTableInfo() const;
+
+    /// The table's Arrow schema. `AppendWriter::AppendArrowBatch` requires a
+    /// batch whose column types match it, so this is what to build or cast
+    /// against.
+    Result GetArrowSchema(std::shared_ptr<arrow::Schema>& out) const;
+
     TablePath GetTablePath() const;
     bool HasPrimaryKey() const;
 
@@ -1620,6 +1793,12 @@ class TableScan {
     TableScan& ProjectByIndex(std::vector<size_t> column_indices);
     TableScan& ProjectByName(std::vector<std::string> column_names);
 
+    /// Pushes a predicate down for conservative server-side RecordBatch pruning.
+    ///
+    /// Only Arrow log scans support this. Returned batches may contain
+    /// non-matching rows and must be filtered again by the caller.
+    TableScan& Filter(Predicate predicate);
+
     TableScan& Limit(int32_t row_number);
 
     /// Creates a record-mode log scanner, polled for individual `ScanRecord`s.
@@ -1637,7 +1816,25 @@ class TableScan {
     /// path carries no per-record change types; read a primary-key table's
     /// changelog with `CreateLogScanner()` instead. Requires the ARROW log
     /// format.
+    Result CreateRecordBatchLogScanner(RecordBatchLogScanner& out);
+
+    /// Legacy overload. Prefer the strongly typed RecordBatchLogScanner.
     Result CreateRecordBatchLogScanner(LogScanner& out);
+
+    /// Creates a bounded reader directly from per-bucket offset ranges.
+    ///
+    /// This is the preferred API for query engines: it subscribes every bucket
+    /// at its starting offset, installs the corresponding stopping offset, and
+    /// transfers scanner ownership to the returned reader.
+    Result CreateRecordBatchLogReader(const std::vector<RecordBatchLogReadRange>& ranges,
+                                      RecordBatchLogReader& out);
+
+    /// Creates a bounded reader for a timestamp range over requested buckets.
+    ///
+    /// The timestamps are resolved independently for every requested bucket,
+    /// then read with [starting_offset, stopping_offset) semantics.
+    Result CreateRecordBatchLogReader(Admin& admin, const std::vector<TableBucket>& buckets,
+                                      const TimestampRange& range, RecordBatchLogReader& out);
 
     Result CreateBucketBatchScanner(const TableBucket& bucket, BatchScanner& out);
 
@@ -1651,6 +1848,7 @@ class TableScan {
     ffi::Table* table_{nullptr};
     std::vector<size_t> projection_;
     std::vector<std::string> name_projection_;
+    std::optional<Predicate> predicate_;
     std::optional<int32_t> limit_;
 };
 
@@ -1801,10 +1999,137 @@ class LogScanner {
    private:
     friend class Table;
     friend class TableScan;
+    friend class RecordBatchLogScanner;
     LogScanner(ffi::LogScanner* scanner) noexcept;
 
     void Destroy() noexcept;
+
+    /// Creates a bounded reader using the latest offsets observed during this call.
+    /// Subscribe the record-batch scanner at the desired starting offsets before
+    /// calling this method.
+    Result CreateRecordBatchLogReaderUntilLatest(const Admin& admin, RecordBatchLogReader& out);
+
+    /// Creates a bounded reader using explicit stopping offsets.
+    /// Starting offsets come from the scanner subscriptions. Every stopping
+    /// offset must correspond to a bucket already subscribed on this scanner.
+    Result CreateRecordBatchLogReaderUntilOffsets(const std::vector<ReaderStopOffset>& offsets,
+                                                  RecordBatchLogReader& out);
+
+    /// Creates a bounded reader from per-bucket offset ranges, subscribing
+    /// every non-empty range. Range validation happens in the SDK.
+    Result CreateRecordBatchLogReaderFromRanges(const std::vector<RecordBatchLogReadRange>& ranges,
+                                                RecordBatchLogReader& out);
+
+    /// Creates a bounded reader for a timestamp range over the given buckets.
+    /// The SDK resolves both timestamps to per-bucket offsets.
+    Result CreateRecordBatchLogReaderBetweenTimestamps(const Admin& admin,
+                                                       const std::vector<TableBucket>& buckets,
+                                                       const TimestampRange& range,
+                                                       RecordBatchLogReader& out);
+
     ffi::LogScanner* scanner_{nullptr};
+};
+
+/// Strongly typed Arrow record-batch log scanner.
+///
+/// Use this type for unbounded batch polling, or move it into a bounded reader.
+class RecordBatchLogScanner {
+   public:
+    RecordBatchLogScanner() noexcept;
+    ~RecordBatchLogScanner() noexcept;
+
+    RecordBatchLogScanner(const RecordBatchLogScanner&) = delete;
+    RecordBatchLogScanner& operator=(const RecordBatchLogScanner&) = delete;
+    RecordBatchLogScanner(RecordBatchLogScanner&& other) noexcept;
+    RecordBatchLogScanner& operator=(RecordBatchLogScanner&& other) noexcept;
+
+    bool Available() const;
+
+    Result Subscribe(int32_t bucket_id, int64_t start_offset);
+    Result Subscribe(const std::vector<BucketSubscription>& bucket_offsets);
+    Result SubscribePartitionBuckets(int64_t partition_id, int32_t bucket_id, int64_t start_offset);
+    Result SubscribePartitionBuckets(const std::vector<PartitionBucketSubscription>& subscriptions);
+    Result Unsubscribe(int32_t bucket_id);
+    Result UnsubscribePartition(int64_t partition_id, int32_t bucket_id);
+    Result Poll(int64_t timeout_ms, ArrowRecordBatches& out);
+
+    /// Transfers this scanner into a reader bounded by the latest offsets
+    /// observed during the call. The scanner becomes unavailable on success.
+    Result CreateRecordBatchLogReaderUntilLatest(const Admin& admin, RecordBatchLogReader& out) &&;
+
+    /// Transfers this scanner into a reader with explicit stopping offsets.
+    /// The scanner becomes unavailable on success.
+    Result CreateRecordBatchLogReaderUntilOffsets(const std::vector<ReaderStopOffset>& offsets,
+                                                  RecordBatchLogReader& out) &&;
+
+   private:
+    friend class TableScan;
+    explicit RecordBatchLogScanner(ffi::LogScanner* scanner) noexcept;
+
+    /// Transfers this scanner into a reader bounded by per-bucket offset ranges,
+    /// subscribing every non-empty range. The scanner becomes unavailable on
+    /// success.
+    Result CreateRecordBatchLogReaderFromRanges(const std::vector<RecordBatchLogReadRange>& ranges,
+                                                RecordBatchLogReader& out) &&;
+
+    /// Transfers this scanner into a reader bounded by a timestamp range over
+    /// the given buckets. The scanner becomes unavailable on success.
+    Result CreateRecordBatchLogReaderBetweenTimestamps(const Admin& admin,
+                                                       const std::vector<TableBucket>& buckets,
+                                                       const TimestampRange& range,
+                                                       RecordBatchLogReader& out) &&;
+
+    LogScanner scanner_;
+};
+
+/// Bounded Arrow batch reader created from a subscribed record-batch log scanner.
+/// Only one reader or polling operation may consume the scanner at a time.
+class RecordBatchLogReader {
+   public:
+    RecordBatchLogReader() noexcept;
+    ~RecordBatchLogReader() noexcept;
+
+    RecordBatchLogReader(const RecordBatchLogReader&) = delete;
+    RecordBatchLogReader& operator=(const RecordBatchLogReader&) = delete;
+    RecordBatchLogReader(RecordBatchLogReader&& other) noexcept;
+    RecordBatchLogReader& operator=(RecordBatchLogReader&& other) noexcept;
+
+    bool Available() const;
+
+    /// Waits up to timeout_ms for the next batch. With a non-positive
+    /// timeout_ms, the method returns a buffered batch or reports Finished if
+    /// already complete; otherwise it reports TimedOut without polling the
+    /// scanner.
+    /// Read `out.status` only when the returned `Result` is `Ok()`.
+    /// TimedOut leaves the reader valid for a later retry; Finished means every
+    /// subscribed bucket reached its stopping offset.
+    Result NextBatch(int64_t timeout_ms, RecordBatchReadResult& out);
+
+    /// Drains remaining batches using timeout_ms as the total execution budget
+    /// for this invocation. Callers should normally pass the query's remaining
+    /// execution time and invoke this method once.
+    /// Batches are *appended* to `out`. If the budget expires before every
+    /// stopping offset is reached, the method stops collecting and returns a
+    /// retriable REQUEST_TIME_OUT; `out` may then contain a partial set of
+    /// complete batches. Only an `Ok()` result means the bounded result is
+    /// complete. Once the budget is exhausted, the reader does not wait for
+    /// additional scanner data, but it still returns buffered batches and
+    /// observes completion before reporting REQUEST_TIME_OUT. Consequently, a
+    /// non-positive timeout_ms returns Ok for an already-complete reader and
+    /// REQUEST_TIME_OUT when unread work remains.
+    /// The reader remains valid after timeout, but retrying is an explicit caller
+    /// policy rather than part of this operation; callers should not retry
+    /// indefinitely.
+    Result CollectAllBatches(int64_t timeout_ms, ArrowRecordBatches& out);
+
+   private:
+    friend class LogScanner;
+    friend class RecordBatchLogScanner;
+    friend class TableScan;
+    explicit RecordBatchLogReader(ffi::RecordBatchLogReader* reader) noexcept;
+
+    void Destroy() noexcept;
+    ffi::RecordBatchLogReader* reader_{nullptr};
 };
 
 // One-shot bounded scan of a single bucket, from TableScan::CreateBucketBatchScanner.

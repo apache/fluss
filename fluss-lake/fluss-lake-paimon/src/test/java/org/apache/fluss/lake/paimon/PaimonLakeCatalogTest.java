@@ -45,6 +45,7 @@ import java.util.List;
 
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_ENABLED;
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_FORMAT;
+import static org.apache.fluss.lake.paimon.utils.PaimonConversions.LAKESTREAM_ENABLED_OPTION_KEY;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
 import static org.apache.fluss.lake.paimon.utils.PaimonTableValidation.isPaimonSchemaCompatible;
@@ -472,6 +473,78 @@ class PaimonLakeCatalogTest {
                         String.format(
                                 "therefore you need to add the diff columns all at once, rather than applying other table changes: %s.",
                                 changes));
+    }
+
+    @Test
+    void testCreateTableSetsLakeStreamEnabledForCleanTable() throws Exception {
+        String database = "test_create_lakestream_db";
+        String tableName = "test_create_lakestream_table";
+        TablePath tablePath = TablePath.of(database, tableName);
+        Identifier identifier = Identifier.create(database, tableName);
+
+        // getTableDescriptor sets table.datalake.enabled=true, so the clean table advertises its
+        // LakeStream state to Paimon
+        flussPaimonCatalog.createTable(
+                tablePath, getTableDescriptor(FLUSS_SCHEMA), LAKE_CATALOG_CONTEXT);
+
+        Table table = flussPaimonCatalog.getPaimonCatalog().getTable(identifier);
+        assertThat(table.options()).containsEntry(LAKESTREAM_ENABLED_OPTION_KEY, "true");
+    }
+
+    @Test
+    void testCreateTableWithoutDataLakeEnabledHasNoLakeStreamOption() throws Exception {
+        String database = "test_create_no_lakestream_db";
+        String tableName = "test_create_no_lakestream_table";
+        TablePath tablePath = TablePath.of(database, tableName);
+        Identifier identifier = Identifier.create(database, tableName);
+
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(FLUSS_SCHEMA)
+                        .property(TABLE_DATALAKE_ENABLED.key(), "false")
+                        .property(TABLE_DATALAKE_FORMAT.key(), "paimon")
+                        .property(
+                                "table.datalake.paimon.warehouse",
+                                tempWarehouseDir.toURI().toString())
+                        .distributedBy(3)
+                        .build();
+        flussPaimonCatalog.createTable(tablePath, tableDescriptor, LAKE_CATALOG_CONTEXT);
+
+        Table table = flussPaimonCatalog.getPaimonCatalog().getTable(identifier);
+        assertThat(table.options()).doesNotContainKey(LAKESTREAM_ENABLED_OPTION_KEY);
+    }
+
+    @Test
+    void testAlterDataLakeEnabledMaintainsLakeStreamOptionForCleanTable() throws Exception {
+        String database = "test_alter_lakestream_db";
+        String tableName = "test_alter_lakestream_table";
+        TablePath tablePath = TablePath.of(database, tableName);
+        Identifier identifier = Identifier.create(database, tableName);
+        createTable(database, tableName);
+
+        // disable lake acceleration removes lakestream.enabled instead of storing false
+        flussPaimonCatalog.alterTable(
+                tablePath,
+                Collections.singletonList(TableChange.set(TABLE_DATALAKE_ENABLED.key(), "false")),
+                LAKE_CATALOG_CONTEXT);
+        Table table = flussPaimonCatalog.getPaimonCatalog().getTable(identifier);
+        assertThat(table.options()).doesNotContainKey(LAKESTREAM_ENABLED_OPTION_KEY);
+
+        // re-enable lake acceleration adds lakestream.enabled=true again
+        flussPaimonCatalog.alterTable(
+                tablePath,
+                Collections.singletonList(TableChange.set(TABLE_DATALAKE_ENABLED.key(), "true")),
+                LAKE_CATALOG_CONTEXT);
+        table = flussPaimonCatalog.getPaimonCatalog().getTable(identifier);
+        assertThat(table.options()).containsEntry(LAKESTREAM_ENABLED_OPTION_KEY, "true");
+
+        // resetting datalake.enabled is equivalent to disabling acceleration
+        flussPaimonCatalog.alterTable(
+                tablePath,
+                Collections.singletonList(TableChange.reset(TABLE_DATALAKE_ENABLED.key())),
+                LAKE_CATALOG_CONTEXT);
+        table = flussPaimonCatalog.getPaimonCatalog().getTable(identifier);
+        assertThat(table.options()).doesNotContainKey(LAKESTREAM_ENABLED_OPTION_KEY);
     }
 
     private org.apache.paimon.schema.Schema createPaimonSchema(

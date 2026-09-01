@@ -57,7 +57,6 @@ cpp_sdk = use_extension("//bindings/cpp/bazel/cpp:deps.bzl", "cpp_sdk")
 cpp_sdk.config(
     mode = "build",
     arrow_cpp_version = "19.0.1",
-    protobuf_version = "3.25.5",
     ep_cmake_ranlib = "/usr/bin/ranlib",
     ep_cmake_ar = "/usr/bin/ar",
     ep_cmake_nm = "/usr/bin/nm",

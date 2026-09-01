@@ -699,6 +699,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td rowspan="7">
           request_produceLog
           request_putKv
+          request_historicalPutKv
           request_lookup
           request_historicalLookup
           request_prefixLookup
@@ -789,7 +790,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </thead>
   <tbody>
     <tr>
-      <th rowspan="37"><strong>tabletserver</strong></th>
+      <th rowspan="39"><strong>tabletserver</strong></th>
       <td rowspan="20">table</td>
       <td>messagesInPerSecond</td>
       <td>The number of messages written per second to this table.</td>
@@ -891,7 +892,17 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>Meter</td>
     </tr>
     <tr>
-      <td rowspan="4">table_historical</td>
+      <td rowspan="6">table_historical</td>
+      <td>totalPutKvRequestsPerSecond</td>
+      <td>The number of historical put kv requests to this table per second.</td>
+      <td>Meter</td>
+    </tr>
+    <tr>
+      <td>failedPutKvRequestsPerSecond</td>
+      <td>The number of historical put kv requests that failed unexpectedly for this table per second.</td>
+      <td>Meter</td>
+    </tr>
+    <tr>
       <td>totalLookupRequestsPerSecond</td>
       <td>The number of historical lookup requests to this table per second.</td>
       <td>Meter</td>
@@ -1092,9 +1103,9 @@ These metrics use Sum aggregation to show the total value across all buckets of 
   </tbody>
 </table>
 
-#### Server-level RocksDB Metrics (Sum Aggregation)
+#### Server-level RocksDB Metrics
 
-These metrics use Sum aggregation to show the total value across all tables in a server, providing a server-wide view of RocksDB resource usage.
+These metrics provide a server-wide view of RocksDB resource usage. The total memory metric sums usage across tables, while the shared block cache metrics report the single cache owned by the server.
 
 <table class="table table-bordered">
   <thead>
@@ -1108,10 +1119,25 @@ These metrics use Sum aggregation to show the total value across all tables in a
   </thead>
   <tbody>
     <tr>
-      <th rowspan="1"><strong>tabletserver</strong></th>
-      <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="1">-</td>
+      <th rowspan="4"><strong>tabletserver</strong></th>
+      <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="4">-</td>
       <td>rocksdbMemoryUsageTotal</td>
-      <td>Total memory usage across all RocksDB instances in this server (in bytes).</td>
+      <td>Total memory usage across all RocksDB instances in this server (in bytes). This includes memtables, table readers, and block cache. When <code>kv.rocksdb.shared-block-cache.size</code> is greater than 0, the shared block cache usage is counted once to avoid double-counting across tablets.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rocksdbSharedBlockCacheUsage</td>
+      <td>Memory usage of the shared RocksDB block cache in this server (in bytes). Reports 0 when the shared block cache is disabled.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rocksdbSharedBlockCacheCapacity</td>
+      <td>Configured soft capacity of the shared RocksDB block cache in this server (in bytes). Reports 0 when the shared block cache is disabled. This is not a hard limit on process memory.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rocksdbSharedBlockCachePinnedUsage</td>
+      <td>Pinned memory usage of the shared RocksDB block cache in this server (in bytes). Reports 0 when the shared block cache is disabled.</td>
       <td>Gauge</td>
     </tr>
   </tbody>
@@ -1149,12 +1175,12 @@ These metrics use Sum aggregation to show the total value across all tables in a
     </tr>
     <tr>
       <td>rocksdbBlockCacheMemoryUsageTotal</td>
-      <td>Total block cache memory usage across all buckets of this table (in bytes).</td>
+      <td>Total block cache memory usage across all buckets of this table (in bytes). When <code>kv.rocksdb.shared-block-cache.size</code> is greater than 0, this metric reports 0 because shared cache usage is not attributable to an individual table; it is reported at the server level via <code>rocksdbSharedBlockCacheUsage</code>.</td>
       <td>Gauge</td>
     </tr>
     <tr>
       <td>rocksdbBlockCachePinnedUsageTotal</td>
-      <td>Total pinned memory in block cache across all buckets of this table (in bytes).</td>
+      <td>Total pinned memory in block cache across all buckets of this table (in bytes). When <code>kv.rocksdb.shared-block-cache.size</code> is greater than 0, this metric reports 0 because shared pinned usage is not attributable to an individual table; it is reported at the server level via <code>rocksdbSharedBlockCachePinnedUsage</code>.</td>
       <td>Gauge</td>
     </tr>
   </tbody>

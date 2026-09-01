@@ -74,6 +74,7 @@ import java.util.Set;
 import java.util.stream.Stream;
 
 import static org.apache.fluss.lake.paimon.testutils.PaimonTestUtils.adjustToLegacyV1Table;
+import static org.apache.fluss.lake.paimon.utils.PaimonConversions.LAKESTREAM_ENABLED_OPTION_KEY;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.PAIMON_UNSETTABLE_OPTIONS;
 import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
@@ -177,6 +178,7 @@ class LakeEnabledTableCreateITCase {
                         new String[] {"log_c1", "log_c2"}),
                 "log_c1,log_c2",
                 BUCKET_NUM);
+        assertThat(paimonLogTable.options()).containsEntry(LAKESTREAM_ENABLED_OPTION_KEY, "true");
 
         TableDescriptor logNoBucketKeyTable =
                 TableDescriptor.builder()
@@ -234,6 +236,7 @@ class LakeEnabledTableCreateITCase {
                         new String[] {"pk_c1", "pk_c2"}),
                 "pk_c1",
                 BUCKET_NUM);
+        assertThat(paimonPkTable.options()).containsEntry(LAKESTREAM_ENABLED_OPTION_KEY, "true");
 
         // test partitioned table
         TablePath partitionedTablePath = TablePath.of(DATABASE, "partitioned_table");
@@ -708,6 +711,9 @@ class LakeEnabledTableCreateITCase {
 
         Identifier paimonTablePath = Identifier.create(DATABASE, logTablePath.getTableName());
         Table enabledPaimonLogTable = paimonCatalog.getTable(paimonTablePath);
+        // enabling lake acceleration on a clean table sets lakestream.enabled=true
+        assertThat(enabledPaimonLogTable.options())
+                .containsEntry(LAKESTREAM_ENABLED_OPTION_KEY, "true");
 
         Map<String, String> updatedProperties = new HashMap<>();
         updatedProperties.put(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true");
@@ -735,6 +741,9 @@ class LakeEnabledTableCreateITCase {
 
         // verify LogTablet datalake status is disabled
         verifyLogTabletDataLakeEnabled(tableId, false);
+        // disabling lake acceleration removes lakestream.enabled instead of storing false
+        assertThat(paimonCatalog.getTable(paimonTablePath).options())
+                .doesNotContainKey(LAKESTREAM_ENABLED_OPTION_KEY);
 
         // try to enable lake table again
         enableLake = TableChange.set(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true");
@@ -743,6 +752,9 @@ class LakeEnabledTableCreateITCase {
 
         // verify LogTablet datalake status is enabled again
         verifyLogTabletDataLakeEnabled(tableId, true);
+        // re-enabling lake acceleration adds lakestream.enabled=true again
+        assertThat(paimonCatalog.getTable(paimonTablePath).options())
+                .containsEntry(LAKESTREAM_ENABLED_OPTION_KEY, "true");
 
         // write some data to the lake table
         writeData(paimonCatalog.getTable(paimonTablePath));
@@ -763,6 +775,143 @@ class LakeEnabledTableCreateITCase {
 
         // verify LogTablet datalake status is enabled
         verifyLogTabletDataLakeEnabled(tableId, true);
+    }
+
+    @Test
+    void testAlterLakeEnabledPrimaryKeyTable() throws Exception {
+        // create pk table with lake disabled
+        TableDescriptor pkTable =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("pk_c1", DataTypes.INT())
+                                        .column("pk_c2", DataTypes.STRING())
+                                        .primaryKey("pk_c1")
+                                        .build())
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, false)
+                        .distributedBy(BUCKET_NUM)
+                        .build();
+        TablePath pkTablePath = TablePath.of(DATABASE, "pk_table_alter");
+        admin.createTable(pkTablePath, pkTable, false).get();
+        Identifier paimonTablePath = Identifier.create(DATABASE, pkTablePath.getTableName());
+
+        // lake table not created yet while lake is disabled
+        assertThatThrownBy(() -> paimonCatalog.getTable(paimonTablePath))
+                .isInstanceOf(Catalog.TableNotExistException.class);
+
+        // enable lake acceleration sets lakestream.enabled=true
+        admin.alterTable(
+                        pkTablePath,
+                        Collections.singletonList(
+                                TableChange.set(
+                                        ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")),
+                        false)
+                .get();
+        assertThat(paimonCatalog.getTable(paimonTablePath).options())
+                .containsEntry(LAKESTREAM_ENABLED_OPTION_KEY, "true");
+
+        // disable lake acceleration removes lakestream.enabled instead of storing false
+        admin.alterTable(
+                        pkTablePath,
+                        Collections.singletonList(
+                                TableChange.set(
+                                        ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "false")),
+                        false)
+                .get();
+        assertThat(paimonCatalog.getTable(paimonTablePath).options())
+                .doesNotContainKey(LAKESTREAM_ENABLED_OPTION_KEY);
+
+        // re-enable lake acceleration adds lakestream.enabled=true again
+        admin.alterTable(
+                        pkTablePath,
+                        Collections.singletonList(
+                                TableChange.set(
+                                        ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")),
+                        false)
+                .get();
+        assertThat(paimonCatalog.getTable(paimonTablePath).options())
+                .containsEntry(LAKESTREAM_ENABLED_OPTION_KEY, "true");
+
+        // resetting datalake.enabled is equivalent to disabling acceleration, and removes the
+        // key from the table descriptor entirely (unlike SetOption "false")
+        admin.alterTable(
+                        pkTablePath,
+                        Collections.singletonList(
+                                TableChange.reset(ConfigOptions.TABLE_DATALAKE_ENABLED.key())),
+                        false)
+                .get();
+        assertThat(paimonCatalog.getTable(paimonTablePath).options())
+                .doesNotContainKey(LAKESTREAM_ENABLED_OPTION_KEY);
+
+        // re-enabling after a reset must still sync lakestream.enabled=true: since the reset
+        // removed the key from the descriptor, MetadataManager must not rely solely on "the old
+        // descriptor already had the key" to decide whether to sync to the lake table
+        admin.alterTable(
+                        pkTablePath,
+                        Collections.singletonList(
+                                TableChange.set(
+                                        ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")),
+                        false)
+                .get();
+        assertThat(paimonCatalog.getTable(paimonTablePath).options())
+                .containsEntry(LAKESTREAM_ENABLED_OPTION_KEY, "true");
+    }
+
+    @Test
+    void testLegacyTableLakeStreamOptionUntouched() throws Exception {
+        // create a clean, lake-enabled table, then turn it into a legacy table carrying the three
+        // system columns. Old-layout tables are outside the scope of lakestream.enabled: altering
+        // datalake.enabled must not add or remove the option on them.
+        TablePath tablePath = TablePath.of(DATABASE, "legacy_lakestream_table");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("c1", DataTypes.INT())
+                                        .column("c2", DataTypes.STRING())
+                                        .build())
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .distributedBy(BUCKET_NUM, "c1")
+                        .build();
+        admin.createTable(tablePath, tableDescriptor, false).get();
+        Identifier paimonTablePath = Identifier.create(DATABASE, tablePath.getTableName());
+
+        adjustToLegacyV1Table(tablePath, paimonCatalog);
+        String lakeStreamValueBeforeAlter =
+                paimonCatalog
+                        .getTable(paimonTablePath)
+                        .options()
+                        .get(LAKESTREAM_ENABLED_OPTION_KEY);
+
+        // disable lake acceleration on a legacy table leaves the option untouched
+        admin.alterTable(
+                        tablePath,
+                        Collections.singletonList(
+                                TableChange.set(
+                                        ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "false")),
+                        false)
+                .get();
+        assertThat(
+                        paimonCatalog
+                                .getTable(paimonTablePath)
+                                .options()
+                                .get(LAKESTREAM_ENABLED_OPTION_KEY))
+                .isEqualTo(lakeStreamValueBeforeAlter);
+
+        // re-enable lake acceleration on a legacy table also leaves the option untouched
+        admin.alterTable(
+                        tablePath,
+                        Collections.singletonList(
+                                TableChange.set(
+                                        ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")),
+                        false)
+                .get();
+        assertThat(
+                        paimonCatalog
+                                .getTable(paimonTablePath)
+                                .options()
+                                .get(LAKESTREAM_ENABLED_OPTION_KEY))
+                .isEqualTo(lakeStreamValueBeforeAlter);
     }
 
     @Test

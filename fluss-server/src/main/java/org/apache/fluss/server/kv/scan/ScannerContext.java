@@ -19,6 +19,7 @@ package org.apache.fluss.server.kv.scan;
 
 import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKv;
 import org.apache.fluss.server.utils.ResourceGuard;
 import org.apache.fluss.utils.IOUtils;
@@ -48,6 +49,7 @@ public class ScannerContext implements Closeable {
     private final String scannerId;
     private final byte[] scannerIdBytes;
     private final TableBucket tableBucket;
+    private final KvValueLayout kvValueLayout;
     private final RocksDBKv rocksDBKv;
     private final RocksIterator iterator;
     private final ReadOptions readOptions;
@@ -80,10 +82,12 @@ public class ScannerContext implements Closeable {
             ResourceGuard.Lease resourceLease,
             long limit,
             long logOffset,
-            long initialAccessTimeMs) {
+            long initialAccessTimeMs,
+            KvValueLayout kvValueLayout) {
         this.scannerId = scannerId;
         this.scannerIdBytes = scannerId.getBytes(StandardCharsets.UTF_8);
         this.tableBucket = tableBucket;
+        this.kvValueLayout = kvValueLayout;
         this.rocksDBKv = rocksDBKv;
         this.iterator = iterator;
         this.readOptions = readOptions;
@@ -110,6 +114,11 @@ public class ScannerContext implements Closeable {
 
     public TableBucket getTableBucket() {
         return tableBucket;
+    }
+
+    /** Returns the physical layout of values read by this scanner. */
+    public KvValueLayout getKvValueLayout() {
+        return kvValueLayout;
     }
 
     public boolean isValid() {

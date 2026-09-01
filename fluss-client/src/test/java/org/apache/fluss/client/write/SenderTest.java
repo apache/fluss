@@ -26,6 +26,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.exception.AuthorizationException;
 import org.apache.fluss.exception.NetworkException;
+import org.apache.fluss.exception.OutOfOrderSequenceException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.exception.TimeoutException;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -750,6 +751,144 @@ final class SenderTest {
         assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isEqualTo(Optional.of(5));
         // No more inflight batches
         assertThat(sender1.numOfInFlightBatches(tb1)).isEqualTo(0);
+    }
+
+    /**
+     * A late (reordered) out-of-order response must be retried, not treated as fatal, when the
+     * acked sequence has advanced while the batch was in flight.
+     *
+     * <p>Scenario: seq0 and seq1 are both in flight (each sent when {@code lastAcked=-1}). Response
+     * reordering delivers seq0's success first, advancing {@code lastAcked} to 0. seq1's
+     * out-of-order response then arrives late; it reflects a superseded server state. Since seq1
+     * was sent when {@code lastAcked=-1}, which is now behind the current {@code lastAcked=0}, the
+     * writer must retry seq1 instead of resetting.
+     */
+    @Test
+    void testStaleOutOfOrderResponseIsRetriedInsteadOfResettingWriter() throws Exception {
+        IdempotenceManager idempotenceManager = createIdempotenceManager(true);
+        Sender sender1 = setupWithIdempotenceState(idempotenceManager);
+        sender1.runOnce();
+        assertThat(idempotenceManager.isWriterIdValid()).isTrue();
+        long writerId = idempotenceManager.writerId();
+
+        // Send seq0 and seq1; both are sent while lastAcked is not present (-1).
+        CompletableFuture<Exception> future0 = new CompletableFuture<>();
+        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future0.complete(e));
+        sender1.runOnce();
+        CompletableFuture<Exception> future1 = new CompletableFuture<>();
+        appendToAccumulator(tb1, row(2, "b"), (tb, leo, e) -> future1.complete(e));
+        sender1.runOnce();
+        assertThat(idempotenceManager.nextSequence(tb1)).isEqualTo(2);
+        assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isNotPresent();
+
+        // Reordered responses: seq0 succeeds first, advancing lastAcked to 0.
+        finishIdempotentProduceLogRequest(0, tb1, 0, createProduceLogResponse(tb1, 0L, 1L));
+        sender1.runOnce();
+        assertThat(future0.get()).isNull();
+        assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isEqualTo(Optional.of(0));
+
+        // seq1's out-of-order response arrives late. It is stale (seq1 was sent at lastAcked=-1,
+        // now behind lastAcked=0), so the writer must retry it, not reset.
+        finishIdempotentProduceLogRequest(
+                1, tb1, 0, createProduceLogResponse(tb1, Errors.OUT_OF_ORDER_SEQUENCE_EXCEPTION));
+        sender1.runOnce();
+        assertThat(idempotenceManager.isWriterIdValid()).isTrue();
+        assertThat(idempotenceManager.writerId()).isEqualTo(writerId);
+        assertThat(future1.isDone()).isFalse();
+
+        // The retried seq1 succeeds once the server observes the advanced state.
+        sender1.runOnce();
+        finishIdempotentProduceLogRequest(1, tb1, 0, createProduceLogResponse(tb1, 1L, 2L));
+        sender1.runOnce();
+        assertThat(future1.get()).isNull();
+        assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isEqualTo(Optional.of(1));
+    }
+
+    /**
+     * A genuine out-of-order response (no progress since the batch was sent) must still reset the
+     * writer.
+     *
+     * <p>Scenario: seq0 is acknowledged so {@code lastAcked=0}. seq1 is then sent while {@code
+     * lastAcked=0} (no in-flight predecessor). seq1 gets an out-of-order response with no
+     * advancement since it was sent, indicating an unrecoverable regression, so the writer resets.
+     */
+    @Test
+    void testGenuineOutOfOrderResponseResetsWriter() throws Exception {
+        IdempotenceManager idempotenceManager = createIdempotenceManager(true);
+        Sender sender1 = setupWithIdempotenceState(idempotenceManager);
+        sender1.runOnce();
+        assertThat(idempotenceManager.isWriterIdValid()).isTrue();
+
+        // Establish lastAcked = 0.
+        CompletableFuture<Exception> future0 = new CompletableFuture<>();
+        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future0.complete(e));
+        sender1.runOnce();
+        finishIdempotentProduceLogRequest(0, tb1, 0, createProduceLogResponse(tb1, 0L, 1L));
+        sender1.runOnce();
+        assertThat(future0.get()).isNull();
+        assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isEqualTo(Optional.of(0));
+
+        // Send seq1 while lastAcked is already 0 (no in-flight predecessor).
+        CompletableFuture<Exception> future1 = new CompletableFuture<>();
+        appendToAccumulator(tb1, row(2, "b"), (tb, leo, e) -> future1.complete(e));
+        sender1.runOnce();
+
+        // seq1 gets an out-of-order response with no progress since it was sent: genuine
+        // regression -> the writer is reset. Do not run the sender again before asserting, since
+        // the next iteration would re-initialize a fresh writer id.
+        finishIdempotentProduceLogRequest(
+                1, tb1, 0, createProduceLogResponse(tb1, Errors.OUT_OF_ORDER_SEQUENCE_EXCEPTION));
+        assertThat(future1.get()).isInstanceOf(OutOfOrderSequenceException.class);
+        assertThat(idempotenceManager.isWriterIdValid()).isFalse();
+    }
+
+    /**
+     * The send-time acked-sequence snapshot must be refreshed on every send attempt: after a stale
+     * out-of-order response is retried, a subsequent out-of-order response with no new
+     * acknowledgement in between must reset the writer (it is no longer stale). This guards against
+     * regressing the snapshot to a capture-once semantic.
+     *
+     * <p>Scenario: seq0 and seq1 are in flight (each sent at {@code lastAcked=-1}). seq0 succeeds
+     * ({@code lastAcked=0}). seq1's first (stale) out-of-order response is retried and the resend
+     * refreshes seq1's snapshot to 0. A second out-of-order response for seq1, with no new ack,
+     * then finds {@code 0 > 0} false and resets the writer.
+     */
+    @Test
+    void testSendTimeSnapshotIsRefreshedOnRetrySoRepeatedOutOfOrderResets() throws Exception {
+        IdempotenceManager idempotenceManager = createIdempotenceManager(true);
+        Sender sender1 = setupWithIdempotenceState(idempotenceManager);
+        sender1.runOnce();
+        assertThat(idempotenceManager.isWriterIdValid()).isTrue();
+        long writerId = idempotenceManager.writerId();
+
+        // Send seq0 and seq1; both are sent while lastAcked is not present (-1).
+        CompletableFuture<Exception> future0 = new CompletableFuture<>();
+        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future0.complete(e));
+        sender1.runOnce();
+        CompletableFuture<Exception> future1 = new CompletableFuture<>();
+        appendToAccumulator(tb1, row(2, "b"), (tb, leo, e) -> future1.complete(e));
+        sender1.runOnce();
+
+        // seq0 succeeds first, advancing lastAcked to 0.
+        finishIdempotentProduceLogRequest(0, tb1, 0, createProduceLogResponse(tb1, 0L, 1L));
+        sender1.runOnce();
+        assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isEqualTo(Optional.of(0));
+
+        // First (stale) seq1 out-of-order: sent at lastAcked=-1 < current 0 -> retried, writer
+        // kept. The following runOnce resends seq1, refreshing its send-time snapshot to 0.
+        finishIdempotentProduceLogRequest(
+                1, tb1, 0, createProduceLogResponse(tb1, Errors.OUT_OF_ORDER_SEQUENCE_EXCEPTION));
+        sender1.runOnce();
+        assertThat(idempotenceManager.isWriterIdValid()).isTrue();
+        assertThat(idempotenceManager.writerId()).isEqualTo(writerId);
+        assertThat(future1.isDone()).isFalse();
+
+        // Second seq1 out-of-order with no new ack: the refreshed snapshot is now 0, so the
+        // response is no longer stale (0 > 0 is false) and the writer is reset.
+        finishIdempotentProduceLogRequest(
+                1, tb1, 0, createProduceLogResponse(tb1, Errors.OUT_OF_ORDER_SEQUENCE_EXCEPTION));
+        assertThat(future1.get()).isInstanceOf(OutOfOrderSequenceException.class);
+        assertThat(idempotenceManager.isWriterIdValid()).isFalse();
     }
 
     @Test

@@ -17,12 +17,12 @@
 
 //! Health endpoints.
 //!
-//! `GET /health` returns the FIP-49 `{status, uptime_ms}` shape and answers from the event loop
+//! `GET /health` returns `{status, uptime_ms}` and answers from the event loop
 //! without a backend RPC; deeper diagnostics live in the Prometheus metrics, not in this payload.
 //! `GET /ready` is the readiness counterpart: 200 only while the gateway accepts traffic.
 
 use crate::error::ErrorEnvelope;
-use crate::protocol::rest::{RequestId, RestState, error_response, json_response};
+use crate::protocol::rest::{RestState, error_response, json_response, request_id};
 use axum::extract::{Request, State};
 use axum::response::Response;
 use serde::Serialize;
@@ -37,7 +37,7 @@ pub fn routes() -> OpenApiRouter<RestState> {
         .routes(routes!(ready))
 }
 
-/// Response of `GET /health` (FIP-49): liveness plus process uptime.
+/// Response of `GET /health`: liveness plus process uptime.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct HealthResponse {
     pub status: &'static str,
@@ -45,7 +45,7 @@ pub struct HealthResponse {
     pub uptime_ms: u64,
 }
 
-/// The FIP-49 health summary: `{status, uptime_ms}`, always 200 while the process answers.
+/// Returns process liveness and uptime without a backend RPC.
 #[utoipa::path(
     get,
     path = "/health",
@@ -53,6 +53,7 @@ pub struct HealthResponse {
     tag = "health",
     responses(
         (status = 200, description = "Gateway liveness and uptime", body = HealthResponse),
+        (status = 400, description = "This operation accepts no query parameters", body = ErrorEnvelope),
         (status = 405, description = "Wrong method for this route", body = ErrorEnvelope),
     )
 )]
@@ -84,6 +85,7 @@ pub struct ReadyResponse {
     tag = "health",
     responses(
         (status = 200, description = "The gateway accepts application traffic", body = ReadyResponse),
+        (status = 400, description = "This operation accepts no query parameters", body = ErrorEnvelope),
         (status = 405, description = "Wrong method for this route", body = ErrorEnvelope),
         (status = 503, description = "The gateway is starting or shutting down", body = ErrorEnvelope),
     )
@@ -92,14 +94,7 @@ pub(crate) async fn ready(State(state): State<RestState>, request: Request) -> R
     match state.readiness.ensure_accepting() {
         Ok(()) => json_response(&ReadyResponse { status: "ready" })
             .expect("the ready response is serializable"),
-        Err(error) => {
-            let request_id = request
-                .extensions()
-                .get::<RequestId>()
-                .cloned()
-                .unwrap_or_default();
-            error_response(&error, &request_id)
-        }
+        Err(error) => error_response(&error, &request_id(&request)),
     }
 }
 
@@ -135,7 +130,7 @@ mod tests {
         serde_json::from_slice(&bytes).expect("json body")
     }
 
-    /// `/health` answers the FIP-49 `{status, uptime_ms}` shape and nothing else.
+    /// `/health` answers `{status, uptime_ms}` and nothing else.
     #[tokio::test]
     async fn health_answers_status_and_uptime_only() {
         let response = get(app(), "/health").await;
@@ -146,7 +141,7 @@ mod tests {
         assert_eq!(
             json.as_object().expect("object").len(),
             2,
-            "no diagnostic fields beyond the FIP shape: {json}"
+            "no diagnostic fields beyond status and uptime_ms: {json}"
         );
     }
 
@@ -171,6 +166,19 @@ mod tests {
         let response = get(app, "/health").await;
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(body_json(response).await["status"], "ok");
+    }
+
+    /// Endpoints without declared query parameters reject them consistently.
+    #[tokio::test]
+    async fn health_endpoints_reject_query_parameters() {
+        for path in ["/health?probe=deep", "/ready?probe=deep"] {
+            let response = get(app(), path).await;
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{path}");
+            assert_eq!(
+                body_json(response).await["error"]["code"],
+                "invalid_argument"
+            );
+        }
     }
 
     /// `/ready` is 200 only while the gateway accepts traffic, so load balancers stop sending

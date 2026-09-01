@@ -56,13 +56,9 @@ mvn clean install -DskipTests -T 1C
 
 ## Building the Rust client (fluss-rust)
 
-The Rust client, language bindings, and examples live under `fluss-rust/` and build with Cargo. You need **Rust** (the toolchain pinned in `fluss-rust/rust-toolchain.toml`, currently 1.85+) and **protoc**, the Protobuf compiler — `build.rs` compiles the canonical `fluss-rpc/src/main/proto/FlussApi.proto`.
+The Rust client, language bindings, and examples live under `fluss-rust/` and build with Cargo. You need **Rust** (the toolchain pinned in `fluss-rust/rust-toolchain.toml`, currently 1.85+). The code generated from the canonical `fluss-rpc/src/main/proto/FlussApi.proto` is checked in, so **protoc** is only needed when the proto changes — run `fluss-rust/crates/fluss/regen.sh` and commit the result.
 
 ```bash
-# protoc (pick one)
-brew install protobuf                    # macOS
-sudo apt-get install protobuf-compiler   # Debian/Ubuntu
-
 cd fluss-rust
 cargo build --workspace --all-targets    # build everything
 cargo test --workspace                    # unit tests
