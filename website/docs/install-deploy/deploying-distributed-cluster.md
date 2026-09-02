@@ -166,8 +166,8 @@ services; the others run as **standby**. If the leader fails, a standby is promo
 increments the coordinator epoch to fence off the old leader.
 
 :::note
-During failover, admin operations (e.g., creating/dropping tables) are temporarily unavailable,
-but data reads and writes on existing tables are **not** affected. The time to elect a new
+During failover, admin operations (e.g., creating/dropping tables) are temporarily unavailable.
+Data reads and writes are not affected if no tablet server fails. The time to elect a new
 leader is bounded by `zookeeper.client.session-timeout` (default 60 seconds).
 :::
 

@@ -258,7 +258,7 @@ You can use the following `docker-compose.yml` file to start a Fluss cluster wit
 
 ```yaml
 services:
-  coordinator-server:
+  coordinator-server-0:
     image: apache/fluss:$FLUSS_DOCKER_VERSION$
     command: coordinatorServer
     depends_on:
@@ -267,7 +267,7 @@ services:
       - |
         FLUSS_PROPERTIES=
         zookeeper.address: zookeeper:2181
-        bind.listeners: INTERNAL://coordinator-server:0, CLIENT://coordinator-server:9123
+        bind.listeners: INTERNAL://coordinator-server-0:0, CLIENT://coordinator-server-0:9123
         advertised.listeners: CLIENT://localhost:9123
         internal.listener.name: INTERNAL
         remote.data.dir: /tmp/fluss/remote-data
@@ -292,7 +292,7 @@ services:
     image: apache/fluss:$FLUSS_DOCKER_VERSION$
     command: tabletServer
     depends_on:
-      - coordinator-server
+      - coordinator-server-0
     environment:
       - |
         FLUSS_PROPERTIES=
@@ -312,7 +312,7 @@ services:
     image: apache/fluss:$FLUSS_DOCKER_VERSION$
     command: tabletServer
     depends_on:
-      - coordinator-server
+      - coordinator-server-0
     environment:
       - |
         FLUSS_PROPERTIES=
@@ -332,7 +332,7 @@ services:
     image: apache/fluss:$FLUSS_DOCKER_VERSION$
     command: tabletServer
     depends_on:
-      - coordinator-server
+      - coordinator-server-0
     environment:
       - |
         FLUSS_PROPERTIES=
