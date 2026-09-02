@@ -124,6 +124,14 @@ See [set_cluster_configs](../engine-flink/procedures.md#set_cluster_configs) for
 
 Add JARs to `${FLUSS_HOME}/plugins/<format>/` based on your configuration:
 
+:::warning
+These JARs go in `${FLUSS_HOME}/plugins/<format>/`, together with the `fluss-lake-<format>` JAR and
+the dependencies it needs. Do not also place them in `${FLUSS_HOME}/lib`: a copy on the main
+classpath shadows the plugin and is loaded without its bundled dependencies, so the CoordinatorServer
+fails to start with errors such as `NoClassDefFoundError: org/apache/hadoop/hdfs/HdfsConfiguration`.
+See [Troubleshooting Plugins](../maintenance/troubleshooting-plugins.md).
+:::
+
 <Tabs groupId="datalake-format">
 <TabItem value="paimon" label="Paimon" default>
 
@@ -169,7 +177,8 @@ The Tiering Service is a Flink job that continuously tiers data from Fluss to th
 
 ### Flink JARs
 
-Add the following to `${FLINK_HOME}/lib`:
+Add the following to `${FLINK_HOME}/lib` — this is the **Flink** installation, not
+`${FLUSS_HOME}/lib`:
 
 <Tabs groupId="datalake-format">
 <TabItem value="paimon" label="Paimon" default>
