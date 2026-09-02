@@ -20,6 +20,7 @@ production environments.
 - A Unix-like environment with Bash and `curl`
 - Docker with Docker Compose v2
 - [just](https://github.com/casey/just)
+- Network access to Maven Central and container registries on first use
 
 A profile represents one local test scenario and starts only the runtime components that scenario
 needs.
@@ -56,9 +57,11 @@ just build gateway
 just up gateway
 ```
 
-`just build <profile>` builds every artifact required by the profile. `just up <profile>` checks
-that those artifacts exist, starts the declared runtime components, and waits for them to become
-ready. It does not rebuild automatically or detect whether source code is newer than an artifact.
+`just build <profile>` compiles local code and downloads the external JARs declared by the profile.
+It refreshes only the assembled Fluss distribution, while other Maven modules remain incremental.
+`just up <profile>` checks those prepared artifacts, starts the declared runtime components, and
+waits for them to become ready. It does not run Maven or Cargo, download profile JARs, or detect
+whether source code is newer than an artifact. Docker may still pull a missing image on first start.
 
 ## Testing Local Changes
 
@@ -133,13 +136,13 @@ just tiering-status
 just run-sql examples/lake/paimon/lake-only-read.sql
 ```
 
-Tiering is asynchronous. Repeat the Lake-only query if it runs before the first snapshot is
-committed. The sample result contains three rows, ID sum `6`, three distinct payloads, and payloads
-from `alpha` to `gamma`.
+Tiering is asynchronous, so the first Lake-only query may run before a snapshot is committed. Once
+the snapshot is available, `lake-only-read.sql` returns the two profiles for Alice and Bob that were
+inserted by `setup.sql`.
 
-Iceberg and Lance provide focused `create-table.sql`, `write-data.sql`, and `query-lake.sql` files
-under `examples/lake/<format>/`. Lance does not include a Flink SQL reader for Lake-only queries;
-inspect its objects in RustFS instead.
+Iceberg provides focused `create-table.sql`, `write-data.sql`, and `query-lake.sql` files under
+`examples/lake/iceberg/`. Lance provides `create-table.sql` and `write-data.sql`; it does not include
+a Flink SQL reader for Lake-only queries, so inspect its objects in RustFS instead.
 
 The examples use fixed table names. Run `just clean` before repeating a workflow when existing
 tables or lake data would conflict.
@@ -174,7 +177,7 @@ There is no need to add a new `just` command.
 
 | File | Purpose |
 |---|---|
-| `build.targets` | Artifacts built by `just build`: `core`, `gateway`, or `tiering` |
+| `build.targets` | Build groups: `core` prepares the distribution and Flink connector, `tiering` prepares those artifacts plus Lake plugins and the Tiering Job, and `gateway` prepares the Gateway executable |
 | `runtime.targets` | Components started and checked by `just up`: `core`, `flink`, `gateway`, or `tiering` |
 | `server.yaml` | Fluss Server and Lake Tiering configuration |
 | `jars.urls` | Additional JARs shared by Fluss Server and Flink |
@@ -184,6 +187,11 @@ There is no need to add a new `just` command.
 
 Target files contain whitespace-separated names. URL and Compose files contain one entry per line.
 Blank lines and `#` comments are ignored.
+
+`tiering` already includes the artifacts prepared by `core`, so a Lake profile normally declares
+only `tiering` in `build.targets`. Add `gateway` when the scenario also needs the Gateway executable.
+For Paimon and Iceberg URLs, use the versions managed by `paimon.version` and `iceberg.version` in
+the root `pom.xml`; the DevKit smoke workflow checks this alignment before building.
 
 To create a reusable Lake Tiering scenario with Gateway, copy the closest profile:
 
@@ -214,7 +222,8 @@ Lake configuration.
 
 To add a different supporting container, define it in a Compose overlay and list that overlay in
 the profile's `compose.files`. Put the component's Fluss or Lake settings in the same profile's
-`server.yaml`.
+`server.yaml`. DevKit records the selected profile when `just up` runs, so subsequent lifecycle
+commands use the same overlays.
 
 Gateway always mounts the standard `fluss-gateway/conf/gateway.yaml`. Edit that file and restart the
 profile to test Gateway configuration changes. Docker overrides these three values so the process is
@@ -244,9 +253,14 @@ just down
 just clean
 ```
 
-`just up` replaces containers from the previous profile while preserving named volumes. `just down`
-removes containers and keeps data. `just clean` also removes Compose volumes and staged Server JARs.
+`just up` replaces containers from the previous profile, reconciles the current profile's staged
+Server JARs, and preserves named volumes. `just down` removes containers while retaining both data
+and the selected profile, so `status`, `logs`, `exec`, and `clean` keep using the same Compose
+overlays. `just clean` also removes Compose volumes, all staged Server JARs, and the selected profile.
 Downloaded dependencies remain in the ignored `.deps` cache.
+
+`just tiering-status` succeeds only when the active Lake profile's format-specific Tiering Job is
+running.
 
 ### Default Endpoints
 

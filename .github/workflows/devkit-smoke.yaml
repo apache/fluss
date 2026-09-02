@@ -28,6 +28,13 @@ on:
       - 'fluss-dist/**'
       - 'fluss-flink/fluss-flink-1.20/**'
       - 'fluss-flink/fluss-flink-common/**'
+      - 'fluss-flink/fluss-flink-tiering/**'
+      - 'fluss-filesystems/fluss-fs-s3/**'
+      - 'fluss-gateway/**'
+      - 'fluss-lake/fluss-lake-paimon/**'
+      - 'fluss-lake/pom.xml'
+      - 'fluss-rust/Cargo.toml'
+      - 'fluss-rust/crates/fluss/**'
       - 'pom.xml'
       - '.github/workflows/devkit-smoke.yaml'
   push:
@@ -39,6 +46,13 @@ on:
       - 'fluss-dist/**'
       - 'fluss-flink/fluss-flink-1.20/**'
       - 'fluss-flink/fluss-flink-common/**'
+      - 'fluss-flink/fluss-flink-tiering/**'
+      - 'fluss-filesystems/fluss-fs-s3/**'
+      - 'fluss-gateway/**'
+      - 'fluss-lake/fluss-lake-paimon/**'
+      - 'fluss-lake/pom.xml'
+      - 'fluss-rust/Cargo.toml'
+      - 'fluss-rust/crates/fluss/**'
       - 'pom.xml'
       - '.github/workflows/devkit-smoke.yaml'
 
@@ -64,17 +78,52 @@ jobs:
         with:
           tool: just@1.40.0
 
-      - name: Run core and Paimon smoke tests
+      - name: Validate managed profile dependency versions
+        working-directory: devkit
+        run: |
+          set -euo pipefail
+          paimon_version=$(sed -n 's:.*<paimon.version>\([^<]*\)</paimon.version>.*:\1:p' ../pom.xml)
+          iceberg_version=$(sed -n 's:.*<iceberg.version>\([^<]*\)</iceberg.version>.*:\1:p' ../pom.xml)
+          grep -Fq "/paimon-s3/${paimon_version}/paimon-s3-${paimon_version}.jar" profiles/paimon/jars.urls
+          grep -Fq "/paimon-flink-1.20/${paimon_version}/paimon-flink-1.20-${paimon_version}.jar" profiles/paimon/flink.urls
+          grep -Fq "/iceberg-aws/${iceberg_version}/iceberg-aws-${iceberg_version}.jar" profiles/iceberg/jars.urls
+          grep -Fq "/iceberg-aws-bundle/${iceberg_version}/iceberg-aws-bundle-${iceberg_version}.jar" profiles/iceberg/jars.urls
+          grep -Fq "/iceberg-flink-runtime-1.20/${iceberg_version}/iceberg-flink-runtime-1.20-${iceberg_version}.jar" profiles/iceberg/flink.urls
+
+      - name: Run Gateway and Paimon smoke tests
         working-directory: devkit
         run: |
           set -euo pipefail
           trap 'just clean >/dev/null 2>&1 || true' EXIT
-          just build paimon
           just build gateway
           just up gateway
           curl --fail --silent --show-error http://localhost:8080/v1/clusters/default/databases
           just down
+          just build paimon
           just up paimon
           just run-sql examples/lake/paimon/setup.sql
-          just run-sql examples/lake/paimon/union-read.sql
-          just run-sql examples/lake/paimon/lake-only-read.sql
+          union_output=$(just run-sql examples/lake/paimon/union-read.sql)
+          printf '%s\n' "$union_output"
+          grep -Eq '\|[[:space:]]*1[[:space:]]*\|[[:space:]]*login[[:space:]]*\|[[:space:]]*alpha[[:space:]]*\|' <<<"$union_output"
+          grep -Eq '\|[[:space:]]*2[[:space:]]*\|[[:space:]]*purchase[[:space:]]*\|[[:space:]]*beta[[:space:]]*\|' <<<"$union_output"
+          grep -Eq '\|[[:space:]]*1[[:space:]]*\|[[:space:]]*Alice[[:space:]]*\|[[:space:]]*gold[[:space:]]*\|' <<<"$union_output"
+          grep -Eq '\|[[:space:]]*2[[:space:]]*\|[[:space:]]*Bob[[:space:]]*\|[[:space:]]*silver[[:space:]]*\|' <<<"$union_output"
+          test "$(grep -Fc '2 rows in set' <<<"$union_output")" -eq 2
+
+          lake_verified=false
+          lake_output=''
+          for _ in {1..20}; do
+            lake_output=$(just run-sql examples/lake/paimon/lake-only-read.sql || true)
+            if grep -Eq '\|[[:space:]]*1[[:space:]]*\|[[:space:]]*Alice[[:space:]]*\|[[:space:]]*gold[[:space:]]*\|' <<<"$lake_output" && \
+               grep -Eq '\|[[:space:]]*2[[:space:]]*\|[[:space:]]*Bob[[:space:]]*\|[[:space:]]*silver[[:space:]]*\|' <<<"$lake_output" && \
+               grep -Fq '2 rows in set' <<<"$lake_output"; then
+              lake_verified=true
+              break
+            fi
+            sleep 3
+          done
+          printf '%s\n' "$lake_output"
+          if [ "$lake_verified" != true ]; then
+            echo 'Lake-only Read did not return the expected Paimon snapshot'
+            exit 1
+          fi
