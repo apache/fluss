@@ -101,6 +101,7 @@ public class DefaultRowMerger implements RowMerger {
                 || TargetColumns.specifiesAllSchemaFieldIndexes(latestSchema, targetColumns)) {
             return fullRowMerger(latestShemaId, latestSchema);
         } else {
+            TargetColumns.checkSequenceGroupsAreFullyTargeted(latestSchema, targetColumns);
             // this also sanity checks the validity of the partial update
             PartialUpdater partialUpdater =
                     arbitrateSequenceGroups

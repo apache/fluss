@@ -28,6 +28,7 @@ import org.junit.jupiter.params.provider.MethodSource;
 
 import javax.annotation.Nullable;
 
+import java.util.BitSet;
 import java.util.stream.Stream;
 
 import static java.util.Arrays.asList;
@@ -244,5 +245,24 @@ class SequenceGroupsTest {
         assertThat(groups.resolveAcceptance(stored, newerRow)[A]).isTrue();
         assertThat(groups.resolveAcceptance(newerRow, stored)[A]).isFalse();
         assertThat(groups.resolveAcceptance(stored, withoutSequence)[A]).isFalse();
+    }
+
+    @Test
+    void testRestrictToLeavesUncoveredGroupsOutOfTheArbitration() {
+        BitSet coveringFirstGroup = new BitSet();
+        coveringFirstGroup.set(0); // k
+        coveringFirstGroup.set(A);
+        coveringFirstGroup.set(G1);
+        SequenceGroups restricted =
+                SequenceGroups.create(TWO_GROUPS).restrictTo(coveringFirstGroup);
+
+        // both groups fall behind, yet only the covered one still holds its fields back
+        boolean[] acceptance =
+                restricted.resolveAcceptance(twoGroupsRow(100, 100), twoGroupsRow(99, 99));
+        assertThat(acceptance).containsExactly(true, false, false, true, true);
+
+        // the uncovered group no longer arbitrates b or g2, so a null sequence cannot hold them back
+        assertThat(restricted.resolveAcceptance(twoGroupsRow(100, 100), twoGroupsRow(101, null)))
+                .containsExactly(true, true, true, true, true);
     }
 }

@@ -17,9 +17,13 @@
 
 package org.apache.fluss.server.kv;
 
+import org.apache.fluss.exception.InvalidTargetColumnException;
 import org.apache.fluss.metadata.Schema;
 
 import java.util.BitSet;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
@@ -54,5 +58,59 @@ public final class TargetColumns {
             covered.set(col);
         }
         return covered.nextClearBit(0) >= fieldCount;
+    }
+
+    /**
+     * Rejects a partial write that targets only part of a sequence group.
+     *
+     * <p>A group arbitrates its sequence columns and the columns they protect as one unit, so all
+     * of them have to move to the incoming row together. Targeting only part of a group would leave
+     * the stored row with values from two different sequences: either a protected column keeping an
+     * older value while the group sequence advances, or a protected column taking the incoming
+     * value on the strength of a sequence that is never stored.
+     *
+     * @param schema the schema being written
+     * @param targetColumns the row field indexes the write targets
+     * @throws InvalidTargetColumnException if a group is neither fully targeted nor fully left out
+     */
+    public static void checkSequenceGroupsAreFullyTargeted(Schema schema, int[] targetColumns) {
+        checkNotNull(schema, "schema");
+        checkNotNull(targetColumns, "targetColumns");
+        List<Schema.SequenceGroup> groups = schema.getSequenceGroups();
+        if (groups.isEmpty()) {
+            return;
+        }
+
+        List<String> fieldNames = schema.getRowType().getFieldNames();
+        Set<String> targetNames = new LinkedHashSet<>();
+        for (int col : targetColumns) {
+            if (col >= 0 && col < fieldNames.size()) {
+                targetNames.add(fieldNames.get(col));
+            }
+        }
+
+        for (Schema.SequenceGroup group : groups) {
+            Set<String> groupFields = new LinkedHashSet<>(group.getSequenceColumns());
+            groupFields.addAll(group.getProtectedColumns());
+
+            Set<String> missing = new LinkedHashSet<>();
+            boolean anyTargeted = false;
+            for (String field : groupFields) {
+                if (targetNames.contains(field)) {
+                    anyTargeted = true;
+                } else {
+                    missing.add(field);
+                }
+            }
+            if (anyTargeted && !missing.isEmpty()) {
+                throw new InvalidTargetColumnException(
+                        String.format(
+                                "The target write columns must cover the sequence group ordered by %s "
+                                        + "entirely or not at all, but %s %s missing.",
+                                group.getSequenceColumns(),
+                                missing,
+                                missing.size() == 1 ? "is" : "are"));
+            }
+        }
     }
 }

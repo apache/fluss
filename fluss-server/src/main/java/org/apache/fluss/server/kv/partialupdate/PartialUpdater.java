@@ -62,10 +62,12 @@ public class PartialUpdater {
             int[] targetColumns,
             @Nullable SequenceGroups sequenceGroups) {
         this.targetSchemaId = schemaId;
-        this.sequenceGroups = sequenceGroups;
         for (int targetColumn : targetColumns) {
             partialUpdateCols.set(targetColumn);
         }
+        // a group the write doesn't cover must not arbitrate, since its sequence is never stored
+        this.sequenceGroups =
+                sequenceGroups == null ? null : sequenceGroups.restrictTo(partialUpdateCols);
         for (int pkIndex : schema.getPrimaryKeyIndexes()) {
             primaryKeyCols.set(pkIndex);
         }

@@ -29,6 +29,7 @@ import javax.annotation.Nullable;
 
 import java.io.Serializable;
 import java.util.Arrays;
+import java.util.BitSet;
 import java.util.List;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
@@ -149,6 +150,22 @@ public class SequenceGroups implements Serializable {
         }
 
         return new SequenceGroups(groupOfField, readersOfGroup);
+    }
+
+    /**
+     * Returns the groups arbitrating only the fields the target set covers, since a group whose
+     * sequence is never stored must not decide on values the row keeps.
+     *
+     * @param targetFields the row field indexes the write targets
+     */
+    public SequenceGroups restrictTo(BitSet targetFields) {
+        int[] restricted = groupOfField.clone();
+        for (int i = 0; i < restricted.length; i++) {
+            if (!targetFields.get(i)) {
+                restricted[i] = NO_GROUP;
+            }
+        }
+        return new SequenceGroups(restricted, readersOfGroup);
     }
 
     /**
