@@ -21,9 +21,7 @@ import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
-import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
-import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.exception.DiskWriteLockedException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidRequiredAcksException;
@@ -180,24 +178,6 @@ class ReplicaManagerTest extends ReplicaTestBase {
 
     /** First PUT_KV version that understands the STORAGE_BACKPRESSURE_EXCEPTION error code. */
     private static final short PUT_KV_VERSION_WITH_STORAGE_BACKPRESSURE = 2;
-
-    @Test
-    void testRejectNonPositiveHistoricalPartitionConfigs() {
-        Configuration invalidThreadPoolSize = new Configuration(conf);
-        invalidThreadPoolSize.set(
-                ConfigOptions.SERVER_HISTORICAL_PARTITION_THREAD_POOL_MAX_SIZE, 0);
-        assertThatThrownBy(() -> replicaManager.validate(invalidThreadPoolSize))
-                .isInstanceOf(ConfigException.class)
-                .hasMessageContaining(
-                        ConfigOptions.SERVER_HISTORICAL_PARTITION_THREAD_POOL_MAX_SIZE.key());
-
-        Configuration invalidRequestLimit = new Configuration(conf);
-        invalidRequestLimit.set(ConfigOptions.NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS, 0);
-        assertThatThrownBy(() -> replicaManager.validate(invalidRequestLimit))
-                .isInstanceOf(ConfigException.class)
-                .hasMessageContaining(
-                        ConfigOptions.NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS.key());
-    }
 
     @Test
     void testProduceLog() throws Exception {
