@@ -49,6 +49,7 @@ import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -176,9 +177,7 @@ public class Sender implements Runnable {
             }
         } catch (Throwable t) {
             LOG.error("Fatal error in Fluss write sender thread: ", t);
-            running = false;
-            forceClose = true;
-            maybeAbortBatches(t);
+            handleFatalError(t, Collections.emptyList());
             ExceptionUtils.rethrow(t);
         } finally {
             destroyResources();
@@ -435,7 +434,7 @@ public class Sender implements Runnable {
                         // encoding runs out of direct memory. No callback is registered in that
                         // case. Fail the affected batches with the client-side cause before
                         // propagating the fatal error to stop the sender.
-                        handleFatalWriteRequestError(error, writeBatches);
+                        handleFatalError(error, writeBatches);
                         throw error;
                     } catch (Exception e) {
                         handleWriteRequestException(e, writeBatches);
@@ -646,7 +645,7 @@ public class Sender implements Runnable {
     private void handleWriteRequestException(Throwable t, List<ReadyWriteBatch> writeBatches) {
         Throwable cause = Errors.maybeUnwrapException(t);
         if (cause instanceof Error) {
-            handleFatalWriteRequestError(cause, writeBatches);
+            handleFatalError(cause, writeBatches);
             return;
         }
 
@@ -663,10 +662,13 @@ public class Sender implements Runnable {
         metadataUpdater.invalidPhysicalTableBucketMeta(invalidMetadataTablesSet);
     }
 
-    private void handleFatalWriteRequestError(Throwable t, List<ReadyWriteBatch> writeBatches) {
+    private void handleFatalError(Throwable t, List<ReadyWriteBatch> writeBatches) {
+        accumulator.close();
         running = false;
         forceClose = true;
-        failWriteBatches(t, writeBatches);
+        if (!writeBatches.isEmpty()) {
+            failWriteBatches(t, writeBatches);
+        }
         maybeAbortBatches(t);
         wakeup();
     }

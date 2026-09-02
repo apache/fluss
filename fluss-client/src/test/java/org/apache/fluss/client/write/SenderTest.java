@@ -27,6 +27,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.exception.AuthorizationException;
+import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
 import org.apache.fluss.exception.PartitionNotExistException;
@@ -387,6 +388,14 @@ final class SenderTest {
         assertThat(sender.isRunning()).isFalse();
         assertThat(sender.numOfInFlightBatches(kvBucket)).isZero();
         assertThat(accumulator.hasIncomplete()).isFalse();
+        assertThatThrownBy(
+                        () ->
+                                appendKvToAccumulator(
+                                        kvBucket,
+                                        compactedRow(DATA1_ROW_TYPE, new Object[] {2, "b"}),
+                                        (tb, leo, e) -> {}))
+                .isInstanceOf(FlussRuntimeException.class)
+                .hasMessage("Writer closed while send in progress");
     }
 
     @Test

@@ -55,6 +55,7 @@ import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.security.auth.AuthenticationFactory;
 import org.apache.fluss.security.auth.ClientAuthenticator;
 import org.apache.fluss.shaded.netty4.io.netty.bootstrap.Bootstrap;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelFuture;
 import org.apache.fluss.shaded.netty4.io.netty.channel.EventLoopGroup;
 import org.apache.fluss.utils.NetUtils;
@@ -63,7 +64,6 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import java.time.Duration;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
@@ -85,10 +85,10 @@ import static org.apache.fluss.metrics.MetricNames.CLIENT_RESPONSES_RATE_AVG;
 import static org.apache.fluss.metrics.MetricNames.CLIENT_RESPONSES_RATE_TOTAL;
 import static org.apache.fluss.rpc.netty.NettyUtils.getClientSocketChannelClass;
 import static org.apache.fluss.rpc.netty.NettyUtils.newEventLoopGroup;
-import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.apache.fluss.utils.NetUtils.getAvailablePort;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -204,24 +204,45 @@ public class ServerConnectionTest {
     }
 
     @Test
-    void testEncodingErrorRemovesInflightRequest() throws Exception {
+    void testEncodingErrorDoesNotInterruptPendingRequests() throws Exception {
+        CountDownLatch connectionLatch = new CountDownLatch(1);
+        Bootstrap delayedBootstrap =
+                new Bootstrap() {
+                    @Override
+                    public ChannelFuture connect(String host, int port) {
+                        return bootstrap
+                                .connect(host, port)
+                                .addListener(f -> connectionLatch.await(1, TimeUnit.MINUTES));
+                    }
+                };
         ServerConnection connection =
                 new ServerConnection(
-                        bootstrap,
+                        delayedBootstrap,
                         serverNode,
                         TestingClientMetricGroup.newInstance(),
                         clientAuthenticator,
                         (con, ignore) -> {});
         try {
-            retry(Duration.ofSeconds(20), () -> assertThat(connection.isReady()).isTrue());
-
             OutOfMemoryError error = new OutOfMemoryError("Direct buffer memory");
             ApiMessage request = mock(ApiMessage.class);
-            when(request.totalSize()).thenThrow(error);
+            when(request.totalSize()).thenReturn(0).thenThrow(error);
+            when(request.writeTo(any(ByteBuf.class))).thenReturn(0);
 
-            assertThatThrownBy(() -> connection.send(ApiKeys.LOOKUP, request)).isSameAs(error);
+            CompletableFuture<ApiMessage> failedFuture = connection.send(ApiKeys.LOOKUP, request);
+            LookupRequest validRequest = new LookupRequest().setTableId(1);
+            validRequest.addBucketsReq().setBucketId(1);
+            CompletableFuture<ApiMessage> successfulFuture =
+                    connection.send(ApiKeys.LOOKUP, validRequest);
+            assertThat(failedFuture).isNotDone();
+            assertThat(successfulFuture).isNotDone();
+
+            connectionLatch.countDown();
+
+            assertThatThrownBy(() -> failedFuture.get(20, TimeUnit.SECONDS)).hasCause(error);
+            assertThat(successfulFuture.get(20, TimeUnit.SECONDS)).isNotNull();
             assertThat(connection.numInflightRequests()).isZero();
         } finally {
+            connectionLatch.countDown();
             connection.close().get();
         }
     }

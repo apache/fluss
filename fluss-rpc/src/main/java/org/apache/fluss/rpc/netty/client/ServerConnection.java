@@ -329,15 +329,25 @@ final class ServerConnection {
             inflightRequests.put(inflight.requestId, inflight);
 
             // TODO: maybe we need to add timeout for the inflight requests
-            ByteBuf byteBuf;
+            ByteBuf byteBuf = null;
             try {
                 byteBuf = inflight.toByteBuf(channel.alloc());
+                connectionMetrics.updateMetricsBeforeSendRequest(apiKey, rawRequest.totalSize());
             } catch (Throwable t) {
                 LOG.error("Failed to encode request for '{}'.", ApiKeys.forId(inflight.apiKey), t);
+                if (byteBuf != null) {
+                    try {
+                        byteBuf.release();
+                    } catch (Throwable releaseFailure) {
+                        if (releaseFailure != t) {
+                            t.addSuppressed(releaseFailure);
+                        }
+                    }
+                }
                 inflightRequests.remove(inflight.requestId);
                 if (t instanceof Error) {
                     responseFuture.completeExceptionally(t);
-                    throw (Error) t;
+                    return responseFuture;
                 }
                 responseFuture.completeExceptionally(
                         new FlussRuntimeException(
@@ -347,8 +357,6 @@ final class ServerConnection {
                                 t));
                 return responseFuture;
             }
-
-            connectionMetrics.updateMetricsBeforeSendRequest(apiKey, rawRequest.totalSize());
 
             channel.writeAndFlush(byteBuf)
                     .addListener(
