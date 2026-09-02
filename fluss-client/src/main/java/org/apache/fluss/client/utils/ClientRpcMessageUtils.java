@@ -673,8 +673,9 @@ public class ClientRpcMessageUtils {
                 pbBucketInfo.getBucketId(),
                 pbBucketInfo.hasLeaderId() ? pbBucketInfo.getLeaderId() : null,
                 pbBucketInfo.hasLeaderEpoch() ? pbBucketInfo.getLeaderEpoch() : null,
+                pbBucketInfo.hasBucketEpoch() ? pbBucketInfo.getBucketEpoch() : null,
                 Arrays.stream(pbBucketInfo.getReplicaIds()).boxed().collect(Collectors.toList()),
-                Arrays.stream(pbBucketInfo.getIsrIds()).boxed().collect(Collectors.toList()));
+                Arrays.stream(pbBucketInfo.getIsrs()).boxed().collect(Collectors.toList()));
     }
 
     public static Map<String, String> toKeyValueMap(List<PbKeyValue> pbKeyValues) {

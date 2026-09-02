@@ -136,11 +136,12 @@ class ClientRpcMessageUtilsTest {
         response.setTablePath().setDatabaseName("db").setTableName("table");
         PbBucketInfo tableBucket = response.addBucketInfo().setBucketId(0).setLeaderId(1);
         tableBucket.setLeaderEpoch(7);
+        tableBucket.setBucketEpoch(8);
         tableBucket.addReplicaId(1);
         tableBucket.addReplicaId(2);
         tableBucket.addReplicaId(3);
-        tableBucket.addIsrId(1);
-        tableBucket.addIsrId(3);
+        tableBucket.addIsr(1);
+        tableBucket.addIsr(3);
 
         PbBucketInfo partitionBucket = response.addBucketInfo().setBucketId(1);
         partitionBucket.setPartitionId(100L).setPartitionName("p1");
@@ -158,6 +159,7 @@ class ClientRpcMessageUtilsTest {
         assertThat(tableBucketInfo.getBucketId()).isEqualTo(0);
         assertThat(tableBucketInfo.getLeaderId()).hasValue(1);
         assertThat(tableBucketInfo.getLeaderEpoch()).hasValue(7);
+        assertThat(tableBucketInfo.getBucketEpoch()).hasValue(8);
         assertThat(tableBucketInfo.getReplicas()).containsExactly(1, 2, 3);
         assertThat(tableBucketInfo.getIsr()).containsExactly(1, 3);
 
@@ -168,6 +170,7 @@ class ClientRpcMessageUtilsTest {
         assertThat(partitionBucketInfo.getBucketId()).isEqualTo(1);
         assertThat(partitionBucketInfo.getLeaderId()).isEmpty();
         assertThat(partitionBucketInfo.getLeaderEpoch()).isEmpty();
+        assertThat(partitionBucketInfo.getBucketEpoch()).isEmpty();
         assertThat(partitionBucketInfo.getReplicas()).containsExactly(2, 3);
         assertThat(partitionBucketInfo.getIsr()).isEmpty();
     }

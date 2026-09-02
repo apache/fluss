@@ -135,6 +135,7 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toListPartitio
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toPbConfigEntries;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toPbDatabaseSummary;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTablePath;
+import static org.apache.fluss.server.zk.data.LeaderAndIsr.NO_LEADER;
 import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
@@ -420,7 +421,8 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                                         response, partitionId, partitionName, bucketMetadata));
     }
 
-    private static void addBucketInfo(
+    @VisibleForTesting
+    static void addBucketInfo(
             DescribeBucketsResponse response,
             @Nullable Long partitionId,
             @Nullable String partitionName,
@@ -433,10 +435,16 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         if (partitionName != null) {
             pbBucketInfo.setPartitionName(partitionName);
         }
-        bucketMetadata.getLeaderId().ifPresent(pbBucketInfo::setLeaderId);
-        bucketMetadata.getLeaderEpoch().ifPresent(pbBucketInfo::setLeaderEpoch);
+        if (bucketMetadata.getLeaderId().isPresent()
+                && bucketMetadata.getLeaderId().getAsInt() != NO_LEADER) {
+            pbBucketInfo.setLeaderId(bucketMetadata.getLeaderId().getAsInt());
+            bucketMetadata.getLeaderEpoch().ifPresent(pbBucketInfo::setLeaderEpoch);
+        }
+        if (bucketMetadata.getBucketEpoch() != null) {
+            pbBucketInfo.setBucketEpoch(bucketMetadata.getBucketEpoch());
+        }
         bucketMetadata.getReplicas().forEach(pbBucketInfo::addReplicaId);
-        bucketMetadata.getIsr().forEach(pbBucketInfo::addIsrId);
+        bucketMetadata.getIsr().forEach(pbBucketInfo::addIsr);
     }
 
     @Override

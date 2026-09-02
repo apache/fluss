@@ -25,10 +25,12 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.DatabaseSummary;
+import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.entity.RegisterTableBucketLeadAndIsrInfo;
 import org.apache.fluss.server.zk.ZkAsyncResponse.ZkGetDataResponse;
@@ -44,7 +46,10 @@ import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
 import org.apache.fluss.server.zk.data.ZkData.BucketIdZNode;
+import org.apache.fluss.server.zk.data.ZkData.LeaderAndIsrZNode;
+import org.apache.fluss.server.zk.data.ZkData.PartitionIdZNode;
 import org.apache.fluss.server.zk.data.ZkData.PartitionZNode;
+import org.apache.fluss.server.zk.data.ZkData.TableIdZNode;
 import org.apache.fluss.server.zk.data.lease.KvSnapshotLeaseMetadata;
 import org.apache.fluss.shaded.curator5.org.apache.curator.CuratorZookeeperClient;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
@@ -203,6 +208,62 @@ class ZooKeeperClientTest {
     }
 
     @Test
+    void testGetTablesAssignmentsPreservesZookeeperErrors() throws Exception {
+        long tableId = 1L;
+        String tablePath = TableIdZNode.path(tableId);
+        ZooKeeperClient testingClient = spy(zookeeperClient);
+        doReturn(
+                        Arrays.asList(
+                                new ZkGetDataResponse(
+                                        tablePath, KeeperException.Code.OK, new byte[0]),
+                                new ZkGetDataResponse(
+                                        TableIdZNode.path(2L), KeeperException.Code.NONODE, null)))
+                .when(testingClient)
+                .getDataInBackground(anyCollection());
+
+        assertThat(testingClient.getTablesAssignments(Arrays.asList(tableId, 2L))).isEmpty();
+
+        doReturn(
+                        Collections.singletonList(
+                                new ZkGetDataResponse(
+                                        tablePath, KeeperException.Code.CONNECTIONLOSS, null)))
+                .when(testingClient)
+                .getDataInBackground(anyCollection());
+
+        assertThatThrownBy(() -> testingClient.getTablesAssignments(Collections.singleton(tableId)))
+                .isInstanceOf(KeeperException.ConnectionLossException.class);
+    }
+
+    @Test
+    void testGetPartitionsAssignmentsPreservesZookeeperErrors() throws Exception {
+        long partitionId = 1L;
+        String partitionPath = PartitionIdZNode.path(partitionId);
+        ZooKeeperClient testingClient = spy(zookeeperClient);
+        doReturn(
+                        Collections.singletonList(
+                                new ZkGetDataResponse(
+                                        partitionPath, KeeperException.Code.NONODE, null)))
+                .when(testingClient)
+                .getDataInBackground(anyCollection());
+
+        assertThat(testingClient.getPartitionsAssignments(Collections.singleton(partitionId)))
+                .isEmpty();
+
+        doReturn(
+                        Collections.singletonList(
+                                new ZkGetDataResponse(
+                                        partitionPath, KeeperException.Code.CONNECTIONLOSS, null)))
+                .when(testingClient)
+                .getDataInBackground(anyCollection());
+
+        assertThatThrownBy(
+                        () ->
+                                testingClient.getPartitionsAssignments(
+                                        Collections.singleton(partitionId)))
+                .isInstanceOf(KeeperException.ConnectionLossException.class);
+    }
+
+    @Test
     void testLeaderAndIsr() throws Exception {
         // try to get bucket leadership, should return empty
         TableBucket tableBucket1 = new TableBucket(1, 1);
@@ -237,6 +298,33 @@ class ZooKeeperClientTest {
         // test delete
         zookeeperClient.deleteLeaderAndIsr(tableBucket1);
         assertThat(zookeeperClient.getLeaderAndIsr(tableBucket1)).isEmpty();
+    }
+
+    @Test
+    void testGetLeaderAndIsrsPreservesZookeeperErrors() throws Exception {
+        TableBucket tableBucket = new TableBucket(1L, 0);
+        String leaderAndIsrPath = LeaderAndIsrZNode.path(tableBucket);
+        ZooKeeperClient testingClient = spy(zookeeperClient);
+        doReturn(
+                        Collections.singletonList(
+                                new ZkGetDataResponse(
+                                        leaderAndIsrPath, KeeperException.Code.NONODE, null)))
+                .when(testingClient)
+                .getDataInBackground(anyCollection());
+
+        assertThat(testingClient.getLeaderAndIsrs(Collections.singleton(tableBucket))).isEmpty();
+
+        doReturn(
+                        Collections.singletonList(
+                                new ZkGetDataResponse(
+                                        leaderAndIsrPath,
+                                        KeeperException.Code.CONNECTIONLOSS,
+                                        null)))
+                .when(testingClient)
+                .getDataInBackground(anyCollection());
+
+        assertThatThrownBy(() -> testingClient.getLeaderAndIsrs(Collections.singleton(tableBucket)))
+                .isInstanceOf(KeeperException.ConnectionLossException.class);
     }
 
     @ParameterizedTest
@@ -789,6 +877,12 @@ class ZooKeeperClientTest {
         assertThat(testingClient.getPartitionRegistrations(tablePath))
                 .containsOnlyKeys("p1")
                 .containsValue(partitionRegistration);
+        PhysicalTablePath partitionPath = PhysicalTablePath.of(tablePath, "p1");
+        Map<PhysicalTablePath, TablePartition> partitionIds =
+                testingClient.getPartitionIds(Collections.singleton(partitionPath));
+        assertThat(partitionIds).containsOnlyKeys(partitionPath);
+        assertThat(partitionIds.get(partitionPath).getTableId()).isEqualTo(1L);
+        assertThat(partitionIds.get(partitionPath).getPartitionId()).isEqualTo(2L);
 
         doReturn(
                         Collections.singletonList(
@@ -798,6 +892,9 @@ class ZooKeeperClientTest {
                 .getDataInBackground(anyCollection());
 
         assertThatThrownBy(() -> testingClient.getPartitionRegistrations(tablePath))
+                .isInstanceOf(KeeperException.ConnectionLossException.class);
+        assertThatThrownBy(
+                        () -> testingClient.getPartitionIds(Collections.singleton(partitionPath)))
                 .isInstanceOf(KeeperException.ConnectionLossException.class);
     }
 

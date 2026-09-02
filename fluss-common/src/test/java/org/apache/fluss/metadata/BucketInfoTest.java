@@ -36,7 +36,8 @@ class BucketInfoTest {
         List<Integer> replicas = new ArrayList<>(Arrays.asList(1, 2, 3));
         List<Integer> isr = new ArrayList<>(Arrays.asList(1, 3));
 
-        BucketInfo bucketInfo = new BucketInfo(tablePath, 10L, 100L, "p1", 0, 1, 7, replicas, isr);
+        BucketInfo bucketInfo =
+                new BucketInfo(tablePath, 10L, 100L, "p1", 0, 1, 7, 8, replicas, isr);
 
         assertThat(bucketInfo.getTablePath()).isEqualTo(tablePath);
         assertThat(bucketInfo.getTableId()).isEqualTo(10L);
@@ -45,6 +46,7 @@ class BucketInfoTest {
         assertThat(bucketInfo.getBucketId()).isEqualTo(0);
         assertThat(bucketInfo.getLeaderId()).hasValue(1);
         assertThat(bucketInfo.getLeaderEpoch()).hasValue(7);
+        assertThat(bucketInfo.getBucketEpoch()).hasValue(8);
         assertThat(bucketInfo.getReplicas()).containsExactly(1, 2, 3);
         assertThat(bucketInfo.getIsr()).containsExactly(1, 3);
 
@@ -69,6 +71,7 @@ class BucketInfoTest {
                         0,
                         null,
                         null,
+                        null,
                         Collections.singletonList(1),
                         Collections.emptyList());
 
@@ -76,6 +79,7 @@ class BucketInfoTest {
         assertThat(bucketInfo.getPartitionName()).isNull();
         assertThat(bucketInfo.getLeaderId()).isEmpty();
         assertThat(bucketInfo.getLeaderEpoch()).isEmpty();
+        assertThat(bucketInfo.getBucketEpoch()).isEmpty();
         assertThat(bucketInfo.getReplicas()).containsExactly(1);
         assertThat(bucketInfo.getIsr()).isEmpty();
     }
@@ -94,6 +98,7 @@ class BucketInfoTest {
                                         0,
                                         null,
                                         null,
+                                        null,
                                         Collections.singletonList(1),
                                         Collections.emptyList()))
                 .isInstanceOf(NullPointerException.class)
@@ -109,6 +114,7 @@ class BucketInfoTest {
                                         null,
                                         null,
                                         null,
+                                        null,
                                         Collections.emptyList()))
                 .isInstanceOf(NullPointerException.class)
                 .hasMessageContaining("replicas should not be null");
@@ -120,6 +126,7 @@ class BucketInfoTest {
                                         null,
                                         null,
                                         0,
+                                        null,
                                         null,
                                         null,
                                         Collections.singletonList(1),
