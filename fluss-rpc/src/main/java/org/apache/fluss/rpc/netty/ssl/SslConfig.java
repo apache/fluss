@@ -33,7 +33,9 @@ import java.security.GeneralSecurityException;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -52,16 +54,31 @@ import java.util.stream.Collectors;
  * factory methods so misconfiguration fails fast with a clear message, instead of surfacing later
  * as an engine-level error on every connection.
  *
- * <p>The per-listener client-certificate requirement is <b>not</b> held here: it is derived per
- * listener from the listener's authentication protocol ({@code mTLS} ⇒ require) when the server
- * pipeline is wired. The server context is always built with a trust manager when a truststore is
- * configured, so any listener can request client certs.
+ * <p>The per-listener client-certificate requirement <b>is</b> held here: a TLS listener whose
+ * {@code security.protocol.map} entry is {@code mTLS} requires a client certificate, which the
+ * server can only validate against an explicitly configured truststore — so such a listener without
+ * {@code security.ssl.truststore.path} is rejected here rather than silently falling back to the
+ * JVM default truststore. The server pipeline reads the requirement per listener via {@link
+ * #requiresClientAuth(String)} instead of re-deriving it from the raw configuration.
  */
 @Internal
 public final class SslConfig {
 
+    /**
+     * The {@code security.protocol.map} authentication protocol that requires a client certificate.
+     * Matched case-insensitively, as {@code AuthenticationFactory} matches authentication protocol
+     * names.
+     */
+    private static final String MUTUAL_TLS_AUTH_PROTOCOL = "mTLS";
+
     /** Server-only: the listener names for which TLS is enabled (empty for a client config). */
     private final List<String> enabledListeners;
+
+    /**
+     * Server-only: the subset of {@link #enabledListeners} that requires a client certificate
+     * (empty for a client config).
+     */
+    private final Set<String> clientAuthListeners;
 
     private final List<String> enabledProtocols;
     private final List<String> cipherSuites;
@@ -82,6 +99,7 @@ public final class SslConfig {
 
     private SslConfig(
             List<String> enabledListeners,
+            Set<String> clientAuthListeners,
             List<String> enabledProtocols,
             List<String> cipherSuites,
             @Nullable String keystorePath,
@@ -93,6 +111,7 @@ public final class SslConfig {
             String truststoreType,
             String endpointIdentificationAlgorithm) {
         this.enabledListeners = enabledListeners;
+        this.clientAuthListeners = clientAuthListeners;
         this.enabledProtocols = enabledProtocols;
         this.cipherSuites = cipherSuites;
         this.keystorePath = keystorePath;
@@ -124,6 +143,25 @@ public final class SslConfig {
                     ConfigOptions.SERVER_SSL_ENABLED_LISTENERS.key());
         }
 
+        Map<String, String> protocolMap = conf.get(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP);
+        Set<String> clientAuthListeners =
+                enabledListeners.stream()
+                        .filter(
+                                listener ->
+                                        MUTUAL_TLS_AUTH_PROTOCOL.equalsIgnoreCase(
+                                                protocolMap.get(listener)))
+                        .collect(Collectors.toCollection(LinkedHashSet::new));
+        String truststorePath = conf.getString(ConfigOptions.SERVER_SSL_TRUSTSTORE_PATH);
+        if (!clientAuthListeners.isEmpty() && truststorePath == null) {
+            throw new IllegalConfigurationException(
+                    "'%s' must be configured to validate client certificates for the %s listener(s) %s. "
+                            + "Without it the server would validate client certificates against the JVM "
+                            + "default truststore, accepting any certificate issued by a public CA.",
+                    ConfigOptions.SERVER_SSL_TRUSTSTORE_PATH.key(),
+                    MUTUAL_TLS_AUTH_PROTOCOL,
+                    clientAuthListeners);
+        }
+
         List<String> enabledProtocols =
                 orEmpty(conf.get(ConfigOptions.SERVER_SSL_ENABLED_PROTOCOLS));
         List<String> cipherSuites = orEmpty(conf.get(ConfigOptions.SERVER_SSL_CIPHER_SUITES));
@@ -136,13 +174,14 @@ public final class SslConfig {
         return Optional.of(
                 new SslConfig(
                         enabledListeners,
+                        clientAuthListeners,
                         enabledProtocols,
                         cipherSuites,
                         keystorePath,
                         password(conf.get(ConfigOptions.SERVER_SSL_KEYSTORE_PASSWORD)),
                         conf.getString(ConfigOptions.SERVER_SSL_KEYSTORE_TYPE),
                         password(conf.get(ConfigOptions.SERVER_SSL_KEY_PASSWORD)),
-                        conf.getString(ConfigOptions.SERVER_SSL_TRUSTSTORE_PATH),
+                        truststorePath,
                         password(conf.get(ConfigOptions.SERVER_SSL_TRUSTSTORE_PASSWORD)),
                         conf.getString(ConfigOptions.SERVER_SSL_TRUSTSTORE_TYPE),
                         ""));
@@ -169,6 +208,7 @@ public final class SslConfig {
         return Optional.of(
                 new SslConfig(
                         Collections.emptyList(),
+                        Collections.emptySet(),
                         enabledProtocols,
                         cipherSuites,
                         conf.getString(ConfigOptions.CLIENT_SSL_KEYSTORE_PATH),
@@ -268,6 +308,22 @@ public final class SslConfig {
      */
     public List<String> enabledListeners() {
         return enabledListeners;
+    }
+
+    /**
+     * Server-only: the TLS listeners that require a client certificate, i.e. those whose {@code
+     * security.protocol.map} entry is {@code mTLS}. Always empty for a client-side config.
+     */
+    public Set<String> clientAuthListeners() {
+        return clientAuthListeners;
+    }
+
+    /**
+     * Whether {@code listenerName} requires a client certificate during the TLS handshake. A
+     * truststore is guaranteed to be configured when this returns true.
+     */
+    public boolean requiresClientAuth(String listenerName) {
+        return clientAuthListeners.contains(listenerName);
     }
 
     public String[] enabledProtocols() {

@@ -44,8 +44,9 @@ import java.util.Optional;
  * <p>The JDK SSL provider is used for portability (it does not require a native OpenSSL binding to
  * be present on the host). Transport encryption is orthogonal to the application-level
  * authentication protocol: a TLS-enabled listener can run any authenticator. Mutual TLS is realized
- * by a listener whose auth protocol is {@code mTLS}; the per-listener client-certificate
- * requirement is then applied on the server handler ({@link #createServerSslHandler}).
+ * by a listener whose auth protocol is {@code mTLS}; that per-listener client-certificate
+ * requirement is parsed and validated by {@link SslConfig} and applied on the server handler
+ * ({@link #createServerSslHandler}).
  */
 @Internal
 public final class SslContextFactory {
@@ -131,8 +132,9 @@ public final class SslContextFactory {
 
     /**
      * Create a server-side {@link SslHandler} for a newly accepted channel. When {@code
-     * requireClientAuth} is true (an {@code mTLS} listener) the engine demands a client certificate
-     * during the handshake.
+     * requireClientAuth} is true the engine demands a client certificate during the handshake;
+     * callers derive that per listener from {@link SslConfig#requiresClientAuth(String)}, which
+     * only returns true when a truststore is configured to validate those certificates against.
      */
     public static SslHandler createServerSslHandler(
             SslContext sslContext, ByteBufAllocator alloc, boolean requireClientAuth) {

@@ -206,6 +206,72 @@ class SslContextFactoryTest {
     }
 
     @Test
+    void testServerConfigRequiresTruststoreForMtlsListener() {
+        Configuration conf = new Configuration();
+        TestSslUtils.setServerSslConfig(conf, keyStore, null);
+        TestSslUtils.setMutualTlsProtocolMap(conf);
+
+        // without a truststore the server would validate client certificates against the JVM
+        // default truststore, accepting anything issued by a public CA.
+        assertThatThrownBy(() -> SslConfig.fromServerConfig(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining(ConfigOptions.SERVER_SSL_TRUSTSTORE_PATH.key())
+                .hasMessageContaining(TestSslUtils.TLS_LISTENER);
+    }
+
+    @Test
+    void testMtlsListenerWithTruststoreRequiresClientAuth() {
+        Configuration conf = new Configuration();
+        TestSslUtils.setServerSslConfig(conf, keyStore, trustStore);
+        TestSslUtils.setMutualTlsProtocolMap(conf);
+
+        SslConfig config = SslConfig.fromServerConfig(conf).get();
+        assertThat(config.clientAuthListeners()).containsExactly(TestSslUtils.TLS_LISTENER);
+        assertThat(config.requiresClientAuth(TestSslUtils.TLS_LISTENER)).isTrue();
+        assertThat(config.truststorePath()).isEqualTo(trustStore.toString());
+    }
+
+    @Test
+    void testNonMtlsListenerNeedsNoTruststore() {
+        Configuration conf = new Configuration();
+        TestSslUtils.setServerSslConfig(conf, keyStore, null);
+        conf.setString(
+                ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(),
+                TestSslUtils.TLS_LISTENER + ":PLAINTEXT");
+
+        SslConfig config = SslConfig.fromServerConfig(conf).get();
+        assertThat(config.clientAuthListeners()).isEmpty();
+        assertThat(config.requiresClientAuth(TestSslUtils.TLS_LISTENER)).isFalse();
+    }
+
+    @Test
+    void testMtlsListenerWithoutTlsNeedsNoTruststore() {
+        Configuration conf = new Configuration();
+        TestSslUtils.setServerSslConfig(conf, keyStore, null);
+        // INTERNAL is an mTLS listener but TLS is not enabled for it, so it imposes nothing here.
+        conf.setString(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "INTERNAL:mTLS");
+
+        SslConfig config = SslConfig.fromServerConfig(conf).get();
+        assertThat(config.clientAuthListeners()).isEmpty();
+    }
+
+    @Test
+    void testMtlsProtocolNameIsCaseInsensitive() {
+        Configuration conf = new Configuration();
+        TestSslUtils.setServerSslConfig(conf, keyStore, trustStore);
+        conf.setString(
+                ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(),
+                TestSslUtils.TLS_LISTENER + ":MTLS");
+
+        // AuthenticationFactory matches authentication protocol names with equalsIgnoreCase.
+        assertThat(
+                        SslConfig.fromServerConfig(conf)
+                                .get()
+                                .requiresClientAuth(TestSslUtils.TLS_LISTENER))
+                .isTrue();
+    }
+
+    @Test
     void testServerConfigRejectsUnsupportedProtocol() {
         Configuration conf = new Configuration();
         TestSslUtils.setServerSslConfig(conf, keyStore, null);
