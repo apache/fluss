@@ -66,6 +66,7 @@ import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -604,6 +605,10 @@ public class MetadataManager {
                         newDescriptor);
         LakeCatalog lakeCatalog =
                 lakeCatalogDynamicLoader.getLakeCatalogContainer().getLakeCatalog();
+        boolean enablingDataLake =
+                isDataLakeEnabled(newDescriptor) && !isDataLakeEnabled(tableDescriptor);
+        TablePath lakeTablePath = currentLakeTablePath;
+        List<TableChange> lakeTableChanges = tableChanges;
 
         if (isDataLakeEnabled(newDescriptor)) {
             if (lakeCatalog == null) {
@@ -614,9 +619,9 @@ public class MetadataManager {
             }
 
             // to enable lake table
-            if (!isDataLakeEnabled(tableDescriptor)) {
+            if (enablingDataLake) {
                 // before create table in fluss, we may create in lake
-                TablePath lakeTablePath =
+                lakeTablePath =
                         LakeTableUtil.resolveLakeTablePath(
                                 tablePath, Configuration.fromMap(newDescriptor.getProperties()));
                 try {
@@ -625,9 +630,10 @@ public class MetadataManager {
                     throw new LakeTableAlreadyExistException(e.getMessage(), e);
                 }
 
-                // The lake table was created or verified against the complete new descriptor, so
-                // applying the same changes again is unnecessary.
-                return;
+                // The target path is already applied by createTable. Do not replay its mapping
+                // options through alterTable, where they are intentionally immutable.
+                lakeTableChanges = new ArrayList<>(tableChanges);
+                lakeTableChanges.removeIf(MetadataManager::isLakeTablePathChange);
             }
         }
 
@@ -639,18 +645,13 @@ public class MetadataManager {
         // resetting table.datalake.enabled removes the key entirely (see
         // #getUpdatedTableDescriptor), so a later re-enable would otherwise see an old descriptor
         // without the key and skip the alterTable call that re-applies lakestream.enabled.
-        boolean enablingDataLake =
-                isDataLakeEnabled(newDescriptor) && !isDataLakeEnabled(tableDescriptor);
         if (lakeCatalog != null
                 && (enablingDataLake
                         || tableDescriptor
                                 .getProperties()
                                 .containsKey(ConfigOptions.TABLE_DATALAKE_ENABLED.key()))) {
-            TablePath lakeTablePath =
-                    LakeTableUtil.resolveLakeTablePath(
-                            tablePath, Configuration.fromMap(tableDescriptor.getProperties()));
             try {
-                lakeCatalog.alterTable(lakeTablePath, tableChanges, lakeCatalogContext);
+                lakeCatalog.alterTable(lakeTablePath, lakeTableChanges, lakeCatalogContext);
             } catch (TableNotExistException e) {
                 // only throw TableNotExistException if datalake is enabled
                 if (isDataLakeEnabled(newDescriptor)) {
@@ -662,6 +663,19 @@ public class MetadataManager {
                 }
             }
         }
+    }
+
+    private static boolean isLakeTablePathChange(TableChange tableChange) {
+        String optionKey;
+        if (tableChange instanceof TableChange.SetOption) {
+            optionKey = ((TableChange.SetOption) tableChange).getKey();
+        } else if (tableChange instanceof TableChange.ResetOption) {
+            optionKey = ((TableChange.ResetOption) tableChange).getKey();
+        } else {
+            return false;
+        }
+        return ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key().equals(optionKey)
+                || ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key().equals(optionKey);
     }
 
     /**
