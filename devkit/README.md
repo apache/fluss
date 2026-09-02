@@ -1,46 +1,67 @@
 # Fluss DevKit
 
-DevKit is a contributor tool for running end-to-end tests against code in the current checkout. It
-builds the local Fluss distribution, connectors, plugins, or Gateway executable and mounts those
-artifacts into Docker containers. You do not need to build a Fluss development image.
+DevKit is a local development tool for running end-to-end tests against the Fluss code in the
+current checkout. It assembles local Fluss, Flink, lake, and Gateway artifacts and runs the selected
+test scenario with Docker Compose.
 
-If you want to learn Fluss without changing its code, start with the
-[Quickstart](../website/docs/quickstart/flink.md), which uses published images and bundles the
-dependencies needed by the tutorial. DevKit is intended for the next step: rebuild the current
-checkout, start only the components needed for a test, and exercise those local changes end to end.
-It is not a deployment tool; its profiles use local data, development ports, and sample
-dependencies. Use the [deployment documentation](../website/docs/install-deploy/) for persistent or
-production environments.
+DevKit is for local testing, not deployment. For a first Fluss tutorial use the
+[Quickstart](../website/docs/quickstart/flink.md). For persistent or production environments use
+the [deployment documentation](../website/docs/install-deploy/).
 
-## Getting Started
+## Profile Model
 
-### Requirements
+A **profile** is a complete, repeatable local test scenario under `profiles/<profile>/`. It defines
+the server configuration, optional dependency downloads, and supporting Compose files needed for
+that scenario. `just build <profile>` and `just up <profile>` both use the profile name as their
+single entry point. A profile names a scenario, not an individual component or build step.
+
+`runtime.targets` is the profile's only declaration of DevKit-managed runtime groups. Each target
+selects the artifacts to build, Compose services to start, and readiness checks to run. The file is
+a whitespace-separated set of target names; order has no meaning, and blank lines and `#` comments
+are ignored.
+
+| Target | Meaning | Required dependencies |
+|---|---|---|
+| `core` | ZooKeeper, CoordinatorServer, and TabletServer | None |
+| `flink` | Flink JobManager and TaskManager for SQL or connector tests | `core` |
+| `tiering` | The format-specific Fluss Lake Tiering Job | `core`, `flink` |
+| `gateway` | The Fluss Gateway process | `core` |
+
+Every profile must include `core`. Targets must be known, their required targets must be present,
+and targets must not be repeated. The built-in profiles are:
+
+| Profile | Scenario | Runtime targets |
+|---|---|---|
+| `core` | Fluss Server and Flink Connector SQL tests | `core flink` |
+| `gateway` | REST Gateway against a Fluss cluster | `core gateway` |
+| `paimon` | Paimon tiering, Union Read, and Lake-only Read | `core flink tiering` |
+| `iceberg` | Iceberg tiering with a JDBC catalog | `core flink tiering` |
+| `lance` | Lance writes and tiering | `core flink tiering` |
+
+`core` or `flink` builds the Fluss distribution and Flink connector; `tiering` adds the Tiering Job
+and lake plugin; `gateway` builds the Gateway executable. Compose overlays for these targets are
+selected automatically. Supporting services outside these built-in groups, such as RustFS or
+PostgreSQL, come from the profile-specific overlays listed in `compose.files`.
+
+The other profile files have narrow responsibilities:
+
+| File | Purpose |
+|---|---|
+| `server.yaml` | Fluss Server and Lake Tiering configuration |
+| `jars.urls` | JARs shared by Fluss Server and Flink |
+| `server.urls` | Fluss Server-only JARs |
+| `flink.urls` | Flink-only JARs |
+| `compose.files` | Additional Compose overlays |
+
+## Quick Start
+
+Requirements:
 
 - JDK 11 or later
-- A Unix-like environment with Bash and `curl`
+- Bash, `curl`, and a Unix-like environment
 - Docker with Docker Compose v2
 - [just](https://github.com/casey/just)
 - Network access to Maven Central and container registries on first use
-
-A profile represents one local test scenario and starts only the runtime components that scenario
-needs.
-
-| Profile | Use it to test | Components started |
-|---|---|---|
-| `core` | Fluss Server, Flink Connector, SQL reads and writes | ZooKeeper, Fluss, Flink |
-| `gateway` | REST Gateway against a real Fluss cluster | ZooKeeper, Fluss, Gateway |
-| `paimon` | Paimon tiering, Union Read, and Lake-only Read | ZooKeeper, Fluss, Flink, Tiering, RustFS |
-| `iceberg` | Iceberg tiering with a JDBC catalog | ZooKeeper, Fluss, Flink, Tiering, RustFS, PostgreSQL |
-| `lance` | Lance writes and tiering | ZooKeeper, Fluss, Flink, Tiering, RustFS |
-
-Profiles start one TabletServer by default. Pass `3` to test a three-TabletServer topology:
-
-```bash
-just up core 3
-just up gateway 3
-```
-
-### Build and Start
 
 Run commands from `devkit/`:
 
@@ -50,82 +71,56 @@ just build core
 just up core
 ```
 
-`core` is the default, so `just build` and `just up` are equivalent. To use another scenario:
+`core` is the default, so `just build` and `just up` use that profile. Pass `3` to run three
+TabletServers instead of one:
 
 ```bash
-just build gateway
-just up gateway
+just up core 3
 ```
 
-`just build <profile>` compiles local code and downloads the external JARs declared by the profile.
-It refreshes only the assembled Fluss distribution, while other Maven modules remain incremental.
-`just up <profile>` checks those prepared artifacts, starts the declared runtime components, and
-waits for them to become ready. It does not run Maven or Cargo, download profile JARs, or detect
-whether source code is newer than an artifact. Docker may still pull a missing image on first start.
+`just build <profile>` compiles the local artifacts and downloads the profile's external JARs.
+`just up <profile>` only checks those artifacts, starts the profile, waits for Compose healthchecks,
+and runs the profile checks. It does not run Maven or Cargo, download dependencies, or detect newer
+source files. Run `just up` again after rebuilding; running containers are not hot-reloaded.
 
-## Testing Local Changes
+## Workflows
 
-### Core and Flink Connector
+### Core and Flink
 
-Build and start the Core scenario, then create the sample catalog and tables:
+Create the sample catalog and tables, then run an example:
 
 ```bash
-just build core
-just up core
 just run-sql examples/core/01-setup.sql
-```
-
-Run the example that exercises the code you changed:
-
-| Example | Covers |
-|---|---|
-| `examples/core/02-scan.sql` | Batch and streaming scans of Log and Primary Key Tables |
-| `examples/core/03-lookup-join.sql` | Point and prefix lookup joins |
-| `examples/core/04-changelog-binlog.sql` | Changelog and binlog virtual tables |
-
-For example:
-
-```bash
 just run-sql examples/core/02-scan.sql
 ```
 
-The setup uses fixed `VALUES` data and requires no Faker connector. You can also run any SQL file
-from the host:
+The remaining examples cover lookup joins and changelog/binlog virtual tables:
 
-```bash
-just run-sql /absolute/path/my-test.sql
-```
+| Example | Covers |
+|---|---|
+| `examples/core/03-lookup-join.sql` | Point and prefix lookup joins |
+| `examples/core/04-changelog-binlog.sql` | Changelog and binlog virtual tables |
 
-The SQL Client runs inside the Flink container. Use container addresses such as
-`coordinator-server:19123` when defining a Fluss catalog.
+SQL runs inside the Flink container. Use Compose hostnames such as
+`coordinator-server:19123` in Fluss catalog definitions. Any local SQL file can be run with
+`just run-sql /absolute/path/test.sql`.
 
 ### Gateway
-
-Build and start Fluss with the locally compiled Gateway executable:
 
 ```bash
 just build gateway
 just up gateway
-```
-
-Check the process first, then make a request that reaches Fluss:
-
-```bash
 curl -fsS http://localhost:8080/ready
 curl -fsS http://localhost:8080/v1/clusters/default/databases
 ```
 
-`/ready` only verifies that Gateway accepts requests. The databases request verifies the complete
-Gateway → `fluss-rust` → Fluss path.
-
-The Gateway executable is built in the pinned Rust environment and mounted read-only into a
-Bookworm runtime container. The standard
-[`fluss-gateway/conf/gateway.yaml`](../fluss-gateway/conf/gateway.yaml) is mounted and loaded by
-the Gateway process.
+The readiness endpoint checks that Gateway accepts requests. The databases request exercises the
+complete Gateway to Fluss path. The executable is built in the pinned Rust container and mounted
+read-only; the standard `fluss-gateway/conf/gateway.yaml` is used by the process.
 
 ### Lake Tiering
 
-Paimon provides the most complete example:
+Paimon is the smallest complete tiering workflow:
 
 ```bash
 just build paimon
@@ -136,109 +131,14 @@ just tiering-status
 just run-sql examples/lake/paimon/lake-only-read.sql
 ```
 
-Tiering is asynchronous, so the first Lake-only query may run before a snapshot is committed. Once
-the snapshot is available, `lake-only-read.sql` returns the two profiles for Alice and Bob that were
-inserted by `setup.sql`.
+Tiering is asynchronous, so wait for `just tiering-status` before the Lake-only query. Iceberg and
+Lance examples are under `examples/lake/iceberg/` and `examples/lake/lance/`. Lance has no Flink
+SQL Lake-only reader; inspect its objects in RustFS instead.
 
-Iceberg provides focused `create-table.sql`, `write-data.sql`, and `query-lake.sql` files under
-`examples/lake/iceberg/`. Lance provides `create-table.sql` and `write-data.sql`; it does not include
-a Flink SQL reader for Lake-only queries, so inspect its objects in RustFS instead.
+All examples use fixed table names. Run `just clean` before repeating a workflow if existing tables
+or lake data would conflict.
 
-The examples use fixed table names. Run `just clean` before repeating a workflow when existing
-tables or lake data would conflict.
-
-### Rebuild and Retest
-
-Choose the smallest profile that exercises the behavior you changed:
-
-| Change | Rebuild | Restart | Verify |
-|---|---|---|---|
-| Fluss Server or Client | `just build <profile>` | `just up <profile>` | Relevant SQL or Gateway request |
-| Flink Connector | `just build core` | `just up core` | A file under `examples/core/` |
-| Gateway Rust code | `just build gateway` | `just up gateway` | A REST request that reaches Fluss |
-| Lake plugin or Tiering Job | `just build <lake-profile>` | `just up <lake-profile>` | Lake SQL and `just tiering-status` |
-| `server.yaml` | No | `just up <profile>` | Relevant endpoint or SQL |
-| SQL only | No | No | `just run-sql <file>` |
-
-The runtime never loads Java or Rust source directly:
-
-- Fluss Server uses the local `build-target` distribution mounted at `/opt/fluss`.
-- Flink receives the locally built Connector and Lake JARs during container startup.
-- Gateway uses `devkit/.deps/gateway/debug/fluss-gateway` as a read-only executable mount.
-- The Tiering Job is submitted from the locally built JAR after Flink becomes ready.
-
-Rebuilding does not hot-reload running processes. Run `just up <profile>` again after every source
-build.
-
-## Tailoring a Profile
-
-If an existing profile is close but not sufficient, change the files under `profiles/<profile>/`.
-There is no need to add a new `just` command.
-
-| File | Purpose |
-|---|---|
-| `runtime.targets` | Components started and checked by `just up`: `core`, `flink`, `gateway`, or `tiering` |
-| `server.yaml` | Fluss Server and Lake Tiering configuration |
-| `jars.urls` | Additional JARs shared by Fluss Server and Flink |
-| `server.urls` | Additional Fluss Server-only JARs |
-| `flink.urls` | Additional Flink-only JARs |
-| `compose.files` | Compose overlays for supporting containers such as RustFS or PostgreSQL |
-
-The target file contains whitespace-separated names. URL and Compose files contain one entry per line.
-Blank lines and `#` comments are ignored.
-
-`just build` derives the required build steps from `runtime.targets`: `tiering` includes the Core
-and Flink artifacts, while `gateway` adds the Gateway executable. Add `gateway` to a copied Lake
-profile when the scenario also needs the Gateway executable.
-For Paimon and Iceberg URLs, use the versions managed by `paimon.version` and `iceberg.version` in
-the root `pom.xml`; the DevKit smoke workflow checks this alignment before building.
-
-To create a reusable Lake Tiering scenario with Gateway, copy the closest profile:
-
-```bash
-cp -R profiles/paimon profiles/paimon-gateway
-```
-
-Then add Gateway to the copied profile's runtime targets:
-
-```text
-# profiles/paimon-gateway/runtime.targets
-core flink tiering gateway
-```
-
-Build and start the new scenario like any other profile:
-
-```bash
-just build paimon-gateway
-just up paimon-gateway
-```
-
-The `flink` and `gateway` runtime targets load their built-in Compose overlays automatically, so
-`compose.files` needs no Gateway entry. The copied Paimon files continue to provide RustFS and the
-Lake configuration.
-
-To add a different supporting container, define it in a Compose overlay and list that overlay in
-the profile's `compose.files`. Put the component's Fluss or Lake settings in the same profile's
-`server.yaml`. DevKit records the selected profile when `just up` runs, so subsequent lifecycle
-commands use the same overlays.
-
-Gateway always mounts the standard `fluss-gateway/conf/gateway.yaml`. Edit that file and restart the
-profile to test Gateway configuration changes. Docker overrides these three values so the process is
-reachable inside the Compose network:
-
-- `gateway.rest.listen=0.0.0.0:8080`
-- `gateway.metrics.exporter.prometheus.listen=0.0.0.0:9095`
-- `gateway.cluster.default.bootstrap.servers=coordinator-server:19123`
-
-Host ports remain configurable per invocation, for example:
-
-```bash
-GATEWAY_REST_PORT=18080 GATEWAY_METRICS_PORT=19095 just up gateway
-```
-
-## Reference
-
-### Operations
+## Operations
 
 ```bash
 just status
@@ -250,16 +150,13 @@ just down
 just clean
 ```
 
-`just up` replaces containers from the previous profile, reconciles the current profile's staged
-Server JARs, and preserves named volumes. `just down` removes containers while retaining both data
-and the selected profile, so `status`, `logs`, `exec`, and `clean` keep using the same Compose
-overlays. `just clean` also removes Compose volumes, all staged Server JARs, and the selected profile.
-Downloaded dependencies remain in the ignored `.deps` cache.
+`just up` replaces containers from the previous profile, stages the current profile's JARs, and
+preserves named volumes. `just down` removes containers but keeps data and the selected profile, so
+the lifecycle commands continue to use the same Compose configuration. `just clean` removes
+containers, volumes, staged Server JARs, and the selected profile. Downloaded dependencies remain in
+the ignored `devkit/.deps` cache.
 
-`just tiering-status` succeeds only when the active Lake profile's format-specific Tiering Job is
-running.
-
-### Default Endpoints
+## Default Endpoints
 
 | Runtime | Address |
 |---|---|
@@ -272,5 +169,5 @@ running.
 | RustFS S3 API | `http://localhost:9000` |
 | RustFS Console | `http://localhost:9001` |
 
-Run `just --list` for the complete command list. Fluss metrics and JDWP ports are defined in
-`docker-compose.yml` and can be overridden with the corresponding environment variables.
+Run `just --list` for all commands. Fluss metrics and JDWP ports are defined in
+`docker-compose.yml` and can be overridden with their environment variables.
