@@ -18,16 +18,25 @@
 package org.apache.fluss.rpc.netty.ssl;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.Password;
+import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.IllegalConfigurationException;
 
 import javax.annotation.Nullable;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLEngine;
 
+import java.security.GeneralSecurityException;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * The parsed and validated TLS configuration for one side (server or client) of an RPC connection.
@@ -38,8 +47,10 @@ import java.util.Optional;
  * {@link Optional#empty()} when TLS is not enabled (no listener listed in {@code
  * security.ssl.enabled.listeners}, resp. {@code client.security.ssl.enabled} being false), so
  * callers never have to consult the raw configuration to make that decision. Validation that does
- * not depend on the actual key material (e.g. "a keystore must be configured for a TLS server")
- * happens in the same factory methods so misconfiguration fails fast with a clear message.
+ * not depend on the actual key material (e.g. "a keystore must be configured for a TLS server",
+ * "every configured TLS protocol and cipher suite is one this JVM supports") happens in the same
+ * factory methods so misconfiguration fails fast with a clear message, instead of surfacing later
+ * as an engine-level error on every connection.
  *
  * <p>The per-listener client-certificate requirement is <b>not</b> held here: it is derived per
  * listener from the listener's authentication protocol ({@code mTLS} ⇒ require) when the server
@@ -113,11 +124,20 @@ public final class SslConfig {
                     ConfigOptions.SERVER_SSL_ENABLED_LISTENERS.key());
         }
 
+        List<String> enabledProtocols =
+                orEmpty(conf.get(ConfigOptions.SERVER_SSL_ENABLED_PROTOCOLS));
+        List<String> cipherSuites = orEmpty(conf.get(ConfigOptions.SERVER_SSL_CIPHER_SUITES));
+        validateProtocolsAndCipherSuites(
+                enabledProtocols,
+                ConfigOptions.SERVER_SSL_ENABLED_PROTOCOLS,
+                cipherSuites,
+                ConfigOptions.SERVER_SSL_CIPHER_SUITES);
+
         return Optional.of(
                 new SslConfig(
                         enabledListeners,
-                        conf.get(ConfigOptions.SERVER_SSL_ENABLED_PROTOCOLS),
-                        orEmpty(conf.get(ConfigOptions.SERVER_SSL_CIPHER_SUITES)),
+                        enabledProtocols,
+                        cipherSuites,
                         keystorePath,
                         password(conf.get(ConfigOptions.SERVER_SSL_KEYSTORE_PASSWORD)),
                         conf.getString(ConfigOptions.SERVER_SSL_KEYSTORE_TYPE),
@@ -137,11 +157,20 @@ public final class SslConfig {
             return Optional.empty();
         }
 
+        List<String> enabledProtocols =
+                orEmpty(conf.get(ConfigOptions.CLIENT_SSL_ENABLED_PROTOCOLS));
+        List<String> cipherSuites = orEmpty(conf.get(ConfigOptions.CLIENT_SSL_CIPHER_SUITES));
+        validateProtocolsAndCipherSuites(
+                enabledProtocols,
+                ConfigOptions.CLIENT_SSL_ENABLED_PROTOCOLS,
+                cipherSuites,
+                ConfigOptions.CLIENT_SSL_CIPHER_SUITES);
+
         return Optional.of(
                 new SslConfig(
                         Collections.emptyList(),
-                        conf.get(ConfigOptions.CLIENT_SSL_ENABLED_PROTOCOLS),
-                        orEmpty(conf.get(ConfigOptions.CLIENT_SSL_CIPHER_SUITES)),
+                        enabledProtocols,
+                        cipherSuites,
                         conf.getString(ConfigOptions.CLIENT_SSL_KEYSTORE_PATH),
                         password(conf.get(ConfigOptions.CLIENT_SSL_KEYSTORE_PASSWORD)),
                         conf.getString(ConfigOptions.CLIENT_SSL_KEYSTORE_TYPE),
@@ -151,6 +180,75 @@ public final class SslConfig {
                         conf.getString(ConfigOptions.CLIENT_SSL_TRUSTSTORE_TYPE),
                         conf.getString(
                                 ConfigOptions.CLIENT_SSL_ENDPOINT_IDENTIFICATION_ALGORITHM)));
+    }
+
+    /**
+     * Reject protocol and cipher suite names this JVM does not support, and an empty protocol list.
+     * Both are otherwise only caught when an {@link SSLEngine} is created, i.e. once per connection
+     * and without naming the option at fault — and an empty protocol list is not caught at all: the
+     * engine then comes up with no protocol enabled and every handshake fails.
+     *
+     * <p>Cipher suites are only checked against what the JVM supports, not against the enabled
+     * protocols: which suites can actually be negotiated depends on the protocol version agreed
+     * during the handshake, so pinning e.g. a TLS 1.3 suite alongside TLS 1.2 is a handshake
+     * concern, not a configuration error. An empty cipher suite list is not an error either — it
+     * selects the provider defaults.
+     */
+    private static void validateProtocolsAndCipherSuites(
+            List<String> enabledProtocols,
+            ConfigOption<List<String>> protocolsOption,
+            List<String> cipherSuites,
+            ConfigOption<List<String>> cipherSuitesOption) {
+        if (enabledProtocols.isEmpty()) {
+            throw new IllegalConfigurationException(
+                    "'%s' must list at least one TLS protocol.", protocolsOption.key());
+        }
+
+        SSLEngine probe = supportedAlgorithmsProbe();
+
+        List<String> unsupportedProtocols =
+                unsupported(enabledProtocols, probe.getSupportedProtocols());
+        if (!unsupportedProtocols.isEmpty()) {
+            throw new IllegalConfigurationException(
+                    "'%s' contains TLS protocol(s) not supported by this JVM: %s. Supported: %s.",
+                    protocolsOption.key(),
+                    unsupportedProtocols,
+                    Arrays.asList(probe.getSupportedProtocols()));
+        }
+
+        List<String> unsupportedCipherSuites =
+                unsupported(cipherSuites, probe.getSupportedCipherSuites());
+        if (!unsupportedCipherSuites.isEmpty()) {
+            throw new IllegalConfigurationException(
+                    "'%s' contains cipher suite(s) not supported by this JVM: %s. Supported: %s.",
+                    cipherSuitesOption.key(),
+                    unsupportedCipherSuites,
+                    Arrays.asList(probe.getSupportedCipherSuites()));
+        }
+    }
+
+    private static List<String> unsupported(List<String> configured, String[] supported) {
+        Set<String> supportedSet = new HashSet<>(Arrays.asList(supported));
+        return configured.stream()
+                .filter(value -> !supportedSet.contains(value))
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * An engine off the default JSSE context, used only for the protocol and cipher suite names it
+     * reports as supported. Those come from the security provider, so they do not depend on the
+     * configured key material.
+     */
+    private static SSLEngine supportedAlgorithmsProbe() {
+        try {
+            SSLContext context = SSLContext.getInstance("TLS");
+            context.init(null, null, null);
+            return context.createSSLEngine();
+        } catch (GeneralSecurityException e) {
+            throw new FlussRuntimeException(
+                    "Failed to determine the TLS protocols and cipher suites supported by this JVM.",
+                    e);
+        }
     }
 
     @Nullable
