@@ -333,14 +333,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
         lifecycleThrottler.start();
 
-        // start table manager -- this drives leader election (replicaStateMachine.startup(),
-        // tableBucketStateMachine.startup()); everything before this point (bulk load above,
-        // watchers) never touched the health-cache listener, which is still the default NO_OP.
+        // start table manager -- this triggers leader election
         tableManager.startup();
 
-        // Now wire up the listener and do the one explicit warm-up: from here on, every
-        // steady-state mutation reaches healthCache automatically, and the first published
-        // snapshot correctly reflects post-election state rather than a pre-election artifact.
+        // wire up the listener only after election, so the first snapshot isn't pre-election
         coordinatorContext.setListener(healthCache);
         healthCache.refresh(coordinatorContext);
 
@@ -517,12 +513,6 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 tabletServerInfoList,
                 coordinatorContext.getServerTags());
         updateTabletServerMetadataCacheWhenStartup(tabletServerInfoList);
-        // healthCache.setListener()/warm-up deliberately do NOT happen here: bulk-loading buckets
-        // above must not mark it dirty (one dirty-mark per bucket during startup, for no benefit),
-        // and leader election (tableManager.startup(), driven from
-        // CoordinatorEventProcessor#startup)
-        // hasn't run yet at this point -- warming up now would publish a pre-election snapshot. See
-        // #startup() for where the listener is actually wired up and the warm-up actually happens.
 
         // Auto-partition initialization schedules creation checks immediately. Start it only after
         // the observed KV leader replica count and live tablet server resources are restored.

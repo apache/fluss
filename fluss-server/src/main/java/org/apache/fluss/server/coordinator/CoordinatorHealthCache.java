@@ -207,9 +207,6 @@ public final class CoordinatorHealthCache implements CoordinatorContextListener 
                     }
                 }
             }
-            // reconciles the aggregate numLeaderReplicas (a bucket count) against the per-server
-            // breakdown (an actual-leader count): every bucket counted above but not here is one
-            // where computeClusterHealth's aggregate and the per-server sum will diverge.
             if (!hasLeader) {
                 bucketsWithoutLeader++;
             }

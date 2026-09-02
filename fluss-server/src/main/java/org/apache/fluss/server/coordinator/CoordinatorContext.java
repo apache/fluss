@@ -62,11 +62,7 @@ public class CoordinatorContext {
     // and use combine retry times and retry delay
     public static final int DELETE_TRY_TIMES = 5;
 
-    // notified from this class's own mutators whenever bucket/leader/ISR/server-liveness/tag
-    // state changes, regardless of which caller triggered the mutation -- see
-    // CoordinatorContextListener's javadoc. Defaults to NO_OP so every existing caller (in
-    // particular every test constructing a CoordinatorContext directly) is unaffected until
-    // setListener is actually called.
+    // notified on state changes made through this class's mutators; defaults to a no-op.
     private CoordinatorContextListener listener = CoordinatorContextListener.NO_OP;
 
     private int offlineBucketCount = 0;
@@ -143,12 +139,7 @@ public class CoordinatorContext {
         this.coordinatorEpochZkVersion = zkEpoch.getCoordinatorEpochZkVersion();
     }
 
-    /**
-     * Registers the listener notified from this class's own mutators. Not constructor injection:
-     * this context is constructed before its eventual listener exists, so the caller sets it once
-     * it does. Mutations before this is called (e.g. bulk load at startup) reach {@link
-     * CoordinatorContextListener#NO_OP} instead, which is deliberate -- see the caller.
-     */
+    /** Registers the listener notified on state changes made through this class's mutators. */
     public void setListener(CoordinatorContextListener listener) {
         this.listener = listener;
     }
@@ -251,9 +242,6 @@ public class CoordinatorContext {
         Set<TableBucket> tableBuckets =
                 replicasOnOffline.computeIfAbsent(serverId, (k) -> new HashSet<>());
         tableBuckets.add(tableBucket);
-        // the event that actually caused this (server death, ISR shrink reported via
-        // onBucketLeaderAndIsrChanged) already notifies urgently through its own, more specific
-        // hook; this is secondary bookkeeping, safety-netted regardless if under-classified here.
         listener.onTopologyChanged();
     }
 

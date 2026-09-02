@@ -283,10 +283,8 @@ public final class CoordinatorEventManager implements EventManager {
                 lastMetricsUpdateTime = currentTime;
             }
 
-            // healthCache owns its own refresh policy entirely -- rate (via dirty/urgentDirty) and
-            // coverage (an unconditional safety-net ceiling) are both internal to it, so this loop
-            // has nothing to report beyond "tick". No AccessContextEvent needed -- this thread
-            // already owns coordinatorContext directly.
+            // healthCache owns its own refresh policy; this loop just ticks it. No
+            // AccessContextEvent needed -- this thread already owns coordinatorContext directly.
             if (coordinatorContext != null) {
                 healthCache.refresh(coordinatorContext);
             }
