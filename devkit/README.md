@@ -177,7 +177,6 @@ There is no need to add a new `just` command.
 
 | File | Purpose |
 |---|---|
-| `build.targets` | Build groups: `core` prepares the distribution and Flink connector, `tiering` prepares those artifacts plus Lake plugins and the Tiering Job, and `gateway` prepares the Gateway executable |
 | `runtime.targets` | Components started and checked by `just up`: `core`, `flink`, `gateway`, or `tiering` |
 | `server.yaml` | Fluss Server and Lake Tiering configuration |
 | `jars.urls` | Additional JARs shared by Fluss Server and Flink |
@@ -185,11 +184,12 @@ There is no need to add a new `just` command.
 | `flink.urls` | Additional Flink-only JARs |
 | `compose.files` | Compose overlays for supporting containers such as RustFS or PostgreSQL |
 
-Target files contain whitespace-separated names. URL and Compose files contain one entry per line.
+The target file contains whitespace-separated names. URL and Compose files contain one entry per line.
 Blank lines and `#` comments are ignored.
 
-`tiering` already includes the artifacts prepared by `core`, so a Lake profile normally declares
-only `tiering` in `build.targets`. Add `gateway` when the scenario also needs the Gateway executable.
+`just build` derives the required build steps from `runtime.targets`: `tiering` includes the Core
+and Flink artifacts, while `gateway` adds the Gateway executable. Add `gateway` to a copied Lake
+profile when the scenario also needs the Gateway executable.
 For Paimon and Iceberg URLs, use the versions managed by `paimon.version` and `iceberg.version` in
 the root `pom.xml`; the DevKit smoke workflow checks this alignment before building.
 
@@ -199,12 +199,9 @@ To create a reusable Lake Tiering scenario with Gateway, copy the closest profil
 cp -R profiles/paimon profiles/paimon-gateway
 ```
 
-Then add Gateway to the copied profile's build and runtime targets:
+Then add Gateway to the copied profile's runtime targets:
 
 ```text
-# profiles/paimon-gateway/build.targets
-tiering gateway
-
 # profiles/paimon-gateway/runtime.targets
 core flink tiering gateway
 ```
