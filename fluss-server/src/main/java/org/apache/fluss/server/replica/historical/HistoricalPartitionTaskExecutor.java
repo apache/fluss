@@ -203,7 +203,8 @@ public final class HistoricalPartitionTaskExecutor implements AutoCloseable {
             maxThreadPoolSize = newMaxThreadPoolSize;
         }
         if (newMaxQueuedHistoricalRequests != maxQueuedHistoricalRequests) {
-            adjustRequestPermits(newMaxQueuedHistoricalRequests);
+            requestPermits.adjustPermits(
+                    newMaxQueuedHistoricalRequests - maxQueuedHistoricalRequests);
             maxQueuedHistoricalRequests = newMaxQueuedHistoricalRequests;
         }
     }
@@ -244,15 +245,6 @@ public final class HistoricalPartitionTaskExecutor implements AutoCloseable {
         }
     }
 
-    private void adjustRequestPermits(int newMaxQueuedHistoricalRequests) {
-        int permitDelta = newMaxQueuedHistoricalRequests - maxQueuedHistoricalRequests;
-        if (permitDelta > 0) {
-            requestPermits.release(permitDelta);
-        } else if (permitDelta < 0) {
-            requestPermits.decreasePermits(-permitDelta);
-        }
-    }
-
     private static final class AdjustableSemaphore extends Semaphore {
         private static final long serialVersionUID = 1L;
 
@@ -260,8 +252,12 @@ public final class HistoricalPartitionTaskExecutor implements AutoCloseable {
             super(permits);
         }
 
-        private void decreasePermits(int reduction) {
-            super.reducePermits(reduction);
+        private void adjustPermits(int delta) {
+            if (delta > 0) {
+                release(delta);
+            } else if (delta < 0) {
+                reducePermits(-delta);
+            }
         }
     }
 }
