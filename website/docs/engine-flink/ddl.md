@@ -181,6 +181,12 @@ CREATE TABLE my_auto_part_log_table (
 For more details about Auto Partitioned (Primary Key/Log) Table, refer to [Auto Partitioning](table-design/data-distribution/partitioning.md#auto-partitioning).
 
 
+### Nested NOT NULL Constraints
+
+`NOT NULL` constraints on top-level columns are always preserved. `NOT NULL` constraints on fields nested inside a nullable `ROW` (for example `ROW<name STRING NOT NULL>` or `ARRAY<ROW<name STRING NOT NULL>>`) are only preserved on Flink 2.2 and later. Flink 2.1 and earlier drop nested `NOT NULL` constraints while resolving the DDL statement (see [FLINK-20539](https://issues.apache.org/jira/browse/FLINK-20539)), so the table is silently created with those fields nullable.
+
+If you need nested `NOT NULL` constraints on Flink 2.1 and earlier, declare the enclosing `ROW` column itself as `NOT NULL`, for example `address ROW<city STRING NOT NULL, zip STRING> NOT NULL`. On Flink 2.2 and later, keep `table.legacy-nested-row-nullability` at its default value of `false`, otherwise nested constraints are dropped again.
+
 ### Options
 
 The supported option in `WITH` parameters when creating a table are listed in [Connector Options](engine-flink/options.md) page.
