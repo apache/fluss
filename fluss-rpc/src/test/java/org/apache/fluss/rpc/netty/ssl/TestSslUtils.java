@@ -48,7 +48,17 @@ public class TestSslUtils {
     /** Create a JKS keystore file holding the private key and certificate of {@code cert}. */
     public static Path createKeyStore(Path dir, String fileName, SelfSignedCertificate cert)
             throws Exception {
-        KeyStore keyStore = KeyStore.getInstance("JKS");
+        return createKeyStore(dir, fileName, "JKS", cert);
+    }
+
+    /**
+     * Create a keystore file of the given {@code storeType} (as accepted by {@code
+     * security.ssl.keystore.type}) holding the private key and certificate of {@code cert}.
+     */
+    public static Path createKeyStore(
+            Path dir, String fileName, String storeType, SelfSignedCertificate cert)
+            throws Exception {
+        KeyStore keyStore = KeyStore.getInstance(storeType);
         keyStore.load(null, null);
         keyStore.setKeyEntry(
                 "key", cert.key(), PASSWORD.toCharArray(), new Certificate[] {cert.cert()});
@@ -58,7 +68,17 @@ public class TestSslUtils {
     /** Create a JKS truststore file trusting the certificate of {@code cert}. */
     public static Path createTrustStore(Path dir, String fileName, SelfSignedCertificate cert)
             throws Exception {
-        KeyStore trustStore = KeyStore.getInstance("JKS");
+        return createTrustStore(dir, fileName, "JKS", cert);
+    }
+
+    /**
+     * Create a truststore file of the given {@code storeType} (as accepted by {@code
+     * security.ssl.truststore.type}) trusting the certificate of {@code cert}.
+     */
+    public static Path createTrustStore(
+            Path dir, String fileName, String storeType, SelfSignedCertificate cert)
+            throws Exception {
+        KeyStore trustStore = KeyStore.getInstance(storeType);
         trustStore.load(null, null);
         trustStore.setCertificateEntry("cert", cert.cert());
         return store(dir, fileName, trustStore);

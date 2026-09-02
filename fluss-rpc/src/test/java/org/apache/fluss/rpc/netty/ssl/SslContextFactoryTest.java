@@ -21,10 +21,12 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.IllegalConfigurationException;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBufAllocator;
+import org.apache.fluss.shaded.netty4.io.netty.channel.Channel;
 import org.apache.fluss.shaded.netty4.io.netty.channel.embedded.EmbeddedChannel;
 import org.apache.fluss.shaded.netty4.io.netty.handler.ssl.SslContext;
 import org.apache.fluss.shaded.netty4.io.netty.handler.ssl.SslHandler;
 import org.apache.fluss.shaded.netty4.io.netty.handler.ssl.util.SelfSignedCertificate;
+import org.apache.fluss.shaded.netty4.io.netty.util.concurrent.Future;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -151,12 +153,100 @@ class SslContextFactoryTest {
         Configuration clientConf = new Configuration();
         TestSslUtils.setClientSslConfig(clientConf, trustStore, null);
 
+        HandshakeResult result = handshake(serverConf, clientConf, false);
+
+        assertThat(result.clientHandshake.isSuccess()).isTrue();
+        assertThat(result.serverHandshake.isSuccess()).isTrue();
+        // Proves real encryption was negotiated (not a NULL/plaintext cipher).
+        assertThat(result.clientHandler.engine().getSession().getProtocol()).startsWith("TLS");
+        assertThat(result.clientHandler.engine().getSession().getCipherSuite())
+                .doesNotContain("NULL");
+    }
+
+    @Test
+    void testClientAuthRejectsClientWithoutCertificate() throws Exception {
+        Configuration serverConf = new Configuration();
+        TestSslUtils.setServerSslConfig(serverConf, keyStore, trustStore);
+        TestSslUtils.setMutualTlsProtocolMap(serverConf);
+        Configuration clientConf = new Configuration();
+        // trusts the server, but presents no certificate of its own.
+        TestSslUtils.setClientSslConfig(clientConf, trustStore, null);
+
+        HandshakeResult result = handshake(serverConf, clientConf, true);
+
+        // The server is the side that enforces client auth. Under TLS 1.3 the client sends its
+        // Finished before the server validates the (missing) certificate, so the client's
+        // handshake future completes successfully and only learns of the rejection from the
+        // alert that follows.
+        assertThat(result.serverHandshake.isSuccess()).isFalse();
+        assertThat(result.serverHandshake.cause())
+                .hasMessageContaining("Empty client certificate chain");
+    }
+
+    @Test
+    void testClientAuthAcceptsClientWithCertificate() throws Exception {
+        Configuration serverConf = new Configuration();
+        TestSslUtils.setServerSslConfig(serverConf, keyStore, trustStore);
+        TestSslUtils.setMutualTlsProtocolMap(serverConf);
+        Configuration clientConf = new Configuration();
+        TestSslUtils.setClientSslConfig(clientConf, trustStore, keyStore);
+
+        HandshakeResult result = handshake(serverConf, clientConf, true);
+
+        assertThat(result.clientHandshake.isSuccess()).isTrue();
+        assertThat(result.serverHandshake.isSuccess()).isTrue();
+    }
+
+    @Test
+    void testPkcs12KeyStoreAndTrustStore() throws Exception {
+        SelfSignedCertificate cert = TestSslUtils.generateCertificate("localhost");
+        Path p12KeyStore = TestSslUtils.createKeyStore(tempDir, "keystore.p12", "PKCS12", cert);
+        Path p12TrustStore =
+                TestSslUtils.createTrustStore(tempDir, "truststore.p12", "PKCS12", cert);
+
+        Configuration serverConf = new Configuration();
+        TestSslUtils.setServerSslConfig(serverConf, p12KeyStore, p12TrustStore);
+        serverConf.setString(ConfigOptions.SERVER_SSL_KEYSTORE_TYPE.key(), "PKCS12");
+        serverConf.setString(ConfigOptions.SERVER_SSL_TRUSTSTORE_TYPE.key(), "PKCS12");
+        Configuration clientConf = new Configuration();
+        TestSslUtils.setClientSslConfig(clientConf, p12TrustStore, p12KeyStore);
+        clientConf.setString(ConfigOptions.CLIENT_SSL_KEYSTORE_TYPE.key(), "PKCS12");
+        clientConf.setString(ConfigOptions.CLIENT_SSL_TRUSTSTORE_TYPE.key(), "PKCS12");
+
+        HandshakeResult result = handshake(serverConf, clientConf, true);
+
+        assertThat(result.clientHandshake.isSuccess()).isTrue();
+        assertThat(result.serverHandshake.isSuccess()).isTrue();
+    }
+
+    /** The outcome of a full embedded-channel handshake between a server and a client handler. */
+    private static class HandshakeResult {
+        private final Future<Channel> serverHandshake;
+        private final Future<Channel> clientHandshake;
+        private final SslHandler clientHandler;
+
+        private HandshakeResult(
+                Future<Channel> serverHandshake,
+                Future<Channel> clientHandshake,
+                SslHandler clientHandler) {
+            this.serverHandshake = serverHandshake;
+            this.clientHandshake = clientHandshake;
+            this.clientHandler = clientHandler;
+        }
+    }
+
+    /**
+     * Pump a TLS handshake between a server and a client handler built from the given
+     * configurations, and return both handshake futures once they settle.
+     */
+    private static HandshakeResult handshake(
+            Configuration serverConf, Configuration clientConf, boolean requireClientAuth) {
         SslHandler serverHandler =
                 SslContextFactory.createServerSslHandler(
                         SslContextFactory.createServerSslContext(serverConf).get(),
                         ByteBufAllocator.DEFAULT,
-                        false);
-        // endpoint identification disabled here: this raw handshake test only checks encryption.
+                        requireClientAuth);
+        // endpoint identification disabled: these tests are about the certificate exchange.
         SslHandler clientHandler =
                 SslContextFactory.createClientSslHandler(
                         SslContextFactory.createClientSslContext(clientConf).get(),
@@ -168,7 +258,6 @@ class SslContextFactoryTest {
         EmbeddedChannel serverChannel = new EmbeddedChannel(serverHandler);
         EmbeddedChannel clientChannel = new EmbeddedChannel(clientHandler);
         try {
-            // Pump the handshake bytes back and forth until both sides complete.
             for (int i = 0;
                     i < 20
                             && !(clientHandler.handshakeFuture().isDone()
@@ -177,15 +266,29 @@ class SslContextFactoryTest {
                 transferOutbound(clientChannel, serverChannel);
                 transferOutbound(serverChannel, clientChannel);
             }
-
-            assertThat(clientHandler.handshakeFuture().isSuccess()).isTrue();
-            assertThat(serverHandler.handshakeFuture().isSuccess()).isTrue();
-            // Proves real encryption was negotiated (not a NULL/plaintext cipher).
-            assertThat(clientHandler.engine().getSession().getProtocol()).startsWith("TLS");
-            assertThat(clientHandler.engine().getSession().getCipherSuite()).doesNotContain("NULL");
+            return new HandshakeResult(
+                    serverHandler.handshakeFuture(),
+                    clientHandler.handshakeFuture(),
+                    clientHandler);
+        } catch (Throwable rejected) {
+            // A rejected handshake also propagates through the channel that decoded the alert.
+            // The handshake futures already carry the outcome, which is what callers assert on.
+            return new HandshakeResult(
+                    serverHandler.handshakeFuture(),
+                    clientHandler.handshakeFuture(),
+                    clientHandler);
         } finally {
-            clientChannel.finishAndReleaseAll();
-            serverChannel.finishAndReleaseAll();
+            releaseQuietly(clientChannel);
+            releaseQuietly(serverChannel);
+        }
+    }
+
+    /** {@link EmbeddedChannel#finishAndReleaseAll()} rethrows a failed handshake; ignore it. */
+    private static void releaseQuietly(EmbeddedChannel channel) {
+        try {
+            channel.finishAndReleaseAll();
+        } catch (Throwable ignored) {
+            // asserted through the handshake futures instead.
         }
     }
 
