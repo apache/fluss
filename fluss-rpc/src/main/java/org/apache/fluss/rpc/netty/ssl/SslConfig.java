@@ -21,14 +21,13 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.Password;
+import org.apache.fluss.exception.IllegalConfigurationException;
 
 import javax.annotation.Nullable;
 
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
-
-import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /**
  * The parsed and validated TLS configuration for one side (server or client) of an RPC connection.
@@ -107,11 +106,12 @@ public final class SslConfig {
         }
 
         String keystorePath = conf.getString(ConfigOptions.SERVER_SSL_KEYSTORE_PATH);
-        checkArgument(
-                keystorePath != null,
-                "'%s' must be configured when any listener enables TLS via '%s'.",
-                ConfigOptions.SERVER_SSL_KEYSTORE_PATH.key(),
-                ConfigOptions.SERVER_SSL_ENABLED_LISTENERS.key());
+        if (keystorePath == null) {
+            throw new IllegalConfigurationException(
+                    "'%s' must be configured when any listener enables TLS via '%s'.",
+                    ConfigOptions.SERVER_SSL_KEYSTORE_PATH.key(),
+                    ConfigOptions.SERVER_SSL_ENABLED_LISTENERS.key());
+        }
 
         return Optional.of(
                 new SslConfig(

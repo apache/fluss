@@ -19,6 +19,7 @@ package org.apache.fluss.rpc.netty.ssl;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.IllegalConfigurationException;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBufAllocator;
 import org.apache.fluss.shaded.netty4.io.netty.channel.embedded.EmbeddedChannel;
 import org.apache.fluss.shaded.netty4.io.netty.handler.ssl.SslContext;
@@ -200,7 +201,7 @@ class SslContextFactoryTest {
         Configuration conf = new Configuration();
         conf.setString(ConfigOptions.SERVER_SSL_ENABLED_LISTENERS.key(), TestSslUtils.TLS_LISTENER);
         assertThatThrownBy(() -> SslConfig.fromServerConfig(conf))
-                .isInstanceOf(IllegalArgumentException.class)
+                .isInstanceOf(IllegalConfigurationException.class)
                 .hasMessageContaining(ConfigOptions.SERVER_SSL_KEYSTORE_PATH.key());
     }
 
