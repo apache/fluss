@@ -24,7 +24,6 @@ import org.apache.fluss.config.Password;
 
 import javax.annotation.Nullable;
 
-import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
@@ -71,9 +70,6 @@ public final class SslConfig {
      */
     private final String endpointIdentificationAlgorithm;
 
-    /** How often to poll the key material for changes (0 disables periodic reload). */
-    private final Duration reloadInterval;
-
     private SslConfig(
             List<String> enabledListeners,
             List<String> enabledProtocols,
@@ -85,8 +81,7 @@ public final class SslConfig {
             @Nullable String truststorePath,
             @Nullable String truststorePassword,
             String truststoreType,
-            String endpointIdentificationAlgorithm,
-            Duration reloadInterval) {
+            String endpointIdentificationAlgorithm) {
         this.enabledListeners = enabledListeners;
         this.enabledProtocols = enabledProtocols;
         this.cipherSuites = cipherSuites;
@@ -98,7 +93,6 @@ public final class SslConfig {
         this.truststorePassword = truststorePassword;
         this.truststoreType = truststoreType;
         this.endpointIdentificationAlgorithm = endpointIdentificationAlgorithm;
-        this.reloadInterval = reloadInterval;
     }
 
     /**
@@ -131,8 +125,7 @@ public final class SslConfig {
                         conf.getString(ConfigOptions.SERVER_SSL_TRUSTSTORE_PATH),
                         password(conf.get(ConfigOptions.SERVER_SSL_TRUSTSTORE_PASSWORD)),
                         conf.getString(ConfigOptions.SERVER_SSL_TRUSTSTORE_TYPE),
-                        "",
-                        conf.get(ConfigOptions.SERVER_SSL_RELOAD_INTERVAL)));
+                        ""));
     }
 
     /**
@@ -156,8 +149,8 @@ public final class SslConfig {
                         conf.getString(ConfigOptions.CLIENT_SSL_TRUSTSTORE_PATH),
                         password(conf.get(ConfigOptions.CLIENT_SSL_TRUSTSTORE_PASSWORD)),
                         conf.getString(ConfigOptions.CLIENT_SSL_TRUSTSTORE_TYPE),
-                        conf.getString(ConfigOptions.CLIENT_SSL_ENDPOINT_IDENTIFICATION_ALGORITHM),
-                        conf.get(ConfigOptions.CLIENT_SSL_RELOAD_INTERVAL)));
+                        conf.getString(
+                                ConfigOptions.CLIENT_SSL_ENDPOINT_IDENTIFICATION_ALGORITHM)));
     }
 
     @Nullable
@@ -223,9 +216,5 @@ public final class SslConfig {
 
     public String endpointIdentificationAlgorithm() {
         return endpointIdentificationAlgorithm;
-    }
-
-    public Duration reloadInterval() {
-        return reloadInterval;
     }
 }
