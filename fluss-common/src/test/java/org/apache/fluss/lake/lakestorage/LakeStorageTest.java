@@ -18,6 +18,7 @@
 package org.apache.fluss.lake.lakestorage;
 
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.lake.source.LakeSource;
@@ -96,6 +97,36 @@ class LakeStorageTest {
                         ((PluginLakeStorageWrapper.ClassLoaderFixingLakeCatalog) lakeCatalog)
                                 .getWrappedDelegate())
                 .isInstanceOf(TestPaimonLakeCatalog.class);
+    }
+
+    @Test
+    void testPluginFoundInBothPluginsDirAndClasspath() {
+        // same identifier from the plugin manager and from SPI, as when the jar is also in lib
+        final Map<Class<?>, Iterator<?>> lakeStoragePlugins = new HashMap<>();
+        lakeStoragePlugins.put(
+                LakeStoragePlugin.class,
+                Collections.singletonList(new TestingClasspathLakeStoragePlugin()).iterator());
+
+        assertThatThrownBy(
+                        () ->
+                                LakeStoragePluginSetUp.fromDataLakeFormat(
+                                        TestingClasspathLakeStoragePlugin.IDENTIFIER,
+                                        new TestingPluginManager(lakeStoragePlugins)))
+                .isInstanceOf(FlussRuntimeException.class)
+                .hasMessageContaining("Found two LakeStoragePlugin for datalake format")
+                .hasMessageContaining(TestingClasspathLakeStoragePlugin.IDENTIFIER)
+                .hasMessageContaining("<FLUSS_HOME>/lib");
+    }
+
+    @Test
+    void testPluginFoundOnClasspathOnly() {
+        LakeStoragePlugin lakeStoragePlugin =
+                LakeStoragePluginSetUp.fromDataLakeFormat(
+                        TestingClasspathLakeStoragePlugin.IDENTIFIER, null);
+
+        assertThat(lakeStoragePlugin).isInstanceOf(PluginLakeStorageWrapper.class);
+        assertThat(lakeStoragePlugin.identifier())
+                .isEqualTo(TestingClasspathLakeStoragePlugin.IDENTIFIER);
     }
 
     private static class TestingPluginManager implements PluginManager {
