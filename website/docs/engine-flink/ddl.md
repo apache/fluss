@@ -185,7 +185,9 @@ For more details about Auto Partitioned (Primary Key/Log) Table, refer to [Auto 
 
 `NOT NULL` constraints on top-level columns are always preserved. `NOT NULL` constraints on fields nested inside a nullable `ROW` (for example `ROW<name STRING NOT NULL>` or `ARRAY<ROW<name STRING NOT NULL>>`) are only preserved on Flink 2.2 and later. Flink 2.1 and earlier drop nested `NOT NULL` constraints while resolving the DDL statement (see [FLINK-20539](https://issues.apache.org/jira/browse/FLINK-20539)), so the table is silently created with those fields nullable.
 
-If you need nested `NOT NULL` constraints on Flink 2.1 and earlier, declare the enclosing `ROW` column itself as `NOT NULL`, for example `address ROW<city STRING NOT NULL, zip STRING> NOT NULL`. On Flink 2.2 and later, keep `table.legacy-nested-row-nullability` at its default value of `false`, otherwise nested constraints are dropped again.
+On Flink 2.1 and earlier, a nested `NOT NULL` constraint survives only if every enclosing `ROW` on its path is itself `NOT NULL`. Declare the enclosing `ROW` column as `NOT NULL`, for example `address ROW<city STRING NOT NULL, zip STRING> NOT NULL`. For `ARRAY` and `MAP` values, declare the element `ROW` as `NOT NULL`, for example `headers ARRAY<ROW<name STRING NOT NULL> NOT NULL>`.
+
+On Flink 2.2 and later, keep `table.legacy-nested-row-nullability` at its default value of `false`, otherwise nested constraints are dropped again. Fluss does not enforce nested `NOT NULL` constraints on write, and Flink's `table.exec.sink.nested-constraint-enforcer` defaults to `IGNORE`, so a null written into a nested `NOT NULL` field is accepted and later fails every read of that record. Set `table.exec.sink.nested-constraint-enforcer` to `ROWS_AND_COLLECTIONS` to reject such writes.
 
 ### Options
 
