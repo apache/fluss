@@ -75,9 +75,8 @@ public class TestSslUtils {
     /**
      * Populate {@code conf} with the server-side {@code security.ssl.*} transport options: TLS
      * enabled for the {@link #TLS_LISTENER} listener, a keystore (and, when {@code trustStore !=
-     * null}, a truststore — needed for mTLS listeners). The per-listener client-certificate
-     * requirement is derived from {@code security.protocol.map} ({@code mTLS}), which the caller
-     * sets.
+     * null}, a truststore — needed for mTLS listeners). Mark the listener as requiring a client
+     * certificate with {@link #setMutualTlsProtocolMap}.
      */
     public static void setServerSslConfig(Configuration conf, Path keyStore, Path trustStore) {
         conf.setString(ConfigOptions.SERVER_SSL_ENABLED_LISTENERS.key(), TLS_LISTENER);
@@ -87,6 +86,14 @@ public class TestSslUtils {
             conf.setString(ConfigOptions.SERVER_SSL_TRUSTSTORE_PATH.key(), trustStore.toString());
             conf.setString(ConfigOptions.SERVER_SSL_TRUSTSTORE_PASSWORD.key(), PASSWORD);
         }
+    }
+
+    /**
+     * Make {@link #TLS_LISTENER} an {@code mTLS} listener via {@code security.protocol.map}, i.e.
+     * one that requires a client certificate.
+     */
+    public static void setMutualTlsProtocolMap(Configuration conf) {
+        conf.setString(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), TLS_LISTENER + ":mTLS");
     }
 
     /**
