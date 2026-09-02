@@ -40,6 +40,7 @@ build profile="core":
     set -e
     PROFILE={{ quote(profile) }}
     just validate-profile "$PROFILE"
+    TARGETS=$(just profile-runtime-targets "$PROFILE")
     just deps "$PROFILE"
     clean_dist() {
         cd "{{ FLUSS_DEV_HOME }}"
@@ -70,7 +71,6 @@ build profile="core":
           rust:1.88-bookworm \
           cargo build --locked --bin fluss-gateway
     }
-    TARGETS=$(just profile-runtime-targets "$PROFILE")
     if grep -Fxq tiering <<<"$TARGETS"; then
       build_tiering
     elif grep -Eq '^(core|flink)$' <<<"$TARGETS"; then
@@ -126,11 +126,38 @@ profile-runtime-targets profile:
     PROFILE={{ quote(profile) }}
     just validate-profile "$PROFILE"
     TARGETS=$(sed 's/#.*//; /^[[:space:]]*$/d' "{{ PROFILES_DIR }}/$PROFILE/runtime.targets")
+    SEEN=""
     for TARGET in $TARGETS; do
       case "$TARGET" in
-        core|flink|gateway|tiering) echo "$TARGET" ;;
+        core|flink|gateway|tiering) ;;
         *) echo "Unknown runtime target in profile $PROFILE: $TARGET" >&2; exit 1 ;;
       esac
+      case " $SEEN " in
+        *" $TARGET "*)
+          echo "Duplicate runtime target in profile $PROFILE: $TARGET" >&2
+          exit 1
+          ;;
+      esac
+      SEEN="$SEEN $TARGET"
+    done
+    has_target() {
+      [[ " $SEEN " == *" $1 "* ]]
+    }
+    require_target() {
+      if has_target "$1" && ! has_target "$2"; then
+        echo "Profile $PROFILE requires runtime target: $2 for $1" >&2
+        exit 1
+      fi
+    }
+    require_target flink core
+    require_target tiering flink
+    require_target gateway core
+    if ! has_target core; then
+      echo "Profile $PROFILE must include runtime target: core" >&2
+      exit 1
+    fi
+    for TARGET in $SEEN; do
+      echo "$TARGET"
     done
 
 [private]
