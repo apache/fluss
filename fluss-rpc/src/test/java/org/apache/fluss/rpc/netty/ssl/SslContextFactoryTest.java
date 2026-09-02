@@ -206,6 +206,58 @@ class SslContextFactoryTest {
     }
 
     @Test
+    void testServerConfigRejectsUnsupportedProtocol() {
+        Configuration conf = new Configuration();
+        TestSslUtils.setServerSslConfig(conf, keyStore, null);
+        conf.setString(ConfigOptions.SERVER_SSL_ENABLED_PROTOCOLS.key(), "TLSv1.2,TLSv1.4");
+
+        // caught here rather than per connection, where the engine reports "Unsupported protocol"
+        // without naming the option at fault.
+        assertThatThrownBy(() -> SslConfig.fromServerConfig(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining(ConfigOptions.SERVER_SSL_ENABLED_PROTOCOLS.key())
+                .hasMessageContaining("TLSv1.4");
+    }
+
+    @Test
+    void testServerConfigRejectsEmptyProtocolList() {
+        Configuration conf = new Configuration();
+        TestSslUtils.setServerSslConfig(conf, keyStore, null);
+        conf.setString(ConfigOptions.SERVER_SSL_ENABLED_PROTOCOLS.key(), "");
+
+        // an engine built with no enabled protocol starts fine and fails every handshake.
+        assertThatThrownBy(() -> SslConfig.fromServerConfig(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining(ConfigOptions.SERVER_SSL_ENABLED_PROTOCOLS.key());
+    }
+
+    @Test
+    void testServerConfigRejectsUnsupportedCipherSuite() {
+        Configuration conf = new Configuration();
+        TestSslUtils.setServerSslConfig(conf, keyStore, null);
+        conf.setString(
+                ConfigOptions.SERVER_SSL_CIPHER_SUITES.key(),
+                "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,TLS_BOGUS_CIPHER");
+
+        assertThatThrownBy(() -> SslConfig.fromServerConfig(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining(ConfigOptions.SERVER_SSL_CIPHER_SUITES.key())
+                .hasMessageContaining("TLS_BOGUS_CIPHER");
+    }
+
+    @Test
+    void testClientConfigRejectsUnsupportedProtocol() {
+        Configuration conf = new Configuration();
+        TestSslUtils.setClientSslConfig(conf, trustStore, null);
+        conf.setString(ConfigOptions.CLIENT_SSL_ENABLED_PROTOCOLS.key(), "TLSv13");
+
+        assertThatThrownBy(() -> SslConfig.fromClientConfig(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining(ConfigOptions.CLIENT_SSL_ENABLED_PROTOCOLS.key())
+                .hasMessageContaining("TLSv13");
+    }
+
+    @Test
     void testServerConfigEmptyWithoutEnabledListeners() {
         // key material alone does not switch TLS on: no listener is enabled.
         Configuration conf = new Configuration();
