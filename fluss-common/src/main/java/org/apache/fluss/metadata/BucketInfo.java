@@ -44,6 +44,7 @@ public final class BucketInfo {
     private final int bucketId;
     private final @Nullable Integer leaderId;
     private final @Nullable Integer leaderEpoch;
+    private final @Nullable Integer bucketEpoch;
     private final List<Integer> replicas;
     private final List<Integer> isr;
 
@@ -56,6 +57,7 @@ public final class BucketInfo {
             int bucketId,
             @Nullable Integer leaderId,
             @Nullable Integer leaderEpoch,
+            @Nullable Integer bucketEpoch,
             List<Integer> replicas,
             List<Integer> isr) {
         this.tablePath = checkNotNull(tablePath, "tablePath should not be null.");
@@ -65,6 +67,7 @@ public final class BucketInfo {
         this.bucketId = bucketId;
         this.leaderId = leaderId;
         this.leaderEpoch = leaderEpoch;
+        this.bucketEpoch = bucketEpoch;
         this.replicas =
                 Collections.unmodifiableList(
                         new ArrayList<>(checkNotNull(replicas, "replicas should not be null.")));
@@ -109,6 +112,14 @@ public final class BucketInfo {
         return leaderEpoch == null ? OptionalInt.empty() : OptionalInt.of(leaderEpoch);
     }
 
+    /**
+     * Returns the generation of the leader/ISR state, or an empty optional for legacy metadata. The
+     * value {@code -1} indicates that no leader/ISR state exists.
+     */
+    public OptionalInt getBucketEpoch() {
+        return bucketEpoch == null ? OptionalInt.empty() : OptionalInt.of(bucketEpoch);
+    }
+
     /** Returns the replica IDs. */
     public List<Integer> getReplicas() {
         return replicas;
@@ -137,6 +148,8 @@ public final class BucketInfo {
                 + leaderId
                 + ", leaderEpoch="
                 + leaderEpoch
+                + ", bucketEpoch="
+                + bucketEpoch
                 + ", replicas="
                 + replicas
                 + ", isr="
@@ -160,6 +173,7 @@ public final class BucketInfo {
                 && Objects.equals(partitionName, that.partitionName)
                 && Objects.equals(leaderId, that.leaderId)
                 && Objects.equals(leaderEpoch, that.leaderEpoch)
+                && Objects.equals(bucketEpoch, that.bucketEpoch)
                 && replicas.equals(that.replicas)
                 && isr.equals(that.isr);
     }
@@ -174,6 +188,7 @@ public final class BucketInfo {
                 bucketId,
                 leaderId,
                 leaderEpoch,
+                bucketEpoch,
                 replicas,
                 isr);
     }

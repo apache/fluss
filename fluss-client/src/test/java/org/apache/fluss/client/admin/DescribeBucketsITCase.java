@@ -181,6 +181,9 @@ class DescribeBucketsITCase extends ClientToServerITCaseBase {
                                                             && bucketInfo
                                                                     .getLeaderEpoch()
                                                                     .isPresent()
+                                                            && bucketInfo
+                                                                    .getBucketEpoch()
+                                                                    .isPresent()
                                                             && !bucketInfo.getIsr().isEmpty());
                 },
                 Duration.ofMinutes(1),
@@ -208,6 +211,7 @@ class DescribeBucketsITCase extends ClientToServerITCaseBase {
             assertThat(bucketInfo.getPartitionId()).hasValue(expectedPartitionId);
         }
         assertThat(bucketInfo.getReplicas()).hasSize(3);
+        assertThat(bucketInfo.getBucketEpoch()).isPresent();
         assertThat(bucketInfo.getIsr()).isNotEmpty();
         assertThat(bucketInfo.getReplicas()).containsAll(bucketInfo.getIsr());
         assertThat(bucketInfo.getIsr()).contains(bucketInfo.getLeaderId().getAsInt());
