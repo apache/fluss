@@ -61,8 +61,10 @@ import java.util.stream.IntStream;
 
 import static org.apache.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
 import static org.apache.fluss.config.ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE;
+import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.TIERING_FORCE_COMPLETE_FINISH_TIMEOUT;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Unit tests for {@link TieringSourceEnumerator} and {@link TieringSplitGenerator}. */
@@ -830,10 +832,70 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
     }
 
     @Test
+    void testFailTieringJobWhenReadersDoNotFinishAfterMaxDuration() throws Throwable {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "tiering-completion-timeout-test");
+        long tableId = createTable(tablePath, DEFAULT_LOG_TABLE_DESCRIPTOR);
+        Duration completionTimeout = Duration.ofMillis(100);
+        conn.getAdmin()
+                .alterTable(
+                        tablePath,
+                        Collections.singletonList(
+                                TableChange.set(
+                                        ConfigOptions.TABLE_DATALAKE_FRESHNESS.key(), "10min")),
+                        false)
+                .get();
+
+        appendRow(tablePath, DEFAULT_LOG_TABLE_DESCRIPTOR, 0, 10);
+
+        Configuration testFlussConf = new Configuration(flussConf);
+        testFlussConf.set(TIERING_FORCE_COMPLETE_FINISH_TIMEOUT, completionTimeout);
+
+        AtomicReference<Throwable> coordinatorError = new AtomicReference<>();
+        try (FlussMockSplitEnumeratorContext<TieringSplit> context =
+                        new FlussMockSplitEnumeratorContext<TieringSplit>(1) {
+                            @Override
+                            public void runInCoordinatorThread(Runnable runnable) {
+                                try {
+                                    runnable.run();
+                                } catch (Throwable t) {
+                                    coordinatorError.compareAndSet(null, t);
+                                }
+                            }
+                        };
+                TieringSourceEnumerator enumerator =
+                        createTieringSourceEnumerator(testFlussConf, context)) {
+            enumerator.start();
+            registerSingleReaderAndHandleSplitRequests(context, enumerator, 0, 0);
+
+            assertThat(context.getSplitsAssignmentSequence()).isNotEmpty();
+            Long tieringEpoch = enumerator.getTieringEpoch(tableId);
+            assertThat(tieringEpoch).isNotNull();
+            enumerator.handleTableTieringReachMaxDuration(tablePath, tableId, tieringEpoch);
+            retry(
+                    Duration.ofSeconds(30),
+                    () ->
+                            assertThat(coordinatorError.get())
+                                    .isInstanceOf(FlinkRuntimeException.class)
+                                    .hasMessageContaining(
+                                            "did not finish within "
+                                                    + completionTimeout.toMillis()
+                                                    + " ms after reaching max duration"));
+        }
+    }
+
+    @Test
     void testTableReachMaxTieringDuration() throws Throwable {
         TablePath tablePath = TablePath.of(DEFAULT_DB, "tiering-max-duration-test-log-table");
         long tableId = createTable(tablePath, DEFAULT_LOG_TABLE_DESCRIPTOR);
         int numSubtasks = 2;
+        conn.getAdmin()
+                .alterTable(
+                        tablePath,
+                        Collections.singletonList(
+                                TableChange.set(
+                                        ConfigOptions.TABLE_DATALAKE_FRESHNESS.key(), "10min")),
+                        false)
+                .get();
 
         try (FlussMockSplitEnumeratorContext<TieringSplit> context =
                         new FlussMockSplitEnumeratorContext<>(numSubtasks);
@@ -854,6 +916,10 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
 
             // Wait for initial assignment
             waitUntilTieringTableSplitAssignmentReady(context, 2, 200L);
+
+            Long firstTieringEpoch = enumerator.getTieringEpoch(tableId);
+            assertThat(firstTieringEpoch).isNotNull();
+            enumerator.handleTableTieringReachMaxDuration(tablePath, tableId, firstTieringEpoch);
 
             retry(
                     Duration.ofSeconds(30),
@@ -884,17 +950,6 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                     .forEach(a -> a.assignment().values().forEach(assignedSplits::addAll));
             assertThat(assignedSplits).hasSize(1);
             assertThat(assignedSplits.get(0).shouldSkipCurrentRound()).isTrue();
-
-            // alter table freshness to 10 min to make sure we won't assign in
-            // normal finish
-            conn.getAdmin()
-                    .alterTable(
-                            tablePath,
-                            Collections.singletonList(
-                                    TableChange.set(
-                                            ConfigOptions.TABLE_DATALAKE_FRESHNESS.key(), "10min")),
-                            false)
-                    .get();
 
             // Mock tiering finished
             // This simulates the reader finishing tiering after reaching max duration
@@ -935,6 +990,12 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                             split ->
                                     split.getTableBucket().getTableId() == tableId
                                             && !split.shouldSkipCurrentRound());
+
+            assertThatCode(
+                            () ->
+                                    enumerator.failTieringJobIfNotFinished(
+                                            tablePath, tableId, firstTieringEpoch, 1000L))
+                    .doesNotThrowAnyException();
         }
     }
 }
