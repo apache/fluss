@@ -25,6 +25,7 @@ import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.record.BinaryValue;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.encode.RowEncoder;
+import org.apache.fluss.server.kv.TargetColumns;
 import org.apache.fluss.server.kv.rowmerger.aggregate.AggregateFieldsProcessor;
 import org.apache.fluss.server.kv.rowmerger.aggregate.AggregationContext;
 import org.apache.fluss.server.kv.rowmerger.aggregate.AggregationContextCache;
@@ -132,6 +133,8 @@ public class AggregateRowMerger implements RowMerger {
             this.targetSchemaId = latestSchemaId;
             return this;
         }
+
+        TargetColumns.checkSequenceGroupsAreFullyTargeted(latestSchema, targetColumns);
 
         // Use cache to get or create PartialAggregateRowMerger
         // This avoids repeated object creation and BitSet construction
@@ -248,6 +251,9 @@ public class AggregateRowMerger implements RowMerger {
         // operations
         private final Cache<Short, BitSet> targetPosBitSetCache;
 
+        // The groups restricted to the target fields, null when the schema declares none
+        private final @Nullable SequenceGroups sequenceGroups;
+
         PartialAggregateRowMerger(
                 BitSet targetColumnIdBitSet,
                 DeleteBehavior deleteBehavior,
@@ -265,12 +271,32 @@ public class AggregateRowMerger implements RowMerger {
             AggregationContext context = contextCache.getOrCreateContext(schemaId, schema);
             context.sanityCheckTargetColumns(targetColumnIdBitSet);
 
+            // a group the write doesn't cover must not arbitrate, since its sequence is never
+            // stored
+            SequenceGroups declared = context.getSequenceGroups();
+            this.sequenceGroups =
+                    declared == null
+                            ? null
+                            : declared.restrictTo(targetPositions(schema, targetColumnIdBitSet));
+
             // Initialize cache for target position BitSets
             this.targetPosBitSetCache =
                     Caffeine.newBuilder()
                             .maximumSize(TARGET_POS_BITSET_CACHE_MAX_SIZE)
                             .expireAfterAccess(TARGET_POS_BITSET_CACHE_EXPIRE_DURATION)
                             .build();
+        }
+
+        /** Maps the target column ids onto the row field indexes of the given schema. */
+        private static BitSet targetPositions(Schema schema, BitSet targetColumnIdBitSet) {
+            BitSet positions = new BitSet();
+            List<Schema.Column> columns = schema.getColumns();
+            for (int pos = 0; pos < columns.size(); pos++) {
+                if (targetColumnIdBitSet.get(columns.get(pos).getColumnId())) {
+                    positions.set(pos);
+                }
+            }
+            return positions;
         }
 
         @Override
@@ -297,7 +323,7 @@ public class AggregateRowMerger implements RowMerger {
                     newContext,
                     targetContext,
                     targetColumnIdBitSet,
-                    targetContext.getSequenceGroups(),
+                    sequenceGroups,
                     encoder);
             BinaryRow mergedRow = encoder.finishRow();
 
