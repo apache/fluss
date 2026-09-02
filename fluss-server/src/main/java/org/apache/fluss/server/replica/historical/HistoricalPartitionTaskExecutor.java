@@ -65,7 +65,6 @@ public final class HistoricalPartitionTaskExecutor implements AutoCloseable {
     // Keep accepted requests so close() can cancel work that remains after executor shutdown.
     private final Set<CompletableFuture<?>> pendingRequests;
     private final ExecutorService executor;
-    private final @Nullable ThreadPoolExecutor threadPoolExecutor;
     private volatile int maxThreadPoolSize;
     private final Object orderedTasksLock = new Object();
 
@@ -100,10 +99,6 @@ public final class HistoricalPartitionTaskExecutor implements AutoCloseable {
                 historicalPartitionExecutor == null
                         ? createHistoricalPartitionExecutor(maxThreadPoolSize)
                         : historicalPartitionExecutor;
-        this.threadPoolExecutor =
-                this.executor instanceof ThreadPoolExecutor
-                        ? (ThreadPoolExecutor) this.executor
-                        : null;
         this.maxThreadPoolSize = maxThreadPoolSize;
         this.requestPermits = new AdjustableSemaphore(maxQueuedHistoricalRequests);
         this.pendingRequests = ConcurrentHashMap.newKeySet();
@@ -234,10 +229,11 @@ public final class HistoricalPartitionTaskExecutor implements AutoCloseable {
     }
 
     private void resizeThreadPool(int newMaxThreadPoolSize) {
-        if (threadPoolExecutor == null) {
+        if (!(executor instanceof ThreadPoolExecutor)) {
             throw new IllegalStateException(
                     "Historical partition executor does not support dynamic resizing.");
         }
+        ThreadPoolExecutor threadPoolExecutor = (ThreadPoolExecutor) executor;
         int currentMaxThreadPoolSize = threadPoolExecutor.getMaximumPoolSize();
         if (newMaxThreadPoolSize > currentMaxThreadPoolSize) {
             threadPoolExecutor.setMaximumPoolSize(newMaxThreadPoolSize);
