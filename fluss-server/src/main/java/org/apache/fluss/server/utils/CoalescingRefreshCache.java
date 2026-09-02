@@ -33,26 +33,37 @@ import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
  * schedule, and coalesced so that many changes reported in a short window trigger at most one
  * recompute.
  *
- * <p>Callers report that something changed via {@link #markDirty(boolean)}; whether that change was
- * urgent affects only how soon {@link #refresh} is willing to act on it. The {@code force} flag on
- * {@link #refresh} lets a caller override the timing question directly -- typically because it
- * knows something this class doesn't, e.g. that its own work queue is currently empty, so a
- * non-urgent change is now welcome to be acted on. An urgent change doesn't need the caller's help:
- * it's bounded by {@code urgentMaxDelayMs} regardless of {@code force}, so a safety- or
- * correctness-relevant change can't be starved by an owner that never passes {@code force=true}.
+ * <p>Two independent questions decide whether {@link #refresh} is due, and they are answered by two
+ * independent mechanisms:
  *
- * <p>Crucially, {@code force} only ever overrides the <em>timing</em> gate, never the {@code dirty}
- * gate: {@link #refresh} always checks "did anything actually change" first, unconditionally,
- * before considering {@code force} at all. This is what keeps a quiet caller's cost at one boolean
- * check per call -- if {@code force} skipped that check too, a caller that happens to be idle most
- * of the time (the common case) would pay for a full recompute on every single call, whether or not
- * anything had changed. A freshly constructed cache starts {@code dirty}, since it hasn't computed
- * a real value yet -- that's what lets a one-time forced warm-up work without needing {@code force}
- * to bypass the dirty check.
+ * <ul>
+ *   <li><b>Rate</b> -- how fast a change that <em>was</em> reported (via {@link #markDirty}) gets
+ *       reflected. Urgent changes are bounded by {@code urgentMaxDelayMs}; everything else by the
+ *       looser {@code normalMaxDelayMs}. This is purely about not recomputing more often than
+ *       necessary once something is known to have changed.
+ *   <li><b>Coverage</b> -- an absolute ceiling, {@code safetyNetMaxDelayMs}, that fires regardless
+ *       of {@code dirty} at all. A caller that forgets to call {@link #markDirty} for some code
+ *       path still can't cause unbounded staleness -- worst case, it's caught within {@code
+ *       safetyNetMaxDelayMs}. This is what actually bounds correctness independent of how complete
+ *       the caller's instrumentation is.
+ * </ul>
+ *
+ * <p>Conflating these into one mechanism is a trap: gating the safety-net ceiling on {@code dirty}
+ * would defeat its entire purpose (it exists precisely for the case where {@code dirty} was never
+ * set), while making the rate thresholds unconditional would mean recomputing on every call even
+ * when nothing changed -- the "quiet caller costs one boolean check" property this class is built
+ * around. Every {@code due} check inspects all three conditions independently:
+ *
+ * <pre>{@code
+ * due = (urgentDirty && elapsed >= urgentMaxDelayMs)
+ *     || (dirty && elapsed >= normalMaxDelayMs)
+ *     || (elapsed >= safetyNetMaxDelayMs);
+ * }</pre>
  *
  * <p>Either way, the eventual recompute is always a full recompute from the supplied {@link
  * Supplier}, never incremental -- a wrong or missed {@code markDirty} call costs at worst one extra
- * recompute, it never leaves the published value permanently wrong.
+ * recompute (or, at the safety-net bound, a bounded wait), it never leaves the published value
+ * permanently wrong.
  *
  * <p>{@link #markDirty} and {@link #refresh} must both be called from a single owning thread; this
  * class does no locking on that side, matching the assumption that whoever computes the new value
@@ -65,6 +76,8 @@ import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
 public final class CoalescingRefreshCache<T> {
 
     private final long urgentMaxDelayMs;
+    private final long normalMaxDelayMs;
+    private final long safetyNetMaxDelayMs;
 
     private final Lock updateLock = new ReentrantLock();
 
@@ -75,11 +88,22 @@ public final class CoalescingRefreshCache<T> {
     // starts true: a freshly constructed cache hasn't computed a real value yet.
     private boolean dirty = true;
     private boolean urgentDirty;
-    private long lastRefreshTimeMs = System.currentTimeMillis();
+    private long lastRefreshTimeMs;
 
-    public CoalescingRefreshCache(T initialValue, long urgentMaxDelayMs) {
+    public CoalescingRefreshCache(
+            T initialValue,
+            long urgentMaxDelayMs,
+            long normalMaxDelayMs,
+            long safetyNetMaxDelayMs) {
         this.value = initialValue;
         this.urgentMaxDelayMs = urgentMaxDelayMs;
+        this.normalMaxDelayMs = normalMaxDelayMs;
+        this.safetyNetMaxDelayMs = safetyNetMaxDelayMs;
+        // seeded in the past (not "now") so that the very first refresh() call, whenever the
+        // caller happens to make it, is unconditionally due -- otherwise a warm-up call made
+        // shortly after construction would see near-zero elapsed time and be a no-op under all
+        // three clauses, silently defeating the caller's warm-up.
+        this.lastRefreshTimeMs = System.currentTimeMillis() - safetyNetMaxDelayMs;
     }
 
     /** Records that something changed. {@code urgent} affects only how soon it is acted on. */
@@ -91,21 +115,20 @@ public final class CoalescingRefreshCache<T> {
     }
 
     /**
-     * Recomputes and republishes the value via {@code compute}, if and only if something has
-     * actually changed since the last refresh <em>and</em> now is the right time to act on it.
+     * Recomputes and republishes the value via {@code compute}, if and only if it is due: either a
+     * reported change has waited long enough for its urgency tier, or the unconditional safety-net
+     * bound has elapsed regardless of whether anything was ever reported. See the class javadoc for
+     * why both mechanisms exist independently.
      *
      * @param compute recomputes the value from scratch; only invoked if a refresh is due.
-     * @param force overrides the timing question directly -- pass {@code true} when the caller
-     *     already knows now is a good time (e.g. its own work queue is empty), or to force an
-     *     unconditional warm-up. Never overrides the {@code dirty} check: if nothing changed, this
-     *     is a no-op regardless of {@code force}.
      */
-    public void refresh(Supplier<T> compute, boolean force) {
-        if (!dirty) {
-            return;
-        }
+    public void refresh(Supplier<T> compute) {
         long now = System.currentTimeMillis();
-        boolean due = force || (urgentDirty && (now - lastRefreshTimeMs) >= urgentMaxDelayMs);
+        long elapsed = now - lastRefreshTimeMs;
+        boolean due =
+                (urgentDirty && elapsed >= urgentMaxDelayMs)
+                        || (dirty && elapsed >= normalMaxDelayMs)
+                        || (elapsed >= safetyNetMaxDelayMs);
         if (due) {
             inLock(updateLock, () -> this.value = compute.get());
             lastRefreshTimeMs = now;

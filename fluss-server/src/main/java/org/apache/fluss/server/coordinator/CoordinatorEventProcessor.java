@@ -333,8 +333,16 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
         lifecycleThrottler.start();
 
-        // start table manager
+        // start table manager -- this drives leader election (replicaStateMachine.startup(),
+        // tableBucketStateMachine.startup()); everything before this point (bulk load above,
+        // watchers) never touched the health-cache listener, which is still the default NO_OP.
         tableManager.startup();
+
+        // Now wire up the listener and do the one explicit warm-up: from here on, every
+        // steady-state mutation reaches healthCache automatically, and the first published
+        // snapshot correctly reflects post-election state rather than a pre-election artifact.
+        coordinatorContext.setListener(healthCache);
+        healthCache.refresh(coordinatorContext);
 
         // start the event manager which will then process the event
         coordinatorEventManager.start();
@@ -509,11 +517,12 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 tabletServerInfoList,
                 coordinatorContext.getServerTags());
         updateTabletServerMetadataCacheWhenStartup(tabletServerInfoList);
-        // Warm the health cache once, unconditionally, so it isn't empty before the first
-        // relevant mutation lands. Bulk-loading buckets above does not mark it dirty on purpose
-        // (that would mean one dirty-mark per bucket during startup, for no benefit); this single
-        // explicit refresh covers it instead.
-        healthCache.refresh(coordinatorContext, true);
+        // healthCache.setListener()/warm-up deliberately do NOT happen here: bulk-loading buckets
+        // above must not mark it dirty (one dirty-mark per bucket during startup, for no benefit),
+        // and leader election (tableManager.startup(), driven from
+        // CoordinatorEventProcessor#startup)
+        // hasn't run yet at this point -- warming up now would publish a pre-election snapshot. See
+        // #startup() for where the listener is actually wired up and the warm-up actually happens.
 
         // Auto-partition initialization schedules creation checks immediately. Start it only after
         // the observed KV leader replica count and live tablet server resources are restored.
@@ -682,16 +691,12 @@ public class CoordinatorEventProcessor implements EventProcessor {
     public void process(CoordinatorEvent event) {
         if (event instanceof CreateTableEvent) {
             processCreateTable((CreateTableEvent) event);
-            healthCache.onTopologyChanged();
         } else if (event instanceof CreatePartitionEvent) {
             processCreatePartition((CreatePartitionEvent) event);
-            healthCache.onTopologyChanged();
         } else if (event instanceof DropTableEvent) {
             processDropTable((DropTableEvent) event);
-            healthCache.onTopologyChanged();
         } else if (event instanceof DropPartitionEvent) {
             processDropPartition((DropPartitionEvent) event);
-            healthCache.onTopologyChanged();
         } else if (event instanceof SchemaChangeEvent) {
             SchemaChangeEvent schemaChangeEvent = (SchemaChangeEvent) event;
             processSchemaChange(schemaChangeEvent);
@@ -710,10 +715,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
             processDeadCoordinator((DeadCoordinatorEvent) event);
         } else if (event instanceof NewTabletServerEvent) {
             processNewTabletServer((NewTabletServerEvent) event);
-            healthCache.onTabletServerRegistered();
         } else if (event instanceof DeadTabletServerEvent) {
             processDeadTabletServer((DeadTabletServerEvent) event);
-            healthCache.onTabletServerDied();
         } else if (event instanceof AdjustIsrReceivedEvent) {
             AdjustIsrReceivedEvent adjustIsrReceivedEvent = (AdjustIsrReceivedEvent) event;
             CompletableFuture<AdjustIsrResponse> callback =
@@ -752,21 +755,12 @@ public class CoordinatorEventProcessor implements EventProcessor {
             AddServerTagEvent addServerTagEvent = (AddServerTagEvent) event;
             completeFromCallable(
                     addServerTagEvent.getRespCallback(),
-                    () -> {
-                        AddServerTagResponse response = processAddServerTag(addServerTagEvent);
-                        healthCache.onTopologyChanged();
-                        return response;
-                    });
+                    () -> processAddServerTag(addServerTagEvent));
         } else if (event instanceof RemoveServerTagEvent) {
             RemoveServerTagEvent removeServerTagEvent = (RemoveServerTagEvent) event;
             completeFromCallable(
                     removeServerTagEvent.getRespCallback(),
-                    () -> {
-                        RemoveServerTagResponse response =
-                                processRemoveServerTag(removeServerTagEvent);
-                        healthCache.onTopologyChanged();
-                        return response;
-                    });
+                    () -> processRemoveServerTag(removeServerTagEvent));
         } else if (event instanceof RebalanceEvent) {
             RebalanceEvent rebalanceEvent = (RebalanceEvent) event;
             completeFromCallable(
@@ -1390,7 +1384,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         coordinatorContext.removeOfflineBucketInServer(tabletServerId);
 
         coordinatorContext.removeLiveTabletServer(tabletServerId);
-        coordinatorContext.shuttingDownTabletServers().remove(tabletServerId);
+        coordinatorContext.clearShuttingDown(tabletServerId);
         coordinatorChannelManager.removeTabletServer(tabletServerId);
 
         // Here, we will first update alive tabletServer info for all tabletServers and
@@ -1818,7 +1812,6 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
             // A2. Set RS = TRS, AR = [], RR = [] in memory.
             coordinatorContext.updateBucketReplicaAssignment(tableBucket, reassignment.replicas);
-            healthCache.onTopologyChanged();
             updateReplicaAssignmentForBucket(tableBucket, reassignment.replicas);
 
             // A3. replicas in AR -> NewReplica
@@ -1844,7 +1837,6 @@ public class CoordinatorEventProcessor implements EventProcessor {
             maybeReassignedBucketLeaderIfRequired(tableBucket, targetReplicas);
             // B3. Set RS = TRS, AR = [], RR = [] in memory.
             coordinatorContext.updateBucketReplicaAssignment(tableBucket, targetReplicas);
-            healthCache.onTopologyChanged();
             // B4. Re-send LeaderAndIsr request with new leader and a new RS (using TRS) and same
             // isr to every tabletServer in TRS.
             updateBucketEpochAndSendRequest(tableBucket, targetReplicas);
@@ -2021,14 +2013,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         }
 
         // update coordinator leader and isr cache.
-        newLeaderAndIsrList.forEach(
-                (tableBucket, newLeaderAndIsr) -> {
-                    coordinatorContext.putBucketLeaderAndIsr(tableBucket, newLeaderAndIsr);
-                    healthCache.onBucketLeaderAndIsrChanged(
-                            tableBucket,
-                            coordinatorContext.getAssignment(tableBucket),
-                            Optional.of(newLeaderAndIsr));
-                });
+        newLeaderAndIsrList.forEach(coordinatorContext::putBucketLeaderAndIsr);
 
         // First, try to judge whether the bucket is in rebalance task when isr change.
         newLeaderAndIsrList.keySet().forEach(this::tryToCompleteRebalanceTaskOnLeaderAndIsrChange);
@@ -2404,7 +2389,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                     "TabletServer" + tabletServerId + " is not available.");
         }
 
-        coordinatorContext.shuttingDownTabletServers().add(tabletServerId);
+        coordinatorContext.markShuttingDown(tabletServerId);
         LOG.debug(
                 "All shutting down tabletServers: {}",
                 coordinatorContext.shuttingDownTabletServers());
@@ -2589,10 +2574,6 @@ public class CoordinatorEventProcessor implements EventProcessor {
         LeaderAndIsr newLeaderAndIsr = leaderAndIsr.newLeaderAndIsr(leaderAndIsr.isr());
 
         coordinatorContext.putBucketLeaderAndIsr(tableBucket, newLeaderAndIsr);
-        healthCache.onBucketLeaderAndIsrChanged(
-                tableBucket,
-                coordinatorContext.getAssignment(tableBucket),
-                Optional.of(newLeaderAndIsr));
         zooKeeperClient.updateLeaderAndIsr(
                 tableBucket, newLeaderAndIsr, coordinatorContext.getCoordinatorZkVersion());
 

@@ -47,21 +47,35 @@ import java.util.TreeMap;
  * #computeTabletServerLoads} today; what changes is how often that scan runs and who waits for it,
  * not its cost.
  *
- * <p>{@link #refresh(CoordinatorContext, boolean)} must only be called from the coordinator event
- * thread, since {@code CoordinatorContext} is not thread-safe -- see {@link
- * CoalescingRefreshCache}'s javadoc for the single-writer-thread assumption this relies on.
+ * <p>{@link #refresh(CoordinatorContext)} must only be called from the coordinator event thread,
+ * since {@code CoordinatorContext} is not thread-safe -- see {@link CoalescingRefreshCache}'s
+ * javadoc for the single-writer-thread assumption this relies on, and for why rate (these three
+ * bounds) and coverage (the safety net) are deliberately independent mechanisms.
  */
-public final class CoordinatorHealthCache {
+public final class CoordinatorHealthCache implements CoordinatorContextListener {
 
     /**
-     * Upper bound on how long an urgent (degrading) change may sit unreflected while the event
-     * queue keeps draining new work. Bounds worst-case staleness for a safety-relevant signal
-     * without forcing a full rescan after every single event in a burst.
+     * Upper bound on how long an urgent (degrading) change may sit unreflected. Bounds worst-case
+     * staleness for a safety-relevant signal without forcing a full rescan after every single event
+     * in a burst.
      */
     @VisibleForTesting static final long URGENT_MAX_DELAY_MS = 200;
 
+    /** Upper bound on how long a known, non-urgent change may sit unreflected. */
+    @VisibleForTesting static final long NORMAL_MAX_DELAY_MS = 3_000;
+
+    /**
+     * Absolute ceiling on staleness, independent of whether anything was ever reported via an
+     * {@code onXxx} call -- the coverage backstop. See {@link CoalescingRefreshCache}'s javadoc.
+     */
+    @VisibleForTesting static final long SAFETY_NET_MAX_DELAY_MS = 10_000;
+
     private final CoalescingRefreshCache<ClusterHealthSnapshot> cache =
-            new CoalescingRefreshCache<>(ClusterHealthSnapshot.EMPTY, URGENT_MAX_DELAY_MS);
+            new CoalescingRefreshCache<>(
+                    ClusterHealthSnapshot.EMPTY,
+                    URGENT_MAX_DELAY_MS,
+                    NORMAL_MAX_DELAY_MS,
+                    SAFETY_NET_MAX_DELAY_MS);
 
     // --------------------------------------------------------------------------------------------
     // Reporting: callers state facts, this class decides what they mean.
@@ -71,6 +85,7 @@ public final class CoordinatorHealthCache {
      * Reports the current (post-mutation) leader/ISR state for a bucket. Under-replication or a
      * missing leader is treated as urgent; anything else is batched.
      */
+    @Override
     public void onBucketLeaderAndIsrChanged(
             TableBucket tableBucket, List<Integer> assignment, Optional<LeaderAndIsr> current) {
         boolean underReplicated =
@@ -81,16 +96,19 @@ public final class CoordinatorHealthCache {
     }
 
     /** Reports that a bucket's leader became active or inactive. Inactive is urgent. */
+    @Override
     public void onLeaderActivityChanged(boolean isActive) {
         cache.markDirty(!isActive);
     }
 
     /** A tablet server died. Always urgent -- it can only make things worse. */
+    @Override
     public void onTabletServerDied() {
         cache.markDirty(true);
     }
 
     /** A tablet server registered (startup or rejoin). Never urgent. */
+    @Override
     public void onTabletServerRegistered() {
         cache.markDirty(false);
     }
@@ -99,6 +117,7 @@ public final class CoordinatorHealthCache {
      * Catch-all for topology changes that don't represent degradation: table/partition
      * create-delete, replica reassignment, server tag add/remove.
      */
+    @Override
     public void onTopologyChanged() {
         cache.markDirty(false);
     }
@@ -109,23 +128,18 @@ public final class CoordinatorHealthCache {
     // --------------------------------------------------------------------------------------------
 
     /**
-     * Recomputes and republishes the snapshot if, and only if, something has actually changed since
-     * the last refresh and now is the right time to act on it: a non-urgent change needs {@code
-     * force}; an urgent change is bounded by {@link #URGENT_MAX_DELAY_MS} regardless of {@code
-     * force}. If nothing changed, this is a no-op regardless of {@code force} -- see {@link
-     * CoalescingRefreshCache}'s javadoc for why that check always comes first.
+     * Recomputes and republishes the snapshot if it's due: a known change (urgent or not) is
+     * reflected within {@link #URGENT_MAX_DELAY_MS}/{@link #NORMAL_MAX_DELAY_MS}; an unconditional
+     * {@link #SAFETY_NET_MAX_DELAY_MS} ceiling guarantees a bound on staleness even for a mutation
+     * path nobody remembered to report through an {@code onXxx} call. Call this from the
+     * coordinator event loop on every tick -- it's cheap (one elapsed-time check) when nothing is
+     * due.
      *
      * <p>Must only be called from a thread that safely owns {@code ctx} (i.e. the coordinator event
      * thread) — {@code ctx} itself is not thread-safe.
-     *
-     * @param force overrides the timing question directly. The coordinator event loop passes
-     *     whether its own event queue is currently empty; an explicit warm-up (e.g. right after the
-     *     coordinator finishes loading its initial state) or a test that wants to bypass the timing
-     *     policy passes {@code true} unconditionally -- which still only takes effect because a
-     *     freshly constructed cache starts dirty.
      */
-    public void refresh(CoordinatorContext ctx, boolean force) {
-        cache.refresh(() -> computeSnapshot(ctx), force);
+    public void refresh(CoordinatorContext ctx) {
+        cache.refresh(() -> computeSnapshot(ctx));
     }
 
     /** Returns the most recently published snapshot. Safe to call from any thread. */
@@ -160,6 +174,7 @@ public final class CoordinatorHealthCache {
         int inSyncReplicas = 0;
         int numLeaderReplicas = 0;
         int activeLeaderReplicas = 0;
+        int bucketsWithoutLeader = 0;
 
         for (TableBucket tb : ctx.getAllBuckets()) {
             List<Integer> assignment = ctx.getAssignment(tb);
@@ -176,6 +191,7 @@ public final class CoordinatorHealthCache {
             }
 
             Optional<LeaderAndIsr> laiOpt = ctx.getBucketLeaderAndIsr(tb);
+            boolean hasLeader = false;
             if (laiOpt.isPresent()) {
                 LeaderAndIsr lai = laiOpt.get();
                 inSyncReplicas += lai.isr().size();
@@ -183,12 +199,19 @@ public final class CoordinatorHealthCache {
                     getOrCreate(loads, serverId).inSyncReplicas++;
                 }
                 if (lai.leader() != LeaderAndIsr.NO_LEADER) {
+                    hasLeader = true;
                     MutableLoad leaderLoad = getOrCreate(loads, lai.leader());
                     leaderLoad.numLeaderReplicas++;
                     if (leaderActive) {
                         leaderLoad.activeLeaderReplicas++;
                     }
                 }
+            }
+            // reconciles the aggregate numLeaderReplicas (a bucket count) against the per-server
+            // breakdown (an actual-leader count): every bucket counted above but not here is one
+            // where computeClusterHealth's aggregate and the per-server sum will diverge.
+            if (!hasLeader) {
+                bucketsWithoutLeader++;
             }
         }
 
@@ -202,6 +225,7 @@ public final class CoordinatorHealthCache {
                 inSyncReplicas,
                 numLeaderReplicas,
                 activeLeaderReplicas,
+                bucketsWithoutLeader,
                 tabletServerLoads);
     }
 

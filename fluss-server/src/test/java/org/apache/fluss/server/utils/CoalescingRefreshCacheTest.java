@@ -25,77 +25,108 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Tests for {@link CoalescingRefreshCache}, exercised with a trivial {@code Integer} value so the
- * coalescing/urgency mechanics are verified independently of any real caller (e.g. {@code
+ * coalescing/urgency/coverage mechanics are verified independently of any real caller (e.g. {@code
  * CoordinatorHealthCache}).
  */
 class CoalescingRefreshCacheTest {
 
-    private static final long URGENT_MAX_DELAY_MS = 100;
+    private static final long URGENT_MAX_DELAY_MS = 50;
+    private static final long NORMAL_MAX_DELAY_MS = 150;
+    private static final long SAFETY_NET_MAX_DELAY_MS = 400;
 
     @Test
     void testFreshCacheStartsDirtyWithTheSeedValue() {
-        CoalescingRefreshCache<Integer> cache =
-                new CoalescingRefreshCache<>(0, URGENT_MAX_DELAY_MS);
+        CoalescingRefreshCache<Integer> cache = newCache(0);
         assertThat(cache.get()).isEqualTo(0);
-        // hasn't computed a real value yet -- starts dirty so a warm-up can force it through.
+        // hasn't computed a real value yet -- starts dirty so a warm-up can go through.
         assertThat(cache.isDirty()).isTrue();
     }
 
     @Test
-    void testRefreshIsNoOpWhenNotDirtyEvenIfForced() {
-        CoalescingRefreshCache<Integer> cache =
-                new CoalescingRefreshCache<>(0, URGENT_MAX_DELAY_MS);
-        cache.refresh(() -> 1, true); // clears the initial dirty state
+    void testFirstRefreshIsAlwaysDueRegardlessOfElapsed() {
+        CoalescingRefreshCache<Integer> cache = newCache(0);
         AtomicInteger computeCalls = new AtomicInteger();
 
-        cache.refresh(() -> computeCalls.incrementAndGet(), true);
+        // called immediately after construction -- elapsed time is near zero, yet the very
+        // first refresh() must still go through: a caller's warm-up call must never be a
+        // silent no-op just because it happened to run right after construction.
+        cache.refresh(() -> computeCalls.incrementAndGet());
 
-        // force overrides the timing gate, never the dirty gate -- nothing changed, so
-        // compute() must not even be invoked, force notwithstanding.
+        assertThat(computeCalls.get()).isEqualTo(1);
+        assertThat(cache.isDirty()).isFalse();
+    }
+
+    @Test
+    void testRefreshIsNoOpWhenNothingChangedAndNoBoundHasElapsed() {
+        CoalescingRefreshCache<Integer> cache = newCache(0);
+        cache.refresh(() -> 1); // warm-up: due unconditionally on the first call
+        AtomicInteger computeCalls = new AtomicInteger();
+
+        cache.refresh(() -> computeCalls.incrementAndGet());
+
+        // called again immediately: nothing marked dirty, and no bound (urgent/normal/safety
+        // net) has elapsed -- compute() must not even be invoked.
         assertThat(computeCalls.get()).isZero();
         assertThat(cache.get()).isEqualTo(1);
     }
 
     @Test
-    void testNonUrgentChangeWaitsForForce() {
-        CoalescingRefreshCache<Integer> cache =
-                new CoalescingRefreshCache<>(0, URGENT_MAX_DELAY_MS);
+    void testNonUrgentChangeFiresAtNormalMaxDelayNotBefore() throws InterruptedException {
+        CoalescingRefreshCache<Integer> cache = newCache(0);
         AtomicInteger source = new AtomicInteger(1);
+        cache.refresh(source::get); // establishes a real lastRefreshTimeMs baseline
+        source.set(2);
         cache.markDirty(false);
 
-        cache.refresh(source::get, false); // not forced -- must wait
-        assertThat(cache.get()).isEqualTo(0);
+        cache.refresh(source::get); // normal delay not yet elapsed -- must wait
+        assertThat(cache.get()).isEqualTo(1);
         assertThat(cache.isDirty()).isTrue();
 
-        cache.refresh(source::get, true); // forced -- now it should recompute
-        assertThat(cache.get()).isEqualTo(1);
+        Thread.sleep(NORMAL_MAX_DELAY_MS + 50);
+
+        cache.refresh(source::get); // normal bound is now up
+        assertThat(cache.get()).isEqualTo(2);
         assertThat(cache.isDirty()).isFalse();
     }
 
     @Test
-    void testUrgentChangeIsBoundedByMaxDelayEvenIfNeverForced() throws InterruptedException {
-        CoalescingRefreshCache<Integer> cache =
-                new CoalescingRefreshCache<>(0, URGENT_MAX_DELAY_MS);
+    void testUrgentChangeFiresAtUrgentMaxDelayNotBefore() throws InterruptedException {
+        CoalescingRefreshCache<Integer> cache = newCache(0);
         AtomicInteger source = new AtomicInteger(1);
-        cache.refresh(source::get, true); // establishes a real lastRefreshTimeMs baseline
+        cache.refresh(source::get); // establishes a real lastRefreshTimeMs baseline
         source.set(2);
-
         cache.markDirty(true);
-        cache.refresh(source::get, false); // urgent, but delay not yet elapsed
+
+        cache.refresh(source::get); // urgent, but delay not yet elapsed
         assertThat(cache.get()).isEqualTo(1);
 
-        Thread.sleep(URGENT_MAX_DELAY_MS + 50);
+        Thread.sleep(URGENT_MAX_DELAY_MS + 20);
 
-        cache.refresh(source::get, false); // still not forced, but the bound is up
+        cache.refresh(source::get); // urgent bound is now up, well before the normal one
         assertThat(cache.get()).isEqualTo(2);
         assertThat(cache.isDirty()).isFalse();
         assertThat(cache.isUrgentlyDirty()).isFalse();
     }
 
     @Test
-    void testManyMarkDirtyCallsCoalesceIntoOneRecompute() {
-        CoalescingRefreshCache<Integer> cache =
-                new CoalescingRefreshCache<>(0, URGENT_MAX_DELAY_MS);
+    void testSafetyNetFiresEvenWithoutAnyMarkDirtyCall() throws InterruptedException {
+        CoalescingRefreshCache<Integer> cache = newCache(0);
+        AtomicInteger source = new AtomicInteger(1);
+        cache.refresh(source::get); // establishes a real lastRefreshTimeMs baseline
+        source.set(2);
+        // deliberately never call markDirty -- proves the coverage guarantee is independent of
+        // whether a caller remembered to report the change at all.
+
+        Thread.sleep(SAFETY_NET_MAX_DELAY_MS + 50);
+
+        cache.refresh(source::get);
+        assertThat(cache.get()).isEqualTo(2);
+    }
+
+    @Test
+    void testManyMarkDirtyCallsCoalesceIntoOneRecompute() throws InterruptedException {
+        CoalescingRefreshCache<Integer> cache = newCache(0);
+        cache.refresh(() -> 0); // warm-up
         AtomicInteger computeCalls = new AtomicInteger();
         AtomicInteger source = new AtomicInteger();
 
@@ -105,35 +136,35 @@ class CoalescingRefreshCacheTest {
                     () -> {
                         computeCalls.incrementAndGet();
                         return source.incrementAndGet();
-                    },
-                    false); // never forced -- simulates a burst arriving while the queue is busy
+                    }); // each call lands well within normalMaxDelayMs -- none is due yet
         }
         assertThat(computeCalls.get()).isZero();
 
+        Thread.sleep(NORMAL_MAX_DELAY_MS + 50);
         cache.refresh(
                 () -> {
                     computeCalls.incrementAndGet();
                     return source.incrementAndGet();
-                },
-                true); // forced now -- exactly one recompute for the whole burst
+                }); // now due -- exactly one recompute for the whole burst
 
         assertThat(computeCalls.get()).isEqualTo(1);
         assertThat(cache.get()).isEqualTo(1);
     }
 
     @Test
-    void testForceClearsDirtyFlagsAfterRecomputing() {
-        CoalescingRefreshCache<Integer> cache =
-                new CoalescingRefreshCache<>(0, URGENT_MAX_DELAY_MS);
+    void testDirtyFlagsClearAfterADueRecompute() {
+        CoalescingRefreshCache<Integer> cache = newCache(0);
         cache.markDirty(true);
 
-        cache.refresh(() -> 7, true);
+        cache.refresh(() -> 7); // first call is unconditionally due
 
         assertThat(cache.get()).isEqualTo(7);
-        // a forced refresh still recomputed the current truth, so nothing is left
-        // unreflected -- force participates fully in the dirty-tracking system, it doesn't
-        // sidestep it.
         assertThat(cache.isDirty()).isFalse();
         assertThat(cache.isUrgentlyDirty()).isFalse();
+    }
+
+    private static CoalescingRefreshCache<Integer> newCache(int initialValue) {
+        return new CoalescingRefreshCache<>(
+                initialValue, URGENT_MAX_DELAY_MS, NORMAL_MAX_DELAY_MS, SAFETY_NET_MAX_DELAY_MS);
     }
 }
