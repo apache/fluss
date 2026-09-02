@@ -25,36 +25,12 @@ on:
   pull_request:
     paths:
       - 'devkit/**'
-      - 'fluss-dist/**'
-      - 'fluss-flink/fluss-flink-1.20/**'
-      - 'fluss-flink/fluss-flink-common/**'
-      - 'fluss-flink/fluss-flink-tiering/**'
-      - 'fluss-filesystems/fluss-fs-s3/**'
-      - 'fluss-gateway/**'
-      - 'fluss-lake/fluss-lake-paimon/**'
-      - 'fluss-lake/pom.xml'
-      - 'fluss-rust/Cargo.toml'
-      - 'fluss-rust/crates/fluss/**'
-      - 'pom.xml'
-      - '.github/workflows/devkit-smoke.yaml'
   push:
     branches:
       - main
       - release-**
     paths:
       - 'devkit/**'
-      - 'fluss-dist/**'
-      - 'fluss-flink/fluss-flink-1.20/**'
-      - 'fluss-flink/fluss-flink-common/**'
-      - 'fluss-flink/fluss-flink-tiering/**'
-      - 'fluss-filesystems/fluss-fs-s3/**'
-      - 'fluss-gateway/**'
-      - 'fluss-lake/fluss-lake-paimon/**'
-      - 'fluss-lake/pom.xml'
-      - 'fluss-rust/Cargo.toml'
-      - 'fluss-rust/crates/fluss/**'
-      - 'pom.xml'
-      - '.github/workflows/devkit-smoke.yaml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.number || github.run_id }}
