@@ -23,13 +23,14 @@ FLUSS_DEV_HOME := DEVKIT_DIR + "/.."
 PROFILES_DIR := DEVKIT_DIR + "/profiles"
 DEPS_DIR := DEVKIT_DIR + "/.deps"
 CACHE_DIR := DEPS_DIR + "/cache"
+ACTIVE_PROFILE_FILE := DEPS_DIR + "/active-profile"
 
 # --- Docker Compose commands --------------------------------------------------
 
 COMPOSE := "docker compose -f " + DEVKIT_DIR + "/docker-compose.yml"
 COMPOSE_TIERING := COMPOSE + " -f " + DEVKIT_DIR + "/compose/tiering.yml"
-COMPOSE_GATEWAY := COMPOSE_TIERING + " -f " + DEVKIT_DIR + "/compose/gateway.yml"
-ALL_COMPOSE := COMPOSE_GATEWAY + " -f " + DEVKIT_DIR + "/compose/lake-common.yml -f " + DEVKIT_DIR + "/compose/iceberg.yml"
+COMPOSE_GATEWAY := COMPOSE + " -f " + DEVKIT_DIR + "/compose/gateway.yml"
+ALL_COMPOSE := COMPOSE_TIERING + " -f " + DEVKIT_DIR + "/compose/gateway.yml -f " + DEVKIT_DIR + "/compose/lake-common.yml -f " + DEVKIT_DIR + "/compose/iceberg.yml"
 ALL_PROFILES := "--profile single --profile cluster --profile flink --profile tiering --profile gateway"
 
 # --- Build commands -----------------------------------------------------------
@@ -37,20 +38,27 @@ ALL_PROFILES := "--profile single --profile cluster --profile flink --profile ti
 BUILD_CMD := env_var_or_default("DEVKIT_BUILD_CMD", "./mvnw -DskipTests -pl fluss-dist,fluss-flink/fluss-flink-1.20 -am package")
 TIERING_BUILD_CMD := env_var_or_default("DEVKIT_TIERING_BUILD_CMD", "./mvnw -DskipTests -pl fluss-dist,fluss-flink/fluss-flink-1.20,fluss-flink/fluss-flink-tiering -am package")
 
-default:
+_default:
     @just --list
 
-[doc("Build every artifact required by a profile")]
+[doc("Prepare every artifact required by a profile")]
 build profile="core":
     #!/usr/bin/env bash
     set -e
     PROFILE={{ quote(profile) }}
     just validate-profile "$PROFILE"
+    just deps "$PROFILE"
+    clean_dist() {
+        cd "{{ FLUSS_DEV_HOME }}"
+        ./mvnw -pl fluss-dist clean
+    }
     build_core() {
+        clean_dist
         cd "{{ FLUSS_DEV_HOME }}"
         {{ BUILD_CMD }}
     }
     build_tiering() {
+        clean_dist
         cd "{{ FLUSS_DEV_HOME }}"
         {{ TIERING_BUILD_CMD }}
     }
@@ -151,7 +159,67 @@ profile-format profile:
     sed -n 's/^[[:space:]]*datalake\.format[[:space:]]*: \([^#]*\).*$/\1/p' \
       "{{ PROFILES_DIR }}/$PROFILE/server.yaml" | sed 's/[[:space:]]*$//' | tail -n 1
 
-[doc("Download the JARs declared by a profile")]
+[private]
+compose profile topology *ARGS:
+    #!/usr/bin/env bash
+    set -e
+    PROFILE={{ quote(profile) }}
+    TOPOLOGY={{ quote(topology) }}
+    ARGS=( {{ ARGS }} )
+    just validate-profile "$PROFILE"
+    case "$TOPOLOGY" in
+      single) REPLICATION_FACTOR=1 ;;
+      cluster) REPLICATION_FACTOR=3 ;;
+      *) echo "Unknown topology: $TOPOLOGY"; exit 1 ;;
+    esac
+    PROFILE_DIR="{{ PROFILES_DIR }}/$PROFILE"
+    COMPOSE_ARGS=(-f "{{ DEVKIT_DIR }}/docker-compose.yml")
+    PROFILES=(--profile "$TOPOLOGY")
+    for TARGET in $(just profile-runtime-targets "$PROFILE"); do
+      case "$TARGET" in
+        core) ;;
+        flink)
+          COMPOSE_ARGS+=(-f "{{ DEVKIT_DIR }}/compose/tiering.yml")
+          PROFILES+=(--profile flink)
+          ;;
+        tiering) PROFILES+=(--profile tiering) ;;
+        gateway)
+          COMPOSE_ARGS+=(-f "{{ DEVKIT_DIR }}/compose/gateway.yml")
+          PROFILES+=(--profile gateway)
+          ;;
+      esac
+    done
+    if [ -f "$PROFILE_DIR/compose.files" ]; then
+      while IFS= read -r FILE; do
+        FILE="${FILE%%#*}"
+        FILE="${FILE//[[:space:]]/}"
+        [ -n "$FILE" ] || continue
+        if [ ! -f "{{ DEVKIT_DIR }}/$FILE" ]; then
+          echo "Compose file not found: $FILE"
+          exit 1
+        fi
+        COMPOSE_ARGS+=(-f "{{ DEVKIT_DIR }}/$FILE")
+      done < "$PROFILE_DIR/compose.files"
+    fi
+    export FLUSS_DEVKIT_CONFIG="$PROFILE_DIR/server.yaml"
+    export FLUSS_REPLICATION_FACTOR="$REPLICATION_FACTOR"
+    docker compose "${COMPOSE_ARGS[@]}" "${PROFILES[@]}" "${ARGS[@]}"
+
+[private]
+compose-active *ARGS:
+    #!/usr/bin/env bash
+    set -e
+    ARGS=( {{ ARGS }} )
+    if [ -f "{{ ACTIVE_PROFILE_FILE }}" ]; then
+      read -r PROFILE TOPOLOGY < "{{ ACTIVE_PROFILE_FILE }}"
+      if just validate-profile "$PROFILE" >/dev/null 2>&1; then
+        just compose "$PROFILE" "$TOPOLOGY" "${ARGS[@]}"
+        exit 0
+      fi
+    fi
+    {{ ALL_COMPOSE }} {{ ALL_PROFILES }} "${ARGS[@]}"
+
+[private]
 deps profile:
     #!/usr/bin/env bash
     set -e
@@ -195,21 +263,27 @@ stage-profile-jars profile:
     PROFILE_DIR="{{ PROFILES_DIR }}/$PROFILE"
     FORMAT=$(just profile-format "$PROFILE")
     SERVER_PLUGIN_DIR="{{ FLUSS_DEV_HOME }}/build-target/plugins/${FORMAT:-$PROFILE}"
+    rm -f "$SERVER_PLUGIN_DIR"/devkit-*.jar
     copy_urls() {
       local FILE="$1"
       local TARGET="$2"
       local PREFIX="${3:-}"
-      local URL NAME
+      local URL NAME SOURCE
       [ -f "$FILE" ] || return 0
       while IFS= read -r URL; do
         NAME="$(basename "${URL%%\?*}")"
+        SOURCE="{{ CACHE_DIR }}/$NAME"
+        if [ ! -s "$SOURCE" ]; then
+          echo "Profile dependency not found: $NAME"
+          echo "Run: just build $PROFILE"
+          exit 1
+        fi
         mkdir -p "$TARGET"
-        cp "{{ CACHE_DIR }}/$NAME" "$TARGET/$PREFIX$NAME"
+        cp "$SOURCE" "$TARGET/$PREFIX$NAME"
       done < <(sed 's/#.*//; s/[[:space:]]//g; /^$/d' "$FILE")
     }
     ACTIVE_DIR="{{ DEPS_DIR }}/flink/active"
     mkdir -p "$ACTIVE_DIR/lib" "$ACTIVE_DIR/jobs"
-    just deps "$PROFILE"
     copy_urls "$PROFILE_DIR/jars.urls" "$SERVER_PLUGIN_DIR" "devkit-"
     copy_urls "$PROFILE_DIR/jars.urls" "$ACTIVE_DIR/lib"
     copy_urls "$PROFILE_DIR/server.urls" "$SERVER_PLUGIN_DIR" "devkit-"
@@ -266,59 +340,40 @@ up profile="core" nodes="1":
       3) TOPOLOGY=cluster ;;
       *) echo "nodes must be 1 or 3"; exit 1 ;;
     esac
-    PROFILE_DIR="{{ PROFILES_DIR }}/$PROFILE"
-    FORMAT=$(just profile-format "$PROFILE")
-    COMPOSE_ARGS=(-f "{{ DEVKIT_DIR }}/docker-compose.yml")
-    PROFILES=(--profile "$TOPOLOGY")
     ENABLE_TIERING=false
     for TARGET in $(just profile-runtime-targets "$PROFILE"); do
       case "$TARGET" in
         core) just ensure-dist ;;
         flink)
           just ensure-flink
-          COMPOSE_ARGS+=(-f "{{ DEVKIT_DIR }}/compose/tiering.yml")
-          PROFILES+=(--profile flink)
           ;;
         tiering) ENABLE_TIERING=true ;;
         gateway)
           just ensure-gateway
-          COMPOSE_ARGS+=(-f "{{ DEVKIT_DIR }}/compose/gateway.yml")
-          PROFILES+=(--profile gateway)
           ;;
       esac
     done
-    if [ -f "$PROFILE_DIR/compose.files" ]; then
-      while IFS= read -r FILE; do
-        FILE="${FILE%%#*}"
-        FILE="${FILE//[[:space:]]/}"
-        [ -n "$FILE" ] || continue
-        if [ ! -f "{{ DEVKIT_DIR }}/$FILE" ]; then
-          echo "Compose file not found: $FILE"
-          exit 1
-        fi
-        COMPOSE_ARGS+=(-f "{{ DEVKIT_DIR }}/$FILE")
-      done < "$PROFILE_DIR/compose.files"
-    fi
     just stage-profile-jars "$PROFILE"
     if [ "$ENABLE_TIERING" = "true" ]; then
       just ensure-tiering "$PROFILE"
-      PROFILES+=(--profile tiering)
     fi
-    export FLUSS_DEVKIT_CONFIG="$PROFILE_DIR/server.yaml"
-    export FLUSS_REPLICATION_FACTOR="{{ nodes }}"
-    {{ ALL_COMPOSE }} {{ ALL_PROFILES }} down --remove-orphans >/dev/null 2>&1 || true
-    docker compose "${COMPOSE_ARGS[@]}" "${PROFILES[@]}" up -d
+    just compose-active down --remove-orphans >/dev/null 2>&1 || true
+    just compose "$PROFILE" "$TOPOLOGY" config --quiet
+    mkdir -p "{{ DEPS_DIR }}"
+    printf '%s %s\n' "$PROFILE" "$TOPOLOGY" > "{{ ACTIVE_PROFILE_FILE }}"
+    just compose "$PROFILE" "$TOPOLOGY" up -d --wait --wait-timeout 180
     just check "$PROFILE"
 
 [doc("Stop services and keep data")]
 down:
-    @{{ ALL_COMPOSE }} {{ ALL_PROFILES }} down --remove-orphans
+    @just compose-active down --remove-orphans
 
 [doc("Stop services and remove data")]
 clean:
     #!/usr/bin/env bash
     set -e
-    {{ ALL_COMPOSE }} {{ ALL_PROFILES }} down -v --remove-orphans
+    just compose-active down -v --remove-orphans
+    rm -f "{{ ACTIVE_PROFILE_FILE }}"
     for JAR in "{{ FLUSS_DEV_HOME }}"/build-target/plugins/*/devkit-*.jar; do
       [ -f "$JAR" ] || continue
       PLUGIN_DIR="$(dirname "$JAR")"
@@ -328,24 +383,25 @@ clean:
 
 [doc("Show service status")]
 status:
-    @{{ ALL_COMPOSE }} {{ ALL_PROFILES }} ps -a
+    @just compose-active ps -a
 
 [doc("Show log output. Example: just logs tablet-server-0 200")]
 logs service="" tail="100":
     #!/usr/bin/env bash
     if [ -z "{{ service }}" ]; then
-      {{ ALL_COMPOSE }} {{ ALL_PROFILES }} logs --tail="{{ tail }}"
+      just compose-active logs --tail="{{ tail }}"
     else
-      {{ ALL_COMPOSE }} {{ ALL_PROFILES }} logs --tail="{{ tail }}" "{{ service }}"
+      just compose-active logs --tail="{{ tail }}" "{{ service }}"
     fi
 
 [doc("Run a command in a service. Example: just exec tablet-server-0 java -version")]
 exec service *CMD:
-    @{{ ALL_COMPOSE }} {{ ALL_PROFILES }} exec "{{ service }}" {{ CMD }}
+    @just compose-active exec "{{ service }}" {{ CMD }}
 
 [private]
 check profile:
     #!/usr/bin/env bash
+    set -e
     PROFILE={{ quote(profile) }}
     FORMAT=$(just profile-format "$PROFILE")
     for TARGET in $(just profile-runtime-targets "$PROFILE"); do
@@ -444,6 +500,29 @@ run-sql file:
       exit 1
     fi
 
-[doc("Show running Flink jobs")]
+[doc("Verify the active profile's Lake Tiering Job")]
 tiering-status:
-    @{{ ALL_COMPOSE }} {{ ALL_PROFILES }} exec -T jobmanager /opt/flink/bin/flink list -r
+    #!/usr/bin/env bash
+    set -e
+    if [ ! -s "{{ ACTIVE_PROFILE_FILE }}" ]; then
+      echo "No active profile. Run: just up <lake-profile>"
+      exit 1
+    fi
+    read -r PROFILE _ < "{{ ACTIVE_PROFILE_FILE }}"
+    FORMAT=$(just profile-format "$PROFILE")
+    HAS_TIERING=false
+    for TARGET in $(just profile-runtime-targets "$PROFILE"); do
+      if [ "$TARGET" = "tiering" ]; then
+        HAS_TIERING=true
+        break
+      fi
+    done
+    if [ "$HAS_TIERING" != "true" ] || [ -z "$FORMAT" ]; then
+      echo "Active profile $PROFILE does not include Lake Tiering"
+      exit 1
+    fi
+    if ! just compose-active ps --status running --services | grep -Fxq jobmanager; then
+      echo "Flink is not running. Run: just up $PROFILE"
+      exit 1
+    fi
+    just check-tiering "$FORMAT"
