@@ -701,15 +701,6 @@ public class ConfigOptions {
                             "The format of the server truststore file. Supported values are `JKS` "
                                     + "and `PKCS12`. The default is `JKS`.");
 
-    public static final ConfigOption<Duration> SERVER_SSL_RELOAD_INTERVAL =
-            key("security.ssl.reload.interval")
-                    .durationType()
-                    .defaultValue(Duration.ofMinutes(5))
-                    .withDescription(
-                            "How often the server checks the keystore/truststore files for changes and "
-                                    + "rebuilds the SSL context (certificate hot-reload). Set to 0 to "
-                                    + "disable periodic reloading.");
-
     public static final ConfigOption<Integer> TABLET_SERVER_ID =
             key("tablet-server.id")
                     .intType()
@@ -1630,15 +1621,6 @@ public class ConfigOptions {
                                     + "server hostname against the server certificate. The default "
                                     + "`https` enables hostname verification; an empty string disables "
                                     + "it (not recommended in production).");
-
-    public static final ConfigOption<Duration> CLIENT_SSL_RELOAD_INTERVAL =
-            key("client.security.ssl.reload.interval")
-                    .durationType()
-                    .defaultValue(Duration.ofMinutes(5))
-                    .withDescription(
-                            "How often the client checks the keystore/truststore files for changes and "
-                                    + "rebuilds the SSL context (certificate hot-reload). Set to 0 to "
-                                    + "disable periodic reloading.");
 
     public static final ConfigOption<MemorySize> CLIENT_SCANNER_LOG_FETCH_MAX_BYTES =
             key("client.scanner.log.fetch.max-bytes")
