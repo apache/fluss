@@ -86,13 +86,43 @@ After changing Gateway or its Fluss integration, build and start the `gateway` p
 ```bash
 just build gateway
 just up gateway
-curl -fsS http://localhost:8080/ready
-curl -fsS http://localhost:8080/v1/clusters/default/databases
 ```
 
-The readiness endpoint checks that Gateway accepts requests. The databases request exercises the
-complete Gateway to Fluss path. DevKit builds the executable in the pinned Rust container and runs
-it with the standard `fluss-gateway/conf/gateway.yaml`.
+Create a Log Table in the default `fluss` database:
+
+```bash
+curl -fsS -X POST \
+  -H 'Content-Type: application/json' \
+  http://localhost:8080/v1/clusters/default/databases/fluss/tables \
+  -d '{
+    "table_name": "gateway_events",
+    "columns": [
+      {"name": "event_id", "data_type": {"type": "BIGINT"}, "nullable": false},
+      {"name": "message", "data_type": {"type": "STRING"}, "nullable": false}
+    ],
+    "distribution": {"bucket_count": 1, "bucket_keys": []}
+  }'
+```
+
+Describe the table:
+
+```bash
+curl -fsS \
+  http://localhost:8080/v1/clusters/default/databases/fluss/tables/gateway_events
+```
+
+Append a record whose fields match the table schema:
+
+```bash
+curl -fsS -X POST \
+  -H 'Content-Type: application/json' \
+  http://localhost:8080/v1/clusters/default/databases/fluss/tables/gateway_events/records \
+  -d '{
+    "entries": [
+      {"id": "event-1", "append": {"event_id": "1", "message": "hello from Gateway"}}
+    ]
+  }'
+```
 
 ### Lake Tiering
 
