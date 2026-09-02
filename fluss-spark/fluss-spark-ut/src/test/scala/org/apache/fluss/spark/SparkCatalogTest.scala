@@ -49,7 +49,7 @@ class SparkCatalogTest extends FlussSparkTestBase {
 
       val table = admin.getTableInfo(createTablePath("t")).get()
       assertThat(table.getRowType.getFieldCount).isEqualTo(3)
-      assertThat(table.getRowType.getFieldNames).containsExactly("id", "name", "age")
+      assertThatList(table.getRowType.getFieldNames).containsExactly("id", "name", "age")
     }
   }
 
