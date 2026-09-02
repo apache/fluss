@@ -19,6 +19,7 @@ package org.apache.fluss.server.replica.historical;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.ConfigException;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -197,6 +198,25 @@ class HistoricalPartitionTaskExecutorTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining(
                         ConfigOptions.SERVER_HISTORICAL_PARTITION_THREAD_POOL_MAX_SIZE.key());
+    }
+
+    @Test
+    void testReconfigureRejectsNonPositiveValues() {
+        HistoricalPartitionTaskExecutor taskExecutor =
+                new HistoricalPartitionTaskExecutor(configuration(1), new ManualExecutor());
+
+        Configuration invalidThreadPoolSize = configuration(1);
+        invalidThreadPoolSize.set(
+                ConfigOptions.SERVER_HISTORICAL_PARTITION_THREAD_POOL_MAX_SIZE, 0);
+        assertThatThrownBy(() -> taskExecutor.reconfigure(invalidThreadPoolSize))
+                .isInstanceOf(ConfigException.class)
+                .hasMessageContaining(
+                        ConfigOptions.SERVER_HISTORICAL_PARTITION_THREAD_POOL_MAX_SIZE.key());
+
+        assertThatThrownBy(() -> taskExecutor.reconfigure(configuration(0)))
+                .isInstanceOf(ConfigException.class)
+                .hasMessageContaining(
+                        ConfigOptions.NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS.key());
     }
 
     @Test
