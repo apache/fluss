@@ -29,7 +29,11 @@ import java.security.cert.Certificate;
 
 /**
  * Test helpers for generating self-signed certificates and JKS keystores/truststores on the fly, so
- * TLS tests do not need committed key material. Backed by Netty's {@link SelfSignedCertificate}.
+ * TLS tests do not need committed key material. Backed by Netty's {@link SelfSignedCertificate},
+ * which generates the certificate with BouncyCastle when it is on the classpath — hence the
+ * test-scoped {@code bcpkix-jdk18on} dependency. Its fallback generator reaches into {@code
+ * sun.security.x509}, which needs {@code --add-opens} from JDK 9 on and stops working altogether
+ * from JDK 18 on.
  */
 public class TestSslUtils {
 
