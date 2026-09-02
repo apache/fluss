@@ -47,4 +47,24 @@ class LakeTableUtilTest {
         assertThat(LakeTableUtil.resolveLakeTablePath(flussTablePath, tableConfig))
                 .isEqualTo(flussTablePath);
     }
+
+    @Test
+    void testIsLakeTablePathChange() {
+        String databaseNameKey = ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key();
+        String tableNameKey = ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key();
+
+        assertThat(LakeTableUtil.isLakeTablePathChange(TableChange.set(databaseNameKey, "db")))
+                .isTrue();
+        assertThat(LakeTableUtil.isLakeTablePathChange(TableChange.reset(databaseNameKey)))
+                .isTrue();
+        assertThat(LakeTableUtil.isLakeTablePathChange(TableChange.set(tableNameKey, "table")))
+                .isTrue();
+        assertThat(LakeTableUtil.isLakeTablePathChange(TableChange.reset(tableNameKey))).isTrue();
+        assertThat(
+                        LakeTableUtil.isLakeTablePathChange(
+                                TableChange.set(
+                                        ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")))
+                .isFalse();
+        assertThat(LakeTableUtil.isLakeTablePathChange(TableChange.dropColumn("c1"))).isFalse();
+    }
 }

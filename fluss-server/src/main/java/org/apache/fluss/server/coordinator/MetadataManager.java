@@ -633,7 +633,7 @@ public class MetadataManager {
                 // The target path is already applied by createTable. Do not replay its mapping
                 // options through alterTable, where they are intentionally immutable.
                 lakeTableChanges = new ArrayList<>(tableChanges);
-                lakeTableChanges.removeIf(MetadataManager::isLakeTablePathChange);
+                lakeTableChanges.removeIf(LakeTableUtil::isLakeTablePathChange);
             }
         }
 
@@ -663,19 +663,6 @@ public class MetadataManager {
                 }
             }
         }
-    }
-
-    private static boolean isLakeTablePathChange(TableChange tableChange) {
-        String optionKey;
-        if (tableChange instanceof TableChange.SetOption) {
-            optionKey = ((TableChange.SetOption) tableChange).getKey();
-        } else if (tableChange instanceof TableChange.ResetOption) {
-            optionKey = ((TableChange.ResetOption) tableChange).getKey();
-        } else {
-            return false;
-        }
-        return ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key().equals(optionKey)
-                || ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key().equals(optionKey);
     }
 
     /**

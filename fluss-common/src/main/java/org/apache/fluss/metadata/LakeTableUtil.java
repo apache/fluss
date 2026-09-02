@@ -40,4 +40,18 @@ public final class LakeTableUtil {
                         .orElse(flussTablePath.getTableName());
         return TablePath.of(lakeDatabaseName, lakeTableName);
     }
+
+    /** Returns whether the table change affects the resolved lake table path. */
+    public static boolean isLakeTablePathChange(TableChange tableChange) {
+        String optionKey;
+        if (tableChange instanceof TableChange.SetOption) {
+            optionKey = ((TableChange.SetOption) tableChange).getKey();
+        } else if (tableChange instanceof TableChange.ResetOption) {
+            optionKey = ((TableChange.ResetOption) tableChange).getKey();
+        } else {
+            return false;
+        }
+        return ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key().equals(optionKey)
+                || ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key().equals(optionKey);
+    }
 }
