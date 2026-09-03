@@ -142,7 +142,11 @@ class DefaultRowMergerTest {
                 new DefaultRowMerger(KvFormat.COMPACTED, DeleteBehavior.ALLOW)
                         .configureTargetColumns(null, (short) 1, SEQUENCE_GROUP_SCHEMA);
 
-        // the first row of a key initializes every group
+        // a first row without a sequence skips the group, while an ungrouped field is accepted
+        assertThat(merger.merge(null, sequenceGroupValue("skipped", null, "n0")))
+                .isEqualTo(sequenceGroupValue(null, null, "n0"));
+
+        // a first row carrying a sequence initializes the group without being re-encoded
         BinaryValue first = sequenceGroupValue("first", 100, "n1");
         assertThat(merger.merge(null, first)).isSameAs(first);
 
@@ -187,6 +191,10 @@ class DefaultRowMergerTest {
         RowMerger partialMerger =
                 merger.configureTargetColumns(
                         new int[] {0, 1, 2}, (short) 1, SEQUENCE_GROUP_SCHEMA);
+
+        // the partial path applies the same first-write arbitration as the full-row path
+        assertThat(partialMerger.merge(null, sequenceGroupValue("skipped", null, null)))
+                .isEqualTo(sequenceGroupValue(null, null, null));
 
         BinaryValue stored = sequenceGroupValue("stored", 100, "kept");
         // the group advances, so the written columns take the incoming values and 'note' is kept
