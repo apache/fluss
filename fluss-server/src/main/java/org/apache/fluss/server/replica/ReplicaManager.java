@@ -2557,7 +2557,7 @@ public class ReplicaManager implements ServerReconfigurable {
         if (routingBucketCount <= 0) {
             // Legacy client (no bucket count in request): reject only when a rescale is known,
             // because then the bucketId may come from an outdated count.
-            if (resolveBucketLayoutEpoch(replica) > 0) {
+            if (resolveBucketCountEpoch(replica) > 0) {
                 throw new StaleMetadataException(
                         "STALE_METADATA for "
                                 + tableBucket
@@ -2587,12 +2587,10 @@ public class ReplicaManager implements ServerReconfigurable {
      * Resolves the effective bucket layout epoch as the maximum of the replica-local value and the
      * metadata cache: ALTER bucket.num advances only the cache, and the epoch is monotonic.
      */
-    private long resolveBucketLayoutEpoch(Replica replica) {
-        Long replicaEpoch = replica.getBucketLayoutEpoch();
+    private long resolveBucketCountEpoch(Replica replica) {
+        Long replicaEpoch = replica.getBucketCountEpoch();
         long cachedEpoch =
-                metadataCache
-                        .getBucketLayoutEpoch(replica.getTableBucket().getTableId())
-                        .orElse(0L);
+                metadataCache.getBucketCountEpoch(replica.getTableBucket().getTableId()).orElse(0L);
         return Math.max(replicaEpoch == null ? 0L : replicaEpoch, cachedEpoch);
     }
 

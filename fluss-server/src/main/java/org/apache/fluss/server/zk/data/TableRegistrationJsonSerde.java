@@ -48,7 +48,7 @@ public class TableRegistrationJsonSerde
     static final String REMOTE_DATA_DIR = "remote_data_dir";
     static final String CREATED_TIME = "created_time";
     static final String MODIFIED_TIME = "modified_time";
-    static final String BUCKET_LAYOUT_EPOCH = "bucket_layout_epoch";
+    static final String BUCKET_LAYOUT_EPOCH = "bucket_count_epoch";
     private static final String VERSION_KEY = "version";
     private static final int VERSION = 2;
 
@@ -113,8 +113,8 @@ public class TableRegistrationJsonSerde
         // serialize modifiedTime
         generator.writeNumberField(MODIFIED_TIME, tableReg.modifiedTime);
 
-        // serialize bucketLayoutEpoch
-        generator.writeNumberField(BUCKET_LAYOUT_EPOCH, tableReg.bucketLayoutEpoch);
+        // serialize bucketCountEpoch
+        generator.writeNumberField(BUCKET_LAYOUT_EPOCH, tableReg.bucketCountEpoch);
 
         generator.writeEndObject();
     }
@@ -163,7 +163,7 @@ public class TableRegistrationJsonSerde
 
         // When deserializing from a legacy version, the bucket layout epoch may not exist;
         // read it as 0 (the table has never been ALTERed).
-        long bucketLayoutEpoch =
+        long bucketCountEpoch =
                 node.has(BUCKET_LAYOUT_EPOCH) ? node.get(BUCKET_LAYOUT_EPOCH).asLong() : 0L;
 
         return new TableRegistration(
@@ -176,7 +176,7 @@ public class TableRegistrationJsonSerde
                 remoteDataDir,
                 createdTime,
                 modifiedTime,
-                bucketLayoutEpoch);
+                bucketCountEpoch);
     }
 
     private Map<String, String> deserializeProperties(JsonNode node) {

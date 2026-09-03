@@ -210,7 +210,7 @@ public final class RecordAccumulator {
             WriteCallback callback,
             Cluster cluster,
             int bucketId,
-            int bucketCountActual,
+            int bucketCount,
             boolean abortIfBatchFull)
             throws Exception {
         PhysicalTablePath physicalTablePath = writeRecord.getPhysicalTablePath();
@@ -256,7 +256,7 @@ public final class RecordAccumulator {
                                 writeRecord,
                                 callback,
                                 bucketId,
-                                bucketCountActual,
+                                bucketCount,
                                 tableInfo,
                                 dq,
                                 memorySegments);
@@ -472,8 +472,8 @@ public final class RecordAccumulator {
             if (historicalBucketCount != null) {
                 for (Deque<WriteBatch> deque : writeTarget.batches.values()) {
                     for (WriteBatch batch : deque) {
-                        if (batch.getBucketCountActual() > 0
-                                && batch.getBucketCountActual() != historicalBucketCount) {
+                        if (batch.getBucketCount() > 0
+                                && batch.getBucketCount() != historicalBucketCount) {
                             return false;
                         }
                     }
@@ -799,7 +799,7 @@ public final class RecordAccumulator {
             WriteRecord writeRecord,
             WriteCallback callback,
             int bucketId,
-            int bucketCountActual,
+            int bucketCount,
             TableInfo tableInfo,
             Deque<WriteBatch> deque,
             List<MemorySegment> segments)
@@ -839,7 +839,7 @@ public final class RecordAccumulator {
                             schemaId,
                             isHistoricalPartition);
 
-            batch.setBucketCountActual(bucketCountActual);
+            batch.setBucketCount(bucketCount);
             batch.tryAppend(writeRecord, callback);
             deque.addLast(batch);
             incomplete.add(batch);

@@ -481,7 +481,7 @@ class PaimonTieringTest {
     }
 
     @Test
-    void testTieringStampsPartitionBucketCountActualAcrossRounds() throws Exception {
+    void testTieringStampsPartitionBucketCountAcrossRounds() throws Exception {
         // After ALTER bucket.num=8: files tiered for the "old" partition are stamped with its
         // actual count 4 (writer override) while the "new" partition inherits the schema value 8;
         // a second tiering round passes Paimon's native bucket-count check (historical 4 ==
@@ -1086,7 +1086,7 @@ class PaimonTieringTest {
                     }
 
                     @Override
-                    public int bucketCountActual() {
+                    public int bucketCount() {
                         return partitionBucketCount != null
                                 ? partitionBucketCount
                                 : tableInfo.getNumBuckets();

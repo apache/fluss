@@ -610,11 +610,11 @@ public class LookupSenderTest {
                     return createSuccessResponse(request, "value".getBytes());
                 });
 
-        // T1: create query with bucketCountActual=4 (the partition's actual count at lookup time)
+        // T1: create query with bucketCount=4 (the partition's actual count at lookup time)
         LookupQuery query =
                 new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("key"), false, null, 4);
         // The pinned value is visible on the query object
-        assertThat(query.bucketCountActual()).isEqualTo(4);
+        assertThat(query.bucketCount()).isEqualTo(4);
 
         lookupSender.sendLookups(1, LookupType.LOOKUP, Collections.singletonList(query));
 
@@ -624,11 +624,11 @@ public class LookupSenderTest {
         assertThat(request.getBucketsReqAt(0).hasRoutingBucketCount()).isTrue();
         assertThat(request.getBucketsReqAt(0).getRoutingBucketCount()).isEqualTo(4);
 
-        // A legacy query (bucketCountActual=0) must not set routing_bucket_count at all, letting
+        // A legacy query (bucketCount=0) must not set routing_bucket_count at all, letting
         // the server's epoch check decide.
         receivedRequests.clear();
         LookupQuery legacyQuery = new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("key"));
-        assertThat(legacyQuery.bucketCountActual()).isEqualTo(0);
+        assertThat(legacyQuery.bucketCount()).isEqualTo(0);
 
         lookupSender.sendLookups(1, LookupType.LOOKUP, Collections.singletonList(legacyQuery));
 
@@ -647,10 +647,10 @@ public class LookupSenderTest {
                     return createSuccessPrefixLookupResponse(request);
                 });
 
-        // T1: create prefix query with bucketCountActual=4
+        // T1: create prefix query with bucketCount=4
         PrefixLookupQuery query =
                 new PrefixLookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("prefix"), 4);
-        assertThat(query.bucketCountActual()).isEqualTo(4);
+        assertThat(query.bucketCount()).isEqualTo(4);
 
         lookupSender.sendLookups(1, LookupType.PREFIX_LOOKUP, Collections.singletonList(query));
 

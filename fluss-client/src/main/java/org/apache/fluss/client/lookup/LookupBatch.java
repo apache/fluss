@@ -34,12 +34,12 @@ public class LookupBatch {
 
     private final List<LookupQuery> lookups;
 
-    private final int bucketCountActual;
+    private final int bucketCount;
 
-    LookupBatch(LookupBatchKey lookupBatchKey, int bucketCountActual) {
+    LookupBatch(LookupBatchKey lookupBatchKey, int bucketCount) {
         this.lookupBatchKey = lookupBatchKey;
         this.lookups = new ArrayList<>();
-        this.bucketCountActual = bucketCountActual;
+        this.bucketCount = bucketCount;
     }
 
     public void addLookup(LookupQuery lookup) {
@@ -59,8 +59,8 @@ public class LookupBatch {
     }
 
     /** The bucket count the bucketId was calculated with, or 0 if unknown (legacy). */
-    public int getBucketCountActual() {
-        return bucketCountActual;
+    public int getBucketCount() {
+        return bucketCount;
     }
 
     LookupBatchKey lookupBatchKey() {

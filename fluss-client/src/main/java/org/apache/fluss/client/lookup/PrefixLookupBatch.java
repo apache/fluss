@@ -34,13 +34,13 @@ public class PrefixLookupBatch {
     /** The table bucket that the lookup operations should fall into. */
     private final TableBucket tableBucket;
 
-    private final int bucketCountActual;
+    private final int bucketCount;
 
     private final List<PrefixLookupQuery> prefixLookups;
 
-    public PrefixLookupBatch(TableBucket tableBucket, int bucketCountActual) {
+    public PrefixLookupBatch(TableBucket tableBucket, int bucketCount) {
         this.tableBucket = tableBucket;
-        this.bucketCountActual = bucketCountActual;
+        this.bucketCount = bucketCount;
         this.prefixLookups = new ArrayList<>();
     }
 
@@ -57,8 +57,8 @@ public class PrefixLookupBatch {
     }
 
     /** The bucket count the bucketId was calculated with, or 0 if unknown (legacy). */
-    public int getBucketCountActual() {
-        return bucketCountActual;
+    public int getBucketCount() {
+        return bucketCount;
     }
 
     public void complete(List<List<byte[]>> values) {

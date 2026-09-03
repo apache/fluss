@@ -322,7 +322,7 @@ public class TabletServerMetadataCacheTest {
     }
 
     @Test
-    void testPartitionBucketCountActualRemovedOnDelete() {
+    void testPartitionBucketCountRemovedOnDelete() {
         // Seed both partitions with explicit per-partition bucket counts.
         int explicitBucketCount = 8;
         serverMetadataCache.updateClusterMetadata(
@@ -350,7 +350,7 @@ public class TabletServerMetadataCacheTest {
                                 .getPartitionMetadata(
                                         PhysicalTablePath.of(partitionedTablePath, partitionName1))
                                 .get()
-                                .getBucketCountActual())
+                                .getBucketCount())
                 .isEqualTo(explicitBucketCount);
 
         // Delete partition1 via DELETED_PARTITION_ID (partitionId marks deletion).
@@ -370,9 +370,9 @@ public class TabletServerMetadataCacheTest {
                                 PhysicalTablePath.of(partitionedTablePath, partitionName1)))
                 .isEmpty();
 
-        // Re-add partition1 WITHOUT an explicit bucketCountActual. The cache must NOT return the
+        // Re-add partition1 WITHOUT an explicit bucketCount. The cache must NOT return the
         // stale 8; the DELETED_PARTITION_ID path must have removed the prior entry from the
-        // partitionBucketCountActuals map so the fallback (bucketMetadataList.size()) applies.
+        // partitionBucketCounts map so the fallback (bucketMetadataList.size()) applies.
         serverMetadataCache.updateClusterMetadata(
                 new ClusterMetadata(
                         coordinatorServer,
@@ -389,7 +389,7 @@ public class TabletServerMetadataCacheTest {
                                 .getPartitionMetadata(
                                         PhysicalTablePath.of(partitionedTablePath, partitionName1))
                                 .get()
-                                .getBucketCountActual())
+                                .getBucketCount())
                 .isEqualTo(initialBucketMetadata.size());
 
         // Delete partition2 via DELETED_PARTITION_NAME (partitionName marks deletion).
@@ -410,7 +410,7 @@ public class TabletServerMetadataCacheTest {
                 .isEmpty();
 
         // Re-add partition2 WITHOUT explicit; the DELETED_PARTITION_NAME path must have also
-        // cleared partitionBucketCountActuals, so fallback (list size) applies rather than stale 8.
+        // cleared partitionBucketCounts, so fallback (list size) applies rather than stale 8.
         serverMetadataCache.updateClusterMetadata(
                 new ClusterMetadata(
                         coordinatorServer,
@@ -427,12 +427,12 @@ public class TabletServerMetadataCacheTest {
                                 .getPartitionMetadata(
                                         PhysicalTablePath.of(partitionedTablePath, partitionName2))
                                 .get()
-                                .getBucketCountActual())
+                                .getBucketCount())
                 .isEqualTo(initialBucketMetadata.size());
     }
 
     @Test
-    void testUpdatePartitionMetadataPropagatesExplicitBucketCountActual() {
+    void testUpdatePartitionMetadataPropagatesExplicitBucketCount() {
         // Seed table metadata: updatePartitionMetadata bails out if the tableId is unknown.
         serverMetadataCache.updateClusterMetadata(
                 new ClusterMetadata(
@@ -442,7 +442,7 @@ public class TabletServerMetadataCacheTest {
                         Collections.emptyList()));
 
         // Route via the single-partition updatePartitionMetadata path (distinct from
-        // updateClusterMetadata). The explicit bucketCountActual must be applied to the cache.
+        // updateClusterMetadata). The explicit bucketCount must be applied to the cache.
         int explicitBucketCount = 8;
         serverMetadataCache.updatePartitionMetadata(
                 new PartitionMetadata(
@@ -456,7 +456,7 @@ public class TabletServerMetadataCacheTest {
                                 .getPartitionMetadata(
                                         PhysicalTablePath.of(partitionedTablePath, partitionName1))
                                 .get()
-                                .getBucketCountActual())
+                                .getBucketCount())
                 .isEqualTo(explicitBucketCount);
     }
 

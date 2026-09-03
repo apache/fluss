@@ -215,8 +215,8 @@ public class CoordinatorRequestBatch {
         // Leader activation requires the routing bucket count; skip the bucket when the
         // coordinator context has no assignment for it (e.g. raced by a drop) instead of
         // sending a notification without the count, which the TabletServer would reject.
-        Integer bucketCountActual = getBucketCountActual(tableBucket);
-        if (bucketCountActual == null) {
+        Integer bucketCount = getBucketCount(tableBucket);
+        if (bucketCount == null) {
             coordinatorContext.addPendingLeaderActivation(tableBucket);
             LOG.error(
                     "Skip notifying leader and isr for {}: no bucket assignment in coordinator "
@@ -224,8 +224,8 @@ public class CoordinatorRequestBatch {
                     tableBucket);
             return;
         }
-        Long bucketLayoutEpoch = getBucketLayoutEpoch(tableBucket.getTableId());
-        if (bucketLayoutEpoch == null) {
+        Long bucketCountEpoch = getBucketCountEpoch(tableBucket.getTableId());
+        if (bucketCountEpoch == null) {
             coordinatorContext.addPendingLeaderActivation(tableBucket);
             LOG.error(
                     "Skip notifying leader and isr for {}: no table info in coordinator context.",
@@ -248,8 +248,8 @@ public class CoordinatorRequestBatch {
                                                     tableBucket,
                                                     bucketReplicas,
                                                     leaderAndIsr,
-                                                    bucketCountActual,
-                                                    bucketLayoutEpoch));
+                                                    bucketCount,
+                                                    bucketCountEpoch));
                             notifyBucketLeaderAndIsr.put(tableBucket, notifyLeaderAndIsrForBucket);
                         });
 
@@ -267,7 +267,7 @@ public class CoordinatorRequestBatch {
      * in the coordinator context. The count is immutable per bucket, so it is carried with the
      * activation instead of waiting for the metadata push.
      */
-    private @Nullable Integer getBucketCountActual(TableBucket tableBucket) {
+    private @Nullable Integer getBucketCount(TableBucket tableBucket) {
         Map<Integer, List<Integer>> assignment;
         if (tableBucket.getPartitionId() != null) {
             assignment =
@@ -280,9 +280,9 @@ public class CoordinatorRequestBatch {
         return assignment.isEmpty() ? null : assignment.size();
     }
 
-    private @Nullable Long getBucketLayoutEpoch(long tableId) {
+    private @Nullable Long getBucketCountEpoch(long tableId) {
         TableInfo tableInfo = coordinatorContext.getTableInfoById(tableId);
-        return tableInfo == null ? null : tableInfo.getBucketLayoutEpoch();
+        return tableInfo == null ? null : tableInfo.getBucketCountEpoch();
     }
 
     public void addStopReplicaRequestForTabletServers(
@@ -736,7 +736,7 @@ public class CoordinatorRequestBatch {
                         Map<Integer, List<Integer>> partitionAssignment =
                                 coordinatorContext.getPartitionAssignment(
                                         new TablePartition(tableId, partitionId));
-                        Integer bucketCountActual =
+                        Integer bucketCount =
                                 partitionAssignment.isEmpty() ? null : partitionAssignment.size();
                         PartitionMetadata partitionMetadata;
                         if (partitionName == null) {
@@ -747,7 +747,7 @@ public class CoordinatorRequestBatch {
                                                 DELETED_PARTITION_NAME,
                                                 partitionId,
                                                 kvEntry.getValue(),
-                                                bucketCountActual);
+                                                bucketCount);
                             } else {
                                 throw new IllegalStateException(
                                         "Partition name is null for partition " + partitionId);
@@ -761,7 +761,7 @@ public class CoordinatorRequestBatch {
                                                     ? DELETED_PARTITION_ID
                                                     : partitionId,
                                             kvEntry.getValue(),
-                                            bucketCountActual);
+                                            bucketCount);
                         }
                         // table
                         partitionMetadataList.add(partitionMetadata);

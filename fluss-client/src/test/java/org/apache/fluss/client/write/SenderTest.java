@@ -225,11 +225,11 @@ final class SenderTest {
         // The historical partition keeps one bucket while the queued batch was routed by a
         // rescaled partition's count of four: its bucket id cannot be moved to the historical
         // layout, so the reroute must abort instead of silently misrouting the records.
-        Map<TablePartition, Integer> bucketCountActualByPartition = new HashMap<>();
-        bucketCountActualByPartition.put(
+        Map<TablePartition, Integer> bucketCountByPartition = new HashMap<>();
+        bucketCountByPartition.put(
                 new TablePartition(tableInfo.getTableId(), historicalBucket.getPartitionId()), 1);
         metadataUpdater.updateCluster(
-                partitionedCluster(tableInfo, tableBucketsByPath, bucketCountActualByPartition));
+                partitionedCluster(tableInfo, tableBucketsByPath, bucketCountByPartition));
         sender = setupWithIdempotenceState();
 
         CompletableFuture<Exception> future =
@@ -1642,7 +1642,7 @@ final class SenderTest {
     private static Cluster partitionedCluster(
             TableInfo tableInfo,
             Map<PhysicalTablePath, TableBucket> tableBucketsByPath,
-            Map<TablePartition, Integer> bucketCountActualByPartition) {
+            Map<TablePartition, Integer> bucketCountByPartition) {
         int[] replicas = new int[] {TestingMetadataUpdater.NODE1.id()};
         Map<PhysicalTablePath, List<BucketLocation>> bucketLocationsByPath = new HashMap<>();
         Map<PhysicalTablePath, Long> partitionIdsByPath = new HashMap<>();
@@ -1665,7 +1665,7 @@ final class SenderTest {
                 bucketLocationsByPath,
                 Collections.singletonMap(tableInfo.getTablePath(), tableInfo.getTableId()),
                 partitionIdsByPath,
-                bucketCountActualByPartition,
+                bucketCountByPartition,
                 Collections.emptyMap());
     }
 
@@ -1680,7 +1680,7 @@ final class SenderTest {
             PhysicalTablePath physicalTablePath,
             int id,
             Cluster cluster,
-            int bucketCountActual)
+            int bucketCount)
             throws Exception {
         accumulator.checkAndCacheHistoricalPartitionEnabled(tableInfo);
         BinaryRow row =
@@ -1705,7 +1705,7 @@ final class SenderTest {
                 (tableBucket, logEndOffset, error) -> future.complete(error),
                 cluster,
                 0,
-                bucketCountActual,
+                bucketCount,
                 false);
         return future;
     }

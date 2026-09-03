@@ -112,5 +112,5 @@ public interface WriterInitContext {
      * so lake writers must stamp bucket layouts with this value instead of the lake table's current
      * schema-level bucket setting.
      */
-    int bucketCountActual();
+    int bucketCount();
 }

@@ -156,8 +156,8 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
      * Returns the bucket layout epoch for the table, or empty if not known (legacy table without
      * the field, read as 0).
      */
-    public OptionalLong getBucketLayoutEpoch(long tableId) {
-        return serverMetadataSnapshot.getBucketLayoutEpoch(tableId);
+    public OptionalLong getBucketCountEpoch(long tableId) {
+        return serverMetadataSnapshot.getBucketCountEpoch(tableId);
     }
 
     public Optional<PartitionMetadata> getPartitionMetadata(PhysicalTablePath partitionPath) {
@@ -174,18 +174,15 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                     new ArrayList<>(snapshot.getBucketMetadataForPartition(partitionId).values());
             // prefer the explicit bucket count sent by the coordinator; the merged bucket
             // metadata list may be transiently partial during incremental updates
-            Integer bucketCountActual =
-                    snapshot.getPartitionBucketCountActual(
-                            new TablePartition(tableId, partitionId));
+            Integer bucketCount =
+                    snapshot.getPartitionBucketCount(new TablePartition(tableId, partitionId));
             return Optional.of(
                     new PartitionMetadata(
                             tableId,
                             partitionName,
                             partitionId,
                             bucketMetadataList,
-                            bucketCountActual != null
-                                    ? bucketCountActual
-                                    : bucketMetadataList.size()));
+                            bucketCount != null ? bucketCount : bucketMetadataList.size()));
         } else {
 
             return Optional.empty();
@@ -225,8 +222,8 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                             new HashMap<>(serverMetadataSnapshot.getTableIdByPath());
                     Map<Long, Map<Integer, BucketMetadata>> bucketMetadataMapForTables =
                             new HashMap<>(serverMetadataSnapshot.getBucketMetadataMapForTables());
-                    Map<Long, Long> bucketLayoutEpochByTableId =
-                            new HashMap<>(serverMetadataSnapshot.getBucketLayoutEpochByTableId());
+                    Map<Long, Long> bucketCountEpochByTableId =
+                            new HashMap<>(serverMetadataSnapshot.getBucketCountEpochByTableId());
 
                     for (TableMetadata tableMetadata : clusterMetadata.getTableMetadataList()) {
                         TableInfo tableInfo = tableMetadata.getTableInfo();
@@ -238,7 +235,7 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                             if (removedTableId != null) {
                                 bucketMetadataMapForTables.remove(removedTableId);
                                 deletedTableIds.add(removedTableId);
-                                bucketLayoutEpochByTableId.remove(removedTableId);
+                                bucketCountEpochByTableId.remove(removedTableId);
                             }
                         } else if (tablePath == DELETED_TABLE_PATH) {
                             serverMetadataSnapshot
@@ -246,17 +243,16 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                                     .ifPresent(tableIdByPath::remove);
                             bucketMetadataMapForTables.remove(tableId);
                             deletedTableIds.add(tableId);
-                            bucketLayoutEpochByTableId.remove(tableId);
+                            bucketCountEpochByTableId.remove(tableId);
                         } else {
                             // Ignore an older UpdateMetadata to prevent an older bucket
                             // layout (ALTER bucket.num) from replacing a newer one.
-                            long newEpoch = tableInfo.getBucketLayoutEpoch();
-                            long currentEpoch =
-                                    bucketLayoutEpochByTableId.getOrDefault(tableId, 0L);
+                            long newEpoch = tableInfo.getBucketCountEpoch();
+                            long currentEpoch = bucketCountEpochByTableId.getOrDefault(tableId, 0L);
                             if (newEpoch < currentEpoch) {
                                 continue;
                             }
-                            bucketLayoutEpochByTableId.put(tableId, newEpoch);
+                            bucketCountEpochByTableId.put(tableId, newEpoch);
 
                             // Update schema metadata.
                             // todo: apply schema id and schema info if needs
@@ -288,8 +284,8 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                     Map<Long, Map<Integer, BucketMetadata>> bucketMetadataMapForPartitions =
                             new HashMap<>(
                                     serverMetadataSnapshot.getBucketMetadataMapForPartitions());
-                    Map<TablePartition, Integer> partitionBucketCountActuals =
-                            new HashMap<>(serverMetadataSnapshot.getPartitionBucketCountActuals());
+                    Map<TablePartition, Integer> partitionBucketCounts =
+                            new HashMap<>(serverMetadataSnapshot.getPartitionBucketCounts());
 
                     for (PartitionMetadata partitionMetadata :
                             clusterMetadata.getPartitionMetadataList()) {
@@ -303,7 +299,7 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                             Long removedPartitionId = partitionIdByPath.remove(physicalTablePath);
                             if (removedPartitionId != null) {
                                 bucketMetadataMapForPartitions.remove(removedPartitionId);
-                                partitionBucketCountActuals
+                                partitionBucketCounts
                                         .keySet()
                                         .removeIf(k -> k.getPartitionId() == removedPartitionId);
                             }
@@ -312,16 +308,13 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                                     .getPhysicalTablePath(partitionId)
                                     .ifPresent(partitionIdByPath::remove);
                             bucketMetadataMapForPartitions.remove(partitionId);
-                            partitionBucketCountActuals
+                            partitionBucketCounts
                                     .keySet()
                                     .removeIf(k -> k.getPartitionId() == partitionId);
                         } else {
                             partitionIdByPath.put(physicalTablePath, partitionId);
-                            mergePartitionBucketCountActual(
-                                    partitionBucketCountActuals,
-                                    tableId,
-                                    partitionId,
-                                    partitionMetadata);
+                            mergePartitionBucketCount(
+                                    partitionBucketCounts, tableId, partitionId, partitionMetadata);
                             partitionMetadata
                                     .getBucketMetadataList()
                                     .forEach(
@@ -345,8 +338,8 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                                     partitionIdByPath,
                                     bucketMetadataMapForTables,
                                     bucketMetadataMapForPartitions,
-                                    partitionBucketCountActuals,
-                                    bucketLayoutEpochByTableId);
+                                    partitionBucketCounts,
+                                    bucketCountEpochByTableId);
                     return deletedTableIds;
                 });
     }
@@ -392,10 +385,10 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
 
                     // Ignore an older UpdateMetadata for this table to prevent it from
                     // overwriting newer state when messages arrive out of order.
-                    long newEpoch = tableInfo.getBucketLayoutEpoch();
+                    long newEpoch = tableInfo.getBucketCountEpoch();
                     long currentEpoch =
                             currentSnapshot
-                                    .getBucketLayoutEpochByTableId()
+                                    .getBucketCountEpochByTableId()
                                     .getOrDefault(tableId, 0L);
                     if (newEpoch < currentEpoch) {
                         return;
@@ -429,9 +422,9 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                     tableIdByPath.forEach((path, id) -> pathByTableId.put(id, path));
 
                     // Update epoch for this table
-                    Map<Long, Long> bucketLayoutEpochByTableId =
-                            new HashMap<>(currentSnapshot.getBucketLayoutEpochByTableId());
-                    bucketLayoutEpochByTableId.put(tableId, tableInfo.getBucketLayoutEpoch());
+                    Map<Long, Long> bucketCountEpochByTableId =
+                            new HashMap<>(currentSnapshot.getBucketCountEpochByTableId());
+                    bucketCountEpochByTableId.put(tableId, tableInfo.getBucketCountEpoch());
 
                     // Create new snapshot
                     serverMetadataSnapshot =
@@ -443,8 +436,8 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                                     partitionIdByPath,
                                     bucketMetadataMapForTables,
                                     bucketMetadataMapForPartitions,
-                                    currentSnapshot.getPartitionBucketCountActuals(),
-                                    bucketLayoutEpochByTableId);
+                                    currentSnapshot.getPartitionBucketCounts(),
+                                    bucketCountEpochByTableId);
                 });
     }
 
@@ -495,10 +488,10 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                     }
                     bucketMetadataMapForPartitions.put(partitionId, partitionBucketMetadata);
 
-                    Map<TablePartition, Integer> partitionBucketCountActuals =
-                            new HashMap<>(currentSnapshot.getPartitionBucketCountActuals());
-                    mergePartitionBucketCountActual(
-                            partitionBucketCountActuals, tableId, partitionId, partitionMetadata);
+                    Map<TablePartition, Integer> partitionBucketCounts =
+                            new HashMap<>(currentSnapshot.getPartitionBucketCounts());
+                    mergePartitionBucketCount(
+                            partitionBucketCounts, tableId, partitionId, partitionMetadata);
 
                     // Copy other existing data
                     Map<Long, Map<Integer, BucketMetadata>> bucketMetadataMapForTables =
@@ -517,8 +510,8 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                                     partitionIdByPath,
                                     bucketMetadataMapForTables,
                                     bucketMetadataMapForPartitions,
-                                    partitionBucketCountActuals,
-                                    currentSnapshot.getBucketLayoutEpochByTableId());
+                                    partitionBucketCounts,
+                                    currentSnapshot.getBucketCountEpochByTableId());
                 });
     }
 
@@ -527,15 +520,14 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
      * older versions do not send it; in that case the cache keeps no entry and readers fall back to
      * the merged bucket metadata size (see {@link #getPartitionMetadata}).
      */
-    private static void mergePartitionBucketCountActual(
-            Map<TablePartition, Integer> partitionBucketCountActuals,
+    private static void mergePartitionBucketCount(
+            Map<TablePartition, Integer> partitionBucketCounts,
             long tableId,
             long partitionId,
             PartitionMetadata partitionMetadata) {
-        if (partitionMetadata.getBucketCountActual() != null) {
-            partitionBucketCountActuals.put(
-                    new TablePartition(tableId, partitionId),
-                    partitionMetadata.getBucketCountActual());
+        if (partitionMetadata.getBucketCount() != null) {
+            partitionBucketCounts.put(
+                    new TablePartition(tableId, partitionId), partitionMetadata.getBucketCount());
         }
     }
 

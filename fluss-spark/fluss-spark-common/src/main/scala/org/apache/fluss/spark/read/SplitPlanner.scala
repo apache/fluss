@@ -137,11 +137,11 @@ abstract class AbstractSplitPlanner(
     val tableBucketCount = tableInfo.getNumBuckets
     infos.asScala.foreach {
       info =>
-        if (info.getBucketCountActual != tableBucketCount) {
+        if (info.getBucketCount != tableBucketCount) {
           throw new UnsupportedOperationException(
             s"Spark does not yet support per-partition bucket count rescale. " +
               s"Table $tablePath partition ${info.getPartitionName} has bucket count " +
-              s"${info.getBucketCountActual} but the table-level count is $tableBucketCount.")
+              s"${info.getBucketCount} but the table-level count is $tableBucketCount.")
         }
     }
     infos

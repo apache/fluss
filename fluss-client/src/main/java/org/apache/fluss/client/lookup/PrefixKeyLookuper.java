@@ -168,7 +168,7 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
                         : bucketKeyEncoder.encodeKey(prefixKey);
 
         Long partitionId = null;
-        int bucketCountActual = numBuckets;
+        int bucketCount = numBuckets;
         if (partitionGetter != null) {
             try {
                 partitionId =
@@ -177,8 +177,8 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
                                 partitionGetter,
                                 tableInfo.getTablePath(),
                                 metadataUpdater);
-                bucketCountActual =
-                        resolvePartitionBucketCountActual(
+                bucketCount =
+                        resolvePartitionBucketCount(
                                 new TablePartition(tableInfo.getTableId(), partitionId),
                                 numBuckets);
             } catch (PartitionNotExistException e) {
@@ -187,13 +187,12 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
         }
 
         // Compute bucket ID after partition resolution — needs per-partition bucket count
-        int bucketId = bucketingFunction.bucketing(bucketKeyBytes, bucketCountActual);
+        int bucketId = bucketingFunction.bucketing(bucketKeyBytes, bucketCount);
 
         CompletableFuture<LookupResult> lookupFuture = new CompletableFuture<>();
         TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), partitionId, bucketId);
         lookupClient
-                .prefixLookup(
-                        tableInfo.getTablePath(), tableBucket, prefixKeyBytes, bucketCountActual)
+                .prefixLookup(tableInfo.getTablePath(), tableBucket, prefixKeyBytes, bucketCount)
                 .whenComplete(
                         (result, error) -> {
                             if (error != null) {

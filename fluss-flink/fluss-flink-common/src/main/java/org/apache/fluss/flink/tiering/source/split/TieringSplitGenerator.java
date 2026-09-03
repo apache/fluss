@@ -104,7 +104,7 @@ public class TieringSplitGenerator {
                             .collect(
                                     Collectors.toMap(
                                             PartitionInfo::getPartitionId,
-                                            PartitionInfo::getBucketCountActual));
+                                            PartitionInfo::getBucketCount));
             if (tableInfo.getTableConfig().isHistoricalPartitionEnabled()) {
                 // The internal historical partition is intentionally omitted from
                 // listPartitionInfos(), but tiering must consume it to synchronize historical
@@ -125,7 +125,7 @@ public class TieringSplitGenerator {
                         historicalPartitionId,
                         metadataUpdater
                                 .getCluster()
-                                .getBucketCountActual(
+                                .getBucketCount(
                                         new TablePartition(
                                                 tableInfo.getTableId(), historicalPartitionId))
                                 .orElseThrow(

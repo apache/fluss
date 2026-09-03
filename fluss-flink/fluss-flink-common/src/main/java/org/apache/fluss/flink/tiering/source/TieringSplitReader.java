@@ -348,8 +348,7 @@ public class TieringSplitReader<WriteResult>
                     Admin admin = connection.getAdmin();
                     for (PartitionInfo partitionInfo : admin.listPartitionInfos(tablePath).get()) {
                         currentTablePartitionBucketCounts.put(
-                                partitionInfo.getPartitionId(),
-                                partitionInfo.getBucketCountActual());
+                                partitionInfo.getPartitionId(), partitionInfo.getBucketCount());
                     }
                 } catch (Exception e) {
                     throw new FlussRuntimeException(

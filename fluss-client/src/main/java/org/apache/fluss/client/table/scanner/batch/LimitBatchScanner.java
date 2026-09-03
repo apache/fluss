@@ -108,7 +108,7 @@ public class LimitBatchScanner implements BatchScanner {
 
         if (tableBucket.getPartitionId() != null) {
             limitScanRequest.setPartitionId(tableBucket.getPartitionId());
-            cluster.getBucketCountActual(
+            cluster.getBucketCount(
                             new TablePartition(
                                     tableBucket.getTableId(), tableBucket.getPartitionId()))
                     .ifPresent(limitScanRequest::setRoutingBucketCount);

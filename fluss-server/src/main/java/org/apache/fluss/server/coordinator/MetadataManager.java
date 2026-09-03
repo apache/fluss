@@ -781,7 +781,7 @@ public class MetadataManager {
             // of old partitions' current actual bucket count.
             partitionBucketCountBackfills = computePartitionBucketCountBackfill(tablePath);
 
-            // Update the structural bucketCount field and increment bucketLayoutEpoch
+            // Update the structural bucketCount field and increment bucketCountEpoch
             tableReg = tableReg.withBucketCount(newBucketNum);
         }
 
@@ -896,7 +896,7 @@ public class MetadataManager {
                 }
                 PartitionRegistration reg = optReg.get().data();
                 int partitionZkVersion = optReg.get().zkVersion();
-                if (reg.getBucketCountActual() != null) {
+                if (reg.getBucketCount() != null) {
                     // Already has bucket count persisted, skip. Idempotent so retries are safe.
                     continue;
                 }
@@ -914,13 +914,13 @@ public class MetadataManager {
                                             + "ALTER.",
                                     tablePath, partitionName, partitionId));
                 }
-                int bucketCountActual = optAssignment.get().getBucketAssignments().size();
+                int bucketCount = optAssignment.get().getBucketAssignments().size();
                 PartitionRegistration updatedReg =
                         new PartitionRegistration(
                                 reg.getTableId(),
                                 reg.getPartitionId(),
                                 reg.getRemoteDataDir(),
-                                bucketCountActual);
+                                bucketCount);
                 backfills.put(
                         partitionName,
                         new ZooKeeperClient.VersionedData<>(updatedReg, partitionZkVersion));
@@ -1207,6 +1207,10 @@ public class MetadataManager {
                 "Fail to get partitions from zookeeper for table " + tablePath);
     }
 
+    /**
+     * Creates a partition. The {@code bucketCount} is the table-level count the partition is
+     * created under; it becomes the partition's own persisted bucket count from here on.
+     */
     public void createPartition(
             TablePath tablePath,
             long tableId,
@@ -1214,7 +1218,7 @@ public class MetadataManager {
             PartitionAssignment partitionAssignment,
             ResolvedPartitionSpec partition,
             boolean ignoreIfExists,
-            int bucketCountActual) {
+            int bucketCount) {
         String partitionName = partition.getPartitionName();
         Optional<PartitionRegistration> optionalPartitionRegistration =
                 getOptionalPartitionRegistration(tablePath, partitionName);
@@ -1267,7 +1271,7 @@ public class MetadataManager {
                     remoteDataDir,
                     tablePath,
                     tableId,
-                    bucketCountActual);
+                    bucketCount);
             LOG.info(
                     "Register partition {} to zookeeper for table [{}].", partitionName, tablePath);
         } catch (KeeperException.NodeExistsException nodeExistsException) {

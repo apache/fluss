@@ -320,7 +320,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                 .setRemoteDataDir(tableInfo.getRemoteDataDir())
                 .setCreatedTime(tableInfo.getCreatedTime())
                 .setModifiedTime(tableInfo.getModifiedTime())
-                .setBucketLayoutEpoch(tableInfo.getBucketLayoutEpoch());
+                .setBucketCountEpoch(tableInfo.getBucketCountEpoch());
         return CompletableFuture.completedFuture(response);
     }
 
@@ -398,8 +398,8 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                         getPartition(tablePath, request.getPartitionName());
                 partitionId = partition.getPartitionId();
                 numBuckets =
-                        partition.getBucketCountActualOrDefault(
-                                numBuckets, tableInfo.getBucketLayoutEpoch());
+                        partition.getBucketCountOrDefault(
+                                numBuckets, tableInfo.getBucketCountEpoch());
             }
             Map<Integer, Optional<BucketSnapshot>> snapshots;
             if (partitionId != null) {
@@ -504,7 +504,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         authorizeTable(OperationType.DESCRIBE, tablePath);
 
         // Read table metadata before reading partitions. This prevents a read spanning ALTER from
-        // combining a pre-ALTER PartitionRegistration (without bucketCountActual) with a post-ALTER
+        // combining a pre-ALTER PartitionRegistration (without bucketCount) with a post-ALTER
         // TableInfo.
         TableInfo tableInfo = metadataManager.getTable(tablePath);
         List<String> partitionKeys = tableInfo.getPartitionKeys();
@@ -525,7 +525,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                         partitionKeys,
                         partitionRegistrations,
                         tableInfo.getNumBuckets(),
-                        tableInfo.getBucketLayoutEpoch()));
+                        tableInfo.getBucketCountEpoch()));
     }
 
     @Override

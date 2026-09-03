@@ -158,7 +158,7 @@ public class LakeSplitGenerator {
             PartitionInfo flussPartition = flussPartitionByName.remove(partitionName);
             if (flussPartition != null) {
                 // mean the partition also exist in fluss partition
-                int partitionBucketCount = flussPartition.getBucketCountActual();
+                int partitionBucketCount = flussPartition.getBucketCount();
                 Map<Integer, Long> bucketEndOffset =
                         stoppingOffsetInitializer.getBucketOffsets(
                                 partitionName,
@@ -194,7 +194,7 @@ public class LakeSplitGenerator {
         // iterate remain fluss splits
         for (PartitionInfo flussPartition : flussPartitionByName.values()) {
             String partitionName = flussPartition.getPartitionName();
-            int partitionBucketCount = flussPartition.getBucketCountActual();
+            int partitionBucketCount = flussPartition.getBucketCount();
             Map<Integer, Long> bucketEndOffset =
                     stoppingOffsetInitializer.getBucketOffsets(
                             partitionName,

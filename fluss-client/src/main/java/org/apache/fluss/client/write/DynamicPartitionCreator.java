@@ -188,7 +188,7 @@ public class DynamicPartitionCreator {
             Cluster cluster, PhysicalTablePath physicalTablePath) {
         Optional<TablePartition> tablePartition = cluster.getTablePartition(physicalTablePath);
         return tablePartition.isPresent()
-                && cluster.getBucketCountActual(tablePartition.get()).isPresent();
+                && cluster.getBucketCount(tablePartition.get()).isPresent();
     }
 
     private boolean forceCheckPartitionExist(PhysicalTablePath physicalTablePath) {

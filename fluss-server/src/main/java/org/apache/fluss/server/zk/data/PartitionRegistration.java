@@ -51,7 +51,7 @@ public class PartitionRegistration {
      * does not persist per-partition bucket count. In that case, callers should fall back to the
      * table-level bucket count.
      */
-    private final @Nullable Integer bucketCountActual;
+    private final @Nullable Integer bucketCount;
 
     public PartitionRegistration(long tableId, long partitionId, @Nullable String remoteDataDir) {
         this(tableId, partitionId, remoteDataDir, null);
@@ -61,11 +61,11 @@ public class PartitionRegistration {
             long tableId,
             long partitionId,
             @Nullable String remoteDataDir,
-            @Nullable Integer bucketCountActual) {
+            @Nullable Integer bucketCount) {
         this.tableId = tableId;
         this.partitionId = partitionId;
         this.remoteDataDir = remoteDataDir;
-        this.bucketCountActual = bucketCountActual;
+        this.bucketCount = bucketCount;
     }
 
     public long getTableId() {
@@ -83,8 +83,8 @@ public class PartitionRegistration {
 
     /** Returns the bucket count of this partition, or null if not persisted (old data). */
     @Nullable
-    public Integer getBucketCountActual() {
-        return bucketCountActual;
+    public Integer getBucketCount() {
+        return bucketCount;
     }
 
     /**
@@ -92,23 +92,23 @@ public class PartitionRegistration {
      * count when this partition was persisted by an older version that does not store the
      * per-partition count.
      *
-     * <p>The fallback is only valid at {@code bucketLayoutEpoch == 0} (legacy table or old server).
-     * At {@code bucketLayoutEpoch > 0}, the first ALTER must have backfilled the per-partition
+     * <p>The fallback is only valid at {@code bucketCountEpoch == 0} (legacy table or old server).
+     * At {@code bucketCountEpoch > 0}, the first ALTER must have backfilled the per-partition
      * count; a missing count indicates an incomplete backfill and throws {@link
      * StaleMetadataException} so the caller can refresh metadata and retry.
      */
-    public int getBucketCountActualOrDefault(int tableBucketCount, long bucketLayoutEpoch) {
-        if (bucketCountActual != null) {
-            return bucketCountActual;
+    public int getBucketCountOrDefault(int tableBucketCount, long bucketCountEpoch) {
+        if (bucketCount != null) {
+            return bucketCount;
         }
-        if (bucketLayoutEpoch == 0) {
+        if (bucketCountEpoch == 0) {
             return tableBucketCount;
         }
         throw new StaleMetadataException(
                 "Partition "
                         + partitionId
-                        + " is missing a per-partition bucket count at bucketLayoutEpoch "
-                        + bucketLayoutEpoch);
+                        + " is missing a per-partition bucket count at bucketCountEpoch "
+                        + bucketCountEpoch);
     }
 
     public TablePartition toTablePartition() {
@@ -124,7 +124,7 @@ public class PartitionRegistration {
      * @return a new registration with the given remote data directory
      */
     public PartitionRegistration newRemoteDataDir(String remoteDataDir) {
-        return new PartitionRegistration(tableId, partitionId, remoteDataDir, bucketCountActual);
+        return new PartitionRegistration(tableId, partitionId, remoteDataDir, bucketCount);
     }
 
     @Override
@@ -136,12 +136,12 @@ public class PartitionRegistration {
         return tableId == that.tableId
                 && partitionId == that.partitionId
                 && Objects.equals(remoteDataDir, that.remoteDataDir)
-                && Objects.equals(bucketCountActual, that.bucketCountActual);
+                && Objects.equals(bucketCount, that.bucketCount);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(tableId, partitionId, remoteDataDir, bucketCountActual);
+        return Objects.hash(tableId, partitionId, remoteDataDir, bucketCount);
     }
 
     @Override
@@ -154,8 +154,8 @@ public class PartitionRegistration {
                 + ", remoteDataDir='"
                 + remoteDataDir
                 + '\''
-                + ", bucketCountActual="
-                + bucketCountActual
+                + ", bucketCount="
+                + bucketCount
                 + '}';
     }
 }

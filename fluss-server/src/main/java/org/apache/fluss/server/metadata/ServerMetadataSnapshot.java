@@ -63,11 +63,11 @@ public class ServerMetadataSnapshot {
 
     // TablePartition -> bucket count; absent only when a legacy Coordinator omits it; a new
     // Coordinator always sends the field.
-    private final Map<TablePartition, Integer> partitionBucketCountActuals;
+    private final Map<TablePartition, Integer> partitionBucketCounts;
 
-    // tableId -> bucketLayoutEpoch; a TabletServer keeps the latest value and ignores a lower
+    // tableId -> bucketCountEpoch; a TabletServer keeps the latest value and ignores a lower
     // epoch to prevent an older bucket layout (ALTER bucket.num) from replacing a newer one.
-    private final Map<Long, Long> bucketLayoutEpochByTableId;
+    private final Map<Long, Long> bucketCountEpochByTableId;
 
     public ServerMetadataSnapshot(
             @Nullable ServerInfo coordinatorServer,
@@ -77,8 +77,8 @@ public class ServerMetadataSnapshot {
             Map<PhysicalTablePath, Long> partitionIdByPath,
             Map<Long, Map<Integer, BucketMetadata>> bucketMetadataMapForTables,
             Map<Long, Map<Integer, BucketMetadata>> bucketMetadataMapForPartitions,
-            Map<TablePartition, Integer> partitionBucketCountActuals,
-            Map<Long, Long> bucketLayoutEpochByTableId) {
+            Map<TablePartition, Integer> partitionBucketCounts,
+            Map<Long, Long> bucketCountEpochByTableId) {
         this.coordinatorServer = coordinatorServer;
         this.aliveTabletServers = Collections.unmodifiableMap(aliveTabletServers);
 
@@ -95,8 +95,8 @@ public class ServerMetadataSnapshot {
         this.bucketMetadataMapForTables = Collections.unmodifiableMap(bucketMetadataMapForTables);
         this.bucketMetadataMapForPartitions =
                 Collections.unmodifiableMap(bucketMetadataMapForPartitions);
-        this.partitionBucketCountActuals = Collections.unmodifiableMap(partitionBucketCountActuals);
-        this.bucketLayoutEpochByTableId = Collections.unmodifiableMap(bucketLayoutEpochByTableId);
+        this.partitionBucketCounts = Collections.unmodifiableMap(partitionBucketCounts);
+        this.bucketCountEpochByTableId = Collections.unmodifiableMap(bucketCountEpochByTableId);
     }
 
     /** Create an empty cluster instance with no nodes and no table-buckets. */
@@ -178,25 +178,25 @@ public class ServerMetadataSnapshot {
      * Returns the actual bucket count for the given table partition, or null when the coordinator
      * didn't send an explicit bucket count for it.
      */
-    public @Nullable Integer getPartitionBucketCountActual(TablePartition tablePartition) {
-        return partitionBucketCountActuals.get(tablePartition);
+    public @Nullable Integer getPartitionBucketCount(TablePartition tablePartition) {
+        return partitionBucketCounts.get(tablePartition);
     }
 
-    public Map<TablePartition, Integer> getPartitionBucketCountActuals() {
-        return partitionBucketCountActuals;
+    public Map<TablePartition, Integer> getPartitionBucketCounts() {
+        return partitionBucketCounts;
     }
 
     /**
      * Returns the bucket layout epoch for the given tableId, or empty if not known (legacy table
      * without the field, read as 0).
      */
-    public OptionalLong getBucketLayoutEpoch(long tableId) {
-        Long epoch = bucketLayoutEpochByTableId.get(tableId);
+    public OptionalLong getBucketCountEpoch(long tableId) {
+        Long epoch = bucketCountEpochByTableId.get(tableId);
         return epoch == null ? OptionalLong.empty() : OptionalLong.of(epoch);
     }
 
-    public Map<Long, Long> getBucketLayoutEpochByTableId() {
-        return bucketLayoutEpochByTableId;
+    public Map<Long, Long> getBucketCountEpochByTableId() {
+        return bucketCountEpochByTableId;
     }
 
     public Map<PhysicalTablePath, Long> getPartitionIdByPath() {
