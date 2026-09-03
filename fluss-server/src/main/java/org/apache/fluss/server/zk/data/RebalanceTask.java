@@ -52,14 +52,24 @@ public class RebalanceTask {
     private final Map<TablePartition, List<RebalancePlanForBucket>>
             planForBucketsOfPartitionedTable;
 
+    /** The time when this rebalance task was started, or {@code -1} if unset. */
+    private final long startedAtMs;
+
+    /** The time when this rebalance task reached a final status, or {@code -1} if unset. */
+    private final long completedAtMs;
+
     public RebalanceTask(
             String rebalanceId,
             RebalanceStatus rebalanceStatus,
-            Map<TableBucket, RebalancePlanForBucket> bucketPlan) {
+            Map<TableBucket, RebalancePlanForBucket> bucketPlan,
+            long startedAtMs,
+            long completedAtMs) {
         this.rebalanceId = rebalanceId;
         this.rebalanceStatus = rebalanceStatus;
         this.planForBuckets = new HashMap<>();
         this.planForBucketsOfPartitionedTable = new HashMap<>();
+        this.startedAtMs = startedAtMs;
+        this.completedAtMs = completedAtMs;
 
         for (Map.Entry<TableBucket, RebalancePlanForBucket> entry : bucketPlan.entrySet()) {
             TableBucket tableBucket = entry.getKey();
@@ -94,6 +104,14 @@ public class RebalanceTask {
         return planForBucketsOfPartitionedTable;
     }
 
+    public long getStartedAtMs() {
+        return startedAtMs;
+    }
+
+    public long getCompletedAtMs() {
+        return completedAtMs;
+    }
+
     public Map<TableBucket, RebalancePlanForBucket> getExecutePlan() {
         Map<TableBucket, RebalancePlanForBucket> executePlan = new HashMap<>();
         planForBuckets.forEach(
@@ -125,6 +143,10 @@ public class RebalanceTask {
                 + planForBuckets
                 + ", planForBucketsOfPartitionedTable="
                 + planForBucketsOfPartitionedTable
+                + ", startedAtMs="
+                + startedAtMs
+                + ", completedAtMs="
+                + completedAtMs
                 + '}';
     }
 
@@ -139,6 +161,8 @@ public class RebalanceTask {
 
         RebalanceTask that = (RebalanceTask) o;
         return rebalanceStatus == that.rebalanceStatus
+                && startedAtMs == that.startedAtMs
+                && completedAtMs == that.completedAtMs
                 && Objects.equals(rebalanceId, that.rebalanceId)
                 && Objects.equals(planForBuckets, that.planForBuckets)
                 && Objects.equals(
@@ -148,6 +172,11 @@ public class RebalanceTask {
     @Override
     public int hashCode() {
         return Objects.hash(
-                rebalanceId, rebalanceStatus, planForBuckets, planForBucketsOfPartitionedTable);
+                rebalanceId,
+                rebalanceStatus,
+                planForBuckets,
+                planForBucketsOfPartitionedTable,
+                startedAtMs,
+                completedAtMs);
     }
 }

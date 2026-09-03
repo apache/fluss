@@ -113,6 +113,8 @@ import org.apache.fluss.rpc.messages.ListKvSnapshotsRequest;
 import org.apache.fluss.rpc.messages.ListKvSnapshotsResponse;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressRequest;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressResponse;
+import org.apache.fluss.rpc.messages.ListRebalancesRequest;
+import org.apache.fluss.rpc.messages.ListRebalancesResponse;
 import org.apache.fluss.rpc.messages.ListRemoteLogManifestsRequest;
 import org.apache.fluss.rpc.messages.ListRemoteLogManifestsResponse;
 import org.apache.fluss.rpc.messages.MetadataRequest;
@@ -159,6 +161,7 @@ import org.apache.fluss.server.coordinator.event.CommitRemoteLogManifestEvent;
 import org.apache.fluss.server.coordinator.event.ControlledShutdownEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
 import org.apache.fluss.server.coordinator.event.ListRebalanceProgressEvent;
+import org.apache.fluss.server.coordinator.event.ListRebalancesEvent;
 import org.apache.fluss.server.coordinator.event.RebalanceEvent;
 import org.apache.fluss.server.coordinator.event.RemoveServerTagEvent;
 import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseHandler;
@@ -1581,6 +1584,17 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                         new CancelRebalanceEvent(
                                 request.hasRebalanceId() ? request.getRebalanceId() : null,
                                 response));
+        return response;
+    }
+
+    @Override
+    public CompletableFuture<ListRebalancesResponse> listRebalances(ListRebalancesRequest request) {
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), OperationType.DESCRIBE, Resource.cluster());
+        }
+
+        CompletableFuture<ListRebalancesResponse> response = new CompletableFuture<>();
+        eventManagerSupplier.get().put(new ListRebalancesEvent(response));
         return response;
     }
 
