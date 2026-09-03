@@ -22,9 +22,8 @@ support reading records — this guide reads data back through Flink SQL.
 ### Prerequisites
 
 Before proceeding with this guide, ensure that [Docker](https://docs.docker.com/engine/install/)
-and the [Docker Compose plugin](https://docs.docker.com/compose/install/linux/)
-are installed on your machine. All commands were tested with Docker version
-27.4.0 and Docker Compose version v2.30.3.
+and the [Docker Compose plugin](https://docs.docker.com/compose/install/linux/) are
+installed on your machine.
 
 :::note
 We encourage you to use a recent version of Docker and [Compose v2](https://docs.docker.com/compose/releases/migrate/)
@@ -33,7 +32,8 @@ We encourage you to use a recent version of Docker and [Compose v2](https://docs
 
 ### Build the Gateway image
 
-A published Gateway image is not used by this quickstart; the guide builds the Gateway image locally from the source checkout. Run this from the root of your Fluss source checkout (the
+The Gateway isn't published as a Docker Hub image yet, so this guide builds
+it from source. Run this from the root of your Fluss source checkout (the
 script resolves the repository root itself, so you don't need to `cd` into
 `docker/fluss-gateway` first):
 
@@ -43,7 +43,8 @@ docker/fluss-gateway/build.sh
 
 This compiles the Gateway inside a `rust:1.88-bookworm` builder container
 (no local Rust toolchain needed) and produces a local image tagged
-`fluss-gateway:dev`, which the Compose file below references directly. The first build may take several minutes because the Gateway binary is compiled from source.
+`fluss-gateway:dev`, which the Compose file below references directly. The
+first build may take several minutes.
 
 ### Starting required components
 
@@ -328,6 +329,12 @@ curl -sS --fail-with-body -X POST \
   }'
 ```
 
+:::note
+`amount_cents` values fit comfortably in a JSON number here. For `BIGINT`
+or `DECIMAL` values that exceed JSON number precision (values beyond 2^53),
+pass them as base-10 strings instead — e.g. `"amount_cents": "9999999999999999"`.
+:::
+
 A successful response looks like:
 
 ```json
@@ -390,6 +397,10 @@ CREATE CATALOG fluss_catalog WITH (
 USE CATALOG fluss_catalog;
 ```
 
+```sql title="Flink SQL"
+USE gateway_demo;
+```
+
 Switch to batch mode and query only the Paimon-tiered snapshot with the
 `$lake` suffix:
 
@@ -403,22 +414,22 @@ SET 'execution.runtime-mode' = 'batch';
 
 ```sql title="Flink SQL"
 -- wait for the ~30s datalake.freshness window before running this
-SELECT snapshot_id, total_record_count FROM gateway_demo.orders$lake$snapshots;
+SELECT snapshot_id, total_record_count FROM orders$lake$snapshots;
 ```
 
 ```sql title="Flink SQL"
-SELECT order_id, customer, amount_cents, status FROM gateway_demo.orders$lake;
+SELECT order_id, customer, amount_cents, status FROM orders$lake;
 ```
 
 Now query the table directly, which performs a Union Read. For a
-primary-key table, `gateway_demo.orders` isn't a raw concatenation of two
+primary-key table, `orders` isn't a raw concatenation of two
 stores — it gives you the **current unified view** of the table's state,
 combining whatever's still in Fluss with what's already tiered to Paimon.
-`gateway_demo.orders$lake`, by contrast, is the **lake-only view**: high
+`orders$lake`, by contrast, is the **lake-only view**: high
 performance, but reflecting only what's been tiered so far.
 
 ```sql title="Flink SQL"
-SELECT order_id, customer, amount_cents, status FROM gateway_demo.orders;
+SELECT order_id, customer, amount_cents, status FROM orders;
 ```
 
 To see this difference, write one more record through the Gateway from
@@ -431,9 +442,9 @@ curl -sS --fail-with-body -X POST \
   -d '{"entries": [{"id": "order-4", "upsert": {"order_id": 4, "customer": "Dave", "amount_cents": 2200, "status": "placed"}}]}'
 ```
 
-Re-run the query on `gateway_demo.orders` in the SQL client — `order_id 4`
+Re-run the query on `orders` in the SQL client — `order_id 4`
 appears immediately in the unified view. The lake-only view,
-`gateway_demo.orders$lake`, will reflect it once the tiering service has
+`orders$lake`, will reflect it once the tiering service has
 processed it, subject to the configured `table.datalake.freshness`.
 
 ### Quitting SQL Client
