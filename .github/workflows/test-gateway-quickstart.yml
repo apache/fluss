@@ -118,15 +118,24 @@ jobs:
 
       - name: Prepare Fluss Docker build context
         run: |
-          rm -rf docker/fluss/build-target
-          cp -a build-target docker/fluss/build-target
+          rm -rf /tmp/fluss-docker-context
+          mkdir -p /tmp/fluss-docker-context
+
+          cp -a docker/fluss/Dockerfile /tmp/fluss-docker-context/
+          cp -a docker/fluss/docker-entrypoint.sh /tmp/fluss-docker-context/
+          cp -a build-target /tmp/fluss-docker-context/build-target
+
+          echo "---- Docker context ----"
+          du -sh /tmp/fluss-docker-context
+          test -d /tmp/fluss-docker-context/build-target
+          test -f /tmp/fluss-docker-context/Dockerfile
+          test -f /tmp/fluss-docker-context/docker-entrypoint.sh
 
       - name: Build Fluss Docker image
         run: |
           docker build \
-            -f docker/fluss/Dockerfile \
             -t apache/fluss:${{ steps.versions.outputs.fluss_docker_version }} \
-            docker/fluss
+            /tmp/fluss-docker-context
 
           docker image inspect \
             apache/fluss:${{ steps.versions.outputs.fluss_docker_version }}
