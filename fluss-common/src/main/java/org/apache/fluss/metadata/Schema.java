@@ -101,7 +101,12 @@ public final class Schema implements Serializable {
 
         // enforce every schema-level sequence group invariant here so that a built Schema is
         // always consistent; merge-engine and log-table rejections still run at table creation
-        validateSequenceGroups(this.rowType, this.primaryKey, this.columns, this.sequenceGroups);
+        validateSequenceGroups(
+                this.rowType,
+                this.primaryKey,
+                this.autoIncrementColumnNames,
+                this.columns,
+                this.sequenceGroups);
     }
 
     public List<Column> getColumns() {
@@ -955,10 +960,22 @@ public final class Schema implements Serializable {
     private static void validateSequenceGroups(
             RowType rowType,
             @Nullable PrimaryKey primaryKey,
+            List<String> autoIncrementColumnNames,
             List<Column> columns,
             List<SequenceGroup> sequenceGroups) {
         if (sequenceGroups.isEmpty()) {
             return;
+        }
+
+        for (SequenceGroup group : sequenceGroups) {
+            if (group.getSequenceColumns().isEmpty()) {
+                throw new IllegalArgumentException(
+                        "The sequence columns of a sequence group must not be empty.");
+            }
+            if (group.getProtectedColumns().isEmpty()) {
+                throw new IllegalArgumentException(
+                        "The protected columns of a sequence group must not be empty.");
+            }
         }
 
         List<String> primaryKeyNames =
@@ -1057,6 +1074,25 @@ public final class Schema implements Serializable {
                                 "The sequence column '%s' orders a sequence group, "
                                         + "so it must not be put into another one.",
                                 sequenceColumn));
+            }
+        }
+
+        // a client may not write an auto increment column, so a group containing one could never
+        // be updated.
+        for (String groupField : allSequenceColumns) {
+            if (autoIncrementColumnNames.contains(groupField)) {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "The auto increment column '%s' must not order a sequence group.",
+                                groupField));
+            }
+        }
+        for (String groupField : allProtectedColumns) {
+            if (autoIncrementColumnNames.contains(groupField)) {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "The auto increment column '%s' must not be put in a sequence group.",
+                                groupField));
             }
         }
     }
