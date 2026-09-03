@@ -274,7 +274,7 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
         ByteBuf byteBuf = encodeErrorResponse(alloc, request.getRequestId(), error);
         ctx.writeAndFlush(byteBuf);
 
-        getMetrics(request).ifPresent(metrics -> metrics.getErrorsCount().inc());
+        getMetrics(request).ifPresent(metrics -> metrics.markError(error.error()));
     }
 
     private void updateRequestMetrics(FlussRequest request, long requestEndTimeMs) {
