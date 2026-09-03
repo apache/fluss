@@ -222,8 +222,9 @@ public class AdjustIsrITCase {
         assertThat(respForBucket.getErrorMessage())
                 .contains(
                         String.format(
-                                "The size of the current ISR [%s] is insufficient to satisfy the "
-                                        + "required acks -1 for table bucket TableBucket{tableId=%s, bucket=0}.",
+                                "The current ISR [%s] has 1 replicas, below the configured minimum "
+                                        + "ISR 2 required for acks=all on table bucket "
+                                        + "TableBucket{tableId=%s, bucket=0}.",
                                 leader, tableId));
         // check again leader highWatermark not increase because the isr set < min_isr
         assertThat(

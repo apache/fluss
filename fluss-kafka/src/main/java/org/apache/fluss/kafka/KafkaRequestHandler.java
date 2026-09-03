@@ -17,27 +17,104 @@
 
 package org.apache.fluss.kafka;
 
+import org.apache.fluss.kafka.api.admin.CreateTopicsHandler;
+import org.apache.fluss.kafka.api.admin.DeleteTopicsHandler;
+import org.apache.fluss.kafka.api.metadata.MetadataHandler;
+import org.apache.fluss.kafka.api.produce.ProduceHandler;
+import org.apache.fluss.kafka.api.versions.ApiVersionsHandler;
+import org.apache.fluss.kafka.backend.admin.GatewayKafkaTopicAdminBackend;
+import org.apache.fluss.kafka.backend.metadata.GatewayKafkaMetadataBackend;
+import org.apache.fluss.kafka.backend.produce.GatewayKafkaProduceBackend;
+import org.apache.fluss.kafka.dispatcher.KafkaApiRegistry;
+import org.apache.fluss.kafka.dispatcher.KafkaRequestDispatcher;
+import org.apache.fluss.kafka.error.KafkaErrorMapper;
+import org.apache.fluss.kafka.format.KafkaDataFormat;
+import org.apache.fluss.kafka.transcode.ArrowKafkaRecordTranscoder;
+import org.apache.fluss.rpc.RpcGatewayService;
+import org.apache.fluss.rpc.gateway.AdminGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.netty.server.RequestHandler;
 import org.apache.fluss.rpc.protocol.RequestType;
 
-import org.apache.kafka.common.message.ApiVersionsResponseData;
-import org.apache.kafka.common.protocol.ApiKeys;
-import org.apache.kafka.common.protocol.Errors;
-import org.apache.kafka.common.record.RecordBatch;
-import org.apache.kafka.common.requests.AbstractRequest;
-import org.apache.kafka.common.requests.AbstractResponse;
-import org.apache.kafka.common.requests.ApiVersionsResponse;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
-/** Kafka protocol implementation for request handler. */
+/** Entry point that dispatches Kafka protocol requests to registered API handlers. */
 public class KafkaRequestHandler implements RequestHandler<KafkaRequest> {
 
-    // TODO: we may need a new abstraction between TabletService and ReplicaManager to avoid
-    //  affecting Fluss protocol when supporting compatibility with Kafka.
-    private final TabletServerGateway gateway;
+    private final KafkaRequestDispatcher dispatcher;
 
-    public KafkaRequestHandler(TabletServerGateway gateway) {
-        this.gateway = gateway;
+    /** Creates a Kafka request handler with the capabilities provided by a TabletServer. */
+    public KafkaRequestHandler(
+            RpcGatewayService service, TabletServerGateway gateway, String kafkaDatabase) {
+        checkNotNull(service);
+        checkNotNull(gateway);
+        checkNotNull(kafkaDatabase);
+        KafkaApiRegistry registry = new KafkaApiRegistry();
+        registry.register(new ApiVersionsHandler(registry));
+        registry.register(
+                new MetadataHandler(
+                        new GatewayKafkaMetadataBackend(service, gateway, kafkaDatabase)));
+        registry.register(
+                new ProduceHandler(
+                        new GatewayKafkaProduceBackend(
+                                service,
+                                gateway,
+                                kafkaDatabase,
+                                new ArrowKafkaRecordTranscoder())));
+        registry.freeze();
+        this.dispatcher = new KafkaRequestDispatcher(registry, new KafkaErrorMapper());
+    }
+
+    /** Creates a Kafka request handler including topic lifecycle capabilities. */
+    public KafkaRequestHandler(
+            RpcGatewayService service,
+            TabletServerGateway gateway,
+            AdminGateway adminGateway,
+            String kafkaDatabase) {
+        this(
+                service,
+                gateway,
+                adminGateway,
+                kafkaDatabase,
+                KafkaDataFormat.RAW,
+                KafkaDataFormat.RAW);
+    }
+
+    /**
+     * Creates a Kafka request handler including topic lifecycle and default format capabilities.
+     */
+    public KafkaRequestHandler(
+            RpcGatewayService service,
+            TabletServerGateway gateway,
+            AdminGateway adminGateway,
+            String kafkaDatabase,
+            KafkaDataFormat defaultKeyFormat,
+            KafkaDataFormat defaultValueFormat) {
+        checkNotNull(service);
+        checkNotNull(gateway);
+        checkNotNull(adminGateway);
+        checkNotNull(kafkaDatabase);
+        checkNotNull(defaultKeyFormat);
+        checkNotNull(defaultValueFormat);
+        KafkaApiRegistry registry = new KafkaApiRegistry();
+        registry.register(new ApiVersionsHandler(registry));
+        registry.register(
+                new MetadataHandler(
+                        new GatewayKafkaMetadataBackend(service, gateway, kafkaDatabase), true));
+        registry.register(
+                new ProduceHandler(
+                        new GatewayKafkaProduceBackend(
+                                service,
+                                gateway,
+                                kafkaDatabase,
+                                new ArrowKafkaRecordTranscoder())));
+        GatewayKafkaTopicAdminBackend topicAdminBackend =
+                new GatewayKafkaTopicAdminBackend(service, adminGateway, kafkaDatabase);
+        registry.register(
+                new CreateTopicsHandler(topicAdminBackend, defaultKeyFormat, defaultValueFormat));
+        registry.register(new DeleteTopicsHandler(topicAdminBackend));
+        registry.freeze();
+        this.dispatcher = new KafkaRequestDispatcher(registry, new KafkaErrorMapper());
     }
 
     @Override
@@ -47,200 +124,15 @@ public class KafkaRequestHandler implements RequestHandler<KafkaRequest> {
 
     @Override
     public void processRequest(KafkaRequest request) {
-        // See kafka.server.KafkaApis#handle
-        switch (request.apiKey()) {
-            case API_VERSIONS:
-                handleApiVersionsRequest(request);
-                break;
-            case METADATA:
-                handleMetadataRequest(request);
-                break;
-            case PRODUCE:
-                handleProducerRequest(request);
-                break;
-            case FIND_COORDINATOR:
-                handleFindCoordinatorRequest(request);
-                break;
-            case LIST_OFFSETS:
-                handleListOffsetRequest(request);
-                break;
-            case OFFSET_FETCH:
-                handleOffsetFetchRequest(request);
-                break;
-            case OFFSET_COMMIT:
-                handleOffsetCommitRequest(request);
-                break;
-            case FETCH:
-                handleFetchRequest(request);
-                break;
-            case JOIN_GROUP:
-                handleJoinGroupRequest(request);
-                break;
-            case SYNC_GROUP:
-                handleSyncGroupRequest(request);
-                break;
-            case HEARTBEAT:
-                handleHeartbeatRequest(request);
-                break;
-            case LEAVE_GROUP:
-                handleLeaveGroupRequest(request);
-                break;
-            case DESCRIBE_GROUPS:
-                handleDescribeGroupsRequest(request);
-                break;
-            case LIST_GROUPS:
-                handleListGroupsRequest(request);
-                break;
-            case DELETE_GROUPS:
-                handleDeleteGroupsRequest(request);
-                break;
-            case SASL_HANDSHAKE:
-                handleSaslHandshakeRequest(request);
-                break;
-            case SASL_AUTHENTICATE:
-                handleSaslAuthenticateRequest(request);
-                break;
-            case CREATE_TOPICS:
-                handleCreateTopicsRequest(request);
-                break;
-            case INIT_PRODUCER_ID:
-                handleInitProducerIdRequest(request);
-                break;
-            case ADD_PARTITIONS_TO_TXN:
-                handleAddPartitionsToTxnRequest(request);
-                break;
-            case ADD_OFFSETS_TO_TXN:
-                handleAddOffsetsToTxnRequest(request);
-                break;
-            case TXN_OFFSET_COMMIT:
-                handleTxnOffsetCommitRequest(request);
-                break;
-            case END_TXN:
-                handleEndTxnRequest(request);
-                break;
-            case WRITE_TXN_MARKERS:
-                handleWriteTxnMarkersRequest(request);
-                break;
-            case DESCRIBE_CONFIGS:
-                handleDescribeConfigsRequest(request);
-                break;
-            case ALTER_CONFIGS:
-                handleAlterConfigsRequest(request);
-                break;
-            case DELETE_TOPICS:
-                handleDeleteTopicsRequest(request);
-                break;
-            case DELETE_RECORDS:
-                handleDeleteRecordsRequest(request);
-                break;
-            case OFFSET_DELETE:
-                handleOffsetDeleteRequest(request);
-                break;
-            case CREATE_PARTITIONS:
-                handleCreatePartitionsRequest(request);
-                break;
-            case DESCRIBE_CLUSTER:
-                handleDescribeClusterRequest(request);
-                break;
-            default:
-                handleUnsupportedRequest(request);
-        }
+        dispatcher
+                .dispatch(request)
+                .whenComplete(
+                        (response, failure) -> {
+                            if (failure == null) {
+                                request.complete(response);
+                            } else {
+                                request.fail(failure);
+                            }
+                        });
     }
-
-    private void handleUnsupportedRequest(KafkaRequest request) {
-        String message = String.format("Unsupported request with api key %s", request.apiKey());
-        AbstractRequest abstractRequest = request.request();
-        AbstractResponse response =
-                abstractRequest.getErrorResponse(new UnsupportedOperationException(message));
-        request.complete(response);
-    }
-
-    void handleApiVersionsRequest(KafkaRequest request) {
-        short apiVersion = request.apiVersion();
-        if (!ApiKeys.API_VERSIONS.isVersionSupported(apiVersion)) {
-            request.fail(Errors.UNSUPPORTED_VERSION.exception());
-            return;
-        }
-        ApiVersionsResponseData data = new ApiVersionsResponseData();
-        for (ApiKeys apiKey : ApiKeys.values()) {
-            if (apiKey.minRequiredInterBrokerMagic <= RecordBatch.CURRENT_MAGIC_VALUE) {
-                ApiVersionsResponseData.ApiVersion apiVersionData =
-                        new ApiVersionsResponseData.ApiVersion()
-                                .setApiKey(apiKey.id)
-                                .setMinVersion(apiKey.oldestVersion())
-                                .setMaxVersion(apiKey.latestVersion());
-                if (apiKey.equals(ApiKeys.METADATA)) {
-                    // Not support TopicId
-                    short v = apiKey.latestVersion() > 11 ? 11 : apiKey.latestVersion();
-                    apiVersionData.setMaxVersion(v);
-                } else if (apiKey.equals(ApiKeys.FETCH)) {
-                    // Not support TopicId
-                    short v = apiKey.latestVersion() > 12 ? 12 : apiKey.latestVersion();
-                    apiVersionData.setMaxVersion(v);
-                }
-                data.apiKeys().add(apiVersionData);
-            }
-        }
-        request.complete(new ApiVersionsResponse(data));
-    }
-
-    void handleProducerRequest(KafkaRequest request) {}
-
-    void handleMetadataRequest(KafkaRequest request) {}
-
-    void handleFindCoordinatorRequest(KafkaRequest request) {}
-
-    void handleListOffsetRequest(KafkaRequest request) {}
-
-    void handleOffsetFetchRequest(KafkaRequest request) {}
-
-    void handleOffsetCommitRequest(KafkaRequest request) {}
-
-    void handleFetchRequest(KafkaRequest request) {}
-
-    void handleJoinGroupRequest(KafkaRequest request) {}
-
-    void handleSyncGroupRequest(KafkaRequest request) {}
-
-    void handleHeartbeatRequest(KafkaRequest request) {}
-
-    void handleLeaveGroupRequest(KafkaRequest request) {}
-
-    void handleDescribeGroupsRequest(KafkaRequest request) {}
-
-    void handleListGroupsRequest(KafkaRequest request) {}
-
-    void handleDeleteGroupsRequest(KafkaRequest request) {}
-
-    void handleSaslHandshakeRequest(KafkaRequest request) {}
-
-    void handleSaslAuthenticateRequest(KafkaRequest request) {}
-
-    void handleCreateTopicsRequest(KafkaRequest request) {}
-
-    void handleInitProducerIdRequest(KafkaRequest request) {}
-
-    void handleAddPartitionsToTxnRequest(KafkaRequest request) {}
-
-    void handleAddOffsetsToTxnRequest(KafkaRequest request) {}
-
-    void handleTxnOffsetCommitRequest(KafkaRequest request) {}
-
-    void handleEndTxnRequest(KafkaRequest request) {}
-
-    void handleWriteTxnMarkersRequest(KafkaRequest request) {}
-
-    void handleDescribeConfigsRequest(KafkaRequest request) {}
-
-    void handleAlterConfigsRequest(KafkaRequest request) {}
-
-    void handleDeleteTopicsRequest(KafkaRequest request) {}
-
-    void handleDeleteRecordsRequest(KafkaRequest request) {}
-
-    void handleOffsetDeleteRequest(KafkaRequest request) {}
-
-    void handleCreatePartitionsRequest(KafkaRequest request) {}
-
-    void handleDescribeClusterRequest(KafkaRequest request) {}
 }
