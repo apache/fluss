@@ -17,23 +17,21 @@
 
 package org.apache.fluss.server.coordinator.event;
 
-import org.apache.fluss.server.coordinator.rebalance.RebalanceExecutionKey;
+/** An event fired when the rebalance max in-flight task limit changes dynamically. */
+public final class RebalanceMaxInflightTasksChangedEvent implements CoordinatorEvent {
 
-/** An event fired when a rebalance task exceeds the timeout without completing. */
-public class RebalanceTaskTimeoutEvent implements CoordinatorEvent {
+    private final int maxInflightTasks;
 
-    private final RebalanceExecutionKey executionKey;
-
-    public RebalanceTaskTimeoutEvent(RebalanceExecutionKey executionKey) {
-        this.executionKey = executionKey;
+    public RebalanceMaxInflightTasksChangedEvent(int maxInflightTasks) {
+        this.maxInflightTasks = maxInflightTasks;
     }
 
-    public RebalanceExecutionKey getExecutionKey() {
-        return executionKey;
+    public int getMaxInflightTasks() {
+        return maxInflightTasks;
     }
 
     @Override
     public String toString() {
-        return "RebalanceTaskTimeoutEvent{executionKey=" + executionKey + "}";
+        return "RebalanceMaxInflightTasksChangedEvent{maxInflightTasks=" + maxInflightTasks + "}";
     }
 }

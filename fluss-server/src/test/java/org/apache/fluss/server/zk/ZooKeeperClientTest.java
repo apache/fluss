@@ -832,6 +832,11 @@ class ZooKeeperClientTest {
                 new RebalanceTask("rebalance-task-2", COMPLETED, bucketPlan));
         assertThat(zookeeperClient.getRebalanceTask())
                 .hasValue(new RebalanceTask("rebalance-task-2", COMPLETED, bucketPlan));
+
+        RebalanceTask cancelRequestedTask =
+                new RebalanceTask("rebalance-task-2", NOT_STARTED, bucketPlan, true);
+        zookeeperClient.registerRebalanceTask(cancelRequestedTask);
+        assertThat(zookeeperClient.getRebalanceTask()).hasValue(cancelRequestedTask);
     }
 
     @Test

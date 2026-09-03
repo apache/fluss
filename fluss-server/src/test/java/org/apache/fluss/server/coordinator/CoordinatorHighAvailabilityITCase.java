@@ -246,7 +246,7 @@ class CoordinatorHighAvailabilityITCase {
         assertThat(leader).isNotNull();
         assertThat(standby).isNotNull();
 
-        String configKey = ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER.key();
+        String configKey = ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS.key();
 
         // Alter a dynamic config through the current leader. This persists it to ZK and inserts a
         // change notification that every server (including the standby) should react to.
@@ -272,6 +272,10 @@ class CoordinatorHighAvailabilityITCase {
         assertThat(dynamicConfigValue(standby, configKey))
                 .as("Newly promoted leader should use the dynamic config it tracked while standby")
                 .isEqualTo("3");
+        waitUntil(
+                () -> rebalanceMaxInflightTasks(standby) == 3,
+                Duration.ofSeconds(30),
+                "Newly promoted leader did not apply the dynamic rebalance concurrency");
 
         // As the new leader it is now the sole writer: a further alter must take effect and stick.
         standby.getDynamicConfigManager()
@@ -279,6 +283,20 @@ class CoordinatorHighAvailabilityITCase {
                         Collections.singletonList(
                                 new AlterConfig(configKey, "5", AlterConfigOpType.SET)));
         assertThat(dynamicConfigValue(standby, configKey)).isEqualTo("5");
+        waitUntil(
+                () -> rebalanceMaxInflightTasks(standby) == 5,
+                Duration.ofSeconds(30),
+                "Leader did not apply the updated dynamic rebalance concurrency");
+    }
+
+    private static int rebalanceMaxInflightTasks(CoordinatorServer server) {
+        try {
+            return server.getCoordinatorEventProcessor()
+                    .getRebalanceManager()
+                    .getMaxInflightRebalanceTasks();
+        } catch (IllegalStateException ignored) {
+            return -1;
+        }
     }
 
     /** Reads the effective value of a config key from a server's DynamicConfigManager. */

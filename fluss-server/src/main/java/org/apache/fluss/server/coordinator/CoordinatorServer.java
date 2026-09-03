@@ -360,6 +360,8 @@ public class CoordinatorServer extends ServerBase {
                             kvSnapshotLeaseManager,
                             scheduler,
                             clock);
+            dynamicConfigManager.registerAndApplyCurrentConfig(
+                    coordinatorEventProcessor.getRebalanceManager());
             coordinatorEventProcessor.startup();
 
             // As the active leader, this server is the sole writer of dynamic configs and holds the
@@ -393,10 +395,7 @@ public class CoordinatorServer extends ServerBase {
 
             // Clean up leader-specific resources in reverse order of initialization
             try {
-                if (coordinatorEventProcessor != null) {
-                    coordinatorEventProcessor.shutdown();
-                    coordinatorEventProcessor = null;
-                }
+                shutdownCoordinatorEventProcessor();
             } catch (Throwable t) {
                 LOG.warn("Failed to shutdown coordinator event processor", t);
             }
@@ -627,9 +626,7 @@ public class CoordinatorServer extends ServerBase {
             }
 
             try {
-                if (coordinatorEventProcessor != null) {
-                    coordinatorEventProcessor.shutdown();
-                }
+                shutdownCoordinatorEventProcessor();
             } catch (Throwable t) {
                 exception = ExceptionUtils.firstOrSuppressed(t, exception);
             }
@@ -728,6 +725,14 @@ public class CoordinatorServer extends ServerBase {
                 terminationFutures.add(FutureUtils.completedExceptionally(exception));
             }
             return FutureUtils.completeAll(terminationFutures);
+        }
+    }
+
+    private void shutdownCoordinatorEventProcessor() {
+        if (coordinatorEventProcessor != null) {
+            dynamicConfigManager.unregister(coordinatorEventProcessor.getRebalanceManager());
+            coordinatorEventProcessor.shutdown();
+            coordinatorEventProcessor = null;
         }
     }
 

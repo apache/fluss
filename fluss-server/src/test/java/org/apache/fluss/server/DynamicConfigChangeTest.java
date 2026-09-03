@@ -570,6 +570,74 @@ public class DynamicConfigChangeTest {
     }
 
     @Test
+    void testDynamicRebalanceMaxInflightTasksChange() throws Exception {
+        Configuration configuration = new Configuration();
+        configuration.set(ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS, 1);
+        DynamicConfigManager dynamicConfigManager = createManager(configuration);
+        RebalanceConcurrencyConfigRecorder recorder = new RebalanceConcurrencyConfigRecorder();
+        dynamicConfigManager.registerAndApplyCurrentConfig(recorder);
+        dynamicConfigManager.startup();
+
+        assertThat(recorder.value).isEqualTo(1);
+        dynamicConfigManager.alterConfigs(
+                Collections.singletonList(
+                        new AlterConfig(
+                                ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS.key(),
+                                "5",
+                                AlterConfigOpType.SET)));
+
+        assertThat(zookeeperClient.fetchEntityConfig())
+                .containsEntry(ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS.key(), "5");
+        assertThat(recorder.value).isEqualTo(5);
+
+        dynamicConfigManager.alterConfigs(
+                Collections.singletonList(
+                        new AlterConfig(
+                                ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS.key(),
+                                "0",
+                                AlterConfigOpType.SET)));
+        assertThat(recorder.value).isZero();
+
+        dynamicConfigManager.alterConfigs(
+                Collections.singletonList(
+                        new AlterConfig(
+                                ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS.key(),
+                                null,
+                                AlterConfigOpType.DELETE)));
+        assertThat(zookeeperClient.fetchEntityConfig())
+                .doesNotContainKey(ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS.key());
+        assertThat(recorder.value).isEqualTo(1);
+    }
+
+    @Test
+    void testLateRegisterReceivesCurrentDynamicRebalanceMaxInflightTasks() throws Exception {
+        Configuration configuration = new Configuration();
+        configuration.set(ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS, 1);
+        DynamicConfigManager dynamicConfigManager = createManager(configuration);
+        dynamicConfigManager.startup();
+        dynamicConfigManager.alterConfigs(
+                Collections.singletonList(
+                        new AlterConfig(
+                                ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS.key(),
+                                "4",
+                                AlterConfigOpType.SET)));
+
+        RebalanceConcurrencyConfigRecorder recorder = new RebalanceConcurrencyConfigRecorder();
+        dynamicConfigManager.registerAndApplyCurrentConfig(recorder);
+
+        assertThat(recorder.value).isEqualTo(4);
+
+        dynamicConfigManager.unregister(recorder);
+        dynamicConfigManager.alterConfigs(
+                Collections.singletonList(
+                        new AlterConfig(
+                                ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS.key(),
+                                "6",
+                                AlterConfigOpType.SET)));
+        assertThat(recorder.value).isEqualTo(4);
+    }
+
+    @Test
     void testDynamicKvLeaderReplicaMemoryReservedChange() throws Exception {
         Configuration configuration = new Configuration();
         configuration.set(ConfigOptions.KV_LEADER_REPLICA_MEMORY_RESERVED, MemorySize.parse("8mb"));
@@ -1215,5 +1283,17 @@ public class DynamicConfigChangeTest {
                         .findFirst()
                         .get();
         assertThat(entry.value()).isEqualTo("******");
+    }
+
+    private static final class RebalanceConcurrencyConfigRecorder implements ServerReconfigurable {
+        private int value;
+
+        @Override
+        public void validate(Configuration newConfig) throws ConfigException {}
+
+        @Override
+        public void reconfigure(Configuration newConfig) {
+            value = newConfig.get(ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS);
+        }
     }
 }

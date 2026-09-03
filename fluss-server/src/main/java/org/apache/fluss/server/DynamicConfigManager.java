@@ -100,6 +100,21 @@ public class DynamicConfigManager {
     }
 
     /**
+     * Register a ServerReconfigurable and immediately apply the current effective configuration.
+     *
+     * <p>Use this for components created after {@link #startup()}, when persisted dynamic
+     * configuration may already have been loaded.
+     */
+    public void registerAndApplyCurrentConfig(ServerReconfigurable serverReconfigurable) {
+        dynamicServerConfig.registerAndApplyCurrentConfig(serverReconfigurable);
+    }
+
+    /** Unregister a ServerReconfigurable that no longer listens to configuration changes. */
+    public void unregister(ServerReconfigurable serverReconfigurable) {
+        dynamicServerConfig.unregister(serverReconfigurable);
+    }
+
+    /**
      * Register a ConfigValidator for stateless validation.
      *
      * <p>Typically used by CoordinatorServer to validate configs for components it doesn't run
