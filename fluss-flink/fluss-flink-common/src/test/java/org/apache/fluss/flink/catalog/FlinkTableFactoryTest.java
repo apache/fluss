@@ -244,6 +244,40 @@ abstract class FlinkTableFactoryTest {
     }
 
     @Test
+    void testLookupCustomShuffleEligibilityUsesBucketKeys() {
+        ResolvedSchema schema = createBasicSchema();
+        FlinkTableSource hashDistributedSource =
+                (FlinkTableSource) createTableSource(schema, getBasicOptionsWithBucketKey());
+        hashDistributedSource.getLookupRuntimeProvider(createLookupContext(new int[][] {{0}, {2}}));
+        assertThat(hashDistributedSource.getPartitionerAdapter()).isPresent();
+
+        FlinkTableSource randomlyDistributedSource =
+                (FlinkTableSource) createTableSource(schema, getBasicOptions());
+        assertThat(randomlyDistributedSource.getBucketKeyIndexes()).isEmpty();
+        assertThat(randomlyDistributedSource.getPartitionerAdapter()).isEmpty();
+    }
+
+    @Test
+    void testLookupCustomShuffleFallsBackWithoutValidBucketNumber() {
+        ResolvedSchema schema = createBasicSchema();
+        Map<String, String> missingBucketNumberOptions = getBasicOptionsWithBucketKey();
+        missingBucketNumberOptions.remove(BUCKET_NUMBER.key());
+        FlinkTableSource missingBucketNumberSource =
+                (FlinkTableSource) createTableSource(schema, missingBucketNumberOptions);
+        missingBucketNumberSource.getLookupRuntimeProvider(
+                createLookupContext(new int[][] {{0}, {2}}));
+        assertThat(missingBucketNumberSource.getPartitionerAdapter()).isEmpty();
+
+        Map<String, String> invalidBucketNumberOptions = getBasicOptionsWithBucketKey();
+        invalidBucketNumberOptions.put(BUCKET_NUMBER.key(), "0");
+        FlinkTableSource invalidBucketNumberSource =
+                (FlinkTableSource) createTableSource(schema, invalidBucketNumberOptions);
+        invalidBucketNumberSource.getLookupRuntimeProvider(
+                createLookupContext(new int[][] {{0}, {2}}));
+        assertThat(invalidBucketNumberSource.getPartitionerAdapter()).isEmpty();
+    }
+
+    @Test
     void testVirtualLogTableSourceSupportsBatchMode() {
         ResolvedSchema schema = createBasicSchema();
         Map<String, String> properties = getBasicOptions();
@@ -362,6 +396,7 @@ abstract class FlinkTableFactoryTest {
     private static Map<String, String> getBasicOptionsWithBucketKey() {
         Map<String, String> basicOptions = getBasicOptions();
         basicOptions.put(BUCKET_KEY.key(), "first");
+        basicOptions.put(BUCKET_NUMBER.key(), "1");
         return basicOptions;
     }
 

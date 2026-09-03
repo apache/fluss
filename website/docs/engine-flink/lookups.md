@@ -268,6 +268,36 @@ ON `o`.`o_custkey` = `c`.`c_custkey` AND  `o`.`o_dt` = `c`.`dt`;
 
 For more details about Fluss partitioned table, see [Partitioned Tables](table-design/data-distribution/partitioning.md).
 
+## Lookup Shuffle
+
+For Flink 2.2, lookup custom shuffle can be enabled with the standard Flink lookup hint:
+
+```sql title="Flink SQL"
+SELECT /*+ LOOKUP('table' = 'c', 'shuffle' = 'true') */ *
+FROM Orders AS o
+JOIN Customers FOR SYSTEM_TIME AS OF o.proc_time AS c
+ON o.customer_id = c.id;
+```
+
+Fluss then partitions the lookup probe stream consistently with its bucket routing. This improves
+lookup-cache locality and reduces RPC fan-out compared with distributing lookup keys independently
+of Fluss tablets.
+
+- When the bucket and lookup-subtask counts evenly divide each other, Fluss preserves direct bucket
+  affinity: each bucket maps to one subtask, or to an equal-size disjoint subtask subset.
+- Otherwise, Fluss uses weighted logical slots. The complete normalized lookup key selects a slot
+  within its bucket, and logical slots are evenly assigned to subtasks. This keeps routing
+  deterministic and bucket fan-out bounded while balancing the expected load across subtasks.
+- Partitioned and non-partitioned tables use the same strategy. Partition keys are included in the
+  normalized lookup key, so the same lookup key is routed consistently. A `(partition, bucket)`
+  tablet may be accessed by multiple subtasks when weighted logical slots are used.
+
+Bucket custom shuffle applies to hash-distributed tables with bucket keys. Tables without bucket
+keys use Flink's default lookup distribution. Fluss Catalog tables expose the resolved `bucket.num`
+automatically. For Fluss connector tables declared outside the Fluss Catalog, configure a matching
+positive `bucket.num` to enable custom shuffle; otherwise, Flink uses its default lookup
+distribution.
+
 ## Historical Partition Lookup
 
 Auto-partitioning removes expired Fluss partitions according to the configured retention policy.
