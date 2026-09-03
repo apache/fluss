@@ -25,6 +25,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.exception.AuthorizationException;
+import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
 import org.apache.fluss.exception.TableNotExistException;
@@ -84,6 +85,7 @@ import static org.apache.fluss.testutils.DataTestUtils.compactedRow;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** ITCase for {@link Sender}. */
 final class SenderTest {
@@ -127,6 +129,52 @@ final class SenderTest {
         sender.runOnce();
         assertThat(sender.numOfInFlightBatches(tb1)).isEqualTo(0);
         assertThat(future.get()).isNull();
+    }
+
+    @Test
+    void testSynchronousGatewayErrorStopsSenderAndReleasesDrainedKvBatch() throws Exception {
+        sender.destroyResources();
+
+        Map<TablePath, TableInfo> tableInfos = new HashMap<>();
+        tableInfos.put(DATA1_TABLE_PATH, DATA1_TABLE_INFO);
+        tableInfos.put(DATA1_TABLE_PATH_PK, DATA1_TABLE_INFO_PK);
+        OutOfMemoryError error = new OutOfMemoryError("Direct buffer memory");
+        TestTabletServerGateway failingGateway =
+                new TestTabletServerGateway(false, Collections.emptySet()) {
+                    @Override
+                    public CompletableFuture<PutKvResponse> putKv(PutKvRequest request) {
+                        throw error;
+                    }
+                };
+        metadataUpdater =
+                TestingMetadataUpdater.builder(tableInfos)
+                        .withTabletServerGateway(TestingMetadataUpdater.NODE1.id(), failingGateway)
+                        .build();
+        writerMetricGroup = TestingWriterMetricGroup.newInstance();
+        sender = setupWithIdempotenceState();
+
+        TableBucket kvBucket = new TableBucket(DATA1_TABLE_ID_PK, 0);
+        CompletableFuture<Exception> future = new CompletableFuture<>();
+        appendKvToAccumulator(
+                kvBucket,
+                compactedRow(DATA1_ROW_TYPE, new Object[] {1, "a"}),
+                (tb, leo, e) -> future.complete(e));
+
+        assertThatThrownBy(sender::run).isSameAs(error);
+
+        assertThat(future).isCompleted();
+        assertThat(future.get()).hasCause(error);
+        assertThat(sender.isRunning()).isFalse();
+        assertThat(sender.numOfInFlightBatches(kvBucket)).isZero();
+        assertThat(accumulator.hasIncomplete()).isFalse();
+        assertThatThrownBy(
+                        () ->
+                                appendKvToAccumulator(
+                                        kvBucket,
+                                        compactedRow(DATA1_ROW_TYPE, new Object[] {2, "b"}),
+                                        (tb, leo, e) -> {}))
+                .isInstanceOf(FlussRuntimeException.class)
+                .hasMessage("Writer closed while send in progress");
     }
 
     @Test

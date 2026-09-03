@@ -321,22 +321,34 @@ final class ServerConnection {
             inflightRequests.put(inflight.requestId, inflight);
 
             // TODO: maybe we need to add timeout for the inflight requests
-            ByteBuf byteBuf;
+            ByteBuf byteBuf = null;
             try {
                 byteBuf = inflight.toByteBuf(channel.alloc());
-            } catch (Exception e) {
-                LOG.error("Failed to encode request for '{}'.", ApiKeys.forId(inflight.apiKey), e);
+                connectionMetrics.updateMetricsBeforeSendRequest(apiKey, rawRequest.totalSize());
+            } catch (Throwable t) {
+                LOG.error("Failed to encode request for '{}'.", ApiKeys.forId(inflight.apiKey), t);
+                if (byteBuf != null) {
+                    try {
+                        byteBuf.release();
+                    } catch (Throwable releaseFailure) {
+                        if (releaseFailure != t) {
+                            t.addSuppressed(releaseFailure);
+                        }
+                    }
+                }
                 inflightRequests.remove(inflight.requestId);
+                if (t instanceof Error) {
+                    responseFuture.completeExceptionally(t);
+                    return responseFuture;
+                }
                 responseFuture.completeExceptionally(
                         new FlussRuntimeException(
                                 String.format(
                                         "Failed to encode request for '%s'",
                                         ApiKeys.forId(inflight.apiKey)),
-                                e));
+                                t));
                 return responseFuture;
             }
-
-            connectionMetrics.updateMetricsBeforeSendRequest(apiKey, rawRequest.totalSize());
 
             channel.writeAndFlush(byteBuf)
                     .addListener(
@@ -585,5 +597,10 @@ final class ServerConnection {
     @VisibleForTesting
     ConnectionState getConnectionState() {
         return state;
+    }
+
+    @VisibleForTesting
+    int numInflightRequests() {
+        return inflightRequests.size();
     }
 }
