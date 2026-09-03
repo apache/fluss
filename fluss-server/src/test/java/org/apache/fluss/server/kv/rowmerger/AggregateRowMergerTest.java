@@ -1080,9 +1080,15 @@ class AggregateRowMergerTest {
     }
 
     @Test
-    void testFirstRowIsTakenAsItIs() {
+    void testFirstRowIsArbitrated() {
         AggregateRowMerger merger = sequenceGroupMerger();
 
+        // a first row without a sequence contributes nothing to the group, while the ungrouped
+        // field is accepted
+        assertThat(merger.merge(null, sequenceGroupRow(30L, null, "outside")))
+                .isEqualTo(sequenceGroupRow(null, null, "outside"));
+
+        // a first row carrying a sequence is fully accepted without being re-encoded
         BinaryValue first = sequenceGroupRow(30L, 100, "first");
         assertThat(merger.merge(null, first)).isSameAs(first);
     }
@@ -1155,6 +1161,11 @@ class AggregateRowMergerTest {
         RowMerger partial =
                 merger.configureTargetColumns(
                         new int[] {0, 1, 2}, SCHEMA_ID, SCHEMA_SEQUENCE_GROUP);
+
+        // the partial path applies the same first-write arbitration as the full aggregation path
+        assertThat(partial.merge(null, sequenceGroupRow(5L, null, null)))
+                .isEqualTo(sequenceGroupRow(null, null, null));
+
         BinaryValue stored = sequenceGroupRow(30L, 100, "kept");
 
         // the group moves forward, so the written columns aggregate and the sequence follows

@@ -261,7 +261,8 @@ class SequenceGroupsTest {
                 restricted.resolveAcceptance(twoGroupsRow(100, 100), twoGroupsRow(99, 99));
         assertThat(acceptance).containsExactly(true, false, false, true, true);
 
-        // the uncovered group no longer arbitrates b or g2, so a null sequence cannot hold them back
+        // the uncovered group no longer arbitrates b or g2, so a null sequence cannot hold them
+        // back
         assertThat(restricted.resolveAcceptance(twoGroupsRow(100, 100), twoGroupsRow(101, null)))
                 .containsExactly(true, true, true, true, true);
     }

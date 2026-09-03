@@ -87,15 +87,20 @@ public class AggregateRowMerger implements RowMerger {
 
     @Override
     public BinaryValue merge(@Nullable BinaryValue oldValue, BinaryValue newValue) {
-        // First write: no existing row
-        if (oldValue == null || oldValue.row == null) {
+        boolean firstWrite = oldValue == null || oldValue.row == null;
+        AggregationContext newContext = contextCache.getContext(newValue.schemaId);
+        AggregationContext targetContext = contextCache.getContext(targetSchemaId);
+        SequenceGroups sequenceGroups = targetContext.getSequenceGroups();
+        if (firstWrite
+                && (sequenceGroups == null
+                        || SequenceGroups.acceptsEveryField(
+                                sequenceGroups.resolveAcceptance(null, newValue.row)))) {
             return newValue;
         }
 
-        // Get contexts for schema evolution support
-        AggregationContext oldContext = contextCache.getContext(oldValue.schemaId);
-        AggregationContext newContext = contextCache.getContext(newValue.schemaId);
-        AggregationContext targetContext = contextCache.getContext(targetSchemaId);
+        // Get the old context only when a stored row exists
+        AggregationContext oldContext =
+                firstWrite ? null : contextCache.getContext(oldValue.schemaId);
 
         // Use target schema encoder to ensure merged row uses latest schema
         RowEncoder encoder = targetContext.getRowEncoder();
@@ -103,12 +108,12 @@ public class AggregateRowMerger implements RowMerger {
 
         // Aggregate using target schema context to ensure output uses server's latest schema
         AggregateFieldsProcessor.aggregateAllFieldsWithTargetSchema(
-                oldValue.row,
+                firstWrite ? null : oldValue.row,
                 newValue.row,
                 oldContext,
                 newContext,
                 targetContext,
-                targetContext.getSequenceGroups(),
+                sequenceGroups,
                 encoder);
         BinaryRow mergedRow = encoder.finishRow();
 
@@ -301,13 +306,17 @@ public class AggregateRowMerger implements RowMerger {
 
         @Override
         public BinaryValue merge(@Nullable BinaryValue oldValue, BinaryValue newValue) {
-            // First write: no existing row
-            if (oldValue == null || oldValue.row == null) {
+            boolean firstWrite = oldValue == null || oldValue.row == null;
+            if (firstWrite
+                    && (sequenceGroups == null
+                            || SequenceGroups.acceptsEveryField(
+                                    sequenceGroups.resolveAcceptance(null, newValue.row)))) {
                 return newValue;
             }
 
             // Get contexts for schema evolution support
-            AggregationContext oldContext = contextCache.getContext(oldValue.schemaId);
+            AggregationContext oldContext =
+                    firstWrite ? null : contextCache.getContext(oldValue.schemaId);
             AggregationContext newContext = contextCache.getContext(newValue.schemaId);
             AggregationContext targetContext = contextCache.getContext(targetSchemaId);
 
@@ -317,7 +326,7 @@ public class AggregateRowMerger implements RowMerger {
 
             // Aggregate using target schema to ensure output uses server's latest schema
             AggregateFieldsProcessor.aggregateTargetFieldsWithTargetSchema(
-                    oldValue.row,
+                    firstWrite ? null : oldValue.row,
                     newValue.row,
                     oldContext,
                     newContext,

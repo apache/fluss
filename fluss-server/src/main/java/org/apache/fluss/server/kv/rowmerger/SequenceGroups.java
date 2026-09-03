@@ -168,6 +168,16 @@ public class SequenceGroups implements Serializable {
         return new SequenceGroups(restricted, readersOfGroup);
     }
 
+    /** Returns whether every field is accepted by its arbitrating group. */
+    public static boolean acceptsEveryField(boolean[] acceptance) {
+        for (boolean accepted : acceptance) {
+            if (!accepted) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     /**
      * Resolves, for every field, whether it may take the value carried by the incoming row.
      *

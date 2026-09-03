@@ -214,37 +214,27 @@ public class DefaultRowMerger implements RowMerger {
         @Nullable
         @Override
         public BinaryValue merge(@Nullable BinaryValue oldValue, BinaryValue newValue) {
-            if (oldValue == null) {
-                return newValue;
-            }
-
-            boolean[] acceptance = sequenceGroups.resolveAcceptance(oldValue.row, newValue.row);
-            if (acceptsEveryField(acceptance)) {
+            boolean[] acceptance =
+                    sequenceGroups.resolveAcceptance(
+                            oldValue == null ? null : oldValue.row, newValue.row);
+            if (SequenceGroups.acceptsEveryField(acceptance)) {
                 // Every group advances, so the whole incoming row wins
                 return newValue;
             }
 
             rowEncoder.startNewRow();
             for (int i = 0; i < fieldGetters.length; i++) {
-                InternalRow source = acceptance[i] ? newValue.row : oldValue.row;
-                // the stored row may follow an older schema with fewer fields, in which case the
-                // missing fields are null
-                if (source.getFieldCount() < i + 1) {
+                InternalRow source =
+                        acceptance[i] ? newValue.row : oldValue == null ? null : oldValue.row;
+                // the stored row may be absent or follow an older schema with fewer fields, in
+                // which case the missing fields are null
+                if (source == null || source.getFieldCount() < i + 1) {
                     rowEncoder.encodeField(i, null);
                 } else {
                     rowEncoder.encodeField(i, fieldGetters[i].getFieldOrNull(source));
                 }
             }
             return new BinaryValue(targetSchemaId, rowEncoder.finishRow());
-        }
-
-        private static boolean acceptsEveryField(boolean[] acceptance) {
-            for (boolean accepted : acceptance) {
-                if (!accepted) {
-                    return false;
-                }
-            }
-            return true;
         }
 
         @Nullable
