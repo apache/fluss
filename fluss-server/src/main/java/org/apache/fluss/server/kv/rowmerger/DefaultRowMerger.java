@@ -214,10 +214,8 @@ public class DefaultRowMerger implements RowMerger {
         @Nullable
         @Override
         public BinaryValue merge(@Nullable BinaryValue oldValue, BinaryValue newValue) {
-            boolean[] acceptance =
-                    sequenceGroups.resolveAcceptance(
-                            oldValue == null ? null : oldValue.row, newValue.row);
-            if (SequenceGroups.acceptsEveryField(acceptance)) {
+            sequenceGroups.arbitrate(oldValue == null ? null : oldValue.row, newValue.row);
+            if (sequenceGroups.acceptsEveryArbitratedGroup()) {
                 // Every group advances, so the whole incoming row wins
                 return newValue;
             }
@@ -225,7 +223,9 @@ public class DefaultRowMerger implements RowMerger {
             rowEncoder.startNewRow();
             for (int i = 0; i < fieldGetters.length; i++) {
                 InternalRow source =
-                        acceptance[i] ? newValue.row : oldValue == null ? null : oldValue.row;
+                        sequenceGroups.accepts(i)
+                                ? newValue.row
+                                : oldValue == null ? null : oldValue.row;
                 // the stored row may be absent or follow an older schema with fewer fields, in
                 // which case the missing fields are null
                 if (source == null || source.getFieldCount() < i + 1) {

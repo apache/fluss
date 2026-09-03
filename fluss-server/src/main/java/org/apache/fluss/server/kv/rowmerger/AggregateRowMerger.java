@@ -91,10 +91,7 @@ public class AggregateRowMerger implements RowMerger {
         AggregationContext newContext = contextCache.getContext(newValue.schemaId);
         AggregationContext targetContext = contextCache.getContext(targetSchemaId);
         SequenceGroups sequenceGroups = targetContext.getSequenceGroups();
-        if (firstWrite
-                && (sequenceGroups == null
-                        || SequenceGroups.acceptsEveryField(
-                                sequenceGroups.resolveAcceptance(null, newValue.row)))) {
+        if (firstWrite && acceptsEveryField(sequenceGroups, null, newValue.row)) {
             return newValue;
         }
 
@@ -118,6 +115,20 @@ public class AggregateRowMerger implements RowMerger {
         BinaryRow mergedRow = encoder.finishRow();
 
         return new BinaryValue(targetSchemaId, mergedRow);
+    }
+
+    /**
+     * Returns whether the first row is accepted as it is, i.e. there is no group to arbitrate or
+     * every group advances. The arbitration result is left in the reused buffer, ready for the
+     * aggregation path when the row is not accepted.
+     */
+    private static boolean acceptsEveryField(
+            @Nullable SequenceGroups sequenceGroups, @Nullable BinaryRow oldRow, BinaryRow newRow) {
+        if (sequenceGroups == null) {
+            return true;
+        }
+        sequenceGroups.arbitrate(oldRow, newRow);
+        return sequenceGroups.acceptsEveryArbitratedGroup();
     }
 
     @Override
@@ -307,10 +318,7 @@ public class AggregateRowMerger implements RowMerger {
         @Override
         public BinaryValue merge(@Nullable BinaryValue oldValue, BinaryValue newValue) {
             boolean firstWrite = oldValue == null || oldValue.row == null;
-            if (firstWrite
-                    && (sequenceGroups == null
-                            || SequenceGroups.acceptsEveryField(
-                                    sequenceGroups.resolveAcceptance(null, newValue.row)))) {
+            if (firstWrite && acceptsEveryField(sequenceGroups, null, newValue.row)) {
                 return newValue;
             }
 

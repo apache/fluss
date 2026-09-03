@@ -75,12 +75,14 @@ public final class AggregateFieldsProcessor {
             @Nullable SequenceGroups sequenceGroups,
             RowEncoder encoder) {
         // the groups are resolved against the target schema, which is the one being encoded
-        SequenceGroups.Decision[] decisions =
-                sequenceGroups == null ? null : sequenceGroups.resolveDecisions(oldRow, newRow);
+        if (sequenceGroups != null) {
+            sequenceGroups.arbitrate(oldRow, newRow);
+        }
 
         // Fast path: all three schemas are the same
         if (oldRow != null && targetContext == oldContext && targetContext == newInputContext) {
-            aggregateAllFieldsWithSameSchema(oldRow, newRow, targetContext, decisions, encoder);
+            aggregateAllFieldsWithSameSchema(
+                    oldRow, newRow, targetContext, sequenceGroups, encoder);
             return;
         }
 
@@ -112,7 +114,7 @@ public final class AggregateFieldsProcessor {
                     oldRow,
                     newRow,
                     targetAggregators[targetIdx],
-                    decisionOf(decisions, targetIdx),
+                    decisionOf(sequenceGroups, targetIdx),
                     targetIdx,
                     encoder);
         }
@@ -123,8 +125,10 @@ public final class AggregateFieldsProcessor {
      * {@link SequenceGroups.Decision#FORWARD} when the schema declares no sequence group at all.
      */
     private static SequenceGroups.Decision decisionOf(
-            @Nullable SequenceGroups.Decision[] decisions, int fieldIndex) {
-        return decisions == null ? SequenceGroups.Decision.FORWARD : decisions[fieldIndex];
+            @Nullable SequenceGroups sequenceGroups, int fieldIndex) {
+        return sequenceGroups == null
+                ? SequenceGroups.Decision.FORWARD
+                : sequenceGroups.decisionOf(fieldIndex);
     }
 
     /**
@@ -212,13 +216,14 @@ public final class AggregateFieldsProcessor {
             BitSet targetColumnIdBitSet,
             @Nullable SequenceGroups sequenceGroups,
             RowEncoder encoder) {
-        SequenceGroups.Decision[] decisions =
-                sequenceGroups == null ? null : sequenceGroups.resolveDecisions(oldRow, newRow);
+        if (sequenceGroups != null) {
+            sequenceGroups.arbitrate(oldRow, newRow);
+        }
 
         // Fast path: all three schemas are the same
         if (oldRow != null && targetContext == oldContext && targetContext == newInputContext) {
             aggregateTargetFieldsWithSameSchema(
-                    oldRow, newRow, targetContext, targetColumnIdBitSet, decisions, encoder);
+                    oldRow, newRow, targetContext, targetColumnIdBitSet, sequenceGroups, encoder);
             return;
         }
 
@@ -249,7 +254,7 @@ public final class AggregateFieldsProcessor {
                         oldRow,
                         newRow,
                         targetAggregators[targetIdx],
-                        decisionOf(decisions, targetIdx),
+                        decisionOf(sequenceGroups, targetIdx),
                         targetIdx,
                         encoder);
             } else if (oldIdx != null) {
@@ -274,7 +279,7 @@ public final class AggregateFieldsProcessor {
             BinaryRow oldRow,
             BinaryRow newRow,
             AggregationContext context,
-            @Nullable SequenceGroups.Decision[] decisions,
+            @Nullable SequenceGroups sequenceGroups,
             RowEncoder encoder) {
         InternalRow.FieldGetter[] fieldGetters = context.getFieldGetters();
         FieldAggregator[] aggregators = context.getAggregators();
@@ -287,7 +292,7 @@ public final class AggregateFieldsProcessor {
                     oldRow,
                     newRow,
                     aggregators[idx],
-                    decisionOf(decisions, idx),
+                    decisionOf(sequenceGroups, idx),
                     idx,
                     encoder);
         }
@@ -303,7 +308,7 @@ public final class AggregateFieldsProcessor {
             BinaryRow newRow,
             AggregationContext context,
             BitSet targetColumnIdBitSet,
-            @Nullable SequenceGroups.Decision[] decisions,
+            @Nullable SequenceGroups sequenceGroups,
             RowEncoder encoder) {
         InternalRow.FieldGetter[] fieldGetters = context.getFieldGetters();
         FieldAggregator[] aggregators = context.getAggregators();
@@ -321,7 +326,7 @@ public final class AggregateFieldsProcessor {
                         oldRow,
                         newRow,
                         aggregators[idx],
-                        decisionOf(decisions, idx),
+                        decisionOf(sequenceGroups, idx),
                         idx,
                         encoder);
             } else {

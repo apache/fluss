@@ -39,14 +39,14 @@ import static org.apache.fluss.utils.Preconditions.checkArgument;
  * arbitrate each group on its own.
  *
  * <p>A column is put under the order of one or more sequence columns (see {@link
- * Schema.Column#getSequenceColumns()}) and then only takes an incoming value when those sequence
- * columns are not older than the stored ones. Columns ordered by the very same sequence columns
- * form one group advancing together, while different groups advance independently: within a single
- * write one group may advance and another may not. That is what distinguishes sequence groups from
- * the versioned merge engine, which arbitrates the whole row with a single version.
+ * Schema.SequenceGroup#getSequenceColumns()}) and then only takes an incoming value when those
+ * sequence columns are not older than the stored ones. Columns ordered by the very same sequence
+ * columns form one group advancing together, while different groups advance independently: within a
+ * single write one group may advance and another may not. That is what distinguishes sequence
+ * groups from the versioned merge engine, which arbitrates the whole row with a single version.
  *
- * <p>Instances are immutable and hold no per-record state, so one instance serves all keys of a
- * table.
+ * <p>One instance serves all keys of a table. The group decisions are reused per record, safe
+ * because the write path is single threaded under KvTablet's write lock.
  */
 @Internal
 public class SequenceGroups implements Serializable {
@@ -93,12 +93,33 @@ public class SequenceGroups implements Serializable {
      */
     private final int[] groupOfField;
 
-    /** For each group, the readers of its sequence columns, in the declared comparison order. */
-    private final SequenceReader[][] readersOfGroup;
+    /**
+     * For each group, the field indexes of its sequence columns, in the declared comparison order.
+     */
+    private final int[][] sequenceFieldsOfGroup;
 
-    private SequenceGroups(int[] groupOfField, SequenceReader[][] readersOfGroup) {
+    /**
+     * For each group, the comparators of its sequence columns, matching {@link
+     * #sequenceFieldsOfGroup}. They compare non-null values only, so that null ordering is decided
+     * once in {@link #decide} instead of per column type.
+     */
+    private final SequenceComparator[][] comparatorsOfGroup;
+
+    /** Stands for a group left out of the arbitration by {@link #restrictTo}. */
+    private static final int[] NO_FIELDS = {};
+
+    /** The decision of every group for the record under arbitration, indexed by group id. */
+    private final Decision[] groupDecisions;
+
+    private SequenceGroups(
+            int[] groupOfField,
+            int[][] sequenceFieldsOfGroup,
+            SequenceComparator[][] comparatorsOfGroup) {
         this.groupOfField = groupOfField;
-        this.readersOfGroup = readersOfGroup;
+        this.sequenceFieldsOfGroup = sequenceFieldsOfGroup;
+        this.comparatorsOfGroup = comparatorsOfGroup;
+        this.groupDecisions = new Decision[comparatorsOfGroup.length];
+        Arrays.fill(groupDecisions, Decision.FORWARD);
     }
 
     /**
@@ -118,11 +139,13 @@ public class SequenceGroups implements Serializable {
         int[] groupOfField = new int[fieldCount];
         Arrays.fill(groupOfField, NO_GROUP);
 
-        SequenceReader[][] readersOfGroup = new SequenceReader[declared.size()][];
+        int[][] sequenceFieldsOfGroup = new int[declared.size()][];
+        SequenceComparator[][] comparatorsOfGroup = new SequenceComparator[declared.size()][];
         for (int groupId = 0; groupId < declared.size(); groupId++) {
             Schema.SequenceGroup group = declared.get(groupId);
             List<String> sequenceColumns = group.getSequenceColumns();
-            SequenceReader[] readers = new SequenceReader[sequenceColumns.size()];
+            int[] sequenceFields = new int[sequenceColumns.size()];
+            SequenceComparator[] comparators = new SequenceComparator[sequenceColumns.size()];
             for (int i = 0; i < sequenceColumns.size(); i++) {
                 String sequenceColumn = sequenceColumns.get(i);
                 int sequenceField = rowType.getFieldIndex(sequenceColumn);
@@ -130,14 +153,16 @@ public class SequenceGroups implements Serializable {
                         sequenceField >= 0,
                         "The sequence column '%s' doesn't exist in schema.",
                         sequenceColumn);
-                readers[i] =
-                        createReader(
+                sequenceFields[i] = sequenceField;
+                comparators[i] =
+                        createComparator(
                                 sequenceColumn, rowType.getTypeAt(sequenceField), sequenceField);
                 // a sequence column takes part in the very group it orders, otherwise it would
                 // always accept incoming values and report a sequence no longer matching them
                 groupOfField[sequenceField] = groupId;
             }
-            readersOfGroup[groupId] = readers;
+            sequenceFieldsOfGroup[groupId] = sequenceFields;
+            comparatorsOfGroup[groupId] = comparators;
 
             for (String protectedColumn : group.getProtectedColumns()) {
                 int fieldIndex = rowType.getFieldIndex(protectedColumn);
@@ -149,7 +174,7 @@ public class SequenceGroups implements Serializable {
             }
         }
 
-        return new SequenceGroups(groupOfField, readersOfGroup);
+        return new SequenceGroups(groupOfField, sequenceFieldsOfGroup, comparatorsOfGroup);
     }
 
     /**
@@ -165,13 +190,75 @@ public class SequenceGroups implements Serializable {
                 restricted[i] = NO_GROUP;
             }
         }
-        return new SequenceGroups(restricted, readersOfGroup);
+
+        int[][] restrictedFields = sequenceFieldsOfGroup.clone();
+        for (int groupId = 0; groupId < restrictedFields.length; groupId++) {
+            if (!coversGroup(restricted, groupId)) {
+                restrictedFields[groupId] = NO_FIELDS;
+            }
+        }
+        return new SequenceGroups(restricted, restrictedFields, comparatorsOfGroup);
     }
 
-    /** Returns whether every field is accepted by its arbitrating group. */
-    public static boolean acceptsEveryField(boolean[] acceptance) {
-        for (boolean accepted : acceptance) {
-            if (!accepted) {
+    /** Returns whether any field still belongs to the given group. */
+    private static boolean coversGroup(int[] groupOfField, int groupId) {
+        for (int owner : groupOfField) {
+            if (owner == groupId) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Decides every covered group for the incoming row, into the reused decision buffer. The
+     * decisions live until the next arbitration.
+     *
+     * @param oldRow the stored row, or null when there is no stored row yet
+     * @param newRow the incoming row
+     */
+    public void arbitrate(@Nullable InternalRow oldRow, InternalRow newRow) {
+        for (int groupId = 0; groupId < comparatorsOfGroup.length; groupId++) {
+            groupDecisions[groupId] =
+                    decide(
+                            sequenceFieldsOfGroup[groupId],
+                            comparatorsOfGroup[groupId],
+                            oldRow,
+                            newRow);
+        }
+    }
+
+    /**
+     * Returns whether the field may take the value carried by the last arbitrated row. A field is
+     * held back only when the group arbitrating it doesn't advance; without aggregate functions a
+     * skipped group and a stale one both keep the stored values, so the two need no telling apart
+     * here.
+     */
+    public boolean accepts(int fieldIndex) {
+        int groupId = groupOfField[fieldIndex];
+        return groupId == NO_GROUP || groupDecisions[groupId] == Decision.FORWARD;
+    }
+
+    /** Returns the field count of the schema these groups were resolved from. */
+    public int fieldCount() {
+        return groupOfField.length;
+    }
+
+    /**
+     * Returns what the group arbitrating the field makes of the last arbitrated row. A field taking
+     * part in no group always reports {@link Decision#FORWARD}, keeping its original behavior;
+     * callers that aggregate use this rather than {@link #accepts}, so that they can aggregate a
+     * stale row in reverse instead of dropping it.
+     */
+    public Decision decisionOf(int fieldIndex) {
+        int groupId = groupOfField[fieldIndex];
+        return groupId == NO_GROUP ? Decision.FORWARD : groupDecisions[groupId];
+    }
+
+    /** Returns whether every arbitrated group advances. */
+    public boolean acceptsEveryArbitratedGroup() {
+        for (Decision decision : groupDecisions) {
+            if (decision != Decision.FORWARD) {
                 return false;
             }
         }
@@ -179,73 +266,23 @@ public class SequenceGroups implements Serializable {
     }
 
     /**
-     * Resolves, for every field, whether it may take the value carried by the incoming row.
-     *
-     * <p>A field is held back only when the group arbitrating it doesn't advance. Fields taking
-     * part in no group keep their original behavior and always accept the incoming value.
-     *
-     * @param oldRow the stored row, or null when there is no stored row yet
-     * @param newRow the incoming row
-     */
-    public boolean[] resolveAcceptance(@Nullable InternalRow oldRow, InternalRow newRow) {
-        Decision[] decisions = decideGroups(oldRow, newRow);
-
-        boolean[] acceptance = new boolean[groupOfField.length];
-        for (int i = 0; i < groupOfField.length; i++) {
-            // without aggregate functions a skipped group and a stale one both keep the stored
-            // values, so the two need no telling apart here
-            acceptance[i] =
-                    groupOfField[i] == NO_GROUP || decisions[groupOfField[i]] == Decision.FORWARD;
-        }
-        return acceptance;
-    }
-
-    /**
-     * Resolves, for every field, what the group arbitrating it makes of the incoming row. Fields
-     * taking part in no group always report {@link Decision#FORWARD}, keeping their original
-     * behavior.
-     *
-     * <p>Callers that aggregate need this rather than {@link #resolveAcceptance}, so that they can
-     * aggregate a stale row in reverse instead of dropping it.
-     *
-     * @param oldRow the stored row, or null when there is no stored row yet
-     * @param newRow the incoming row
-     */
-    public Decision[] resolveDecisions(@Nullable InternalRow oldRow, InternalRow newRow) {
-        Decision[] decisions = decideGroups(oldRow, newRow);
-
-        Decision[] ofField = new Decision[groupOfField.length];
-        for (int i = 0; i < groupOfField.length; i++) {
-            ofField[i] =
-                    groupOfField[i] == NO_GROUP ? Decision.FORWARD : decisions[groupOfField[i]];
-        }
-        return ofField;
-    }
-
-    /** Decides every group of the schema, indexed by group id. */
-    private Decision[] decideGroups(@Nullable InternalRow oldRow, InternalRow newRow) {
-        Decision[] decisions = new Decision[readersOfGroup.length];
-        for (int groupId = 0; groupId < readersOfGroup.length; groupId++) {
-            decisions[groupId] = decide(readersOfGroup[groupId], oldRow, newRow);
-        }
-        return decisions;
-    }
-
-    /**
      * Decides one group, by comparing its sequence columns in the declared order until one of them
-     * differs.
+     * differs. The values are compared column by column and never stored, so deciding allocates
+     * nothing and never boxes a sequence value.
      */
     private static Decision decide(
-            SequenceReader[] readers, @Nullable InternalRow oldRow, InternalRow newRow) {
-        Comparable<?>[] newSequence = new Comparable<?>[readers.length];
-        boolean allNull = true;
-        for (int i = 0; i < readers.length; i++) {
-            newSequence[i] = readers[i].read(newRow);
-            if (newSequence[i] != null) {
-                allNull = false;
+            int[] sequenceFields,
+            SequenceComparator[] comparators,
+            @Nullable InternalRow oldRow,
+            InternalRow newRow) {
+        boolean carriesValue = false;
+        for (int field : sequenceFields) {
+            if (!absent(newRow, field)) {
+                carriesValue = true;
+                break;
             }
         }
-        if (allNull) {
+        if (!carriesValue) {
             // the group carries no order information at all
             return Decision.SKIP;
         }
@@ -253,8 +290,17 @@ public class SequenceGroups implements Serializable {
             return Decision.FORWARD;
         }
 
-        for (int i = 0; i < readers.length; i++) {
-            int comparison = compare(newSequence[i], readers[i].read(oldRow));
+        for (int i = 0; i < sequenceFields.length; i++) {
+            int field = sequenceFields[i];
+            // SQL NULL orders before every value, and a column absent from an older schema is null
+            int comparison;
+            if (absent(newRow, field)) {
+                comparison = absent(oldRow, field) ? 0 : -1;
+            } else if (absent(oldRow, field)) {
+                comparison = 1;
+            } else {
+                comparison = comparators[i].compareNonNull(oldRow, newRow);
+            }
             if (comparison != 0) {
                 return comparison > 0 ? Decision.FORWARD : Decision.STALE;
             }
@@ -263,42 +309,30 @@ public class SequenceGroups implements Serializable {
         return Decision.FORWARD;
     }
 
-    /** Null is treated as the smallest value, consistently with the versioned merge engine. */
-    @SuppressWarnings("unchecked")
-    private static int compare(@Nullable Comparable<?> left, @Nullable Comparable<?> right) {
-        if (left == null) {
-            return right == null ? 0 : -1;
-        }
-        if (right == null) {
-            return 1;
-        }
-        return ((Comparable<Object>) left).compareTo(right);
-    }
-
     /**
-     * Returns a reader of the given sequence column, and validates that its type can order a group.
-     * The accepted types are the same as the version column of the versioned merge engine, so that
-     * both order arbitration mechanisms stay consistent.
+     * Returns a comparator of the given sequence column, and validates that its type can order a
+     * group. The accepted types are the same as the version column of the versioned merge engine,
+     * so that both order arbitration mechanisms stay consistent.
      */
-    private static SequenceReader createReader(
+    private static SequenceComparator createComparator(
             String columnName, DataType dataType, int fieldIndex) {
         switch (dataType.getTypeRoot()) {
             case INTEGER:
-                return row -> absent(row, fieldIndex) ? null : row.getInt(fieldIndex);
+                return (oldRow, newRow) ->
+                        Integer.compare(newRow.getInt(fieldIndex), oldRow.getInt(fieldIndex));
             case BIGINT:
-                return row -> absent(row, fieldIndex) ? null : row.getLong(fieldIndex);
+                return (oldRow, newRow) ->
+                        Long.compare(newRow.getLong(fieldIndex), oldRow.getLong(fieldIndex));
             case TIMESTAMP_WITHOUT_TIME_ZONE:
                 int ntzPrecision = ((TimestampType) dataType).getPrecision();
-                return row ->
-                        absent(row, fieldIndex)
-                                ? null
-                                : row.getTimestampNtz(fieldIndex, ntzPrecision);
+                return (oldRow, newRow) ->
+                        newRow.getTimestampNtz(fieldIndex, ntzPrecision)
+                                .compareTo(oldRow.getTimestampNtz(fieldIndex, ntzPrecision));
             case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
                 int ltzPrecision = ((LocalZonedTimestampType) dataType).getPrecision();
-                return row ->
-                        absent(row, fieldIndex)
-                                ? null
-                                : row.getTimestampLtz(fieldIndex, ltzPrecision);
+                return (oldRow, newRow) ->
+                        newRow.getTimestampLtz(fieldIndex, ltzPrecision)
+                                .compareTo(oldRow.getTimestampLtz(fieldIndex, ltzPrecision));
             default:
                 throw new IllegalArgumentException(
                         String.format(
@@ -316,12 +350,15 @@ public class SequenceGroups implements Serializable {
         return row.getFieldCount() < fieldIndex + 1 || row.isNullAt(fieldIndex);
     }
 
-    /** Reads the sequence value of a sequence column out of a row. */
+    /**
+     * Compares the sequence value of one column between the stored and the incoming row. Both
+     * values are known to be non-null; the null ordering lives in {@link #decide} so it is decided
+     * once instead of per column type.
+     */
     @FunctionalInterface
-    private interface SequenceReader extends Serializable {
+    private interface SequenceComparator extends Serializable {
 
-        /** Returns the sequence value, or null if the column is absent or SQL NULL. */
-        @Nullable
-        Comparable<?> read(InternalRow row);
+        /** Returns a negative number when the incoming value is older than the stored one. */
+        int compareNonNull(InternalRow oldRow, InternalRow newRow);
     }
 }
