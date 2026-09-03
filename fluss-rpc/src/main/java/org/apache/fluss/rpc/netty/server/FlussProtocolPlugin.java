@@ -21,19 +21,25 @@ import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.cluster.ServerReconfigurable;
+import org.apache.fluss.exception.AuthorizationException;
 import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.rpc.RpcGatewayService;
 import org.apache.fluss.rpc.protocol.ApiManager;
 import org.apache.fluss.rpc.protocol.NetworkProtocolPlugin;
+import org.apache.fluss.security.acl.FlussPrincipal;
 import org.apache.fluss.security.auth.AuthenticationFactory;
 import org.apache.fluss.security.auth.PlainTextAuthenticationPlugin;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandler;
 
+import javax.annotation.Nullable;
+
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -42,6 +48,7 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
 
     private static final String PLAIN_CREDENTIALS_CONFIG =
             ConfigOptions.SERVER_SASL_CREDENTIALS.key();
+    private static final String USER_PRINCIPAL_TYPE = "User";
 
     /** Pattern to match {@code user_<username>="<password>"} entries in JAAS config strings. */
     private static final Pattern JAAS_USER_PATTERN = Pattern.compile("user_(\\w+)=\"([^\"]*)\"");
@@ -65,6 +72,9 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
     private final List<String> listeners;
     private final RequestsMetrics requestsMetrics;
     private Configuration conf;
+    private Set<FlussPrincipal> superUsers;
+    private boolean principalIgnoreCase;
+
     /** Initial credentials from `security.sasl.plain.jaas.config`. */
     private Map<String, String> initialPlainCredentialsFromJaasConfig;
 
@@ -86,6 +96,8 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
     @Override
     public void setup(Configuration conf) {
         this.conf = new Configuration(conf);
+        this.principalIgnoreCase = this.conf.get(ConfigOptions.SECURITY_ACL_PRINCIPAL_IGNORE_CASE);
+        this.superUsers = parseSuperUsers(this.conf);
         this.initialPlainCredentialsFromJaasConfig = parseCredentialsFromJaasConfig(conf);
         enrichWithJaasConfig(conf);
     }
@@ -136,6 +148,13 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
 
         // Generate the merged JAAS config value to ensure it is valid.
         generateMergedJaasConfig(newCredentials);
+    }
+
+    @Override
+    public void validate(Configuration newConfig, @Nullable FlussPrincipal requester)
+            throws ConfigException {
+        authorizeSuperUserCredentialChanges(readPlainCredentials(newConfig), requester);
+        validate(newConfig);
     }
 
     @Override
@@ -209,11 +228,7 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
      * @return the generated JAAS config string
      */
     private String generateMergedJaasConfig(Map<String, String> newCredentials) {
-        Map<String, String> mergedCredentials =
-                new LinkedHashMap<>(initialPlainCredentialsFromJaasConfig);
-        if (newCredentials != null) {
-            mergedCredentials.putAll(newCredentials);
-        }
+        Map<String, String> mergedCredentials = mergePlainCredentials(newCredentials);
 
         StringBuilder sb =
                 new StringBuilder(
@@ -223,6 +238,58 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
         }
         sb.append(";");
         return sb.toString();
+    }
+
+    private Map<String, String> mergePlainCredentials(Map<String, String> plainCredentials) {
+        Map<String, String> mergedCredentials =
+                new LinkedHashMap<>(initialPlainCredentialsFromJaasConfig);
+        if (plainCredentials != null) {
+            mergedCredentials.putAll(plainCredentials);
+        }
+        return mergedCredentials;
+    }
+
+    /**
+     * Rejects the change if the requester is not a configured super user but the credentials of a
+     * configured super user would be added, removed or modified.
+     */
+    private void authorizeSuperUserCredentialChanges(
+            @Nullable Map<String, String> newCredentials, @Nullable FlussPrincipal requester) {
+        if (requester == null || isSuperUser(requester)) {
+            return;
+        }
+
+        if (!Objects.equals(
+                superUserCredentials(currentPlainCredentials),
+                superUserCredentials(newCredentials))) {
+            throw new AuthorizationException(
+                    "Only configured super users may alter credentials of configured super users.");
+        }
+    }
+
+    /** Returns the merged credentials that belong to a configured super user. */
+    private Map<String, String> superUserCredentials(@Nullable Map<String, String> credentials) {
+        Map<String, String> superUserCredentials = new LinkedHashMap<>();
+        mergePlainCredentials(credentials)
+                .forEach(
+                        (user, password) -> {
+                            if (isSuperUser(new FlussPrincipal(user, USER_PRINCIPAL_TYPE))) {
+                                superUserCredentials.put(user, password);
+                            }
+                        });
+        return superUserCredentials;
+    }
+
+    private boolean isSuperUser(FlussPrincipal principal) {
+        return superUsers.stream()
+                .anyMatch(superUser -> superUser.matches(principal, principalIgnoreCase));
+    }
+
+    private static Set<FlussPrincipal> parseSuperUsers(Configuration configuration) {
+        return configuration
+                .getOptional(ConfigOptions.SUPER_USERS)
+                .map(FlussPrincipal::parsePrincipals)
+                .orElse(Collections.emptySet());
     }
 
     private static Map<String, String> parseCredentialsFromJaasConfig(Configuration configuration) {

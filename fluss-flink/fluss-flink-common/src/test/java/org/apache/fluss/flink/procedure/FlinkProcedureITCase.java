@@ -26,6 +26,7 @@ import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
+import org.apache.fluss.exception.AuthorizationException;
 import org.apache.fluss.exception.NoRebalanceInProgressException;
 import org.apache.fluss.exception.SecurityDisabledException;
 import org.apache.fluss.metadata.DataLakeFormat;
@@ -896,6 +897,83 @@ public abstract class FlinkProcedureITCase {
                     .containsExactly(
                             "+I[security.sasl.plain.credentials, root:******,guest:******,bob:******, DYNAMIC_SERVER_CONFIG]");
         }
+
+        String credentialsKey = ConfigOptions.SERVER_SASL_CREDENTIALS.key();
+        String credentialsWithAlice = "root:password,guest:passwords,bob:bob_pass,alice:alice_pass";
+        String credentialsWithChangedGuest =
+                "root:password,guest:new-password,bob:bob_pass,alice:alice_pass";
+
+        // Security-related cluster configs require ALL rather than ALTER.
+        tEnv.executeSql(
+                        String.format(
+                                "Call %s.sys.add_acl('CLUSTER', 'ALLOW', 'User:bob', 'ALTER', '*')",
+                                CATALOG_NAME))
+                .await();
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                                String.format(
+                                                        "Call %s.sys.set_cluster_configs('%s', '5min', '%s', '%s')",
+                                                        bobCatalog,
+                                                        ConfigOptions.KV_SNAPSHOT_INTERVAL.key(),
+                                                        credentialsKey,
+                                                        credentialsWithAlice))
+                                        .await())
+                .rootCause()
+                .isInstanceOf(AuthorizationException.class)
+                .hasMessageContaining("operate ALL");
+
+        // ALL allows Bob to alter ordinary credentials, but not super-user credentials.
+        tEnv.executeSql(
+                        String.format(
+                                "Call %s.sys.add_acl('CLUSTER', 'ALLOW', 'User:bob', 'ALL', '*')",
+                                CATALOG_NAME))
+                .await();
+        tEnv.executeSql(
+                        String.format(
+                                "Call %s.sys.append_cluster_configs('%s', 'alice:alice_pass')",
+                                bobCatalog, credentialsKey))
+                .await();
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                                String.format(
+                                                        "Call %s.sys.set_cluster_configs('%s', '%s')",
+                                                        bobCatalog,
+                                                        credentialsKey,
+                                                        credentialsWithChangedGuest))
+                                        .await())
+                .rootCause()
+                .isInstanceOf(AuthorizationException.class)
+                .hasMessageContaining("Only configured super users may alter credentials");
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                                String.format(
+                                                        "Call %s.sys.subtract_cluster_configs('%s', 'guest:passwords')",
+                                                        bobCatalog, credentialsKey))
+                                        .await())
+                .rootCause()
+                .isInstanceOf(AuthorizationException.class)
+                .hasMessageContaining("Only configured super users may alter credentials");
+
+        // A super user may alter another configured super user's credentials.
+        tEnv.executeSql(
+                        String.format(
+                                "Call %s.sys.set_cluster_configs('%s', '%s')",
+                                CATALOG_NAME, credentialsKey, credentialsWithChangedGuest))
+                .await();
+        tEnv.executeSql(
+                        String.format(
+                                "Call %s.sys.set_cluster_configs('%s', '%s')",
+                                CATALOG_NAME, credentialsKey, credentialsWithAlice))
+                .await();
+        tEnv.executeSql(
+                        String.format(
+                                "Call %s.sys.subtract_cluster_configs('%s', 'alice:alice_pass')",
+                                bobCatalog, credentialsKey))
+                .await();
+
         tEnv.executeSql("drop catalog " + bobCatalog);
 
         // Step 2: Delete user "bob" via subtract_cluster_configs
@@ -930,6 +1008,16 @@ public abstract class FlinkProcedureITCase {
         tEnv.executeSql(
                         String.format(
                                 "Call %s.sys.drop_acl('CLUSTER', 'ALLOW', 'User:bob', 'DESCRIBE', '*')",
+                                CATALOG_NAME))
+                .await();
+        tEnv.executeSql(
+                        String.format(
+                                "Call %s.sys.drop_acl('CLUSTER', 'ALLOW', 'User:bob', 'ALTER', '*')",
+                                CATALOG_NAME))
+                .await();
+        tEnv.executeSql(
+                        String.format(
+                                "Call %s.sys.drop_acl('CLUSTER', 'ALLOW', 'User:bob', 'ALL', '*')",
                                 CATALOG_NAME))
                 .await();
         // Try to append a map entry with the same key as the existing "root" entry
@@ -1075,7 +1163,7 @@ public abstract class FlinkProcedureITCase {
         conf.setString("security.sasl.enabled.mechanisms", "plain");
         conf.setString(
                 ConfigOptions.SERVER_SASL_CREDENTIALS.key(), "root:password,guest:passwords");
-        conf.set(ConfigOptions.SUPER_USERS, "User:root");
+        conf.set(ConfigOptions.SUPER_USERS, "User:root;User:guest");
         conf.set(ConfigOptions.AUTHORIZER_ENABLED, true);
         return conf;
     }

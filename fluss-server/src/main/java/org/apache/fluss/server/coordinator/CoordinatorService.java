@@ -242,6 +242,7 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 public final class CoordinatorService extends RpcServiceBase implements CoordinatorGateway {
 
     private static final Logger LOG = LoggerFactory.getLogger(CoordinatorService.class);
+    private static final String SECURITY_CONFIG_KEY_PREFIX = "security.";
 
     private final int defaultBucketNumber;
     private final int defaultReplicationFactor;
@@ -1457,10 +1458,6 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             return CompletableFuture.completedFuture(new AlterClusterConfigsResponse());
         }
 
-        if (authorizer != null) {
-            authorizer.authorize(currentSession(), OperationType.ALTER, Resource.cluster());
-        }
-
         List<AlterConfig> serverConfigChanges =
                 infos.stream()
                         .map(
@@ -1472,11 +1469,27 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                                                         : null,
                                                 AlterConfigOpType.from((byte) info.getOpType())))
                         .collect(Collectors.toList());
+
+        Session session = currentSession();
+        if (authorizer != null) {
+            // altering security related configs (e.g. super user credentials) requires the full
+            // cluster permission instead of ALTER only
+            boolean alterSecurityConfigs =
+                    serverConfigChanges.stream()
+                            .anyMatch(
+                                    config -> config.key().startsWith(SECURITY_CONFIG_KEY_PREFIX));
+            authorizer.authorize(
+                    session,
+                    alterSecurityConfigs ? OperationType.ALL : OperationType.ALTER,
+                    Resource.cluster());
+        }
+        FlussPrincipal requester = session.isInternal() ? null : session.getPrincipal();
+
         AccessContextEvent<Void> accessContextEvent =
                 new AccessContextEvent<>(
                         (context) -> {
                             try {
-                                dynamicConfigManager.alterConfigs(serverConfigChanges);
+                                dynamicConfigManager.alterConfigs(serverConfigChanges, requester);
                                 future.complete(new AlterClusterConfigsResponse());
                             } catch (ApiException e) {
                                 future.completeExceptionally(e);
