@@ -53,13 +53,14 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
     private static final Pattern VALID_USERNAME_PATTERN = Pattern.compile("\\w+");
 
     /**
-     * Characters forbidden in passwords. These would break the map format or the generated JAAS
-     * config string: comma (entry separator), colon (key-value separator), double-quote (JAAS value
-     * delimiter), semicolon (JAAS statement terminator), backslash (escape char), and control
-     * characters.
+     * Characters that cannot be represented in the generated config value and are therefore
+     * rejected on both the setup and reconfigure paths: the double-quote and backslash characters,
+     * which carry special meaning in the generated value, and control characters. Separators such
+     * as commas, colons and semicolons are handled by the map parser and, once quoted, may
+     * legitimately appear in a value, so they are accepted here.
      */
     private static final Pattern INVALID_PASSWORD_PATTERN =
-            Pattern.compile("[,:\"\\\\;]|[\\x00-\\x1F\\x7F]");
+            Pattern.compile("[\"\\\\]|[\\x00-\\x1F\\x7F]");
 
     private final ApiManager apiManager;
     private final List<String> listeners;
@@ -125,14 +126,7 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
         if (Objects.equals(newCredentials, currentPlainCredentials)) {
             return;
         }
-        if (newCredentials != null && !newCredentials.isEmpty()) {
-            int index = 0;
-            for (Map.Entry<String, String> credential : newCredentials.entrySet()) {
-                validateUsername(credential.getKey());
-                validatePassword(index, credential.getKey(), credential.getValue());
-                index++;
-            }
-        }
+        validateConfigEntries(newCredentials);
 
         // Generate the merged JAAS config value to ensure it is valid.
         generateMergedJaasConfig(newCredentials);
@@ -160,11 +154,29 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
         if (Objects.equals(newCredentials, currentPlainCredentials)) {
             return;
         }
+        validateConfigEntries(newCredentials);
 
         conf.setString(
                 ConfigOptions.SERVER_SASL_PLAIN_JAAS_CONFIG,
                 generateMergedJaasConfig(newCredentials));
         currentPlainCredentials = newCredentials;
+    }
+
+    /**
+     * Validates each configuration entry so that the same rules apply on the setup path and the
+     * reconfigure path. Entries whose values cannot be represented in the generated config are
+     * rejected here rather than silently corrupting it.
+     */
+    private static void validateConfigEntries(Map<String, String> entries) throws ConfigException {
+        if (entries == null || entries.isEmpty()) {
+            return;
+        }
+        int index = 0;
+        for (Map.Entry<String, String> entry : entries.entrySet()) {
+            validateUsername(entry.getKey());
+            validatePassword(index, entry.getKey(), entry.getValue());
+            index++;
+        }
     }
 
     private static Map<String, String> readPlainCredentials(Configuration config)
@@ -195,7 +207,7 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
             throw new ConfigException(
                     String.format(
                             "%s[%d]: password for user '%s' contains invalid characters. "
-                                    + "Commas, colons, quotes, semicolons, backslashes, and control characters are not allowed.",
+                                    + "Double-quote, backslash, and control characters are not allowed.",
                             PLAIN_CREDENTIALS_CONFIG, index, username));
         }
     }

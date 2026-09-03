@@ -439,26 +439,22 @@ public class SaslAuthenticationITCase {
                     .isInstanceOf(ConfigException.class)
                     .hasMessageContaining("Failed to parse security.sasl.plain.credentials");
 
-            // Password with colon (breaks map key-value format)
+            // A colon inside a quoted value is representable and should be accepted
             Configuration colonPassword = new Configuration();
             colonPassword.setString("security.sasl.plain.credentials", "bob:'pass:word'");
-            assertThatThrownBy(() -> reconfigurable.validate(colonPassword))
-                    .isInstanceOf(ConfigException.class)
-                    .hasMessageContaining("contains invalid characters");
+            reconfigurable.validate(colonPassword);
 
-            // Password with double-quote (breaks JAAS value)
+            // A double-quote cannot be represented in the generated value
             Configuration quotePassword = new Configuration();
             quotePassword.setString("security.sasl.plain.credentials", "bob:pass\"word");
             assertThatThrownBy(() -> reconfigurable.validate(quotePassword))
                     .isInstanceOf(ConfigException.class)
                     .hasMessageContaining("password for user 'bob' contains invalid characters");
 
-            // Password with semicolon (breaks JAAS statement)
+            // A semicolon is representable inside the quoted value and should be accepted
             Configuration semicolonPassword = new Configuration();
             semicolonPassword.setString("security.sasl.plain.credentials", "bob:pass;word");
-            assertThatThrownBy(() -> reconfigurable.validate(semicolonPassword))
-                    .isInstanceOf(ConfigException.class)
-                    .hasMessageContaining("contains invalid characters");
+            reconfigurable.validate(semicolonPassword);
 
             // Password with backslash (escape char)
             Configuration backslashPassword = new Configuration();
@@ -471,6 +467,82 @@ public class SaslAuthenticationITCase {
             Configuration validPassword = new Configuration();
             validPassword.setString("security.sasl.plain.credentials", "bob:P@ss!w0rd#$%^&*()");
             reconfigurable.validate(validPassword);
+        }
+    }
+
+    /**
+     * The setup path must apply the same per-entry validation as the reconfigure path: a config
+     * value that cannot be represented in the generated config is rejected loudly at startup, while
+     * a value the map splitter legitimately supports is accepted and produces a working config.
+     */
+    @Test
+    void testSetupRejectsInvalidConfigValueAndAcceptsRepresentableValue() throws Exception {
+        MetricGroup metricGroup = NOPMetricsGroup.newInstance();
+        TestingAuthenticateGatewayService service = new TestingAuthenticateGatewayService();
+
+        // A value containing a double-quote cannot be represented in the generated config and must
+        // be rejected while the server is being set up, before it starts.
+        try (NetUtils.Port port = getAvailablePort()) {
+            Configuration invalidConfig = new Configuration();
+            invalidConfig.setString(
+                    ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:sasl");
+            invalidConfig.setString("security.sasl.enabled.mechanisms", "plain");
+            invalidConfig.setString(
+                    "security.sasl.plain.jaas.config",
+                    "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required"
+                            + " user_admin=\"admin-secret\";");
+            invalidConfig.setString("security.sasl.plain.credentials", "bob:pass\"word");
+            invalidConfig.setString(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS.key(), "3");
+
+            assertThatThrownBy(
+                            () ->
+                                    new NettyServer(
+                                            invalidConfig,
+                                            Collections.singletonList(
+                                                    new Endpoint(
+                                                            "localhost", port.getPort(), "CLIENT")),
+                                            service,
+                                            metricGroup,
+                                            RequestsMetrics.createCoordinatorServerRequestMetrics(
+                                                    metricGroup)))
+                    .isInstanceOf(ConfigException.class)
+                    .hasMessageContaining("contains invalid characters");
+        }
+
+        // A quoted colon is representable, so the same setup path must accept it and produce a
+        // config that lets the configured user connect with that exact value.
+        try (NetUtils.Port port = getAvailablePort()) {
+            Configuration validConfig = new Configuration();
+            validConfig.setString(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:sasl");
+            validConfig.setString("security.sasl.enabled.mechanisms", "plain");
+            validConfig.setString(
+                    "security.sasl.plain.jaas.config",
+                    "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required"
+                            + " user_admin=\"admin-secret\";");
+            validConfig.setString("security.sasl.plain.credentials", "bob:'pass:word'");
+            validConfig.setString(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS.key(), "3");
+
+            try (NettyServer nettyServer =
+                    new NettyServer(
+                            validConfig,
+                            Collections.singletonList(
+                                    new Endpoint("localhost", port.getPort(), "CLIENT")),
+                            service,
+                            metricGroup,
+                            RequestsMetrics.createCoordinatorServerRequestMetrics(metricGroup))) {
+                nettyServer.start();
+                ServerNode serverNode =
+                        new ServerNode(1, "localhost", port.getPort(), ServerType.TABLET_SERVER);
+
+                // Existing user from the initial config can still connect.
+                try (NettyClient client = createSaslClient("admin", "admin-secret")) {
+                    verifyListTables(client, serverNode);
+                }
+                // The configured user connects with the exact value that carried a colon.
+                try (NettyClient client = createSaslClient("bob", "pass:word")) {
+                    verifyListTables(client, serverNode);
+                }
+            }
         }
     }
 
