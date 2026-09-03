@@ -575,4 +575,43 @@ class SparkLakePaimonPrimaryKeyTableReadTest extends SparkLakePrimaryKeyTableRea
     conf.setString("warehouse", warehousePath)
     conf
   }
+
+  test("Spark Lake Read: custom lake path preserves predicate pushdown in union read") {
+    withTable("t_custom_path_union") {
+      sql(s"""
+             |CREATE TABLE $DEFAULT_DATABASE.t_custom_path_union
+             |  (id INT, name STRING, score INT)
+             | TBLPROPERTIES (
+             |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
+             |  '${ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key()}' = 'custom_lake_db',
+             |  '${ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key()}' = 'custom_pk_union',
+             |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
+             |  '${PRIMARY_KEY.key()}' = 'id',
+             |  '${BUCKET_NUMBER.key()}' = 1)
+             |""".stripMargin)
+
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t_custom_path_union VALUES
+             |(1, 'alice', 90), (2, 'bob', 85), (3, 'charlie', 95)
+             |""".stripMargin)
+
+      tierToLake("t_custom_path_union")
+
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t_custom_path_union VALUES
+             |(4, 'dave', 88), (5, 'eve', 92)
+             |""".stripMargin)
+
+      val query =
+        sql(
+          s"SELECT id, score FROM $DEFAULT_DATABASE.t_custom_path_union " +
+            "WHERE score >= 90 ORDER BY id")
+
+      checkAnswer(
+        query,
+        Row(1, 90) :: Row(3, 95) :: Row(5, 92) :: Nil
+      )
+      assertPushedNames(query, Set(">="))
+    }
+  }
 }
