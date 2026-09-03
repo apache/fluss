@@ -35,6 +35,7 @@ import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.exception.NotCoordinatorLeaderException;
+import org.apache.fluss.exception.RetriableException;
 import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
@@ -161,14 +162,17 @@ public class FlussAdmin implements Admin {
         AdminGateway rawGateway =
                 GatewayClientProxy.createGatewayProxy(
                         metadataUpdater::getCoordinatorServer, client, AdminGateway.class);
-        // Retrying generic network errors is unsafe for non-idempotent writes because the request
-        // may already have succeeded. NotCoordinatorLeaderException is safe because the standby
-        // rejects the request before invoking the coordinator API.
+        // Refresh metadata for recoverable failures, but don't retry generic network errors because
+        // a non-idempotent write may already have succeeded. NotCoordinatorLeaderException is safe
+        // to retry because the standby rejects the request before invoking the coordinator API.
         this.gateway =
                 RetryableGatewayClientProxy.createRetryableGatewayProxy(
                         rawGateway,
                         () -> refreshCoordinatorMetadata(client, metadataUpdater),
                         refreshExecutor,
+                        cause ->
+                                cause instanceof NotCoordinatorLeaderException
+                                        || cause instanceof RetriableException,
                         NotCoordinatorLeaderException.class::isInstance,
                         AdminGateway.class);
         AdminGateway rawReadOnlyGateway =

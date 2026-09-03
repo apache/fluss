@@ -150,7 +150,7 @@ class RetryableGatewayClientProxyTest {
     }
 
     @Test
-    void testCustomRetryPredicateExcludesNetworkErrors() {
+    void testCustomPredicatesRefreshWithoutRetryingNetworkError() throws Exception {
         AtomicInteger callCount = new AtomicInteger(0);
         AtomicInteger refreshCount = new AtomicInteger(0);
 
@@ -160,6 +160,7 @@ class RetryableGatewayClientProxyTest {
                         delegate,
                         refreshCount::incrementAndGet,
                         REFRESH_EXECUTOR,
+                        NetworkException.class::isInstance,
                         NotCoordinatorLeaderException.class::isInstance,
                         RpcGateway.class);
 
@@ -169,7 +170,44 @@ class RetryableGatewayClientProxyTest {
                 .rootCause()
                 .isInstanceOf(NetworkException.class);
         assertThat(callCount.get()).isEqualTo(1);
-        assertThat(refreshCount.get()).isEqualTo(0);
+        assertThat(refreshCount.get()).isEqualTo(1);
+
+        assertThat(proxy.apiVersions(new ApiVersionsRequest()).get()).isNotNull();
+        assertThat(callCount.get()).isEqualTo(2);
+        assertThat(refreshCount.get()).isEqualTo(1);
+    }
+
+    @Test
+    void testCustomPredicatesRetryNotCoordinatorLeader() throws Exception {
+        AtomicInteger callCount = new AtomicInteger(0);
+        AtomicInteger refreshCount = new AtomicInteger(0);
+        RpcGateway delegate =
+                new TestRpcGateway() {
+                    @Override
+                    public CompletableFuture<ApiVersionsResponse> apiVersions(
+                            ApiVersionsRequest request) {
+                        if (callCount.incrementAndGet() == 1) {
+                            CompletableFuture<ApiVersionsResponse> failed =
+                                    new CompletableFuture<>();
+                            failed.completeExceptionally(
+                                    new NotCoordinatorLeaderException("not coordinator leader"));
+                            return failed;
+                        }
+                        return CompletableFuture.completedFuture(new ApiVersionsResponse());
+                    }
+                };
+        RpcGateway proxy =
+                RetryableGatewayClientProxy.createRetryableGatewayProxy(
+                        delegate,
+                        refreshCount::incrementAndGet,
+                        REFRESH_EXECUTOR,
+                        NotCoordinatorLeaderException.class::isInstance,
+                        NotCoordinatorLeaderException.class::isInstance,
+                        RpcGateway.class);
+
+        assertThat(proxy.apiVersions(new ApiVersionsRequest()).get()).isNotNull();
+        assertThat(callCount.get()).isEqualTo(2);
+        assertThat(refreshCount.get()).isEqualTo(1);
     }
 
     @Test
