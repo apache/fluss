@@ -31,6 +31,7 @@ import org.apache.fluss.exception.StorageBackpressureException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.PbProduceLogRespForBucket;
 import org.apache.fluss.rpc.messages.PbPutKvRespForBucket;
@@ -815,10 +816,42 @@ public class Sender implements Runnable {
         @Nullable Throwable historicalTargetCause = null;
         try {
             if (metadataUpdater.checkAndUpdatePartitionMetadata(historicalPath)) {
-                accumulator.rerouteQueuedWritesToHistorical(
-                        targetPath,
-                        historicalPath,
-                        metadataUpdater.getPartitionIdOrElseThrow(historicalPath));
+                // The queued batches were routed by the original partition's bucket count; they can
+                // only land in the right buckets of the historical partition if its own count
+                // matches. Otherwise the bucket ids would be hashes against the wrong layout.
+                TablePartition historicalPartition =
+                        metadataUpdater
+                                .getCluster()
+                                .getTablePartition(historicalPath)
+                                .orElseThrow(
+                                        () ->
+                                                new PartitionNotExistException(
+                                                        "Historical partition "
+                                                                + historicalPath
+                                                                + " does not exist."));
+                Integer historicalBucketCount =
+                        metadataUpdater
+                                .getCluster()
+                                .getBucketCountActual(historicalPartition)
+                                .orElse(null);
+                boolean rerouted =
+                        accumulator.rerouteQueuedWritesToHistorical(
+                                targetPath,
+                                historicalPath,
+                                historicalPartition.getPartitionId(),
+                                historicalBucketCount);
+                if (!rerouted) {
+                    abortBatches(
+                            targetPath,
+                            newPartitionNotExistException(
+                                    "Cannot reroute writes from "
+                                            + targetPath
+                                            + " to the historical partition because their "
+                                            + "bucket ids were routed by a different bucket "
+                                            + "count than the historical partition's.",
+                                    historicalTargetCause));
+                    return;
+                }
                 LOG.info(
                         "Rerouted writes from partition {} to historical partition {}.",
                         targetPath,

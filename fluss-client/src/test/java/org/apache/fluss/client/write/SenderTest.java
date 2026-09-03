@@ -39,6 +39,7 @@ import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.row.BinaryRow;
@@ -100,6 +101,7 @@ import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** ITCase for {@link Sender}. */
 final class SenderTest {
@@ -205,6 +207,47 @@ final class SenderTest {
                                 PutKvResultForBucket.historicalSuccess(
                                         historicalBucket, 1L, originalPath.getPartitionName()))));
         assertThat(future.get()).isNull();
+    }
+
+    @Test
+    void testAbortsRerouteWhenQueuedBatchBucketCountDiffers() throws Exception {
+        sender.destroyResources();
+        TableInfo tableInfo = createHistoricalTableInfo();
+        PhysicalTablePath originalPath = PhysicalTablePath.of(tableInfo.getTablePath(), "20990101");
+        PhysicalTablePath historicalPath =
+                PhysicalTablePath.of(tableInfo.getTablePath(), HISTORICAL_PARTITION_VALUE);
+        TableBucket originalBucket = new TableBucket(tableInfo.getTableId(), 21L, 0);
+        TableBucket historicalBucket = new TableBucket(tableInfo.getTableId(), 22L, 0);
+        metadataUpdater = missingPartitionMetadataUpdater(tableInfo, originalPath);
+        Map<PhysicalTablePath, TableBucket> tableBucketsByPath = new HashMap<>();
+        tableBucketsByPath.put(originalPath, originalBucket);
+        tableBucketsByPath.put(historicalPath, historicalBucket);
+        // The historical partition keeps one bucket while the queued batch was routed by a
+        // rescaled partition's count of four: its bucket id cannot be moved to the historical
+        // layout, so the reroute must abort instead of silently misrouting the records.
+        Map<TablePartition, Integer> bucketCountActualByPartition = new HashMap<>();
+        bucketCountActualByPartition.put(
+                new TablePartition(tableInfo.getTableId(), historicalBucket.getPartitionId()), 1);
+        metadataUpdater.updateCluster(
+                partitionedCluster(tableInfo, tableBucketsByPath, bucketCountActualByPartition));
+        sender = setupWithIdempotenceState();
+
+        CompletableFuture<Exception> future =
+                appendKvRecord(tableInfo, originalPath, 1, metadataUpdater.getCluster(), 4);
+        sender.runOnce();
+
+        TestTabletServerGateway gateway = node1Gateway();
+        gateway.response(
+                0, createPutKvResponse(originalBucket, Errors.UNKNOWN_TABLE_OR_BUCKET_EXCEPTION));
+        sender.runOnce();
+
+        assertThat(future.get())
+                .isInstanceOf(PartitionNotExistException.class)
+                .hasMessageContaining("different bucket count");
+        // Nothing was sent to the historical partition: aborting is the whole point.
+        assertThatThrownBy(() -> gateway.getRequest(0))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("No requests pending");
     }
 
     @Test
@@ -1593,6 +1636,13 @@ final class SenderTest {
 
     private static Cluster partitionedCluster(
             TableInfo tableInfo, Map<PhysicalTablePath, TableBucket> tableBucketsByPath) {
+        return partitionedCluster(tableInfo, tableBucketsByPath, Collections.emptyMap());
+    }
+
+    private static Cluster partitionedCluster(
+            TableInfo tableInfo,
+            Map<PhysicalTablePath, TableBucket> tableBucketsByPath,
+            Map<TablePartition, Integer> bucketCountActualByPartition) {
         int[] replicas = new int[] {TestingMetadataUpdater.NODE1.id()};
         Map<PhysicalTablePath, List<BucketLocation>> bucketLocationsByPath = new HashMap<>();
         Map<PhysicalTablePath, Long> partitionIdsByPath = new HashMap<>();
@@ -1614,11 +1664,23 @@ final class SenderTest {
                 TestingMetadataUpdater.COORDINATOR,
                 bucketLocationsByPath,
                 Collections.singletonMap(tableInfo.getTablePath(), tableInfo.getTableId()),
-                partitionIdsByPath);
+                partitionIdsByPath,
+                bucketCountActualByPartition,
+                Collections.emptyMap());
     }
 
     private CompletableFuture<Exception> appendKvRecord(
             TableInfo tableInfo, PhysicalTablePath physicalTablePath, int id, Cluster cluster)
+            throws Exception {
+        return appendKvRecord(tableInfo, physicalTablePath, id, cluster, 0);
+    }
+
+    private CompletableFuture<Exception> appendKvRecord(
+            TableInfo tableInfo,
+            PhysicalTablePath physicalTablePath,
+            int id,
+            Cluster cluster,
+            int bucketCountActual)
             throws Exception {
         accumulator.checkAndCacheHistoricalPartitionEnabled(tableInfo);
         BinaryRow row =
@@ -1643,6 +1705,7 @@ final class SenderTest {
                 (tableBucket, logEndOffset, error) -> future.complete(error),
                 cluster,
                 0,
+                bucketCountActual,
                 false);
         return future;
     }
