@@ -1,7 +1,9 @@
 name: Test Gateway Lakehouse Quickstart
 
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - issue-4221-http-gateway-quickstart
 
 jobs:
   quickstart:
