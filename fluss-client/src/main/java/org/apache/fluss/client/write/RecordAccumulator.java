@@ -458,10 +458,11 @@ public final class RecordAccumulator {
     }
 
     /** Reroutes queued batches for {@code originalPath} to the historical target. */
-    void rerouteQueuedWritesToHistorical(
+    boolean rerouteQueuedWritesToHistorical(
             PhysicalTablePath originalPath,
             PhysicalTablePath historicalPath,
-            long historicalPartitionId) {
+            long historicalPartitionId,
+            @Nullable Integer historicalBucketCount) {
         BucketAndWriteBatches writeTarget =
                 checkNotNull(
                         writeBatches.get(originalPath),
@@ -471,7 +472,17 @@ public final class RecordAccumulator {
         synchronized (writeTarget) {
             if (writeTarget.isHistoricalWriteTarget()) {
                 writeTarget.partitionId = historicalPartitionId;
-                return;
+                return true;
+            }
+            if (historicalBucketCount != null) {
+                for (Deque<WriteBatch> deque : writeTarget.batches.values()) {
+                    for (WriteBatch batch : deque) {
+                        if (batch.getBucketCountActual() > 0
+                                && batch.getBucketCountActual() != historicalBucketCount) {
+                            return false;
+                        }
+                    }
+                }
             }
             // New appends observe the historical route and are marked as historical. Existing
             // queued batches are converted below before the Sender can drain again.
@@ -499,6 +510,7 @@ public final class RecordAccumulator {
                 }
             }
         }
+        return true;
     }
 
     /** Aborts incomplete batches whose current RPC target is {@code targetPath}. */
