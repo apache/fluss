@@ -1,0 +1,30 @@
+name: Test Gateway Lakehouse Quickstart
+
+on:
+  workflow_dispatch:
+
+jobs:
+  quickstart:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check Docker
+        run: |
+          docker version
+          docker compose version
+
+      - name: Check Gateway source
+        run: |
+          test -f fluss-gateway/src/protocol/rest/ddl.rs
+          test -f fluss-gateway/src/protocol/rest/records.rs
+
+      - name: Build Gateway image
+        run: |
+          docker/fluss-gateway/build.sh
+
+      - name: Verify Gateway image
+        run: |
+          docker images fluss-gateway:dev
