@@ -62,6 +62,9 @@ public class CoordinatorContext {
     // and use combine retry times and retry delay
     public static final int DELETE_TRY_TIMES = 5;
 
+    // notified on state changes made through this class's mutators; defaults to a no-op.
+    private CoordinatorContextListener listener = CoordinatorContextListener.NO_OP;
+
     private int offlineBucketCount = 0;
 
     // a map from the tablet replica to the delete fail number,
@@ -136,6 +139,11 @@ public class CoordinatorContext {
         this.coordinatorEpochZkVersion = zkEpoch.getCoordinatorEpochZkVersion();
     }
 
+    /** Registers the listener notified on state changes made through this class's mutators. */
+    public void setListener(CoordinatorContextListener listener) {
+        this.listener = listener;
+    }
+
     public int getCoordinatorEpoch() {
         return coordinatorEpoch;
     }
@@ -179,6 +187,18 @@ public class CoordinatorContext {
         return shuttingDownTabletServers;
     }
 
+    /** Marks a tablet server as undergoing controlled shutdown -- a precursor to removal. */
+    public void markShuttingDown(int serverId) {
+        shuttingDownTabletServers.add(serverId);
+        listener.onTabletServerDied();
+    }
+
+    /** Clears the shutting-down marker, e.g. once the server is confirmed fully dead. */
+    public void clearShuttingDown(int serverId) {
+        shuttingDownTabletServers.remove(serverId);
+        listener.onTopologyChanged();
+    }
+
     public Set<Integer> liveOrShuttingDownTabletServers() {
         return liveTabletServers.keySet();
     }
@@ -199,10 +219,12 @@ public class CoordinatorContext {
 
     public void addLiveTabletServer(ServerInfo serverInfo) {
         this.liveTabletServers.put(serverInfo.id(), serverInfo);
+        listener.onTabletServerRegistered();
     }
 
     public void removeLiveTabletServer(int serverId) {
         this.liveTabletServers.remove(serverId);
+        listener.onTabletServerDied();
     }
 
     public boolean isReplicaOnline(int serverId, TableBucket tableBucket) {
@@ -220,10 +242,12 @@ public class CoordinatorContext {
         Set<TableBucket> tableBuckets =
                 replicasOnOffline.computeIfAbsent(serverId, (k) -> new HashSet<>());
         tableBuckets.add(tableBucket);
+        listener.onTopologyChanged();
     }
 
     public void removeOfflineBucketInServer(int serverId) {
         replicasOnOffline.remove(serverId);
+        listener.onTopologyChanged();
     }
 
     /** Removes the offline marker for one table bucket on the given tablet server. */
@@ -236,6 +260,7 @@ public class CoordinatorContext {
         if (tableBuckets.isEmpty()) {
             replicasOnOffline.remove(serverId);
         }
+        listener.onTopologyChanged();
     }
 
     /**
@@ -264,14 +289,17 @@ public class CoordinatorContext {
 
     public void addPendingLeaderActivation(TableBucket bucket) {
         pendingLeaderActivationBuckets.add(bucket);
+        listener.onLeaderActivityChanged(false);
     }
 
     public void addPendingLeaderActivations(Collection<TableBucket> buckets) {
         pendingLeaderActivationBuckets.addAll(buckets);
+        listener.onLeaderActivityChanged(false);
     }
 
     public void clearPendingLeaderActivation(TableBucket bucket) {
         pendingLeaderActivationBuckets.remove(bucket);
+        listener.onLeaderActivityChanged(true);
     }
 
     /**
@@ -300,6 +328,7 @@ public class CoordinatorContext {
 
     public void removeFromPendingLeaderActivations(Set<TableBucket> buckets) {
         pendingLeaderActivationBuckets.removeAll(buckets);
+        listener.onLeaderActivityChanged(true);
     }
 
     public Map<Long, TablePath> allTables() {
@@ -469,6 +498,7 @@ public class CoordinatorContext {
                             (k) -> new HashMap<>());
         }
         assignments.put(tableBucket.getBucket(), replicaAssignment);
+        listener.onTopologyChanged();
     }
 
     public List<Integer> getAssignment(TableBucket tableBucket) {
@@ -524,7 +554,9 @@ public class CoordinatorContext {
     }
 
     public ReplicaState putReplicaState(TableBucketReplica replica, ReplicaState state) {
-        return replicaStates.put(replica, state);
+        ReplicaState previous = replicaStates.put(replica, state);
+        listener.onTopologyChanged();
+        return previous;
     }
 
     public ReplicaState removeReplicaState(TableBucketReplica replica) {
@@ -667,6 +699,7 @@ public class CoordinatorContext {
     public BucketState putBucketState(TableBucket tableBucket, BucketState targetState) {
         BucketState currentState = bucketStates.put(tableBucket, targetState);
         updateBucketStateMetrics(tableBucket, currentState, targetState);
+        listener.onTopologyChanged();
         return currentState;
     }
 
@@ -693,6 +726,8 @@ public class CoordinatorContext {
 
     public void putBucketLeaderAndIsr(TableBucket tableBucket, LeaderAndIsr leaderAndIsr) {
         bucketLeaderAndIsr.put(tableBucket, leaderAndIsr);
+        listener.onBucketLeaderAndIsrChanged(
+                tableBucket, getAssignment(tableBucket), Optional.of(leaderAndIsr));
     }
 
     public Optional<LeaderAndIsr> getBucketLeaderAndIsr(TableBucket tableBucket) {
@@ -772,6 +807,7 @@ public class CoordinatorContext {
             tableIdByPath.remove(tablePath);
         }
         tableInfoById.remove(tableId);
+        listener.onTopologyChanged();
     }
 
     public void removePartition(TablePartition tablePartition) {
@@ -799,6 +835,7 @@ public class CoordinatorContext {
         if (physicalTablePath != null) {
             partitionIdByPath.remove(physicalTablePath);
         }
+        listener.onTopologyChanged();
     }
 
     public void initSeverTags(Map<Integer, ServerTag> initialServerTags) {
@@ -807,6 +844,7 @@ public class CoordinatorContext {
 
     public void putServerTag(int serverId, ServerTag serverTag) {
         serverTags.put(serverId, serverTag);
+        listener.onTopologyChanged();
     }
 
     public Map<Integer, ServerTag> getServerTags() {
@@ -819,6 +857,7 @@ public class CoordinatorContext {
 
     public void removeServerTag(int serverId) {
         serverTags.remove(serverId);
+        listener.onTopologyChanged();
     }
 
     private void clearTablesState() {

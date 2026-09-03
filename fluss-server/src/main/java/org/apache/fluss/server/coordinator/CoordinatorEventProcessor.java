@@ -188,6 +188,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
     private final CoordinatorChangeWatcher coordinatorChangeWatcher;
     private final TabletServerChangeWatcher tabletServerChangeWatcher;
     private final CoordinatorMetadataCache serverMetadataCache;
+    private final CoordinatorHealthCache healthCache;
     private final CoordinatorRequestBatch coordinatorRequestBatch;
     private final String internalListenerName;
     private final CoordinatorMetricGroup coordinatorMetricGroup;
@@ -218,7 +219,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
         this.coordinatorChannelManager = coordinatorChannelManager;
         this.coordinatorContext = coordinatorContext;
         this.replicaCapacityController = replicaCapacityController;
-        this.coordinatorEventManager = new CoordinatorEventManager(this, coordinatorMetricGroup);
+        this.healthCache = new CoordinatorHealthCache();
+        this.coordinatorEventManager =
+                new CoordinatorEventManager(
+                        this, coordinatorContext, healthCache, coordinatorMetricGroup);
         this.replicaStateMachine =
                 new ReplicaStateMachine(
                         coordinatorContext,
@@ -300,6 +304,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
         return coordinatorContext;
     }
 
+    public CoordinatorHealthCache getHealthCache() {
+        return healthCache;
+    }
+
     @VisibleForTesting
     TableLifecycleThrottler getLifecycleThrottler() {
         return lifecycleThrottler;
@@ -325,8 +333,12 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
         lifecycleThrottler.start();
 
-        // start table manager
+        // start table manager -- this triggers leader election
         tableManager.startup();
+
+        // wire up the listener only after election, so the first snapshot isn't pre-election
+        coordinatorContext.setListener(healthCache);
+        healthCache.refresh(coordinatorContext);
 
         // start the event manager which will then process the event
         coordinatorEventManager.start();
@@ -1362,7 +1374,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         coordinatorContext.removeOfflineBucketInServer(tabletServerId);
 
         coordinatorContext.removeLiveTabletServer(tabletServerId);
-        coordinatorContext.shuttingDownTabletServers().remove(tabletServerId);
+        coordinatorContext.clearShuttingDown(tabletServerId);
         coordinatorChannelManager.removeTabletServer(tabletServerId);
 
         // Here, we will first update alive tabletServer info for all tabletServers and
@@ -2380,7 +2392,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                     "TabletServer" + tabletServerId + " is not available.");
         }
 
-        coordinatorContext.shuttingDownTabletServers().add(tabletServerId);
+        coordinatorContext.markShuttingDown(tabletServerId);
         LOG.debug(
                 "All shutting down tabletServers: {}",
                 coordinatorContext.shuttingDownTabletServers());
