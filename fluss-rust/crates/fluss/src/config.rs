@@ -17,6 +17,7 @@
 
 use clap::{Parser, ValueEnum};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use strum_macros::{Display, EnumString};
 
 const DEFAULT_BOOTSTRAP_SERVER: &str = "127.0.0.1:9123";
@@ -212,6 +213,250 @@ pub struct Config {
     pub lookup_max_retries: i32,
 }
 
+type ConfigPropertyApplier = fn(&mut Config, &str) -> Result<(), String>;
+
+struct ConfigPropertySpec {
+    key: &'static str,
+    sensitive: bool,
+    apply: ConfigPropertyApplier,
+}
+
+const CONFIG_PROPERTY_SPECS: &[ConfigPropertySpec] = &[
+    ConfigPropertySpec {
+        key: "security.protocol",
+        sensitive: false,
+        apply: |config, value| {
+            config.security_protocol = value.to_string();
+            Ok(())
+        },
+    },
+    ConfigPropertySpec {
+        key: "security.sasl.mechanism",
+        sensitive: false,
+        apply: |config, value| {
+            config.security_sasl_mechanism = value.to_string();
+            Ok(())
+        },
+    },
+    ConfigPropertySpec {
+        key: "security.sasl.username",
+        sensitive: false,
+        apply: |config, value| {
+            config.security_sasl_username = value.to_string();
+            Ok(())
+        },
+    },
+    ConfigPropertySpec {
+        key: "security.sasl.password",
+        sensitive: true,
+        apply: |config, value| {
+            config.security_sasl_password = value.to_string();
+            Ok(())
+        },
+    },
+    ConfigPropertySpec {
+        key: "connect-timeout",
+        sensitive: false,
+        apply: |config, value| {
+            config.connect_timeout_ms = parse_duration_ms(value)?;
+            Ok(())
+        },
+    },
+    ConfigPropertySpec {
+        key: "writer.batch-size",
+        sensitive: false,
+        apply: |config, value| {
+            config.writer_batch_size = parse_i32_bytes(value)?;
+            Ok(())
+        },
+    },
+    ConfigPropertySpec {
+        key: "writer.request-max-size",
+        sensitive: false,
+        apply: |config, value| {
+            config.writer_request_max_size = parse_i32_bytes(value)?;
+            Ok(())
+        },
+    },
+    ConfigPropertySpec {
+        key: "writer.buffer.memory-size",
+        sensitive: false,
+        apply: |config, value| {
+            config.writer_buffer_memory_size = parse_usize_bytes(value)?;
+            Ok(())
+        },
+    },
+    ConfigPropertySpec {
+        key: "writer.buffer.wait-timeout",
+        sensitive: false,
+        apply: |config, value| {
+            config.writer_buffer_wait_timeout_ms = parse_duration_ms(value)?;
+            Ok(())
+        },
+    },
+    ConfigPropertySpec {
+        key: "writer.batch-timeout",
+        sensitive: false,
+        apply: |config, value| {
+            config.writer_batch_timeout_ms = i64::try_from(parse_duration_ms(value)?)
+                .map_err(|_| "duration exceeds the supported range".to_string())?;
+            Ok(())
+        },
+    },
+    ConfigPropertySpec {
+        key: "writer.dynamic-batch-size.enabled",
+        sensitive: false,
+        apply: |config, value| {
+            config.writer_dynamic_batch_size_enabled = parse_bool(value)?;
+            Ok(())
+        },
+    },
+    ConfigPropertySpec {
+        key: "writer.dynamic-batch-size.min",
+        sensitive: false,
+        apply: |config, value| {
+            config.writer_dynamic_batch_size_min = parse_i32_bytes(value)?;
+            Ok(())
+        },
+    },
+    ConfigPropertySpec {
+        key: "writer.kv-backpressure.max-throttle",
+        sensitive: false,
+        apply: |config, value| {
+            config.writer_kv_backpressure_max_throttle_ms = parse_duration_ms(value)?;
+            Ok(())
+        },
+    },
+    ConfigPropertySpec {
+        key: "lookup.queue-size",
+        sensitive: false,
+        apply: |config, value| {
+            config.lookup_queue_size = parse_usize_count(value, 1)?;
+            Ok(())
+        },
+    },
+    ConfigPropertySpec {
+        key: "lookup.max-batch-size",
+        sensitive: false,
+        apply: |config, value| {
+            config.lookup_max_batch_size = parse_usize_count(value, 1)?;
+            Ok(())
+        },
+    },
+    ConfigPropertySpec {
+        key: "lookup.max-inflight-requests",
+        sensitive: false,
+        apply: |config, value| {
+            config.lookup_max_inflight_requests = parse_usize_count(value, 1)?;
+            Ok(())
+        },
+    },
+    ConfigPropertySpec {
+        key: "lookup.max-retries",
+        sensitive: false,
+        apply: |config, value| {
+            config.lookup_max_retries = parse_i32_count(value, 0)?;
+            Ok(())
+        },
+    },
+    ConfigPropertySpec {
+        key: "lookup.batch-timeout",
+        sensitive: false,
+        apply: |config, value| {
+            config.lookup_batch_timeout_ms = parse_duration_ms(value)?;
+            Ok(())
+        },
+    },
+];
+
+fn config_property_spec(key: &str) -> Option<&'static ConfigPropertySpec> {
+    CONFIG_PROPERTY_SPECS.iter().find(|spec| spec.key == key)
+}
+
+fn parse_bool(value: &str) -> Result<bool, String> {
+    value
+        .parse::<bool>()
+        .map_err(|_| "expected 'true' or 'false'".to_string())
+}
+
+fn parse_i32_count(value: &str, min: i32) -> Result<i32, String> {
+    let parsed = value
+        .parse::<i32>()
+        .map_err(|_| "expected a 32-bit integer".to_string())?;
+    if parsed < min {
+        return Err(format!("must be at least {min}"));
+    }
+    Ok(parsed)
+}
+
+fn parse_usize_count(value: &str, min: usize) -> Result<usize, String> {
+    let parsed = value
+        .parse::<usize>()
+        .map_err(|_| "expected a non-negative integer".to_string())?;
+    if parsed < min {
+        return Err(format!("must be at least {min}"));
+    }
+    Ok(parsed)
+}
+
+fn parse_i32_bytes(value: &str) -> Result<i32, String> {
+    i32::try_from(parse_byte_size(value)?)
+        .map_err(|_| "byte size exceeds the supported range".to_string())
+}
+
+fn parse_usize_bytes(value: &str) -> Result<usize, String> {
+    usize::try_from(parse_byte_size(value)?)
+        .map_err(|_| "byte size exceeds the supported range".to_string())
+}
+
+fn parse_byte_size(value: &str) -> Result<u64, String> {
+    let (number, unit) = split_number_and_unit(value)?;
+    let multiplier = match unit.to_ascii_lowercase().as_str() {
+        "" | "b" | "bytes" => 1,
+        "k" | "kb" | "kib" | "kibibyte" | "kibibytes" => 1_024,
+        "m" | "mb" | "mib" | "mebibyte" | "mebibytes" => 1_024 * 1_024,
+        "g" | "gb" | "gib" | "gibibyte" | "gibibytes" => 1_024 * 1_024 * 1_024,
+        "t" | "tb" | "tib" | "tebibyte" | "tebibytes" => 1_024_u64 * 1_024 * 1_024 * 1_024,
+        _ => return Err("unsupported byte-size unit".to_string()),
+    };
+    let bytes = number
+        .checked_mul(multiplier)
+        .ok_or_else(|| "byte size exceeds the supported range".to_string())?;
+    if bytes == 0 {
+        return Err("byte size must be greater than zero".to_string());
+    }
+    Ok(bytes)
+}
+
+fn parse_duration_ms(value: &str) -> Result<u64, String> {
+    let (number, unit) = split_number_and_unit(value)?;
+    let multiplier = match unit.to_ascii_lowercase().as_str() {
+        "ms" => 1,
+        "s" => 1_000,
+        "m" => 60_000,
+        "h" => 3_600_000,
+        "d" => 86_400_000,
+        _ => return Err("expected a duration ending in ms, s, m, h, or d".to_string()),
+    };
+    number
+        .checked_mul(multiplier)
+        .ok_or_else(|| "duration exceeds the supported range".to_string())
+}
+
+fn split_number_and_unit(value: &str) -> Result<(u64, &str), String> {
+    let value = value.trim();
+    let split_at = value
+        .find(|character: char| !character.is_ascii_digit())
+        .unwrap_or(value.len());
+    if split_at == 0 {
+        return Err("expected an unsigned integer followed by a unit".to_string());
+    }
+    let number = value[..split_at]
+        .parse::<u64>()
+        .map_err(|_| "number exceeds the supported range".to_string())?;
+    Ok((number, value[split_at..].trim()))
+}
+
 impl std::fmt::Debug for Config {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Config")
@@ -333,6 +578,36 @@ impl Default for Config {
 }
 
 impl Config {
+    /// Applies canonical string properties to a cloned config. Cross-field
+    /// validation is deferred to [`Config::validate`].
+    pub fn try_with_properties(
+        &self,
+        properties: &BTreeMap<String, String>,
+    ) -> Result<Self, String> {
+        let mut candidate = self.clone();
+        for (key, value) in properties {
+            let spec = config_property_spec(key)
+                .ok_or_else(|| format!("unknown config property '{key}'"))?;
+            (spec.apply)(&mut candidate, value)
+                .map_err(|reason| format!("invalid value for config property '{key}': {reason}"))?;
+        }
+        Ok(candidate)
+    }
+
+    /// Returns whether a canonical property contains sensitive data. Unknown
+    /// properties are treated as sensitive to keep logging fail-safe.
+    pub fn is_sensitive_property(key: &str) -> bool {
+        config_property_spec(key).is_none_or(|spec| spec.sensitive)
+    }
+
+    /// Validates all configuration groups.
+    pub fn validate(&self) -> Result<(), String> {
+        self.validate_security()?;
+        self.validate_scanner()?;
+        self.validate_writer()?;
+        self.validate_lookup()
+    }
+
     /// Returns true when the security protocol indicates SASL authentication
     /// should be performed. Matches Java's `SaslAuthenticationPlugin` which
     /// registers as `"sasl"` (case-insensitive).
@@ -458,11 +733,213 @@ impl Config {
         }
         Ok(())
     }
+
+    pub fn validate_lookup(&self) -> Result<(), String> {
+        if self.lookup_queue_size == 0 {
+            return Err("lookup_queue_size must be > 0".to_string());
+        }
+        if self.lookup_max_batch_size == 0 {
+            return Err("lookup_max_batch_size must be > 0".to_string());
+        }
+        if self.lookup_max_inflight_requests == 0 {
+            return Err("lookup_max_inflight_requests must be > 0".to_string());
+        }
+        if self.lookup_max_retries < 0 {
+            return Err("lookup_max_retries must be >= 0".to_string());
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn properties(entries: &[(&str, &str)]) -> BTreeMap<String, String> {
+        entries
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn test_parse_byte_size_matches_fluss_units() {
+        for (value, expected) in [
+            ("512", 512),
+            ("512 bytes", 512),
+            ("1KB", 1_024),
+            ("1 KiB", 1_024),
+            ("1mebibyte", 1_048_576),
+            ("1GB", 1_073_741_824),
+            ("1 TB", 1_099_511_627_776),
+        ] {
+            assert_eq!(parse_byte_size(value).unwrap(), expected);
+        }
+        assert!(parse_byte_size("0B").is_err());
+        assert!(parse_byte_size("1PB").is_err());
+    }
+
+    #[test]
+    fn test_parse_duration_units() {
+        assert_eq!(parse_duration_ms("1d").unwrap(), 86_400_000);
+        assert_eq!(parse_duration_ms(" 2 D ").unwrap(), 172_800_000);
+        assert!(parse_duration_ms("1w").is_err());
+    }
+
+    #[test]
+    fn test_try_with_properties_applies_canonical_properties() {
+        let config = Config::default();
+        let overlay = properties(&[
+            ("connect-timeout", "2s"),
+            ("lookup.batch-timeout", "3s"),
+            ("lookup.max-batch-size", "64"),
+            ("lookup.max-inflight-requests", "32"),
+            ("lookup.max-retries", "10"),
+            ("lookup.queue-size", "1024"),
+            ("security.protocol", "sasl"),
+            ("security.sasl.mechanism", "PLAIN"),
+            ("security.sasl.password", "secret"),
+            ("security.sasl.username", "admin"),
+            ("writer.batch-size", "4MiB"),
+            ("writer.batch-timeout", "5s"),
+            ("writer.buffer.memory-size", "16MiB"),
+            ("writer.buffer.wait-timeout", "6s"),
+            ("writer.dynamic-batch-size.enabled", "false"),
+            ("writer.dynamic-batch-size.min", "1MiB"),
+            ("writer.kv-backpressure.max-throttle", "1m"),
+            ("writer.request-max-size", "8MiB"),
+        ]);
+
+        let overlaid = config.try_with_properties(&overlay).unwrap();
+
+        assert_eq!(overlaid.connect_timeout_ms, 2_000);
+        assert_eq!(overlaid.lookup_batch_timeout_ms, 3_000);
+        assert_eq!(overlaid.lookup_max_batch_size, 64);
+        assert_eq!(overlaid.lookup_max_inflight_requests, 32);
+        assert_eq!(overlaid.lookup_max_retries, 10);
+        assert_eq!(overlaid.lookup_queue_size, 1_024);
+        assert_eq!(overlaid.security_protocol, "sasl");
+        assert_eq!(overlaid.security_sasl_mechanism, "PLAIN");
+        assert_eq!(overlaid.security_sasl_username, "admin");
+        assert_eq!(overlaid.security_sasl_password, "secret");
+        assert_eq!(overlaid.writer_batch_size, 4 * 1_048_576);
+        assert_eq!(overlaid.writer_batch_timeout_ms, 5_000);
+        assert_eq!(overlaid.writer_buffer_memory_size, 16 * 1_048_576);
+        assert_eq!(overlaid.writer_buffer_wait_timeout_ms, 6_000);
+        assert!(!overlaid.writer_dynamic_batch_size_enabled);
+        assert_eq!(overlaid.writer_dynamic_batch_size_min, 1_048_576);
+        assert_eq!(overlaid.writer_kv_backpressure_max_throttle_ms, 60_000);
+        assert_eq!(overlaid.writer_request_max_size, 8 * 1_048_576);
+    }
+
+    #[test]
+    fn test_try_with_properties_applies_related_properties() {
+        let config = Config::default();
+        let overlay = properties(&[
+            ("writer.batch-size", "32MiB"),
+            ("writer.buffer.memory-size", "128MiB"),
+            ("writer.request-max-size", "64MiB"),
+        ]);
+
+        let overlaid = config.try_with_properties(&overlay).unwrap();
+
+        assert_eq!(overlaid.writer_batch_size, 32 * 1_048_576);
+        assert_eq!(overlaid.writer_request_max_size, 64 * 1_048_576);
+        assert_eq!(overlaid.writer_buffer_memory_size, 128 * 1_048_576);
+        assert!(overlaid.validate().is_ok());
+    }
+
+    #[test]
+    fn test_try_with_properties_defers_configuration_validation() {
+        let config = Config::default();
+        let overlay = properties(&[
+            ("writer.batch-size", "32MiB"),
+            ("writer.request-max-size", "16MiB"),
+        ]);
+
+        let overlaid = config.try_with_properties(&overlay).unwrap();
+
+        assert!(overlaid.validate().is_err());
+        assert_eq!(config.writer_batch_size, DEFAULT_WRITER_BATCH_SIZE);
+        assert_eq!(config.writer_request_max_size, DEFAULT_REQUEST_MAX_SIZE);
+    }
+
+    #[test]
+    fn test_try_with_properties_allows_staged_security_configuration() {
+        let overlay = properties(&[("security.protocol", "sasl")]);
+
+        let mut config = Config::default().try_with_properties(&overlay).unwrap();
+
+        assert!(config.validate().is_err());
+        config.security_sasl_username = "admin".to_string();
+        config.security_sasl_password = "secret".to_string();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_try_with_properties_rejects_invalid_value_atomically() {
+        let config = Config::default();
+        let overlay = properties(&[
+            ("writer.batch-size", "4MiB"),
+            ("writer.batch-timeout", "later"),
+        ]);
+
+        let error = config.try_with_properties(&overlay).unwrap_err();
+
+        assert!(error.contains("writer.batch-timeout"));
+        assert_eq!(config.writer_batch_size, DEFAULT_WRITER_BATCH_SIZE);
+        assert_eq!(
+            config.writer_batch_timeout_ms,
+            DEFAULT_WRITER_BATCH_TIMEOUT_MS
+        );
+    }
+
+    #[test]
+    fn test_try_with_properties_rejects_unknown_key_without_aliases() {
+        let config = Config::default();
+        let overlay = properties(&[("writer.batch-timeout-ms", "100")]);
+
+        let error = config.try_with_properties(&overlay).unwrap_err();
+
+        assert_eq!(error, "unknown config property 'writer.batch-timeout-ms'");
+    }
+
+    #[test]
+    fn test_try_with_properties_rejects_overflow() {
+        let config = Config::default();
+        let overlay = properties(&[("writer.request-max-size", "3GiB")]);
+
+        let error = config.try_with_properties(&overlay).unwrap_err();
+
+        assert!(error.contains("writer.request-max-size"));
+    }
+
+    #[test]
+    fn test_property_errors_do_not_expose_sensitive_values() {
+        let config = Config::default();
+        let password = "do-not-leak";
+        let overlay = properties(&[
+            ("security.sasl.password", password),
+            ("writer.batch-timeout", "later"),
+        ]);
+
+        let error = config.try_with_properties(&overlay).unwrap_err();
+
+        assert!(!error.contains(password));
+        assert!(Config::is_sensitive_property("security.sasl.password"));
+        assert!(!Config::is_sensitive_property("writer.batch-size"));
+        assert!(Config::is_sensitive_property("unknown.property"));
+    }
+
+    #[test]
+    fn test_config_property_keys_are_unique() {
+        let keys = CONFIG_PROPERTY_SPECS
+            .iter()
+            .map(|spec| spec.key)
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert_eq!(keys.len(), CONFIG_PROPERTY_SPECS.len());
+    }
 
     #[test]
     fn test_default_is_not_sasl() {
@@ -578,6 +1055,40 @@ mod tests {
             ..Config::default()
         };
         assert!(config.validate_scanner().is_err());
+    }
+
+    #[test]
+    fn test_lookup_defaults_valid() {
+        let config = Config::default();
+        assert!(config.validate_lookup().is_ok());
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_lookup_invalid_values() {
+        let invalid_configs = [
+            Config {
+                lookup_queue_size: 0,
+                ..Config::default()
+            },
+            Config {
+                lookup_max_batch_size: 0,
+                ..Config::default()
+            },
+            Config {
+                lookup_max_inflight_requests: 0,
+                ..Config::default()
+            },
+            Config {
+                lookup_max_retries: -1,
+                ..Config::default()
+            },
+        ];
+
+        for config in invalid_configs {
+            assert!(config.validate_lookup().is_err());
+            assert!(config.validate().is_err());
+        }
     }
 
     #[test]
