@@ -103,7 +103,8 @@ class SparkCatalogTest extends FlussSparkTestBase {
       sql("CREATE TABLE t (id int, name string DEFAULT 'abc')")
     }
     assertThat(createException)
-      .hasMessageContaining("Table `fluss_catalog`.`fluss`.`t` does not support column default value")
+      .hasMessageContaining(
+        "Table `fluss_catalog`.`fluss`.`t` does not support column default value")
 
     withTable("t") {
       sql("CREATE TABLE t (id int, name string)")
