@@ -59,7 +59,7 @@ A filesystem plugin JAR belongs in `${FLUSS_HOME}/plugins/<scheme>/` and **must 
 into `${FLUSS_HOME}/lib`. A copy on the main classpath shadows the one in the plugins directory and
 is loaded without the dependencies bundled next to it, which fails at runtime with errors such as
 `NoClassDefFoundError: org/apache/hadoop/hdfs/HdfsConfiguration`. See
-[Troubleshooting Plugins](/docs/maintenance/troubleshooting-plugins).
+[Troubleshooting Plugins](/docs/next/maintenance/troubleshooting-plugins).
 :::
 
 The following are the plugins of the latest stable release, Apache Fluss (Incubating) 0.9.1:
@@ -84,4 +84,4 @@ Pick one, never both:
 | `fluss-fs-hadoop` | not bundled (~10 KB) | You provide Hadoop yourself through `HADOOP_CLASSPATH`, for example to match your cluster's Hadoop version or to use Kerberos. |
 
 Deploying both at once gives two implementations of the same scheme, so use exactly one. See
-[HDFS](/docs/maintenance/tiered-storage/filesystems/hdfs) for the Hadoop configuration options.
+[HDFS](/docs/next/maintenance/tiered-storage/filesystems/hdfs) for the Hadoop configuration options.
