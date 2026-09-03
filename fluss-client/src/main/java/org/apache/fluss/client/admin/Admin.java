@@ -787,12 +787,21 @@ public interface Admin extends AutoCloseable {
      *   <li>{@link ClusterHealthStatus#RED} — one or more leader replicas have not yet been
      *       confirmed active (e.g., leader election or KV snapshot recovery is still in progress).
      *   <li>{@link ClusterHealthStatus#UNKNOWN} — the Coordinator was unable to determine cluster
-     *       health (e.g., the server does not support this API).
+     *       health (e.g., the server does not support this API), or the answering coordinator is a
+     *       standby (see below).
      * </ul>
      *
      * <p>This API is designed for the situation like a Kubernetes readiness-probe gate during
      * rolling upgrades: only proceed to the next pod when the status is {@code GREEN}, ensuring all
      * replicas have fully recovered before the next server is restarted.
+     *
+     * <p>Unlike other admin operations, a <b>standby</b> coordinator answers this request instead
+     * of rejecting it with a {@code NotCoordinatorLeaderException} (so a readiness probe can gate
+     * on it). If the client's coordinator address is stale — e.g. during a coordinator failover,
+     * before the client's metadata refreshes — the returned {@link ClusterHealth} carries {@link
+     * ClusterHealth#isServedByLeader()} {@code false}, status {@code UNKNOWN}, and zeroed replica
+     * counts. Callers that monitor cluster health should check {@link
+     * ClusterHealth#isServedByLeader()} before interpreting the counts.
      *
      * @return a {@link CompletableFuture} that completes with the cluster health information.
      * @since 1.0

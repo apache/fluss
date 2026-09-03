@@ -882,12 +882,18 @@ public class ClientRpcMessageUtils {
     }
 
     public static ClusterHealth toClusterHealth(GetClusterHealthResponse resp) {
+        // A response without is_leader comes from a leader that predates the field — a standby
+        // of those versions rejects the request instead of answering.
+        boolean servedByLeader = !resp.hasIsLeader() || resp.isIsLeader();
+        boolean leaderElected = resp.hasLeaderElected() ? resp.isLeaderElected() : servedByLeader;
         return new ClusterHealth(
                 resp.getNumReplicas(),
                 resp.getInSyncReplicas(),
                 resp.getNumLeaderReplicas(),
                 resp.getActiveLeaderReplicas(),
-                toClusterHealthStatus(resp.getStatus()));
+                toClusterHealthStatus(resp.getStatus()),
+                servedByLeader,
+                leaderElected);
     }
 
     private static ClusterHealthStatus toClusterHealthStatus(int pbStatus) {
