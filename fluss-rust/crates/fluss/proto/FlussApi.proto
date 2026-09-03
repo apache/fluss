@@ -157,7 +157,7 @@ message GetTableInfoResponse {
   required int64 created_time = 4;
   required int64 modified_time = 5;
   optional string remote_data_dir = 6;
-  optional int64 bucket_layout_epoch = 7;
+  optional int64 bucket_count_epoch = 7;
 }
 
 // list tables request and response
@@ -865,7 +865,7 @@ message PbTableMetadata {
   required int64 modified_time = 7;
   optional string remote_data_dir = 8;
   // A table-level, monotonically increasing version for bucket.num changes.
-  optional int64 bucket_layout_epoch = 9;
+  optional int64 bucket_count_epoch = 9;
 
   // TODO add a new filed 'deleted_table' to indicate this table is deleted in UpdateMetadataRequest.
   // trace by: https://github.com/apache/fluss/issues/981
@@ -878,7 +878,7 @@ message PbPartitionMetadata {
   required int64 partition_id = 3;
   repeated PbBucketMetadata bucket_metadata = 4;
   // the actual bucket count for this partition, used for per-partition bucket rescale
-  optional int32 bucket_count_actual = 5;
+  optional int32 bucket_count = 5;
 }
 
 message PbBucketMetadata {
@@ -1084,8 +1084,8 @@ message PbNotifyLeaderAndIsrReqForBucket {
   repeated int32 isr = 6 [packed = true];
   required int32 bucket_epoch = 7;
   repeated int32 standby_replicas = 8 [packed = true];
-  optional int32 bucket_count_actual = 9;
-  optional int64 bucket_layout_epoch = 10;
+  optional int32 bucket_count = 9;
+  optional int64 bucket_count_epoch = 10;
 }
 
 message PbNotifyLeaderAndIsrRespForBucket {
@@ -1157,7 +1157,7 @@ message PbPartitionInfo {
   required PbPartitionSpec partition_spec = 2;
   optional string remote_data_dir = 3;
   // the actual bucket count for this partition, used for per-partition bucket rescale
-  optional int32 bucket_count_actual = 4;
+  optional int32 bucket_count = 4;
 }
 
 message PbPartitionSpec {

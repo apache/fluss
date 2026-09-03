@@ -64,7 +64,7 @@ public final class OrphanCleanUtils {
      */
     public static List<TableBucket> enumerateBuckets(
             TableInfo tableInfo, @Nullable PartitionInfo partitionInfo) {
-        int n = PartitionInfo.bucketCountActualOrDefault(partitionInfo, tableInfo.getNumBuckets());
+        int n = PartitionInfo.bucketCountOrDefault(partitionInfo, tableInfo.getNumBuckets());
         List<TableBucket> buckets = new ArrayList<TableBucket>(n);
         long tableId = tableInfo.getTableId();
         for (int b = 0; b < n; b++) {

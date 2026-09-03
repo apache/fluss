@@ -40,17 +40,17 @@ public class PartitionInfo {
      * that did not persist a per-partition bucket count, the table-level bucket count is filled in
      * at construction time.
      */
-    private final int bucketCountActual;
+    private final int bucketCount;
 
     public PartitionInfo(
             long partitionId,
             ResolvedPartitionSpec partitionSpec,
             @Nullable String remoteDataDir,
-            int bucketCountActual) {
+            int bucketCount) {
         this.partitionId = partitionId;
         this.partitionSpec = partitionSpec;
         this.remoteDataDir = remoteDataDir;
-        this.bucketCountActual = bucketCountActual;
+        this.bucketCount = bucketCount;
     }
 
     /** Get the partition id. The id is globally unique in the Fluss cluster. */
@@ -83,8 +83,8 @@ public class PartitionInfo {
      * Get the bucket count of this partition. For partitions created by older versions without a
      * persisted per-partition bucket count, this is the table-level bucket count.
      */
-    public int getBucketCountActual() {
-        return bucketCountActual;
+    public int getBucketCount() {
+        return bucketCount;
     }
 
     /**
@@ -93,9 +93,9 @@ public class PartitionInfo {
      * bucket count. The null case represents a non-partitioned table or a partition whose
      * PartitionInfo is not available.
      */
-    public static int bucketCountActualOrDefault(
+    public static int bucketCountOrDefault(
             @Nullable PartitionInfo partitionInfo, int tableBucketCount) {
-        return partitionInfo != null ? partitionInfo.getBucketCountActual() : tableBucketCount;
+        return partitionInfo != null ? partitionInfo.getBucketCount() : tableBucketCount;
     }
 
     @Override
@@ -110,12 +110,12 @@ public class PartitionInfo {
         return partitionId == that.partitionId
                 && Objects.equals(partitionSpec, that.partitionSpec)
                 && Objects.equals(remoteDataDir, that.remoteDataDir)
-                && bucketCountActual == that.bucketCountActual;
+                && bucketCount == that.bucketCount;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(partitionId, partitionSpec, remoteDataDir, bucketCountActual);
+        return Objects.hash(partitionId, partitionSpec, remoteDataDir, bucketCount);
     }
 
     @Override
@@ -127,8 +127,8 @@ public class PartitionInfo {
                 + partitionId
                 + ", remoteDataDir="
                 + remoteDataDir
-                + ", bucketCountActual="
-                + bucketCountActual
+                + ", bucketCount="
+                + bucketCount
                 + '}';
     }
 }

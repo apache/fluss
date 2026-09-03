@@ -68,7 +68,7 @@ public final class TableInfo {
 
     private final long createdTime;
     private final long modifiedTime;
-    private final long bucketLayoutEpoch;
+    private final long bucketCountEpoch;
 
     private int[] cachedStatsIndexMapping = null;
 
@@ -117,7 +117,7 @@ public final class TableInfo {
             @Nullable String comment,
             long createdTime,
             long modifiedTime,
-            long bucketLayoutEpoch) {
+            long bucketCountEpoch) {
         this.tablePath = tablePath;
         this.tableId = tableId;
         this.schemaId = schemaId;
@@ -135,7 +135,7 @@ public final class TableInfo {
         this.comment = comment;
         this.createdTime = createdTime;
         this.modifiedTime = modifiedTime;
-        this.bucketLayoutEpoch = bucketLayoutEpoch;
+        this.bucketCountEpoch = bucketCountEpoch;
     }
 
     /**
@@ -441,8 +441,8 @@ public final class TableInfo {
      * Returns the bucket layout epoch of the table. New tables start at 0; every committed
      * bucket.num change increments it (see {@code TableRegistration#withBucketCount(int)}).
      */
-    public long getBucketLayoutEpoch() {
-        return bucketLayoutEpoch;
+    public long getBucketCountEpoch() {
+        return bucketCountEpoch;
     }
 
     /**
@@ -496,7 +496,7 @@ public final class TableInfo {
             String remoteDataDir,
             long createdTime,
             long modifiedTime,
-            long bucketLayoutEpoch) {
+            long bucketCountEpoch) {
         Schema schema = tableDescriptor.getSchema();
         int numBuckets =
                 tableDescriptor
@@ -520,7 +520,7 @@ public final class TableInfo {
                 tableDescriptor.getComment().orElse(null),
                 createdTime,
                 modifiedTime,
-                bucketLayoutEpoch);
+                bucketCountEpoch);
     }
 
     @Override
@@ -533,7 +533,7 @@ public final class TableInfo {
         return tableId == that.tableId
                 && schemaId == that.schemaId
                 && numBuckets == that.numBuckets
-                && bucketLayoutEpoch == that.bucketLayoutEpoch
+                && bucketCountEpoch == that.bucketCountEpoch
                 && Objects.equals(tablePath, that.tablePath)
                 && Objects.equals(rowType, that.rowType)
                 && Objects.equals(primaryKeys, that.primaryKeys)
@@ -563,7 +563,7 @@ public final class TableInfo {
                 customProperties,
                 remoteDataDir,
                 comment,
-                bucketLayoutEpoch);
+                bucketCountEpoch);
     }
 
     @Override
@@ -598,8 +598,8 @@ public final class TableInfo {
                 + createdTime
                 + ", modifiedTime="
                 + modifiedTime
-                + ", bucketLayoutEpoch="
-                + bucketLayoutEpoch
+                + ", bucketCountEpoch="
+                + bucketCountEpoch
                 + '}';
     }
 

@@ -806,8 +806,8 @@ public class RecoveryOffsetManagerTest {
     }
 
     @Test
-    void testCheckpointRecoveryEnumeratesPerPartitionBucketCountActual() throws Exception {
-        // Two partitions with different bucketCountActual: partition 1 has 2 buckets (old,
+    void testCheckpointRecoveryEnumeratesPerPartitionBucketCount() throws Exception {
+        // Two partitions with different bucketCount: partition 1 has 2 buckets (old,
         // pre-ALTER), partition 2 has 4 buckets (new, post-ALTER). If getAllBuckets used the
         // table-level count for both, the old partition would spuriously enumerate buckets 2/3 or
         // the new partition would be truncated.
@@ -827,10 +827,8 @@ public class RecoveryOffsetManagerTest {
         RecoveryTestAdmin admin = new RecoveryTestAdmin(currentOffsets);
         admin.setPartitions(
                 Arrays.asList(
-                        createPartitionInfoWithBucketCountActual(
-                                oldPartitionId, "old", oldBucketCount),
-                        createPartitionInfoWithBucketCountActual(
-                                newPartitionId, "new", newBucketCount)));
+                        createPartitionInfoWithBucketCount(oldPartitionId, "old", oldBucketCount),
+                        createPartitionInfoWithBucketCount(newPartitionId, "new", newBucketCount)));
         // Table-level bucket count is 4 (post-ALTER). Old partition must be enumerated at 2.
         TableInfo tableInfo = createTableInfo(4, true);
         RecoveryOffsetManager manager =
@@ -865,10 +863,10 @@ public class RecoveryOffsetManagerTest {
     }
 
     @Test
-    void testProducerOffsetRegistrationUsesPerPartitionBucketCountActual() throws Exception {
+    void testProducerOffsetRegistrationUsesPerPartitionBucketCount() throws Exception {
         // Empty checkpoint on Task0 → registerCurrentOffsets writes ALL buckets it enumerates.
-        // fetchAllBucketOffsets must enumerate each partition using its own bucketCountActual so
-        // the registered set is exactly the union of per-partition [0, bucketCountActual) ranges.
+        // fetchAllBucketOffsets must enumerate each partition using its own bucketCount so
+        // the registered set is exactly the union of per-partition [0, bucketCount) ranges.
         long oldPartitionId = 1L;
         long newPartitionId = 2L;
         int oldBucketCount = 2;
@@ -886,10 +884,8 @@ public class RecoveryOffsetManagerTest {
         RecoveryTestAdmin admin = new RecoveryTestAdmin(currentOffsets);
         admin.setPartitions(
                 Arrays.asList(
-                        createPartitionInfoWithBucketCountActual(
-                                oldPartitionId, "old", oldBucketCount),
-                        createPartitionInfoWithBucketCountActual(
-                                newPartitionId, "new", newBucketCount)));
+                        createPartitionInfoWithBucketCount(oldPartitionId, "old", oldBucketCount),
+                        createPartitionInfoWithBucketCount(newPartitionId, "new", newBucketCount)));
         admin.setInitialOffsetsForRegistration(currentOffsets);
         TableInfo tableInfo = createTableInfo(4, true);
         RecoveryOffsetManager manager =
@@ -913,10 +909,10 @@ public class RecoveryOffsetManagerTest {
                 .doesNotContainKey(new TableBucket(TABLE_ID, oldPartitionId, 3));
     }
 
-    private static PartitionInfo createPartitionInfoWithBucketCountActual(
-            long partitionId, String partitionName, int bucketCountActual) {
+    private static PartitionInfo createPartitionInfoWithBucketCount(
+            long partitionId, String partitionName, int bucketCount) {
         ResolvedPartitionSpec spec = ResolvedPartitionSpec.fromPartitionValue("pt", partitionName);
-        return new PartitionInfo(partitionId, spec, DEFAULT_REMOTE_DATA_DIR, bucketCountActual);
+        return new PartitionInfo(partitionId, spec, DEFAULT_REMOTE_DATA_DIR, bucketCount);
     }
 
     // ==================== Test Admin Implementation ====================

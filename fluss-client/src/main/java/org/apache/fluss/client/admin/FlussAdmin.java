@@ -347,7 +347,7 @@ public class FlussAdmin implements Admin {
                                         r.hasRemoteDataDir() ? r.getRemoteDataDir() : null,
                                         r.getCreatedTime(),
                                         r.getModifiedTime(),
-                                        r.hasBucketLayoutEpoch() ? r.getBucketLayoutEpoch() : 0L));
+                                        r.hasBucketCountEpoch() ? r.getBucketCountEpoch() : 0L));
     }
 
     @Override
@@ -400,7 +400,7 @@ public class FlussAdmin implements Admin {
                         response -> {
                             boolean allHaveBucketCount =
                                     response.getPartitionsInfosList().stream()
-                                            .allMatch(PbPartitionInfo::hasBucketCountActual);
+                                            .allMatch(PbPartitionInfo::hasBucketCount);
                             if (allHaveBucketCount) {
                                 // Every partition already carries its own bucket count, so skip
                                 // the extra getTableInfo RPC (the -1 default is never used).
@@ -414,9 +414,9 @@ public class FlussAdmin implements Admin {
                             //      fails leader activation with UnsupportedVersionException;
                             //   3) prohibit ALTER bucket.num during the server rolling upgrade;
                             //   4) a fully old cluster omits the partition count, while the
-                            //      table-level count is still safe (bucketLayoutEpoch == 0);
+                            //      table-level count is still safe (bucketCountEpoch == 0);
                             //   5) after every server is upgraded, ListPartitionInfosResponse
-                            //      must return an explicit partitionId and bucketCountActual;
+                            //      must return an explicit partitionId and bucketCount;
                             //   6) if a new server still returns a missing count, fail loud
                             //      instead of calling getTableInfo to guess it.
                             // TODO: a future FIP should enforce server-side rejection of
@@ -425,7 +425,7 @@ public class FlussAdmin implements Admin {
                             return getTableInfo(tablePath)
                                     .thenApply(
                                             tableInfo -> {
-                                                long epoch = tableInfo.getBucketLayoutEpoch();
+                                                long epoch = tableInfo.getBucketCountEpoch();
                                                 // Post-ALTER server must return the count;
                                                 // missing means inconsistency, so fail loud.
                                                 if (epoch > 0) {
@@ -433,7 +433,7 @@ public class FlussAdmin implements Admin {
                                                             "Server omitted the per-partition "
                                                                     + "bucket count for table "
                                                                     + tablePath
-                                                                    + " at bucketLayoutEpoch "
+                                                                    + " at bucketCountEpoch "
                                                                     + epoch
                                                                     + " > 0; refusing to fall "
                                                                     + "back to the table-level "
@@ -608,9 +608,9 @@ public class FlussAdmin implements Admin {
             }
             List<TableBucket> tableBuckets = new ArrayList<>();
             for (PartitionInfo partitionInfo : partitionInfos) {
-                int bucketCountActual =
-                        PartitionInfo.bucketCountActualOrDefault(partitionInfo, tableBucketCount);
-                for (int bucket = 0; bucket < bucketCountActual; bucket++) {
+                int bucketCount =
+                        PartitionInfo.bucketCountOrDefault(partitionInfo, tableBucketCount);
+                for (int bucket = 0; bucket < bucketCount; bucket++) {
                     tableBuckets.add(
                             new TableBucket(
                                     tableInfo.getTableId(),

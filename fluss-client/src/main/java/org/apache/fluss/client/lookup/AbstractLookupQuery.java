@@ -39,7 +39,7 @@ public abstract class AbstractLookupQuery<T> {
      */
     private final @Nullable String originalPartitionName;
 
-    private final int bucketCountActual;
+    private final int bucketCount;
     private int retries;
     private long nextRetryTimeMs;
 
@@ -60,12 +60,12 @@ public abstract class AbstractLookupQuery<T> {
             TableBucket tableBucket,
             byte[] key,
             @Nullable String originalPartitionName,
-            int bucketCountActual) {
+            int bucketCount) {
         this.tablePath = tablePath;
         this.tableBucket = tableBucket;
         this.key = key;
         this.originalPartitionName = originalPartitionName;
-        this.bucketCountActual = bucketCountActual;
+        this.bucketCount = bucketCount;
         this.retries = 0;
         this.nextRetryTimeMs = 0;
     }
@@ -87,8 +87,8 @@ public abstract class AbstractLookupQuery<T> {
     }
 
     /** The bucket count used to calculate this lookup's bucketId, or 0 if unknown (legacy). */
-    public int bucketCountActual() {
-        return bucketCountActual;
+    public int bucketCount() {
+        return bucketCount;
     }
 
     public int retries() {

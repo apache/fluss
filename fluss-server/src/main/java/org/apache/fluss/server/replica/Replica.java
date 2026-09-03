@@ -198,7 +198,7 @@ public final class Replica {
     // Routing state carried with activation: both values are immutable per bucket, so they are
     // set once and never change. Null until the coordinator notifies them.
     private volatile @Nullable Integer routingBucketCount;
-    private volatile @Nullable Long bucketLayoutEpoch;
+    private volatile @Nullable Long bucketCountEpoch;
 
     private final boolean historicalPartition;
     // logFormat and arrowCompressionInfo are immutable and used in hot-path, so cache them here.
@@ -461,11 +461,11 @@ public final class Replica {
      * so unset fields never overwrite known ones.
      */
     public void updateRoutingState(NotifyLeaderAndIsrData data) {
-        if (data.getBucketCountActual() != null) {
-            this.routingBucketCount = data.getBucketCountActual();
+        if (data.getBucketCount() != null) {
+            this.routingBucketCount = data.getBucketCount();
         }
-        if (data.getBucketLayoutEpoch() != null) {
-            this.bucketLayoutEpoch = data.getBucketLayoutEpoch();
+        if (data.getBucketCountEpoch() != null) {
+            this.bucketCountEpoch = data.getBucketCountEpoch();
         }
     }
 
@@ -474,7 +474,7 @@ public final class Replica {
      * coordinator is older than this server (upgrade contract: coordinator first).
      */
     private void requireRoutingState(NotifyLeaderAndIsrData data) {
-        if (data.getBucketCountActual() == null) {
+        if (data.getBucketCount() == null) {
             throw new UnsupportedVersionException(
                     "Leader activation for bucket "
                             + tableBucket
@@ -493,8 +493,8 @@ public final class Replica {
     }
 
     /** The bucket layout epoch of the owning table, or null if not yet notified. */
-    public @Nullable Long getBucketLayoutEpoch() {
-        return bucketLayoutEpoch;
+    public @Nullable Long getBucketCountEpoch() {
+        return bucketCountEpoch;
     }
 
     public void makeLeader(NotifyLeaderAndIsrData data) throws IOException {

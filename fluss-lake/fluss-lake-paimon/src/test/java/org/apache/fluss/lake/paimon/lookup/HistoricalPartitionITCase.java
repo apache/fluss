@@ -373,7 +373,7 @@ class HistoricalPartitionITCase extends FlinkPaimonTieringTestBase {
         admin.createPartition(tablePath, partitionSpec(EXPIRED_PARTITION_NAME), false).get();
         long oldPartitionId = getPartitionId(tablePath, EXPIRED_PARTITION_NAME);
         FLUSS_CLUSTER_EXTENSION.waitUntilTablePartitionReady(tableId, oldPartitionId);
-        assertThat(bucketCountActualOf(tablePath, EXPIRED_PARTITION_NAME))
+        assertThat(bucketCountOf(tablePath, EXPIRED_PARTITION_NAME))
                 .isEqualTo(PRE_RESCALE_BUCKET_NUM);
 
         InternalRow expectedOldRow =
@@ -392,7 +392,7 @@ class HistoricalPartitionITCase extends FlinkPaimonTieringTestBase {
         admin.createPartition(tablePath, partitionSpec(SECOND_EXPIRED_PARTITION_NAME), false).get();
         long newPartitionId = getPartitionId(tablePath, SECOND_EXPIRED_PARTITION_NAME);
         FLUSS_CLUSTER_EXTENSION.waitUntilTablePartitionReady(tableId, newPartitionId);
-        assertThat(bucketCountActualOf(tablePath, SECOND_EXPIRED_PARTITION_NAME))
+        assertThat(bucketCountOf(tablePath, SECOND_EXPIRED_PARTITION_NAME))
                 .isEqualTo(POST_RESCALE_BUCKET_NUM);
         writeRows(
                 tablePath,
@@ -490,12 +490,11 @@ class HistoricalPartitionITCase extends FlinkPaimonTieringTestBase {
     }
 
     /** Reads the bucket count a Fluss partition was created with. */
-    private static int bucketCountActualOf(TablePath tablePath, String partitionName)
-            throws Exception {
+    private static int bucketCountOf(TablePath tablePath, String partitionName) throws Exception {
         Optional<PartitionRegistration> partition =
                 FLUSS_CLUSTER_EXTENSION.getZooKeeperClient().getPartition(tablePath, partitionName);
         assertThat(partition).isPresent();
-        return partition.get().getBucketCountActual();
+        return partition.get().getBucketCount();
     }
 
     /** Reads the bucket counts the tiered lake data of a partition was written with. */

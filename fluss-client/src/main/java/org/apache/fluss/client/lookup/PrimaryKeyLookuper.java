@@ -128,7 +128,7 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
         int bucketId = bucketingFunction.bucketing(bkBytes, numBuckets);
         Long partitionId = null;
         String originalPartitionName = null;
-        int bucketCountActual = numBuckets;
+        int bucketCount = numBuckets;
         if (partitionGetter != null) {
             originalPartitionName = partitionGetter.getPartition(lookupKey);
             if (confirmedHistoricalPartitions.contains(originalPartitionName)) {
@@ -141,8 +141,8 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
                                 partitionGetter,
                                 tableInfo.getTablePath(),
                                 metadataUpdater);
-                bucketCountActual =
-                        resolvePartitionBucketCountActual(
+                bucketCount =
+                        resolvePartitionBucketCount(
                                 new TablePartition(tableInfo.getTableId(), partitionId),
                                 numBuckets);
             } catch (PartitionNotExistException e) {
@@ -153,8 +153,8 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
         // A partition created before ALTER bucket.num keeps its own layout, so re-route by the
         // partition's actual count. The historical lookups above are routed by the historical
         // partition's own count on their own path.
-        if (bucketCountActual != numBuckets) {
-            bucketId = bucketingFunction.bucketing(bkBytes, bucketCountActual);
+        if (bucketCount != numBuckets) {
+            bucketId = bucketingFunction.bucketing(bkBytes, bucketCount);
         }
         TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), partitionId, bucketId);
         return lookupBucket(
@@ -164,7 +164,7 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
                 insertIfNotExists,
                 false,
                 originalPartitionName,
-                bucketCountActual);
+                bucketCount);
     }
 
     /**
@@ -212,7 +212,7 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
             // Route by the historical partition's own count, which an ALTER bucket.num does not
             // change. The bucket the lake data lives in is resolved on the server.
             int historicalBucketCount =
-                    resolvePartitionBucketCountActual(
+                    resolvePartitionBucketCount(
                             new TablePartition(tableInfo.getTableId(), historicalPartitionId),
                             numBuckets);
             int routingBucketId =
@@ -239,7 +239,7 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
             boolean insertIfNotExists,
             boolean historicalLookup,
             @Nullable String originalPartitionName,
-            int bucketCountActual) {
+            int bucketCount) {
         CompletableFuture<LookupResult> lookupFuture = new CompletableFuture<>();
         lookupClient
                 .lookup(
@@ -248,7 +248,7 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
                         keyBytes,
                         insertIfNotExists,
                         historicalLookup ? originalPartitionName : null,
-                        bucketCountActual)
+                        bucketCount)
                 .whenComplete(
                         (result, error) -> {
                             if (error != null) {

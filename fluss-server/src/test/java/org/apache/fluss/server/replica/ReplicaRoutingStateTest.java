@@ -104,7 +104,7 @@ final class ReplicaRoutingStateTest extends ReplicaTestBase {
                                                 1L),
                                         Collections.emptyList())),
                         Collections.emptyList()));
-        assertThat(replicaManager.getReplicaOrException(tb).getBucketLayoutEpoch()).isEqualTo(0L);
+        assertThat(replicaManager.getReplicaOrException(tb).getBucketCountEpoch()).isEqualTo(0L);
         assertThatThrownBy(() -> replicaManager.validateRoutingBucketCount(tb, 0))
                 .isInstanceOf(StaleMetadataException.class);
 
@@ -113,19 +113,19 @@ final class ReplicaRoutingStateTest extends ReplicaTestBase {
     }
 
     private void makeLeaderWithRoutingState(
-            TableBucket tb, Integer bucketCountActual, Long bucketLayoutEpoch) throws Exception {
+            TableBucket tb, Integer bucketCount, Long bucketCountEpoch) throws Exception {
         CompletableFuture<List<NotifyLeaderAndIsrResultForBucket>> future =
                 new CompletableFuture<>();
         replicaManager.becomeLeaderOrFollower(
                 INITIAL_COORDINATOR_EPOCH,
                 Collections.singletonList(
-                        notifyDataWithRoutingState(tb, bucketCountActual, bucketLayoutEpoch)),
+                        notifyDataWithRoutingState(tb, bucketCount, bucketCountEpoch)),
                 future::complete);
         assertThat(future.get()).containsOnly(new NotifyLeaderAndIsrResultForBucket(tb));
     }
 
     private static NotifyLeaderAndIsrData notifyDataWithRoutingState(
-            TableBucket tb, Integer bucketCountActual, Long bucketLayoutEpoch) {
+            TableBucket tb, Integer bucketCount, Long bucketCountEpoch) {
         return new NotifyLeaderAndIsrData(
                 PhysicalTablePath.of(DATA1_TABLE_PATH),
                 tb,
@@ -137,7 +137,7 @@ final class ReplicaRoutingStateTest extends ReplicaTestBase {
                         Collections.emptyList(),
                         INITIAL_COORDINATOR_EPOCH,
                         INITIAL_BUCKET_EPOCH),
-                bucketCountActual,
-                bucketLayoutEpoch);
+                bucketCount,
+                bucketCountEpoch);
     }
 }

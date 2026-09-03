@@ -415,8 +415,7 @@ public class PushdownUtils {
         List<CompletableFuture<Long>> list = new ArrayList<>();
         for (@Nullable PartitionInfo info : partitionInfos) {
             String partitionName = info != null ? info.getPartitionName() : null;
-            int partitionBucketCount =
-                    PartitionInfo.bucketCountActualOrDefault(info, tableBucketCount);
+            int partitionBucketCount = PartitionInfo.bucketCountOrDefault(info, tableBucketCount);
             Collection<Integer> buckets =
                     IntStream.range(0, partitionBucketCount).boxed().collect(Collectors.toList());
             ListOffsetsResult earliestOffsets =

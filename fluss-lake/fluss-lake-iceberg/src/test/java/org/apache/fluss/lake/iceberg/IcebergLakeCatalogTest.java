@@ -1530,7 +1530,7 @@ class IcebergLakeCatalogTest {
      * rejected.
      */
     @Test
-    void testCreateTableFailsWithIncompatiblePartitionBucketCountActual() {
+    void testCreateTableFailsWithIncompatiblePartitionBucketCount() {
         String database = "spec_bucket_db";
         String tableName = "spec_bucket_table";
         TablePath tablePath = TablePath.of(database, tableName);

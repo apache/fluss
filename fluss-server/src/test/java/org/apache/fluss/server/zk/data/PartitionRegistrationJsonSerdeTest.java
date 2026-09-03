@@ -52,7 +52,7 @@ class PartitionRegistrationJsonSerdeTest extends JsonSerdeTestBase<PartitionRegi
         return new String[] {
             "{\"version\":2,\"table_id\":1234,\"partition_id\":5678,\"remote_data_dir\":\"file://local/remote\"}",
             "{\"version\":2,\"table_id\":246,\"partition_id\":135}",
-            "{\"version\":2,\"table_id\":1234,\"partition_id\":5678,\"remote_data_dir\":\"file://local/remote\",\"bucket_count_actual\":8}"
+            "{\"version\":2,\"table_id\":1234,\"partition_id\":5678,\"remote_data_dir\":\"file://local/remote\",\"bucket_count\":8}"
         };
     }
 
@@ -71,9 +71,9 @@ class PartitionRegistrationJsonSerdeTest extends JsonSerdeTestBase<PartitionRegi
     }
 
     @Test
-    void testBucketCountActualBackwardCompatibility() throws IOException {
+    void testBucketCountBackwardCompatibility() throws IOException {
         // A v1 registration (written before per-partition bucket count existed) has no
-        // bucket_count_actual field. It must deserialize with a null bucketCountActual so that
+        // bucket_count field. It must deserialize with a null bucketCount so that
         // callers fall back to the table-level bucket count.
         String v1Json =
                 "{\"version\":1,\"table_id\":1234,\"partition_id\":5678,\"remote_data_dir\":\"file://local/remote\"}";
@@ -82,7 +82,7 @@ class PartitionRegistrationJsonSerdeTest extends JsonSerdeTestBase<PartitionRegi
                         v1Json.getBytes(StandardCharsets.UTF_8),
                         PartitionRegistrationJsonSerde.INSTANCE);
 
-        assertThat(actual.getBucketCountActual()).isNull();
+        assertThat(actual.getBucketCount()).isNull();
         assertThat(actual)
                 .isEqualTo(new PartitionRegistration(1234L, 5678L, "file://local/remote"));
     }

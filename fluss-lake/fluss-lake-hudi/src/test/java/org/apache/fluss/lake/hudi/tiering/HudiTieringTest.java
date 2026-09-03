@@ -656,7 +656,7 @@ class HudiTieringTest {
         }
 
         @Override
-        public int bucketCountActual() {
+        public int bucketCount() {
             return tableInfo.getNumBuckets();
         }
     }

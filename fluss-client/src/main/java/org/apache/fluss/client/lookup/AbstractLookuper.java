@@ -82,11 +82,11 @@ abstract class AbstractLookuper implements Lookuper {
      * when the cluster metadata has it, falling back to the table-level bucket count otherwise
      * (non-partitioned tables or partitions created by older versions).
      */
-    protected int resolvePartitionBucketCountActual(
+    protected int resolvePartitionBucketCount(
             TablePartition tablePartition, int tableLevelNumBuckets) {
         return metadataUpdater
                 .getCluster()
-                .getBucketCountActual(tablePartition)
+                .getBucketCount(tablePartition)
                 .orElse(tableLevelNumBuckets);
     }
 

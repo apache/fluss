@@ -75,7 +75,7 @@ class FlinkUnionReadRescaleBucketITCase extends FlinkUnionReadTestBase {
     }
 
     @Test
-    void testUnionReadAcrossPartitionsWithDifferentBucketCountActuals() throws Exception {
+    void testUnionReadAcrossPartitionsWithDifferentBucketCounts() throws Exception {
         String tableName = "rescale_bucket_log_table";
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
         createPartitionedLogTable(tablePath, OLD_BUCKET_NUM);
@@ -91,9 +91,8 @@ class FlinkUnionReadRescaleBucketITCase extends FlinkUnionReadTestBase {
         createPartition(tablePath, "new");
         expectedRows.addAll(writeRows(tablePath, "new", 0));
 
-        Map<String, Integer> bucketCountActualByPartition =
-                bucketCountActualByPartitionName(tablePath);
-        assertThat(bucketCountActualByPartition)
+        Map<String, Integer> bucketCountByPartition = bucketCountByPartitionName(tablePath);
+        assertThat(bucketCountByPartition)
                 .containsEntry("old", OLD_BUCKET_NUM)
                 .containsEntry("new", NEW_BUCKET_NUM);
 
@@ -146,7 +145,7 @@ class FlinkUnionReadRescaleBucketITCase extends FlinkUnionReadTestBase {
     }
 
     @Test
-    void testUnionReadPkTableAcrossPartitionsWithDifferentBucketCountActuals() throws Exception {
+    void testUnionReadPkTableAcrossPartitionsWithDifferentBucketCounts() throws Exception {
         String tableName = "rescale_bucket_pk_table";
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
         createPartitionedPkTable(tablePath, OLD_BUCKET_NUM);
@@ -158,7 +157,7 @@ class FlinkUnionReadRescaleBucketITCase extends FlinkUnionReadTestBase {
         createPartition(tablePath, "new");
         writeUpsertRows(tablePath, "new", 0);
 
-        assertThat(bucketCountActualByPartitionName(tablePath))
+        assertThat(bucketCountByPartitionName(tablePath))
                 .containsEntry("old", OLD_BUCKET_NUM)
                 .containsEntry("new", NEW_BUCKET_NUM);
 
@@ -223,7 +222,7 @@ class FlinkUnionReadRescaleBucketITCase extends FlinkUnionReadTestBase {
     }
 
     @Test
-    void testStreamUnionReadAcrossPartitionsWithDifferentBucketCountActuals() throws Exception {
+    void testStreamUnionReadAcrossPartitionsWithDifferentBucketCounts() throws Exception {
         String tableName = "rescale_bucket_stream_log_table";
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
         createPartitionedLogTable(tablePath, OLD_BUCKET_NUM);
@@ -234,7 +233,7 @@ class FlinkUnionReadRescaleBucketITCase extends FlinkUnionReadTestBase {
         createPartition(tablePath, "new");
         expectedRows.addAll(writeRows(tablePath, "new", 0));
 
-        assertThat(bucketCountActualByPartitionName(tablePath))
+        assertThat(bucketCountByPartitionName(tablePath))
                 .containsEntry("old", OLD_BUCKET_NUM)
                 .containsEntry("new", NEW_BUCKET_NUM);
 
@@ -265,8 +264,7 @@ class FlinkUnionReadRescaleBucketITCase extends FlinkUnionReadTestBase {
     }
 
     @Test
-    void testStreamUnionReadPkTableAcrossPartitionsWithDifferentBucketCountActuals()
-            throws Exception {
+    void testStreamUnionReadPkTableAcrossPartitionsWithDifferentBucketCounts() throws Exception {
         String tableName = "rescale_bucket_stream_pk_table";
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
         createPartitionedPkTable(tablePath, OLD_BUCKET_NUM);
@@ -277,7 +275,7 @@ class FlinkUnionReadRescaleBucketITCase extends FlinkUnionReadTestBase {
         createPartition(tablePath, "new");
         writeUpsertRows(tablePath, "new", 0);
 
-        assertThat(bucketCountActualByPartitionName(tablePath))
+        assertThat(bucketCountByPartitionName(tablePath))
                 .containsEntry("old", OLD_BUCKET_NUM)
                 .containsEntry("new", NEW_BUCKET_NUM);
 
@@ -337,7 +335,7 @@ class FlinkUnionReadRescaleBucketITCase extends FlinkUnionReadTestBase {
         createPartition(tablePath, "new");
         List<Row> newRows = writeRows(tablePath, "new", 0);
 
-        assertThat(bucketCountActualByPartitionName(tablePath))
+        assertThat(bucketCountByPartitionName(tablePath))
                 .containsEntry("old", OLD_BUCKET_NUM)
                 .containsEntry("new", NEW_BUCKET_NUM);
 
@@ -448,15 +446,13 @@ class FlinkUnionReadRescaleBucketITCase extends FlinkUnionReadTestBase {
         return flinkRows;
     }
 
-    private Map<String, Integer> bucketCountActualByPartitionName(TablePath tablePath)
-            throws Exception {
+    private Map<String, Integer> bucketCountByPartitionName(TablePath tablePath) throws Exception {
         List<PartitionInfo> partitionInfos = admin.listPartitionInfos(tablePath).get();
-        Map<String, Integer> bucketCountActualByName = new java.util.HashMap<>();
+        Map<String, Integer> bucketCountByName = new java.util.HashMap<>();
         for (PartitionInfo partitionInfo : partitionInfos) {
-            bucketCountActualByName.put(
-                    partitionInfo.getPartitionName(), partitionInfo.getBucketCountActual());
+            bucketCountByName.put(partitionInfo.getPartitionName(), partitionInfo.getBucketCount());
         }
-        return bucketCountActualByName;
+        return bucketCountByName;
     }
 
     private void waitUntilPartitionBucketsSynced(TablePath tablePath, long tableId)
@@ -467,14 +463,14 @@ class FlinkUnionReadRescaleBucketITCase extends FlinkUnionReadTestBase {
                 new BucketOffsetsRetrieverImpl(admin, tablePath);
         Set<TableBucket> tableBuckets = new HashSet<>();
         for (PartitionInfo partitionInfo : admin.listPartitionInfos(tablePath).get()) {
-            int bucketCountActual = partitionInfo.getBucketCountActual();
+            int bucketCount = partitionInfo.getBucketCount();
             List<Integer> buckets = new ArrayList<>();
-            for (int bucket = 0; bucket < bucketCountActual; bucket++) {
+            for (int bucket = 0; bucket < bucketCount; bucket++) {
                 buckets.add(bucket);
             }
             Map<Integer, Long> latestOffsets =
                     bucketOffsetsRetriever.latestOffsets(partitionInfo.getPartitionName(), buckets);
-            for (int bucket = 0; bucket < bucketCountActual; bucket++) {
+            for (int bucket = 0; bucket < bucketCount; bucket++) {
                 Long latestOffset = latestOffsets.get(bucket);
                 if (latestOffset != null && latestOffset > 0) {
                     tableBuckets.add(

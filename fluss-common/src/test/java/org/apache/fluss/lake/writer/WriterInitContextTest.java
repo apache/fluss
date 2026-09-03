@@ -56,7 +56,7 @@ class WriterInitContextTest {
                     }
 
                     @Override
-                    public int bucketCountActual() {
+                    public int bucketCount() {
                         throw new UnsupportedOperationException("not used in this test");
                     }
                 };

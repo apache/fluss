@@ -222,8 +222,7 @@ class LookupSender implements Runnable {
             LookupBatchKey batchKey = new LookupBatchKey(tb, lookup.originalPartitionName());
             lookupByTableId
                     .computeIfAbsent(tableId, k -> new LinkedHashMap<>())
-                    .computeIfAbsent(
-                            batchKey, k -> new LookupBatch(batchKey, lookup.bucketCountActual()))
+                    .computeIfAbsent(batchKey, k -> new LookupBatch(batchKey, lookup.bucketCount()))
                     .addLookup(lookup);
         }
 
@@ -301,8 +300,7 @@ class LookupSender implements Runnable {
             long tableId = tb.getTableId();
             lookupByTableId
                     .computeIfAbsent(tableId, k -> new HashMap<>())
-                    .computeIfAbsent(
-                            tb, k -> new PrefixLookupBatch(tb, prefixLookup.bucketCountActual()))
+                    .computeIfAbsent(tb, k -> new PrefixLookupBatch(tb, prefixLookup.bucketCount()))
                     .addLookup(prefixLookup);
         }
 

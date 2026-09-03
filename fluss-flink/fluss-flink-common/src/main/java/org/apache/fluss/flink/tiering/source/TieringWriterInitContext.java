@@ -35,7 +35,7 @@ public class TieringWriterInitContext implements WriterInitContext {
     private final TableInfo tableInfo;
     private final int splitIndex;
     private final long tieringRoundTimestamp;
-    private final int bucketCountActual;
+    private final int bucketCount;
     @Nullable private final String[] ioTmpDirs;
 
     public TieringWriterInitContext(
@@ -79,7 +79,7 @@ public class TieringWriterInitContext implements WriterInitContext {
             TableInfo tableInfo,
             int splitIndex,
             long tieringRoundTimestamp,
-            @Nullable Integer bucketCountActual,
+            @Nullable Integer bucketCount,
             @Nullable String[] ioTmpDirs) {
         this.tablePath = tablePath;
         this.tableBucket = tableBucket;
@@ -89,13 +89,13 @@ public class TieringWriterInitContext implements WriterInitContext {
         this.tieringRoundTimestamp = tieringRoundTimestamp;
         this.ioTmpDirs = ioTmpDirs;
         if (tableBucket.getPartitionId() == null) {
-            this.bucketCountActual = tableInfo.getNumBuckets();
+            this.bucketCount = tableInfo.getNumBuckets();
         } else {
             // Writing with a wrong bucket count would silently corrupt the lake table's bucket
             // layout metadata, so a missing per-partition count must fail here.
-            this.bucketCountActual =
+            this.bucketCount =
                     checkNotNull(
-                            bucketCountActual,
+                            bucketCount,
                             "No actual bucket count known for partition %s (id %s) of table %s.",
                             partition,
                             tableBucket.getPartitionId(),
@@ -141,7 +141,7 @@ public class TieringWriterInitContext implements WriterInitContext {
     }
 
     @Override
-    public int bucketCountActual() {
-        return bucketCountActual;
+    public int bucketCount() {
+        return bucketCount;
     }
 }

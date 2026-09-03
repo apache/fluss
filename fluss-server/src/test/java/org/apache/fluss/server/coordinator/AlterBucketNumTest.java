@@ -147,7 +147,7 @@ class AlterBucketNumTest {
                 .isEqualTo(originalBucketCount);
         Optional<PartitionRegistration> pre = zookeeperClient.getPartition(tablePath, "2024-01");
         assertThat(pre).isPresent();
-        assertThat(pre.get().getBucketCountActual()).isEqualTo(originalBucketCount);
+        assertThat(pre.get().getBucketCount()).isEqualTo(originalBucketCount);
     }
 
     @Test
@@ -175,7 +175,7 @@ class AlterBucketNumTest {
         assertThat(mm.getTable(tablePath).getNumBuckets()).isEqualTo(originalBucketCount);
         Optional<PartitionRegistration> pre = zookeeperClient.getPartition(tablePath, "2024-01");
         assertThat(pre).isPresent();
-        assertThat(pre.get().getBucketCountActual()).isEqualTo(originalBucketCount);
+        assertThat(pre.get().getBucketCount()).isEqualTo(originalBucketCount);
     }
 
     @Test
@@ -351,7 +351,7 @@ class AlterBucketNumTest {
                 partitionedLogTable(originalBucketCount),
                 generateAssignment(originalBucketCount, 3, getTabletServers()),
                 false);
-        long originalEpoch = metadataManager.getTable(tablePath).getBucketLayoutEpoch();
+        long originalEpoch = metadataManager.getTable(tablePath).getBucketCountEpoch();
 
         // RESET carries no target count, so it must be rejected instead of silently succeeding.
         assertThatThrownBy(() -> resetBucketNum(metadataManager, tablePath))
@@ -362,14 +362,14 @@ class AlterBucketNumTest {
         // The bucket layout is untouched: neither the count nor the epoch moved.
         TableInfo afterTableInfo = metadataManager.getTable(tablePath);
         assertThat(afterTableInfo.getNumBuckets()).isEqualTo(originalBucketCount);
-        assertThat(afterTableInfo.getBucketLayoutEpoch()).isEqualTo(originalEpoch);
+        assertThat(afterTableInfo.getBucketCountEpoch()).isEqualTo(originalEpoch);
     }
 
     // ========================== Success Tests ==========================
 
     @ParameterizedTest(name = "bucketNum {0} -> {1}")
     @CsvSource({"3, 6", "6, 3"})
-    void testBackfillOnlyAffectsPartitionsWithoutBucketCountActual(
+    void testBackfillOnlyAffectsPartitionsWithoutBucketCount(
             int originalBucketCount, int newBucketCount) throws Exception {
         TablePath tablePath =
                 TablePath.of(
@@ -386,7 +386,7 @@ class AlterBucketNumTest {
         TableInfo tableInfo = metadataManager.getTable(tablePath);
         long tableId = tableInfo.getTableId();
 
-        // Create two partitions with bucketCountActual = originalBucketCount
+        // Create two partitions with bucketCount = originalBucketCount
         PartitionAssignment partitionAssignment =
                 new PartitionAssignment(tableId, tableAssignment.getBucketAssignments());
         metadataManager.createPartition(
@@ -406,7 +406,7 @@ class AlterBucketNumTest {
                 false,
                 originalBucketCount);
 
-        // Simulate a legacy partition by overwriting its registration with null bucketCountActual.
+        // Simulate a legacy partition by overwriting its registration with null bucketCount.
         // This models a partition created before per-partition bucket count was introduced.
         Optional<PartitionRegistration> legacyReg =
                 zookeeperClient.getPartition(tablePath, "legacy");
@@ -418,15 +418,15 @@ class AlterBucketNumTest {
                         legacyReg.get().getRemoteDataDir());
         zookeeperClient.updatePartitionRegistration(tablePath, "legacy", nullBucketCountReg);
 
-        // Verify: "legacy" has null bucketCountActual, "new" has originalBucketCount
+        // Verify: "legacy" has null bucketCount, "new" has originalBucketCount
         Optional<PartitionRegistration> beforeLegacy =
                 zookeeperClient.getPartition(tablePath, "legacy");
         assertThat(beforeLegacy).isPresent();
-        assertThat(beforeLegacy.get().getBucketCountActual()).isNull();
+        assertThat(beforeLegacy.get().getBucketCount()).isNull();
 
         Optional<PartitionRegistration> beforeNew = zookeeperClient.getPartition(tablePath, "new");
         assertThat(beforeNew).isPresent();
-        assertThat(beforeNew.get().getBucketCountActual()).isEqualTo(originalBucketCount);
+        assertThat(beforeNew.get().getBucketCount()).isEqualTo(originalBucketCount);
 
         // ALTER bucket.num in both directions (scale-up 3->6 and scale-down 6->3)
         alterBucketNum(metadataManager, tablePath, String.valueOf(newBucketCount));
@@ -438,12 +438,12 @@ class AlterBucketNumTest {
         Optional<PartitionRegistration> afterLegacy =
                 zookeeperClient.getPartition(tablePath, "legacy");
         assertThat(afterLegacy).isPresent();
-        assertThat(afterLegacy.get().getBucketCountActual()).isEqualTo(originalBucketCount);
+        assertThat(afterLegacy.get().getBucketCount()).isEqualTo(originalBucketCount);
 
-        // Verify: "new" still has the original bucketCountActual (not overwritten to the new value)
+        // Verify: "new" still has the original bucketCount (not overwritten to the new value)
         Optional<PartitionRegistration> afterNew = zookeeperClient.getPartition(tablePath, "new");
         assertThat(afterNew).isPresent();
-        assertThat(afterNew.get().getBucketCountActual()).isEqualTo(originalBucketCount);
+        assertThat(afterNew.get().getBucketCount()).isEqualTo(originalBucketCount);
     }
 
     @Test
@@ -515,7 +515,7 @@ class AlterBucketNumTest {
         Optional<PartitionAssignment> assignment =
                 zookeeperClient.getPartitionAssignment(partition.get().getPartitionId());
         assertThat(assignment).isPresent();
-        assertThat(partition.get().getBucketCountActual())
+        assertThat(partition.get().getBucketCount())
                 .isEqualTo(assignment.get().getBucketAssignments().size())
                 .isEqualTo(expected);
     }

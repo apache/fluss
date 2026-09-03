@@ -72,7 +72,7 @@ public class TableRegistration {
      * it. It is used to decide whether legacy clients without bucket count are still allowed (epoch
      * 0) and to let TabletServers ignore older UpdateMetadata messages.
      */
-    public final long bucketLayoutEpoch;
+    public final long bucketCountEpoch;
 
     public TableRegistration(
             long tableId,
@@ -107,7 +107,7 @@ public class TableRegistration {
             @Nullable String remoteDataDir,
             long createdTime,
             long modifiedTime,
-            long bucketLayoutEpoch) {
+            long bucketCountEpoch) {
         checkArgument(
                 tableDistribution.getBucketCount().isPresent(),
                 "Bucket count is required for table registration.");
@@ -121,7 +121,7 @@ public class TableRegistration {
         this.remoteDataDir = remoteDataDir;
         this.createdTime = createdTime;
         this.modifiedTime = modifiedTime;
-        this.bucketLayoutEpoch = bucketLayoutEpoch;
+        this.bucketCountEpoch = bucketCountEpoch;
     }
 
     public boolean isPartitioned() {
@@ -161,7 +161,7 @@ public class TableRegistration {
                 this.comment,
                 this.createdTime,
                 this.modifiedTime,
-                this.bucketLayoutEpoch);
+                this.bucketCountEpoch);
     }
 
     public static TableRegistration newTable(
@@ -195,13 +195,13 @@ public class TableRegistration {
                 remoteDataDir,
                 createdTime,
                 currentMillis,
-                bucketLayoutEpoch);
+                bucketCountEpoch);
     }
 
     /**
-     * Replaces the table-level bucket count and increments {@code bucketLayoutEpoch} atomically.
-     * For a partitioned table, the new count applies to partitions created after this ALTER;
-     * existing partitions retain their actual bucket counts in their partition registrations.
+     * Replaces the table-level bucket count and increments {@code bucketCountEpoch} atomically. For
+     * a partitioned table, the new count applies to partitions created after this ALTER; existing
+     * partitions retain their actual bucket counts in their partition registrations.
      */
     public TableRegistration withBucketCount(int newBucketCount) {
         final long currentMillis = System.currentTimeMillis();
@@ -215,7 +215,7 @@ public class TableRegistration {
                 remoteDataDir,
                 createdTime,
                 currentMillis,
-                bucketLayoutEpoch + 1);
+                bucketCountEpoch + 1);
     }
 
     /**
@@ -237,7 +237,7 @@ public class TableRegistration {
                 remoteDataDir,
                 createdTime,
                 modifiedTime,
-                bucketLayoutEpoch);
+                bucketCountEpoch);
     }
 
     @Override
@@ -253,7 +253,7 @@ public class TableRegistration {
         return tableId == that.tableId
                 && createdTime == that.createdTime
                 && modifiedTime == that.modifiedTime
-                && bucketLayoutEpoch == that.bucketLayoutEpoch
+                && bucketCountEpoch == that.bucketCountEpoch
                 && Objects.equals(comment, that.comment)
                 && Objects.equals(partitionKeys, that.partitionKeys)
                 && Objects.equals(bucketCount, that.bucketCount)
@@ -276,7 +276,7 @@ public class TableRegistration {
                 remoteDataDir,
                 createdTime,
                 modifiedTime,
-                bucketLayoutEpoch);
+                bucketCountEpoch);
     }
 
     @Override
@@ -303,8 +303,8 @@ public class TableRegistration {
                 + createdTime
                 + ", modifiedTime="
                 + modifiedTime
-                + ", bucketLayoutEpoch="
-                + bucketLayoutEpoch
+                + ", bucketCountEpoch="
+                + bucketCountEpoch
                 + '}';
     }
 }

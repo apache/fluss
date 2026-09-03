@@ -972,7 +972,7 @@ public class FlinkSourceEnumerator
                                         new Partition(
                                                 p.getPartitionId(),
                                                 p.getPartitionName(),
-                                                p.getBucketCountActual()))
+                                                p.getBucketCount()))
                         .collect(Collectors.toSet());
         final Set<Partition> removedPartitions = new HashSet<>();
 
@@ -1064,7 +1064,7 @@ public class FlinkSourceEnumerator
                             partition.getPartitionId(),
                             partition.getPartitionName(),
                             effectiveOffsetsInitializer,
-                            partition.getBucketCountActual()));
+                            partition.getBucketCount()));
         }
         return splits;
     }
@@ -1842,16 +1842,16 @@ public class FlinkSourceEnumerator
          * is {@link #NO_BUCKET_COUNT} only for instances created for diff comparison or removal
          * handling, which never generate splits.
          */
-        final int bucketCountActual;
+        final int bucketCount;
 
         Partition(long partitionId, String partitionName) {
             this(partitionId, partitionName, NO_BUCKET_COUNT);
         }
 
-        Partition(long partitionId, String partitionName, int bucketCountActual) {
+        Partition(long partitionId, String partitionName, int bucketCount) {
             this.partitionId = partitionId;
             this.partitionName = partitionName;
-            this.bucketCountActual = bucketCountActual;
+            this.bucketCount = bucketCount;
         }
 
         public long getPartitionId() {
@@ -1862,14 +1862,14 @@ public class FlinkSourceEnumerator
             return partitionName;
         }
 
-        public int getBucketCountActual() {
+        public int getBucketCount() {
             checkState(
-                    bucketCountActual != NO_BUCKET_COUNT,
+                    bucketCount != NO_BUCKET_COUNT,
                     "Partition %s (id %s) does not carry a bucket count; comparison-only "
                             + "instances must not be used to generate splits.",
                     partitionName,
                     partitionId);
-            return bucketCountActual;
+            return bucketCount;
         }
 
         @Override

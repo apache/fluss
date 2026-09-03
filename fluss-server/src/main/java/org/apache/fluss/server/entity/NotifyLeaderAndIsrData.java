@@ -33,8 +33,8 @@ public final class NotifyLeaderAndIsrData {
     private final List<Integer> replicas;
     private final LeaderAndIsr leaderAndIsr;
     // null when a legacy coordinator omits the fields
-    private final @Nullable Integer bucketCountActual;
-    private final @Nullable Long bucketLayoutEpoch;
+    private final @Nullable Integer bucketCount;
+    private final @Nullable Long bucketCountEpoch;
 
     public NotifyLeaderAndIsrData(
             PhysicalTablePath physicalTablePath,
@@ -49,14 +49,14 @@ public final class NotifyLeaderAndIsrData {
             TableBucket tableBucket,
             List<Integer> replicas,
             LeaderAndIsr leaderAndIsr,
-            @Nullable Integer bucketCountActual,
-            @Nullable Long bucketLayoutEpoch) {
+            @Nullable Integer bucketCount,
+            @Nullable Long bucketCountEpoch) {
         this.physicalTablePath = physicalTablePath;
         this.tableBucket = tableBucket;
         this.replicas = replicas;
         this.leaderAndIsr = leaderAndIsr;
-        this.bucketCountActual = bucketCountActual;
-        this.bucketLayoutEpoch = bucketLayoutEpoch;
+        this.bucketCount = bucketCount;
+        this.bucketCountEpoch = bucketCountEpoch;
     }
 
     public PhysicalTablePath getPhysicalTablePath() {
@@ -112,12 +112,12 @@ public final class NotifyLeaderAndIsrData {
     }
 
     /** The actual bucket count of the owning table/partition, or null if not carried. */
-    public @Nullable Integer getBucketCountActual() {
-        return bucketCountActual;
+    public @Nullable Integer getBucketCount() {
+        return bucketCount;
     }
 
     /** The bucket layout epoch of the owning table, or null if not carried. */
-    public @Nullable Long getBucketLayoutEpoch() {
-        return bucketLayoutEpoch;
+    public @Nullable Long getBucketCountEpoch() {
+        return bucketCountEpoch;
     }
 }

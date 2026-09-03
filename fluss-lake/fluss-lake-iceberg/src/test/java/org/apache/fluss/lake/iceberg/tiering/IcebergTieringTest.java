@@ -318,7 +318,7 @@ class IcebergTieringTest {
                     }
 
                     @Override
-                    public int bucketCountActual() {
+                    public int bucketCount() {
                         return tableInfo.getNumBuckets();
                     }
                 });

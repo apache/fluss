@@ -600,7 +600,7 @@ public class LogFetcher implements Closeable {
                     fetchLogReqForBucket.setPartitionId(tb.getPartitionId());
                     metadataUpdater
                             .getCluster()
-                            .getBucketCountActual(
+                            .getBucketCount(
                                     new TablePartition(tb.getTableId(), tb.getPartitionId()))
                             .ifPresent(fetchLogReqForBucket::setRoutingBucketCount);
                 } else {

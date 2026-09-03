@@ -145,8 +145,7 @@ public class ClientRpcMessageUtils {
                     PbProduceLogReqForBucket pbProduceLogReqForBucket =
                             request.addBucketsReq()
                                     .setBucketId(tableBucket.getBucket())
-                                    .setRoutingBucketCount(
-                                            readyBatch.writeBatch().getBucketCountActual())
+                                    .setRoutingBucketCount(readyBatch.writeBatch().getBucketCount())
                                     .setRecordsBytesView(readyBatch.writeBatch().build());
                     if (tableBucket.getPartitionId() != null) {
                         pbProduceLogReqForBucket.setPartitionId(tableBucket.getPartitionId());
@@ -206,8 +205,7 @@ public class ClientRpcMessageUtils {
                     PbPutKvReqForBucket pbPutKvReqForBucket =
                             request.addBucketsReq()
                                     .setBucketId(tableBucket.getBucket())
-                                    .setRoutingBucketCount(
-                                            readyBatch.writeBatch().getBucketCountActual())
+                                    .setRoutingBucketCount(readyBatch.writeBatch().getBucketCount())
                                     .setRecordsBytesView(readyBatch.writeBatch().build());
                     if (tableBucket.getPartitionId() != null) {
                         pbPutKvReqForBucket.setPartitionId(tableBucket.getPartitionId());
@@ -243,8 +241,8 @@ public class ClientRpcMessageUtils {
                     }
                     // Carry the bucket count the bucketId was calculated with so the server can
                     // validate it; 0 means unknown (legacy) and leaves the field unset.
-                    if (batch.getBucketCountActual() > 0) {
-                        pbLookupReqForBucket.setRoutingBucketCount(batch.getBucketCountActual());
+                    if (batch.getBucketCount() > 0) {
+                        pbLookupReqForBucket.setRoutingBucketCount(batch.getBucketCount());
                     }
                     if (batch.originalPartitionName() != null) {
                         pbLookupReqForBucket.setOriginalPartitionName(
@@ -268,9 +266,8 @@ public class ClientRpcMessageUtils {
                     }
                     // Carry the bucket count the bucketId was calculated with so the server can
                     // validate it; 0 means unknown (legacy) and leaves the field unset.
-                    if (batch.getBucketCountActual() > 0) {
-                        pbPrefixLookupReqForBucket.setRoutingBucketCount(
-                                batch.getBucketCountActual());
+                    if (batch.getBucketCount() > 0) {
+                        pbPrefixLookupReqForBucket.setRoutingBucketCount(batch.getBucketCount());
                     }
                     batch.lookups().forEach(get -> pbPrefixLookupReqForBucket.addKey(get.key()));
                 });
@@ -383,7 +380,7 @@ public class ClientRpcMessageUtils {
                 .setBucketIds(bucketIdList.stream().mapToInt(Integer::intValue).toArray());
         if (partitionId != null) {
             listOffsetsRequest.setPartitionId(partitionId);
-            cluster.getBucketCountActual(new TablePartition(tableId, partitionId))
+            cluster.getBucketCount(new TablePartition(tableId, partitionId))
                     .ifPresent(listOffsetsRequest::setRoutingBucketCount);
         } else {
             cluster.getBucketCountForTable(tableId)
@@ -681,8 +678,8 @@ public class ClientRpcMessageUtils {
                                                 : null,
                                         // old clusters do not send the per-partition bucket count;
                                         // resolve to the table-level count here
-                                        pbPartitionInfo.hasBucketCountActual()
-                                                ? pbPartitionInfo.getBucketCountActual()
+                                        pbPartitionInfo.hasBucketCount()
+                                                ? pbPartitionInfo.getBucketCount()
                                                 : defaultBucketCount))
                 .collect(Collectors.toList());
     }
@@ -913,7 +910,7 @@ public class ClientRpcMessageUtils {
                                                     .setBucketId(bucket.getBucket());
                                     if (bucket.getPartitionId() != null) {
                                         pbBucket.setPartitionId(bucket.getPartitionId());
-                                        cluster.getBucketCountActual(
+                                        cluster.getBucketCount(
                                                         new TablePartition(
                                                                 bucket.getTableId(),
                                                                 bucket.getPartitionId()))

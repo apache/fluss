@@ -884,7 +884,7 @@ public class Sender implements Runnable {
                 Integer historicalBucketCount =
                         metadataUpdater
                                 .getCluster()
-                                .getBucketCountActual(historicalPartition)
+                                .getBucketCount(historicalPartition)
                                 .orElse(null);
                 boolean rerouted =
                         accumulator.rerouteQueuedWritesToHistorical(

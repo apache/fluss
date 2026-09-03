@@ -2091,8 +2091,8 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                 infos.stream().filter(i -> "old".equals(i.getPartitionName())).findFirst().get();
         PartitionInfo newInfo =
                 infos.stream().filter(i -> "new".equals(i.getPartitionName())).findFirst().get();
-        assertThat(oldInfo.getBucketCountActual()).isEqualTo(OLD_BUCKET_NUM);
-        assertThat(newInfo.getBucketCountActual()).isEqualTo(NEW_BUCKET_NUM);
+        assertThat(oldInfo.getBucketCount()).isEqualTo(OLD_BUCKET_NUM);
+        assertThat(newInfo.getBucketCount()).isEqualTo(NEW_BUCKET_NUM);
         return new Object[] {
             tablePath,
             admin.getTableInfo(tablePath).get(),

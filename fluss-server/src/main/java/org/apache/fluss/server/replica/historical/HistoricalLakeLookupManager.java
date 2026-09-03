@@ -365,7 +365,7 @@ class HistoricalLakeLookupManager implements AutoCloseable {
         // The request's bucket id only routes the request. It matches the lake layout only while
         // the table was never rescaled; otherwise the lake lookuper resolves the bucket itself.
         Integer lakeBucketId =
-                tableInfo.getBucketLayoutEpoch() == 0 ? tableBucket.getBucket() : null;
+                tableInfo.getBucketCountEpoch() == 0 ? tableBucket.getBucket() : null;
 
         LakeTableLookuper.LookupContext lookupContext =
                 new LakeTableLookuper.LookupContext(

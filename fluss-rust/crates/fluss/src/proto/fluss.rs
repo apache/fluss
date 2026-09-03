@@ -186,7 +186,7 @@ pub struct GetTableInfoResponse {
     #[prost(string, optional, tag = "6")]
     pub remote_data_dir: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(int64, optional, tag = "7")]
-    pub bucket_layout_epoch: ::core::option::Option<i64>,
+    pub bucket_count_epoch: ::core::option::Option<i64>,
 }
 /// list tables request and response
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -1141,7 +1141,7 @@ pub struct PbTableMetadata {
     pub remote_data_dir: ::core::option::Option<::prost::alloc::string::String>,
     /// A table-level, monotonically increasing version for bucket.num changes.
     #[prost(int64, optional, tag = "9")]
-    pub bucket_layout_epoch: ::core::option::Option<i64>,
+    pub bucket_count_epoch: ::core::option::Option<i64>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PbPartitionMetadata {
@@ -1156,7 +1156,7 @@ pub struct PbPartitionMetadata {
     pub bucket_metadata: ::prost::alloc::vec::Vec<PbBucketMetadata>,
     /// the actual bucket count for this partition, used for per-partition bucket rescale
     #[prost(int32, optional, tag = "5")]
-    pub bucket_count_actual: ::core::option::Option<i32>,
+    pub bucket_count: ::core::option::Option<i32>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PbBucketMetadata {
@@ -1474,9 +1474,9 @@ pub struct PbNotifyLeaderAndIsrReqForBucket {
     #[prost(int32, repeated, tag = "8")]
     pub standby_replicas: ::prost::alloc::vec::Vec<i32>,
     #[prost(int32, optional, tag = "9")]
-    pub bucket_count_actual: ::core::option::Option<i32>,
+    pub bucket_count: ::core::option::Option<i32>,
     #[prost(int64, optional, tag = "10")]
-    pub bucket_layout_epoch: ::core::option::Option<i64>,
+    pub bucket_count_epoch: ::core::option::Option<i64>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PbNotifyLeaderAndIsrRespForBucket {
@@ -1582,7 +1582,7 @@ pub struct PbPartitionInfo {
     pub remote_data_dir: ::core::option::Option<::prost::alloc::string::String>,
     /// the actual bucket count for this partition, used for per-partition bucket rescale
     #[prost(int32, optional, tag = "4")]
-    pub bucket_count_actual: ::core::option::Option<i32>,
+    pub bucket_count: ::core::option::Option<i32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PbPartitionSpec {
