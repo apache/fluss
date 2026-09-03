@@ -18,7 +18,6 @@
 package org.apache.fluss.lake.iceberg.utils;
 
 import org.apache.fluss.annotation.Internal;
-import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.metadata.TableDescriptor;
 
 import org.apache.iceberg.PartitionField;
@@ -28,7 +27,6 @@ import org.apache.iceberg.Schema;
 import java.util.List;
 
 import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
-import static org.apache.iceberg.types.Type.TypeID.STRING;
 
 /** Utilities for constructing the Iceberg partition spec used by Fluss lake tiering. */
 @Internal
@@ -61,11 +59,6 @@ public final class IcebergPartitionSpecUtils {
             List<String> bucketKeys,
             List<String> partitionKeys,
             int bucketCount) {
-        if (bucketKeys.size() > 1) {
-            throw new UnsupportedOperationException(
-                    "Only one bucket key is supported for Iceberg at the moment");
-        }
-
         if (bucketKeys.isEmpty() && isPrimaryKeyTable) {
             throw new IllegalArgumentException(
                     "Bucket key must be set for primary key Iceberg tables");
@@ -73,12 +66,6 @@ public final class IcebergPartitionSpecUtils {
 
         PartitionSpec.Builder builder = PartitionSpec.builderFor(icebergSchema);
         for (String partitionKey : partitionKeys) {
-            if (!icebergSchema.findType(partitionKey).typeId().equals(STRING)) {
-                throw new InvalidTableException(
-                        String.format(
-                                "Partition key only support string type for iceberg currently. Column `%s` is not string type.",
-                                partitionKey));
-            }
             builder.identity(partitionKey);
         }
 
@@ -91,6 +78,9 @@ public final class IcebergPartitionSpecUtils {
                 builder.identity(BUCKET_COLUMN_NAME);
             }
         } else {
+            // Use the first bucket key for Iceberg's bucket transform. For multi-key tables,
+            // this provides approximate scan pruning. The tiering writer explicitly assigns the
+            // correct bucket partition via PartitionKey regardless of how many keys are used.
             builder.bucket(bucketKeys.get(0), bucketCount);
         }
         return builder.build();

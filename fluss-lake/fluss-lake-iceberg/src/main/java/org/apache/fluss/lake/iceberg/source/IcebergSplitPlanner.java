@@ -178,8 +178,7 @@ public class IcebergSplitPlanner implements Planner<IcebergSplit> {
                 IntStream.range(0, partitionColCount).boxed().collect(Collectors.toList());
         return task ->
                 partitionFieldIndices.stream()
-                        // since currently, only string partition is supported
-                        .map(index -> task.partition().get(index, String.class))
+                        .map(index -> String.valueOf(task.partition().get(index, Object.class)))
                         .collect(Collectors.toList());
     }
 }
