@@ -22,6 +22,7 @@ import org.apache.fluss.exception.InvalidAlterTableException
 import org.apache.fluss.metadata._
 import org.apache.fluss.types.{DataTypes, RowType}
 
+import org.apache.spark.SparkException
 import org.apache.spark.sql.{AnalysisException, Row}
 import org.apache.spark.sql.catalyst.analysis.PartitionsAlreadyExistException
 import org.apache.spark.sql.connector.catalog.Identifier
@@ -40,15 +41,78 @@ class SparkCatalogTest extends FlussSparkTestBase {
     withTable("t") {
       sql("CREATE TABLE t (id int, name string)")
 
+      // add column without comment, default is nullable and appended at the end
       sql("ALTER TABLE t ADD COLUMN age bigint")
+      // add column with comment
+      sql("ALTER TABLE t ADD COLUMN addr string COMMENT 'address of the user'")
       checkAnswer(
         sql("DESC t"),
         Row("id", "int", null) ::
           Row("name", "string", null) ::
-          Row("age", "bigint", null) :: Nil)
+          Row("age", "bigint", null) ::
+          Row("addr", "string", null) :: Nil)
 
       val table = admin.getTableInfo(createTablePath("t")).get()
-      assertThat(table.getRowType.getFieldCount).isEqualTo(3)
+      assertThat(table.getRowType.getFieldCount).isEqualTo(4)
+      assertThatList(table.getRowType.getFieldNames).containsExactly("id", "name", "age", "addr")
+      // the comment of the added column should be persisted
+      assertThat(table.getSchema.getColumn("addr").getComment.get).isEqualTo("address of the user")
+    }
+  }
+
+  test("Catalog: add columns with unsupported position") {
+    withTable("t") {
+      sql("CREATE TABLE t (id int, name string)")
+
+      // only the last position is supported: FIRST/AFTER fail at the Fluss RPC serialization
+      // layer (ColumnPositionType only knows LAST), surfaced by Spark as a SparkException
+      val firstException = intercept[SparkException] {
+        sql("ALTER TABLE t ADD COLUMN age bigint FIRST")
+      }
+      assertThat(firstException).hasMessageContaining("Unsupported ColumnPositionType: FIRST")
+      val afterException = intercept[SparkException] {
+        sql("ALTER TABLE t ADD COLUMN age bigint AFTER id")
+      }
+      assertThat(afterException).hasMessageContaining("Unsupported ColumnPositionType: AFTER")
+
+      val table = admin.getTableInfo(createTablePath("t")).get()
+      assertThatList(table.getRowType.getFieldNames).containsExactly("id", "name")
+    }
+  }
+
+  test("Catalog: add non-nullable column is not supported") {
+    withTable("t") {
+      sql("CREATE TABLE t (id int, name string)")
+
+      // fluss only supports adding nullable columns currently, the server rejects the change
+      // and the IllegalArgumentException is wrapped as UnknownServerException over the RPC
+      val notNullException = intercept[ExecutionException] {
+        sql("ALTER TABLE t ADD COLUMN age bigint NOT NULL")
+      }
+      assertThat(notNullException).hasMessageContaining("Column age must be nullable.")
+
+      val table = admin.getTableInfo(createTablePath("t")).get()
+      assertThatList(table.getRowType.getFieldNames).containsExactly("id", "name")
+    }
+  }
+
+  test("Catalog: column default value is not supported") {
+    // Creating a table with a column default value is rejected by Spark, because Fluss does not
+    // implement SupportsColumnDefaultValue.
+    val createException = intercept[AnalysisException] {
+      sql("CREATE TABLE t (id int, name string DEFAULT 'abc')")
+    }
+    assertThat(createException)
+      .hasMessageContaining("Table `fluss_catalog`.`fluss`.`t` does not support column default value")
+
+    withTable("t") {
+      sql("CREATE TABLE t (id int, name string)")
+
+      // ALTER TABLE ADD COLUMN with a DEFAULT clause behaves differently: Spark silently drops
+      // the default value (the catalog does not support it) and still adds a nullable column at
+      // the end.
+      sql("ALTER TABLE t ADD COLUMN age bigint DEFAULT 18")
+      val table = admin.getTableInfo(createTablePath("t")).get()
       assertThatList(table.getRowType.getFieldNames).containsExactly("id", "name", "age")
     }
   }

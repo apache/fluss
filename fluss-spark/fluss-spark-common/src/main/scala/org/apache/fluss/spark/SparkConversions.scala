@@ -110,6 +110,10 @@ object SparkConversions {
           throw new UnsupportedOperationException(
             s"Adding nested columns is not supported: ${p.fieldNames().mkString(".")}")
         }
+        if (p.defaultValue() != null) {
+          throw new UnsupportedOperationException(
+            s"Adding column with default value is not supported: ${p.fieldNames().head}")
+        }
         org.apache.fluss.metadata.TableChange.addColumn(
           p.fieldNames().head,
           SparkToFlussTypeVisitor.visit(p.dataType()).copy(p.isNullable()),
