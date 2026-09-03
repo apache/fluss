@@ -129,18 +129,16 @@ public class PartialUpdater {
             return oldValue;
         }
 
-        boolean[] acceptance =
-                sequenceGroups == null
-                        ? null
-                        : sequenceGroups.resolveAcceptance(
-                                oldValue == null ? null : oldValue.row, partialValue.row);
+        if (sequenceGroups != null) {
+            sequenceGroups.arbitrate(oldValue == null ? null : oldValue.row, partialValue.row);
+        }
 
         rowEncoder.startNewRow();
         // write each field
         for (int i = 0; i < fieldDataTypes.length; i++) {
             // use the partial row value, unless the sequence group arbitrating the field holds it
             // back because the incoming row is not newer
-            if (partialUpdateCols.get(i) && (acceptance == null || acceptance[i])) {
+            if (partialUpdateCols.get(i) && (sequenceGroups == null || sequenceGroups.accepts(i))) {
                 rowEncoder.encodeField(i, flussFieldGetters[i].getFieldOrNull(partialValue.row));
             } else {
                 // use the old row value, the old row may be old schema with fewer fields,

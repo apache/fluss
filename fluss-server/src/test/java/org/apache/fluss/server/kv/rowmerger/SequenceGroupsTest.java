@@ -63,13 +63,23 @@ class SequenceGroupsTest {
         return compactedRow(TWO_GROUPS.getRowType(), new Object[] {1, "a", g1, "b", g2});
     }
 
+    /** Arbitrates the two rows and collects whether every field is accepted. */
+    private static boolean[] acceptanceOf(
+            SequenceGroups groups, @Nullable InternalRow oldRow, InternalRow newRow) {
+        groups.arbitrate(oldRow, newRow);
+        boolean[] acceptance = new boolean[groups.fieldCount()];
+        for (int i = 0; i < acceptance.length; i++) {
+            acceptance[i] = groups.accepts(i);
+        }
+        return acceptance;
+    }
+
     @Test
     void testEachGroupIsArbitratedOnItsOwn() {
         SequenceGroups groups = SequenceGroups.create(TWO_GROUPS);
 
         // the first group moves forward while the second falls behind
-        boolean[] acceptance =
-                groups.resolveAcceptance(twoGroupsRow(100, 100), twoGroupsRow(101, 99));
+        boolean[] acceptance = acceptanceOf(groups, twoGroupsRow(100, 100), twoGroupsRow(101, 99));
         assertThat(acceptance[A]).isTrue();
         assertThat(acceptance[B]).isFalse();
         // a sequence column follows the group it orders, so that its value stays in step with the
@@ -85,12 +95,12 @@ class SequenceGroupsTest {
         SequenceGroups groups = SequenceGroups.create(TWO_GROUPS);
 
         // a replayed record still refreshes the group
-        assertThat(groups.resolveAcceptance(twoGroupsRow(100, 100), twoGroupsRow(100, 100)))
+        assertThat(acceptanceOf(groups, twoGroupsRow(100, 100), twoGroupsRow(100, 100)))
                 .containsOnly(true);
 
         // the incoming group carries no order information at all, so its values are dropped even
         // though there is no stored row to compare against
-        boolean[] acceptance = groups.resolveAcceptance(null, twoGroupsRow(null, 1));
+        boolean[] acceptance = acceptanceOf(groups, null, twoGroupsRow(null, 1));
         assertThat(acceptance[A]).isFalse();
         assertThat(acceptance[B]).isTrue();
     }
@@ -111,9 +121,7 @@ class SequenceGroupsTest {
         InternalRow incomingFirst =
                 compactedRow(sequenceFirst.getRowType(), new Object[] {1, 99, "a"});
         // both the sequence column and the column it orders are held back together
-        assertThat(
-                        SequenceGroups.create(sequenceFirst)
-                                .resolveAcceptance(storedFirst, incomingFirst))
+        assertThat(acceptanceOf(SequenceGroups.create(sequenceFirst), storedFirst, incomingFirst))
                 .containsExactly(true, false, false);
 
         // two columns naming the same sequence column advance as one group
@@ -130,7 +138,7 @@ class SequenceGroupsTest {
                 compactedRow(shared.getRowType(), new Object[] {1, "a", "b", 100});
         InternalRow incomingShared =
                 compactedRow(shared.getRowType(), new Object[] {1, "a", "b", 99});
-        assertThat(SequenceGroups.create(shared).resolveAcceptance(storedShared, incomingShared))
+        assertThat(acceptanceOf(SequenceGroups.create(shared), storedShared, incomingShared))
                 .containsExactly(true, false, false, false);
     }
 
@@ -147,7 +155,7 @@ class SequenceGroupsTest {
         SequenceGroups groups = SequenceGroups.create(TWO_GROUPS);
 
         InternalRow shortRow = compactedRow(olderSchema.getRowType(), new Object[] {1, "a"});
-        assertThat(groups.resolveAcceptance(shortRow, twoGroupsRow(1, 1))).containsOnly(true);
+        assertThat(acceptanceOf(groups, shortRow, twoGroupsRow(1, 1))).containsOnly(true);
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -174,9 +182,10 @@ class SequenceGroupsTest {
             @Nullable Integer storedG2,
             @Nullable Integer incomingG1,
             @Nullable Integer incomingG2) {
-        return SequenceGroups.create(COMPOSITE)
-                .resolveAcceptance(
-                        compositeRow(storedG1, storedG2), compositeRow(incomingG1, incomingG2))[A];
+        return acceptanceOf(
+                SequenceGroups.create(COMPOSITE),
+                compositeRow(storedG1, storedG2),
+                compositeRow(incomingG1, incomingG2))[A];
     }
 
     @Test
@@ -242,9 +251,9 @@ class SequenceGroupsTest {
         InternalRow withoutSequence =
                 compactedRow(schema.getRowType(), new Object[] {1, "a", null});
 
-        assertThat(groups.resolveAcceptance(stored, newerRow)[A]).isTrue();
-        assertThat(groups.resolveAcceptance(newerRow, stored)[A]).isFalse();
-        assertThat(groups.resolveAcceptance(stored, withoutSequence)[A]).isFalse();
+        assertThat(acceptanceOf(groups, stored, newerRow)[A]).isTrue();
+        assertThat(acceptanceOf(groups, newerRow, stored)[A]).isFalse();
+        assertThat(acceptanceOf(groups, stored, withoutSequence)[A]).isFalse();
     }
 
     @Test
@@ -258,12 +267,12 @@ class SequenceGroupsTest {
 
         // both groups fall behind, yet only the covered one still holds its fields back
         boolean[] acceptance =
-                restricted.resolveAcceptance(twoGroupsRow(100, 100), twoGroupsRow(99, 99));
+                acceptanceOf(restricted, twoGroupsRow(100, 100), twoGroupsRow(99, 99));
         assertThat(acceptance).containsExactly(true, false, false, true, true);
 
         // the uncovered group no longer arbitrates b or g2, so a null sequence cannot hold them
         // back
-        assertThat(restricted.resolveAcceptance(twoGroupsRow(100, 100), twoGroupsRow(101, null)))
+        assertThat(acceptanceOf(restricted, twoGroupsRow(100, 100), twoGroupsRow(101, null)))
                 .containsExactly(true, true, true, true, true);
     }
 }
