@@ -1679,7 +1679,11 @@ public class ReplicaManager implements ServerReconfigurable {
             try {
                 Replica replica = getReplicaOrException(tb);
                 long rowCount = replica.getRowCount();
-                results.add(new TableStatsResultForBucket(tb, rowCount));
+                long dataSizeBytes = replica.getLogTablet().logSize();
+                if (replica.isKvTable()) {
+                    dataSizeBytes += replica.getLatestKvSnapshotSize();
+                }
+                results.add(new TableStatsResultForBucket(tb, rowCount, dataSizeBytes));
             } catch (Exception e) {
                 LOG.error("Error getting table stats on replica {}", tableBucket, e);
                 results.add(new TableStatsResultForBucket(tb, ApiError.fromThrowable(e)));

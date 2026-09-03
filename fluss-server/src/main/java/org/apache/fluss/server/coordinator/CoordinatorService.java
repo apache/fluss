@@ -174,6 +174,7 @@ import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotJsonSerde;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
 import org.apache.fluss.server.metadata.CoordinatorMetadataProvider;
+import org.apache.fluss.server.metrics.ServerNodeMetrics;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperClient.TableBucketAndManifest;
@@ -276,6 +277,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             RemoteDirDynamicLoader remoteDirDynamicLoader,
             DynamicConfigManager dynamicConfigManager,
             ExecutorService ioExecutor,
+            ServerNodeMetrics serverNodeMetrics,
             KvSnapshotLeaseManager kvSnapshotLeaseManager,
             CoordinatorLeaderElection coordinatorLeaderElection,
             ReplicaCapacityController replicaCapacityController) {
@@ -286,7 +288,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 metadataManager,
                 authorizer,
                 dynamicConfigManager,
-                ioExecutor);
+                ioExecutor,
+                serverNodeMetrics);
         this.defaultBucketNumber = conf.getInt(ConfigOptions.DEFAULT_BUCKET_NUMBER);
         this.defaultReplicationFactor = conf.getInt(ConfigOptions.DEFAULT_REPLICATION_FACTOR);
         this.logTableAllowCreation = conf.getBoolean(ConfigOptions.LOG_TABLE_ALLOW_CREATION);

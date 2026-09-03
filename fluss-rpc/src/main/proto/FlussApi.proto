@@ -357,6 +357,7 @@ message GetTableStatsRequest {
 
 message GetTableStatsResponse {
   repeated PbTableStatsRespForBucket buckets_resp = 1;
+  optional int64 collected_at_ms = 2;
 }
 
 // notify bucket leader and isr request
@@ -814,6 +815,20 @@ message GetClusterHealthResponse {
   required int32 num_leader_replicas = 3;
   required int32 active_leader_replicas = 4;
   required int32 status = 5; // PbClusterHealthStatus: GREEN=0, YELLOW=1, RED=2, UNKNOWN=3
+}
+
+message GetServerInfoRequest { }
+
+message GetServerInfoResponse {
+  required string server_id = 1;
+  required int32 server_type = 2;
+  required double cpu_cores = 3;
+  required int64 memory_total_bytes = 4;
+  required double cpu_usage_ratio = 5;
+  required int64 memory_used_bytes = 6;
+  optional int64 data_disk_total_bytes = 7;
+  optional int64 data_disk_used_bytes = 8;
+  required int64 collected_at_ms = 9;
 }
 
 
@@ -1357,12 +1372,11 @@ message PbTableStatsRespForBucket {
   // Absent if row count is not available (e.g., WAL changelog mode or legacy tables).
   optional int64 row_count = 5;
 
-  // --- data size stats (future) ---
+  // --- data size stats ---
   // The data size in bytes of this bucket.
   // For KV tables: the size of the KV store.
   // For Log tables: the size of the log segments.
-  // Reserved for future use.
-  // optional int64 data_size_bytes = 6;
+  optional int64 data_size_bytes = 6;
 
   // --- Column-level stats (future) ---
   // Per-column statistics, keyed by column index.

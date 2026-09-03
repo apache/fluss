@@ -2339,7 +2339,8 @@ public class ServerRpcMessageUtils {
 
     public static GetTableStatsResponse makeGetTableStatsResponse(
             List<TableStatsResultForBucket> stats) {
-        GetTableStatsResponse response = new GetTableStatsResponse();
+        GetTableStatsResponse response =
+                new GetTableStatsResponse().setCollectedAtMs(System.currentTimeMillis());
         for (TableStatsResultForBucket statForBucket : stats) {
             TableBucket tb = statForBucket.getTableBucket();
             PbTableStatsRespForBucket respForBucket =
@@ -2352,6 +2353,9 @@ public class ServerRpcMessageUtils {
                         statForBucket.getErrorCode(), statForBucket.getErrorMessage());
             } else {
                 respForBucket.setRowCount(statForBucket.getRowCount());
+                if (statForBucket.getDataSizeBytes() != null) {
+                    respForBucket.setDataSizeBytes(statForBucket.getDataSizeBytes());
+                }
             }
         }
         return response;
