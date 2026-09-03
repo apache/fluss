@@ -30,21 +30,31 @@ jobs:
         run: |
           python3 - <<'PY'
           import json
+          import os
           from pathlib import Path
 
           data = json.loads(Path("website/fluss-versions.json").read_text())
-          next_version = next(v for v in data if v["versionName"] == "next")
+          next_version = next(
+              v for v in data if v["versionName"] == "next"
+          )
 
-          print(f"FLUSS_VERSION={next_version['fullVersion']}")
-          print(f"FLUSS_DOCKER_VERSION={next_version['dockerVersion']}")
-          print(f"PAIMON_VERSION={next_version['paimonVersion']}")
-          print("FLINK_DOCKER_VERSION=1.20-0.9.1-incubating")
+          fluss_version = next_version["fullVersion"]
+          fluss_docker_version = next_version["dockerVersion"]
+          paimon_version = next_version["paimonVersion"]
+          flink_docker_version = "1.20-0.9.1-incubating"
 
-          with open("${GITHUB_OUTPUT}", "a") as f:
-              f.write(f"fluss_version={next_version['fullVersion']}\n")
-              f.write(f"fluss_docker_version={next_version['dockerVersion']}\n")
-              f.write(f"paimon_version={next_version['paimonVersion']}\n")
-              f.write("flink_docker_version=1.20-0.9.1-incubating\n")
+          print(f"FLUSS_VERSION={fluss_version}")
+          print(f"FLUSS_DOCKER_VERSION={fluss_docker_version}")
+          print(f"PAIMON_VERSION={paimon_version}")
+          print(f"FLINK_DOCKER_VERSION={flink_docker_version}")
+
+          output_file = os.environ["GITHUB_OUTPUT"]
+
+          with open(output_file, "a") as f:
+              f.write(f"fluss_version={fluss_version}\n")
+              f.write(f"fluss_docker_version={fluss_docker_version}\n")
+              f.write(f"paimon_version={paimon_version}\n")
+              f.write(f"flink_docker_version={flink_docker_version}\n")
           PY
 
       # ------------------------------------------------------------
