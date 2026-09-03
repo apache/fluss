@@ -126,41 +126,51 @@ jobs:
           ./mvnw clean install -DskipTests -T 1C
 
           test -d build-target
-          test -d fluss-dist/target
+          test -f build-target/bin/coordinator-server.sh
+          test -f build-target/bin/tablet-server.sh
 
           echo "---- build-target ----"
           du -sh build-target
-          find build-target -maxdepth 2 -type f | head -100
 
       - name: Prepare Fluss Docker build context
         shell: bash
         run: |
           set -euo pipefail
 
-          rm -rf /tmp/fluss-docker-context
-          mkdir -p /tmp/fluss-docker-context
-          cp -a docker/fluss/Dockerfile /tmp/fluss-docker-context/
-          cp -a docker/fluss/docker-entrypoint.sh /tmp/fluss-docker-context/
-          cp -a build-target /tmp/fluss-docker-context/build-target
+          rm -rf "$RUNNER_TEMP/fluss-docker-context"
+          mkdir -p "$RUNNER_TEMP/fluss-docker-context"
 
-          test -f /tmp/fluss-docker-context/Dockerfile
-          test -f /tmp/fluss-docker-context/docker-entrypoint.sh
-          test -d /tmp/fluss-docker-context/build-target
+          cp docker/fluss/Dockerfile \
+            "$RUNNER_TEMP/fluss-docker-context/Dockerfile"
 
-          echo "---- Fluss Docker context ----"
-          du -sh /tmp/fluss-docker-context
-          du -sh /tmp/fluss-docker-context/build-target
+          cp docker/fluss/docker-entrypoint.sh \
+            "$RUNNER_TEMP/fluss-docker-context/docker-entrypoint.sh"
+
+          cp -a build-target \
+            "$RUNNER_TEMP/fluss-docker-context/build-target"
+
+          echo "---- Docker context ----"
+          find "$RUNNER_TEMP/fluss-docker-context" -maxdepth 2 -type f | head -50
+          du -sh "$RUNNER_TEMP/fluss-docker-context/build-target"
+
+          test -f "$RUNNER_TEMP/fluss-docker-context/Dockerfile"
+          test -f "$RUNNER_TEMP/fluss-docker-context/docker-entrypoint.sh"
+          test -f "$RUNNER_TEMP/fluss-docker-context/build-target/bin/coordinator-server.sh"
+          test -f "$RUNNER_TEMP/fluss-docker-context/build-target/bin/tablet-server.sh"
 
       - name: Build Fluss Docker image
         shell: bash
         run: |
           set -euo pipefail
 
-          docker build \
-            -t apache/fluss:${{ steps.versions.outputs.fluss_docker_version }} \
-            /tmp/fluss-docker-context
+          echo "Building from: $RUNNER_TEMP/fluss-docker-context"
 
-          docker image inspect apache/fluss:${{ steps.versions.outputs.fluss_docker_version }}
+          docker build --no-cache \
+            -t apache/fluss:${{ steps.versions.outputs.fluss_docker_version }} \
+            "$RUNNER_TEMP/fluss-docker-context"
+
+          docker image inspect \
+            apache/fluss:${{ steps.versions.outputs.fluss_docker_version }}
 
       - name: Prepare quickstart-flink build
         shell: bash
