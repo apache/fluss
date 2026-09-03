@@ -1775,6 +1775,11 @@ class IcebergLakeCatalogTest {
         existing.put("engine.internal", "whatever");
         assertThat(flussIcebergCatalog.isIcebergPropertiesCompatible(existing, expected)).isTrue();
 
+        // Fluss properties are metadata owned by Fluss and may differ between descriptors.
+        expected.put("fluss.table.replication.factor", "1");
+        existing.put("fluss.table.replication.factor", "2");
+        assertThat(flussIcebergCatalog.isIcebergPropertiesCompatible(existing, expected)).isTrue();
+
         // Existing missing an expected key -> incompatible.
         existing = new HashMap<>();
         existing.put("k1", "v1");
