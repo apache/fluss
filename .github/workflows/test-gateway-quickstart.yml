@@ -35,35 +35,16 @@ jobs:
           data = json.loads(Path("website/fluss-versions.json").read_text())
           next_version = next(v for v in data if v["versionName"] == "next")
 
-          fluss_version = next_version["fullVersion"]
-          fluss_docker_version = next_version["dockerVersion"]
-          paimon_version = next_version["paimonVersion"]
-
-          # The versions file used by this branch may expose the Flink
-          # Docker version under different names. Resolve the first one
-          # that exists rather than assuming flinkVersion.
-          flink_version = (
-              next_version.get("quickstartFlinkDockerVersion")
-              or next_version.get("flinkDockerVersion")
-              or next_version.get("flinkVersion")
-          )
-
-          if not flink_version:
-              raise SystemExit(
-                  "Could not find a Flink version. Available keys: "
-                  + ", ".join(sorted(next_version.keys()))
-              )
-
-          print(f"FLUSS_VERSION={fluss_version}")
-          print(f"FLUSS_DOCKER_VERSION={fluss_docker_version}")
-          print(f"PAIMON_VERSION={paimon_version}")
-          print(f"FLINK_DOCKER_VERSION={flink_version}")
+          print(f"FLUSS_VERSION={next_version['fullVersion']}")
+          print(f"FLUSS_DOCKER_VERSION={next_version['dockerVersion']}")
+          print(f"PAIMON_VERSION={next_version['paimonVersion']}")
+          print("FLINK_DOCKER_VERSION=1.20-0.9.1-incubating")
 
           with open("${GITHUB_OUTPUT}", "a") as f:
-              f.write(f"fluss_version={fluss_version}\n")
-              f.write(f"fluss_docker_version={fluss_docker_version}\n")
-              f.write(f"paimon_version={paimon_version}\n")
-              f.write(f"flink_docker_version={flink_version}\n")
+              f.write(f"fluss_version={next_version['fullVersion']}\n")
+              f.write(f"fluss_docker_version={next_version['dockerVersion']}\n")
+              f.write(f"paimon_version={next_version['paimonVersion']}\n")
+              f.write("flink_docker_version=1.20-0.9.1-incubating\n")
           PY
 
       # ------------------------------------------------------------
@@ -124,7 +105,7 @@ jobs:
 
           echo "---- build-target ----"
           find build-target -maxdepth 2 -type f | head -100
-          
+
       - name: Prepare Fluss Docker build context
         run: |
           rm -rf docker/fluss/build-target
