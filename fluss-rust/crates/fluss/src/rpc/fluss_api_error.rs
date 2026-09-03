@@ -171,6 +171,14 @@ pub enum FlussError {
     InvalidAlterTableException = 56,
     /// Deletion operations are disabled on this table.
     DeletionDisabledException = 57,
+    /// The scanner session has expired due to inactivity.
+    ScannerExpired = 66,
+    /// The scanner id is not recognized by the server.
+    UnknownScannerId = 67,
+    /// The scan request is invalid.
+    InvalidScanRequest = 68,
+    /// The per-bucket or per-server scanner session limit has been reached.
+    TooManyScanners = 69,
     /// The KV storage engine rejected a write due to backpressure.
     StorageBackpressureException = 72,
 }
@@ -301,6 +309,12 @@ impl FlussError {
             FlussError::DeletionDisabledException => {
                 "Deletion operations are disabled on this table."
             }
+            FlussError::ScannerExpired => "The scanner session has expired due to inactivity.",
+            FlussError::UnknownScannerId => "The scanner id is not recognized by the server.",
+            FlussError::InvalidScanRequest => "The scan request is invalid.",
+            FlussError::TooManyScanners => {
+                "The per-bucket or per-server scanner session limit has been reached."
+            }
             FlussError::StorageBackpressureException => {
                 "The tablet server has rejected the write because the KV storage engine has reached its write-pressure threshold."
             }
@@ -378,6 +392,10 @@ impl FlussError {
             55 => FlussError::IneligibleReplicaException,
             56 => FlussError::InvalidAlterTableException,
             57 => FlussError::DeletionDisabledException,
+            66 => FlussError::ScannerExpired,
+            67 => FlussError::UnknownScannerId,
+            68 => FlussError::InvalidScanRequest,
+            69 => FlussError::TooManyScanners,
             72 => FlussError::StorageBackpressureException,
             _ => FlussError::UnknownServerError,
         }
@@ -421,6 +439,8 @@ mod tests {
             FlussError::for_code(72),
             FlussError::StorageBackpressureException
         );
+        assert_eq!(FlussError::for_code(66), FlussError::ScannerExpired);
+        assert_eq!(FlussError::for_code(69), FlussError::TooManyScanners);
         assert_eq!(FlussError::for_code(9999), FlussError::UnknownServerError);
     }
 
@@ -505,6 +525,10 @@ mod tests {
             FlussError::FencedLeaderEpochException,
             FlussError::FencedTieringEpochException,
             FlussError::RetriableAuthenticateException,
+            FlussError::ScannerExpired,
+            FlussError::UnknownScannerId,
+            FlussError::InvalidScanRequest,
+            FlussError::TooManyScanners,
         ];
         for err in &non_retriable {
             assert!(!err.is_retriable(), "{err:?} should not be retriable");

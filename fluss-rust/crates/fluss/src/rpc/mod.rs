@@ -27,6 +27,8 @@ pub use error::*;
 mod server_connection;
 pub use server_connection::*;
 mod convert;
+#[cfg(test)]
+pub(crate) mod test_utils;
 mod transport;
 
 pub(crate) use convert::*;

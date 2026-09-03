@@ -35,6 +35,7 @@ const DEFAULT_SCANNER_LOG_FETCH_MIN_BYTES: i32 = 1;
 const DEFAULT_SCANNER_LOG_FETCH_WAIT_MAX_TIME_MS: i32 = 500;
 const DEFAULT_WRITER_BATCH_TIMEOUT_MS: i64 = 100;
 const DEFAULT_SCANNER_LOG_FETCH_MAX_BYTES_FOR_BUCKET: i32 = 1024 * 1024;
+const DEFAULT_SCANNER_KV_FETCH_MAX_BYTES: i32 = 4 * 1024 * 1024;
 const DEFAULT_WRITER_MAX_INFLIGHT_REQUESTS_PER_BUCKET: usize = 5;
 const DEFAULT_WRITER_BUFFER_MEMORY_SIZE: usize = 64 * 1024 * 1024; // 64MB, matching Java
 const DEFAULT_WRITER_BUFFER_WAIT_TIMEOUT_MS: u64 = u64::MAX;
@@ -138,6 +139,12 @@ pub struct Config {
     /// Default: 1048576 (1MB)
     #[arg(long, default_value_t = DEFAULT_SCANNER_LOG_FETCH_MAX_BYTES_FOR_BUCKET)]
     pub scanner_log_fetch_max_bytes_for_bucket: i32,
+
+    /// Maximum bytes of record data the server returns per `ScanKv` request when
+    /// performing a full primary-key table scan (`BatchScanner` without a limit).
+    /// Default: 4194304 (4MB, matching Java `client.scanner.kv.fetch.max-bytes`)
+    #[arg(long, default_value_t = DEFAULT_SCANNER_KV_FETCH_MAX_BYTES)]
+    pub scanner_kv_fetch_max_bytes: i32,
 
     /// Whether to enable idempotent writes. When enabled, each batch is tagged with
     /// a server-allocated writer ID and per-bucket sequence number so the server can
@@ -257,6 +264,10 @@ impl std::fmt::Debug for Config {
                 &self.scanner_log_fetch_max_bytes_for_bucket,
             )
             .field(
+                "scanner_kv_fetch_max_bytes",
+                &self.scanner_kv_fetch_max_bytes,
+            )
+            .field(
                 "scanner_log_fetch_wait_max_time_ms",
                 &self.scanner_log_fetch_wait_max_time_ms,
             )
@@ -311,6 +322,7 @@ impl Default for Config {
             scanner_log_fetch_min_bytes: DEFAULT_SCANNER_LOG_FETCH_MIN_BYTES,
             scanner_log_fetch_wait_max_time_ms: DEFAULT_SCANNER_LOG_FETCH_WAIT_MAX_TIME_MS,
             scanner_log_fetch_max_bytes_for_bucket: DEFAULT_SCANNER_LOG_FETCH_MAX_BYTES_FOR_BUCKET,
+            scanner_kv_fetch_max_bytes: DEFAULT_SCANNER_KV_FETCH_MAX_BYTES,
             writer_batch_timeout_ms: DEFAULT_WRITER_BATCH_TIMEOUT_MS,
             writer_enable_idempotence: true,
             writer_max_inflight_requests_per_bucket:
@@ -381,6 +393,9 @@ impl Config {
         }
         if self.scanner_log_fetch_max_bytes <= 0 {
             return Err("scanner_log_fetch_max_bytes must be > 0".to_string());
+        }
+        if self.scanner_kv_fetch_max_bytes <= 0 {
+            return Err("scanner_kv_fetch_max_bytes must be > 0".to_string());
         }
         if self.scanner_log_fetch_max_bytes < self.scanner_log_fetch_min_bytes {
             return Err(
@@ -566,6 +581,15 @@ mod tests {
         let config = Config {
             scanner_log_fetch_min_bytes: 2,
             scanner_log_fetch_max_bytes: 1,
+            ..Config::default()
+        };
+        assert!(config.validate_scanner().is_err());
+    }
+
+    #[test]
+    fn test_scanner_kv_fetch_max_bytes_zero() {
+        let config = Config {
+            scanner_kv_fetch_max_bytes: 0,
             ..Config::default()
         };
         assert!(config.validate_scanner().is_err());

@@ -287,9 +287,10 @@ async fn decode_kv_batch(
     table_info: &TableInfo,
     schema_getter: &ClientSchemaGetter,
     projected_fields: Option<&[usize]>,
-    raw: Vec<u8>,
+    raw: impl Into<Bytes>,
     limit: usize,
 ) -> Result<RecordBatch> {
+    let raw: Bytes = raw.into();
     // No records: return an empty (projected) batch.
     if raw.is_empty() {
         return empty_record_batch(table_info.get_row_type(), projected_fields);
@@ -306,7 +307,7 @@ async fn decode_kv_batch(
             source: None,
         })?;
 
-    let batch = ValueRecordBatch::new(Bytes::from(raw));
+    let batch = ValueRecordBatch::new(raw);
     let ranges = batch.value_ranges()?;
 
     // Collect the distinct schema ids present, then build one decoder per id
@@ -454,6 +455,9 @@ fn project_batch(
         }
     }
 }
+
+mod kv_batch_scanner;
+pub use kv_batch_scanner::{KvBatchReadOutcome, KvBatchScanner, KvSnapshotScanner};
 
 #[cfg(test)]
 mod tests {

@@ -228,6 +228,7 @@ inline ffi::FfiConfig to_ffi_config(const Configuration& config) {
     ffi_config.scanner_log_fetch_min_bytes = config.scanner_log_fetch_min_bytes;
     ffi_config.scanner_log_fetch_wait_max_time_ms = config.scanner_log_fetch_wait_max_time_ms;
     ffi_config.scanner_log_fetch_max_bytes_for_bucket = config.scanner_log_fetch_max_bytes_for_bucket;
+    ffi_config.scanner_kv_fetch_max_bytes = config.scanner_kv_fetch_max_bytes;
     ffi_config.writer_batch_timeout_ms = config.writer_batch_timeout_ms;
     ffi_config.writer_enable_idempotence = config.writer_enable_idempotence;
     ffi_config.writer_max_inflight_requests_per_bucket =

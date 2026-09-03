@@ -238,6 +238,17 @@ impl RpcClient {
         Ok(new_server)
     }
 
+    #[cfg(test)]
+    pub(crate) fn insert_connection_for_test(
+        &self,
+        server_node: &ServerNode,
+        connection: ServerConnection,
+    ) {
+        self.connections
+            .write()
+            .insert(server_node.uid().to_owned(), connection);
+    }
+
     async fn connect(&self, server_node: &ServerNode) -> Result<ServerConnection, Error> {
         let url = server_node.url();
         let transport = Transport::connect(&url, self.timeout)
@@ -641,6 +652,15 @@ where
 
         fut.await
     }
+}
+
+#[cfg(test)]
+pub(crate) fn server_connection_from_duplex(stream: tokio::io::DuplexStream) -> ServerConnection {
+    Arc::new(ServerConnectionInner::new(
+        BufStream::new(Transport::from_duplex(stream)),
+        usize::MAX,
+        Arc::from("scan-kv-test"),
+    ))
 }
 
 impl<RW> Drop for ServerConnectionInner<RW> {

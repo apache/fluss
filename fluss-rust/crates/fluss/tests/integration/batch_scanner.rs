@@ -18,12 +18,18 @@
 
 #[cfg(test)]
 mod batch_scanner_test {
-    use crate::integration::utils::{create_table, get_shared_cluster, wait_for_table_ready};
+    use crate::integration::utils::{
+        create_partitions, create_table, get_shared_cluster, wait_for_partition_buckets_ready,
+        wait_for_table_buckets_ready, wait_for_table_ready,
+    };
     use arrow::array::{Array, Int32Array, Int64Array, StringArray, record_batch};
+    use fluss::client::FlussConnection;
+    use fluss::config::Config;
     use fluss::metadata::{
         AddColumn, AlterTableChanges, ColumnPositionType, DataTypes, JsonSerde, LogFormat, Schema,
         TableBucket, TableDescriptor, TablePath,
     };
+    use fluss::predicate::col;
     use fluss::row::GenericRow;
     use futures::TryStreamExt;
     use std::collections::HashMap;
@@ -590,5 +596,374 @@ mod batch_scanner_test {
                 .is_err(),
             "create_record_batch_log_scanner must reject a configured limit"
         );
+    }
+
+    // ---- full KV scan (ScanKv) ---------------------------------------------
+
+    fn id_name_pk_descriptor(num_buckets: i32) -> TableDescriptor {
+        TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("name", DataTypes::string())
+                    .primary_key(vec!["id"])
+                    .expect("primary key")
+                    .build()
+                    .expect("schema"),
+            )
+            .distributed_by(Some(num_buckets), vec!["id".to_string()])
+            .build()
+            .expect("descriptor")
+    }
+
+    async fn create_id_name_pk_table<'a>(
+        connection: &'a FlussConnection,
+        table_name: &str,
+        num_buckets: i32,
+    ) -> fluss::client::FlussTable<'a> {
+        let admin = connection.get_admin().expect("admin");
+        let table_path = TablePath::new("fluss", table_name);
+        create_table(&admin, &table_path, &id_name_pk_descriptor(num_buckets)).await;
+        if num_buckets == 1 {
+            wait_for_table_ready(&admin, &table_path).await;
+        } else {
+            let buckets: Vec<i32> = (0..num_buckets).collect();
+            wait_for_table_buckets_ready(&admin, &table_path, &buckets).await;
+        }
+        connection.get_table(&table_path).await.expect("table")
+    }
+
+    async fn upsert_id_name_rows(
+        table: &fluss::client::FlussTable<'_>,
+        rows: &HashMap<i32, String>,
+    ) {
+        let writer = table
+            .new_upsert()
+            .expect("upsert")
+            .create_writer()
+            .expect("writer");
+        for (id, name) in rows {
+            let mut row = GenericRow::new(2);
+            row.set_field(0, *id);
+            row.set_field(1, name.as_str());
+            writer.upsert(&row).expect("upsert row");
+        }
+        writer.flush().await.expect("flush");
+    }
+
+    fn id_name_rows(ids: impl IntoIterator<Item = i32>) -> HashMap<i32, String> {
+        ids.into_iter()
+            .map(|id| (id, format!("name-{id}")))
+            .collect()
+    }
+
+    /// Collect every (id, name) pair across all batches, asserting each key is
+    /// seen exactly once — a full KV scan returns merged state, not a changelog.
+    fn collect_id_name(batches: &[fluss::record::ScanBatch]) -> HashMap<i32, String> {
+        let mut seen: HashMap<i32, String> = HashMap::new();
+        for scan_batch in batches {
+            let rows = scan_batch.batch();
+            let ids = rows
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .expect("id column Int32");
+            let names = rows
+                .column(1)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .expect("name column Utf8");
+            for i in 0..rows.num_rows() {
+                let prev = seen.insert(ids.value(i), names.value(i).to_string());
+                assert!(
+                    prev.is_none(),
+                    "key {} returned more than once",
+                    ids.value(i)
+                );
+            }
+        }
+        seen
+    }
+
+    /// Bucket and whole-table entry points both cover the complete merged state.
+    #[tokio::test]
+    async fn kv_scanners_cover_bucket_and_whole_table_reads() {
+        let connection = get_shared_cluster().get_fluss_connection().await;
+        let table = create_id_name_pk_table(&connection, "test_kv_scan_current_state", 3).await;
+
+        let mut empty_scanner = table
+            .new_scan()
+            .create_kv_scanner()
+            .await
+            .expect("create empty whole-table scanner");
+        assert!(
+            empty_scanner
+                .collect_all_batches()
+                .await
+                .expect("scan empty table")
+                .is_empty()
+        );
+
+        let expected = id_name_rows(1..=20);
+        upsert_id_name_rows(&table, &expected).await;
+
+        let mut table_scanner = table
+            .new_scan()
+            .create_kv_scanner()
+            .await
+            .expect("create whole-table scanner");
+        let whole_table = table_scanner
+            .collect_all_batches()
+            .await
+            .expect("scan whole table");
+        assert_eq!(collect_id_name(&whole_table), expected);
+
+        let mut across_buckets = HashMap::new();
+        for bucket_id in 0..3 {
+            let bucket = TableBucket::new(table.get_table_info().table_id, bucket_id);
+            let mut scanner = table
+                .new_scan()
+                .create_bucket_kv_scanner(bucket.clone())
+                .expect("create bucket scanner");
+            let batches = scanner.collect_all_batches().await.expect("scan bucket");
+            assert!(batches.iter().all(|batch| batch.bucket() == &bucket));
+            for (id, name) in collect_id_name(&batches) {
+                assert!(
+                    across_buckets.insert(id, name).is_none(),
+                    "key {id} returned by multiple buckets"
+                );
+            }
+        }
+        assert_eq!(across_buckets, expected);
+    }
+
+    /// Whole-table scans enumerate every partition and bucket once.
+    #[tokio::test]
+    async fn kv_whole_table_scanner_covers_partitioned_table() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("admin");
+
+        let table_path = TablePath::new("fluss", "test_kv_scan_partitioned_table");
+        let descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("name", DataTypes::string())
+                    .column("region", DataTypes::string())
+                    .primary_key(vec!["id", "region"])
+                    .expect("primary key")
+                    .build()
+                    .expect("schema"),
+            )
+            .distributed_by(Some(2), vec!["id".to_string()])
+            .partitioned_by(vec!["region"])
+            .build()
+            .expect("descriptor");
+        create_table(&admin, &table_path, &descriptor).await;
+        create_partitions(&admin, &table_path, "region", &["US", "EU"]).await;
+        wait_for_partition_buckets_ready(&admin, &table_path, "US", &[0, 1]).await;
+        wait_for_partition_buckets_ready(&admin, &table_path, "EU", &[0, 1]).await;
+
+        let table = connection.get_table(&table_path).await.expect("table");
+        let writer = table
+            .new_upsert()
+            .expect("upsert")
+            .create_writer()
+            .expect("writer");
+
+        let rows = [
+            (1, "name-1", "US"),
+            (2, "name-2", "US"),
+            (3, "name-3", "EU"),
+            (4, "name-4", "EU"),
+        ];
+        for &(id, name, region) in &rows {
+            let mut row = GenericRow::new(3);
+            row.set_field(0, id);
+            row.set_field(1, name);
+            row.set_field(2, region);
+            writer.upsert(&row).expect("upsert row");
+        }
+        writer.flush().await.expect("flush");
+
+        let mut scanner = table
+            .new_scan()
+            .create_kv_scanner()
+            .await
+            .expect("create partitioned whole-table scanner");
+        let batches = scanner
+            .collect_all_batches()
+            .await
+            .expect("scan partitioned primary-key table");
+
+        let seen = collect_id_name(&batches);
+        let expected: HashMap<i32, String> = rows
+            .iter()
+            .map(|(id, name, _)| (*id, (*name).to_string()))
+            .collect();
+        assert_eq!(seen, expected);
+
+        let regions: std::collections::HashSet<String> = batches
+            .iter()
+            .flat_map(|batch| {
+                let rows = batch.batch();
+                let regions = rows
+                    .column(2)
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .expect("region column");
+                (0..rows.num_rows())
+                    .map(|row| regions.value(row).to_string())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(regions, ["US".to_string(), "EU".to_string()].into());
+    }
+
+    /// A small fetch size forces continuation RPCs; rows written after the open
+    /// response must remain invisible to the bucket snapshot.
+    #[tokio::test]
+    async fn kv_bucket_scanner_preserves_snapshot_across_continuations() {
+        let cluster = get_shared_cluster();
+        let setup_connection = cluster.get_fluss_connection().await;
+        let setup_table =
+            create_id_name_pk_table(&setup_connection, "test_kv_scan_snapshot", 1).await;
+        let table_path = setup_table.table_path().clone();
+
+        let scan_connection = FlussConnection::new(Config {
+            bootstrap_servers: cluster.plaintext_bootstrap_servers().to_string(),
+            writer_acks: "all".to_string(),
+            scanner_kv_fetch_max_bytes: 128,
+            ..Config::default()
+        })
+        .await
+        .expect("small-fetch connection");
+        let table = scan_connection.get_table(&table_path).await.expect("table");
+        let initial_rows: HashMap<i32, String> = (0..20)
+            .map(|id| (id, format!("initial-value-{id:02}-with-padding")))
+            .collect();
+        upsert_id_name_rows(&table, &initial_rows).await;
+
+        let bucket = TableBucket::new(table.get_table_info().table_id, 0);
+        let mut scanner = table
+            .new_scan()
+            .create_bucket_kv_scanner(bucket)
+            .expect("create snapshot scanner");
+        let first_batch = scanner
+            .next_batch()
+            .await
+            .expect("open snapshot scan")
+            .expect("non-empty table must return KV rows");
+        assert!(
+            first_batch.batch().num_rows() < initial_rows.len(),
+            "small fetch size must force at least one continuation"
+        );
+        assert!(
+            scanner.snapshot_log_offset().is_some(),
+            "open response must expose the snapshot log offset"
+        );
+
+        let post_snapshot_id = 20;
+        let writer = table
+            .new_upsert()
+            .expect("upsert")
+            .create_writer()
+            .expect("writer");
+        let mut row = GenericRow::new(2);
+        row.set_field(0, post_snapshot_id);
+        row.set_field(1, "post-snapshot");
+        writer.upsert(&row).expect("upsert post-snapshot row");
+        writer.flush().await.expect("flush post-snapshot row");
+
+        let mut batches = vec![first_batch];
+        batches.extend(
+            scanner
+                .collect_all_batches()
+                .await
+                .expect("continue snapshot scan"),
+        );
+        let seen = collect_id_name(&batches);
+        assert_eq!(seen, initial_rows);
+        assert!(!seen.contains_key(&post_snapshot_id));
+    }
+
+    /// Unsupported table shapes, pushdowns, and bucket coordinates fail before ScanKV.
+    #[tokio::test]
+    async fn kv_scanner_rejects_unsupported_requests() {
+        let connection = get_shared_cluster().get_fluss_connection().await;
+        let admin = connection.get_admin().expect("admin");
+
+        let log_path = TablePath::new("fluss", "test_kv_scan_reject_log");
+        let log_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .build()
+                    .expect("schema"),
+            )
+            .distributed_by(Some(1), vec!["id".to_string()])
+            .build()
+            .expect("descriptor");
+        create_table(&admin, &log_path, &log_descriptor).await;
+        let log_table = connection.get_table(&log_path).await.expect("log table");
+        let log_bucket = TableBucket::new(log_table.get_table_info().table_id, 0);
+        assert!(log_table.new_scan().create_kv_scanner().await.is_err());
+        assert!(
+            log_table
+                .new_scan()
+                .create_bucket_kv_scanner(log_bucket)
+                .is_err()
+        );
+
+        let table = create_id_name_pk_table(&connection, "test_kv_scan_reject_options", 1).await;
+        let table_id = table.get_table_info().table_id;
+        let bucket = TableBucket::new(table_id, 0);
+        assert!(
+            table
+                .new_scan()
+                .limit(5)
+                .expect("limit")
+                .create_kv_scanner()
+                .await
+                .is_err()
+        );
+        assert!(
+            table
+                .new_scan()
+                .limit(5)
+                .expect("limit")
+                .create_bucket_kv_scanner(bucket.clone())
+                .is_err()
+        );
+        assert!(
+            table
+                .new_scan()
+                .filter(col("id").gt(0))
+                .expect("filter")
+                .create_kv_scanner()
+                .await
+                .is_err()
+        );
+        assert!(
+            table
+                .new_scan()
+                .filter(col("id").gt(0))
+                .expect("filter")
+                .create_bucket_kv_scanner(bucket)
+                .is_err()
+        );
+
+        for invalid_bucket in [
+            TableBucket::new(table_id + 9999, 0),
+            TableBucket::new(table_id, 99),
+        ] {
+            assert!(
+                table
+                    .new_scan()
+                    .create_bucket_kv_scanner(invalid_bucket)
+                    .is_err()
+            );
+        }
     }
 }
