@@ -74,6 +74,7 @@ import org.rocksdb.RateLimiter;
 import org.rocksdb.ReadOptions;
 import org.rocksdb.RocksIterator;
 import org.rocksdb.Snapshot;
+import org.rocksdb.WriteBufferManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -294,12 +295,61 @@ public final class KvTablet {
                 changelogImage,
                 sharedRateLimiter,
                 null,
+                null,
                 new KvFlushScheduler(serverConf),
                 true,
                 null,
                 autoIncrementManager,
                 SystemClock.getInstance(),
                 new TableConfig(new Configuration()));
+    }
+
+    static KvTablet create(
+            PhysicalTablePath tablePath,
+            TableBucket tableBucket,
+            LogTablet logTablet,
+            File kvTabletDir,
+            Configuration serverConf,
+            TabletServerMetricGroup serverMetricGroup,
+            BufferAllocator arrowBufferAllocator,
+            MemorySegmentPool memorySegmentPool,
+            KvFormat kvFormat,
+            RowMerger rowMerger,
+            ArrowCompressionInfo arrowCompressionInfo,
+            SchemaGetter schemaGetter,
+            ChangelogImage changelogImage,
+            RateLimiter sharedRateLimiter,
+            @Nullable Cache sharedBlockCache,
+            @Nullable WriteBufferManager sharedWriteBufferManager,
+            KvFlushScheduler kvFlushScheduler,
+            @Nullable Runnable flushCompleteListener,
+            AutoIncrementManager autoIncrementManager,
+            Clock clock,
+            TableConfig tableConfig)
+            throws IOException {
+        return create(
+                tablePath,
+                tableBucket,
+                logTablet,
+                kvTabletDir,
+                serverConf,
+                serverMetricGroup,
+                arrowBufferAllocator,
+                memorySegmentPool,
+                kvFormat,
+                rowMerger,
+                arrowCompressionInfo,
+                schemaGetter,
+                changelogImage,
+                sharedRateLimiter,
+                sharedBlockCache,
+                sharedWriteBufferManager,
+                kvFlushScheduler,
+                false,
+                flushCompleteListener,
+                autoIncrementManager,
+                clock,
+                tableConfig);
     }
 
     public static KvTablet create(
@@ -340,6 +390,7 @@ public final class KvTablet {
                 changelogImage,
                 sharedRateLimiter,
                 sharedBlockCache,
+                null,
                 kvFlushScheduler,
                 false,
                 flushCompleteListener,
@@ -364,6 +415,7 @@ public final class KvTablet {
             ChangelogImage changelogImage,
             RateLimiter sharedRateLimiter,
             @Nullable Cache sharedBlockCache,
+            @Nullable WriteBufferManager sharedWriteBufferManager,
             KvFlushScheduler kvFlushScheduler,
             boolean closeFlushScheduler,
             @Nullable Runnable flushCompleteListener,
@@ -398,6 +450,7 @@ public final class KvTablet {
                         kvTabletDir,
                         sharedRateLimiter,
                         sharedBlockCache,
+                        sharedWriteBufferManager,
                         compactionFilterFactory);
 
         // Create RocksDB statistics accessor (will be registered to TableMetricGroup by Replica)
@@ -475,6 +528,7 @@ public final class KvTablet {
                 changelogImage,
                 sharedRateLimiter,
                 null,
+                null,
                 new KvFlushScheduler(serverConf),
                 true,
                 null,
@@ -488,6 +542,7 @@ public final class KvTablet {
             File kvDir,
             RateLimiter sharedRateLimiter,
             @Nullable Cache sharedBlockCache,
+            @Nullable WriteBufferManager sharedWriteBufferManager,
             @Nullable
                     AbstractCompactionFilterFactory<? extends AbstractCompactionFilter<?>>
                             compactionFilterFactory)
@@ -497,7 +552,12 @@ public final class KvTablet {
         try {
             rocksDBResourceContainer =
                     new RocksDBResourceContainer(
-                            configuration, kvDir, true, sharedRateLimiter, sharedBlockCache);
+                            configuration,
+                            kvDir,
+                            true,
+                            sharedRateLimiter,
+                            sharedBlockCache,
+                            sharedWriteBufferManager);
             RocksDBKvBuilder rocksDBKvBuilder =
                     new RocksDBKvBuilder(
                                     kvDir,

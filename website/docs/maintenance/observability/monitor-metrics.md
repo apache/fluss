@@ -1119,8 +1119,8 @@ These metrics provide a server-wide view of RocksDB resource usage. The total me
   </thead>
   <tbody>
     <tr>
-      <th rowspan="4"><strong>tabletserver</strong></th>
-      <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="4">-</td>
+      <th rowspan="6"><strong>tabletserver</strong></th>
+      <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="6">-</td>
       <td>rocksdbMemoryUsageTotal</td>
       <td>Total memory usage across all RocksDB instances in this server (in bytes). This includes memtables, table readers, and block cache. When <code>kv.rocksdb.shared-block-cache.size</code> is greater than 0, the shared block cache usage is counted once to avoid double-counting across tablets.</td>
       <td>Gauge</td>
@@ -1138,6 +1138,16 @@ These metrics provide a server-wide view of RocksDB resource usage. The total me
     <tr>
       <td>rocksdbSharedBlockCachePinnedUsage</td>
       <td>Pinned memory usage of the shared RocksDB block cache in this server (in bytes). Reports 0 when the shared block cache is disabled.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rocksdbSharedWriteBufferUsage</td>
+      <td>Approximate memory charged to the shared RocksDB write buffer manager in this server (in bytes). This is a logical accounting value, not process RSS or a hard memory bound. It is not added to <code>rocksdbMemoryUsageTotal</code>, whose memtable component already reports the same memory.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rocksdbSharedWriteBufferCapacity</td>
+      <td>Configured soft capacity of the shared RocksDB write buffer manager in this server (in bytes). Reports 0 when the shared write buffer manager is disabled.</td>
       <td>Gauge</td>
     </tr>
   </tbody>

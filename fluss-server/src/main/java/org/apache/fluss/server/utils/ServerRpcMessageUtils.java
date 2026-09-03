@@ -1024,6 +1024,9 @@ public class ServerRpcMessageUtils {
             if (bucketResult.hasFilteredEndOffset()) {
                 fetchLogRespForBucket.setFilteredEndOffset(bucketResult.getFilteredEndOffset());
             }
+            if (bucketResult.hasMinRetainOffset()) {
+                fetchLogRespForBucket.setMinRetainOffset(bucketResult.getMinRetainOffset());
+            }
             if (tb.getPartitionId() != null) {
                 fetchLogRespForBucket.setPartitionId(tb.getPartitionId());
             }

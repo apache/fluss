@@ -243,6 +243,13 @@ public class MetricNames {
     public static final String ROCKSDB_SHARED_BLOCK_CACHE_PINNED_USAGE =
             "rocksdbSharedBlockCachePinnedUsage";
 
+    /** Approximate memory charged to the shared RocksDB write buffer manager in this server. */
+    public static final String ROCKSDB_SHARED_WRITE_BUFFER_USAGE = "rocksdbSharedWriteBufferUsage";
+
+    /** Configured soft capacity of the shared RocksDB write buffer manager in this server. */
+    public static final String ROCKSDB_SHARED_WRITE_BUFFER_CAPACITY =
+            "rocksdbSharedWriteBufferCapacity";
+
     // Table-level RocksDB memory metrics (Sum aggregation)
     /** Total memtable memory usage across all buckets of this table. */
     public static final String ROCKSDB_MEMTABLE_MEMORY_USAGE_TOTAL =

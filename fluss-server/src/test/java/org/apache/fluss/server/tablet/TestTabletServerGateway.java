@@ -182,7 +182,8 @@ public class TestTabletServerGateway implements TabletServerGateway {
         fetchLogData.forEach(
                 (tableBucket, fetchData) -> {
                     FetchLogResultForBucket fetchLogResultForBucket =
-                            new FetchLogResultForBucket(tableBucket, MemoryLogRecords.EMPTY, 0L);
+                            FetchLogResultForBucket.records(
+                                    tableBucket, MemoryLogRecords.EMPTY, 0L, -1L, -1L);
                     resultForBucketMap.put(tableBucket, fetchLogResultForBucket);
                 });
         return CompletableFuture.completedFuture(makeFetchLogResponse(resultForBucketMap));

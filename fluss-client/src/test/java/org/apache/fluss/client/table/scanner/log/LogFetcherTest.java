@@ -245,7 +245,7 @@ public class LogFetcherTest {
             fetchLogData.forEach(
                     (tableBucket, fetchData) -> {
                         FetchLogResultForBucket fetchLogResultForBucket =
-                                new FetchLogResultForBucket(
+                                FetchLogResultForBucket.error(
                                         tableBucket,
                                         ApiError.fromThrowable(
                                                 new NotLeaderOrFollowerException(

@@ -235,7 +235,10 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                 //  to skip the authorization.
                 authorizer != null && request.getFollowerServerId() < 0
                         ? authorizeRequestData(
-                                READ, fetchLogData, errorResponseMap, FetchLogResultForBucket::new)
+                                READ,
+                                fetchLogData,
+                                errorResponseMap,
+                                FetchLogResultForBucket::error)
                         : fetchLogData;
         if (interesting.isEmpty()) {
             return CompletableFuture.completedFuture(makeFetchLogResponse(errorResponseMap));

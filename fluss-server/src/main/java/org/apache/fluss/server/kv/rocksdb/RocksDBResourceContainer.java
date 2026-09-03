@@ -40,6 +40,7 @@ import org.rocksdb.RateLimiter;
 import org.rocksdb.ReadOptions;
 import org.rocksdb.Statistics;
 import org.rocksdb.TableFormatConfig;
+import org.rocksdb.WriteBufferManager;
 import org.rocksdb.WriteOptions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -85,6 +86,9 @@ public class RocksDBResourceContainer implements AutoCloseable {
     /** The shared block cache from KvManager, null if not using shared cache. */
     @Nullable private final Cache sharedBlockCache;
 
+    /** The TabletServer-scoped shared write buffer manager, null for standalone containers. */
+    @Nullable private final WriteBufferManager sharedWriteBufferManager;
+
     /** The statistics object for RocksDB, null if statistics is disabled. */
     @Nullable private Statistics statistics;
 
@@ -96,11 +100,11 @@ public class RocksDBResourceContainer implements AutoCloseable {
 
     @VisibleForTesting
     RocksDBResourceContainer() {
-        this(new Configuration(), null, false, KvManager.getDefaultRateLimiter(), null);
+        this(new Configuration(), null, false, KvManager.getDefaultRateLimiter(), null, null);
     }
 
     public RocksDBResourceContainer(ReadableConfig configuration, @Nullable File instanceBasePath) {
-        this(configuration, instanceBasePath, false, KvManager.getDefaultRateLimiter(), null);
+        this(configuration, instanceBasePath, false, KvManager.getDefaultRateLimiter(), null, null);
     }
 
     public RocksDBResourceContainer(
@@ -112,6 +116,7 @@ public class RocksDBResourceContainer implements AutoCloseable {
                 instanceBasePath,
                 enableStatistics,
                 KvManager.getDefaultRateLimiter(),
+                null,
                 null);
     }
 
@@ -120,7 +125,7 @@ public class RocksDBResourceContainer implements AutoCloseable {
             @Nullable File instanceBasePath,
             boolean enableStatistics,
             RateLimiter sharedRateLimiter) {
-        this(configuration, instanceBasePath, enableStatistics, sharedRateLimiter, null);
+        this(configuration, instanceBasePath, enableStatistics, sharedRateLimiter, null, null);
     }
 
     public RocksDBResourceContainer(
@@ -129,6 +134,28 @@ public class RocksDBResourceContainer implements AutoCloseable {
             boolean enableStatistics,
             RateLimiter sharedRateLimiter,
             @Nullable Cache sharedBlockCache) {
+        this(
+                configuration,
+                instanceBasePath,
+                enableStatistics,
+                sharedRateLimiter,
+                sharedBlockCache,
+                null);
+    }
+
+    /**
+     * Creates a resource container that borrows TabletServer-scoped RocksDB resources.
+     *
+     * <p>The caller owns the shared rate limiter, block cache, and write buffer manager and must
+     * keep them alive until this container is closed.
+     */
+    public RocksDBResourceContainer(
+            ReadableConfig configuration,
+            @Nullable File instanceBasePath,
+            boolean enableStatistics,
+            RateLimiter sharedRateLimiter,
+            @Nullable Cache sharedBlockCache,
+            @Nullable WriteBufferManager sharedWriteBufferManager) {
         this.configuration = configuration;
 
         this.instanceRocksDBPath =
@@ -139,6 +166,7 @@ public class RocksDBResourceContainer implements AutoCloseable {
         this.sharedRateLimiter =
                 checkNotNull(sharedRateLimiter, "sharedRateLimiter must not be null");
         this.sharedBlockCache = sharedBlockCache;
+        this.sharedWriteBufferManager = sharedWriteBufferManager;
 
         this.handlesToClose = new ArrayList<>();
     }
@@ -155,13 +183,14 @@ public class RocksDBResourceContainer implements AutoCloseable {
         // todo: maybe we can allow user define options factory and some predefined options
         //  just like Flink
 
-        // todo: introduce WriteBufferManager for controllable memory consume in FLUSS-54164814
-
         // add necessary default options
         opt = opt.setCreateIfMissing(true);
 
         // set shared rate limiter
         opt.setRateLimiter(sharedRateLimiter);
+        if (sharedWriteBufferManager != null) {
+            opt.setWriteBufferManager(sharedWriteBufferManager);
+        }
 
         if (enableStatistics) {
             statistics = new Statistics();

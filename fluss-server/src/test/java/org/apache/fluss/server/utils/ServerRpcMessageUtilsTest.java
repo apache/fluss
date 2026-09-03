@@ -18,12 +18,17 @@
 package org.apache.fluss.server.utils;
 
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.KvRecordBatch;
+import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.row.encode.KvValueLayout;
+import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.entity.LookupResultForBucket;
 import org.apache.fluss.rpc.entity.PutKvResultForBucket;
+import org.apache.fluss.rpc.messages.FetchLogResponse;
 import org.apache.fluss.rpc.messages.LookupResponse;
 import org.apache.fluss.rpc.messages.PbBucketMetadata;
+import org.apache.fluss.rpc.messages.PbFetchLogRespForBucket;
 import org.apache.fluss.rpc.messages.PbPartitionMetadata;
 import org.apache.fluss.rpc.messages.PbPutKvReqForBucket;
 import org.apache.fluss.rpc.messages.PbPutKvRespForBucket;
@@ -31,6 +36,7 @@ import org.apache.fluss.rpc.messages.PbTableMetadata;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.PutKvResponse;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
+import org.apache.fluss.rpc.util.CommonRpcMessageUtils;
 import org.apache.fluss.server.entity.PutKvDataForBucket;
 import org.apache.fluss.server.metadata.BucketMetadata;
 import org.apache.fluss.server.metadata.ClusterMetadata;
@@ -55,6 +61,49 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for {@link ServerRpcMessageUtils}. */
 class ServerRpcMessageUtilsTest {
+
+    @Test
+    void testFetchLogResponseContainsMinRetainOffset() {
+        TableBucket tableBucket = new TableBucket(1L, 0);
+        FetchLogResultForBucket result =
+                FetchLogResultForBucket.records(tableBucket, MemoryLogRecords.EMPTY, 10L, -1L, 8L);
+
+        FetchLogResponse response =
+                ServerRpcMessageUtils.makeFetchLogResponse(
+                        Collections.singletonMap(tableBucket, result));
+
+        PbFetchLogRespForBucket bucketResponse =
+                response.getTablesRespsList().get(0).getBucketsRespsList().get(0);
+        assertThat(bucketResponse.hasMinRetainOffset()).isTrue();
+        assertThat(bucketResponse.getMinRetainOffset()).isEqualTo(8L);
+
+        FetchLogResultForBucket decodedResult =
+                CommonRpcMessageUtils.getFetchLogResultForBucket(
+                        tableBucket, TablePath.of("db", "table"), bucketResponse);
+        assertThat(decodedResult.hasMinRetainOffset()).isTrue();
+        assertThat(decodedResult.getMinRetainOffset()).isEqualTo(8L);
+
+        FetchLogResponse responseWithoutMinRetainOffset =
+                ServerRpcMessageUtils.makeFetchLogResponse(
+                        Collections.singletonMap(
+                                tableBucket,
+                                FetchLogResultForBucket.records(
+                                        tableBucket, MemoryLogRecords.EMPTY, 10L, -1L, -1L)));
+        PbFetchLogRespForBucket bucketResponseWithoutMinRetainOffset =
+                responseWithoutMinRetainOffset
+                        .getTablesRespsList()
+                        .get(0)
+                        .getBucketsRespsList()
+                        .get(0);
+        assertThat(bucketResponseWithoutMinRetainOffset.hasMinRetainOffset()).isFalse();
+        assertThat(
+                        CommonRpcMessageUtils.getFetchLogResultForBucket(
+                                        tableBucket,
+                                        TablePath.of("db", "table"),
+                                        bucketResponseWithoutMinRetainOffset)
+                                .hasMinRetainOffset())
+                .isFalse();
+    }
 
     @Test
     void testLookupResponseSupportsMixedValueLayouts() {

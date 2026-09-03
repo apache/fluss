@@ -1921,6 +1921,8 @@ public final class Replica {
         // the fetch do not prevent a follower from coming into sync.
         long initialHighWatermark = logTablet.getHighWatermark();
         long initialLogEndOffset = logTablet.localLogEndOffset();
+        long initialMinRetainOffset =
+                fetchParams.isFromFollower() && isKvTable() ? logTablet.getMinRetainOffset() : -1L;
         long readOffset =
                 fetchParams.fetchOffset() == FetchParams.FETCH_FROM_EARLIEST_OFFSET
                         ? logTablet.logStartOffset()
@@ -1947,7 +1949,8 @@ public final class Replica {
                 IOUtils.closeQuietly(filterContext.getReadContext());
             }
         }
-        return new LogReadInfo(fetchDataInfo, initialHighWatermark, initialLogEndOffset);
+        return new LogReadInfo(
+                fetchDataInfo, initialHighWatermark, initialLogEndOffset, initialMinRetainOffset);
     }
 
     /**

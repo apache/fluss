@@ -183,7 +183,7 @@ public class CommonRpcMessageUtils {
         FetchLogResultForBucket fetchLogResultForBucket;
         if (respForBucket.hasErrorCode()) {
             fetchLogResultForBucket =
-                    new FetchLogResultForBucket(tb, ApiError.fromErrorMessage(respForBucket));
+                    FetchLogResultForBucket.error(tb, ApiError.fromErrorMessage(respForBucket));
         } else {
             if (respForBucket.hasRemoteLogFetchInfo()) {
                 PbRemoteLogFetchInfo pbRlfInfo = respForBucket.getRemoteLogFetchInfo();
@@ -218,7 +218,7 @@ public class CommonRpcMessageUtils {
                                 remoteLogSegmentList,
                                 pbRlfInfo.getFirstStartPos());
                 fetchLogResultForBucket =
-                        new FetchLogResultForBucket(
+                        FetchLogResultForBucket.remote(
                                 tb, rlFetchInfo, respForBucket.getHighWatermark());
             } else {
                 ByteBuffer recordsBuffer = toByteBuffer(respForBucket.getRecordsSlice());
@@ -226,19 +226,18 @@ public class CommonRpcMessageUtils {
                         respForBucket.hasRecords()
                                 ? MemoryLogRecords.pointToByteBuffer(recordsBuffer)
                                 : MemoryLogRecords.EMPTY;
-                if (respForBucket.hasFilteredEndOffset()
-                        && respForBucket.getFilteredEndOffset() >= 0) {
-                    fetchLogResultForBucket =
-                            new FetchLogResultForBucket(
-                                    tb,
-                                    records,
-                                    respForBucket.getHighWatermark(),
-                                    respForBucket.getFilteredEndOffset());
-                } else {
-                    fetchLogResultForBucket =
-                            new FetchLogResultForBucket(
-                                    tb, records, respForBucket.getHighWatermark());
-                }
+                boolean hasFilteredEndOffset =
+                        respForBucket.hasFilteredEndOffset()
+                                && respForBucket.getFilteredEndOffset() >= 0;
+                fetchLogResultForBucket =
+                        FetchLogResultForBucket.records(
+                                tb,
+                                records,
+                                respForBucket.getHighWatermark(),
+                                hasFilteredEndOffset ? respForBucket.getFilteredEndOffset() : -1L,
+                                respForBucket.hasMinRetainOffset()
+                                        ? respForBucket.getMinRetainOffset()
+                                        : -1L);
             }
         }
 

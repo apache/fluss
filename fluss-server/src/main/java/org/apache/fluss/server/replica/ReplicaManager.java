@@ -1786,19 +1786,17 @@ public class ReplicaManager implements ServerReconfigurable {
                     fetchParams.markReadOneMessage();
                 }
                 limitBytes = Math.max(0, limitBytes - recordBatchSize);
-                FetchLogResultForBucket fetchLogResult;
-                if (fetchedData.hasFilteredEndOffset()) {
-                    fetchLogResult =
-                            new FetchLogResultForBucket(
-                                    tb,
-                                    fetchedData.getRecords(),
-                                    readInfo.getHighWatermark(),
-                                    fetchedData.getFilteredEndOffset());
-                } else {
-                    fetchLogResult =
-                            new FetchLogResultForBucket(
-                                    tb, fetchedData.getRecords(), readInfo.getHighWatermark());
-                }
+                FetchLogResultForBucket fetchLogResult =
+                        FetchLogResultForBucket.records(
+                                tb,
+                                fetchedData.getRecords(),
+                                readInfo.getHighWatermark(),
+                                fetchedData.hasFilteredEndOffset()
+                                        ? fetchedData.getFilteredEndOffset()
+                                        : -1L,
+                                readInfo.hasMinRetainOffset()
+                                        ? readInfo.getMinRetainOffset()
+                                        : -1L);
                 logReadResult.put(
                         tb,
                         new LogReadResult(fetchLogResult, fetchedData.getFetchOffsetMetadata()));
@@ -1825,7 +1823,7 @@ public class ReplicaManager implements ServerReconfigurable {
                 if (replica != null && e instanceof LogOffsetOutOfRangeException) {
                     result = handleFetchOutOfRangeException(replica, fetchOffset, e);
                 } else {
-                    result = new FetchLogResultForBucket(tb, ApiError.fromThrowable(e));
+                    result = FetchLogResultForBucket.error(tb, ApiError.fromThrowable(e));
                 }
                 logReadResult.put(
                         tb, new LogReadResult(result, LogOffsetMetadata.UNKNOWN_OFFSET_METADATA));
@@ -1856,7 +1854,7 @@ public class ReplicaManager implements ServerReconfigurable {
             RemoteLogFetchInfo remoteLogFetchInfo =
                     fetchLogFromRemote(replica, normalizedFetchOffset);
             if (remoteLogFetchInfo != null) {
-                return new FetchLogResultForBucket(
+                return FetchLogResultForBucket.remote(
                         tb, remoteLogFetchInfo, replica.getLogHighWatermark());
             }
             // Remote log is expected to cover the offset, but segments/manifest may not be ready
@@ -1885,8 +1883,8 @@ public class ReplicaManager implements ServerReconfigurable {
             // todo: currently, we just return empty records directly
             // need to return the info of datalake to make client can fetch
             // from datalake directly
-            return new FetchLogResultForBucket(
-                    tb, MemoryLogRecords.EMPTY, replica.getLogHighWatermark());
+            return FetchLogResultForBucket.records(
+                    tb, MemoryLogRecords.EMPTY, replica.getLogHighWatermark(), -1L, -1L);
         }
         // Once we get a fetch out of range exception from local storage, we need to check whether
         // the log segment already upload to the remote storage. If uploaded, we will return a list
@@ -1896,13 +1894,13 @@ public class ReplicaManager implements ServerReconfigurable {
             try {
                 RemoteLogFetchInfo remoteLogFetchInfo = fetchLogFromRemote(replica, fetchOffset);
                 if (remoteLogFetchInfo != null) {
-                    return new FetchLogResultForBucket(
+                    return FetchLogResultForBucket.remote(
                             tb, remoteLogFetchInfo, replica.getLogHighWatermark());
                 }
             } catch (Exception ex) {
-                return new FetchLogResultForBucket(tb, ApiError.fromThrowable(ex));
+                return FetchLogResultForBucket.error(tb, ApiError.fromThrowable(ex));
             }
-            return new FetchLogResultForBucket(
+            return FetchLogResultForBucket.error(
                     tb,
                     ApiError.fromThrowable(
                             new LogOffsetOutOfRangeException(
@@ -1910,7 +1908,7 @@ public class ReplicaManager implements ServerReconfigurable {
                                             "The fetch offset %s is out of range for table bucket %s",
                                             fetchOffset, tb))));
         } else {
-            return new FetchLogResultForBucket(tb, ApiError.fromThrowable(e));
+            return FetchLogResultForBucket.error(tb, ApiError.fromThrowable(e));
         }
     }
 

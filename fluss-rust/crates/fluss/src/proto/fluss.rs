@@ -1245,6 +1245,10 @@ pub struct PbFetchLogRespForBucket {
     /// its next fetch from the later of this offset and the end of the records it received.
     #[prost(int64, optional, tag = "9")]
     pub filtered_end_offset: ::core::option::Option<i64>,
+    /// The safe local log retention boundary confirmed by a committed KV snapshot. This is only
+    /// returned for KV follower fetches and is distinct from the physical log_start_offset.
+    #[prost(int64, optional, tag = "10")]
+    pub min_retain_offset: ::core::option::Option<i64>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PbPutKvReqForBucket {

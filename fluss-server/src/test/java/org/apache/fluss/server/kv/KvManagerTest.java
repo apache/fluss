@@ -28,7 +28,11 @@ import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.metrics.Gauge;
+import org.apache.fluss.metrics.MetricNames;
+import org.apache.fluss.metrics.registry.NOPMetricRegistry;
 import org.apache.fluss.record.KvRecord;
 import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.KvRecordTestUtils;
@@ -37,12 +41,14 @@ import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.row.encode.ValueEncoder;
 import org.apache.fluss.server.log.LogManager;
 import org.apache.fluss.server.log.LogTablet;
+import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.server.storage.LocalDiskManager;
 import org.apache.fluss.server.utils.ResourceGuard;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
+import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.ByteArraySlice;
@@ -185,6 +191,95 @@ final class KvManagerTest {
 
         assertThat(firstKv.getRocksDBKv().getBlockCache())
                 .isSameAs(secondKv.getRocksDBKv().getBlockCache());
+    }
+
+    @Test
+    void testSharedWriteBufferConfiguredThroughKvManagerCreateAndLoad() throws Exception {
+        assertThat(
+                        gaugeValue(
+                                TestingMetricGroups.TABLET_SERVER_METRICS,
+                                MetricNames.ROCKSDB_SHARED_WRITE_BUFFER_USAGE))
+                .isEqualTo(0L);
+        assertThat(
+                        gaugeValue(
+                                TestingMetricGroups.TABLET_SERVER_METRICS,
+                                MetricNames.ROCKSDB_SHARED_WRITE_BUFFER_CAPACITY))
+                .isEqualTo(0L);
+
+        kvManager.shutdown();
+        kvManager = null;
+        MemorySize capacity = MemorySize.ofMebiBytes(64);
+        conf.set(ConfigOptions.KV_SHARED_WRITE_BUFFER_SIZE, capacity);
+        TabletServerMetricGroup metricGroup =
+                new TabletServerMetricGroup(
+                        NOPMetricRegistry.INSTANCE, "cluster", "rack", "host", 1);
+        kvManager = KvManager.create(conf, zkClient, logManager, metricGroup, localDiskManager);
+        kvManager.startup();
+
+        initTableBuckets(null);
+        KvTablet firstKv = getOrCreateKv(tablePath1, null, tableBucket1);
+        byte[] value = new byte[512 * 1024];
+        firstKv.getRocksDBKv().put("first-key".getBytes(), value);
+        long firstUsage = gaugeValue(metricGroup, MetricNames.ROCKSDB_SHARED_WRITE_BUFFER_USAGE);
+
+        KvTablet secondKv = getOrCreateKv(tablePath2, null, tableBucket2);
+        byte[] secondKey = "second-key".getBytes();
+        secondKv.getRocksDBKv().put(secondKey, value);
+        long secondUsage = gaugeValue(metricGroup, MetricNames.ROCKSDB_SHARED_WRITE_BUFFER_USAGE);
+
+        assertThat(firstUsage).isPositive();
+        assertThat(secondUsage).isGreaterThan(firstUsage);
+        assertThat(gaugeValue(metricGroup, MetricNames.ROCKSDB_SHARED_WRITE_BUFFER_CAPACITY))
+                .isEqualTo(capacity.getBytes());
+
+        kvManager.dropKv(tableBucket1);
+        KvRecord remainingRecord =
+                kvRecordFactory.ofRecord("remaining-key".getBytes(), new Object[] {3, "remaining"});
+        put(secondKv, remainingRecord);
+        assertThat(secondKv.getRocksDBKv().get(secondKey)).isEqualTo(value);
+        verifyMultiGet(secondKv, "remaining-key".getBytes(), valueOf(remainingRecord));
+
+        File secondKvDir = secondKv.getKvTabletDir();
+        zkClient.registerSchema(tablePath2, DATA1_SCHEMA_PK, schemaId);
+        long currentTime = System.currentTimeMillis();
+        zkClient.registerTable(
+                tablePath2,
+                new TableRegistration(
+                        tableBucket2.getTableId(),
+                        null,
+                        Collections.emptyList(),
+                        new TableDescriptor.TableDistribution(1, Collections.emptyList()),
+                        Collections.emptyMap(),
+                        Collections.emptyMap(),
+                        null,
+                        currentTime,
+                        currentTime),
+                false);
+
+        metricGroup.close();
+        kvManager.shutdown();
+        kvManager = null;
+        TabletServerMetricGroup recoveredMetricGroup =
+                new TabletServerMetricGroup(
+                        NOPMetricRegistry.INSTANCE, "cluster", "rack", "host", 1);
+        kvManager =
+                KvManager.create(
+                        conf, zkClient, logManager, recoveredMetricGroup, localDiskManager);
+        kvManager.startup();
+        KvTablet loadedKv =
+                kvManager.loadKv(
+                        secondKvDir,
+                        new TestingSchemaGetter(new SchemaInfo(DATA1_SCHEMA_PK, schemaId)),
+                        null);
+        loadedKv.getRocksDBKv().put("loaded-key".getBytes(), value);
+
+        assertThat(gaugeValue(recoveredMetricGroup, MetricNames.ROCKSDB_SHARED_WRITE_BUFFER_USAGE))
+                .isPositive();
+        assertThat(
+                        gaugeValue(
+                                recoveredMetricGroup,
+                                MetricNames.ROCKSDB_SHARED_WRITE_BUFFER_CAPACITY))
+                .isEqualTo(capacity.getBytes());
     }
 
     @ParameterizedTest
@@ -577,5 +672,10 @@ final class KvManagerTest {
             values.add(slice == null ? null : slice.toByteArray());
         }
         return values;
+    }
+
+    private static long gaugeValue(TabletServerMetricGroup metricGroup, String metricName) {
+        return ((Number) ((Gauge<?>) metricGroup.getMetrics().get(metricName)).getValue())
+                .longValue();
     }
 }

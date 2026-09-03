@@ -85,6 +85,11 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
 
     private volatile long sharedBlockCacheCapacity;
 
+    /** Supplier for shared write buffer usage, set by KvManager. */
+    private volatile LongSupplier sharedWriteBufferUsageSupplier = () -> 0L;
+
+    private volatile long sharedWriteBufferCapacity;
+
     public TabletServerMetricGroup(
             MetricRegistry registry, String clusterId, String rack, String hostname, int serverId) {
         super(registry, new String[] {clusterId, hostname, NAME}, null);
@@ -171,6 +176,10 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
         gauge(
                 MetricNames.ROCKSDB_SHARED_BLOCK_CACHE_PINNED_USAGE,
                 () -> sharedBlockCachePinnedUsageSupplier.getAsLong());
+        gauge(
+                MetricNames.ROCKSDB_SHARED_WRITE_BUFFER_USAGE,
+                () -> sharedWriteBufferUsageSupplier.getAsLong());
+        gauge(MetricNames.ROCKSDB_SHARED_WRITE_BUFFER_CAPACITY, () -> sharedWriteBufferCapacity);
     }
 
     /**
@@ -189,6 +198,21 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
         this.sharedBlockCacheUsageSupplier = checkedUsageSupplier;
         this.sharedBlockCachePinnedUsageSupplier = checkedPinnedUsageSupplier;
         this.sharedBlockCacheCapacity = capacity;
+    }
+
+    /**
+     * Sets the shared write buffer metrics.
+     *
+     * <p>The usage is RocksDB's approximate logical charge for memtable allocations. It is not a
+     * process RSS measurement or a hard memory bound.
+     *
+     * @param usageSupplier supplier for current shared write buffer usage
+     * @param capacity configured soft capacity in bytes, or 0 when disabled
+     */
+    public void setSharedWriteBufferMetrics(LongSupplier usageSupplier, long capacity) {
+        this.sharedWriteBufferUsageSupplier =
+                checkNotNull(usageSupplier, "usageSupplier must not be null");
+        this.sharedWriteBufferCapacity = capacity;
     }
 
     @Override

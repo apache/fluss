@@ -2204,6 +2204,17 @@ public class ConfigOptions {
                                     + "block cache, in which case each tablet creates its own cache. "
                                     + "This is not a hard limit on process memory. The default is 0.");
 
+    public static final ConfigOption<MemorySize> KV_SHARED_WRITE_BUFFER_SIZE =
+            key("kv.rocksdb.shared-write-buffer.size")
+                    .memoryType()
+                    .defaultValue(MemorySize.ZERO)
+                    .withDescription(
+                            "The shared soft memory limit for RocksDB memtables across all KV tablets "
+                                    + "in the TabletServer. Reaching the limit makes RocksDB flush memtables "
+                                    + "more aggressively, but it is not a hard limit on process memory. "
+                                    + "Set to 0 to disable the shared write buffer manager. "
+                                    + "The default is 0. Changes require a TabletServer restart.");
+
     // --------------------------------------------------------------------------
     // Provided configurable ColumnFamilyOptions within Fluss
     // --------------------------------------------------------------------------

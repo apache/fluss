@@ -33,7 +33,9 @@ import org.rocksdb.DBOptions;
 import org.rocksdb.FlushOptions;
 import org.rocksdb.InfoLogLevel;
 import org.rocksdb.LRUCache;
+import org.rocksdb.RateLimiter;
 import org.rocksdb.ReadOptions;
+import org.rocksdb.WriteBufferManager;
 import org.rocksdb.WriteOptions;
 import org.rocksdb.util.SizeUnit;
 
@@ -275,6 +277,35 @@ class RocksDBResourceContainerTest {
     }
 
     @Test
+    void testTwoRocksDBInstancesShareWriteBufferManager(@TempDir Path tempDir) throws Exception {
+        byte[] value = new byte[(int) (512 * SizeUnit.KB)];
+        RateLimiter rateLimiter = KvManager.getDefaultRateLimiter();
+
+        try (Cache accountingCache = new LRUCache(4 * SizeUnit.MB);
+                WriteBufferManager writeBufferManager =
+                        new WriteBufferManager(4 * SizeUnit.MB, accountingCache);
+                RocksDBKv firstKv =
+                        buildRocksDBKvWithSharedWriteBufferManager(
+                                tempDir.resolve("first").toFile(),
+                                rateLimiter,
+                                writeBufferManager);
+                RocksDBKv secondKv =
+                        buildRocksDBKvWithSharedWriteBufferManager(
+                                tempDir.resolve("second").toFile(),
+                                rateLimiter,
+                                writeBufferManager)) {
+            firstKv.put(new byte[] {1}, value);
+            secondKv.put(new byte[] {2}, value);
+            assertThat(accountingCache.getUsage()).isPositive();
+
+            firstKv.close();
+            assertThat(writeBufferManager.isOwningHandle()).isTrue();
+            secondKv.put(new byte[] {3}, value);
+            assertThat(secondKv.get(new byte[] {2})).isEqualTo(value);
+        }
+    }
+
+    @Test
     void testIndependentCacheClosedOnContainerClose() throws Exception {
         // When no shared cache, the independent cache should be closed with the container
         RocksDBResourceContainer container = new RocksDBResourceContainer();
@@ -295,6 +326,20 @@ class RocksDBResourceContainerTest {
                         false,
                         KvManager.getDefaultRateLimiter(),
                         sharedCache);
+        return new RocksDBKvBuilder(directory, container, container.getColumnOptions()).build();
+    }
+
+    private RocksDBKv buildRocksDBKvWithSharedWriteBufferManager(
+            File directory, RateLimiter rateLimiter, WriteBufferManager writeBufferManager)
+            throws Exception {
+        RocksDBResourceContainer container =
+                new RocksDBResourceContainer(
+                        new Configuration(),
+                        directory,
+                        false,
+                        rateLimiter,
+                        null,
+                        writeBufferManager);
         return new RocksDBKvBuilder(directory, container, container.getColumnOptions()).build();
     }
 }
