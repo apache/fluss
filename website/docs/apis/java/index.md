@@ -158,6 +158,35 @@ System.out.println("Row count: " + stats.getRowCount());
 `getTableStats` for Primary Key Tables requires the table to use the default changelog mode (`'table.changelog.image' = 'FULL'`). Tables configured with `'table.changelog.image' = 'WAL'` do not support this feature.
 :::
 
+## Server Information
+
+The `getServerNodes` method returns the current Coordinator and TabletServer nodes. Each returned
+`ServerNode` includes a `NodeResourceInfo` snapshot containing the CPU, memory, and data disk
+information collected from that node. This information is queried directly from the Fluss nodes
+and does not require querying Prometheus.
+
+```java
+List<ServerNode> serverNodes = admin.getServerNodes().get();
+for (ServerNode serverNode : serverNodes) {
+    NodeResourceInfo resourceInfo = serverNode.resourceInfo();
+
+    System.out.println("Node: " + serverNode);
+    if (resourceInfo != null) {
+        System.out.println("CPU cores: " + resourceInfo.cpuCores());
+        System.out.println("CPU usage ratio: " + resourceInfo.cpuUsageRatio());
+        System.out.println("Memory total (bytes): " + resourceInfo.memoryTotalBytes());
+        System.out.println("Memory used (bytes): " + resourceInfo.memoryUsedBytes());
+        System.out.println("Data disk total (bytes): " + resourceInfo.dataDiskTotalBytes());
+        System.out.println("Data disk used (bytes): " + resourceInfo.dataDiskUsedBytes());
+        System.out.println("Collected at (epoch ms): " + resourceInfo.collectedAtMs());
+    }
+}
+```
+
+The data disk fields are `null` for Coordinator nodes because Coordinators do not store Fluss
+table data locally. The snapshot timestamp is available through `collectedAtMs()` when the
+freshness of the resource information needs to be checked.
+
 ## Table API
 ### Writers
 In order to write data to Fluss tables, first you need to create a Table instance.

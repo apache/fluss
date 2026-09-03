@@ -25,9 +25,9 @@ import org.apache.fluss.config.Configuration;
 import java.util.List;
 
 /** A small executable example for querying server node information through the Java client. */
-public final class ServerMetricsClientExample {
+public final class ServerInfoClientExample {
 
-    private ServerMetricsClientExample() {}
+    private ServerInfoClientExample() {}
 
     /**
      * Connects to Fluss and prints node information and the latest machine resource snapshot
