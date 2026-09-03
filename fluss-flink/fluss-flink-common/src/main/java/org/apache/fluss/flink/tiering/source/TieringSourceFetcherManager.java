@@ -20,6 +20,7 @@ package org.apache.fluss.flink.tiering.source;
 
 import org.apache.fluss.flink.adapter.SingleThreadFetcherManagerAdapter;
 import org.apache.fluss.flink.tiering.source.split.TieringSplit;
+import org.apache.fluss.lake.writer.LakeWriteResult;
 
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
@@ -38,7 +39,7 @@ import java.util.function.Supplier;
  * The SplitFetcherManager for tiering source. This class is needed to help notify a table reaches
  * the max duration of tiering to {@link TieringSplitReader}.
  */
-public class TieringSourceFetcherManager<WriteResult>
+public class TieringSourceFetcherManager<WriteResult extends LakeWriteResult>
         extends SingleThreadFetcherManagerAdapter<
                 TableBucketWriteResult<WriteResult>, TieringSplit> {
 

@@ -60,8 +60,8 @@ public class LanceLakeCommitter implements LakeCommitter<LanceWriteResult, Lance
     }
 
     @Override
-    public LanceCommittable toCommittable(List<LanceWriteResult> lanceWriteResults)
-            throws IOException {
+    public LanceCommittable toCommittable(
+            List<LanceWriteResult> lanceWriteResults, @Nullable Long watermark) throws IOException {
         List<FragmentMetadata> fragments =
                 lanceWriteResults.stream()
                         .map(LanceWriteResult::commitMessage)

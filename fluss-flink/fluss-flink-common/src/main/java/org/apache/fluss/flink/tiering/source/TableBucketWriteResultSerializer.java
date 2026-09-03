@@ -17,6 +17,7 @@
 
 package org.apache.fluss.flink.tiering.source;
 
+import org.apache.fluss.lake.writer.LakeWriteResult;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 
@@ -27,13 +28,13 @@ import org.apache.flink.core.memory.DataOutputSerializer;
 import java.io.IOException;
 
 /** The serializer for {@link TableBucketWriteResult}. */
-public class TableBucketWriteResultSerializer<WriteResult>
+public class TableBucketWriteResultSerializer<WriteResult extends LakeWriteResult>
         implements SimpleVersionedSerializer<TableBucketWriteResult<WriteResult>> {
 
     private static final ThreadLocal<DataOutputSerializer> SERIALIZER_CACHE =
             ThreadLocal.withInitial(() -> new DataOutputSerializer(64));
 
-    private static final int CURRENT_VERSION = 1;
+    private static final int CURRENT_VERSION = 2;
 
     private final org.apache.fluss.lake.serializer.SimpleVersionedSerializer<WriteResult>
             writeResultSerializer;
@@ -77,6 +78,7 @@ public class TableBucketWriteResultSerializer<WriteResult>
             // write -1 to mark write result as null
             out.writeInt(-1);
         } else {
+            out.writeInt(writeResultSerializer.getVersion());
             byte[] serializeBytes = writeResultSerializer.serialize(writeResult);
             out.writeInt(serializeBytes.length);
             out.write(serializeBytes);
@@ -99,7 +101,7 @@ public class TableBucketWriteResultSerializer<WriteResult>
     @Override
     public TableBucketWriteResult<WriteResult> deserialize(int version, byte[] serialized)
             throws IOException {
-        if (version != CURRENT_VERSION) {
+        if (version > CURRENT_VERSION) {
             throw new IOException("Unknown version " + version);
         }
         final DataInputDeserializer in = new DataInputDeserializer(serialized);
@@ -120,14 +122,28 @@ public class TableBucketWriteResultSerializer<WriteResult>
         TableBucket tableBucket = new TableBucket(tableId, partitionId, bucketId);
 
         // deserialize write result
-        int writeResultLength = in.readInt();
         WriteResult writeResult;
-        if (writeResultLength >= 0) {
-            byte[] writeResultBytes = new byte[writeResultLength];
-            in.readFully(writeResultBytes);
-            writeResult = writeResultSerializer.deserialize(version, writeResultBytes);
+        if (version == 1) {
+            int writeResultLength = in.readInt();
+            if (writeResultLength >= 0) {
+                byte[] writeResultBytes = new byte[writeResultLength];
+                in.readFully(writeResultBytes);
+                writeResult = writeResultSerializer.deserialize(version, writeResultBytes);
+            } else {
+                writeResult = null;
+            }
         } else {
-            writeResult = null;
+            int writeResultVersionOrNull = in.readInt();
+            if (writeResultVersionOrNull == -1) {
+                writeResult = null;
+            } else {
+                int writeResultLength = in.readInt();
+                byte[] writeResultBytes = new byte[writeResultLength];
+                in.readFully(writeResultBytes);
+                writeResult =
+                        writeResultSerializer.deserialize(
+                                writeResultVersionOrNull, writeResultBytes);
+            }
         }
 
         // deserialize log end offset
