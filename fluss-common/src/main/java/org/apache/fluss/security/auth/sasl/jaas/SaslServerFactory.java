@@ -17,6 +17,7 @@
 
 package org.apache.fluss.security.auth.sasl.jaas;
 
+import org.apache.fluss.security.auth.sasl.plain.PlainSaslServer;
 import org.apache.fluss.security.auth.sasl.plain.PlainServerCallbackHandler;
 
 import org.slf4j.Logger;
@@ -61,6 +62,13 @@ public class SaslServerFactory {
             }
 
             callbackHandler.configure(mechanism, configurationEntries);
+            // Construct Fluss's PLAIN server directly. Kafka clients register a provider with the
+            // same JVM provider name as Fluss's PLAIN provider. Delegating this server-side path
+            // to Sasl.createSaslServer would therefore make the selected callback type depend on
+            // class-loading order when both implementations share a process.
+            if (PlainSaslServer.PLAIN_MECHANISM.equals(mechanism)) {
+                return new PlainSaslServer(callbackHandler);
+            }
             SaslServer saslServer =
                     Subject.doAs(
                             loginManager.subject(),

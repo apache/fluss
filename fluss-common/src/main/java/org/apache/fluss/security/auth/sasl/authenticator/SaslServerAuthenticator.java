@@ -46,6 +46,7 @@ public class SaslServerAuthenticator implements ServerAuthenticator {
     private static final String SERVER_AUTHENTICATOR_PREFIX = "security.sasl.";
     private final List<String> enabledMechanisms;
     private SaslServer saslServer;
+    private LoginManager loginManager;
     private final Map<String, String> configs;
 
     public SaslServerAuthenticator(Configuration configuration) {
@@ -60,6 +61,7 @@ public class SaslServerAuthenticator implements ServerAuthenticator {
 
     @Override
     public void initialize(AuthenticateContext context) {
+        close();
         String mechanism = context.protocol();
         String listenerName = context.listenerName();
         String address = context.ipAddress();
@@ -102,16 +104,22 @@ public class SaslServerAuthenticator implements ServerAuthenticator {
 
         JaasContext jaasContext = JaasContext.loadServerContext(listenerName, dynamicJaasConfig);
 
+        LoginManager acquiredLoginManager = null;
         try {
-            LoginManager loginManager = LoginManager.acquireLoginManager(jaasContext);
-            saslServer =
+            acquiredLoginManager = LoginManager.acquireLoginManager(jaasContext);
+            SaslServer newSaslServer =
                     createSaslServer(
                             mechanism,
                             address,
                             configs,
-                            loginManager,
+                            acquiredLoginManager,
                             jaasContext.configurationEntries());
+            loginManager = acquiredLoginManager;
+            saslServer = newSaslServer;
         } catch (Exception e) {
+            if (acquiredLoginManager != null) {
+                acquiredLoginManager.release();
+            }
             throw new RuntimeException(e);
         }
     }
@@ -149,5 +157,22 @@ public class SaslServerAuthenticator implements ServerAuthenticator {
     @Override
     public FlussPrincipal createPrincipal() {
         return new FlussPrincipal(saslServer.getAuthorizationID(), "User");
+    }
+
+    @Override
+    public void close() {
+        if (saslServer != null) {
+            try {
+                saslServer.dispose();
+            } catch (SaslException e) {
+                LOG.debug("Failed to dispose SASL server.", e);
+            } finally {
+                saslServer = null;
+            }
+        }
+        if (loginManager != null) {
+            loginManager.release();
+            loginManager = null;
+        }
     }
 }

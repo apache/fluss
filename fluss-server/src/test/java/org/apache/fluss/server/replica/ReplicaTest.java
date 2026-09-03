@@ -38,6 +38,7 @@ import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.record.ProjectionPushdownCache;
+import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.kv.KvFlushScheduler;
@@ -266,6 +267,26 @@ final class ReplicaTest extends ReplicaTestBase {
         assertThat(secondReplica.bucketMetrics().getAllVariables())
                 .containsEntry("partition", "")
                 .containsEntry("bucket", "2");
+    }
+
+    @Test
+    void testAcksAllUsesUpdatedMinIsrWhileWaitingForAcknowledgement() throws Exception {
+        conf.set(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER, 1);
+        Replica logReplica =
+                makeLogReplica(DATA1_PHYSICAL_TABLE_PATH, new TableBucket(DATA1_TABLE_ID, 1));
+        makeLogReplicaAsLeader(logReplica);
+
+        logReplica.appendRecordsToLeader(genMemoryLogRecordsByObject(DATA1), 0);
+        long requiredOffset = logReplica.getLocalLogEndOffset();
+        logReplica.getLogTablet().updateHighWatermark(requiredOffset);
+
+        assertThat(logReplica.checkEnoughReplicasReachOffset(requiredOffset))
+                .isEqualTo(Tuple2.of(true, Errors.NONE));
+
+        conf.set(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER, 2);
+
+        assertThat(logReplica.checkEnoughReplicasReachOffset(requiredOffset))
+                .isEqualTo(Tuple2.of(true, Errors.NOT_ENOUGH_REPLICAS_AFTER_APPEND_EXCEPTION));
     }
 
     @Test

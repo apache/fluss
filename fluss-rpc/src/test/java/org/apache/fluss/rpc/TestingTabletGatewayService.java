@@ -18,6 +18,7 @@
 package org.apache.fluss.rpc;
 
 import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.rpc.gateway.AdminOperationAuthorizer;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.DatabaseExistsRequest;
 import org.apache.fluss.rpc.messages.DatabaseExistsResponse;
@@ -83,12 +84,18 @@ import org.apache.fluss.rpc.messages.TableExistsRequest;
 import org.apache.fluss.rpc.messages.TableExistsResponse;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.messages.UpdateMetadataResponse;
+import org.apache.fluss.rpc.netty.server.Session;
+import org.apache.fluss.security.acl.OperationType;
+import org.apache.fluss.security.acl.Resource;
 
 import java.util.concurrent.CompletableFuture;
 
 /** A testing implementation of the {@link TabletServerGateway} interface. */
 public class TestingTabletGatewayService extends TestingGatewayService
-        implements TabletServerGateway {
+        implements TabletServerGateway, AdminOperationAuthorizer {
+
+    @Override
+    public void authorize(Session session, OperationType operationType, Resource resource) {}
 
     @Override
     public ServerType providerType() {

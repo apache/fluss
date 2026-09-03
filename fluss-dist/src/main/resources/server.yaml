@@ -39,6 +39,10 @@ default.bucket.number: 1
 # factor is specified for the table.
 default.replication.factor: 1
 
+# The minimum number of in-sync replicas required for writes configured with acks=all (-1).
+# A replicated production deployment commonly sets this to 2 or higher. The default is 1.
+log.replica.min-in-sync-replicas-number: 1
+
 # The local data directory to be used for Fluss to storing kv and log data.
 data.dir: /tmp/fluss-data
 
