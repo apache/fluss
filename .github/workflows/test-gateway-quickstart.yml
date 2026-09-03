@@ -6,22 +6,19 @@ on:
       - issue-4221-http-gateway-quickstart
 
 jobs:
-  quickstart:
+  e2e:
+    name: Gateway Lakehouse E2E
     runs-on: ubuntu-latest
+    timeout-minutes: 40
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Check Docker
         run: |
           docker version
           docker compose version
-
-      - name: Check Gateway source
-        run: |
-          test -f fluss-gateway/src/protocol/rest/ddl.rs
-          test -f fluss-gateway/src/protocol/rest/records.rs
 
       - name: Build Gateway image
         run: |
@@ -29,4 +26,732 @@ jobs:
 
       - name: Verify Gateway image
         run: |
-          docker images fluss-gateway:dev
+          docker image inspect fluss-gateway:dev
+
+      - name: Prepare quickstart from documentation
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p fluss-quickstart-gateway-lakehouse/lib
+
+          python3 <<'PY'
+          import json
+          import re
+          from pathlib import Path
+
+          doc = Path("website/docs/quickstart/gateway-lakehouse.md").read_text(
+              encoding="utf-8"
+          )
+
+          matches = re.findall(
+              r"```yaml\s*\n(.*?)\n```",
+              doc,
+              flags=re.DOTALL,
+          )
+
+          if not matches:
+              raise SystemExit("No YAML fenced block found in gateway-lakehouse.md")
+
+          compose = matches[0]
+
+          versions = json.loads(
+              Path("website/fluss-versions.json").read_text(encoding="utf-8")
+          )
+
+          current = next(
+              (entry for entry in versions if entry.get("versionName") == "next"),
+              None,
+          )
+
+          if current is None:
+              raise SystemExit(
+                  "Could not find versionName=next in website/fluss-versions.json"
+              )
+
+          required = [
+              "fullVersion",
+              "dockerVersion",
+              "paimonVersion",
+          ]
+
+          for key in required:
+              if not current.get(key):
+                  raise SystemExit(f"Missing {key} in next version entry")
+
+          replacements = {
+              "$FLUSS_VERSION$": current["fullVersion"],
+              "$FLUSS_DOCKER_VERSION$": current["dockerVersion"],
+              "$PAIMON_VERSION$": current["paimonVersion"],
+              "$FLUSS_QUICKSTART_FLINK_DOCKER_VERSION$": current.get(
+                  "quickstartFlinkDockerVersion",
+                  f'2.2-{current["dockerVersion"]}',
+              ),
+          }
+
+          for placeholder, value in replacements.items():
+              compose = compose.replace(placeholder, value)
+
+          unresolved = re.findall(r"\$[A-Z][A-Z0-9_]*\$", compose)
+          if unresolved:
+              raise SystemExit(
+                  "Unresolved documentation placeholders: "
+                  + ", ".join(sorted(set(unresolved)))
+              )
+
+          out = Path("fluss-quickstart-gateway-lakehouse/docker-compose.yml")
+          out.write_text(compose + "\n", encoding="utf-8")
+
+          print("Resolved quickstart versions:")
+          for key, value in replacements.items():
+              print(f"  {key} = {value}")
+          print(f"Wrote {out}")
+          PY
+
+          test -s fluss-quickstart-gateway-lakehouse/docker-compose.yml
+
+      - name: Download Paimon S3 plugin
+        working-directory: fluss-quickstart-gateway-lakehouse
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PAIMON_VERSION="$(python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          versions = json.loads(
+              Path("../website/fluss-versions.json").read_text(encoding="utf-8")
+          )
+
+          current = next(
+              entry for entry in versions if entry.get("versionName") == "next"
+          )
+
+          print(current["paimonVersion"])
+          PY
+          )"
+
+          URL="https://repo.maven.apache.org/maven2/org/apache/paimon/paimon-s3/${PAIMON_VERSION}/paimon-s3-${PAIMON_VERSION}.jar"
+
+          echo "Downloading ${URL}"
+          curl -fL --retry 5 --retry-all-errors \
+            -o "lib/paimon-s3-${PAIMON_VERSION}.jar" \
+            "${URL}"
+
+          test -s "lib/paimon-s3-${PAIMON_VERSION}.jar"
+
+      - name: Validate Compose configuration
+        working-directory: fluss-quickstart-gateway-lakehouse
+        run: |
+          docker compose config
+
+      - name: Start Compose stack
+        working-directory: fluss-quickstart-gateway-lakehouse
+        run: |
+          docker compose up -d
+
+      - name: Show Compose state
+        working-directory: fluss-quickstart-gateway-lakehouse
+        run: |
+          docker compose ps
+
+      - name: Wait for core containers
+        working-directory: fluss-quickstart-gateway-lakehouse
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          services=(
+            zookeeper
+            rustfs
+            coordinator-server
+            tablet-server
+            gateway
+            jobmanager
+            taskmanager
+          )
+
+          for service in "${services[@]}"; do
+            echo "Waiting for ${service}..."
+            ready=0
+
+            for i in {1..60}; do
+              container_id="$(docker compose ps -q "${service}")"
+
+              if [[ -n "${container_id}" ]]; then
+                state="$(docker inspect -f '{{.State.Status}}' "${container_id}")"
+
+                if [[ "${state}" == "running" ]]; then
+                  ready=1
+                  echo "${service}: running"
+                  break
+                fi
+              fi
+
+              sleep 2
+            done
+
+            if [[ "${ready}" -ne 1 ]]; then
+              echo "${service} did not become running"
+              docker compose ps
+              exit 1
+            fi
+          done
+
+      - name: Test Gateway health and readiness
+        working-directory: fluss-quickstart-gateway-lakehouse
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Waiting for Gateway /health..."
+
+          for i in {1..60}; do
+            if curl -fsS --connect-timeout 2 --max-time 5 \
+              http://localhost:8080/health; then
+              echo
+              echo "Gateway /health succeeded"
+              break
+            fi
+
+            sleep 2
+
+            if [[ "${i}" -eq 60 ]]; then
+              echo "Gateway /health never became available"
+              exit 1
+            fi
+          done
+
+          echo "Checking Gateway /ready..."
+          curl -fsS --connect-timeout 2 --max-time 5 \
+            http://localhost:8080/ready
+
+          echo
+          echo "Gateway /ready succeeded"
+
+      - name: Create database through Gateway
+        working-directory: fluss-quickstart-gateway-lakehouse
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          export GATEWAY_URL=http://localhost:8080
+          export CLUSTER=default
+          export DATABASE=gateway_demo
+
+          for i in {1..60}; do
+            code="$(
+              curl -sS \
+                --connect-timeout 2 \
+                --max-time 10 \
+                -o /tmp/create-database.json \
+                -w '%{http_code}' \
+                -X POST \
+                -H 'Content-Type: application/json' \
+                "$GATEWAY_URL/v1/clusters/$CLUSTER/databases" \
+                -d "{\"database\":\"$DATABASE\"}" \
+                || true
+            )"
+
+            echo "Create database HTTP status: ${code}"
+
+            if [[ "${code}" == "200" || "${code}" == "201" ]]; then
+              cat /tmp/create-database.json
+              break
+            fi
+
+            cat /tmp/create-database.json 2>/dev/null || true
+            echo
+            echo "Fluss may not be accepting Gateway requests yet; retrying..."
+            sleep 2
+
+            if [[ "${i}" -eq 60 ]]; then
+              echo "Database creation never succeeded"
+              exit 1
+            fi
+          done
+
+      - name: Create datalake-enabled table through Gateway
+        working-directory: fluss-quickstart-gateway-lakehouse
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          export GATEWAY_URL=http://localhost:8080
+          export CLUSTER=default
+          export DATABASE=gateway_demo
+
+          cat > /tmp/create-table.json <<'JSON'
+          {
+            "table_name": "orders",
+            "columns": [
+              {
+                "name": "order_id",
+                "data_type": {
+                  "type": "INTEGER"
+                },
+                "nullable": false
+              },
+              {
+                "name": "customer",
+                "data_type": {
+                  "type": "STRING"
+                },
+                "nullable": true
+              },
+              {
+                "name": "amount_cents",
+                "data_type": {
+                  "type": "BIGINT"
+                },
+                "nullable": true
+              },
+              {
+                "name": "status",
+                "data_type": {
+                  "type": "STRING"
+                },
+                "nullable": true
+              }
+            ],
+            "primary_key": [
+              "order_id"
+            ],
+            "distribution": {
+              "bucket_count": 1,
+              "bucket_keys": [
+                "order_id"
+              ]
+            },
+            "configs": {
+              "table.datalake.enabled": "true",
+              "table.datalake.freshness": "30s"
+            }
+          }
+          JSON
+
+          code="$(
+            curl -sS \
+              --connect-timeout 5 \
+              --max-time 30 \
+              -o /tmp/create-table-response.json \
+              -w '%{http_code}' \
+              -X POST \
+              -H 'Content-Type: application/json' \
+              "$GATEWAY_URL/v1/clusters/$CLUSTER/databases/$DATABASE/tables" \
+              --data-binary @/tmp/create-table.json
+          )"
+
+          echo "Create table HTTP status: ${code}"
+          cat /tmp/create-table-response.json
+          echo
+
+          [[ "${code}" == "200" || "${code}" == "201" ]]
+
+          jq -e 'type == "object"' /tmp/create-table-response.json >/dev/null
+
+      - name: Write three records through Gateway
+        working-directory: fluss-quickstart-gateway-lakehouse
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          export GATEWAY_URL=http://localhost:8080
+          export CLUSTER=default
+          export DATABASE=gateway_demo
+
+          cat > /tmp/write-records.json <<'JSON'
+          {
+            "entries": [
+              {
+                "id": "order-1",
+                "upsert": {
+                  "order_id": 1,
+                  "customer": "Alice",
+                  "amount_cents": 4599,
+                  "status": "placed"
+                }
+              },
+              {
+                "id": "order-2",
+                "upsert": {
+                  "order_id": 2,
+                  "customer": "Bob",
+                  "amount_cents": 12000,
+                  "status": "placed"
+                }
+              },
+              {
+                "id": "order-3",
+                "upsert": {
+                  "order_id": 3,
+                  "customer": "Carol",
+                  "amount_cents": 750,
+                  "status": "placed"
+                }
+              }
+            ]
+          }
+          JSON
+
+          code="$(
+            curl -sS \
+              --connect-timeout 5 \
+              --max-time 30 \
+              -o /tmp/write-records-response.json \
+              -w '%{http_code}' \
+              -X POST \
+              -H 'Content-Type: application/json' \
+              "$GATEWAY_URL/v1/clusters/$CLUSTER/databases/$DATABASE/tables/orders/records" \
+              --data-binary @/tmp/write-records.json
+          )"
+
+          echo "Write HTTP status: ${code}"
+          cat /tmp/write-records-response.json
+          echo
+
+          [[ "${code}" == "200" ]]
+
+          jq -e '
+            .row_count == 3
+            and .success_count == 3
+            and .error_count == 0
+            and (.successes | length) == 3
+            and (.failures | length) == 0
+          ' /tmp/write-records-response.json
+
+      - name: Wait for Flink cluster
+        working-directory: fluss-quickstart-gateway-lakehouse
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Waiting for Flink JobManager REST API..."
+
+          for i in {1..60}; do
+            if curl -fsS --connect-timeout 2 --max-time 5 \
+              http://localhost:8083/overview >/tmp/flink-overview.json; then
+
+              echo "Flink JobManager is responding"
+
+              taskmanagers="$(
+                curl -fsS --connect-timeout 2 --max-time 5 \
+                  http://localhost:8083/taskmanagers \
+                  | jq '.taskmanagers | length'
+              )"
+
+              echo "TaskManagers: ${taskmanagers}"
+
+              if [[ "${taskmanagers}" -ge 1 ]]; then
+                break
+              fi
+            fi
+
+            sleep 2
+
+            if [[ "${i}" -eq 60 ]]; then
+              echo "Flink cluster never became ready"
+              exit 1
+            fi
+          done
+
+      - name: Start Lakehouse Tiering Service
+        working-directory: fluss-quickstart-gateway-lakehouse
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FLUSS_VERSION="$(
+            python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          versions = json.loads(
+              Path("../website/fluss-versions.json").read_text(encoding="utf-8")
+          )
+
+          current = next(
+              entry for entry in versions if entry.get("versionName") == "next"
+          )
+
+          print(current["fullVersion"])
+          PY
+          )"
+
+          echo "Starting tiering using Fluss version ${FLUSS_VERSION}"
+
+          docker compose exec -T jobmanager \
+            /opt/flink/bin/flink run -d \
+            "/opt/flink/opt/fluss-flink-tiering-${FLUSS_VERSION}.jar" \
+            --fluss.bootstrap.servers coordinator-server:9123 \
+            --datalake.format paimon \
+            --datalake.paimon.metastore filesystem \
+            --datalake.paimon.warehouse s3://fluss/paimon \
+            --datalake.paimon.s3.endpoint http://rustfs:9000 \
+            --datalake.paimon.s3.access.key rustfsadmin \
+            --datalake.paimon.s3.secret.key rustfsadmin \
+            --datalake.paimon.s3.path.style.access true
+
+          echo "Tiering job submitted"
+
+          curl -fsS http://localhost:8083/jobs/overview | jq .
+
+      - name: Verify Paimon snapshot and lake rows
+        working-directory: fluss-quickstart-gateway-lakehouse
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          run_sql() {
+            docker compose run --rm -T sql-client <<'SQL'
+          SET 'sql-client.execution.result-mode' = 'tableau';
+          SET 'execution.runtime-mode' = 'batch';
+
+          USE CATALOG fluss_catalog;
+          USE gateway_demo;
+
+          SELECT COUNT(*) AS snapshot_count
+          FROM orders$lake$snapshots;
+
+          SELECT COUNT(*) AS lake_count
+          FROM orders$lake;
+
+          SELECT COUNT(*) AS union_count
+          FROM orders;
+          SQL
+          }
+
+          echo "Waiting for the first Paimon snapshot..."
+
+          for i in {1..18}; do
+            output="$(run_sql 2>&1 || true)"
+
+            echo "----- SQL attempt ${i} -----"
+            echo "${output}"
+
+            snapshot_count="$(
+              printf '%s\n' "${output}" \
+                | sed -nE 's/.*\|\s*([0-9]+)\s*\|.*/\1/p' \
+                | head -1
+            )"
+
+            lake_count="$(
+              printf '%s\n' "${output}" \
+                | sed -nE 's/.*\|\s*([0-9]+)\s*\|.*/\1/p' \
+                | sed -n '2p'
+            )"
+
+            union_count="$(
+              printf '%s\n' "${output}" \
+                | sed -nE 's/.*\|\s*([0-9]+)\s*\|.*/\1/p' \
+                | sed -n '3p'
+            )"
+
+            echo "snapshot_count=${snapshot_count:-unknown}"
+            echo "lake_count=${lake_count:-unknown}"
+            echo "union_count=${union_count:-unknown}"
+
+            if [[ "${snapshot_count:-0}" =~ ^[0-9]+$ ]] &&
+               [[ "${lake_count:-0}" =~ ^[0-9]+$ ]] &&
+               [[ "${union_count:-0}" =~ ^[0-9]+$ ]] &&
+               [[ "${snapshot_count}" -ge 1 ]] &&
+               [[ "${lake_count}" -eq 3 ]] &&
+               [[ "${union_count}" -eq 3 ]]; then
+              echo "Initial lakehouse state verified"
+              break
+            fi
+
+            if [[ "${i}" -eq 18 ]]; then
+              echo "Initial lakehouse state was not reached"
+              exit 1
+            fi
+
+            sleep 10
+          done
+
+      - name: Write order-4 and verify Union Read freshness
+        working-directory: fluss-quickstart-gateway-lakehouse
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          export GATEWAY_URL=http://localhost:8080
+          export CLUSTER=default
+          export DATABASE=gateway_demo
+
+          code="$(
+            curl -sS \
+              --connect-timeout 5 \
+              --max-time 30 \
+              -o /tmp/order-4-response.json \
+              -w '%{http_code}' \
+              -X POST \
+              -H 'Content-Type: application/json' \
+              "$GATEWAY_URL/v1/clusters/$CLUSTER/databases/$DATABASE/tables/orders/records" \
+              -d '{
+                "entries": [
+                  {
+                    "id": "order-4",
+                    "upsert": {
+                      "order_id": 4,
+                      "customer": "Dave",
+                      "amount_cents": 2200,
+                      "status": "placed"
+                    }
+                  }
+                ]
+              }'
+          )"
+
+          echo "Order-4 write HTTP status: ${code}"
+          cat /tmp/order-4-response.json
+          echo
+
+          [[ "${code}" == "200" ]]
+
+          jq -e '
+            .row_count == 1
+            and .success_count == 1
+            and .error_count == 0
+            and (.successes | length) == 1
+            and (.failures | length) == 0
+          ' /tmp/order-4-response.json
+
+          echo "Waiting for Union Read to see order-4..."
+
+          for i in {1..12}; do
+            output="$(
+              docker compose run --rm -T sql-client <<'SQL'
+          SET 'sql-client.execution.result-mode' = 'tableau';
+          SET 'execution.runtime-mode' = 'batch';
+
+          USE CATALOG fluss_catalog;
+          USE gateway_demo;
+
+          SELECT COUNT(*) AS union_count
+          FROM orders;
+          SQL
+            )"
+
+            echo "${output}"
+
+            if printf '%s\n' "${output}" \
+              | grep -Eq '\|\s*4\s*\|'; then
+              echo "Union Read sees 4 rows"
+              break
+            fi
+
+            if [[ "${i}" -eq 12 ]]; then
+              echo "Union Read did not reach 4 rows"
+              exit 1
+            fi
+
+            sleep 5
+          done
+
+      - name: Verify order-4 reaches Paimon
+        working-directory: fluss-quickstart-gateway-lakehouse
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Waiting for order-4 to reach the lake..."
+
+          for i in {1..18}; do
+            output="$(
+              docker compose run --rm -T sql-client <<'SQL'
+          SET 'sql-client.execution.result-mode' = 'tableau';
+          SET 'execution.runtime-mode' = 'batch';
+
+          USE CATALOG fluss_catalog;
+          USE gateway_demo;
+
+          SELECT COUNT(*) AS lake_count
+          FROM orders$lake;
+          SQL
+            )"
+
+            echo "${output}"
+
+            if printf '%s\n' "${output}" \
+              | grep -Eq '\|\s*4\s*\|'; then
+              echo "Paimon lake view sees 4 rows"
+              break
+            fi
+
+            if [[ "${i}" -eq 18 ]]; then
+              echo "Paimon lake view did not reach 4 rows"
+              exit 1
+            fi
+
+            sleep 10
+          done
+
+      - name: Verify cleanup through Gateway
+        working-directory: fluss-quickstart-gateway-lakehouse
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          export GATEWAY_URL=http://localhost:8080
+          export CLUSTER=default
+          export DATABASE=gateway_demo
+
+          table_code="$(
+            curl -sS \
+              --connect-timeout 5 \
+              --max-time 30 \
+              -o /tmp/delete-table-response.json \
+              -w '%{http_code}' \
+              -X DELETE \
+              "$GATEWAY_URL/v1/clusters/$CLUSTER/databases/$DATABASE/tables/orders"
+          )"
+
+          echo "Delete table HTTP status: ${table_code}"
+          cat /tmp/delete-table-response.json
+          echo
+
+          [[ "${table_code}" == "200" || "${table_code}" == "204" ]]
+
+          database_code="$(
+            curl -sS \
+              --connect-timeout 5 \
+              --max-time 30 \
+              -o /tmp/delete-database-response.json \
+              -w '%{http_code}' \
+              -X DELETE \
+              "$GATEWAY_URL/v1/clusters/$CLUSTER/databases/$DATABASE"
+          )"
+
+          echo "Delete database HTTP status: ${database_code}"
+          cat /tmp/delete-database-response.json
+          echo
+
+          [[ "${database_code}" == "200" || "${database_code}" == "204" ]]
+
+      - name: Shut down Compose stack
+        if: always()
+        working-directory: fluss-quickstart-gateway-lakehouse
+        run: |
+          docker compose down -v
+
+      - name: Collect Docker diagnostics
+        if: failure()
+        working-directory: fluss-quickstart-gateway-lakehouse
+        run: |
+          mkdir -p ../gateway-e2e-diagnostics
+
+          docker compose ps > ../gateway-e2e-diagnostics/compose-ps.txt || true
+          docker compose logs --no-color > ../gateway-e2e-diagnostics/compose.log || true
+
+          docker version > ../gateway-e2e-diagnostics/docker-version.txt || true
+          docker compose version > ../gateway-e2e-diagnostics/compose-version.txt || true
+
+      - name: Upload Docker diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gateway-lakehouse-e2e-diagnostics
+          path: gateway-e2e-diagnostics/
+          if-no-files-found: ignore
