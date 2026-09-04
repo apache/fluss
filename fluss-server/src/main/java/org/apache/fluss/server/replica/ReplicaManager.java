@@ -2554,6 +2554,15 @@ public class ReplicaManager implements ServerReconfigurable {
             return;
         }
 
+        // Only hash-distributed tables (those with a bucket key, including primary-key tables whose
+        // bucket key defaults to the primary key) place a record in a bucket deterministically, so
+        // only they can misroute a key when the client routes with a stale bucket count. A table
+        // without a bucket key (round-robin/sticky) may place a record in any bucket, so a stale
+        // routing count is harmless and must not fail the write.
+        if (!replica.getTableInfo().hasBucketKey()) {
+            return;
+        }
+
         if (routingBucketCount <= 0) {
             // Legacy client (no bucket count in request): reject only when a rescale is known,
             // because then the bucketId may come from an outdated count.

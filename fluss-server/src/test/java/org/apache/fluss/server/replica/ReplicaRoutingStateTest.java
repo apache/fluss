@@ -37,6 +37,9 @@ import java.util.concurrent.CompletableFuture;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
+import static org.apache.fluss.record.TestData.DATA2_TABLE_DESCRIPTOR;
+import static org.apache.fluss.record.TestData.DATA2_TABLE_ID;
+import static org.apache.fluss.record.TestData.DATA2_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
 import static org.apache.fluss.server.zk.data.LeaderAndIsr.INITIAL_BUCKET_EPOCH;
@@ -58,8 +61,8 @@ final class ReplicaRoutingStateTest extends ReplicaTestBase {
     private static final int TEST_BUCKET = 5;
 
     @Test
-    void testLeaderActivationRequiresRoutingState() throws Exception {
-        TableBucket tb = new TableBucket(DATA1_TABLE_ID, TEST_BUCKET);
+    void testRoutingBucketCountValidationAppliesOnlyToHashDistributedTables() throws Exception {
+        TableBucket keylessTb = new TableBucket(DATA1_TABLE_ID, TEST_BUCKET);
 
         // A legacy coordinator's notification (no routing fields) fails leader activation loudly:
         // the upgrade contract requires the CoordinatorServer to be upgraded first.
@@ -67,25 +70,24 @@ final class ReplicaRoutingStateTest extends ReplicaTestBase {
                 new CompletableFuture<>();
         replicaManager.becomeLeaderOrFollower(
                 INITIAL_COORDINATOR_EPOCH,
-                Collections.singletonList(notifyDataWithRoutingState(tb, null, null)),
+                Collections.singletonList(
+                        notifyDataWithRoutingState(
+                                PhysicalTablePath.of(DATA1_TABLE_PATH), keylessTb, null, null)),
                 legacyFuture::complete);
         assertThat(legacyFuture.get().get(0).getError().error())
                 .isEqualTo(Errors.UNSUPPORTED_VERSION);
         assertThat(legacyFuture.get().get(0).getError().messageWithFallback())
                 .contains("upgrade the CoordinatorServer first");
-        assertThat(replicaManager.getReplicaOrException(tb).isLeader()).isFalse();
+        assertThat(replicaManager.getReplicaOrException(keylessTb).isLeader()).isFalse();
 
-        // A new coordinator's notification activates the leader and arms the routing state.
-        makeLeaderWithRoutingState(tb, 3, 0L);
-        assertThat(replicaManager.getReplicaOrException(tb).isLeader()).isTrue();
-        replicaManager.validateRoutingBucketCount(tb, 3);
-        assertThatThrownBy(() -> replicaManager.validateRoutingBucketCount(tb, 4))
-                .isInstanceOf(StaleMetadataException.class);
-
-        // A legacy client (no count) passes on a non-rescaled table...
-        replicaManager.validateRoutingBucketCount(tb, 0);
-        // ...but is rejected once an ALTER advances the metadata cache to epoch 1 through
-        // UpdateMetadata, which does not re-notify the already active replica.
+        // DATA1 has no bucket key (round-robin/sticky distribution): which bucket a record lands in
+        // carries no semantic meaning, so routing bucket count validation is skipped for it. Even a
+        // mismatched count, and even after its metadata epoch advances, must not fail the write.
+        makeLeaderWithRoutingState(PhysicalTablePath.of(DATA1_TABLE_PATH), keylessTb, 3, 0L);
+        assertThat(replicaManager.getReplicaOrException(keylessTb).isLeader()).isTrue();
+        replicaManager.validateRoutingBucketCount(keylessTb, 3);
+        replicaManager.validateRoutingBucketCount(keylessTb, 4);
+        replicaManager.validateRoutingBucketCount(keylessTb, 0);
         replicaManager.maybeUpdateMetadataCache(
                 INITIAL_COORDINATOR_EPOCH,
                 new ClusterMetadata(
@@ -104,30 +106,73 @@ final class ReplicaRoutingStateTest extends ReplicaTestBase {
                                                 1L),
                                         Collections.emptyList())),
                         Collections.emptyList()));
-        assertThat(replicaManager.getReplicaOrException(tb).getBucketCountEpoch()).isEqualTo(0L);
-        assertThatThrownBy(() -> replicaManager.validateRoutingBucketCount(tb, 0))
+        replicaManager.validateRoutingBucketCount(keylessTb, 4);
+        replicaManager.validateRoutingBucketCount(keylessTb, 0);
+
+        // DATA2 is DISTRIBUTED BY (a): a hash-distributed table where a stale count would misroute
+        // the key, so its routing bucket count IS validated.
+        TableBucket keyedTb = new TableBucket(DATA2_TABLE_ID, TEST_BUCKET);
+        makeLeaderWithRoutingState(PhysicalTablePath.of(DATA2_TABLE_PATH), keyedTb, 3, 0L);
+        assertThat(replicaManager.getReplicaOrException(keyedTb).isLeader()).isTrue();
+        replicaManager.validateRoutingBucketCount(keyedTb, 3);
+        assertThatThrownBy(() -> replicaManager.validateRoutingBucketCount(keyedTb, 4))
+                .isInstanceOf(StaleMetadataException.class);
+
+        // A legacy client (no count) passes on a non-rescaled hash table...
+        replicaManager.validateRoutingBucketCount(keyedTb, 0);
+        // ...but is rejected once an ALTER advances the metadata cache to epoch 1 through
+        // UpdateMetadata, which does not re-notify the already active replica.
+        replicaManager.maybeUpdateMetadataCache(
+                INITIAL_COORDINATOR_EPOCH,
+                new ClusterMetadata(
+                        null,
+                        Collections.emptySet(),
+                        Collections.singletonList(
+                                new TableMetadata(
+                                        TableInfo.of(
+                                                DATA2_TABLE_PATH,
+                                                DATA2_TABLE_ID,
+                                                1,
+                                                DATA2_TABLE_DESCRIPTOR,
+                                                DEFAULT_REMOTE_DATA_DIR,
+                                                1L,
+                                                1L,
+                                                1L),
+                                        Collections.emptyList())),
+                        Collections.emptyList()));
+        assertThat(replicaManager.getReplicaOrException(keyedTb).getBucketCountEpoch())
+                .isEqualTo(0L);
+        assertThatThrownBy(() -> replicaManager.validateRoutingBucketCount(keyedTb, 0))
                 .isInstanceOf(StaleMetadataException.class);
 
         // An unknown bucket keeps the downstream per-bucket error semantics: validation passes.
-        replicaManager.validateRoutingBucketCount(new TableBucket(DATA1_TABLE_ID, 99), 3);
+        replicaManager.validateRoutingBucketCount(new TableBucket(DATA2_TABLE_ID, 99), 3);
     }
 
     private void makeLeaderWithRoutingState(
-            TableBucket tb, Integer bucketCount, Long bucketCountEpoch) throws Exception {
+            PhysicalTablePath physicalTablePath,
+            TableBucket tb,
+            Integer bucketCount,
+            Long bucketCountEpoch)
+            throws Exception {
         CompletableFuture<List<NotifyLeaderAndIsrResultForBucket>> future =
                 new CompletableFuture<>();
         replicaManager.becomeLeaderOrFollower(
                 INITIAL_COORDINATOR_EPOCH,
                 Collections.singletonList(
-                        notifyDataWithRoutingState(tb, bucketCount, bucketCountEpoch)),
+                        notifyDataWithRoutingState(
+                                physicalTablePath, tb, bucketCount, bucketCountEpoch)),
                 future::complete);
         assertThat(future.get()).containsOnly(new NotifyLeaderAndIsrResultForBucket(tb));
     }
 
     private static NotifyLeaderAndIsrData notifyDataWithRoutingState(
-            TableBucket tb, Integer bucketCount, Long bucketCountEpoch) {
+            PhysicalTablePath physicalTablePath,
+            TableBucket tb,
+            Integer bucketCount,
+            Long bucketCountEpoch) {
         return new NotifyLeaderAndIsrData(
-                PhysicalTablePath.of(DATA1_TABLE_PATH),
+                physicalTablePath,
                 tb,
                 Collections.singletonList(TABLET_SERVER_ID),
                 new LeaderAndIsr(
