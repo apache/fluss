@@ -36,6 +36,9 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.metrics.Gauge;
+import org.apache.fluss.metrics.MetricNames;
+import org.apache.fluss.metrics.groups.AbstractMetricGroup;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.AdjustIsrResponse;
 import org.apache.fluss.rpc.messages.ApiMessage;
@@ -46,6 +49,7 @@ import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsRequest;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
+import org.apache.fluss.rpc.messages.UpdateMetadataResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.protocol.Errors;
@@ -106,6 +110,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
@@ -115,9 +120,11 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedDeque;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -138,6 +145,7 @@ import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignm
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link CoordinatorEventProcessor}. */
@@ -783,6 +791,142 @@ class CoordinatorEventProcessorTest {
         assertThatThrownBy(responseCompletableFuture::get)
                 .cause()
                 .isInstanceOf(InvalidCoordinatorException.class);
+    }
+
+    @Test
+    void testMetricsRemainCollectableAfterDropTableFailure() throws Exception {
+        eventProcessor.shutdown();
+
+        FailingUpdateMetadataChannelManager failingChannelManager =
+                new FailingUpdateMetadataChannelManager();
+        testCoordinatorChannelManager = failingChannelManager;
+        eventProcessor = buildCoordinatorEventProcessor();
+        eventProcessor.startup();
+        completedSnapshotStoreManager = eventProcessor.completedSnapshotStoreManager();
+
+        TablePath tablePath = TablePath.of(defaultDatabase, "test_metrics_during_drop_table");
+        initCoordinatorChannel();
+        TableAssignment tableAssignment =
+                generateAssignment(
+                        N_BUCKETS,
+                        REPLICATION_FACTOR,
+                        new TabletServerInfo[] {
+                            new TabletServerInfo(0, "rack0"),
+                            new TabletServerInfo(1, "rack1"),
+                            new TabletServerInfo(2, "rack2")
+                        });
+        long tableId =
+                metadataManager.createTable(
+                        tablePath, remoteDataDir, TEST_TABLE, tableAssignment, false);
+        verifyTableCreated(tableId, tableAssignment, N_BUCKETS, REPLICATION_FACTOR);
+
+        List<TableBucket> tableBuckets = allTableBuckets(tableId, N_BUCKETS);
+        List<AbstractMetricGroup> bucketMetricGroups = new ArrayList<>();
+        List<Gauge<?>> inFlightGauges = new ArrayList<>();
+        for (TableBucket tableBucket : tableBuckets) {
+            completedSnapshotStoreManager.getOrCreateCompletedSnapshotStore(tablePath, tableBucket);
+            AbstractMetricGroup bucketMetricGroup =
+                    (AbstractMetricGroup)
+                            TestingMetricGroups.COORDINATOR_METRICS.getTableBucketMetricGroup(
+                                    tablePath, tableBucket);
+            assertThat(bucketMetricGroup).isNotNull();
+            bucketMetricGroups.add(bucketMetricGroup);
+            inFlightGauges.add(
+                    (Gauge<?>) bucketMetricGroup.getMetrics().get(MetricNames.KV_NUM_SNAPSHOTS));
+            inFlightGauges.add(
+                    (Gauge<?>)
+                            bucketMetricGroup.getMetrics().get(MetricNames.KV_ALL_SNAPSHOT_SIZE));
+        }
+        assertThat(inFlightGauges).doesNotContainNull();
+
+        failingChannelManager.failNextUpdateMetadata();
+        metadataManager.dropTable(tablePath, false);
+        failingChannelManager.awaitFailure();
+        fromCtx(context -> null);
+
+        assertThat(completedSnapshotStoreManager.getBucketCompletedSnapshotStores()).isEmpty();
+        assertThat(bucketMetricGroups).allMatch(AbstractMetricGroup::isClosed);
+        assertThat(tableBuckets)
+                .allSatisfy(
+                        tableBucket ->
+                                assertThat(
+                                                TestingMetricGroups.COORDINATOR_METRICS
+                                                        .getTableBucketMetricGroup(
+                                                                tablePath, tableBucket))
+                                        .isNull());
+        assertThatCode(() -> inFlightGauges.forEach(Gauge::getValue)).doesNotThrowAnyException();
+    }
+
+    @Test
+    void testMetricsRemainCollectableAfterDropPartitionFailure() throws Exception {
+        eventProcessor.shutdown();
+
+        FailingUpdateMetadataChannelManager failingChannelManager =
+                new FailingUpdateMetadataChannelManager();
+        testCoordinatorChannelManager = failingChannelManager;
+        eventProcessor = buildCoordinatorEventProcessor();
+        eventProcessor.startup();
+        completedSnapshotStoreManager = eventProcessor.completedSnapshotStoreManager();
+
+        TablePath tablePath = TablePath.of(defaultDatabase, "test_metrics_during_drop_partition");
+        initCoordinatorChannel();
+        long tableId =
+                metadataManager.createTable(
+                        tablePath, remoteDataDir, getPartitionedTable(), null, false);
+        Map<Integer, BucketAssignment> assignments =
+                generateAssignment(
+                                N_BUCKETS,
+                                REPLICATION_FACTOR,
+                                new TabletServerInfo[] {
+                                    new TabletServerInfo(0, "rack0"),
+                                    new TabletServerInfo(1, "rack1"),
+                                    new TabletServerInfo(2, "rack2")
+                                })
+                        .getBucketAssignments();
+        PartitionAssignment partitionAssignment = new PartitionAssignment(tableId, assignments);
+        PartitionIdName partition =
+                preparePartitionAssignment(tablePath, tableId, partitionAssignment).f0;
+        verifyPartitionCreated(
+                new TablePartition(tableId, partition.partitionId),
+                partitionAssignment,
+                N_BUCKETS,
+                REPLICATION_FACTOR);
+
+        List<TableBucket> tableBuckets = allTableBuckets(tableId, partition.partitionId, N_BUCKETS);
+        List<AbstractMetricGroup> bucketMetricGroups = new ArrayList<>();
+        List<Gauge<?>> inFlightGauges = new ArrayList<>();
+        for (TableBucket tableBucket : tableBuckets) {
+            completedSnapshotStoreManager.getOrCreateCompletedSnapshotStore(tablePath, tableBucket);
+            AbstractMetricGroup bucketMetricGroup =
+                    (AbstractMetricGroup)
+                            TestingMetricGroups.COORDINATOR_METRICS.getTableBucketMetricGroup(
+                                    tablePath, tableBucket);
+            assertThat(bucketMetricGroup).isNotNull();
+            bucketMetricGroups.add(bucketMetricGroup);
+            inFlightGauges.add(
+                    (Gauge<?>) bucketMetricGroup.getMetrics().get(MetricNames.KV_NUM_SNAPSHOTS));
+            inFlightGauges.add(
+                    (Gauge<?>)
+                            bucketMetricGroup.getMetrics().get(MetricNames.KV_ALL_SNAPSHOT_SIZE));
+        }
+        assertThat(inFlightGauges).doesNotContainNull();
+
+        failingChannelManager.failNextUpdateMetadata();
+        zookeeperClient.deletePartition(tablePath, partition.partitionName);
+        failingChannelManager.awaitFailure();
+        fromCtx(context -> null);
+
+        assertThat(completedSnapshotStoreManager.getBucketCompletedSnapshotStores()).isEmpty();
+        assertThat(bucketMetricGroups).allMatch(AbstractMetricGroup::isClosed);
+        assertThat(tableBuckets)
+                .allSatisfy(
+                        tableBucket ->
+                                assertThat(
+                                                TestingMetricGroups.COORDINATOR_METRICS
+                                                        .getTableBucketMetricGroup(
+                                                                tablePath, tableBucket))
+                                        .isNull());
+        assertThatCode(() -> inFlightGauges.forEach(Gauge::getValue)).doesNotThrowAnyException();
     }
 
     @Test
@@ -2200,6 +2344,33 @@ class CoordinatorEventProcessorTest {
                 kvSnapshotLeaseManager,
                 scheduler,
                 SystemClock.getInstance());
+    }
+
+    private static class FailingUpdateMetadataChannelManager extends TestCoordinatorChannelManager {
+
+        private final CountDownLatch failureObserved = new CountDownLatch(1);
+        private volatile boolean failUpdateMetadata;
+
+        private void failNextUpdateMetadata() {
+            failUpdateMetadata = true;
+        }
+
+        @Override
+        public void sendUpdateMetadataRequest(
+                int serverId,
+                UpdateMetadataRequest request,
+                BiConsumer<UpdateMetadataResponse, ? super Throwable> responseConsumer) {
+            if (failUpdateMetadata) {
+                failUpdateMetadata = false;
+                failureObserved.countDown();
+                throw new RuntimeException("Injected update metadata failure");
+            }
+            super.sendUpdateMetadataRequest(serverId, request, responseConsumer);
+        }
+
+        private void awaitFailure() throws InterruptedException {
+            assertThat(failureObserved.await(30, TimeUnit.SECONDS)).isTrue();
+        }
     }
 
     private static class RecordingAutoPartitionManager extends AutoPartitionManager {

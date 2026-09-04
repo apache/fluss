@@ -1068,9 +1068,13 @@ public class CoordinatorEventProcessor implements EventProcessor {
     }
 
     private void processDropTable(DropTableEvent dropTableEvent) {
-        // If this is a primary key table, drop the kv snapshot store.
         long tableId = dropTableEvent.getTableId();
         TableInfo dropTableInfo = coordinatorContext.getTableInfoById(tableId);
+
+        // Remove table metrics before dropping their backing snapshot stores.
+        coordinatorMetricGroup.removeTableMetricGroup(dropTableInfo.getTablePath(), tableId);
+
+        // If this is a primary key table, drop the kv snapshot store.
         if (dropTableInfo.hasPrimaryKey()) {
             Set<TableBucket> deleteTableBuckets = coordinatorContext.getAllBucketsForTable(tableId);
             completedSnapshotStoreManager.removeCompletedSnapshotStoreByTableBuckets(
@@ -1093,9 +1097,6 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 null,
                 Collections.emptySet());
 
-        // remove table metrics.
-        coordinatorMetricGroup.removeTableMetricGroup(dropTableInfo.getTablePath(), tableId);
-
         // For partitioned tables, the dropped table has no table-level replicas
         // (all buckets live under partitionAssignments), so getAllReplicasForTable
         // returns empty and areAllReplicasInState(.., ReplicaDeletionSuccessful)
@@ -1115,6 +1116,11 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
         // If this is a primary key table partition, drop the kv snapshot store.
         TableInfo dropTableInfo = coordinatorContext.getTableInfoById(tableId);
+
+        // Remove partition metrics before dropping their backing snapshot stores.
+        coordinatorMetricGroup.removeTablePartitionMetricsGroup(
+                dropTableInfo.getTablePath(), tableId, tablePartition.getPartitionId());
+
         if (dropTableInfo.hasPrimaryKey()) {
             Set<TableBucket> deleteTableBuckets =
                     coordinatorContext.getAllBucketsForPartition(
@@ -1133,10 +1139,6 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 tableId,
                 tablePartition.getPartitionId(),
                 Collections.emptySet());
-
-        // remove partition metrics.
-        coordinatorMetricGroup.removeTablePartitionMetricsGroup(
-                dropTableInfo.getTablePath(), tableId, tablePartition.getPartitionId());
     }
 
     private void processDeleteReplicaResponseReceived(
