@@ -773,8 +773,12 @@ public class TabletServiceITCase {
 
     @Test
     void testRoutingBucketCountValidationAppliesToClientRequestsOnly() throws Exception {
+        // Routing validation only applies to hash-distributed tables: a keyless table may place a
+        // record in any bucket, so a stale count is harmless there (see
+        // ReplicaManager#validateRoutingBucketCount).
         long tableId =
-                createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR);
+                createTable(
+                        FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH_PK, DATA1_TABLE_DESCRIPTOR_PK);
         TableBucket tb = new TableBucket(tableId, 0);
 
         FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
@@ -847,7 +851,9 @@ public class TabletServiceITCase {
                         tablePath,
                         TableDescriptor.builder()
                                 .schema(DATA1_SCHEMA)
-                                .distributedBy(bucketCount)
+                                // hash-distributed: routing validation is skipped for keyless
+                                // tables
+                                .distributedBy(bucketCount, "a")
                                 .build());
 
         Map<Integer, List<Integer>> bucketsByLeader = new HashMap<>();
