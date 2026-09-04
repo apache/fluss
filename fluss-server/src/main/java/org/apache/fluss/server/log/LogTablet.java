@@ -96,6 +96,7 @@ public final class LogTablet {
     private final LocalLog localLog;
 
     private final int maxSegmentFileSize;
+    private final long maxSegmentTimeMs;
     private final long logFlushIntervalMessages;
     // A lock that guards all modifications to the localLog.
     private final Object lock = new Object();
@@ -159,6 +160,7 @@ public final class LogTablet {
         this.physicalPath = physicalPath;
         this.localLog = localLog;
         this.maxSegmentFileSize = (int) conf.get(ConfigOptions.LOG_SEGMENT_FILE_SIZE).getBytes();
+        this.maxSegmentTimeMs = conf.get(ConfigOptions.LOG_SEGMENT_MAX_TIME).toMillis();
         this.logFlushIntervalMessages = conf.get(ConfigOptions.LOG_FLUSH_INTERVAL_MESSAGES);
         int writerExpirationCheckIntervalMs =
                 (int) conf.get(ConfigOptions.WRITER_ID_EXPIRATION_CHECK_INTERVAL).toMillis();
@@ -924,8 +926,8 @@ public final class LogTablet {
                 }
             }
 
-            // maybe roll the log if this segment is full.
-            maybeRoll(validRecords.sizeInBytes(), appendInfo);
+            // maybe roll the log if necessary.
+            maybeRoll(validRecords, appendInfo);
 
             // now that we have valid records, offsets assigned, we need to validate the idempotent
             // state of the writers and collect some metadata.
@@ -1065,12 +1067,21 @@ public final class LogTablet {
         }
     }
 
-    private void maybeRoll(int messageSize, LogAppendInfo appendInfo) throws Exception {
+    private void maybeRoll(MemoryLogRecords records, LogAppendInfo appendInfo) throws Exception {
         synchronized (lock) {
             LogSegment segment = localLog.getSegments().activeSegment();
+            long firstTimestampInMessages =
+                    maxSegmentTimeMs > 0
+                            ? records.batches().iterator().next().commitTimestamp()
+                            : -1L;
 
             if (segment.shouldRoll(
-                    new RollParams(maxSegmentFileSize, appendInfo.lastOffset(), messageSize))) {
+                    new RollParams(
+                            maxSegmentFileSize,
+                            maxSegmentTimeMs,
+                            firstTimestampInMessages,
+                            appendInfo.lastOffset(),
+                            records.sizeInBytes()))) {
                 if (LOG.isDebugEnabled()) {
                     LOG.debug(
                             "Rolling new log segment for bucket {} (log_size = {}/{}), offset_index_size = {}/{}, "

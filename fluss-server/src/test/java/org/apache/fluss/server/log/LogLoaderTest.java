@@ -44,6 +44,7 @@ import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -668,6 +669,34 @@ final class LogLoaderTest extends LogTestBase {
         appendRecords(logTablet, 1, (int) expectedLogEndOffset);
         assertThat(logTablet.localLogEndOffset()).isEqualTo(expectedLogEndOffset + 1);
 
+        logTablet.close();
+    }
+
+    @Test
+    void testTimeBasedRollAfterRecovery() throws Exception {
+        conf.set(ConfigOptions.LOG_SEGMENT_MAX_TIME, Duration.ofMillis(10));
+        ManualClock recordClock = new ManualClock(100L);
+        clock = recordClock;
+
+        LogTablet logTablet = createLogTablet(true);
+        appendRecords(logTablet, 1, 0);
+        recordClock.advanceTime(Duration.ofMillis(9));
+        appendRecords(logTablet, 1, 1);
+        logTablet.close();
+
+        logTablet = createLogTablet(false);
+        recordClock.advanceTime(Duration.ofMillis(1));
+        appendRecords(logTablet, 1, 2);
+        assertThat(logTablet.logSegments())
+                .extracting(LogSegment::getBaseOffset)
+                .containsExactly(0L);
+
+        recordClock.advanceTime(Duration.ofMillis(1));
+        appendRecords(logTablet, 1, 3);
+        assertThat(logTablet.logSegments())
+                .extracting(LogSegment::getBaseOffset)
+                .containsExactly(0L, 3L);
+        assertThat(logTablet.localLogEndOffset()).isEqualTo(4L);
         logTablet.close();
     }
 

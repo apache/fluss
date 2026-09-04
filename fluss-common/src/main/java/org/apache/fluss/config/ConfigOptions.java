@@ -931,6 +931,29 @@ public class ConfigOptions {
                                     + "Retention and cleaning is always done a file at a time so a "
                                     + "larger segment size means fewer files but less granular control over retention.");
 
+    public static final ConfigOption<Duration> LOG_SEGMENT_MAX_TIME =
+            key("log.segment.max-time")
+                    .durationType()
+                    .defaultValue(Duration.ZERO)
+                    .withDescription(
+                            "The maximum commit-time span of an active log segment. Before appending records, "
+                                    + "Fluss rolls a non-empty segment when the first incoming record batch is "
+                                    + "more than this duration after the segment's first record batch. Rolling "
+                                    + "is append-triggered, so an idle segment is not rolled. A value of 0 disables "
+                                    + "time-based rolling. Enable this option only after all TabletServers have "
+                                    + "been upgraded and configured with the same value.");
+
+    public static final ConfigOption<Duration> LOG_SEGMENT_MAX_TIME_JITTER =
+            key("log.segment.max-time-jitter")
+                    .durationType()
+                    .defaultValue(Duration.ZERO)
+                    .withDescription(
+                            "The maximum random jitter subtracted from log.segment.max-time for each "
+                                    + "log segment to avoid many segments rolling at the same time. The configured "
+                                    + "maximum is capped at log.segment.max-time, and the sampled jitter is smaller "
+                                    + "than that cap. This option requires log.segment.max-time to be enabled. "
+                                    + "A value of 0 disables jitter.");
+
     public static final ConfigOption<MemorySize> LOG_INDEX_FILE_SIZE =
             key("log.index.file-size")
                     .memoryType()

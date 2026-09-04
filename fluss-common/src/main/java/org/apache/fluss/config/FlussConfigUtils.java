@@ -232,6 +232,17 @@ public class FlussConfigUtils {
                 1);
         validateHistoricalLookupCacheRatio(conf);
 
+        validZeroOrMinDuration(conf, ConfigOptions.LOG_SEGMENT_MAX_TIME, 1);
+        validZeroOrMinDuration(conf, ConfigOptions.LOG_SEGMENT_MAX_TIME_JITTER, 1);
+        if (conf.get(ConfigOptions.LOG_SEGMENT_MAX_TIME).isZero()
+                && !conf.get(ConfigOptions.LOG_SEGMENT_MAX_TIME_JITTER).isZero()) {
+            throw new IllegalConfigurationException(
+                    String.format(
+                            "Invalid configuration for %s, it must be 0 when %s is 0.",
+                            ConfigOptions.LOG_SEGMENT_MAX_TIME_JITTER.key(),
+                            ConfigOptions.LOG_SEGMENT_MAX_TIME.key()));
+        }
+
         if (conf.get(ConfigOptions.LOG_SEGMENT_FILE_SIZE).getBytes() > Integer.MAX_VALUE) {
             throw new IllegalConfigurationException(
                     String.format(
@@ -271,12 +282,38 @@ public class FlussConfigUtils {
 
     private static void validMinDuration(
             Configuration conf, ConfigOption<Duration> option, long minMillis) {
-        long millis = conf.get(option).toMillis();
+        long millis = toMillisOrThrow(option, conf.get(option));
         if (millis < minMillis) {
             throw new IllegalConfigurationException(
                     String.format(
                             "Invalid configuration for %s, it must be greater than or equal %d ms.",
                             option.key(), minMillis));
+        }
+    }
+
+    private static void validZeroOrMinDuration(
+            Configuration conf, ConfigOption<Duration> option, long minMillis) {
+        Duration duration = conf.get(option);
+        long millis = toMillisOrThrow(option, duration);
+        // Zero disables the option; non-zero sub-millisecond values truncate to 0 ms and are
+        // invalid.
+        if (!duration.isZero() && millis < minMillis) {
+            throw new IllegalConfigurationException(
+                    String.format(
+                            "Invalid configuration for %s, it must be 0 or greater than or equal %d ms.",
+                            option.key(), minMillis));
+        }
+    }
+
+    private static long toMillisOrThrow(ConfigOption<Duration> option, Duration duration) {
+        try {
+            return duration.toMillis();
+        } catch (ArithmeticException e) {
+            throw new IllegalConfigurationException(
+                    String.format(
+                            "Invalid configuration for %s, it must be representable in milliseconds.",
+                            option.key()),
+                    e);
         }
     }
 }
