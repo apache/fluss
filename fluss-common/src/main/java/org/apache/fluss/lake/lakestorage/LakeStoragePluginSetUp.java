@@ -17,11 +17,12 @@
 
 package org.apache.fluss.lake.lakestorage;
 
+import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.plugin.PluginManager;
-import org.apache.fluss.shaded.guava32.com.google.common.collect.Iterators;
 
 import javax.annotation.Nullable;
 
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.Objects;
 import java.util.ServiceLoader;
@@ -32,35 +33,65 @@ import java.util.ServiceLoader;
  */
 public class LakeStoragePluginSetUp {
 
+    /**
+     * Finds the {@link LakeStoragePlugin} for the given datalake format, from the plugins directory
+     * or from the main classpath.
+     *
+     * <p>Providing it from both cannot work: {@code org.apache.fluss.} is parent-first, so the copy
+     * on the main classpath shadows the plugin and is loaded without the dependencies bundled next
+     * to it. That is rejected here rather than failing later with a {@link NoClassDefFoundError}.
+     */
     public static LakeStoragePlugin fromDataLakeFormat(
             final String dataLakeFormat, @Nullable final PluginManager pluginManager) {
-        // now, load lake storage plugin
-        Iterator<LakeStoragePlugin> lakeStoragePluginIterator =
-                getAllLakeStoragePlugins(pluginManager);
+        LakeStoragePlugin fromPluginsDir =
+                findByIdentifier(loadFromPluginManager(pluginManager), dataLakeFormat);
+        LakeStoragePlugin fromClasspath = findByIdentifier(loadFromClasspath(), dataLakeFormat);
 
-        while (lakeStoragePluginIterator.hasNext()) {
-            LakeStoragePlugin lakeStoragePlugin = lakeStoragePluginIterator.next();
-            if (Objects.equals(lakeStoragePlugin.identifier(), dataLakeFormat)) {
-                return PluginLakeStorageWrapper.of(lakeStoragePlugin);
-            }
+        if (fromPluginsDir != null && fromClasspath != null) {
+            throw new FlussRuntimeException(
+                    String.format(
+                            "Found two LakeStoragePlugin for datalake format '%s': one in the plugins "
+                                    + "directory and one on the main classpath (usually <FLUSS_HOME>/lib). "
+                                    + "The copy on the main classpath shadows the one in the plugins "
+                                    + "directory, but is loaded without the dependencies bundled next to "
+                                    + "the plugin, such as Hadoop. This later fails with errors like "
+                                    + "'NoClassDefFoundError: org/apache/hadoop/hdfs/HdfsConfiguration'. "
+                                    + "Remove the fluss-lake-%s jar from <FLUSS_HOME>/lib and keep it only "
+                                    + "in <FLUSS_HOME>/plugins/%s/.",
+                            dataLakeFormat, dataLakeFormat, dataLakeFormat));
         }
 
-        // if come here, means we haven't found LakeStoragePlugin match the configured
-        // datalake, throw exception
-        throw new UnsupportedOperationException(
-                "No LakeStoragePlugin can be found for datalake format: " + dataLakeFormat);
+        LakeStoragePlugin lakeStoragePlugin =
+                fromPluginsDir != null ? fromPluginsDir : fromClasspath;
+        if (lakeStoragePlugin == null) {
+            throw new UnsupportedOperationException(
+                    "No LakeStoragePlugin can be found for datalake format: " + dataLakeFormat);
+        }
+        return PluginLakeStorageWrapper.of(lakeStoragePlugin);
     }
 
-    private static Iterator<LakeStoragePlugin> getAllLakeStoragePlugins(
-            @Nullable PluginManager pluginManager) {
-        final Iterator<LakeStoragePlugin> pluginIteratorSPI =
-                ServiceLoader.load(
-                                LakeStoragePlugin.class, LakeStoragePlugin.class.getClassLoader())
-                        .iterator();
-        if (pluginManager == null) {
-            return pluginIteratorSPI;
-        } else {
-            return Iterators.concat(pluginManager.load(LakeStoragePlugin.class), pluginIteratorSPI);
+    @Nullable
+    private static LakeStoragePlugin findByIdentifier(
+            Iterator<LakeStoragePlugin> lakeStoragePlugins, String dataLakeFormat) {
+        while (lakeStoragePlugins.hasNext()) {
+            LakeStoragePlugin lakeStoragePlugin = lakeStoragePlugins.next();
+            if (Objects.equals(lakeStoragePlugin.identifier(), dataLakeFormat)) {
+                return lakeStoragePlugin;
+            }
         }
+        return null;
+    }
+
+    private static Iterator<LakeStoragePlugin> loadFromPluginManager(
+            @Nullable PluginManager pluginManager) {
+        if (pluginManager == null) {
+            return Collections.emptyIterator();
+        }
+        return pluginManager.load(LakeStoragePlugin.class);
+    }
+
+    private static Iterator<LakeStoragePlugin> loadFromClasspath() {
+        return ServiceLoader.load(LakeStoragePlugin.class, LakeStoragePlugin.class.getClassLoader())
+                .iterator();
     }
 }
