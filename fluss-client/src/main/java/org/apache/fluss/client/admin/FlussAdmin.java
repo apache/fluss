@@ -34,7 +34,6 @@ import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
-import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
@@ -424,25 +423,12 @@ public class FlussAdmin implements Admin {
                             //   observe a half-upgraded cluster.
                             return getTableInfo(tablePath)
                                     .thenApply(
-                                            tableInfo -> {
-                                                long epoch = tableInfo.getBucketCountEpoch();
-                                                // Post-ALTER server must return the count;
-                                                // missing means inconsistency, so fail loud.
-                                                if (epoch > 0) {
-                                                    throw new StaleMetadataException(
-                                                            "Server omitted the per-partition "
-                                                                    + "bucket count for table "
-                                                                    + tablePath
-                                                                    + " at bucketCountEpoch "
-                                                                    + epoch
-                                                                    + " > 0; refusing to fall "
-                                                                    + "back to the table-level "
-                                                                    + "count.");
-                                                }
-                                                // epoch == 0: table-level count is safe.
-                                                return ClientRpcMessageUtils.toPartitionInfos(
-                                                        response, tableInfo.getNumBuckets());
-                                            });
+                                            tableInfo ->
+                                                    ClientRpcMessageUtils.toPartitionInfos(
+                                                            response,
+                                                            ClientRpcMessageUtils
+                                                                    .fallbackBucketCountOrFail(
+                                                                            tableInfo, tablePath)));
                         });
     }
 

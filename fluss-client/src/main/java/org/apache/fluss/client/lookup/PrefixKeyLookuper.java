@@ -21,6 +21,7 @@ import org.apache.fluss.bucketing.BucketingFunction;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.table.getter.PartitionGetter;
 import org.apache.fluss.exception.PartitionNotExistException;
+import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
@@ -179,10 +180,16 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
                                 metadataUpdater);
                 bucketCount =
                         resolvePartitionBucketCount(
-                                new TablePartition(tableInfo.getTableId(), partitionId),
-                                numBuckets);
+                                new TablePartition(tableInfo.getTableId(), partitionId));
             } catch (PartitionNotExistException e) {
                 return CompletableFuture.completedFuture(new LookupResult(Collections.emptyList()));
+            } catch (StaleMetadataException e) {
+                // The partition was rescaled but its per-partition bucket count is unavailable.
+                // Report it as a failed future (retriable) rather than throwing synchronously from
+                // this async method.
+                CompletableFuture<LookupResult> failed = new CompletableFuture<>();
+                failed.completeExceptionally(e);
+                return failed;
             }
         }
 

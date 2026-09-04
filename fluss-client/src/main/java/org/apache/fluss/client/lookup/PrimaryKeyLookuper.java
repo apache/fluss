@@ -21,6 +21,7 @@ import org.apache.fluss.bucketing.BucketingFunction;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.table.getter.PartitionGetter;
 import org.apache.fluss.exception.PartitionNotExistException;
+import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaGetter;
@@ -143,10 +144,14 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
                                 metadataUpdater);
                 bucketCount =
                         resolvePartitionBucketCount(
-                                new TablePartition(tableInfo.getTableId(), partitionId),
-                                numBuckets);
+                                new TablePartition(tableInfo.getTableId(), partitionId));
             } catch (PartitionNotExistException e) {
                 return mayFallbackToHistoricalLookup(bkBytes, pkBytes, originalPartitionName);
+            } catch (StaleMetadataException e) {
+                // The partition was rescaled but its per-partition bucket count is unavailable.
+                // Report it as a failed future (retriable), consistent with historicalLookup,
+                // rather than throwing synchronously from this async method.
+                return completedExceptionally(e);
             }
         }
 
@@ -213,8 +218,7 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
             // change. The bucket the lake data lives in is resolved on the server.
             int historicalBucketCount =
                     resolvePartitionBucketCount(
-                            new TablePartition(tableInfo.getTableId(), historicalPartitionId),
-                            numBuckets);
+                            new TablePartition(tableInfo.getTableId(), historicalPartitionId));
             int routingBucketId =
                     bucketingFunction.bucketing(bucketKeyBytes, historicalBucketCount);
             TableBucket tableBucket =
