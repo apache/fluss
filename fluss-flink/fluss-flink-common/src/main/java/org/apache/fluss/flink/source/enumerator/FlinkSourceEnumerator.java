@@ -772,22 +772,25 @@ public class FlinkSourceEnumerator
                 Set<PartitionInfo> partitionInfos = listPartitions();
                 List<SourceSplitBase> splits = new ArrayList<>();
                 for (PartitionInfo partitionInfo : partitionInfos) {
-                    splits.addAll(
-                            buildKvBatchSplits(
-                                    partitionInfo.getPartitionId(),
-                                    partitionInfo.getPartitionName()));
+                    splits.addAll(buildKvBatchSplits(partitionInfo));
                 }
                 return splits;
             }
-            return buildKvBatchSplits(null, null);
+            return buildKvBatchSplits(null);
         }
         return flussOnlyBatchSplitGenerator.generate();
     }
 
-    private List<SourceSplitBase> buildKvBatchSplits(
-            @Nullable Long partitionId, @Nullable String partitionName) {
+    private List<SourceSplitBase> buildKvBatchSplits(@Nullable PartitionInfo partitionInfo) {
+        // A partition keeps the bucket count it was created with, so its buckets must be
+        // enumerated by that count; the table-level count only applies to a non-partitioned
+        // table, whose single bucket layout is the table's own.
+        int bucketCount =
+                partitionInfo != null ? partitionInfo.getBucketCount() : tableInfo.getNumBuckets();
+        Long partitionId = partitionInfo != null ? partitionInfo.getPartitionId() : null;
+        String partitionName = partitionInfo != null ? partitionInfo.getPartitionName() : null;
         List<SourceSplitBase> splits = new ArrayList<>();
-        for (int bucketId = 0; bucketId < tableInfo.getNumBuckets(); bucketId++) {
+        for (int bucketId = 0; bucketId < bucketCount; bucketId++) {
             TableBucket tb = new TableBucket(tableInfo.getTableId(), partitionId, bucketId);
             if (ignoreTableBucket(tb)) {
                 continue;
