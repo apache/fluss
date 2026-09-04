@@ -38,6 +38,8 @@ import org.apache.fluss.row.encode.ValueDecoder;
 import org.apache.fluss.row.encode.ValueEncoder;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
+import org.apache.fluss.rpc.messages.GetTableStatsRequest;
+import org.apache.fluss.rpc.messages.GetTableStatsResponse;
 import org.apache.fluss.rpc.messages.InitWriterRequest;
 import org.apache.fluss.rpc.messages.InitWriterResponse;
 import org.apache.fluss.rpc.messages.ListOffsetsRequest;
@@ -51,6 +53,7 @@ import org.apache.fluss.rpc.messages.PbLookupRespForBucket;
 import org.apache.fluss.rpc.messages.PbNotifyLeaderAndIsrReqForBucket;
 import org.apache.fluss.rpc.messages.PbPrefixLookupRespForBucket;
 import org.apache.fluss.rpc.messages.PbPutKvRespForBucket;
+import org.apache.fluss.rpc.messages.PbTableStatsRespForBucket;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
 import org.apache.fluss.rpc.messages.PutKvResponse;
 import org.apache.fluss.rpc.messages.ScanKvRequest;
@@ -830,6 +833,64 @@ public class TabletServiceITCase {
             int routingBucketCount) {
         return newListOffsetsRequest(followerServerId, offsetType, tableId, bucketId)
                 .setRoutingBucketCount(routingBucketCount);
+    }
+
+    @Test
+    void testStaleRoutingBucketCountOnlyFailsTheOffendingBucket() throws Exception {
+        // 9 buckets over 3 tablet servers, so at least one server necessarily leads two of them
+        // and a single request can carry two buckets hosted by the same leader.
+        int bucketCount = 9;
+        TablePath tablePath = TablePath.of("test_db_1", "test_stale_routing_per_bucket");
+        long tableId =
+                createTable(
+                        FLUSS_CLUSTER_EXTENSION,
+                        tablePath,
+                        TableDescriptor.builder()
+                                .schema(DATA1_SCHEMA)
+                                .distributedBy(bucketCount)
+                                .build());
+
+        Map<Integer, List<Integer>> bucketsByLeader = new HashMap<>();
+        for (int bucketId = 0; bucketId < bucketCount; bucketId++) {
+            TableBucket tb = new TableBucket(tableId, bucketId);
+            FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
+            bucketsByLeader
+                    .computeIfAbsent(
+                            FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb), k -> new ArrayList<>())
+                    .add(bucketId);
+        }
+        Map.Entry<Integer, List<Integer>> coLocated =
+                bucketsByLeader.entrySet().stream()
+                        .filter(entry -> entry.getValue().size() >= 2)
+                        .findFirst()
+                        .orElseThrow(
+                                () ->
+                                        new AssertionError(
+                                                "9 buckets over 3 servers must co-locate two leaders"));
+        int healthyBucket = coLocated.getValue().get(0);
+        int staleBucket = coLocated.getValue().get(1);
+
+        GetTableStatsRequest request = new GetTableStatsRequest().setTableId(tableId);
+        request.addBucketsReq().setBucketId(healthyBucket).setRoutingBucketCount(bucketCount);
+        request.addBucketsReq().setBucketId(staleBucket).setRoutingBucketCount(bucketCount + 1);
+
+        GetTableStatsResponse response =
+                FLUSS_CLUSTER_EXTENSION
+                        .newTabletServerClientForNode(coLocated.getKey())
+                        .getTableStats(request)
+                        .get();
+
+        assertThat(response.getBucketsRespsCount()).isEqualTo(2);
+        Map<Integer, PbTableStatsRespForBucket> respByBucket = new HashMap<>();
+        for (PbTableStatsRespForBucket bucketResp : response.getBucketsRespsList()) {
+            respByBucket.put(bucketResp.getBucketId(), bucketResp);
+        }
+
+        // the co-batched bucket whose routing is still valid is served as usual
+        assertThat(respByBucket.get(healthyBucket).hasErrorCode()).isFalse();
+        // only the bucket routed by a stale count is rejected, and it stays retriable
+        assertThat(respByBucket.get(staleBucket).getErrorCode())
+                .isEqualTo(Errors.STALE_METADATA.code());
     }
 
     @Test
