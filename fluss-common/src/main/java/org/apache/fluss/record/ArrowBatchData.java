@@ -17,11 +17,17 @@
 
 package org.apache.fluss.record;
 
-import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.annotation.PublicEvolving;
 
 import org.apache.arrow.memory.ArrowBuf;
 import org.apache.arrow.vector.FieldVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
+
+import javax.annotation.Nullable;
+
+import java.nio.ByteBuffer;
+import java.util.Arrays;
+import java.util.Optional;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -33,21 +39,37 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  *
  * <p>The caller must close this object after use in order to release the underlying Arrow memory.
  */
-@Internal
+@PublicEvolving
 public class ArrowBatchData implements AutoCloseable {
 
     private final VectorSchemaRoot vectorSchemaRoot;
     private final long baseLogOffset;
     private final long timestamp;
     private final int schemaId;
+    @Nullable private final byte[] changeTypes;
     private boolean closed;
 
     public ArrowBatchData(
             VectorSchemaRoot vectorSchemaRoot, long baseLogOffset, long timestamp, int schemaId) {
+        this(vectorSchemaRoot, baseLogOffset, timestamp, schemaId, null);
+    }
+
+    ArrowBatchData(
+            VectorSchemaRoot vectorSchemaRoot,
+            long baseLogOffset,
+            long timestamp,
+            int schemaId,
+            @Nullable byte[] changeTypes) {
         this.vectorSchemaRoot = checkNotNull(vectorSchemaRoot, "vectorSchemaRoot must not be null");
         this.baseLogOffset = baseLogOffset;
         this.timestamp = timestamp;
         this.schemaId = schemaId;
+        checkArgument(
+                changeTypes == null || changeTypes.length == vectorSchemaRoot.getRowCount(),
+                "changeTypes length must match row count %s, but is %s",
+                vectorSchemaRoot.getRowCount(),
+                changeTypes == null ? 0 : changeTypes.length);
+        this.changeTypes = changeTypes;
     }
 
     /** Returns the Arrow vectors of this batch. */
@@ -75,6 +97,41 @@ public class ArrowBatchData implements AutoCloseable {
         return vectorSchemaRoot.getRowCount();
     }
 
+    /** Returns whether every row in this batch is append-only. */
+    public boolean isAppendOnly() {
+        return changeTypes == null;
+    }
+
+    /**
+     * Returns the stored change type for the given row.
+     *
+     * <p>Append-only batches do not materialize a change-type vector and return {@link
+     * ChangeType#APPEND_ONLY} for every row.
+     */
+    public ChangeType getChangeType(int rowId) {
+        checkArgument(
+                rowId >= 0 && rowId < getRecordCount(),
+                "rowId must be in [0, %s), but is %s",
+                getRecordCount(),
+                rowId);
+        return changeTypes == null
+                ? ChangeType.APPEND_ONLY
+                : ChangeType.fromByteValue(changeTypes[rowId]);
+    }
+
+    /**
+     * Returns the stored per-row change-type vector as a read-only buffer.
+     *
+     * <p>The buffer contains one {@link ChangeType#toByteValue() encoded byte} for every row and is
+     * absent for append-only batches. The returned buffer remains valid for the lifetime of this
+     * object.
+     */
+    public Optional<ByteBuffer> getChangeTypes() {
+        return changeTypes == null
+                ? Optional.empty()
+                : Optional.of(ByteBuffer.wrap(changeTypes).asReadOnlyBuffer());
+    }
+
     /** Returns the total size in bytes of the underlying Arrow buffers. */
     public long getSizeInBytes() {
         long size = 0;
@@ -82,6 +139,9 @@ public class ArrowBatchData implements AutoCloseable {
             for (ArrowBuf buf : vector.getBuffers(false)) {
                 size += buf.readableBytes();
             }
+        }
+        if (changeTypes != null) {
+            size += changeTypes.length;
         }
         return size;
     }
@@ -105,9 +165,14 @@ public class ArrowBatchData implements AutoCloseable {
                 getRecordCount());
         int remainingRows = getRecordCount() - skipRows;
         VectorSchemaRoot slicedRoot = vectorSchemaRoot.slice(skipRows, remainingRows);
-        // release original vector buffers; sliced vectors hold independent copies
+        byte[] slicedChangeTypes =
+                changeTypes == null
+                        ? null
+                        : Arrays.copyOfRange(changeTypes, skipRows, changeTypes.length);
+        // VectorSchemaRoot.slice transfers each slice into independently owned vectors.
         close();
-        return new ArrowBatchData(slicedRoot, baseLogOffset + skipRows, timestamp, schemaId);
+        return new ArrowBatchData(
+                slicedRoot, baseLogOffset + skipRows, timestamp, schemaId, slicedChangeTypes);
     }
 
     /**
@@ -128,8 +193,11 @@ public class ArrowBatchData implements AutoCloseable {
                 rowCount,
                 getRecordCount());
         VectorSchemaRoot slicedRoot = vectorSchemaRoot.slice(0, rowCount);
+        byte[] slicedChangeTypes =
+                changeTypes == null ? null : Arrays.copyOfRange(changeTypes, 0, rowCount);
         close();
-        return new ArrowBatchData(slicedRoot, baseLogOffset, timestamp, schemaId);
+        return new ArrowBatchData(
+                slicedRoot, baseLogOffset, timestamp, schemaId, slicedChangeTypes);
     }
 
     @Override
