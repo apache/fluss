@@ -22,6 +22,7 @@ import org.apache.fluss.security.auth.sasl.plain.PlainServerCallbackHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
 import javax.security.auth.Subject;
 import javax.security.auth.login.AppConfigurationEntry;
 import javax.security.sasl.Sasl;
@@ -88,7 +89,11 @@ public class SaslServerFactory {
     }
 
     public static SaslClient createSaslClient(
-            String mechanism, String hostAddress, Map<String, ?> props, LoginManager loginManager)
+            String mechanism,
+            @Nullable String authorizationId,
+            String hostAddress,
+            Map<String, ?> props,
+            LoginManager loginManager)
             throws PrivilegedActionException {
 
         return Subject.doAs(
@@ -104,7 +109,7 @@ public class SaslServerFactory {
 
                             return Sasl.createSaslClient(
                                     mechs,
-                                    null,
+                                    authorizationId,
                                     serviceName,
                                     hostAddress,
                                     props,
