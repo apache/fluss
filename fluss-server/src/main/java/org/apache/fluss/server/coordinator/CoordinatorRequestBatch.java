@@ -38,7 +38,9 @@ import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.DeleteReplicaResponseReceivedEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
+import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrRequestContext;
 import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrResponseReceivedEvent;
+import org.apache.fluss.server.coordinator.rebalance.RebalanceExecutionKey;
 import org.apache.fluss.server.entity.DeleteReplicaResultForBucket;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.metadata.BucketMetadata;
@@ -60,6 +62,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_ID;
@@ -114,6 +117,8 @@ public class CoordinatorRequestBatch {
     private final CoordinatorChannelManager coordinatorChannelManager;
     private final EventManager eventManager;
     private final CoordinatorContext coordinatorContext;
+    private Function<TableBucket, RebalanceExecutionKey> rebalanceExecutionKeyResolver =
+            ignored -> null;
 
     public CoordinatorRequestBatch(
             CoordinatorChannelManager coordinatorChannelManager,
@@ -122,6 +127,11 @@ public class CoordinatorRequestBatch {
         this.coordinatorChannelManager = coordinatorChannelManager;
         this.eventManager = eventManager;
         this.coordinatorContext = coordinatorContext;
+    }
+
+    void setRebalanceExecutionKeyResolver(
+            Function<TableBucket, RebalanceExecutionKey> rebalanceExecutionKeyResolver) {
+        this.rebalanceExecutionKeyResolver = rebalanceExecutionKeyResolver;
     }
 
     public void newBatch() {
@@ -425,6 +435,19 @@ public class CoordinatorRequestBatch {
             NotifyLeaderAndIsrRequest notifyLeaderAndIsrRequest =
                     makeNotifyLeaderAndIsrRequest(
                             coordinatorEpoch, notifyRequestEntry.getValue().values());
+            Map<TableBucket, NotifyLeaderAndIsrRequestContext> requestContexts = new HashMap<>();
+            for (Map.Entry<TableBucket, PbNotifyLeaderAndIsrReqForBucket> entry :
+                    notifyRequestEntry.getValue().entrySet()) {
+                PbNotifyLeaderAndIsrReqForBucket request = entry.getValue();
+                requestContexts.put(
+                        entry.getKey(),
+                        new NotifyLeaderAndIsrRequestContext(
+                                coordinatorEpoch,
+                                request.getLeader(),
+                                request.getLeaderEpoch(),
+                                request.getBucketEpoch(),
+                                rebalanceExecutionKeyResolver.apply(entry.getKey())));
+            }
 
             // Track exactly which buckets THIS request marked as pending leader activation. Only
             // those entries (where leader == serverId) need to be cleared if the request fails
@@ -473,7 +496,9 @@ public class CoordinatorRequestBatch {
                         // put the response receive event into the event manager
                         eventManager.put(
                                 new NotifyLeaderAndIsrResponseReceivedEvent(
-                                        getNotifyLeaderAndIsrResponseData(response), serverId));
+                                        getNotifyLeaderAndIsrResponseData(response),
+                                        serverId,
+                                        requestContexts));
                     });
         }
         notifyLeaderAndIsrRequestMap.clear();
