@@ -800,6 +800,29 @@ public interface Admin extends AutoCloseable {
     CompletableFuture<ClusterHealth> getClusterHealth();
 
     /**
+     * Get the human-readable version of the cluster asynchronously: the server's Maven project
+     * version, e.g. {@code "0.10.0"} for a release build or {@code "1.0-SNAPSHOT"} for a snapshot
+     * build.
+     *
+     * <p>Like {@link #getClusterHealth()}, this is answered by the Coordinator, so the result does
+     * not depend on which server the client happens to be connected to. During a rolling upgrade,
+     * this reflects the Coordinator's own version, not necessarily every Tablet Server's.
+     *
+     * <p>Returns {@code "unknown"} if the Coordinator could not determine its own version.
+     *
+     * <p>The version string is intended for diagnostics and display. For programmatic feature
+     * gating, use the api-versions handshake instead: snapshot builds, downstream distributions,
+     * and the {@code "unknown"} fallback all produce strings a naive comparison mishandles.
+     *
+     * <p>Servers that do not yet implement this RPC complete the returned future exceptionally with
+     * {@link org.apache.fluss.exception.UnsupportedVersionException}.
+     *
+     * @return a {@link CompletableFuture} that completes with the cluster version information.
+     * @since 1.0
+     */
+    CompletableFuture<ClusterVersionInfo> getClusterVersion();
+
+    /**
      * List per-bucket remote log manifest entries for a table or partition scope.
      *
      * @param tableId the table to query

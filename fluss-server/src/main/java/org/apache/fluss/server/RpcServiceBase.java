@@ -48,6 +48,8 @@ import org.apache.fluss.rpc.messages.DatabaseExistsRequest;
 import org.apache.fluss.rpc.messages.DatabaseExistsResponse;
 import org.apache.fluss.rpc.messages.DescribeClusterConfigsRequest;
 import org.apache.fluss.rpc.messages.DescribeClusterConfigsResponse;
+import org.apache.fluss.rpc.messages.GetClusterVersionRequest;
+import org.apache.fluss.rpc.messages.GetClusterVersionResponse;
 import org.apache.fluss.rpc.messages.GetDatabaseInfoRequest;
 import org.apache.fluss.rpc.messages.GetDatabaseInfoResponse;
 import org.apache.fluss.rpc.messages.GetFileSystemSecurityTokenRequest;
@@ -98,6 +100,7 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
+import org.apache.fluss.utils.VersionInfo;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -602,6 +605,22 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         List<ConfigEntry> configs = dynamicConfigManager.describeConfigs();
         return CompletableFuture.completedFuture(
                 new DescribeClusterConfigsResponse().addAllConfigs(toPbConfigEntries(configs)));
+    }
+
+    @Override
+    public CompletableFuture<GetClusterVersionResponse> getClusterVersion(
+            GetClusterVersionRequest request) {
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), OperationType.DESCRIBE, Resource.cluster());
+        }
+
+        // Reports this server's own version - no forwarding to the coordinator. The client's
+        // FlussAdmin routes this RPC to the coordinator gateway, so users still see one
+        // consistent answer; per-node versions are a possible follow-up via
+        // TabletServerRegistration.
+        GetClusterVersionResponse response = new GetClusterVersionResponse();
+        response.setVersion(VersionInfo.getVersion());
+        return CompletableFuture.completedFuture(response);
     }
 
     protected MetadataResponse processMetadataRequest(
