@@ -21,11 +21,13 @@ import org.apache.fluss.bucketing.BucketingFunction;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.table.getter.PartitionGetter;
 import org.apache.fluss.exception.PartitionNotExistException;
+import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.types.RowType;
@@ -127,10 +129,11 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
         int bucketId = bucketingFunction.bucketing(bkBytes, numBuckets);
         Long partitionId = null;
         String originalPartitionName = null;
+        int bucketCount = numBuckets;
         if (partitionGetter != null) {
             originalPartitionName = partitionGetter.getPartition(lookupKey);
             if (confirmedHistoricalPartitions.contains(originalPartitionName)) {
-                return historicalLookup(bucketId, pkBytes, originalPartitionName);
+                return historicalLookup(bkBytes, pkBytes, originalPartitionName);
             }
             try {
                 partitionId =
@@ -139,20 +142,41 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
                                 partitionGetter,
                                 tableInfo.getTablePath(),
                                 metadataUpdater);
+                bucketCount =
+                        resolvePartitionBucketCount(
+                                new TablePartition(tableInfo.getTableId(), partitionId));
             } catch (PartitionNotExistException e) {
-                return mayFallbackToHistoricalLookup(bucketId, pkBytes, originalPartitionName);
+                return mayFallbackToHistoricalLookup(bkBytes, pkBytes, originalPartitionName);
+            } catch (StaleMetadataException e) {
+                // The partition was rescaled but its per-partition bucket count is unavailable.
+                // Report it as a failed future (retriable), consistent with historicalLookup,
+                // rather than throwing synchronously from this async method.
+                return completedExceptionally(e);
             }
         }
 
+        // A partition created before ALTER bucket.num keeps its own layout, so re-route by the
+        // partition's actual count. The historical lookups above are routed by the historical
+        // partition's own count on their own path.
+        if (bucketCount != numBuckets) {
+            bucketId = bucketingFunction.bucketing(bkBytes, bucketCount);
+        }
         TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), partitionId, bucketId);
-        return lookupBucket(tableBucket, pkBytes, insertIfNotExists, false, originalPartitionName);
+        return lookupBucket(
+                tableBucket,
+                bkBytes,
+                pkBytes,
+                insertIfNotExists,
+                false,
+                originalPartitionName,
+                bucketCount);
     }
 
     /**
      * Falls back to historical lookup when the normal partition is missing and fallback is enabled.
      */
     private CompletableFuture<LookupResult> mayFallbackToHistoricalLookup(
-            int bucketId, byte[] keyBytes, String originalPartitionName) {
+            byte[] bucketKeyBytes, byte[] keyBytes, String originalPartitionName) {
         // Clear the stale normal-partition route before deciding whether to fall back so that a
         // partition created later can be discovered by the next lookup.
         metadataUpdater.invalidPhysicalTableBucketAndPartitionMeta(
@@ -171,11 +195,11 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
             return CompletableFuture.completedFuture(new LookupResult(Collections.emptyList()));
         }
         confirmedHistoricalPartitions.add(originalPartitionName);
-        return historicalLookup(bucketId, keyBytes, originalPartitionName);
+        return historicalLookup(bucketKeyBytes, keyBytes, originalPartitionName);
     }
 
     private CompletableFuture<LookupResult> historicalLookup(
-            int bucketId, byte[] keyBytes, String originalPartitionName) {
+            byte[] bucketKeyBytes, byte[] keyBytes, String originalPartitionName) {
         if (insertIfNotExists) {
             return completedExceptionally(
                     new UnsupportedOperationException(
@@ -190,9 +214,23 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
             }
             Long historicalPartitionId =
                     metadataUpdater.getPartitionIdOrElseThrow(historicalPartitionPath);
+            // Route by the historical partition's own count, which an ALTER bucket.num does not
+            // change. The bucket the lake data lives in is resolved on the server.
+            int historicalBucketCount =
+                    resolvePartitionBucketCount(
+                            new TablePartition(tableInfo.getTableId(), historicalPartitionId));
+            int routingBucketId =
+                    bucketingFunction.bucketing(bucketKeyBytes, historicalBucketCount);
             TableBucket tableBucket =
-                    new TableBucket(tableInfo.getTableId(), historicalPartitionId, bucketId);
-            return lookupBucket(tableBucket, keyBytes, false, true, originalPartitionName);
+                    new TableBucket(tableInfo.getTableId(), historicalPartitionId, routingBucketId);
+            return lookupBucket(
+                    tableBucket,
+                    bucketKeyBytes,
+                    keyBytes,
+                    false,
+                    true,
+                    originalPartitionName,
+                    historicalBucketCount);
         } catch (Throwable t) {
             return completedExceptionally(t);
         }
@@ -200,10 +238,12 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
 
     private CompletableFuture<LookupResult> lookupBucket(
             TableBucket tableBucket,
+            byte[] bucketKeyBytes,
             byte[] keyBytes,
             boolean insertIfNotExists,
             boolean historicalLookup,
-            @Nullable String originalPartitionName) {
+            @Nullable String originalPartitionName,
+            int bucketCount) {
         CompletableFuture<LookupResult> lookupFuture = new CompletableFuture<>();
         lookupClient
                 .lookup(
@@ -211,7 +251,8 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
                         tableBucket,
                         keyBytes,
                         insertIfNotExists,
-                        historicalLookup ? originalPartitionName : null)
+                        historicalLookup ? originalPartitionName : null,
+                        bucketCount)
                 .whenComplete(
                         (result, error) -> {
                             if (error != null) {
@@ -227,9 +268,7 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
                                 }
 
                                 mayFallbackToHistoricalLookup(
-                                                tableBucket.getBucket(),
-                                                keyBytes,
-                                                originalPartitionName)
+                                                bucketKeyBytes, keyBytes, originalPartitionName)
                                         .whenComplete(
                                                 (historicalResult, historicalError) -> {
                                                     if (historicalError != null) {

@@ -443,7 +443,9 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
                                 Arrays.asList(TABLET_SERVER_ID, newLeaderId),
                                 Collections.emptyList(),
                                 INITIAL_COORDINATOR_EPOCH,
-                                INITIAL_BUCKET_EPOCH + 1)));
+                                INITIAL_BUCKET_EPOCH + 1),
+                        3,
+                        0L));
 
         CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> fetchFuture =
                 new CompletableFuture<>();

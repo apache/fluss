@@ -34,6 +34,7 @@ import org.apache.fluss.exception.LogOffsetOutOfRangeException;
 import org.apache.fluss.exception.LogStorageException;
 import org.apache.fluss.exception.NonPrimaryKeyTableException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
+import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.exception.StorageBackpressureException;
 import org.apache.fluss.exception.StorageException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
@@ -2500,6 +2501,9 @@ public class ReplicaManager implements ServerReconfigurable {
                                 clock,
                                 remoteLogManager,
                                 scannerManager);
+                // Initialize the routing state before the replica becomes visible, so a
+                // ready leader always has its routing bucket count ready.
+                replica.updateRoutingState(data);
                 if (!existingLogTabletOpt.isPresent()) {
                     localDiskManager.recordReplicaLoad(dataDir, isKvTable);
                 }
@@ -2529,6 +2533,74 @@ public class ReplicaManager implements ServerReconfigurable {
         } else {
             throw new UnknownTableOrBucketException("Unknown table or bucket: " + tableBucket);
         }
+    }
+
+    /**
+     * Validates the routing bucket count of a client request against the replica-local routing
+     * state. A mismatch (or a legacy client on a rescaled table) fails with STALE_METADATA; a
+     * replica not resolvable here keeps the existing per-bucket not-exist/unknown error semantics
+     * of the downstream replica lookup.
+     *
+     * <p>Only client requests may be validated; follower-initiated requests carry bucket ids
+     * assigned authoritatively by NotifyLeaderAndIsr and must skip this check.
+     */
+    public void validateRoutingBucketCount(TableBucket tableBucket, int routingBucketCount) {
+        HostedReplica hostedReplica = getReplica(tableBucket);
+        if (!(hostedReplica instanceof OnlineReplica)) {
+            return;
+        }
+        Replica replica = ((OnlineReplica) hostedReplica).getReplica();
+        if (!replica.isLeader()) {
+            return;
+        }
+
+        // Only hash-distributed tables (those with a bucket key, including primary-key tables whose
+        // bucket key defaults to the primary key) place a record in a bucket deterministically, so
+        // only they can misroute a key when the client routes with a stale bucket count. A table
+        // without a bucket key (round-robin/sticky) may place a record in any bucket, so a stale
+        // routing count is harmless and must not fail the write.
+        if (!replica.getTableInfo().hasBucketKey()) {
+            return;
+        }
+
+        if (routingBucketCount <= 0) {
+            // Legacy client (no bucket count in request): reject only when a rescale is known,
+            // because then the bucketId may come from an outdated count.
+            if (resolveBucketCountEpoch(replica) > 0) {
+                throw new StaleMetadataException(
+                        "STALE_METADATA for "
+                                + tableBucket
+                                + ": the table's 'bucket.num' has been altered and requests without"
+                                + " a routing bucket count are no longer accepted.");
+            }
+            return;
+        }
+
+        Integer actual = replica.getRoutingBucketCount();
+        if (actual == null) {
+            return;
+        }
+        if (routingBucketCount != actual) {
+            throw new StaleMetadataException(
+                    "STALE_METADATA for "
+                            + tableBucket
+                            + ": the request's routing bucket count "
+                            + routingBucketCount
+                            + " does not match the actual bucket count "
+                            + actual
+                            + ". The client should refresh metadata and retry.");
+        }
+    }
+
+    /**
+     * Resolves the effective bucket layout epoch as the maximum of the replica-local value and the
+     * metadata cache: ALTER bucket.num advances only the cache, and the epoch is monotonic.
+     */
+    private long resolveBucketCountEpoch(Replica replica) {
+        Long replicaEpoch = replica.getBucketCountEpoch();
+        long cachedEpoch =
+                metadataCache.getBucketCountEpoch(replica.getTableBucket().getTableId()).orElse(0L);
+        return Math.max(replicaEpoch == null ? 0L : replicaEpoch, cachedEpoch);
     }
 
     public HostedReplica getReplica(TableBucket tableBucket) {

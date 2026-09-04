@@ -316,6 +316,11 @@ class IcebergTieringTest {
                     public TableInfo tableInfo() {
                         return tableInfo;
                     }
+
+                    @Override
+                    public int bucketCount() {
+                        return tableInfo.getNumBuckets();
+                    }
                 });
     }
 

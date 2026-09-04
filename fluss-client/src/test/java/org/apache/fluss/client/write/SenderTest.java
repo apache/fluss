@@ -30,6 +30,7 @@ import org.apache.fluss.exception.AuthorizationException;
 import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
 import org.apache.fluss.exception.PartitionNotExistException;
+import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.exception.TimeoutException;
 import org.apache.fluss.metadata.DataLakeFormat;
@@ -38,6 +39,7 @@ import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.row.BinaryRow;
@@ -74,6 +76,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
@@ -98,6 +101,7 @@ import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** ITCase for {@link Sender}. */
 final class SenderTest {
@@ -203,6 +207,47 @@ final class SenderTest {
                                 PutKvResultForBucket.historicalSuccess(
                                         historicalBucket, 1L, originalPath.getPartitionName()))));
         assertThat(future.get()).isNull();
+    }
+
+    @Test
+    void testAbortsRerouteWhenQueuedBatchBucketCountDiffers() throws Exception {
+        sender.destroyResources();
+        TableInfo tableInfo = createHistoricalTableInfo();
+        PhysicalTablePath originalPath = PhysicalTablePath.of(tableInfo.getTablePath(), "20990101");
+        PhysicalTablePath historicalPath =
+                PhysicalTablePath.of(tableInfo.getTablePath(), HISTORICAL_PARTITION_VALUE);
+        TableBucket originalBucket = new TableBucket(tableInfo.getTableId(), 21L, 0);
+        TableBucket historicalBucket = new TableBucket(tableInfo.getTableId(), 22L, 0);
+        metadataUpdater = missingPartitionMetadataUpdater(tableInfo, originalPath);
+        Map<PhysicalTablePath, TableBucket> tableBucketsByPath = new HashMap<>();
+        tableBucketsByPath.put(originalPath, originalBucket);
+        tableBucketsByPath.put(historicalPath, historicalBucket);
+        // The historical partition keeps one bucket while the queued batch was routed by a
+        // rescaled partition's count of four: its bucket id cannot be moved to the historical
+        // layout, so the reroute must abort instead of silently misrouting the records.
+        Map<TablePartition, Integer> bucketCountByPartition = new HashMap<>();
+        bucketCountByPartition.put(
+                new TablePartition(tableInfo.getTableId(), historicalBucket.getPartitionId()), 1);
+        metadataUpdater.updateCluster(
+                partitionedCluster(tableInfo, tableBucketsByPath, bucketCountByPartition));
+        sender = setupWithIdempotenceState();
+
+        CompletableFuture<Exception> future =
+                appendKvRecord(tableInfo, originalPath, 1, metadataUpdater.getCluster(), 4);
+        sender.runOnce();
+
+        TestTabletServerGateway gateway = node1Gateway();
+        gateway.response(
+                0, createPutKvResponse(originalBucket, Errors.UNKNOWN_TABLE_OR_BUCKET_EXCEPTION));
+        sender.runOnce();
+
+        assertThat(future.get())
+                .isInstanceOf(PartitionNotExistException.class)
+                .hasMessageContaining("different bucket count");
+        // Nothing was sent to the historical partition: aborting is the whole point.
+        assertThatThrownBy(() -> gateway.getRequest(0))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("No requests pending");
     }
 
     @Test
@@ -1469,6 +1514,99 @@ final class SenderTest {
         assertThat(future2.get()).isNull();
     }
 
+    @Test
+    void testStaleMetadataFailsBatchAndInvalidatesBucketAssigner() throws Exception {
+        // Recreate sender with a tracking bucketAssignerInvalidator.
+        IdempotenceManager idempotenceManager = createIdempotenceManager(false);
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE, new MemorySize(TOTAL_MEMORY_SIZE));
+        conf.set(ConfigOptions.CLIENT_WRITER_BATCH_SIZE, new MemorySize(BATCH_SIZE));
+        conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_PAGE_SIZE, new MemorySize(PAGE_SIZE));
+        conf.set(ConfigOptions.CLIENT_WRITER_BATCH_TIMEOUT, Duration.ofMillis(0));
+        accumulator =
+                new RecordAccumulator(
+                        conf, idempotenceManager, writerMetricGroup, SystemClock.getInstance());
+        AtomicReference<TableBucket> invalidatedBucket = new AtomicReference<>();
+        Sender staleSender =
+                new Sender(
+                        accumulator,
+                        REQUEST_TIMEOUT,
+                        MAX_REQUEST_SIZE,
+                        ACKS_ALL,
+                        Integer.MAX_VALUE,
+                        metadataUpdater,
+                        idempotenceManager,
+                        writerMetricGroup,
+                        invalidatedBucket::set);
+
+        // Append one record and send it.
+        CompletableFuture<Exception> future = new CompletableFuture<>();
+        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future.complete(e));
+        staleSender.runOnce();
+        assertThat(staleSender.numOfInFlightBatches(tb1)).isEqualTo(1);
+
+        // Server rejects with STALE_METADATA — the bucketId was computed with a stale count.
+        Cluster clusterBeforeError = metadataUpdater.getCluster();
+        finishRequest(tb1, 0, createProduceLogResponse(tb1, Errors.STALE_METADATA));
+
+        // The batch is failed (not re-enqueued for retry — the bucketId is stale and must not be
+        // reused).
+        assertThat(staleSender.numOfInFlightBatches(tb1)).isEqualTo(0);
+
+        // The BucketAssigner for this bucket was invalidated so the next send rebuilds it with
+        // the refreshed bucket count.
+        assertThat(invalidatedBucket.get()).isEqualTo(tb1);
+
+        // The table's bucket metadata was invalidated so the next send requests it again.
+        assertThat(metadataUpdater.getCluster()).isNotSameAs(clusterBeforeError);
+
+        // The write callback receives the StaleMetadataException.
+        Exception exception = future.get();
+        assertThat(exception).isInstanceOf(StaleMetadataException.class);
+    }
+
+    @Test
+    void testStaleMetadataReclaimsBatchSequenceWhenIdempotenceEnabled() throws Exception {
+        // STALE_METADATA is only produced for hash-distributed tables (those with a bucket key; see
+        // ReplicaManager#validateRoutingBucketCount), so exercise the client reclaim path on a
+        // primary-key table bucket rather than a keyless one.
+        TableBucket keyedBucket = new TableBucket(DATA1_TABLE_ID_PK, 0);
+        IdempotenceManager idempotenceManager = createIdempotenceManager(true);
+        Sender staleSender = setupWithIdempotenceState(idempotenceManager);
+        staleSender.runOnce();
+        long writerId = idempotenceManager.writerId();
+        assertThat(idempotenceManager.isWriterIdValid()).isTrue();
+        assertThat(idempotenceManager.nextSequence(keyedBucket)).isEqualTo(0);
+
+        // Drain and send one batch: it takes batch sequence 0 and nextSequence advances to 1.
+        CompletableFuture<Exception> future = new CompletableFuture<>();
+        appendKvToAccumulator(
+                keyedBucket,
+                compactedRow(DATA1_ROW_TYPE, new Object[] {1, "a"}),
+                (tb, leo, e) -> future.complete(e));
+        staleSender.runOnce();
+        assertThat(idempotenceManager.nextSequence(keyedBucket)).isEqualTo(1);
+
+        // The server rejects the batch during pre-append routing validation (STALE_METADATA), so it
+        // was provably never written. Its batch sequence (0) must be reclaimed.
+        finishRequest(keyedBucket, 0, createPutKvResponse(keyedBucket, Errors.STALE_METADATA));
+        staleSender.runOnce();
+
+        // The write callback receives the StaleMetadataException.
+        assertThat(future.get()).isInstanceOf(StaleMetadataException.class);
+
+        // The writer id must survive: nothing was accepted, so there is no lost message to guard.
+        assertThat(idempotenceManager.isWriterIdValid()).isTrue();
+        assertThat(idempotenceManager.writerId()).isEqualTo(writerId);
+
+        // The reclaimed sequence must roll nextSequence back to 0. Otherwise a permanent hole at
+        // sequence 0 remains: the next batch that reaches the server on this bucket (created after
+        // the metadata refresh, carrying a valid routing count) would send sequence 1 against an
+        // expected 0, triggering OUT_OF_ORDER_SEQUENCE_EXCEPTION and resetWriterId, which wipes
+        // idempotence for every bucket of this writer.
+        assertThat(idempotenceManager.nextSequence(keyedBucket)).isEqualTo(0);
+    }
+
     private TestingMetadataUpdater initializeMetadataUpdater() {
         Map<TablePath, TableInfo> tableInfos = new HashMap<>();
         tableInfos.put(DATA1_TABLE_PATH, DATA1_TABLE_INFO);
@@ -1540,6 +1678,13 @@ final class SenderTest {
 
     private static Cluster partitionedCluster(
             TableInfo tableInfo, Map<PhysicalTablePath, TableBucket> tableBucketsByPath) {
+        return partitionedCluster(tableInfo, tableBucketsByPath, Collections.emptyMap());
+    }
+
+    private static Cluster partitionedCluster(
+            TableInfo tableInfo,
+            Map<PhysicalTablePath, TableBucket> tableBucketsByPath,
+            Map<TablePartition, Integer> bucketCountByPartition) {
         int[] replicas = new int[] {TestingMetadataUpdater.NODE1.id()};
         Map<PhysicalTablePath, List<BucketLocation>> bucketLocationsByPath = new HashMap<>();
         Map<PhysicalTablePath, Long> partitionIdsByPath = new HashMap<>();
@@ -1561,11 +1706,23 @@ final class SenderTest {
                 TestingMetadataUpdater.COORDINATOR,
                 bucketLocationsByPath,
                 Collections.singletonMap(tableInfo.getTablePath(), tableInfo.getTableId()),
-                partitionIdsByPath);
+                partitionIdsByPath,
+                bucketCountByPartition,
+                Collections.emptyMap());
     }
 
     private CompletableFuture<Exception> appendKvRecord(
             TableInfo tableInfo, PhysicalTablePath physicalTablePath, int id, Cluster cluster)
+            throws Exception {
+        return appendKvRecord(tableInfo, physicalTablePath, id, cluster, 0);
+    }
+
+    private CompletableFuture<Exception> appendKvRecord(
+            TableInfo tableInfo,
+            PhysicalTablePath physicalTablePath,
+            int id,
+            Cluster cluster,
+            int bucketCount)
             throws Exception {
         accumulator.checkAndCacheHistoricalPartitionEnabled(tableInfo);
         BinaryRow row =
@@ -1590,6 +1747,7 @@ final class SenderTest {
                 (tableBucket, logEndOffset, error) -> future.complete(error),
                 cluster,
                 0,
+                bucketCount,
                 false);
         return future;
     }
@@ -1772,7 +1930,8 @@ final class SenderTest {
                 reties,
                 metadataUpdater,
                 idempotenceManager,
-                writerMetricGroup);
+                writerMetricGroup,
+                tb -> {});
     }
 
     private IdempotenceManager createIdempotenceManager(boolean idempotenceEnabled) {

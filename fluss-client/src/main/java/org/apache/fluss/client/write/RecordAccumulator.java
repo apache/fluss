@@ -202,6 +202,17 @@ public final class RecordAccumulator {
             int bucketId,
             boolean abortIfBatchFull)
             throws Exception {
+        return append(writeRecord, callback, cluster, bucketId, 0, abortIfBatchFull);
+    }
+
+    public RecordAppendResult append(
+            WriteRecord writeRecord,
+            WriteCallback callback,
+            Cluster cluster,
+            int bucketId,
+            int bucketCount,
+            boolean abortIfBatchFull)
+            throws Exception {
         PhysicalTablePath physicalTablePath = writeRecord.getPhysicalTablePath();
         TableInfo tableInfo = writeRecord.getTableInfo();
         // The metadata may return null for the partition id, but it is fine to pass null here,
@@ -242,7 +253,13 @@ public final class RecordAccumulator {
             synchronized (dq) {
                 RecordAppendResult appendResult =
                         appendNewBatch(
-                                writeRecord, callback, bucketId, tableInfo, dq, memorySegments);
+                                writeRecord,
+                                callback,
+                                bucketId,
+                                bucketCount,
+                                tableInfo,
+                                dq,
+                                memorySegments);
                 if (appendResult.newBatchCreated) {
                     memorySegments = Collections.emptyList();
                 }
@@ -436,10 +453,11 @@ public final class RecordAccumulator {
     }
 
     /** Reroutes queued batches for {@code originalPath} to the historical target. */
-    void rerouteQueuedWritesToHistorical(
+    boolean rerouteQueuedWritesToHistorical(
             PhysicalTablePath originalPath,
             PhysicalTablePath historicalPath,
-            long historicalPartitionId) {
+            long historicalPartitionId,
+            @Nullable Integer historicalBucketCount) {
         BucketAndWriteBatches writeTarget =
                 checkNotNull(
                         writeBatches.get(originalPath),
@@ -449,7 +467,17 @@ public final class RecordAccumulator {
         synchronized (writeTarget) {
             if (writeTarget.isHistoricalWriteTarget()) {
                 writeTarget.partitionId = historicalPartitionId;
-                return;
+                return true;
+            }
+            if (historicalBucketCount != null) {
+                for (Deque<WriteBatch> deque : writeTarget.batches.values()) {
+                    for (WriteBatch batch : deque) {
+                        if (batch.getBucketCount() > 0
+                                && batch.getBucketCount() != historicalBucketCount) {
+                            return false;
+                        }
+                    }
+                }
             }
             // New appends observe the historical route and are marked as historical. Existing
             // queued batches are converted below before the Sender can drain again.
@@ -477,6 +505,7 @@ public final class RecordAccumulator {
                 }
             }
         }
+        return true;
     }
 
     /** Aborts incomplete batches whose current RPC target is {@code targetPath}. */
@@ -770,6 +799,7 @@ public final class RecordAccumulator {
             WriteRecord writeRecord,
             WriteCallback callback,
             int bucketId,
+            int bucketCount,
             TableInfo tableInfo,
             Deque<WriteBatch> deque,
             List<MemorySegment> segments)
@@ -809,6 +839,7 @@ public final class RecordAccumulator {
                             schemaId,
                             isHistoricalPartition);
 
+            batch.setBucketCount(bucketCount);
             batch.tryAppend(writeRecord, callback);
             deque.addLast(batch);
             incomplete.add(batch);

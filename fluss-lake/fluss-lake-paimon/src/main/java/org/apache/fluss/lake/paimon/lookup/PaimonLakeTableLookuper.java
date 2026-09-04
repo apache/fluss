@@ -17,6 +17,7 @@
 
 package org.apache.fluss.lake.paimon.lookup;
 
+import org.apache.fluss.bucketing.BucketingFunction;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.config.TableConfig;
@@ -25,6 +26,7 @@ import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.lake.lakestorage.LakeTableLookuper;
 import org.apache.fluss.lake.paimon.utils.PaimonPartitionBucket;
 import org.apache.fluss.lake.paimon.utils.PaimonRowAsFlussRow;
+import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.InternalRow;
@@ -104,6 +106,10 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  */
 public class PaimonLakeTableLookuper implements LakeTableLookuper {
 
+    /** Bucketing function the lake data was written with, used to recompute a bucket. */
+    private static final BucketingFunction BUCKETING_FUNCTION =
+            BucketingFunction.of(DataLakeFormat.PAIMON);
+
     private final Configuration paimonConfig;
     private final TablePath tablePath;
     private final String ioTmpDir;
@@ -118,6 +124,9 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
     private final Map<PaimonPartitionBucket, List<DataFileMeta>> registeredFiles;
     // Remains non-zero until a refresh completes without observing another request.
     private final AtomicLong pendingRefreshRequests;
+
+    /** Bucket count each partition was written with, resolved from the lake metadata. */
+    private final Map<org.apache.paimon.data.BinaryRow, Integer> totalBucketsByPartition;
 
     private @Nullable Catalog catalog;
     private @Nullable FileStoreTable fileStoreTable;
@@ -153,6 +162,7 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
         this.lookupStateLock = new Object();
         this.registeredFiles = new ConcurrentHashMap<>();
         this.pendingRefreshRequests = new AtomicLong();
+        this.totalBucketsByPartition = new ConcurrentHashMap<>();
     }
 
     @Override
@@ -191,6 +201,7 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
             IOUtils.closeQuietly(ioManager, "Paimon lookup IO manager");
             IOUtils.closeQuietly(catalog, "Paimon catalog");
             registeredFiles.clear();
+            totalBucketsByPartition.clear();
             localTableQuery = null;
             compactedKeyDecoder = null;
             trimmedPrimaryKeys = null;
@@ -353,10 +364,14 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
     }
 
     private @Nullable byte[] lookupInternal(byte[] key, LookupContext context) {
+        org.apache.paimon.data.BinaryRow partition = getPartition(context);
+        Integer bucket = resolveLakeBucket(key, partition, context);
+        if (bucket == null) {
+            return null;
+        }
         org.apache.paimon.data.InternalRow paimonRow;
         try {
-            paimonRow =
-                    lookupPaimon(getPartition(context), context.bucketId(), getKey(key, context));
+            paimonRow = lookupPaimon(partition, bucket, getKey(key, context));
         } catch (IOException e) {
             // Historical Paimon point lookup is part of the Fluss KV lookup path. Expose a
             // persistent I/O failure as a retriable KV error so the existing KV RPC retry
@@ -371,6 +386,81 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
             return null;
         }
         return encodeValue(paimonRow, context.schemaId(), context.valueRowType());
+    }
+
+    /**
+     * Resolves the bucket the key lives in: the caller's bucket id when it matches the lake layout,
+     * otherwise recomputed from the bucket count the partition was written with. Returns null when
+     * the partition holds no data in the lake.
+     */
+    private @Nullable Integer resolveLakeBucket(
+            byte[] key, org.apache.paimon.data.BinaryRow partition, LookupContext context) {
+        if (context.bucketId() != null) {
+            return context.bucketId();
+        }
+        Integer totalBuckets = resolveTotalBuckets(partition);
+        if (totalBuckets == null) {
+            return null;
+        }
+        return BUCKETING_FUNCTION.bucketing(deriveBucketKey(key, context), totalBuckets);
+    }
+
+    /**
+     * Reads the bucket count the given partition was written with from the lake metadata. Fluss
+     * writes each partition with a single bucket count, so more than one value means the lake data
+     * cannot be routed reliably.
+     */
+    private @Nullable Integer resolveTotalBuckets(org.apache.paimon.data.BinaryRow partition) {
+        return totalBucketsByPartition.computeIfAbsent(
+                partition.copy(),
+                p -> {
+                    Set<Integer> totalBuckets = new HashSet<>();
+                    InnerTableScan tableScan =
+                            fileStoreTable
+                                    .newScan()
+                                    .withPartitionFilter(Collections.singletonList(p));
+                    for (Split split : tableScan.plan().splits()) {
+                        if (split instanceof DataSplit) {
+                            totalBuckets.add(((DataSplit) split).totalBuckets());
+                        }
+                    }
+                    if (totalBuckets.isEmpty()) {
+                        return null;
+                    }
+                    if (totalBuckets.size() > 1) {
+                        throw new KvStorageException(
+                                "Cannot look up historical data of table "
+                                        + tablePath
+                                        + " because its lake data reports multiple bucket counts "
+                                        + totalBuckets
+                                        + " for one partition, so the bucket a key was written to "
+                                        + "cannot be determined.");
+                    }
+                    return totalBuckets.iterator().next();
+                });
+    }
+
+    /**
+     * Returns the bucket key bytes the lake bucketing function expects. The lookup key already is
+     * the bucket key when the table uses the default bucket key; otherwise the primary key is
+     * decoded and the bucket key fields are re-encoded with the lake encoder.
+     */
+    private byte[] deriveBucketKey(byte[] key, LookupContext context) {
+        List<String> bucketKeys = fileStoreTable.schema().bucketKeys();
+        if (bucketKeys.equals(trimmedPrimaryKeys)) {
+            return key;
+        }
+        RowType primaryKeyRowType = context.valueRowType().project(trimmedPrimaryKeys);
+        InternalRow primaryKeyRow;
+        if (compactedKeyDecoder != null) {
+            primaryKeyRow = compactedKeyDecoder.decodeKey(key);
+        } else {
+            org.apache.paimon.data.BinaryRow paimonKeyRow =
+                    new org.apache.paimon.data.BinaryRow(trimmedPrimaryKeys.size());
+            paimonKeyRow.pointTo(MemorySegment.wrap(key), 0, key.length);
+            primaryKeyRow = new PaimonRowAsFlussRow(paimonKeyRow);
+        }
+        return new PaimonKeyEncoder(primaryKeyRowType, bucketKeys).encodeKey(primaryKeyRow);
     }
 
     private @Nullable org.apache.paimon.data.InternalRow lookupPaimon(

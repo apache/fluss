@@ -17,8 +17,10 @@
 
 package org.apache.fluss.flink.source.enumerator;
 
+import org.apache.fluss.client.FlussConnection;
 import org.apache.fluss.client.admin.OffsetSpec;
 import org.apache.fluss.client.initializer.OffsetsInitializer;
+import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.client.write.HashBucketAssigner;
@@ -39,16 +41,21 @@ import org.apache.fluss.flink.source.split.LogSplit;
 import org.apache.fluss.flink.source.split.SnapshotSplit;
 import org.apache.fluss.flink.source.split.SourceSplitBase;
 import org.apache.fluss.flink.source.state.SourceEnumeratorState;
+import org.apache.fluss.flink.tiering.source.split.TieringSplit;
+import org.apache.fluss.flink.tiering.source.split.TieringSplitGenerator;
 import org.apache.fluss.flink.utils.FlinkTestBase;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.LakeSplit;
 import org.apache.fluss.lake.source.TestingLakeSource;
 import org.apache.fluss.lake.source.TestingLakeSplit;
 import org.apache.fluss.metadata.PartitionInfo;
+import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.predicate.PredicateBuilder;
@@ -406,7 +413,10 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                         DEFAULT_BUCKET_NUM,
                         Collections.singletonList(
                                 new PartitionInfo(
-                                        partitionId, partitionSpec, DEFAULT_REMOTE_DATA_DIR)));
+                                        partitionId,
+                                        partitionSpec,
+                                        DEFAULT_REMOTE_DATA_DIR,
+                                        DEFAULT_BUCKET_NUM)));
 
         SourceEnumeratorState checkpointState;
         try (MockSplitEnumeratorContext<SourceSplitBase> context =
@@ -1567,14 +1577,22 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             Collections.singletonList(isPrimaryKeyTable ? "date" : "name"),
                             partitionName);
             lakePartitionInfos.add(
-                    new PartitionInfo(partitionId, partitionSpec, DEFAULT_REMOTE_DATA_DIR));
+                    new PartitionInfo(
+                            partitionId,
+                            partitionSpec,
+                            DEFAULT_REMOTE_DATA_DIR,
+                            DEFAULT_BUCKET_NUM));
         }
         ResolvedPartitionSpec partitionSpec =
                 ResolvedPartitionSpec.fromPartitionName(
                         Collections.singletonList(isPrimaryKeyTable ? "date" : "name"),
                         hybridPartitionName);
         lakePartitionInfos.add(
-                new PartitionInfo(hybridPartitionId, partitionSpec, DEFAULT_REMOTE_DATA_DIR));
+                new PartitionInfo(
+                        hybridPartitionId,
+                        partitionSpec,
+                        DEFAULT_REMOTE_DATA_DIR,
+                        DEFAULT_BUCKET_NUM));
 
         LakeSource<LakeSplit> lakeSource =
                 new TestingLakeSource(DEFAULT_BUCKET_NUM, lakePartitionInfos);
@@ -2029,5 +2047,158 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
             upsertWriter.flush();
         }
         return bucketRows;
+    }
+
+    // ==================== Per-Partition Bucket Count Tests ====================
+
+    private static final int OLD_BUCKET_NUM = 2;
+    private static final int NEW_BUCKET_NUM = 4;
+
+    private static final TableDescriptor RESCALE_LOG_TABLE =
+            TableDescriptor.builder()
+                    .schema(
+                            Schema.newBuilder()
+                                    .column("id", DataTypes.INT())
+                                    .column("name", DataTypes.STRING())
+                                    .build())
+                    .distributedBy(OLD_BUCKET_NUM)
+                    .partitionedBy("name")
+                    .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, false)
+                    .build();
+
+    /**
+     * Creates a partitioned log table, creates "old" partition, ALTERs bucket.num to {@link
+     * #NEW_BUCKET_NUM}, creates "new" partition, writes rows to both. Returns [tablePath,
+     * tableInfo, oldPartitionId, newPartitionId].
+     */
+    private Object[] setupRescaledPartitionedTable() throws Exception {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "rescale_split_" + System.nanoTime());
+        createTable(tablePath, RESCALE_LOG_TABLE);
+        PartitionSpec oldSpec = new PartitionSpec(Collections.singletonMap("name", "old"));
+        PartitionSpec newSpec = new PartitionSpec(Collections.singletonMap("name", "new"));
+        admin.createPartition(tablePath, oldSpec, false).get();
+        writeRows(conn, tablePath, genRows(10, "old"), true);
+        admin.alterTable(
+                        tablePath,
+                        Collections.singletonList(
+                                TableChange.set("bucket.num", String.valueOf(NEW_BUCKET_NUM))),
+                        false)
+                .get();
+        admin.createPartition(tablePath, newSpec, false).get();
+        writeRows(conn, tablePath, genRows(20, "new"), true);
+        List<PartitionInfo> infos = admin.listPartitionInfos(tablePath).get();
+        PartitionInfo oldInfo =
+                infos.stream().filter(i -> "old".equals(i.getPartitionName())).findFirst().get();
+        PartitionInfo newInfo =
+                infos.stream().filter(i -> "new".equals(i.getPartitionName())).findFirst().get();
+        assertThat(oldInfo.getBucketCount()).isEqualTo(OLD_BUCKET_NUM);
+        assertThat(newInfo.getBucketCount()).isEqualTo(NEW_BUCKET_NUM);
+        return new Object[] {
+            tablePath,
+            admin.getTableInfo(tablePath).get(),
+            oldInfo.getPartitionId(),
+            newInfo.getPartitionId()
+        };
+    }
+
+    private static List<InternalRow> genRows(int count, String partition) {
+        List<InternalRow> rows = new ArrayList<>();
+        for (int i = 0; i < count; i++) {
+            rows.add(row(i, partition));
+        }
+        return rows;
+    }
+
+    /**
+     * Tests that {@link FlinkSourceEnumerator} generates splits using each partition's actual
+     * bucket count after an ALTER bucket.num, in both streaming and batch modes.
+     */
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testFlussSplitsEnumeratePerPartitionBucketCount(boolean streaming) throws Throwable {
+        Object[] ctx = setupRescaledPartitionedTable();
+        try (MockSplitEnumeratorContext<SourceSplitBase> context =
+                        new MockSplitEnumeratorContext<>(3);
+                MockWorkExecutor workExecutor = new MockWorkExecutor(context);
+                FlinkSourceEnumerator enumerator =
+                        new FlinkSourceEnumerator(
+                                (TablePath) ctx[0],
+                                flussConf,
+                                false,
+                                true,
+                                context,
+                                Collections.emptySet(),
+                                Collections.emptyMap(),
+                                null,
+                                streaming
+                                        ? OffsetsInitializer.earliest()
+                                        : OffsetsInitializer.full(),
+                                DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
+                                streaming,
+                                null,
+                                null,
+                                workExecutor,
+                                LeaseContext.DEFAULT,
+                                false)) {
+            enumerator.start();
+            if (streaming) {
+                runPeriodicPartitionDiscovery(workExecutor);
+            } else {
+                workExecutor.runNextOneTimeCallable();
+            }
+            for (int i = 0; i < 3; i++) {
+                registerReader(context, enumerator, i);
+            }
+            long oldId = (long) ctx[2];
+            long newId = (long) ctx[3];
+            List<SourceSplitBase> splits =
+                    getReadersAssignments(context).values().stream()
+                            .flatMap(List::stream)
+                            .collect(Collectors.toList());
+            assertThat(splits).allMatch(s -> s instanceof LogSplit);
+            assertThat(
+                            splits.stream()
+                                    .filter(s -> s.getTableBucket().getPartitionId() == oldId)
+                                    .map(s -> s.getTableBucket().getBucket())
+                                    .collect(Collectors.toList()))
+                    .containsExactlyInAnyOrder(0, 1);
+            assertThat(
+                            splits.stream()
+                                    .filter(s -> s.getTableBucket().getPartitionId() == newId)
+                                    .map(s -> s.getTableBucket().getBucket())
+                                    .collect(Collectors.toList()))
+                    .containsExactlyInAnyOrder(0, 1, 2, 3);
+        }
+    }
+
+    /**
+     * Tests that {@link TieringSplitGenerator} generates tiering splits using each partition's
+     * actual bucket count after an ALTER bucket.num.
+     */
+    @Test
+    void testTieringSplitsEnumeratePerPartitionBucketCount() throws Throwable {
+        Object[] ctx = setupRescaledPartitionedTable();
+        TableInfo tableInfo = (TableInfo) ctx[1];
+        long oldPartitionId = (long) ctx[2];
+        long newPartitionId = (long) ctx[3];
+        List<TieringSplit> splits =
+                new TieringSplitGenerator(admin, metadataUpdater()).generateTableSplits(tableInfo);
+        assertThat(
+                        splits.stream()
+                                .filter(s -> s.getTableBucket().getPartitionId() == oldPartitionId)
+                                .map(s -> s.getTableBucket().getBucket())
+                                .collect(Collectors.toList()))
+                .containsExactlyInAnyOrder(0, 1);
+        assertThat(
+                        splits.stream()
+                                .filter(s -> s.getTableBucket().getPartitionId() == newPartitionId)
+                                .map(s -> s.getTableBucket().getBucket())
+                                .collect(Collectors.toList()))
+                .containsExactlyInAnyOrder(0, 1, 2, 3);
+    }
+
+    /** The split generator resolves the internal historical partition through this updater. */
+    private static MetadataUpdater metadataUpdater() {
+        return ((FlussConnection) conn).getMetadataUpdater();
     }
 }

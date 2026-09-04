@@ -32,9 +32,14 @@ import java.util.concurrent.CompletableFuture;
 public class PrefixLookupQuery extends AbstractLookupQuery<List<byte[]>> {
     private final CompletableFuture<List<byte[]>> future;
 
-    PrefixLookupQuery(TablePath tablePath, TableBucket tableBucket, byte[] prefixKey) {
-        super(tablePath, tableBucket, prefixKey);
+    PrefixLookupQuery(
+            TablePath tablePath, TableBucket tableBucket, byte[] prefixKey, int bucketCount) {
+        super(tablePath, tableBucket, prefixKey, null, bucketCount);
         this.future = new CompletableFuture<>();
+    }
+
+    PrefixLookupQuery(TablePath tablePath, TableBucket tableBucket, byte[] prefixKey) {
+        this(tablePath, tableBucket, prefixKey, 0);
     }
 
     @Override

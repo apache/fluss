@@ -31,6 +31,7 @@ import org.apache.fluss.exception.StorageBackpressureException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.PbProduceLogRespForBucket;
 import org.apache.fluss.rpc.messages.PbPutKvRespForBucket;
@@ -55,6 +56,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.Consumer;
 
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeProduceLogRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makePutKvRequest;
@@ -114,6 +116,13 @@ public class Sender implements Runnable {
 
     private final WriterMetricGroup writerMetricGroup;
 
+    /**
+     * Called when a write batch receives STALE_METADATA so the owning {@link WriterClient} can
+     * remove the stale {@link BucketAssigner}. The next {@code send} will refresh metadata and
+     * create a new assigner with the updated bucket count.
+     */
+    private final Consumer<TableBucket> bucketAssignerInvalidator;
+
     public Sender(
             RecordAccumulator accumulator,
             int maxRequestTimeoutMs,
@@ -122,7 +131,8 @@ public class Sender implements Runnable {
             int retries,
             MetadataUpdater metadataUpdater,
             IdempotenceManager idempotenceManager,
-            WriterMetricGroup writerMetricGroup) {
+            WriterMetricGroup writerMetricGroup,
+            Consumer<TableBucket> bucketAssignerInvalidator) {
         this.accumulator = accumulator;
         this.maxRequestSize = maxRequestSize;
         this.maxRequestTimeoutMs = maxRequestTimeoutMs;
@@ -136,6 +146,7 @@ public class Sender implements Runnable {
 
         this.idempotenceManager = idempotenceManager;
         this.writerMetricGroup = writerMetricGroup;
+        this.bucketAssignerInvalidator = bucketAssignerInvalidator;
 
         // TODO add retry logic while send failed. See FLUSS-56364375
     }
@@ -642,6 +653,25 @@ public class Sender implements Runnable {
             // re-enqueues the batch.
             accumulator.updateThrottle(readyWriteBatch.tableBucket(), 1.0f);
         }
+        if (error.error() == Errors.STALE_METADATA) {
+            // The bucketId in this batch was computed with a stale bucket count, and the server
+            // rejected it during pre-append routing validation, so it was provably never written.
+            // Reclaim its batch sequence (adjustBatchSequences=true): otherwise a permanent hole is
+            // left at this sequence, and the next batch that reaches the server on this bucket
+            // (created after the metadata refresh, carrying a valid routing count) would send the
+            // following sequence against a lower expected one, raising OUT_OF_ORDER_SEQUENCE and
+            // resetting the writer id — which discards idempotence for every bucket of this writer.
+            // Do not re-enqueue (the bucketId is fixed); invalidate metadata and drop the
+            // BucketAssigner so the next send re-routes with the updated count.
+            LOG.warn(
+                    "Received STALE_METADATA error in write request on table bucket {}. "
+                            + "Failing batch and invalidating BucketAssigner.",
+                    readyWriteBatch.tableBucket());
+            failBatch(readyWriteBatch, error.exception(), true);
+            invalidMetadataTables.add(writeBatch.physicalTablePath());
+            bucketAssignerInvalidator.accept(readyWriteBatch.tableBucket());
+            return invalidMetadataTables;
+        }
         if (error.error() == Errors.DUPLICATE_SEQUENCE_EXCEPTION) {
             // If we have received a duplicate batch sequence error, it means that the batch
             // sequence has advanced beyond the sequence of the current batch.
@@ -792,10 +822,42 @@ public class Sender implements Runnable {
         @Nullable Throwable historicalTargetCause = null;
         try {
             if (metadataUpdater.checkAndUpdatePartitionMetadata(historicalPath)) {
-                accumulator.rerouteQueuedWritesToHistorical(
-                        targetPath,
-                        historicalPath,
-                        metadataUpdater.getPartitionIdOrElseThrow(historicalPath));
+                // The queued batches were routed by the original partition's bucket count; they can
+                // only land in the right buckets of the historical partition if its own count
+                // matches. Otherwise the bucket ids would be hashes against the wrong layout.
+                TablePartition historicalPartition =
+                        metadataUpdater
+                                .getCluster()
+                                .getTablePartition(historicalPath)
+                                .orElseThrow(
+                                        () ->
+                                                new PartitionNotExistException(
+                                                        "Historical partition "
+                                                                + historicalPath
+                                                                + " does not exist."));
+                Integer historicalBucketCount =
+                        metadataUpdater
+                                .getCluster()
+                                .getBucketCount(historicalPartition)
+                                .orElse(null);
+                boolean rerouted =
+                        accumulator.rerouteQueuedWritesToHistorical(
+                                targetPath,
+                                historicalPath,
+                                historicalPartition.getPartitionId(),
+                                historicalBucketCount);
+                if (!rerouted) {
+                    abortBatches(
+                            targetPath,
+                            newPartitionNotExistException(
+                                    "Cannot reroute writes from "
+                                            + targetPath
+                                            + " to the historical partition because their "
+                                            + "bucket ids were routed by a different bucket "
+                                            + "count than the historical partition's.",
+                                    historicalTargetCause));
+                    return;
+                }
                 LOG.info(
                         "Rerouted writes from partition {} to historical partition {}.",
                         targetPath,

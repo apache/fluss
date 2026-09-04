@@ -570,7 +570,9 @@ public class ReplicaFetcherThreadTest {
                                         Arrays.asList(leaderServerId, followerServerId),
                                         Collections.emptyList(),
                                         INITIAL_COORDINATOR_EPOCH,
-                                        INITIAL_BUCKET_EPOCH))),
+                                        INITIAL_BUCKET_EPOCH),
+                                3,
+                                0L)),
                 result -> {});
         followerRM.becomeLeaderOrFollower(
                 INITIAL_COORDINATOR_EPOCH,
@@ -585,7 +587,9 @@ public class ReplicaFetcherThreadTest {
                                         Arrays.asList(leaderServerId, followerServerId),
                                         Collections.emptyList(),
                                         INITIAL_COORDINATOR_EPOCH,
-                                        INITIAL_BUCKET_EPOCH))),
+                                        INITIAL_BUCKET_EPOCH),
+                                3,
+                                0L)),
                 result -> {});
     }
 

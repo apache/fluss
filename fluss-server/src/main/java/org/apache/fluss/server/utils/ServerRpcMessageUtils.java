@@ -609,7 +609,8 @@ public class ServerRpcMessageUtils {
                         .setTableJson(tableInfo.toTableDescriptor().toJsonBytes())
                         .setRemoteDataDir(tableInfo.getRemoteDataDir())
                         .setCreatedTime(tableInfo.getCreatedTime())
-                        .setModifiedTime(tableInfo.getModifiedTime());
+                        .setModifiedTime(tableInfo.getModifiedTime())
+                        .setBucketCountEpoch(tableInfo.getBucketCountEpoch());
         TablePath tablePath = tableInfo.getTablePath();
         pbTableMetadata
                 .setTablePath()
@@ -628,6 +629,16 @@ public class ServerRpcMessageUtils {
                         .setPartitionName(partitionMetadata.getPartitionName());
         pbPartitionMetadata.addAllBucketMetadatas(
                 toPbBucketMetadata(partitionMetadata.getBucketMetadataList()));
+        Integer bucketCount = partitionMetadata.getBucketCount();
+        int effectiveBucketCount =
+                bucketCount != null
+                        ? bucketCount
+                        : partitionMetadata.getBucketMetadataList().size();
+        // 0 means the partition assignment is not known yet, not a zero-bucket layout;
+        // omitting the field keeps the client on its table-level fallback instead of 0.
+        if (effectiveBucketCount > 0) {
+            pbPartitionMetadata.setBucketCount(effectiveBucketCount);
+        }
         return pbPartitionMetadata;
     }
 
@@ -684,7 +695,11 @@ public class ServerRpcMessageUtils {
                                 ? pbTableMetadata.getRemoteDataDir()
                                 : null,
                         pbTableMetadata.getCreatedTime(),
-                        pbTableMetadata.getModifiedTime());
+                        pbTableMetadata.getModifiedTime(),
+                        // legacy Coordinators predate bucketCountEpoch; read as 0 (never ALTERed)
+                        pbTableMetadata.hasBucketCountEpoch()
+                                ? pbTableMetadata.getBucketCountEpoch()
+                                : 0L);
 
         List<BucketMetadata> bucketMetadata = new ArrayList<>();
         for (PbBucketMetadata pbBucketMetadata : pbTableMetadata.getBucketMetadatasList()) {
@@ -713,7 +728,8 @@ public class ServerRpcMessageUtils {
                 pbPartitionMetadata.getPartitionId(),
                 pbPartitionMetadata.getBucketMetadatasList().stream()
                         .map(ServerRpcMessageUtils::toBucketMetadata)
-                        .collect(Collectors.toList()));
+                        .collect(Collectors.toList()),
+                pbPartitionMetadata.hasBucketCount() ? pbPartitionMetadata.getBucketCount() : null);
     }
 
     public static NotifyLeaderAndIsrRequest makeNotifyLeaderAndIsrRequest(
@@ -747,6 +763,12 @@ public class ServerRpcMessageUtils {
                 .setPhysicalTablePath(fromPhysicalTablePath(physicalTablePath))
                 .setReplicas(notifyLeaderAndIsrData.getReplicasArray())
                 .setIsrs(notifyLeaderAndIsrData.getIsrArray());
+        if (notifyLeaderAndIsrData.getBucketCount() != null) {
+            reqForBucket.setBucketCount(notifyLeaderAndIsrData.getBucketCount());
+        }
+        if (notifyLeaderAndIsrData.getBucketCountEpoch() != null) {
+            reqForBucket.setBucketCountEpoch(notifyLeaderAndIsrData.getBucketCountEpoch());
+        }
 
         return reqForBucket;
     }
@@ -783,7 +805,11 @@ public class ServerRpcMessageUtils {
                                     isr,
                                     standbyReplicas,
                                     request.getCoordinatorEpoch(),
-                                    reqForBucket.getBucketEpoch())));
+                                    reqForBucket.getBucketEpoch()),
+                            reqForBucket.hasBucketCount() ? reqForBucket.getBucketCount() : null,
+                            reqForBucket.hasBucketCountEpoch()
+                                    ? reqForBucket.getBucketCountEpoch()
+                                    : null));
         }
         return notifyLeaderAndIsrDataList;
     }
@@ -1852,18 +1878,24 @@ public class ServerRpcMessageUtils {
     }
 
     public static ListPartitionInfosResponse toListPartitionInfosResponse(
-            List<String> partitionKeys, Map<String, PartitionRegistration> partitionRegistrations) {
+            List<String> partitionKeys,
+            Map<String, PartitionRegistration> partitionRegistrations,
+            int tableBucketCount,
+            long bucketCountEpoch) {
         ListPartitionInfosResponse listPartitionsResponse = new ListPartitionInfosResponse();
         for (Map.Entry<String, PartitionRegistration> partitionRegistration :
                 partitionRegistrations.entrySet()) {
             ResolvedPartitionSpec spec =
                     ResolvedPartitionSpec.fromPartitionName(
                             partitionKeys, partitionRegistration.getKey());
+            PartitionRegistration partition = partitionRegistration.getValue();
             listPartitionsResponse
                     .addPartitionsInfo()
-                    .setPartitionId(partitionRegistration.getValue().getPartitionId())
+                    .setPartitionId(partition.getPartitionId())
                     .setPartitionSpec(makePbPartitionSpec(spec))
-                    .setRemoteDataDir(partitionRegistration.getValue().getRemoteDataDir());
+                    .setRemoteDataDir(partition.getRemoteDataDir())
+                    .setBucketCount(
+                            partition.getBucketCountOrDefault(tableBucketCount, bucketCountEpoch));
         }
         return listPartitionsResponse;
     }

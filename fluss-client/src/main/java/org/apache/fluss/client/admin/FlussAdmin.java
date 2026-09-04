@@ -93,6 +93,7 @@ import org.apache.fluss.rpc.messages.ListTablesRequest;
 import org.apache.fluss.rpc.messages.ListTablesResponse;
 import org.apache.fluss.rpc.messages.PbAlterConfig;
 import org.apache.fluss.rpc.messages.PbListOffsetsRespForBucket;
+import org.apache.fluss.rpc.messages.PbPartitionInfo;
 import org.apache.fluss.rpc.messages.PbPartitionSpec;
 import org.apache.fluss.rpc.messages.PbTablePath;
 import org.apache.fluss.rpc.messages.PbTableStatsRespForBucket;
@@ -344,7 +345,8 @@ public class FlussAdmin implements Admin {
                                         // clusters do not include the remote data dir
                                         r.hasRemoteDataDir() ? r.getRemoteDataDir() : null,
                                         r.getCreatedTime(),
-                                        r.getModifiedTime()));
+                                        r.getModifiedTime(),
+                                        r.hasBucketCountEpoch() ? r.getBucketCountEpoch() : 0L));
     }
 
     @Override
@@ -393,7 +395,41 @@ public class FlussAdmin implements Admin {
         }
         return readOnlyGateway
                 .listPartitionInfos(request)
-                .thenApply(ClientRpcMessageUtils::toPartitionInfos);
+                .thenCompose(
+                        response -> {
+                            boolean allHaveBucketCount =
+                                    response.getPartitionsInfosList().stream()
+                                            .allMatch(PbPartitionInfo::hasBucketCount);
+                            if (allHaveBucketCount) {
+                                // Every partition already carries its own bucket count, so skip
+                                // the extra getTableInfo RPC (the -1 default is never used).
+                                return CompletableFuture.completedFuture(
+                                        ClientRpcMessageUtils.toPartitionInfos(response, -1));
+                            }
+                            // Upgrade contract for the per-partition bucket count fallback:
+                            //   1) upgrade clients first;
+                            //   2) upgrade the CoordinatorServer before (or together with) the
+                            //      TabletServers; a TabletServer newer than its Coordinator
+                            //      fails leader activation with UnsupportedVersionException;
+                            //   3) prohibit ALTER bucket.num during the server rolling upgrade;
+                            //   4) a fully old cluster omits the partition count, while the
+                            //      table-level count is still safe (bucketCountEpoch == 0);
+                            //   5) after every server is upgraded, ListPartitionInfosResponse
+                            //      must return an explicit partitionId and bucketCount;
+                            //   6) if a new server still returns a missing count, fail loud
+                            //      instead of calling getTableInfo to guess it.
+                            // TODO: a future FIP should enforce server-side rejection of
+                            //   bucket-layout ALTERs during a rolling upgrade so clients never
+                            //   observe a half-upgraded cluster.
+                            return getTableInfo(tablePath)
+                                    .thenApply(
+                                            tableInfo ->
+                                                    ClientRpcMessageUtils.toPartitionInfos(
+                                                            response,
+                                                            ClientRpcMessageUtils
+                                                                    .fallbackBucketCountOrFail(
+                                                                            tableInfo, tablePath)));
+                        });
     }
 
     /**
@@ -549,30 +585,34 @@ public class FlussAdmin implements Admin {
         metadataUpdater.updateTableOrPartitionMetadata(tablePath, null);
         TableInfo tableInfo = getTableInfo(tablePath).join();
         try {
-            int bucketCount = tableInfo.getNumBuckets();
+            int tableBucketCount = tableInfo.getNumBuckets();
             List<PartitionInfo> partitionInfos;
             if (tableInfo.isPartitioned()) {
                 partitionInfos = listPartitionInfos(tablePath).get();
             } else {
                 partitionInfos = Collections.singletonList(null);
             }
-            // create all TableBuckets for each partition and bucket combination
-            Map<TableBucket, CompletableFuture<Long>> bucketToRowCountMap = new HashMap<>();
+            List<TableBucket> tableBuckets = new ArrayList<>();
             for (PartitionInfo partitionInfo : partitionInfos) {
+                int bucketCount =
+                        PartitionInfo.bucketCountOrDefault(partitionInfo, tableBucketCount);
                 for (int bucket = 0; bucket < bucketCount; bucket++) {
-                    TableBucket tb =
+                    tableBuckets.add(
                             new TableBucket(
                                     tableInfo.getTableId(),
                                     partitionInfo == null ? null : partitionInfo.getPartitionId(),
-                                    bucket);
-                    bucketToRowCountMap.put(tb, new CompletableFuture<>());
+                                    bucket));
                 }
+            }
+            long tableId = tableInfo.getTableId();
+            Map<TableBucket, CompletableFuture<Long>> bucketToRowCountMap = new HashMap<>();
+            for (TableBucket tb : tableBuckets) {
+                bucketToRowCountMap.put(tb, new CompletableFuture<>());
             }
             Map<Integer, GetTableStatsRequest> requestMap =
                     prepareTableStatsRequests(
                             metadataUpdater, bucketToRowCountMap.keySet(), tablePath);
-            sendTableStatsRequest(
-                    metadataUpdater, tableInfo.getTableId(), requestMap, bucketToRowCountMap);
+            sendTableStatsRequest(metadataUpdater, tableId, requestMap, bucketToRowCountMap);
             return FutureUtils.combineAll(bucketToRowCountMap.values())
                     .thenApply(
                             counts -> {
@@ -606,13 +646,13 @@ public class FlussAdmin implements Admin {
                         buckets,
                         offsetSpec,
                         tableInfo.getTablePath());
-        Map<Integer, CompletableFuture<Long>> bucketToOffsetMap = new ConcurrentHashMap<>();
-        for (int bucket : buckets) {
-            bucketToOffsetMap.put(bucket, new CompletableFuture<>());
-        }
 
-        sendListOffsetsRequest(metadataUpdater, requestMap, bucketToOffsetMap);
-        return new ListOffsetsResult(bucketToOffsetMap);
+        Map<Integer, CompletableFuture<Long>> resultMap = new ConcurrentHashMap<>();
+        for (int bucket : buckets) {
+            resultMap.put(bucket, new CompletableFuture<>());
+        }
+        sendListOffsetsRequest(metadataUpdater, requestMap, resultMap);
+        return new ListOffsetsResult(resultMap);
     }
 
     @Override
@@ -818,7 +858,10 @@ public class FlussAdmin implements Admin {
 
         Map<Integer, GetTableStatsRequest> requests = new HashMap<>();
         nodeForBucketList.forEach(
-                (leader, tbs) -> requests.put(leader, makeGetTableStatsRequest(tbs)));
+                (leader, tbs) ->
+                        requests.put(
+                                leader,
+                                makeGetTableStatsRequest(tbs, metadataUpdater.getCluster())));
         return requests;
     }
 
@@ -890,7 +933,12 @@ public class FlussAdmin implements Admin {
                 (leader, ids) ->
                         listOffsetsRequests.put(
                                 leader,
-                                makeListOffsetsRequest(tableId, partitionId, ids, offsetSpec)));
+                                makeListOffsetsRequest(
+                                        tableId,
+                                        partitionId,
+                                        ids,
+                                        offsetSpec,
+                                        metadataUpdater.getCluster())));
         return listOffsetsRequests;
     }
 

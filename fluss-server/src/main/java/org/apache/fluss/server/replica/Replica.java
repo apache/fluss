@@ -34,6 +34,7 @@ import org.apache.fluss.exception.NonPrimaryKeyTableException;
 import org.apache.fluss.exception.NotEnoughReplicasException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.exception.TooManyScannersException;
+import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.LogFormat;
@@ -193,6 +194,12 @@ public final class Replica {
 
     private final SchemaGetter schemaGetter;
     private volatile TableInfo tableInfo;
+
+    // Routing state carried with activation: both values are immutable per bucket, so they are
+    // set once and never change. Null until the coordinator notifies them.
+    private volatile @Nullable Integer routingBucketCount;
+    private volatile @Nullable Long bucketCountEpoch;
+
     private final boolean historicalPartition;
     // logFormat and arrowCompressionInfo are immutable and used in hot-path, so cache them here.
     private final LogFormat logFormat;
@@ -449,6 +456,47 @@ public final class Replica {
         return logFormat;
     }
 
+    /**
+     * Adopts the routing state carried by the notification. Both values are immutable per bucket,
+     * so unset fields never overwrite known ones.
+     */
+    public void updateRoutingState(NotifyLeaderAndIsrData data) {
+        if (data.getBucketCount() != null) {
+            this.routingBucketCount = data.getBucketCount();
+        }
+        if (data.getBucketCountEpoch() != null) {
+            this.bucketCountEpoch = data.getBucketCountEpoch();
+        }
+    }
+
+    /**
+     * Fails leader activation when the notification carries no routing state, which means the
+     * coordinator is older than this server (upgrade contract: coordinator first).
+     */
+    private void requireRoutingState(NotifyLeaderAndIsrData data) {
+        if (data.getBucketCount() == null) {
+            throw new UnsupportedVersionException(
+                    "Leader activation for bucket "
+                            + tableBucket
+                            + " requires the routing bucket count, but the notification from "
+                            + "coordinator epoch "
+                            + data.getCoordinatorEpoch()
+                            + " carries none. The CoordinatorServer is older than this "
+                            + "TabletServer; upgrade the CoordinatorServer first (upgrade "
+                            + "contract: coordinator before tablet servers).");
+        }
+    }
+
+    /** The actual bucket count of the owning table/partition, or null if not yet notified. */
+    public @Nullable Integer getRoutingBucketCount() {
+        return routingBucketCount;
+    }
+
+    /** The bucket layout epoch of the owning table, or null if not yet notified. */
+    public @Nullable Long getBucketCountEpoch() {
+        return bucketCountEpoch;
+    }
+
     public void makeLeader(NotifyLeaderAndIsrData data) throws IOException {
         boolean leaderHWIncremented =
                 inWriteLock(
@@ -457,7 +505,11 @@ public final class Replica {
                             int requestBucketEpoch = data.getBucketEpoch();
                             validateBucketEpoch(requestBucketEpoch);
 
+                            // Leader activation requires the routing state
+                            requireRoutingState(data);
+
                             coordinatorEpoch = data.getCoordinatorEpoch();
+                            updateRoutingState(data);
 
                             long currentTimeMs = clock.milliseconds();
                             // Updating the assignment and ISR state is safe if the bucket epoch is
@@ -530,6 +582,7 @@ public final class Replica {
                     validateBucketEpoch(requestBucketEpoch);
 
                     coordinatorEpoch = data.getCoordinatorEpoch();
+                    updateRoutingState(data);
 
                     updateAssignmentAndIsr(
                             Collections.emptyList(),
@@ -1853,6 +1906,13 @@ public final class Replica {
         return inReadLock(
                 leaderIsrUpdateLock,
                 () -> {
+                    if (!isLeader()) {
+                        throw new NotLeaderOrFollowerException(
+                                String.format(
+                                        "Leader not local for bucket %s on tabletServer %d",
+                                        tableBucket, localTabletServerId));
+                    }
+
                     int offsetType = listOffsetsParam.getOffsetType();
                     if (offsetType == ListOffsetsParam.TIMESTAMP_OFFSET_TYPE) {
                         return getOffsetByTimestamp(remoteLogManager, listOffsetsParam);
