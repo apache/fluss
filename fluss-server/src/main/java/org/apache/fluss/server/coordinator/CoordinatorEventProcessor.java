@@ -924,7 +924,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         oldTableInfo.getRemoteDataDir(),
                         oldTableInfo.getComment().orElse(null),
                         oldTableInfo.getCreatedTime(),
-                        System.currentTimeMillis()));
+                        System.currentTimeMillis(),
+                        oldTableInfo.getBucketCountEpoch()));
 
         updateTabletServerMetadataCache(
                 new HashSet<>(coordinatorContext.getLiveTabletServers().values()),

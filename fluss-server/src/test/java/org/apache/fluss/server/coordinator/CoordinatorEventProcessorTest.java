@@ -28,6 +28,8 @@ import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.DatabaseDescriptor;
+import org.apache.fluss.metadata.PartitionSpec;
+import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableBucketReplica;
@@ -1627,6 +1629,105 @@ class CoordinatorEventProcessorTest {
                 () ->
                         verifyMetadataUpdateRequest(
                                 3, new TableMetadata(tableInfo2, Collections.emptyList())));
+    }
+
+    @Test
+    void testSchemaChangeKeepsBucketCountEpochAfterRescale() throws Exception {
+        initCoordinatorChannel();
+        TablePath t1 = TablePath.of(defaultDatabase, "schema_change_keeps_epoch");
+        int originalBucketCount = 3;
+        TableAssignment tableAssignment =
+                generateAssignment(
+                        originalBucketCount,
+                        REPLICATION_FACTOR,
+                        new TabletServerInfo[] {
+                            new TabletServerInfo(0, "rack0"),
+                            new TabletServerInfo(1, "rack1"),
+                            new TabletServerInfo(2, "rack2")
+                        });
+        TableDescriptor partitionedTable =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("a", DataTypes.INT())
+                                        .column("b", DataTypes.STRING())
+                                        .primaryKey("a", "b")
+                                        .build())
+                        .distributedBy(originalBucketCount)
+                        .partitionedBy("b")
+                        .build()
+                        .withReplicationFactor(REPLICATION_FACTOR);
+        long tableId =
+                metadataManager.createTable(
+                        t1, remoteDataDir, partitionedTable, tableAssignment, false);
+        // create one partition so the ALTER bucket.num rescale can commit
+        metadataManager.createPartition(
+                t1,
+                tableId,
+                remoteDataDir,
+                new PartitionAssignment(
+                        tableId,
+                        generateAssignment(
+                                        originalBucketCount,
+                                        REPLICATION_FACTOR,
+                                        new TabletServerInfo[] {
+                                            new TabletServerInfo(0, "rack0"),
+                                            new TabletServerInfo(1, "rack1"),
+                                            new TabletServerInfo(2, "rack2")
+                                        })
+                                .getBucketAssignments()),
+                ResolvedPartitionSpec.fromPartitionSpec(
+                        Collections.singletonList("b"),
+                        new PartitionSpec(Collections.singletonMap("b", "2024-01-01"))),
+                false,
+                originalBucketCount);
+
+        // ALTER bucket.num advances the bucket count epoch (persisted in ZK TableRegistration)
+        TablePropertyChanges.Builder propertyBuilder = TablePropertyChanges.builder();
+        propertyBuilder.setCustomProperty("bucket.num", "8");
+        metadataManager.alterTableProperties(
+                t1,
+                Collections.singletonList(TableChange.set("bucket.num", "8")),
+                propertyBuilder.build(),
+                false,
+                null,
+                (currentTable, updatedTable) -> {},
+                (currentTable, updatedTable) -> {},
+                ZkVersion.MATCH_ANY_VERSION.getVersion());
+
+        long epochAfterAlter = metadataManager.getTable(t1).getBucketCountEpoch();
+        assertThat(epochAfterAlter).isGreaterThan(0L);
+
+        // A later schema change rebuilds the context TableInfo; the epoch must survive it
+        alterTable(
+                t1,
+                Collections.singletonList(
+                        TableChange.addColumn(
+                                "add_column",
+                                DataTypes.INT(),
+                                null,
+                                TableChange.ColumnPosition.last())));
+
+        retryVerifyContext(
+                ctx -> {
+                    TableInfo tableInfoInCtx = ctx.getTableInfoById(tableId);
+                    assertThat(tableInfoInCtx).isNotNull();
+                    // the schema change took effect
+                    assertThat(tableInfoInCtx.getSchema().getColumnNames()).contains("add_column");
+                    // and the bucket count epoch did NOT roll back to 0
+                    assertThat(tableInfoInCtx.getBucketCountEpoch()).isEqualTo(epochAfterAlter);
+                });
+
+        // the UpdateMetadata pushed for the schema change carries the same epoch
+        TableInfo tableInfoAfterSchemaChange = metadataManager.getTable(t1);
+        assertThat(tableInfoAfterSchemaChange.getBucketCountEpoch()).isEqualTo(epochAfterAlter);
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        verifyMetadataUpdateRequest(
+                                3,
+                                new TableMetadata(
+                                        tableInfoAfterSchemaChange, Collections.emptyList())));
     }
 
     @Test
