@@ -193,8 +193,9 @@ public class RebalanceManagerTest {
         RebalanceManager manager =
                 new RebalanceManager(
                         eventProcessor, zookeeperClient, eventManager, clock, executor);
-        // startup() 若在 ZK 中发现 pending rebalance 任务,应入队 RecoverRebalanceEvent,
-        // 由协调器事件线程执行 registerRebalance,而不是在启动线程直接调用。
+        // If startup() finds a pending rebalance task in ZooKeeper, it should enqueue a
+        // RecoverRebalanceEvent to be processed by the coordinator event thread, instead of
+        // calling registerRebalance() directly on the startup thread.
         manager.startup();
 
         assertThat(eventManager.events).hasSize(1);
