@@ -22,6 +22,7 @@ import org.apache.fluss.bucketing.BucketingFunction;
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.metrics.WriterMetricGroup;
+import org.apache.fluss.client.utils.ClientRpcMessageUtils;
 import org.apache.fluss.client.write.RecordAccumulator.RecordAppendResult;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.config.ConfigOptions;
@@ -29,7 +30,6 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.IllegalConfigurationException;
 import org.apache.fluss.exception.PartitionNotExistException;
-import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
@@ -244,25 +244,9 @@ public class WriterClient {
                 bucketCount =
                         cluster.getBucketCount(tablePartition)
                                 .orElseGet(
-                                        () -> {
-                                            // bucketCountEpoch == 0 proves the table was never
-                                            // rescaled, so the table-level bucket count IS this
-                                            // partition's actual count — a safe, provable fallback
-                                            // (e.g. an old server that never sends the
-                                            // per-partition
-                                            // count). Only epoch > 0 with a missing count is a real
-                                            // inconsistency worth failing on.
-                                            if (tableInfo.getBucketCountEpoch() > 0) {
-                                                throw new StaleMetadataException(
-                                                        "Per-partition bucket count is unavailable for "
-                                                                + assignerPath
-                                                                + " at bucketCountEpoch "
-                                                                + tableInfo.getBucketCountEpoch()
-                                                                + "; refusing to fall back to the"
-                                                                + " table-level count.");
-                                            }
-                                            return tableInfo.getNumBuckets();
-                                        });
+                                        () ->
+                                                ClientRpcMessageUtils.fallbackBucketCountOrFail(
+                                                        tableInfo, assignerPath));
                 bucketAssigner =
                         partitionBucketAssigners.computeIfAbsent(
                                 tablePartition,
@@ -271,7 +255,11 @@ public class WriterClient {
                                                 tableInfo, assignerPath, bucketCount, conf));
             } else {
                 bucketCount =
-                        cluster.getBucketCountForTable(tableId).orElse(tableInfo.getNumBuckets());
+                        cluster.getBucketCountForTable(tableId)
+                                .orElseGet(
+                                        () ->
+                                                ClientRpcMessageUtils.fallbackBucketCountOrFail(
+                                                        tableInfo, physicalTablePath));
                 bucketAssigner =
                         tableBucketAssigners.computeIfAbsent(
                                 tableId,

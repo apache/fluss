@@ -39,6 +39,7 @@ import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.config.cluster.ColumnPositionType;
 import org.apache.fluss.config.cluster.ConfigEntry;
+import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.FsPathAndFileName;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
@@ -50,6 +51,7 @@ import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.messages.AcquireKvSnapshotLeaseRequest;
@@ -682,6 +684,27 @@ public class ClientRpcMessageUtils {
                                                 ? pbPartitionInfo.getBucketCount()
                                                 : defaultBucketCount))
                 .collect(Collectors.toList());
+    }
+
+    /**
+     * Resolves the routing bucket count when a per-partition (or per-table) bucket count is
+     * unavailable in the metadata. Falling back to the table-level count is safe only when {@code
+     * bucketCountEpoch == 0}, which proves the table was never rescaled; otherwise the table-level
+     * count may route to the wrong bucket, so this fails loud instead of silently returning a wrong
+     * answer. Shared by the write path (bucket assignment), the lookup path (bucket routing), and
+     * the admin path (partition info resolution) so the policy lives in one place.
+     */
+    public static int fallbackBucketCountOrFail(TableInfo tableInfo, Object target) {
+        long epoch = tableInfo.getBucketCountEpoch();
+        if (epoch > 0) {
+            throw new StaleMetadataException(
+                    "Routing bucket count is unavailable for "
+                            + target
+                            + " at bucketCountEpoch "
+                            + epoch
+                            + "; refusing to fall back to the table-level count.");
+        }
+        return tableInfo.getNumBuckets();
     }
 
     public static Map<String, String> toKeyValueMap(List<PbKeyValue> pbKeyValues) {

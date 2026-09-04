@@ -18,6 +18,7 @@
 package org.apache.fluss.client.lookup;
 
 import org.apache.fluss.client.metadata.MetadataUpdater;
+import org.apache.fluss.client.utils.ClientRpcMessageUtils;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
@@ -79,15 +80,17 @@ abstract class AbstractLookuper implements Lookuper {
 
     /**
      * Resolves the effective bucket count for the target partition: the per-partition bucket count
-     * when the cluster metadata has it, falling back to the table-level bucket count otherwise
-     * (non-partitioned tables or partitions created by older versions).
+     * when the cluster metadata has it, otherwise the shared fallback policy (safe table-level
+     * count only when the table was never rescaled; fail loud otherwise).
      */
-    protected int resolvePartitionBucketCount(
-            TablePartition tablePartition, int tableLevelNumBuckets) {
+    protected int resolvePartitionBucketCount(TablePartition tablePartition) {
         return metadataUpdater
                 .getCluster()
                 .getBucketCount(tablePartition)
-                .orElse(tableLevelNumBuckets);
+                .orElseGet(
+                        () ->
+                                ClientRpcMessageUtils.fallbackBucketCountOrFail(
+                                        tableInfo, tablePartition));
     }
 
     protected void handleLookupResponse(
