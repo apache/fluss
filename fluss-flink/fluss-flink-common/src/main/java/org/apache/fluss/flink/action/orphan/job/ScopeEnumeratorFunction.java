@@ -134,6 +134,8 @@ public final class ScopeEnumeratorFunction extends ProcessFunction<Integer, Clea
                     normalizeRoots(resolveClusterRemoteDataDirs(clusterConfigMap));
 
             Map<String, DbScanState> dbStates = enumerateActiveScope(admin, audit, tracker);
+            Set<Long> activeTableIds = collectActiveTableIds(dbStates);
+            Set<Long> activePartitionIds = collectActivePartitionIds(dbStates);
 
             for (DbScanState dbState : dbStates.values()) {
                 for (LiveTableScope liveTable : dbState.liveTables) {
@@ -145,6 +147,17 @@ public final class ScopeEnumeratorFunction extends ProcessFunction<Integer, Clea
                 emitOrphanTableDirTasks(
                         dbState, tracker, clusterRoots, audit, remoteFsOpRateLimiter, out);
             }
+            emitOrphanDirTasksUnderUnknownDatabases(
+                    dbStates.keySet(),
+                    activeTableIds,
+                    activeTableIdsComplete(dbStates),
+                    activePartitionIds,
+                    activePartitionIdsComplete(dbStates),
+                    tracker,
+                    clusterRoots,
+                    audit,
+                    remoteFsOpRateLimiter,
+                    out);
         }
     }
 
@@ -503,13 +516,7 @@ public final class ScopeEnumeratorFunction extends ProcessFunction<Integer, Clea
                                     OrphanDirDetector.isOrphanTable(
                                             dirName, activeTableIds, maxKnownTableId),
                             remoteFsOpRateLimiter,
-                            dir ->
-                                    out.collect(
-                                            new OrphanDirCleanTask(
-                                                    dir.toString(),
-                                                    config.olderThanMillis(),
-                                                    config.dryRun(),
-                                                    config.allowDeleteManifest())));
+                            dir -> out.collect(orphanDirCleanTask(dir)));
                 } else {
                     forEachOrphanDirUnderParent(
                             dbDir,
@@ -551,13 +558,7 @@ public final class ScopeEnumeratorFunction extends ProcessFunction<Integer, Clea
                                     OrphanDirDetector.isOrphanPartition(
                                             dirName, activePartitionIds, maxKnownPartitionId),
                             remoteFsOpRateLimiter,
-                            dir ->
-                                    out.collect(
-                                            new OrphanDirCleanTask(
-                                                    dir.toString(),
-                                                    config.olderThanMillis(),
-                                                    config.dryRun(),
-                                                    config.allowDeleteManifest())));
+                            dir -> out.collect(orphanDirCleanTask(dir)));
                 } else {
                     forEachOrphanDirUnderParent(
                             tableDir,
@@ -569,6 +570,175 @@ public final class ScopeEnumeratorFunction extends ProcessFunction<Integer, Clea
                 }
             }
         }
+    }
+
+    private void emitOrphanDirTasksUnderUnknownDatabases(
+            Set<String> activeDbNames,
+            Set<Long> activeTableIds,
+            boolean activeTableIdsComplete,
+            Set<Long> activePartitionIds,
+            boolean activePartitionIdsComplete,
+            MaxKnownIdsTracker tracker,
+            List<String> clusterRoots,
+            AuditLogger audit,
+            RateLimiter remoteFsOpRateLimiter,
+            Collector<CleanTask> out)
+            throws IOException {
+        if (config.table().isPresent()) {
+            return;
+        }
+        if (!activeTableIdsComplete) {
+            audit.logSkipOrphanTableScan("*", "tableInfos-incomplete");
+            return;
+        }
+        if (config.allDatabases()) {
+            emitOrphanDirTasksUnderAllUnknownDatabases(
+                    activeDbNames,
+                    activeTableIds,
+                    activePartitionIds,
+                    activePartitionIdsComplete,
+                    tracker,
+                    clusterRoots,
+                    audit,
+                    remoteFsOpRateLimiter,
+                    out);
+            return;
+        }
+
+        String databaseName = config.database().get();
+        if (activeDbNames.contains(databaseName)) {
+            return;
+        }
+        for (String root : clusterRoots) {
+            for (String topLevel : TOP_LEVEL_DIRS) {
+                FsPath dbDir = remoteSubDir(root, topLevel + "/" + databaseName);
+                emitOrphanDirTasksUnderUnknownDatabase(
+                        dbDir,
+                        activeTableIds,
+                        activePartitionIds,
+                        activePartitionIdsComplete,
+                        tracker,
+                        audit,
+                        remoteFsOpRateLimiter,
+                        out);
+            }
+        }
+    }
+
+    private void emitOrphanDirTasksUnderAllUnknownDatabases(
+            Set<String> activeDbNames,
+            Set<Long> activeTableIds,
+            Set<Long> activePartitionIds,
+            boolean activePartitionIdsComplete,
+            MaxKnownIdsTracker tracker,
+            List<String> clusterRoots,
+            AuditLogger audit,
+            RateLimiter remoteFsOpRateLimiter,
+            Collector<CleanTask> out)
+            throws IOException {
+        for (String root : clusterRoots) {
+            for (String topLevel : TOP_LEVEL_DIRS) {
+                FsPath topLevelDir = remoteSubDir(root, topLevel);
+                FileSystem fs = getFileSystemIfExists(topLevelDir, remoteFsOpRateLimiter);
+                if (fs == null) {
+                    continue;
+                }
+                FileStatus[] entries = listStatuses(fs, topLevelDir, remoteFsOpRateLimiter);
+                if (entries == null) {
+                    continue;
+                }
+                for (FileStatus entry : entries) {
+                    if (!entry.isDir()) {
+                        continue;
+                    }
+                    String dbName = entry.getPath().getName();
+                    if (activeDbNames.contains(dbName)) {
+                        continue;
+                    }
+                    emitOrphanDirTasksUnderUnknownDatabase(
+                            entry.getPath(),
+                            activeTableIds,
+                            activePartitionIds,
+                            activePartitionIdsComplete,
+                            tracker,
+                            audit,
+                            remoteFsOpRateLimiter,
+                            out);
+                }
+            }
+        }
+    }
+
+    private void emitOrphanDirTasksUnderUnknownDatabase(
+            FsPath dbDir,
+            Set<Long> activeTableIds,
+            Set<Long> activePartitionIds,
+            boolean activePartitionIdsComplete,
+            MaxKnownIdsTracker tracker,
+            AuditLogger audit,
+            RateLimiter remoteFsOpRateLimiter,
+            Collector<CleanTask> out)
+            throws IOException {
+        FileSystem fs = getFileSystemIfExists(dbDir, remoteFsOpRateLimiter);
+        if (fs == null) {
+            return;
+        }
+        FileStatus[] entries = listStatuses(fs, dbDir, remoteFsOpRateLimiter);
+        if (entries == null) {
+            return;
+        }
+        long maxKnownTableId = tracker.maxKnownTableId();
+        for (FileStatus entry : entries) {
+            if (!entry.isDir()) {
+                continue;
+            }
+            FsPath tableDir = entry.getPath();
+            if (!OrphanDirDetector.isOrphanTable(
+                    tableDir.getName(), activeTableIds, maxKnownTableId)) {
+                continue;
+            }
+            if (config.allowCleanOrphanTables()) {
+                out.collect(orphanDirCleanTask(tableDir));
+            } else {
+                audit.logSkipOrphanTable(tableDir, "default-conservative");
+                emitOrphanPartitionDirTasksUnderUnknownTable(
+                        tableDir,
+                        activePartitionIds,
+                        activePartitionIdsComplete,
+                        tracker,
+                        remoteFsOpRateLimiter,
+                        out);
+            }
+        }
+    }
+
+    private void emitOrphanPartitionDirTasksUnderUnknownTable(
+            FsPath tableDir,
+            Set<Long> activePartitionIds,
+            boolean activePartitionIdsComplete,
+            MaxKnownIdsTracker tracker,
+            RateLimiter remoteFsOpRateLimiter,
+            Collector<CleanTask> out)
+            throws IOException {
+        if (!config.allowCleanOrphanPartitions() || !activePartitionIdsComplete) {
+            return;
+        }
+        long maxKnownPartitionId = tracker.maxKnownPartitionId();
+        forEachOrphanDirUnderParent(
+                tableDir,
+                dirName ->
+                        OrphanDirDetector.isOrphanPartition(
+                                dirName, activePartitionIds, maxKnownPartitionId),
+                remoteFsOpRateLimiter,
+                dir -> out.collect(orphanDirCleanTask(dir)));
+    }
+
+    private OrphanDirCleanTask orphanDirCleanTask(FsPath dir) {
+        return new OrphanDirCleanTask(
+                dir.toString(),
+                config.olderThanMillis(),
+                config.dryRun(),
+                config.allowDeleteManifest());
     }
 
     private void forEachOrphanDirUnderParent(
@@ -599,6 +769,44 @@ public final class ScopeEnumeratorFunction extends ProcessFunction<Integer, Clea
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
+
+    private static Set<Long> collectActiveTableIds(Map<String, DbScanState> dbStates) {
+        Set<Long> ids = new LinkedHashSet<Long>();
+        for (DbScanState dbState : dbStates.values()) {
+            ids.addAll(dbState.activeTableIds);
+        }
+        return ids;
+    }
+
+    private static Set<Long> collectActivePartitionIds(Map<String, DbScanState> dbStates) {
+        Set<Long> ids = new LinkedHashSet<Long>();
+        for (DbScanState dbState : dbStates.values()) {
+            for (LiveTableScope liveTable : dbState.liveTables) {
+                ids.addAll(liveTable.activePartitionIds);
+            }
+        }
+        return ids;
+    }
+
+    private static boolean activeTableIdsComplete(Map<String, DbScanState> dbStates) {
+        for (DbScanState dbState : dbStates.values()) {
+            if (!dbState.tableInfosComplete) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean activePartitionIdsComplete(Map<String, DbScanState> dbStates) {
+        for (DbScanState dbState : dbStates.values()) {
+            for (LiveTableScope liveTable : dbState.liveTables) {
+                if (liveTable.partitioned && !liveTable.partitionInfosComplete) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
 
     private static String classifyName(Throwable e) {
         return RpcErrorClassifier.classify(e).name();
