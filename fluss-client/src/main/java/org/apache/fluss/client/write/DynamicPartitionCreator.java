@@ -88,7 +88,7 @@ public class DynamicPartitionCreator {
         }
 
         Cluster cluster = metadataUpdater.getCluster();
-        if (isPartitionMetadataAvailable(cluster, physicalTablePath)) {
+        if (isPartitionMetadataAvailable(cluster, physicalTablePath, tableInfo)) {
             return cluster;
         }
 
@@ -126,13 +126,14 @@ public class DynamicPartitionCreator {
                 }
             }
         }
-        return waitForPartitionMetadata(physicalTablePath);
+        return waitForPartitionMetadata(physicalTablePath, tableInfo);
     }
 
     /**
      * Returns the metadata snapshot once the partition id and actual bucket count are available.
      */
-    private Cluster waitForPartitionMetadata(PhysicalTablePath physicalTablePath) {
+    private Cluster waitForPartitionMetadata(
+            PhysicalTablePath physicalTablePath, TableInfo tableInfo) {
         long deadlineNanos = System.nanoTime() + metadataWaitTimeout.toNanos();
         long backoffMs = 100;
         while (true) {
@@ -144,7 +145,7 @@ public class DynamicPartitionCreator {
             }
 
             Cluster cluster = metadataUpdater.getCluster();
-            if (isPartitionMetadataAvailable(cluster, physicalTablePath)) {
+            if (isPartitionMetadataAvailable(cluster, physicalTablePath, tableInfo)) {
                 partitionCreationFailures.remove(physicalTablePath);
                 return cluster;
             }
@@ -160,7 +161,7 @@ public class DynamicPartitionCreator {
             }
 
             cluster = metadataUpdater.getCluster();
-            if (isPartitionMetadataAvailable(cluster, physicalTablePath)) {
+            if (isPartitionMetadataAvailable(cluster, physicalTablePath, tableInfo)) {
                 partitionCreationFailures.remove(physicalTablePath);
                 return cluster;
             }
@@ -185,10 +186,18 @@ public class DynamicPartitionCreator {
     }
 
     private boolean isPartitionMetadataAvailable(
-            Cluster cluster, PhysicalTablePath physicalTablePath) {
+            Cluster cluster, PhysicalTablePath physicalTablePath, TableInfo tableInfo) {
         Optional<TablePartition> tablePartition = cluster.getTablePartition(physicalTablePath);
-        return tablePartition.isPresent()
-                && cluster.getBucketCount(tablePartition.get()).isPresent();
+        if (!tablePartition.isPresent()) {
+            return false;
+        }
+        if (cluster.getBucketCount(tablePartition.get()).isPresent()) {
+            return true;
+        }
+        // bucketCountEpoch == 0 proves the table was never rescaled, so the table-level bucket
+        // count IS this partition's actual count. Waiting for a per-partition count that an old
+        // server never sends would only stall the caller until the request timeout.
+        return tableInfo.getBucketCountEpoch() == 0;
     }
 
     private boolean forceCheckPartitionExist(PhysicalTablePath physicalTablePath) {
