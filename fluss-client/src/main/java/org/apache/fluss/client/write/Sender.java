@@ -654,14 +654,20 @@ public class Sender implements Runnable {
             accumulator.updateThrottle(readyWriteBatch.tableBucket(), 1.0f);
         }
         if (error.error() == Errors.STALE_METADATA) {
-            // The bucketId in this batch was calculated with a stale bucket count. Fail the
-            // batch (do not re-enqueue — the bucketId is fixed), invalidate metadata, and remove
-            // the BucketAssigner so the next send creates a new one with the updated count.
+            // The bucketId in this batch was computed with a stale bucket count, and the server
+            // rejected it during pre-append routing validation, so it was provably never written.
+            // Reclaim its batch sequence (adjustBatchSequences=true): otherwise a permanent hole is
+            // left at this sequence, and the next batch that reaches the server on this bucket
+            // (created after the metadata refresh, carrying a valid routing count) would send the
+            // following sequence against a lower expected one, raising OUT_OF_ORDER_SEQUENCE and
+            // resetting the writer id — which discards idempotence for every bucket of this writer.
+            // Do not re-enqueue (the bucketId is fixed); invalidate metadata and drop the
+            // BucketAssigner so the next send re-routes with the updated count.
             LOG.warn(
                     "Received STALE_METADATA error in write request on table bucket {}. "
                             + "Failing batch and invalidating BucketAssigner.",
                     readyWriteBatch.tableBucket());
-            failBatch(readyWriteBatch, error.exception(), false);
+            failBatch(readyWriteBatch, error.exception(), true);
             invalidMetadataTables.add(writeBatch.physicalTablePath());
             bucketAssignerInvalidator.accept(readyWriteBatch.tableBucket());
             return invalidMetadataTables;

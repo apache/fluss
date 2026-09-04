@@ -1565,6 +1565,48 @@ final class SenderTest {
         assertThat(exception).isInstanceOf(StaleMetadataException.class);
     }
 
+    @Test
+    void testStaleMetadataReclaimsBatchSequenceWhenIdempotenceEnabled() throws Exception {
+        // STALE_METADATA is only produced for hash-distributed tables (those with a bucket key; see
+        // ReplicaManager#validateRoutingBucketCount), so exercise the client reclaim path on a
+        // primary-key table bucket rather than a keyless one.
+        TableBucket keyedBucket = new TableBucket(DATA1_TABLE_ID_PK, 0);
+        IdempotenceManager idempotenceManager = createIdempotenceManager(true);
+        Sender staleSender = setupWithIdempotenceState(idempotenceManager);
+        staleSender.runOnce();
+        long writerId = idempotenceManager.writerId();
+        assertThat(idempotenceManager.isWriterIdValid()).isTrue();
+        assertThat(idempotenceManager.nextSequence(keyedBucket)).isEqualTo(0);
+
+        // Drain and send one batch: it takes batch sequence 0 and nextSequence advances to 1.
+        CompletableFuture<Exception> future = new CompletableFuture<>();
+        appendKvToAccumulator(
+                keyedBucket,
+                compactedRow(DATA1_ROW_TYPE, new Object[] {1, "a"}),
+                (tb, leo, e) -> future.complete(e));
+        staleSender.runOnce();
+        assertThat(idempotenceManager.nextSequence(keyedBucket)).isEqualTo(1);
+
+        // The server rejects the batch during pre-append routing validation (STALE_METADATA), so it
+        // was provably never written. Its batch sequence (0) must be reclaimed.
+        finishRequest(keyedBucket, 0, createPutKvResponse(keyedBucket, Errors.STALE_METADATA));
+        staleSender.runOnce();
+
+        // The write callback receives the StaleMetadataException.
+        assertThat(future.get()).isInstanceOf(StaleMetadataException.class);
+
+        // The writer id must survive: nothing was accepted, so there is no lost message to guard.
+        assertThat(idempotenceManager.isWriterIdValid()).isTrue();
+        assertThat(idempotenceManager.writerId()).isEqualTo(writerId);
+
+        // The reclaimed sequence must roll nextSequence back to 0. Otherwise a permanent hole at
+        // sequence 0 remains: the next batch that reaches the server on this bucket (created after
+        // the metadata refresh, carrying a valid routing count) would send sequence 1 against an
+        // expected 0, triggering OUT_OF_ORDER_SEQUENCE_EXCEPTION and resetWriterId, which wipes
+        // idempotence for every bucket of this writer.
+        assertThat(idempotenceManager.nextSequence(keyedBucket)).isEqualTo(0);
+    }
+
     private TestingMetadataUpdater initializeMetadataUpdater() {
         Map<TablePath, TableInfo> tableInfos = new HashMap<>();
         tableInfos.put(DATA1_TABLE_PATH, DATA1_TABLE_INFO);
