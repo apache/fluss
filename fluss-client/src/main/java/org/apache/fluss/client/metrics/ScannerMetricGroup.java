@@ -75,7 +75,8 @@ public class ScannerMetricGroup extends AbstractMetricGroup {
         bytesPerRequest =
                 histogram(
                         MetricNames.SCANNER_BYTES_PER_REQUEST,
-                        new DescriptiveStatisticsHistogram(WINDOW_SIZE));
+                        new DescriptiveStatisticsHistogram(
+                                WINDOW_SIZE, DescriptiveStatisticsHistogram.DEFAULT_MAX_AGE));
 
         gauge(MetricNames.SCANNER_TIME_MS_BETWEEN_POLL, () -> timeMsBetweenPoll);
         gauge(MetricNames.SCANNER_LAST_POLL_SECONDS_AGO, this::lastPollSecondsAgo);
