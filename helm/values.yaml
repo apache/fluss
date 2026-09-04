@@ -85,6 +85,14 @@ tablet:
   initContainers: []
   extraEnv: []
   envFrom: []
+  # Optional advertised host/port overrides for this component only.
+  # listeners:
+  #   client:
+  #     advertisedHost: ""
+  #     advertisedPort: ""
+  #   external:
+  #     advertisedHost: ""
+  #     advertisedPort: ""
   annotations: {}
   service:
     annotations: {}
@@ -131,6 +139,14 @@ coordinator:
   initContainers: []
   extraEnv: []
   envFrom: []
+  # Optional advertised host/port overrides for this component only.
+  # listeners:
+  #   client:
+  #     advertisedHost: ""
+  #     advertisedPort: ""
+  #   external:
+  #     advertisedHost: ""
+  #     advertisedPort: ""
   annotations: {}
   service:
     annotations: {}
@@ -145,12 +161,22 @@ coordinator:
   tolerations: []
   topologySpreadConstraints: []
 
-# Fluss listener configurations
 listeners:
   internal:
     port: 9123
   client:
     port: 9124
+    # Empty = <pod>.<headless-svc>.<ns>.svc.cluster.local
+    advertisedHost: ""
+    advertisedPort: ""
+  external:
+    # Opt-in second client listener so in-cluster CLIENT advertised addresses
+    # stay on cluster DNS while external clients bootstrap on EXTERNAL.
+    enabled: false
+    name: EXTERNAL
+    port: 9125
+    advertisedHost: ""
+    advertisedPort: ""
 
 # Secrets referenced from configurationOverrides via config provider markers:
 # mounts are read with ${directory:<basePath>/<name>:<key>}, env entries with
