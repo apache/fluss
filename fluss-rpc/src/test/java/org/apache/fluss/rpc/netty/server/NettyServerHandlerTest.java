@@ -18,6 +18,10 @@
 package org.apache.fluss.rpc.netty.server;
 
 import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.exception.TableNotExistException;
+import org.apache.fluss.metrics.Meter;
+import org.apache.fluss.metrics.MetricNames;
+import org.apache.fluss.metrics.groups.GenericMetricGroup;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.metrics.util.NOPMetricsGroup;
 import org.apache.fluss.rpc.messages.ApiVersionsRequest;
@@ -30,6 +34,7 @@ import org.apache.fluss.rpc.messages.PbLookupRespForBucket;
 import org.apache.fluss.rpc.messages.PbValue;
 import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.protocol.ApiManager;
+import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.protocol.MessageCodec;
 import org.apache.fluss.security.auth.PlainTextAuthenticationPlugin;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
@@ -38,11 +43,13 @@ import org.apache.fluss.shaded.netty4.io.netty.channel.Channel;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelId;
 import org.apache.fluss.shaded.netty4.io.netty.util.concurrent.DefaultEventExecutor;
+import org.apache.fluss.shaded.netty4.io.netty.util.concurrent.ImmediateEventExecutor;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
+import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.Deque;
@@ -75,6 +82,55 @@ final class NettyServerHandlerTest {
                         new PlainTextAuthenticationPlugin.PlainTextServerAuthenticator());
         this.ctx = mockChannelHandlerContext();
         serverHandler.channelActive(ctx);
+    }
+
+    @Test
+    void testFailedRequestMarksAggregateAndErrorMetrics() throws Exception {
+        RequestsMetricsTest.RecordingMetricRegistry metricRegistry =
+                new RequestsMetricsTest.RecordingMetricRegistry();
+        MetricGroup metricGroup = new GenericMetricGroup(metricRegistry, null, "tabletserver");
+        TestingRequestChannel tabletRequestChannel = new TestingRequestChannel(100);
+        NettyServerHandler tabletServerHandler =
+                new NettyServerHandler(
+                        tabletRequestChannel,
+                        new ApiManager(ServerType.TABLET_SERVER),
+                        "FLUSS",
+                        true,
+                        RequestsMetrics.createTabletServerRequestMetrics(metricGroup),
+                        new PlainTextAuthenticationPlugin.PlainTextServerAuthenticator());
+        ChannelHandlerContext tabletContext = mockImmediateChannelHandlerContext();
+        tabletServerHandler.channelActive(tabletContext);
+
+        LookupRequest lookupRequest = new LookupRequest().setTableId(1);
+        PbLookupReqForBucket bucketRequest =
+                new PbLookupReqForBucket().setPartitionId(1).setBucketId(1);
+        bucketRequest.addKey("key".getBytes());
+        lookupRequest.addAllBucketsReqs(Collections.singleton(bucketRequest));
+        ByteBuf byteBuf =
+                MessageCodec.encodeRequest(
+                        ByteBufAllocator.DEFAULT,
+                        ApiKeys.LOOKUP.id,
+                        ApiKeys.LOOKUP.highestSupportedVersion,
+                        1001,
+                        lookupRequest);
+
+        tabletServerHandler.channelRead(tabletContext, byteBuf);
+        FlussRequest request = (FlussRequest) tabletRequestChannel.getAndRemoveRequest(0);
+        request.fail(new TableNotExistException("table does not exist"));
+
+        assertThat(metricRegistry.metrics(MetricNames.ERRORS_RATE, "lookup"))
+                .hasSize(2)
+                .allSatisfy(
+                        registered ->
+                                assertThat(((Meter) registered.metric).getCount()).isEqualTo(1))
+                .anySatisfy(
+                        registered ->
+                                assertThat(registered.group.getAllVariables())
+                                        .doesNotContainKey("error"))
+                .anySatisfy(
+                        registered ->
+                                assertThat(registered.group.getAllVariables())
+                                        .containsEntry("error", Errors.TABLE_NOT_EXIST.name()));
     }
 
     @Test
@@ -213,6 +269,13 @@ final class NettyServerHandlerTest {
         when(ctx.channel()).thenReturn(channel);
         when(ctx.alloc()).thenReturn(ByteBufAllocator.DEFAULT);
         when(ctx.executor()).thenReturn(new DefaultEventExecutor());
+        return ctx;
+    }
+
+    private static ChannelHandlerContext mockImmediateChannelHandlerContext() {
+        ChannelHandlerContext ctx = mockChannelHandlerContext();
+        when(ctx.channel().remoteAddress()).thenReturn(new InetSocketAddress("127.0.0.1", 9092));
+        when(ctx.executor()).thenReturn(ImmediateEventExecutor.INSTANCE);
         return ctx;
     }
 

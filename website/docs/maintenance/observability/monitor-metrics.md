@@ -683,7 +683,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>Gauge</td>
     </tr>
     <tr>
-      <th rowspan="9">tabletserver</th>
+      <th rowspan="10">tabletserver</th>
       <td rowspan="1">request</td>
       <td>requestQueueSize</td>
       <td>The TabletServer node network waiting queue size.</td>
@@ -740,6 +740,12 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>responseSendTimeMs</td>
       <td>Time to send the response	for each request type.</td>
       <td>Histogram</td>
+    </tr>
+    <tr>
+      <td rowspan="1">request_error</td>
+      <td>errorsPerSecond</td>
+      <td>The number of failed RPC responses processed per second for each request type and <code>error</code> name. One event is recorded for each failed RPC response; <code>NONE</code> and errors in successful response buckets are excluded. A series appears only after its request/error first occurs.</td>
+      <td>Meter</td>
     </tr>
      <tr>
       <th rowspan="6">client</th>
