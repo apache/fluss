@@ -111,15 +111,20 @@ public class SequenceGroups implements Serializable {
     /** The decision of every group for the record under arbitration, indexed by group id. */
     private final Decision[] groupDecisions;
 
+    /** The primary key field indexes, which hold the same value in both rows being merged. */
+    private final BitSet primaryKeyFields;
+
     private SequenceGroups(
             int[] groupOfField,
             int[][] sequenceFieldsOfGroup,
-            SequenceComparator[][] comparatorsOfGroup) {
+            SequenceComparator[][] comparatorsOfGroup,
+            BitSet primaryKeyFields) {
         this.groupOfField = groupOfField;
         this.sequenceFieldsOfGroup = sequenceFieldsOfGroup;
         this.comparatorsOfGroup = comparatorsOfGroup;
         this.groupDecisions = new Decision[comparatorsOfGroup.length];
         Arrays.fill(groupDecisions, Decision.FORWARD);
+        this.primaryKeyFields = primaryKeyFields;
     }
 
     /**
@@ -174,7 +179,12 @@ public class SequenceGroups implements Serializable {
             }
         }
 
-        return new SequenceGroups(groupOfField, sequenceFieldsOfGroup, comparatorsOfGroup);
+        BitSet primaryKeyFields = new BitSet();
+        for (int pkIndex : schema.getPrimaryKeyIndexes()) {
+            primaryKeyFields.set(pkIndex);
+        }
+        return new SequenceGroups(
+                groupOfField, sequenceFieldsOfGroup, comparatorsOfGroup, primaryKeyFields);
     }
 
     /**
@@ -197,7 +207,8 @@ public class SequenceGroups implements Serializable {
                 restrictedFields[groupId] = NO_FIELDS;
             }
         }
-        return new SequenceGroups(restricted, restrictedFields, comparatorsOfGroup);
+        return new SequenceGroups(
+                restricted, restrictedFields, comparatorsOfGroup, primaryKeyFields);
     }
 
     /** Returns whether any field still belongs to the given group. */
@@ -259,6 +270,35 @@ public class SequenceGroups implements Serializable {
     public boolean acceptsEveryArbitratedGroup() {
         for (Decision decision : groupDecisions) {
             if (decision != Decision.FORWARD) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Returns whether every target field of the write is rejected, so the write changes nothing. A
+     * target field is either a primary key, holding the same value in both rows, or arbitrated by a
+     * group that rejects the incoming value; a field outside the groups takes the incoming value
+     * unconditionally, so it counts as a contribution.
+     *
+     * <p>Without aggregate functions SKIP and STALE alike keep the stored values, while an
+     * aggregating engine still folds a stale record in through aggReversed, so there only SKIP
+     * rejects.
+     *
+     * @param aggregating whether the merging engine aggregates, i.e. whether a stale record still
+     *     contributes
+     */
+    public boolean rejectsEveryTargetField(BitSet targetFields, boolean aggregating) {
+        for (int i = targetFields.nextSetBit(0); i >= 0; i = targetFields.nextSetBit(i + 1)) {
+            if (primaryKeyFields.get(i)) {
+                continue;
+            }
+            if (groupOfField[i] == NO_GROUP) {
+                return false;
+            }
+            Decision decision = groupDecisions[groupOfField[i]];
+            if (decision == Decision.FORWARD || (aggregating && decision == Decision.STALE)) {
                 return false;
             }
         }

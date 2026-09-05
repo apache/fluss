@@ -200,9 +200,9 @@ class DefaultRowMergerTest {
         // the group advances, so the written columns take the incoming values and 'note' is kept
         assertThat(partialMerger.merge(stored, sequenceGroupValue("newer", 101, null)))
                 .isEqualTo(sequenceGroupValue("newer", 101, "kept"));
-        // the group falls behind, so even the written columns keep the stored values
+        // the group falls behind, so the write is a no-op and the stored value is returned as is
         assertThat(partialMerger.merge(stored, sequenceGroupValue("stale", 99, null)))
-                .isEqualTo(stored);
+                .isSameAs(stored);
     }
 
     @Test

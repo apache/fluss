@@ -131,6 +131,13 @@ public class PartialUpdater {
 
         if (sequenceGroups != null) {
             sequenceGroups.arbitrate(oldValue == null ? null : oldValue.row, partialValue.row);
+            // a fully rejected write is a no-op: return the stored row itself, so the processor
+            // sees no change. Only under the target schema, since returning it keeps that schema.
+            if (oldValue != null
+                    && oldValue.schemaId == targetSchemaId
+                    && sequenceGroups.rejectsEveryTargetField(partialUpdateCols, false)) {
+                return oldValue;
+            }
         }
 
         rowEncoder.startNewRow();
