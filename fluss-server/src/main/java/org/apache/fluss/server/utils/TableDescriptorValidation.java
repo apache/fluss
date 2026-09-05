@@ -18,6 +18,7 @@
 package org.apache.fluss.server.utils;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.compression.ColumnValueCodec;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.ConfigOptions;
@@ -55,13 +56,16 @@ import java.util.Collections;
 import java.util.EnumSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.config.ConfigOptions.CURRENT_KV_FORMAT_VERSION;
 import static org.apache.fluss.config.FlussConfigUtils.TABLE_OPTIONS;
+import static org.apache.fluss.config.FlussConfigUtils.getColumnNameFromCompressionConfig;
 import static org.apache.fluss.config.FlussConfigUtils.isAlterableTableOption;
+import static org.apache.fluss.config.FlussConfigUtils.isColumnCompressionConfig;
 import static org.apache.fluss.config.FlussConfigUtils.isTableStorageConfig;
 import static org.apache.fluss.config.StatisticsConfigUtils.validateStatisticsConfig;
 import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
@@ -108,6 +112,10 @@ public class TableDescriptorValidation {
                 continue;
             }
 
+            if (isColumnCompressionConfig(key)) {
+                continue;
+            }
+
             if (isTableStorageConfig(key)) {
                 throw new InvalidConfigException(
                         String.format(
@@ -138,6 +146,7 @@ public class TableDescriptorValidation {
         checkKvValueLayout(tableConf, hasPrimaryKey);
         checkPartition(tableConf, tableDescriptor.getPartitionKeys(), schema.getRowType());
         checkSystemColumns(schema.getRowType());
+        checkColumnCompression(tableDescriptor, tableConf, hasPrimaryKey);
         validateStatisticsConfig(tableDescriptor);
         checkTableLakeFormatMatchesCluster(tableConf, clusterDataLakeFormat);
         checkCustomLakePathSupported(tableConf, clusterDataLakeFormat);
@@ -540,6 +549,54 @@ public class TableDescriptorValidation {
                         "Invalid ZSTD compression level: "
                                 + compressionLevel
                                 + ". Expected a value between 1 and 22.");
+            }
+        }
+    }
+
+    private static void checkColumnCompression(
+            TableDescriptor tableDescriptor, Configuration tableConf, boolean hasPrimaryKey) {
+        for (Map.Entry<String, String> property : tableConf.toMap().entrySet()) {
+            if (!isColumnCompressionConfig(property.getKey())) {
+                continue;
+            }
+
+            String columnName = getColumnNameFromCompressionConfig(property.getKey());
+            if (!ColumnValueCodec.isSupportedCompression(property.getValue())) {
+                throw new InvalidConfigException(
+                        String.format(
+                                "Unsupported compression '%s' for column '%s'. Supported compressions: lz4, zstd.",
+                                property.getValue(), columnName));
+            }
+            if (!hasPrimaryKey) {
+                throw new InvalidTableException(
+                        "Column compression is only supported for primary key tables.");
+            }
+
+            Schema schema = tableDescriptor.getSchema();
+            int columnIndex = schema.getRowType().getFieldIndex(columnName);
+            if (columnIndex < 0) {
+                throw new InvalidConfigException(
+                        String.format(
+                                "Compression property '%s' refers to unknown column '%s'.",
+                                property.getKey(), columnName));
+            }
+            if (schema.getRowType().getTypeAt(columnIndex).getTypeRoot() != DataTypeRoot.BYTES) {
+                throw new InvalidConfigException(
+                        String.format(
+                                "Column compression only supports BYTES columns, but column '%s' is %s.",
+                                columnName, schema.getRowType().getTypeAt(columnIndex)));
+            }
+            if (schema.getPrimaryKeyColumnNames().contains(columnName)
+                    || tableDescriptor.getBucketKeys().contains(columnName)
+                    || tableDescriptor.getPartitionKeys().contains(columnName)) {
+                throw new InvalidConfigException(
+                        String.format(
+                                "Column compression is not supported for key column '%s'.",
+                                columnName));
+            }
+            if (tableConf.get(ConfigOptions.TABLE_MERGE_ENGINE) == MergeEngineType.AGGREGATION) {
+                throw new InvalidConfigException(
+                        "Column compression is not supported with the aggregation merge engine.");
             }
         }
     }
