@@ -19,7 +19,9 @@ package org.apache.fluss.kafka;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.kafka.format.KafkaDataFormat;
 import org.apache.fluss.rpc.RpcGatewayService;
+import org.apache.fluss.rpc.gateway.AdminGatewayProvider;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.netty.server.RequestChannel;
 import org.apache.fluss.rpc.netty.server.RequestHandler;
@@ -53,6 +55,7 @@ public class KafkaProtocolPlugin implements NetworkProtocolPlugin {
             RequestChannel[] requestChannels, String listenerName) {
         return new KafkaChannelInitializer(
                 requestChannels,
+                listenerName,
                 conf.get(ConfigOptions.KAFKA_CONNECTION_MAX_IDLE_TIME).getSeconds(),
                 (int) conf.get(ConfigOptions.NETTY_SERVER_MAX_REQUEST_SIZE).getBytes(),
                 conf.getBoolean(ConfigOptions.NETTY_CLIENT_ALLOCATOR_HEAP_BUFFER_FIRST));
@@ -66,6 +69,15 @@ public class KafkaProtocolPlugin implements NetworkProtocolPlugin {
                             + service.getClass().getSimpleName());
         }
         TabletServerGateway gateway = (TabletServerGateway) service;
-        return new KafkaRequestHandler(gateway);
+        if (service instanceof AdminGatewayProvider) {
+            return new KafkaRequestHandler(
+                    service,
+                    gateway,
+                    ((AdminGatewayProvider) service).getAdminGateway(),
+                    conf.get(ConfigOptions.KAFKA_DATABASE),
+                    KafkaDataFormat.parse(conf.get(ConfigOptions.KAFKA_DEFAULT_KEY_FORMAT)),
+                    KafkaDataFormat.parse(conf.get(ConfigOptions.KAFKA_DEFAULT_VALUE_FORMAT)));
+        }
+        return new KafkaRequestHandler(service, gateway, conf.get(ConfigOptions.KAFKA_DATABASE));
     }
 }

@@ -27,6 +27,7 @@ import org.apache.fluss.shaded.netty4.io.netty.util.ReferenceCountUtil;
 import org.apache.fluss.utils.MathUtils;
 
 import org.apache.kafka.common.errors.LeaderNotAvailableException;
+import org.apache.kafka.common.message.ApiVersionsRequestData;
 import org.apache.kafka.common.protocol.ApiKeys;
 import org.apache.kafka.common.requests.AbstractRequest;
 import org.apache.kafka.common.requests.AbstractResponse;
@@ -55,6 +56,7 @@ public class KafkaCommandDecoder extends SimpleChannelInboundHandler<ByteBuf> {
 
     private final RequestChannel[] requestChannels;
     private final int numChannels;
+    private final String listenerName;
 
     // Need to use a Queue to store the inflight responses, because Kafka clients require the
     // responses to be sent in order.
@@ -65,18 +67,18 @@ public class KafkaCommandDecoder extends SimpleChannelInboundHandler<ByteBuf> {
     protected volatile ChannelHandlerContext ctx;
     protected SocketAddress remoteAddress;
 
-    public KafkaCommandDecoder(RequestChannel[] requestChannels) {
+    public KafkaCommandDecoder(RequestChannel[] requestChannels, String listenerName) {
         super(false);
         this.requestChannels = requestChannels;
         this.numChannels = requestChannels.length;
+        this.listenerName = listenerName;
     }
 
     @Override
     public void channelRead0(ChannelHandlerContext ctx, ByteBuf buffer) throws Exception {
         CompletableFuture<AbstractResponse> future = new CompletableFuture<>();
-        boolean needRelease = false;
         try {
-            KafkaRequest request = parseRequest(ctx, future, buffer);
+            KafkaRequest request = parseRequest(ctx, future, buffer, listenerName);
             inflightResponses.addLast(request);
             future.whenCompleteAsync((r, t) -> sendResponse(ctx), ctx.executor());
             int channelIndex =
@@ -86,16 +88,15 @@ public class KafkaCommandDecoder extends SimpleChannelInboundHandler<ByteBuf> {
             if (!isActive.get()) {
                 LOG.warn("Received a request on an inactive channel: {}", remoteAddress);
                 request.fail(new LeaderNotAvailableException("Channel is inactive"));
-                needRelease = true;
             }
         } catch (Throwable t) {
-            needRelease = true;
             LOG.error("Error handling request", t);
             future.completeExceptionally(t);
         } finally {
-            if (needRelease) {
-                ReferenceCountUtil.release(buffer);
-            }
+            // KafkaRequest retains the buffer because Kafka record sets can reference its memory
+            // asynchronously. Release the decoder's ownership on every path; the request releases
+            // its retained reference after response handling or cancellation.
+            ReferenceCountUtil.release(buffer);
         }
     }
 
@@ -184,19 +185,39 @@ public class KafkaCommandDecoder extends SimpleChannelInboundHandler<ByteBuf> {
     }
 
     private static KafkaRequest parseRequest(
-            ChannelHandlerContext ctx, CompletableFuture<AbstractResponse> future, ByteBuf buffer) {
+            ChannelHandlerContext ctx,
+            CompletableFuture<AbstractResponse> future,
+            ByteBuf buffer,
+            String listenerName) {
         ByteBuffer nioBuffer = buffer.nioBuffer();
         RequestHeader header = RequestHeader.parse(nioBuffer);
         if (isUnsupportedApiVersionRequest(header)) {
             ApiVersionsRequest request =
-                    new ApiVersionsRequest.Builder(header.apiVersion()).build();
+                    new ApiVersionsRequest(
+                            new ApiVersionsRequestData(),
+                            API_VERSIONS.oldestVersion(),
+                            header.apiVersion());
             return new KafkaRequest(
-                    API_VERSIONS, header.apiVersion(), header, request, buffer, ctx, future);
+                    API_VERSIONS,
+                    header.apiVersion(),
+                    header,
+                    request,
+                    listenerName,
+                    buffer,
+                    ctx,
+                    future);
         }
         RequestAndSize request =
                 AbstractRequest.parseRequest(header.apiKey(), header.apiVersion(), nioBuffer);
         return new KafkaRequest(
-                header.apiKey(), header.apiVersion(), header, request.request, buffer, ctx, future);
+                header.apiKey(),
+                header.apiVersion(),
+                header,
+                request.request,
+                listenerName,
+                buffer,
+                ctx,
+                future);
     }
 
     private static boolean isUnsupportedApiVersionRequest(RequestHeader header) {

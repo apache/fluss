@@ -46,6 +46,7 @@ public class KafkaRequest implements RpcRequest {
     private final long requestId = ID_GENERATOR.getAndIncrement();
     private final RequestHeader header;
     private final AbstractRequest request;
+    private final String listenerName;
     private final ByteBuf buffer;
     private final ChannelHandlerContext ctx;
     private final long startTimeMs;
@@ -60,10 +61,23 @@ public class KafkaRequest implements RpcRequest {
             ByteBuf buffer,
             ChannelHandlerContext ctx,
             CompletableFuture<AbstractResponse> future) {
+        this(apiKey, apiVersion, header, request, "UNKNOWN", buffer, ctx, future);
+    }
+
+    protected KafkaRequest(
+            ApiKeys apiKey,
+            short apiVersion,
+            RequestHeader header,
+            AbstractRequest request,
+            String listenerName,
+            ByteBuf buffer,
+            ChannelHandlerContext ctx,
+            CompletableFuture<AbstractResponse> future) {
         this.apiKey = apiKey;
         this.apiVersion = apiVersion;
         this.header = header;
         this.request = request;
+        this.listenerName = listenerName;
         this.buffer = buffer.retain();
         this.ctx = ctx;
         this.startTimeMs = System.currentTimeMillis();
@@ -98,6 +112,10 @@ public class KafkaRequest implements RpcRequest {
 
     public <T> T request() {
         return (T) request;
+    }
+
+    public String listenerName() {
+        return listenerName;
     }
 
     public ChannelHandlerContext ctx() {

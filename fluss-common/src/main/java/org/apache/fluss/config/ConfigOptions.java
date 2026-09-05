@@ -2673,6 +2673,22 @@ public class ConfigOptions {
                     .withDescription(
                             "The database for fluss kafka. The default database is `kafka`.");
 
+    public static final ConfigOption<String> KAFKA_DEFAULT_KEY_FORMAT =
+            key("kafka.default.key.format")
+                    .stringType()
+                    .defaultValue("raw")
+                    .withDescription(
+                            "The default format for Kafka record keys when a CreateTopics request does not specify fluss.key.format. "
+                                    + "Supported formats are raw and string.");
+
+    public static final ConfigOption<String> KAFKA_DEFAULT_VALUE_FORMAT =
+            key("kafka.default.value.format")
+                    .stringType()
+                    .defaultValue("raw")
+                    .withDescription(
+                            "The default format for Kafka record values when a CreateTopics request does not specify fluss.value.format. "
+                                    + "Supported formats are raw and string.");
+
     public static final ConfigOption<Duration> KAFKA_CONNECTION_MAX_IDLE_TIME =
             key("kafka.connection.max-idle-time")
                     .durationType()
