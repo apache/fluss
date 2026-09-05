@@ -973,9 +973,16 @@ fn decimal_to_unscaled(text: &str, precision: u32, scale: u32) -> Result<i128, S
         Some(rest) => (true, rest),
         None => (false, text.strip_prefix('+').unwrap_or(text)),
     };
-    let (int_part, frac_part) = match unsigned.split_once('.') {
+    let (mantissa, exponent) = match unsigned.split_once(['e', 'E']) {
+        Some((mantissa, exponent)) if !exponent.contains(['e', 'E']) => {
+            (mantissa, parse_decimal_exponent(exponent)?)
+        }
+        Some(_) => return Err("not a decimal number".to_string()),
+        None => (unsigned, 0),
+    };
+    let (int_part, frac_part) = match mantissa.split_once('.') {
         Some((int_part, frac_part)) => (int_part, frac_part),
-        None => (unsigned, ""),
+        None => (mantissa, ""),
     };
     if int_part.is_empty() && frac_part.is_empty() {
         return Err("not a decimal number".to_string());
@@ -985,33 +992,70 @@ fn decimal_to_unscaled(text: &str, precision: u32, scale: u32) -> Result<i128, S
             .chars()
             .all(|character| character.is_ascii_digit())
     {
-        return Err("not a plain base-10 decimal (exponents are not accepted)".to_string());
+        return Err("not a decimal number".to_string());
     }
-    let scale = scale as usize;
-    let significant_frac = frac_part.trim_end_matches('0');
-    if significant_frac.len() > scale {
-        return Err(format!(
-            "value has {} fractional digits but the scale is {scale}",
-            significant_frac.len()
-        ));
-    }
-    let mut digits = String::with_capacity(int_part.len() + scale);
+    let mut digits = String::with_capacity(int_part.len() + frac_part.len());
     digits.push_str(int_part);
-    digits.push_str(frac_part.get(..scale.min(frac_part.len())).unwrap_or(""));
-    for _ in frac_part.len()..scale {
-        digits.push('0');
+    digits.push_str(frac_part);
+    if digits.bytes().all(|byte| byte == b'0') {
+        return Ok(0);
     }
+
+    let shift = exponent
+        .checked_add(i64::from(scale))
+        .and_then(|shift| shift.checked_sub(i64::try_from(frac_part.len()).ok()?))
+        .ok_or_else(|| "decimal exponent is out of range".to_string())?;
+    if shift < 0 {
+        let remove = usize::try_from(
+            shift
+                .checked_neg()
+                .ok_or_else(|| "decimal exponent is out of range".to_string())?,
+        )
+        .map_err(|_| "decimal exponent is out of range".to_string())?;
+        if remove >= digits.len()
+            || !digits[digits.len() - remove..]
+                .bytes()
+                .all(|byte| byte == b'0')
+        {
+            return Err(format!(
+                "value has more fractional precision than scale {scale}"
+            ));
+        }
+        digits.truncate(digits.len() - remove);
+    } else {
+        let append =
+            usize::try_from(shift).map_err(|_| "decimal exponent is out of range".to_string())?;
+        if digits.trim_start_matches('0').len().saturating_add(append) > precision as usize {
+            return Err(format!(
+                "value needs more than {precision} digits of precision"
+            ));
+        }
+        digits.extend(std::iter::repeat_n('0', append));
+    }
+
+    let digits = digits.trim_start_matches('0');
     let unscaled: i128 = digits
         .parse()
         .map_err(|_| "value does not fit a 128-bit decimal".to_string())?;
-    let trimmed = digits.trim_start_matches('0');
-    let significant = if trimmed.is_empty() { 1 } else { trimmed.len() };
+    let significant = digits.len();
     if significant > precision as usize {
         return Err(format!(
             "value needs {significant} digits of precision but the type allows {precision}"
         ));
     }
     Ok(if negative { -unscaled } else { unscaled })
+}
+
+fn parse_decimal_exponent(text: &str) -> Result<i64, String> {
+    let digits = text
+        .strip_prefix(['+', '-'])
+        .filter(|digits| !digits.is_empty())
+        .unwrap_or(text);
+    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err("not a decimal number".to_string());
+    }
+    text.parse()
+        .map_err(|_| "decimal exponent is out of range".to_string())
 }
 
 fn decode_binary(
@@ -1766,7 +1810,31 @@ mod tests {
             panic!("expected decimal");
         };
         assert_eq!(decimal.to_big_decimal().to_string(), "12.34");
-        for json in ["\"12.345\"", "\"1e2\"", "\"1000.00\""] {
+        for (json, expected) in [
+            ("1e2", "100.00"),
+            ("\"1e2\"", "100.00"),
+            ("1234e-2", "12.34"),
+            ("\"+1.234E+1\"", "12.34"),
+            ("\"-1.234e1\"", "-12.34"),
+            ("123400e-4", "12.34"),
+        ] {
+            let Datum::Decimal(decimal) =
+                decode_one(DataType::Decimal(DecimalType::new(5, 2).unwrap()), json).unwrap()
+            else {
+                panic!("expected decimal");
+            };
+            assert_eq!(decimal.to_big_decimal().to_string(), expected, "{json}");
+        }
+        for json in [
+            "\"12.345\"",
+            "1e-3",
+            "1e3",
+            "\"1e\"",
+            "\"1e+\"",
+            "\"0einvalid\"",
+            "\"0e9223372036854775808\"",
+            "\"1000.00\"",
+        ] {
             assert!(
                 decode_one(DataType::Decimal(DecimalType::new(5, 2).unwrap()), json).is_err(),
                 "{json}"
