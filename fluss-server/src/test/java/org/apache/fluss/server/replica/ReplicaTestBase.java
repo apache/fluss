@@ -68,6 +68,7 @@ import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
 import org.apache.fluss.utils.CloseableRegistry;
+import org.apache.fluss.utils.ExecutorUtils;
 import org.apache.fluss.utils.clock.ManualClock;
 import org.apache.fluss.utils.concurrent.FlussScheduler;
 import org.apache.fluss.utils.function.FunctionWithException;
@@ -159,6 +160,7 @@ public class ReplicaTestBase {
     protected TestCoordinatorGateway testCoordinatorGateway;
     private FlussScheduler scheduler;
     private ExecutorService ioExecutor;
+    private ExecutorService replicaTransitionExecutor;
 
     // remote log related
     protected TestingRemoteLogStorage remoteLogStorage;
@@ -219,6 +221,9 @@ public class ReplicaTestBase {
         scheduler = new FlussScheduler(2);
         scheduler.startup();
         ioExecutor = Executors.newSingleThreadExecutor();
+        replicaTransitionExecutor =
+                Executors.newFixedThreadPool(
+                        conf.get(ConfigOptions.TABLET_SERVER_REPLICA_TRANSITION_THREAD_NUM));
 
         manualClock = new ManualClock(System.currentTimeMillis());
         localDiskManager = LocalDiskManager.create(conf);
@@ -374,6 +379,7 @@ public class ReplicaTestBase {
                 scannerManager,
                 manualClock,
                 ioExecutor,
+                replicaTransitionExecutor,
                 localDiskManager,
                 null);
     }
@@ -381,6 +387,10 @@ public class ReplicaTestBase {
     @AfterEach
     void tearDown() throws Exception {
         closeableRegistry.close();
+
+        if (replicaTransitionExecutor != null) {
+            ExecutorUtils.gracefulShutdown(5, TimeUnit.SECONDS, replicaTransitionExecutor);
+        }
 
         if (logManager != null) {
             logManager.shutdown();

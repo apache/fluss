@@ -189,6 +189,9 @@ public class TabletServer extends ServerBase {
     @GuardedBy("lock")
     private ExecutorService replicaStateChangeExecutor;
 
+    @GuardedBy("lock")
+    private ExecutorService replicaTransitionExecutor;
+
     public TabletServer(Configuration conf) {
         this(conf, SystemClock.getInstance());
     }
@@ -285,6 +288,11 @@ public class TabletServer extends ServerBase {
             this.replicaStateChangeExecutor =
                     Executors.newSingleThreadExecutor(
                             new ExecutorThreadFactory("tablet-server-replica-state-change"));
+            this.replicaTransitionExecutor =
+                    Executors.newFixedThreadPool(
+                            conf.get(ConfigOptions.TABLET_SERVER_REPLICA_TRANSITION_THREAD_NUM),
+                            new ExecutorThreadFactory(
+                                    "tablet-server-replica-transition-" + serverId));
 
             this.scannerManager = new ScannerManager(conf, scheduler);
 
@@ -307,6 +315,7 @@ public class TabletServer extends ServerBase {
                             scannerManager,
                             clock,
                             ioExecutor,
+                            replicaTransitionExecutor,
                             localDiskManager,
                             pluginManager);
             replicaManager.startup();
@@ -473,6 +482,14 @@ public class TabletServer extends ServerBase {
             try {
                 if (tabletService != null) {
                     tabletService.shutdown();
+                }
+            } catch (Throwable t) {
+                exception = ExceptionUtils.firstOrSuppressed(t, exception);
+            }
+
+            try {
+                if (replicaTransitionExecutor != null) {
+                    ExecutorUtils.gracefulShutdown(5, TimeUnit.SECONDS, replicaTransitionExecutor);
                 }
             } catch (Throwable t) {
                 exception = ExceptionUtils.firstOrSuppressed(t, exception);

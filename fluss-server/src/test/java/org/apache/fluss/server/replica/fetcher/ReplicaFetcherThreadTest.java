@@ -112,6 +112,7 @@ public class ReplicaFetcherThreadTest {
     private ReplicaFetcherThread followerFetcher;
     private TestingLeaderEndpoint leaderEndpoint;
     private ExecutorService ioExecutor;
+    private ExecutorService replicaTransitionExecutor;
     private LocalDiskManager leaderLocalDiskManager;
     private LocalDiskManager followerLocalDiskManager;
     private KvManager leaderKvManager;
@@ -133,6 +134,7 @@ public class ReplicaFetcherThreadTest {
         conf.set(ConfigOptions.LOG_REPLICA_FETCH_WAIT_MAX_TIME, Duration.ofSeconds(5));
         tb = new TableBucket(DATA1_TABLE_ID, 0);
         ioExecutor = Executors.newSingleThreadExecutor();
+        replicaTransitionExecutor = Executors.newFixedThreadPool(2);
         leaderLocalDiskManager = createLocalDiskManager(leaderServerId);
         leaderRM = createReplicaManager(leaderServerId, leaderLocalDiskManager);
         followerLocalDiskManager = createLocalDiskManager(followerServerId);
@@ -178,6 +180,9 @@ public class ReplicaFetcherThreadTest {
         }
         if (ioExecutor != null) {
             ioExecutor.shutdownNow();
+        }
+        if (replicaTransitionExecutor != null) {
+            replicaTransitionExecutor.shutdownNow();
         }
     }
 
@@ -646,6 +651,7 @@ public class ReplicaFetcherThreadTest {
                         TestingMetricGroups.TABLET_SERVER_METRICS,
                         manualClock,
                         ioExecutor,
+                        replicaTransitionExecutor,
                         localDiskManager);
         replicaManager.startup();
         return replicaManager;
@@ -668,6 +674,7 @@ public class ReplicaFetcherThreadTest {
                 TabletServerMetricGroup serverMetricGroup,
                 Clock clock,
                 ExecutorService ioExecutor,
+                ExecutorService replicaTransitionExecutor,
                 LocalDiskManager localDiskManager)
                 throws IOException {
             super(
@@ -687,6 +694,7 @@ public class ReplicaFetcherThreadTest {
                     new ScannerManager(conf, scheduler),
                     clock,
                     ioExecutor,
+                    replicaTransitionExecutor,
                     localDiskManager,
                     null);
         }
