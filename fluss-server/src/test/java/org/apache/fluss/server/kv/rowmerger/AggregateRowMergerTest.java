@@ -1067,6 +1067,30 @@ class AggregateRowMergerTest {
     }
 
     @Test
+    void testAllSkippedWriteReturnsTheStoredValueAsItIs() {
+        // every field belongs to the group, so an all-NULL sequence makes the whole write a no-op
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("total", DataTypes.BIGINT(), AggFunctions.SUM())
+                        .column("ts", DataTypes.INT())
+                        .sequenceGroup(
+                                java.util.Collections.singletonList("ts"),
+                                java.util.Collections.singletonList("total"))
+                        .primaryKey("id")
+                        .build();
+        TableConfig tableConfig = new TableConfig(new Configuration());
+        AggregateRowMerger merger = createMerger(schema, tableConfig);
+        merger.configureTargetColumns(null, SCHEMA_ID, schema);
+
+        BinaryValue stored =
+                toBinaryValue(compactedRow(schema.getRowType(), new Object[] {1, 30L, 100}));
+        BinaryValue skipped =
+                toBinaryValue(compactedRow(schema.getRowType(), new Object[] {1, 5L, null}));
+        assertThat(merger.merge(stored, skipped)).isSameAs(stored);
+    }
+
+    @Test
     void testGroupWithoutAnySequenceContributesNothing() {
         AggregateRowMerger merger = sequenceGroupMerger();
         BinaryValue stored = sequenceGroupRow(30L, 100, "first");
@@ -1180,11 +1204,9 @@ class AggregateRowMergerTest {
         assertThat(stale.row.getInt(2)).isEqualTo(100);
         assertThat(stale.row.getString(3).toString()).isEqualTo("kept");
 
-        // no sequence at all, so the group contributes nothing
-        BinaryValue skipped = partial.merge(stored, sequenceGroupRow(5L, null, null));
-        assertThat(skipped.row.getLong(1)).isEqualTo(30L);
-        assertThat(skipped.row.getInt(2)).isEqualTo(100);
-        assertThat(skipped.row.getString(3).toString()).isEqualTo("kept");
+        // no sequence at all and every written field is grouped, so the write is a no-op and the
+        // stored value is returned as is
+        assertThat(partial.merge(stored, sequenceGroupRow(5L, null, null))).isSameAs(stored);
     }
 
     @Test

@@ -71,6 +71,10 @@ public class AggregateRowMerger implements RowMerger {
     // the current target schema id which is updated before merge() operation
     private short targetSchemaId = -1;
 
+    // the all-fields bit set for the current target schema, computed on demand and reused
+    private @Nullable BitSet allTargetFields;
+    private int allTargetFieldsCount = -1;
+
     public AggregateRowMerger(
             TableConfig tableConfig, KvFormat kvFormat, SchemaGetter schemaGetter) {
         this.schemaGetter = schemaGetter;
@@ -93,6 +97,16 @@ public class AggregateRowMerger implements RowMerger {
         SequenceGroups sequenceGroups = targetContext.getSequenceGroups();
         if (firstWrite && acceptsEveryField(sequenceGroups, null, newValue.row)) {
             return newValue;
+        }
+
+        // a fully rejected write is a no-op: return the stored row itself, so the processor sees
+        // no change. Only under the target schema, since returning it keeps that schema.
+        if (sequenceGroups != null
+                && !firstWrite
+                && oldValue.schemaId == targetSchemaId
+                && rejectsEveryTargetField(
+                        sequenceGroups, allFields(targetContext), oldValue.row, newValue.row)) {
+            return oldValue;
         }
 
         // Get the old context only when a stored row exists
@@ -129,6 +143,28 @@ public class AggregateRowMerger implements RowMerger {
         }
         sequenceGroups.arbitrate(oldRow, newRow);
         return sequenceGroups.acceptsEveryArbitratedGroup();
+    }
+
+    /** Arbitrates and returns whether the write contributes nothing to any target field. */
+    private static boolean rejectsEveryTargetField(
+            SequenceGroups sequenceGroups,
+            BitSet targetFields,
+            BinaryRow oldRow,
+            BinaryRow newRow) {
+        sequenceGroups.arbitrate(oldRow, newRow);
+        return sequenceGroups.rejectsEveryTargetField(targetFields, true);
+    }
+
+    /** Returns a cached bit set covering every field of the given context's schema. */
+    private BitSet allFields(AggregationContext context) {
+        int fieldCount = context.getFieldCount();
+        if (allTargetFields == null || allTargetFieldsCount != fieldCount) {
+            BitSet all = new BitSet();
+            all.set(0, fieldCount);
+            this.allTargetFields = all;
+            this.allTargetFieldsCount = fieldCount;
+        }
+        return allTargetFields;
     }
 
     @Override
@@ -270,6 +306,9 @@ public class AggregateRowMerger implements RowMerger {
         // The groups restricted to the target fields, null when the schema declares none
         private final @Nullable SequenceGroups sequenceGroups;
 
+        // the target fields as row field indexes, matching the schema this merger was built for
+        private final BitSet targetFieldPositions;
+
         PartialAggregateRowMerger(
                 BitSet targetColumnIdBitSet,
                 DeleteBehavior deleteBehavior,
@@ -289,11 +328,10 @@ public class AggregateRowMerger implements RowMerger {
 
             // a group the write doesn't cover must not arbitrate, since its sequence is never
             // stored
+            this.targetFieldPositions = targetPositions(schema, targetColumnIdBitSet);
             SequenceGroups declared = context.getSequenceGroups();
             this.sequenceGroups =
-                    declared == null
-                            ? null
-                            : declared.restrictTo(targetPositions(schema, targetColumnIdBitSet));
+                    declared == null ? null : declared.restrictTo(targetFieldPositions);
 
             // Initialize cache for target position BitSets
             this.targetPosBitSetCache =
@@ -320,6 +358,16 @@ public class AggregateRowMerger implements RowMerger {
             boolean firstWrite = oldValue == null || oldValue.row == null;
             if (firstWrite && acceptsEveryField(sequenceGroups, null, newValue.row)) {
                 return newValue;
+            }
+
+            // the same no-op shortcut as the full aggregation path, over this write's target
+            // fields; the groups here are already restricted to those fields
+            if (sequenceGroups != null
+                    && !firstWrite
+                    && oldValue.schemaId == targetSchemaId
+                    && rejectsEveryTargetField(
+                            sequenceGroups, targetFieldPositions, oldValue.row, newValue.row)) {
+                return oldValue;
             }
 
             // Get contexts for schema evolution support
