@@ -57,6 +57,15 @@ public class TabletServerResourceProbe {
                 probeCpuCores().orElse(null), probeMemoryBytes().orElse(null));
     }
 
+    /** Returns the current memory usage from the cgroup, when available. */
+    public Optional<Long> probeMemoryUsedBytes() {
+        Optional<Long> cgroupV2Memory = readMemoryValue(cgroupRoot.resolve("memory.current"));
+        if (cgroupV2Memory.isPresent()) {
+            return cgroupV2Memory;
+        }
+        return readMemoryValue(cgroupRoot.resolve("memory").resolve("memory.usage_in_bytes"));
+    }
+
     private Optional<Double> probeCpuCores() {
         Optional<Double> configuredCpuCores =
                 conf.getOptional(ConfigOptions.TABLET_SERVER_ADVERTISED_RESOURCE_CPU_CORES);

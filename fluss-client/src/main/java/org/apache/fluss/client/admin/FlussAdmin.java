@@ -26,7 +26,9 @@ import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.metadata.RemoteLogManifestInfo;
 import org.apache.fluss.client.utils.ClientRpcMessageUtils;
 import org.apache.fluss.cluster.Cluster;
+import org.apache.fluss.cluster.NodeResourceInfo;
 import org.apache.fluss.cluster.ServerNode;
+import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.cluster.rebalance.GoalType;
 import org.apache.fluss.cluster.rebalance.RebalanceProgress;
 import org.apache.fluss.cluster.rebalance.ServerTag;
@@ -76,6 +78,8 @@ import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataRequest;
 import org.apache.fluss.rpc.messages.GetLakeSnapshotRequest;
 import org.apache.fluss.rpc.messages.GetLatestKvSnapshotsRequest;
 import org.apache.fluss.rpc.messages.GetProducerOffsetsRequest;
+import org.apache.fluss.rpc.messages.GetServerInfoRequest;
+import org.apache.fluss.rpc.messages.GetServerInfoResponse;
 import org.apache.fluss.rpc.messages.GetTableInfoRequest;
 import org.apache.fluss.rpc.messages.GetTableSchemaRequest;
 import org.apache.fluss.rpc.messages.GetTableStatsRequest;
@@ -180,6 +184,10 @@ public class FlussAdmin implements Admin {
 
     @Override
     public CompletableFuture<List<ServerNode>> getServerNodes() {
+        return getServerNodesWithoutResourceInfo().thenCompose(this::attachResourceInfo);
+    }
+
+    private CompletableFuture<List<ServerNode>> getServerNodesWithoutResourceInfo() {
         CompletableFuture<List<ServerNode>> future = new CompletableFuture<>();
         CompletableFuture.runAsync(
                 () -> {
@@ -201,6 +209,57 @@ public class FlussAdmin implements Admin {
                     }
                 });
         return future;
+    }
+
+    private CompletableFuture<List<ServerNode>> attachResourceInfo(List<ServerNode> serverNodes) {
+        List<CompletableFuture<ServerNode>> futures = new ArrayList<>(serverNodes.size());
+        for (ServerNode serverNode : serverNodes) {
+            futures.add(
+                    getNodeResourceInfo(serverNode)
+                            .thenApply(resourceInfo -> serverNode.withResourceInfo(resourceInfo)));
+        }
+        return CompletableFuture.allOf(futures.toArray(new CompletableFuture<?>[0]))
+                .thenApply(
+                        ignored -> {
+                            List<ServerNode> nodes = new ArrayList<>(futures.size());
+                            for (CompletableFuture<ServerNode> future : futures) {
+                                nodes.add(future.join());
+                            }
+                            return nodes;
+                        });
+    }
+
+    private CompletableFuture<NodeResourceInfo> getNodeResourceInfo(ServerNode serverNode) {
+        CompletableFuture<GetServerInfoResponse> responseFuture;
+        if (serverNode.serverType() == ServerType.COORDINATOR) {
+            responseFuture =
+                    metadataUpdater
+                            .newCoordinatorServerClient()
+                            .getServerInfo(new GetServerInfoRequest());
+        } else {
+            TabletServerGateway tabletGateway =
+                    metadataUpdater.newTabletServerClientForNode(serverNode.id());
+            if (tabletGateway == null) {
+                CompletableFuture<NodeResourceInfo> unavailable = new CompletableFuture<>();
+                unavailable.completeExceptionally(
+                        new FlussRuntimeException(
+                                "Tablet server is no longer available: " + serverNode));
+                return unavailable;
+            }
+            responseFuture = tabletGateway.getServerInfo(new GetServerInfoRequest());
+        }
+        return responseFuture.thenApply(FlussAdmin::toNodeResourceInfo);
+    }
+
+    private static NodeResourceInfo toNodeResourceInfo(GetServerInfoResponse response) {
+        return new NodeResourceInfo(
+                response.getCpuCores(),
+                response.getMemoryTotalBytes(),
+                response.getCpuUsageRatio(),
+                response.getMemoryUsedBytes(),
+                response.hasDataDiskTotalBytes() ? response.getDataDiskTotalBytes() : null,
+                response.hasDataDiskUsedBytes() ? response.getDataDiskUsedBytes() : null,
+                response.getCollectedAtMs());
     }
 
     @Override
@@ -371,6 +430,39 @@ public class FlussAdmin implements Admin {
         ListTablesRequest request = new ListTablesRequest();
         request.setDatabaseName(databaseName);
         return readOnlyGateway.listTables(request).thenApply(ListTablesResponse::getTableNamesList);
+    }
+
+    @Override
+    public CompletableFuture<List<TableInfoWithStats>> listTableDetails(String databaseName) {
+        return listTables(databaseName)
+                .thenCompose(
+                        tableNames -> {
+                            List<CompletableFuture<TableInfoWithStats>> detailFutures =
+                                    new ArrayList<>(tableNames.size());
+                            for (String tableName : tableNames) {
+                                TablePath tablePath = TablePath.of(databaseName, tableName);
+                                CompletableFuture<TableInfo> tableInfoFuture =
+                                        getTableInfo(tablePath);
+                                CompletableFuture<TableStats> tableStatsFuture =
+                                        getTableStats(tablePath);
+                                detailFutures.add(
+                                        tableInfoFuture.thenCombine(
+                                                tableStatsFuture, TableInfoWithStats::new));
+                            }
+
+                            return CompletableFuture.allOf(
+                                            detailFutures.toArray(new CompletableFuture<?>[0]))
+                                    .thenApply(
+                                            ignored -> {
+                                                List<TableInfoWithStats> details =
+                                                        new ArrayList<>(detailFutures.size());
+                                                for (CompletableFuture<TableInfoWithStats> future :
+                                                        detailFutures) {
+                                                    details.add(future.join());
+                                                }
+                                                return details;
+                                            });
+                        });
     }
 
     @Override
@@ -557,7 +649,7 @@ public class FlussAdmin implements Admin {
                 partitionInfos = Collections.singletonList(null);
             }
             // create all TableBuckets for each partition and bucket combination
-            Map<TableBucket, CompletableFuture<Long>> bucketToRowCountMap = new HashMap<>();
+            Map<TableBucket, CompletableFuture<BucketStats>> bucketToStatsMap = new HashMap<>();
             for (PartitionInfo partitionInfo : partitionInfos) {
                 for (int bucket = 0; bucket < bucketCount; bucket++) {
                     TableBucket tb =
@@ -565,19 +657,34 @@ public class FlussAdmin implements Admin {
                                     tableInfo.getTableId(),
                                     partitionInfo == null ? null : partitionInfo.getPartitionId(),
                                     bucket);
-                    bucketToRowCountMap.put(tb, new CompletableFuture<>());
+                    bucketToStatsMap.put(tb, new CompletableFuture<>());
                 }
             }
             Map<Integer, GetTableStatsRequest> requestMap =
                     prepareTableStatsRequests(
-                            metadataUpdater, bucketToRowCountMap.keySet(), tablePath);
+                            metadataUpdater, bucketToStatsMap.keySet(), tablePath);
             sendTableStatsRequest(
-                    metadataUpdater, tableInfo.getTableId(), requestMap, bucketToRowCountMap);
-            return FutureUtils.combineAll(bucketToRowCountMap.values())
+                    metadataUpdater, tableInfo.getTableId(), requestMap, bucketToStatsMap);
+            return FutureUtils.combineAll(bucketToStatsMap.values())
                     .thenApply(
-                            counts -> {
-                                long totalRowCount = counts.stream().reduce(0L, Long::sum);
-                                return new TableStats(totalRowCount);
+                            stats -> {
+                                long totalRowCount = 0L;
+                                long totalDataSizeBytes = 0L;
+                                long collectedAtMs = -1L;
+                                boolean dataSizeAvailable = true;
+                                for (BucketStats stat : stats) {
+                                    totalRowCount += stat.rowCount;
+                                    if (stat.dataSizeBytes == null) {
+                                        dataSizeAvailable = false;
+                                    } else {
+                                        totalDataSizeBytes += stat.dataSizeBytes;
+                                    }
+                                    collectedAtMs = Math.max(collectedAtMs, stat.collectedAtMs);
+                                }
+                                return new TableStats(
+                                        totalRowCount,
+                                        dataSizeAvailable ? totalDataSizeBytes : null,
+                                        collectedAtMs);
                             });
         } catch (Exception e) {
             throw new FlussRuntimeException(
@@ -826,7 +933,7 @@ public class FlussAdmin implements Admin {
             MetadataUpdater metadataUpdater,
             long tableId,
             Map<Integer, GetTableStatsRequest> leaderToRequestMap,
-            Map<TableBucket, CompletableFuture<Long>> bucketToRowCountMap) {
+            Map<TableBucket, CompletableFuture<BucketStats>> bucketToStatsMap) {
         leaderToRequestMap.forEach(
                 (leader, request) -> {
                     TabletServerGateway gateway =
@@ -839,7 +946,7 @@ public class FlussAdmin implements Admin {
                                 .whenComplete(
                                         (response, t) ->
                                                 handleTableStatsResponse(
-                                                        response, t, tableId, bucketToRowCountMap));
+                                                        response, t, tableId, bucketToStatsMap));
                     }
                 });
     }
@@ -848,12 +955,13 @@ public class FlussAdmin implements Admin {
             GetTableStatsResponse response,
             Throwable t,
             long tableId,
-            Map<TableBucket, CompletableFuture<Long>> bucketToRowCountMap) {
+            Map<TableBucket, CompletableFuture<BucketStats>> bucketToStatsMap) {
         if (t != null) {
             // fail all futures to fail fast
-            bucketToRowCountMap.values().forEach(f -> f.completeExceptionally(t));
+            bucketToStatsMap.values().forEach(f -> f.completeExceptionally(t));
             return;
         }
+        long collectedAtMs = response.hasCollectedAtMs() ? response.getCollectedAtMs() : -1L;
         for (PbTableStatsRespForBucket resp : response.getBucketsRespsList()) {
             TableBucket tb =
                     new TableBucket(
@@ -861,12 +969,30 @@ public class FlussAdmin implements Admin {
                             resp.hasPartitionId() ? resp.getPartitionId() : null,
                             resp.getBucketId());
             if (resp.hasErrorCode()) {
-                bucketToRowCountMap
+                bucketToStatsMap
                         .get(tb)
                         .completeExceptionally(ApiError.fromErrorMessage(resp).exception());
             } else {
-                bucketToRowCountMap.get(tb).complete(resp.getRowCount());
+                bucketToStatsMap
+                        .get(tb)
+                        .complete(
+                                new BucketStats(
+                                        resp.getRowCount(),
+                                        resp.hasDataSizeBytes() ? resp.getDataSizeBytes() : null,
+                                        collectedAtMs));
             }
+        }
+    }
+
+    private static final class BucketStats {
+        private final long rowCount;
+        private final @Nullable Long dataSizeBytes;
+        private final long collectedAtMs;
+
+        private BucketStats(long rowCount, @Nullable Long dataSizeBytes, long collectedAtMs) {
+            this.rowCount = rowCount;
+            this.dataSizeBytes = dataSizeBytes;
+            this.collectedAtMs = collectedAtMs;
         }
     }
 

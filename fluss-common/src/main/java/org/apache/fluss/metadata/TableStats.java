@@ -21,10 +21,15 @@ package org.apache.fluss.metadata;
 
 import org.apache.fluss.annotation.PublicEvolving;
 
+import javax.annotation.Nullable;
+
 import java.util.Objects;
 
 /**
  * Statistics of a table.
+ *
+ * <p>The data size is the current local physical size reported by the tablet leaders. It may be
+ * unavailable when the server does not support this field.
  *
  * @since 0.9
  */
@@ -32,14 +37,32 @@ import java.util.Objects;
 public class TableStats {
 
     private final long rowCount;
+    private final @Nullable Long dataSizeBytes;
+    private final long collectedAtMs;
 
     public TableStats(long rowCount) {
+        this(rowCount, null, -1L);
+    }
+
+    public TableStats(long rowCount, @Nullable Long dataSizeBytes, long collectedAtMs) {
         this.rowCount = rowCount;
+        this.dataSizeBytes = dataSizeBytes;
+        this.collectedAtMs = collectedAtMs;
     }
 
     /** Returns the current total row count of the table. */
     public long getRowCount() {
         return rowCount;
+    }
+
+    /** Returns the current local data size of the table, or null if it is unavailable. */
+    public @Nullable Long getDataSizeBytes() {
+        return dataSizeBytes;
+    }
+
+    /** Returns the time at which the table statistics response was collected. */
+    public long getCollectedAtMs() {
+        return collectedAtMs;
     }
 
     @Override
@@ -48,16 +71,25 @@ public class TableStats {
             return false;
         }
         TableStats that = (TableStats) o;
-        return rowCount == that.rowCount;
+        return rowCount == that.rowCount
+                && collectedAtMs == that.collectedAtMs
+                && Objects.equals(dataSizeBytes, that.dataSizeBytes);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hashCode(rowCount);
+        return Objects.hash(rowCount, dataSizeBytes, collectedAtMs);
     }
 
     @Override
     public String toString() {
-        return "TableStats{" + "rowCount=" + rowCount + '}';
+        return "TableStats{"
+                + "rowCount="
+                + rowCount
+                + ", dataSizeBytes="
+                + dataSizeBytes
+                + ", collectedAtMs="
+                + collectedAtMs
+                + '}';
     }
 }

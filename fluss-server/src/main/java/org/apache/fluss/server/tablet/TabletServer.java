@@ -47,6 +47,7 @@ import org.apache.fluss.server.log.remote.RemoteLogManager;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.metadata.TabletServerResource;
 import org.apache.fluss.server.metrics.ServerMetricUtils;
+import org.apache.fluss.server.metrics.ServerNodeMetrics;
 import org.apache.fluss.server.metrics.UserMetrics;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.server.replica.ReplicaManager;
@@ -137,6 +138,9 @@ public class TabletServer extends ServerBase {
 
     @GuardedBy("lock")
     private TabletServerMetricGroup tabletServerMetricGroup;
+
+    @GuardedBy("lock")
+    private ServerNodeMetrics serverNodeMetrics;
 
     @GuardedBy("lock")
     private TabletServerMetadataCache metadataCache;
@@ -242,6 +246,16 @@ public class TabletServer extends ServerBase {
             this.metadataCache = new TabletServerMetadataCache(metadataManager);
 
             this.localDiskManager = LocalDiskManager.create(conf);
+            this.serverNodeMetrics =
+                    new ServerNodeMetrics(
+                            conf,
+                            metricRegistry,
+                            ServerMetricUtils.validateAndGetClusterId(conf),
+                            endpoints.get(0).getHost(),
+                            String.valueOf(serverId),
+                            ServerType.TABLET_SERVER,
+                            localDiskManager.dataDirs(),
+                            scheduler);
             this.logManager =
                     LogManager.create(
                             conf,
@@ -322,6 +336,7 @@ public class TabletServer extends ServerBase {
                             authorizer,
                             dynamicConfigManager,
                             ioExecutor,
+                            serverNodeMetrics,
                             replicaStateChangeExecutor,
                             scannerManager,
                             coordinatorGateway,
@@ -432,6 +447,15 @@ public class TabletServer extends ServerBase {
     CompletableFuture<Void> stopServices() {
         synchronized (lock) {
             Throwable exception = null;
+
+            try {
+                if (serverNodeMetrics != null) {
+                    serverNodeMetrics.close();
+                    serverNodeMetrics = null;
+                }
+            } catch (Throwable t) {
+                exception = ExceptionUtils.firstOrSuppressed(t, exception);
+            }
 
             try {
                 if (tabletServerMetricGroup != null) {

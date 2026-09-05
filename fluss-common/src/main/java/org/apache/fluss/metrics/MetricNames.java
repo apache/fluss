@@ -109,6 +109,13 @@ public class MetricNames {
     public static final String HISTORICAL_LOOKUP_CACHE_CAPACITY_EVICTIONS =
             "lookupCacheCapacityEvictions";
 
+    public static final String NODE_CPU_CORES = "machineCpuCores";
+    public static final String NODE_MEMORY_TOTAL_BYTES = "machineMemoryTotalBytes";
+    public static final String NODE_CPU_USAGE_RATIO = "machineCpuUsageRatio";
+    public static final String NODE_MEMORY_USED_BYTES = "machineMemoryUsedBytes";
+    public static final String DATA_DISK_TOTAL_BYTES = "dataDiskTotalBytes";
+    public static final String DATA_DISK_USED_BYTES = "dataDiskUsedBytes";
+
     // --------------------------------------------------------------------------------------------
     // metrics for user
     // --------------------------------------------------------------------------------------------

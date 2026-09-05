@@ -38,6 +38,7 @@ import org.apache.fluss.server.coordinator.remote.RemoteDirDynamicLoader;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
 import org.apache.fluss.server.metadata.ServerMetadataCache;
 import org.apache.fluss.server.metrics.ServerMetricUtils;
+import org.apache.fluss.server.metrics.ServerNodeMetrics;
 import org.apache.fluss.server.metrics.group.CoordinatorMetricGroup;
 import org.apache.fluss.server.metrics.group.LakeTieringMetricGroup;
 import org.apache.fluss.server.storage.DiskWriteLimitConfigValidator;
@@ -105,6 +106,9 @@ public class CoordinatorServer extends ServerBase {
 
     @GuardedBy("lock")
     private CoordinatorMetricGroup serverMetricGroup;
+
+    @GuardedBy("lock")
+    private ServerNodeMetrics serverNodeMetrics;
 
     @GuardedBy("lock")
     private RpcServer rpcServer;
@@ -235,6 +239,16 @@ public class CoordinatorServer extends ServerBase {
                             ServerMetricUtils.validateAndGetClusterId(conf),
                             endpoints.get(0).getHost(),
                             serverId);
+            this.serverNodeMetrics =
+                    new ServerNodeMetrics(
+                            conf,
+                            metricRegistry,
+                            ServerMetricUtils.validateAndGetClusterId(conf),
+                            endpoints.get(0).getHost(),
+                            serverId,
+                            ServerType.COORDINATOR,
+                            null,
+                            scheduler);
 
             this.zkClient = ZooKeeperUtils.startZookeeperClient(conf, this);
 
@@ -289,6 +303,7 @@ public class CoordinatorServer extends ServerBase {
                             remoteDirDynamicLoader,
                             dynamicConfigManager,
                             ioExecutor,
+                            serverNodeMetrics,
                             kvSnapshotLeaseManager,
                             coordinatorLeaderElection,
                             replicaCapacityController);
@@ -589,6 +604,15 @@ public class CoordinatorServer extends ServerBase {
 
         synchronized (lock) {
             Throwable exception = leaderElectionException;
+
+            try {
+                if (serverNodeMetrics != null) {
+                    serverNodeMetrics.close();
+                    serverNodeMetrics = null;
+                }
+            } catch (Throwable t) {
+                exception = ExceptionUtils.firstOrSuppressed(t, exception);
+            }
 
             try {
                 // We must shut down the scheduler early because otherwise, the scheduler could

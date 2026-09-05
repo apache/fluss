@@ -65,6 +65,16 @@ public final class DiskUsageCollector {
      * IOException} is thrown only when <b>all</b> directories fail.
      */
     public double collect() throws IOException {
+        DiskUsage diskUsage = collectUsage();
+        return diskUsage.getUsageRatio();
+    }
+
+    /**
+     * Collects the total and used space of the distinct file stores backing the data directories.
+     */
+    public DiskUsage collectUsage() throws IOException {
+        long totalSpace = 0L;
+        long usableSpace = 0L;
         double maxRatio = 0.0;
         Set<FileStore> counted = new HashSet<>();
         int failures = 0;
@@ -76,7 +86,10 @@ public final class DiskUsageCollector {
                     if (total <= 0L) {
                         continue;
                     }
-                    double ratio = (double) (total - fs.getUsableSpace()) / total;
+                    long usable = fs.getUsableSpace();
+                    totalSpace += total;
+                    usableSpace += usable;
+                    double ratio = (double) (total - usable) / total;
                     if (ratio > maxRatio) {
                         maxRatio = ratio;
                     }
@@ -89,6 +102,34 @@ public final class DiskUsageCollector {
         if (failures > 0 && failures == dataDirs.size()) {
             throw new IOException("All " + failures + " data directories failed FileStore lookup.");
         }
-        return maxRatio;
+        return new DiskUsage(totalSpace, totalSpace - usableSpace, maxRatio);
+    }
+
+    /** A snapshot of the local data disk capacity and usage. */
+    public static final class DiskUsage {
+        private final long totalBytes;
+        private final long usedBytes;
+        private final double usageRatio;
+
+        private DiskUsage(long totalBytes, long usedBytes, double usageRatio) {
+            this.totalBytes = totalBytes;
+            this.usedBytes = usedBytes;
+            this.usageRatio = usageRatio;
+        }
+
+        /** Returns the total capacity in bytes. */
+        public long getTotalBytes() {
+            return totalBytes;
+        }
+
+        /** Returns the used capacity in bytes. */
+        public long getUsedBytes() {
+            return usedBytes;
+        }
+
+        /** Returns the maximum usage ratio across the collected file stores. */
+        public double getUsageRatio() {
+            return usageRatio;
+        }
     }
 }

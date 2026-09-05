@@ -89,7 +89,13 @@ import java.util.concurrent.CompletableFuture;
 @PublicEvolving
 public interface Admin extends AutoCloseable {
 
-    /** Get the current server node information. asynchronously. */
+    /**
+     * Gets the current server node information and a machine resource snapshot asynchronously.
+     *
+     * <p>The returned {@link ServerNode} contains {@link ServerNode#resourceInfo()} for each
+     * currently available node. The resource snapshot includes CPU, memory and data disk
+     * information and is collected when this method is called.
+     */
     CompletableFuture<List<ServerNode>> getServerNodes();
 
     /**
@@ -288,6 +294,17 @@ public interface Admin extends AutoCloseable {
      * @param databaseName The name of the database.
      */
     CompletableFuture<List<String>> listTables(String databaseName);
+
+    /**
+     * Lists all tables in a database together with their current statistics asynchronously.
+     *
+     * <p>The returned table metadata is static metadata, while the statistics contain a snapshot of
+     * the data size and row count collected from the tablet servers.
+     *
+     * @param databaseName the name of the database
+     * @return a future containing the table metadata and statistics
+     */
+    CompletableFuture<List<TableInfoWithStats>> listTableDetails(String databaseName);
 
     /**
      * Alter a table with the given {@code tableChanges}.
@@ -557,6 +574,9 @@ public interface Admin extends AutoCloseable {
 
     /**
      * Asynchronously gets the statistics of this table.
+     *
+     * <p>The returned statistics include the row count and the current local physical data size
+     * reported by tablet leaders. The data size is nullable for servers that do not provide it.
      *
      * @return A future TableStats
      */
