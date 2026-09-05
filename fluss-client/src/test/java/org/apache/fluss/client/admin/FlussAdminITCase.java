@@ -1262,7 +1262,6 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         assertThat(zkClient.getKvSnapshotLeaseMetadata(lease.leaseId())).isPresent();
 
         restartCoordinatorServer(zkClient);
-        FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
 
         lease.dropLease().get();
         assertThat(zkClient.getKvSnapshotLeaseMetadata(lease.leaseId())).isNotPresent();
@@ -1275,6 +1274,10 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 Duration.ofMinutes(1),
                 "Coordinator server node still exists in ZooKeeper");
         FLUSS_CLUSTER_EXTENSION.startCoordinatorServer();
+        // The retryable gateway proxy refreshes metadata from a tablet server and retries only
+        // once, so wait until the tablet servers have learned the new coordinator address before
+        // issuing the next lease request; the client itself still holds the stale address.
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
     }
 
     @Test
