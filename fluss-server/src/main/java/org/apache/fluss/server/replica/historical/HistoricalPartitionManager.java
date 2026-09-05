@@ -176,6 +176,7 @@ public final class HistoricalPartitionManager implements AutoCloseable {
 
     /** Applies dynamic historical lookup configuration changes. */
     public void reconfigure(Configuration newConf) {
+        taskExecutor.reconfigure(newConf);
         lakeLookupManager.reconfigure(newConf);
     }
 

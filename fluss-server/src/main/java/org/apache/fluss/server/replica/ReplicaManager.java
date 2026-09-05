@@ -428,6 +428,24 @@ public class ReplicaManager implements ServerReconfigurable {
                                     + "negative or zero: %d",
                             newMinInSyncReplicas));
         }
+
+        int newHistoricalPartitionThreadPoolMaxSize =
+                newConfig.get(ConfigOptions.SERVER_HISTORICAL_PARTITION_THREAD_POOL_MAX_SIZE);
+        if (newHistoricalPartitionThreadPoolMaxSize <= 0) {
+            throw new ConfigException(
+                    String.format(
+                            "Invalid configuration for %s, it must be greater than 0.",
+                            ConfigOptions.SERVER_HISTORICAL_PARTITION_THREAD_POOL_MAX_SIZE.key()));
+        }
+
+        int newMaxQueuedHistoricalRequests =
+                newConfig.get(ConfigOptions.NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS);
+        if (newMaxQueuedHistoricalRequests <= 0) {
+            throw new ConfigException(
+                    String.format(
+                            "Invalid configuration for %s, it must be greater than 0.",
+                            ConfigOptions.NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS.key()));
+        }
     }
 
     @Override
