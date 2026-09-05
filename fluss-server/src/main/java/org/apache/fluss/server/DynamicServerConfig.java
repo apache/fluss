@@ -25,11 +25,14 @@ import org.apache.fluss.config.ConfigurationUtils;
 import org.apache.fluss.config.cluster.ConfigValidator;
 import org.apache.fluss.config.cluster.ServerReconfigurable;
 import org.apache.fluss.exception.ConfigException;
+import org.apache.fluss.security.acl.FlussPrincipal;
 import org.apache.fluss.server.config.ConfigRedactor;
 import org.apache.fluss.server.config.ConfigRedactors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import javax.annotation.Nullable;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -180,9 +183,12 @@ class DynamicServerConfig {
      * Update the dynamic configuration and apply to registered ServerReconfigurable. If skipping
      * error config, only the error one will be ignored.
      */
-    void updateDynamicConfig(Map<String, String> newDynamicConfigs, boolean skipErrorConfig)
+    void updateDynamicConfig(
+            Map<String, String> newDynamicConfigs,
+            boolean skipErrorConfig,
+            @Nullable FlussPrincipal requester)
             throws Exception {
-        inWriteLock(lock, () -> updateCurrentConfig(newDynamicConfigs, skipErrorConfig));
+        inWriteLock(lock, () -> updateCurrentConfig(newDynamicConfigs, skipErrorConfig, requester));
     }
 
     Map<String, String> getDynamicConfigs() {
@@ -206,7 +212,10 @@ class DynamicServerConfig {
         return false;
     }
 
-    private void updateCurrentConfig(Map<String, String> newDynamicConfigs, boolean skipErrorConfig)
+    private void updateCurrentConfig(
+            Map<String, String> newDynamicConfigs,
+            boolean skipErrorConfig,
+            @Nullable FlussPrincipal requester)
             throws Exception {
         // Compute effective config changes (merge with initial configs)
         Map<String, String> effectiveChanges =
@@ -225,7 +234,7 @@ class DynamicServerConfig {
         Configuration newConfig = Configuration.fromMap(newConfigMap);
 
         // Apply changes to all registered ServerReconfigurable instances
-        applyToServerReconfigurables(newConfig, skipErrorConfig);
+        applyToServerReconfigurables(newConfig, skipErrorConfig, requester);
 
         // Update internal state
         updateInternalState(newConfig, newConfigMap, newDynamicConfigs);
@@ -444,9 +453,11 @@ class DynamicServerConfig {
      *
      * @param newConfig new configuration to apply
      * @param skipErrorConfig whether to skip errors
+     * @param requester the principal that requested the change, or null if triggered by the server
      * @throws Exception if apply fails and skipErrorConfig is false
      */
-    private void applyToServerReconfigurables(Configuration newConfig, boolean skipErrorConfig)
+    private void applyToServerReconfigurables(
+            Configuration newConfig, boolean skipErrorConfig, @Nullable FlussPrincipal requester)
             throws Exception {
         Configuration oldConfig = currentConfig;
         Set<ServerReconfigurable> appliedSet = new HashSet<>();
@@ -454,7 +465,7 @@ class DynamicServerConfig {
         // Validate all first
         for (ServerReconfigurable reconfigurable : serverReconfigures.values()) {
             try {
-                reconfigurable.validate(newConfig);
+                reconfigurable.validate(newConfig, requester);
             } catch (ConfigException e) {
                 LOG.error(
                         "Validation failed for {}: {}",
