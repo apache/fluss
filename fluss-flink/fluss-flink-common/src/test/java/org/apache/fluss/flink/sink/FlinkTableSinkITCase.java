@@ -2103,9 +2103,10 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         tEnv.executeSql("insert into agg_seq_group values (1, 10, 50)").await();
         assertResultsIgnoreOrder(rowIter, Arrays.asList("-U[1, 50, 200]", "+U[1, 60, 200]"), false);
 
-        // a record without any sequence carries no order information, so it is skipped entirely
+        // a record without any sequence carries no order information, so it contributes nothing:
+        // the write changes nothing and produces no changelog event at all
         tEnv.executeSql("insert into agg_seq_group values (1, 5, cast(null as int))").await();
-        assertResultsIgnoreOrder(rowIter, Arrays.asList("-U[1, 60, 200]", "+U[1, 60, 200]"), true);
+        assertResultsIgnoreOrder(rowIter, Collections.emptyList(), true);
     }
 
     @Test

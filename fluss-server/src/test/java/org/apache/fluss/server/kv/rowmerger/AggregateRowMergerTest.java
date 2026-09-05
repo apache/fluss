@@ -1069,7 +1069,8 @@ class AggregateRowMergerTest {
 
     @Test
     void testStaleRecordTakesItsEarlierPositionForAnOrderSensitiveFunction() {
-        // a stale record is aggregated into its earlier position, so the launch price wins over the later repricing
+        // a stale record is aggregated into its earlier position, so the launch price wins over the
+        // later repricing
         Schema schema =
                 Schema.newBuilder()
                         .column("id", DataTypes.INT())
