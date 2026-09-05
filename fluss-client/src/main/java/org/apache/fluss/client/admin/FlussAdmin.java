@@ -34,6 +34,8 @@ import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
+import org.apache.fluss.exception.NotCoordinatorLeaderException;
+import org.apache.fluss.exception.RetriableException;
 import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
@@ -157,15 +159,22 @@ public class FlussAdmin implements Admin {
                     1, new ExecutorThreadFactory("fluss-admin-metadata-refresh"));
 
     public FlussAdmin(RpcClient client, MetadataUpdater metadataUpdater) {
-        // TODO: AdminGateway includes non-idempotent write operations (createTable, dropTable,
-        //  createDatabase, etc.). Wrapping it with RetryableGatewayClientProxy is unsafe because
-        //  a request may succeed on the server while the response is lost (surfacing as a
-        //  RetriableException), causing a duplicate mutation on retry. A future phase should
-        //  introduce idempotent retry semantics (e.g., request-id deduplication) before enabling
-        //  retry on the write gateway.
-        this.gateway =
+        AdminGateway rawGateway =
                 GatewayClientProxy.createGatewayProxy(
                         metadataUpdater::getCoordinatorServer, client, AdminGateway.class);
+        // Refresh metadata for recoverable failures, but don't retry generic network errors because
+        // a non-idempotent write may already have succeeded. NotCoordinatorLeaderException is safe
+        // to retry because the standby rejects the request before invoking the coordinator API.
+        this.gateway =
+                RetryableGatewayClientProxy.createRetryableGatewayProxy(
+                        rawGateway,
+                        () -> refreshCoordinatorMetadata(client, metadataUpdater),
+                        refreshExecutor,
+                        cause ->
+                                cause instanceof NotCoordinatorLeaderException
+                                        || cause instanceof RetriableException,
+                        NotCoordinatorLeaderException.class::isInstance,
+                        AdminGateway.class);
         AdminGateway rawReadOnlyGateway =
                 GatewayClientProxy.createGatewayProxy(
                         metadataUpdater::getRandomTabletServer, client, AdminGateway.class);
@@ -176,6 +185,17 @@ public class FlussAdmin implements Admin {
                         refreshExecutor,
                         AdminGateway.class);
         this.metadataUpdater = metadataUpdater;
+    }
+
+    private static void refreshCoordinatorMetadata(
+            RpcClient client, MetadataUpdater metadataUpdater) {
+        metadataUpdater.refreshClusterUntilAvailable();
+        ServerNode coordinator = metadataUpdater.getCoordinatorServer();
+        if (coordinator != null) {
+            // Coordinator nodes share the same cs-0 UID. Discard the connection that returned
+            // NotCoordinatorLeaderException so the retry opens one to the refreshed endpoint.
+            client.disconnect(coordinator.uid()).join();
+        }
     }
 
     @Override

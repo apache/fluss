@@ -18,6 +18,7 @@
 package org.apache.fluss.rpc;
 
 import org.apache.fluss.exception.NetworkException;
+import org.apache.fluss.exception.NotCoordinatorLeaderException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.rpc.messages.ApiVersionsRequest;
 import org.apache.fluss.rpc.messages.ApiVersionsResponse;
@@ -146,6 +147,67 @@ class RetryableGatewayClientProxyTest {
         // Should only be called once - no retries for non-retriable exceptions
         assertThat(callCount.get()).isEqualTo(1);
         assertThat(refreshCount.get()).isEqualTo(0);
+    }
+
+    @Test
+    void testCustomPredicatesRefreshWithoutRetryingNetworkError() throws Exception {
+        AtomicInteger callCount = new AtomicInteger(0);
+        AtomicInteger refreshCount = new AtomicInteger(0);
+
+        RpcGateway delegate = createGateway(callCount, 1);
+        RpcGateway proxy =
+                RetryableGatewayClientProxy.createRetryableGatewayProxy(
+                        delegate,
+                        refreshCount::incrementAndGet,
+                        REFRESH_EXECUTOR,
+                        NetworkException.class::isInstance,
+                        NotCoordinatorLeaderException.class::isInstance,
+                        RpcGateway.class);
+
+        CompletableFuture<ApiVersionsResponse> result = proxy.apiVersions(new ApiVersionsRequest());
+        assertThatThrownBy(result::get)
+                .isInstanceOf(ExecutionException.class)
+                .rootCause()
+                .isInstanceOf(NetworkException.class);
+        assertThat(callCount.get()).isEqualTo(1);
+        assertThat(refreshCount.get()).isEqualTo(1);
+
+        assertThat(proxy.apiVersions(new ApiVersionsRequest()).get()).isNotNull();
+        assertThat(callCount.get()).isEqualTo(2);
+        assertThat(refreshCount.get()).isEqualTo(1);
+    }
+
+    @Test
+    void testCustomPredicatesRetryNotCoordinatorLeader() throws Exception {
+        AtomicInteger callCount = new AtomicInteger(0);
+        AtomicInteger refreshCount = new AtomicInteger(0);
+        RpcGateway delegate =
+                new TestRpcGateway() {
+                    @Override
+                    public CompletableFuture<ApiVersionsResponse> apiVersions(
+                            ApiVersionsRequest request) {
+                        if (callCount.incrementAndGet() == 1) {
+                            CompletableFuture<ApiVersionsResponse> failed =
+                                    new CompletableFuture<>();
+                            failed.completeExceptionally(
+                                    new NotCoordinatorLeaderException("not coordinator leader"));
+                            return failed;
+                        }
+                        return CompletableFuture.completedFuture(new ApiVersionsResponse());
+                    }
+                };
+        RpcGateway proxy =
+                RetryableGatewayClientProxy.createRetryableGatewayProxy(
+                        delegate,
+                        refreshCount::incrementAndGet,
+                        REFRESH_EXECUTOR,
+                        NotCoordinatorLeaderException.class::isInstance,
+                        NotCoordinatorLeaderException.class::isInstance,
+                        RpcGateway.class);
+
+        assertThat(proxy.apiVersions(new ApiVersionsRequest()).get()).isNotNull();
+        assertThat(callCount.get()).isEqualTo(2);
+        assertThat(refreshCount.get()).isEqualTo(1);
     }
 
     @Test
