@@ -21,7 +21,10 @@ import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.RowEncoder;
+import org.apache.fluss.server.kv.rowmerger.SequenceGroups;
 import org.apache.fluss.server.kv.rowmerger.aggregate.functions.FieldAggregator;
+
+import javax.annotation.Nullable;
 
 import java.util.BitSet;
 import java.util.List;
@@ -54,28 +57,38 @@ public final class AggregateFieldsProcessor {
      * <p>This method handles schema evolution by matching fields using column IDs across three
      * potentially different schemas: old row schema, new row schema, and target output schema.
      *
-     * @param oldRow the old row
+     * @param oldRow the old row, or null when there is no stored row yet
      * @param newRow the new row
-     * @param oldContext context for the old row schema
+     * @param oldContext context for the old row schema, or null when there is no stored row yet
      * @param newInputContext context for the new row schema (for reading newRow)
      * @param targetContext context for the target output schema
+     * @param sequenceGroups the sequence groups arbitrating the merge, or null when the schema
+     *     declares none
      * @param encoder the row encoder to encode results (should match targetContext)
      */
     public static void aggregateAllFieldsWithTargetSchema(
-            BinaryRow oldRow,
+            @Nullable BinaryRow oldRow,
             BinaryRow newRow,
-            AggregationContext oldContext,
+            @Nullable AggregationContext oldContext,
             AggregationContext newInputContext,
             AggregationContext targetContext,
+            @Nullable SequenceGroups sequenceGroups,
             RowEncoder encoder) {
+        // the groups are resolved against the target schema, which is the one being encoded
+        if (sequenceGroups != null) {
+            sequenceGroups.arbitrate(oldRow, newRow);
+        }
+
         // Fast path: all three schemas are the same
-        if (targetContext == oldContext && targetContext == newInputContext) {
-            aggregateAllFieldsWithSameSchema(oldRow, newRow, targetContext, encoder);
+        if (oldRow != null && targetContext == oldContext && targetContext == newInputContext) {
+            aggregateAllFieldsWithSameSchema(
+                    oldRow, newRow, targetContext, sequenceGroups, encoder);
             return;
         }
 
         // General path: iterate over target schema columns and aggregate using column ID matching
-        InternalRow.FieldGetter[] oldFieldGetters = oldContext.getFieldGetters();
+        InternalRow.FieldGetter[] oldFieldGetters =
+                oldContext == null ? null : oldContext.getFieldGetters();
         InternalRow.FieldGetter[] newFieldGetters = newInputContext.getFieldGetters();
         FieldAggregator[] targetAggregators = targetContext.getAggregators();
         List<Schema.Column> targetColumns = targetContext.getSchema().getColumns();
@@ -85,7 +98,7 @@ public final class AggregateFieldsProcessor {
             int columnId = targetColumn.getColumnId();
 
             // Find corresponding fields in old and new schemas using column ID
-            Integer oldIdx = oldContext.getFieldIndex(columnId);
+            Integer oldIdx = oldContext == null ? null : oldContext.getFieldIndex(columnId);
             Integer newIdx = newInputContext.getFieldIndex(columnId);
 
             // Get field getters (use NULL_FIELD_GETTER if column doesn't exist in that schema)
@@ -101,9 +114,21 @@ public final class AggregateFieldsProcessor {
                     oldRow,
                     newRow,
                     targetAggregators[targetIdx],
+                    decisionOf(sequenceGroups, targetIdx),
                     targetIdx,
                     encoder);
         }
+    }
+
+    /**
+     * Returns what the group arbitrating the given field makes of the incoming row, defaulting to
+     * {@link SequenceGroups.Decision#FORWARD} when the schema declares no sequence group at all.
+     */
+    private static SequenceGroups.Decision decisionOf(
+            @Nullable SequenceGroups sequenceGroups, int fieldIndex) {
+        return sequenceGroups == null
+                ? SequenceGroups.Decision.FORWARD
+                : sequenceGroups.decisionOf(fieldIndex);
     }
 
     /**
@@ -111,23 +136,36 @@ public final class AggregateFieldsProcessor {
      *
      * @param oldFieldGetter getter for the old field
      * @param newFieldGetter getter for the new field
-     * @param oldRow the old row
+     * @param oldRow the old row, or null when there is no stored row yet
      * @param newRow the new row
      * @param aggregator the aggregator for this field
+     * @param decision what the sequence group arbitrating this field makes of the incoming row, or
+     *     {@link SequenceGroups.Decision#FORWARD} when no group arbitrates it
      * @param targetIdx the target index to encode
      * @param encoder the row encoder
      */
     private static void aggregateAndEncode(
             InternalRow.FieldGetter oldFieldGetter,
             InternalRow.FieldGetter newFieldGetter,
-            BinaryRow oldRow,
+            @Nullable BinaryRow oldRow,
             BinaryRow newRow,
             FieldAggregator aggregator,
+            SequenceGroups.Decision decision,
             int targetIdx,
             RowEncoder encoder) {
-        Object accumulator = oldFieldGetter.getFieldOrNull(oldRow);
+        Object accumulator = oldRow == null ? null : oldFieldGetter.getFieldOrNull(oldRow);
+        if (decision == SequenceGroups.Decision.SKIP) {
+            // the incoming row carries no sequence for the group, so it contributes nothing
+            encoder.encodeField(targetIdx, accumulator);
+            return;
+        }
+
         Object inputField = newFieldGetter.getFieldOrNull(newRow);
-        Object mergedField = aggregator.agg(accumulator, inputField);
+        // a stale row still aggregates, only as one that happened before the stored value
+        Object mergedField =
+                decision == SequenceGroups.Decision.STALE
+                        ? aggregator.aggReversed(accumulator, inputField)
+                        : aggregator.agg(accumulator, inputField);
         encoder.encodeField(targetIdx, mergedField);
     }
 
@@ -159,31 +197,39 @@ public final class AggregateFieldsProcessor {
      * the old value unchanged. For columns that don't exist in old schema, copy from newRow. For
      * columns that exist only in target schema, set to null.
      *
-     * @param oldRow the old row
+     * @param oldRow the old row, or null when there is no stored row yet
      * @param newRow the new row
-     * @param oldContext context for the old row schema
+     * @param oldContext context for the old row schema, or null when there is no stored row yet
      * @param newInputContext context for the new row schema (for reading newRow)
      * @param targetContext context for the target output schema
      * @param targetColumnIdBitSet BitSet marking target columns by column ID
+     * @param sequenceGroups the sequence groups arbitrating the merge, or null when the schema
+     *     declares none
      * @param encoder the row encoder to encode results (should match targetContext)
      */
     public static void aggregateTargetFieldsWithTargetSchema(
-            BinaryRow oldRow,
+            @Nullable BinaryRow oldRow,
             BinaryRow newRow,
-            AggregationContext oldContext,
+            @Nullable AggregationContext oldContext,
             AggregationContext newInputContext,
             AggregationContext targetContext,
             BitSet targetColumnIdBitSet,
+            @Nullable SequenceGroups sequenceGroups,
             RowEncoder encoder) {
+        if (sequenceGroups != null) {
+            sequenceGroups.arbitrate(oldRow, newRow);
+        }
+
         // Fast path: all three schemas are the same
-        if (targetContext == oldContext && targetContext == newInputContext) {
+        if (oldRow != null && targetContext == oldContext && targetContext == newInputContext) {
             aggregateTargetFieldsWithSameSchema(
-                    oldRow, newRow, targetContext, targetColumnIdBitSet, encoder);
+                    oldRow, newRow, targetContext, targetColumnIdBitSet, sequenceGroups, encoder);
             return;
         }
 
         // General path: iterate over target schema columns
-        InternalRow.FieldGetter[] oldFieldGetters = oldContext.getFieldGetters();
+        InternalRow.FieldGetter[] oldFieldGetters =
+                oldContext == null ? null : oldContext.getFieldGetters();
         InternalRow.FieldGetter[] newFieldGetters = newInputContext.getFieldGetters();
         FieldAggregator[] targetAggregators = targetContext.getAggregators();
         List<Schema.Column> targetColumns = targetContext.getSchema().getColumns();
@@ -193,7 +239,7 @@ public final class AggregateFieldsProcessor {
             int columnId = targetColumn.getColumnId();
 
             // Find corresponding fields in old and new schemas using column ID
-            Integer oldIdx = oldContext.getFieldIndex(columnId);
+            Integer oldIdx = oldContext == null ? null : oldContext.getFieldIndex(columnId);
             Integer newIdx = newInputContext.getFieldIndex(columnId);
 
             if (targetColumnIdBitSet.get(columnId)) {
@@ -208,6 +254,7 @@ public final class AggregateFieldsProcessor {
                         oldRow,
                         newRow,
                         targetAggregators[targetIdx],
+                        decisionOf(sequenceGroups, targetIdx),
                         targetIdx,
                         encoder);
             } else if (oldIdx != null) {
@@ -229,7 +276,11 @@ public final class AggregateFieldsProcessor {
      * <p>Fast path: field positions match directly, no column ID lookup needed.
      */
     private static void aggregateAllFieldsWithSameSchema(
-            BinaryRow oldRow, BinaryRow newRow, AggregationContext context, RowEncoder encoder) {
+            BinaryRow oldRow,
+            BinaryRow newRow,
+            AggregationContext context,
+            @Nullable SequenceGroups sequenceGroups,
+            RowEncoder encoder) {
         InternalRow.FieldGetter[] fieldGetters = context.getFieldGetters();
         FieldAggregator[] aggregators = context.getAggregators();
         int fieldCount = context.getFieldCount();
@@ -241,6 +292,7 @@ public final class AggregateFieldsProcessor {
                     oldRow,
                     newRow,
                     aggregators[idx],
+                    decisionOf(sequenceGroups, idx),
                     idx,
                     encoder);
         }
@@ -256,6 +308,7 @@ public final class AggregateFieldsProcessor {
             BinaryRow newRow,
             AggregationContext context,
             BitSet targetColumnIdBitSet,
+            @Nullable SequenceGroups sequenceGroups,
             RowEncoder encoder) {
         InternalRow.FieldGetter[] fieldGetters = context.getFieldGetters();
         FieldAggregator[] aggregators = context.getAggregators();
@@ -273,6 +326,7 @@ public final class AggregateFieldsProcessor {
                         oldRow,
                         newRow,
                         aggregators[idx],
+                        decisionOf(sequenceGroups, idx),
                         idx,
                         encoder);
             } else {

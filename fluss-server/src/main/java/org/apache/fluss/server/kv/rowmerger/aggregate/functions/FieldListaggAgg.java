@@ -26,7 +26,13 @@ import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.types.StringType;
 import org.apache.fluss.utils.BinaryStringUtils;
 
-/** List aggregation aggregator - concatenates string values with a delimiter. */
+/**
+ * List aggregation aggregator - concatenates string values with a delimiter.
+ *
+ * <p>Under a sequence group this aggregator follows the arrival order once a second stale record
+ * lands: every stale record is prepended, so the stale values end up ordered by arrival rather than
+ * by sequence. With a single stale record the result is correct.
+ */
 public class FieldListaggAgg extends FieldAggregator {
 
     private static final long serialVersionUID = 1L;

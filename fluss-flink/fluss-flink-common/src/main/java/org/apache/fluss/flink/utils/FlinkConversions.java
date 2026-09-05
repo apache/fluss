@@ -62,6 +62,7 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -94,6 +95,9 @@ import static org.apache.fluss.utils.PropertiesUtils.excludeByPrefix;
 
 /** Utils for conversion between Flink and Fluss. */
 public class FlinkConversions {
+
+    private static final String SEQUENCE_GROUP_PREFIX = "fields.";
+    private static final String SEQUENCE_GROUP_SUFFIX = ".sequence-group";
 
     private FlinkConversions() {}
 
@@ -142,6 +146,16 @@ public class FlinkConversions {
                 FlinkAggFunctionParser.formatAggFunctionToOptions(
                         column.getName(), column.getAggFunction().get(), newOptions);
             }
+        }
+
+        // rebuild the fields.<sequence-columns>.sequence-group options from the schema, so that a
+        // SHOW CREATE TABLE reflects the declarations kept on Schema.sequenceGroups
+        for (Schema.SequenceGroup group : schema.getSequenceGroups()) {
+            String key =
+                    SEQUENCE_GROUP_PREFIX
+                            + String.join(",", group.getSequenceColumns())
+                            + SEQUENCE_GROUP_SUFFIX;
+            newOptions.put(key, String.join(",", group.getProtectedColumns()));
         }
         List<String> physicalColumns = schema.getColumnNames();
         int columnCount =
@@ -223,6 +237,13 @@ public class FlinkConversions {
                         column ->
                                 addColumnToSchema(
                                         schemBuilder, column, flinkTableConf, isAggregationEngine));
+
+        // Sequence groups are a cross-column relation, so they are added on the schema itself
+        // rather than on the individual protected columns
+        parseSequenceGroups(flinkTableConf)
+                .forEach(
+                        (sequenceColumns, protectedColumns) ->
+                                schemBuilder.sequenceGroup(sequenceColumns, protectedColumns));
 
         // Configure auto-increment columns based on the 'auto-increment.fields' option.
         if (flinkTableConf.containsKey(AUTO_INCREMENT_FIELDS.key())) {
@@ -743,7 +764,102 @@ public class FlinkConversions {
     }
 
     /**
-     * Add a column to the schema builder with optional aggregation function.
+     * Parses the sequence groups declared in the table options. The key lists the sequence columns
+     * ordering the group and the value lists the columns it protects:
+     *
+     * <pre>
+     * 'fields.g1.sequence-group' = 'a,b'
+     * 'fields.g1,g2.sequence-group' = 'c'
+     * </pre>
+     *
+     * <p>Returns the groups in a map from ordered sequence columns to protected columns, keeping
+     * the shape declared in the DDL so that the schema can hold it directly.
+     */
+    private static Map<List<String>, List<String>> parseSequenceGroups(Configuration tableConf) {
+        // LinkedHashMap keeps the group order stable across serializations
+        Map<List<String>, List<String>> groups = new LinkedHashMap<>();
+        Map<String, List<String>> sequenceColumnsOfProtected = new HashMap<>();
+        for (String key : tableConf.keySet()) {
+            if (!key.startsWith(SEQUENCE_GROUP_PREFIX) || !key.endsWith(SEQUENCE_GROUP_SUFFIX)) {
+                continue;
+            }
+            List<String> sequenceColumns =
+                    splitColumns(
+                            key.substring(
+                                    SEQUENCE_GROUP_PREFIX.length(),
+                                    key.length() - SEQUENCE_GROUP_SUFFIX.length()),
+                            key,
+                            "sequence columns");
+            // the key comes from the option keys, so a value is always present
+            List<String> protectedColumns =
+                    splitColumns(tableConf.getString(key, ""), key, "protected columns");
+
+            for (String protectedColumn : protectedColumns) {
+                if (sequenceColumns.contains(protectedColumn)) {
+                    throw new IllegalArgumentException(
+                            String.format(
+                                    "Invalid option '%s': column '%s' must not be protected by itself.",
+                                    key, protectedColumn));
+                }
+                List<String> previous =
+                        sequenceColumnsOfProtected.put(protectedColumn, sequenceColumns);
+                if (previous != null) {
+                    throw new IllegalArgumentException(
+                            String.format(
+                                    "Column '%s' is declared repeatedly by sequence groups %s and %s.",
+                                    protectedColumn, previous, sequenceColumns));
+                }
+            }
+            groups.merge(
+                    sequenceColumns,
+                    protectedColumns,
+                    (a, b) -> {
+                        List<String> merged = new ArrayList<>(a);
+                        for (String c : b) {
+                            if (!merged.contains(c)) {
+                                merged.add(c);
+                            }
+                        }
+                        return merged;
+                    });
+        }
+        return groups;
+    }
+
+    /**
+     * Splits a comma separated list of column names, rejecting an empty list as well as an empty or
+     * repeated name. A repeated name is always a typo, since naming a column twice adds nothing.
+     *
+     * @param description names the parsed list in the rejection message
+     */
+    private static List<String> splitColumns(String value, String key, String description) {
+        if (value.trim().isEmpty()) {
+            throw new IllegalArgumentException(
+                    String.format(
+                            "Invalid option '%s': the %s must not be empty.", key, description));
+        }
+        List<String> columns = new ArrayList<>();
+        for (String column : value.split(",")) {
+            String trimmed = column.trim();
+            if (trimmed.isEmpty()) {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Invalid option '%s': the %s must not be empty.",
+                                key, description));
+            }
+            if (columns.contains(trimmed)) {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Invalid option '%s': the %s name '%s' is declared more than once.",
+                                key, description, trimmed));
+            }
+            columns.add(trimmed);
+        }
+        return columns;
+    }
+
+    /**
+     * Add a column to the schema builder with optional aggregation function and sequence columns.
      *
      * @param schemaBuilder the schema builder
      * @param column the Flink column
@@ -783,6 +899,15 @@ public class FlinkConversions {
         // properties.
         customProperties.remove(BUCKET_KEY.key());
         customProperties.remove(BUCKET_NUMBER.key());
+        // Sequence group options are consumed into Schema.sequenceGroups, so they must not be
+        // retained as custom properties as well. Otherwise the table would carry two
+        // representations that could drift apart across ALTER TABLE SET.
+        customProperties
+                .keySet()
+                .removeIf(
+                        key ->
+                                key.startsWith(SEQUENCE_GROUP_PREFIX)
+                                        && key.endsWith(SEQUENCE_GROUP_SUFFIX));
         return customProperties;
     }
 }
