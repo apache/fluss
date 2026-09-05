@@ -434,11 +434,10 @@ public class ZooKeeperClient implements AutoCloseable {
                 tableIds.stream().collect(toMap(TableIdZNode::path, id -> id));
 
         List<ZkGetDataResponse> responses = getDataInBackground(path2TableIdMap.keySet());
-        return processGetDataResponses(
+        return processGetDataResponsesOrThrow(
                 responses,
                 response -> path2TableIdMap.get(response.getPath()),
-                TableIdZNode::decode,
-                "table assignment");
+                data -> data == null || data.length == 0 ? null : TableIdZNode.decode(data));
     }
 
     /** Get the partition assignment in ZK. */
@@ -454,11 +453,10 @@ public class ZooKeeperClient implements AutoCloseable {
                 partitionIds.stream().collect(toMap(PartitionIdZNode::path, id -> id));
 
         List<ZkGetDataResponse> responses = getDataInBackground(path2PartitionIdMap.keySet());
-        return processGetDataResponses(
+        return processGetDataResponsesOrThrow(
                 responses,
                 response -> path2PartitionIdMap.get(response.getPath()),
-                PartitionIdZNode::decode,
-                "partition assignment");
+                PartitionIdZNode::decode);
     }
 
     public void updateTableAssignment(
@@ -585,11 +583,10 @@ public class ZooKeeperClient implements AutoCloseable {
                 tableBuckets.stream().collect(toMap(LeaderAndIsrZNode::path, bucket -> bucket));
 
         List<ZkGetDataResponse> responses = getDataInBackground(path2TableBucketMap.keySet());
-        return processGetDataResponses(
+        return processGetDataResponsesOrThrow(
                 responses,
                 response -> path2TableBucketMap.get(response.getPath()),
-                LeaderAndIsrZNode::decode,
-                "leader and isr");
+                LeaderAndIsrZNode::decode);
     }
 
     public void updateLeaderAndIsr(
@@ -916,12 +913,7 @@ public class ZooKeeperClient implements AutoCloseable {
     /** Get the partition registrations of a table in ZK. */
     public Map<String, PartitionRegistration> getPartitionRegistrations(TablePath tablePath)
             throws Exception {
-        Map<String, PartitionRegistration> partitions = new HashMap<>();
-        for (String partitionName : getPartitions(tablePath)) {
-            Optional<PartitionRegistration> optPartition = getPartition(tablePath, partitionName);
-            optPartition.ifPresent(partition -> partitions.put(partitionName, partition));
-        }
-        return partitions;
+        return getPartitionRegistrations(tablePath, getPartitions(tablePath));
     }
 
     /** Get the partition and the id for the partitions of tables in ZK. */
@@ -969,20 +961,31 @@ public class ZooKeeperClient implements AutoCloseable {
             List<String> partitionKeys,
             ResolvedPartitionSpec partialPartitionSpec)
             throws Exception {
-        Map<String, PartitionRegistration> partitions = new HashMap<>();
+        List<String> matchedPartitionNames =
+                getPartitions(tablePath).stream()
+                        .filter(
+                                partitionName ->
+                                        fromPartitionName(partitionKeys, partitionName)
+                                                .contains(partialPartitionSpec))
+                        .collect(Collectors.toList());
+        return getPartitionRegistrations(tablePath, matchedPartitionNames);
+    }
 
-        for (String partitionName : getPartitions(tablePath)) {
-            ResolvedPartitionSpec resolvedPartitionSpec =
-                    fromPartitionName(partitionKeys, partitionName);
-            boolean contains = resolvedPartitionSpec.contains(partialPartitionSpec);
-            if (contains) {
-                Optional<PartitionRegistration> optPartition =
-                        getPartition(tablePath, partitionName);
-                optPartition.ifPresent(partition -> partitions.put(partitionName, partition));
-            }
-        }
-
-        return partitions;
+    private Map<String, PartitionRegistration> getPartitionRegistrations(
+            TablePath tablePath, Collection<String> partitionNames) throws Exception {
+        Map<String, String> path2PartitionName =
+                partitionNames.stream()
+                        .collect(
+                                toMap(
+                                        partitionName ->
+                                                PartitionZNode.path(tablePath, partitionName),
+                                        partitionName -> partitionName));
+        return getPartitionZNodeData(
+                path2PartitionName,
+                partitionRegistration ->
+                        partitionRegistration.getRemoteDataDir() == null
+                                ? partitionRegistration.newRemoteDataDir(defaultRemoteDataDir)
+                                : partitionRegistration);
     }
 
     /** Get the id and name for the partitions of a table in ZK. */
@@ -1046,12 +1049,18 @@ public class ZooKeeperClient implements AutoCloseable {
                                                         checkNotNull(p.getPartitionName())),
                                         path -> path));
 
-        List<ZkGetDataResponse> responses = getDataInBackground(path2PartitionPathMap.keySet());
-        return processGetDataResponses(
+        return getPartitionZNodeData(
+                path2PartitionPathMap, PartitionRegistration::toTablePartition);
+    }
+
+    private <K, V> Map<K, V> getPartitionZNodeData(
+            Map<String, K> path2Key, Function<PartitionRegistration, V> partitionRegistrationMapper)
+            throws Exception {
+        List<ZkGetDataResponse> responses = getDataInBackground(path2Key.keySet());
+        return processGetDataResponsesOrThrow(
                 responses,
-                response -> path2PartitionPathMap.get(response.getPath()),
-                (byte[] data) -> PartitionZNode.decode(data).toTablePartition(),
-                "partition");
+                response -> path2Key.get(response.getPath()),
+                data -> partitionRegistrationMapper.apply(PartitionZNode.decode(data)));
     }
 
     /** Get partition num of a table in ZK. */
@@ -2002,6 +2011,26 @@ public class ZooKeeperClient implements AutoCloseable {
                         operationName,
                         response.getPath(),
                         response.getResultCode());
+            }
+        }
+        return result;
+    }
+
+    private static <K, V> Map<K, V> processGetDataResponsesOrThrow(
+            List<ZkGetDataResponse> responses,
+            Function<ZkGetDataResponse, K> keyExtractor,
+            Function<byte[], V> decoder)
+            throws KeeperException {
+        Map<K, V> result = new HashMap<>();
+        for (ZkGetDataResponse response : responses) {
+            if (response.getResultCode() == KeeperException.Code.NONODE) {
+                continue;
+            }
+            response.maybeThrow();
+
+            V value = decoder.apply(response.getData());
+            if (value != null) {
+                result.put(keyExtractor.apply(response), value);
             }
         }
         return result;
