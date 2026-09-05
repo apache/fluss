@@ -46,6 +46,7 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
@@ -182,17 +183,49 @@ public final class NettyClient implements RpcClient {
 
     private ServerConnection getOrCreateConnection(ServerNode node) {
         String serverId = node.uid();
-        return connections.computeIfAbsent(
-                serverId,
-                ignored -> {
-                    LOG.debug("Creating connection to server {}.", node);
-                    return new ServerConnection(
-                            bootstrap,
-                            node,
-                            clientMetricGroup,
-                            authenticatorSupplier.get(),
-                            (con, ignore) -> connections.remove(serverId, con));
-                });
+        // A server uid (e.g., the coordinator's "cs-0") can point at a new address after a
+        // failover: the standby that takes over reuses the same uid but binds a different
+        // host/port. If we blindly reused the cached connection, requests would keep going to the
+        // old (now stale) server. So when the cached connection targets a different address,
+        // replace it and close the stale one.
+        AtomicReference<ServerConnection> staleConnection = new AtomicReference<>();
+        ServerConnection connection =
+                connections.compute(
+                        serverId,
+                        (ignored, existing) -> {
+                            if (existing != null && isSameAddress(existing.getServerNode(), node)) {
+                                return existing;
+                            }
+                            if (existing != null) {
+                                LOG.debug(
+                                        "Address for server {} changed from {}:{} to {}:{}, recreating connection.",
+                                        serverId,
+                                        existing.getServerNode().host(),
+                                        existing.getServerNode().port(),
+                                        node.host(),
+                                        node.port());
+                                staleConnection.set(existing);
+                            } else {
+                                LOG.debug("Creating connection to server {}.", node);
+                            }
+                            return new ServerConnection(
+                                    bootstrap,
+                                    node,
+                                    clientMetricGroup,
+                                    authenticatorSupplier.get(),
+                                    (con, ignore) -> connections.remove(serverId, con));
+                        });
+        // Close the stale connection outside compute() to avoid re-entrant modification of the map
+        // from the connection's removal callback; close() is asynchronous.
+        ServerConnection stale = staleConnection.get();
+        if (stale != null) {
+            stale.close();
+        }
+        return connection;
+    }
+
+    private static boolean isSameAddress(ServerNode a, ServerNode b) {
+        return a.port() == b.port() && a.host().equals(b.host());
     }
 
     @VisibleForTesting
