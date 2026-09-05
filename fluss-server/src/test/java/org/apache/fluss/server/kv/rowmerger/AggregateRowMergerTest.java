@@ -20,6 +20,7 @@ package org.apache.fluss.server.kv.rowmerger;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.TableConfig;
+import org.apache.fluss.metadata.AggFunctionType;
 import org.apache.fluss.metadata.AggFunctions;
 import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.KvFormat;
@@ -1064,6 +1065,38 @@ class AggregateRowMergerTest {
         BinaryValue merged = merger.merge(stored, sequenceGroupRow(10L, 50, "older"));
         assertThat(merged.row.getLong(1)).isEqualTo(40L); // 30 + 10
         assertThat(merged.row.getInt(2)).isEqualTo(100); // the sequence does not go backwards
+    }
+
+    @Test
+    void testStaleRecordTakesItsEarlierPositionForAnOrderSensitiveFunction() {
+        // a stale record is aggregated into its earlier position, so the launch price wins over the later repricing
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column(
+                                "first_price",
+                                DataTypes.BIGINT(),
+                                AggFunctions.of(AggFunctionType.FIRST_VALUE))
+                        .column("ts", DataTypes.INT())
+                        .sequenceGroup(
+                                java.util.Collections.singletonList("ts"),
+                                java.util.Collections.singletonList("first_price"))
+                        .primaryKey("id")
+                        .build();
+        TableConfig tableConfig = new TableConfig(new Configuration());
+        AggregateRowMerger merger = createMerger(schema, tableConfig);
+        merger.configureTargetColumns(null, SCHEMA_ID, schema);
+
+        BinaryValue stored =
+                toBinaryValue(compactedRow(schema.getRowType(), new Object[] {1, 100L, 200}));
+        BinaryValue merged =
+                merger.merge(
+                        stored,
+                        toBinaryValue(
+                                compactedRow(schema.getRowType(), new Object[] {1, 80L, 50})));
+
+        assertThat(merged.row.getLong(1)).isEqualTo(80L); // the launch price wins
+        assertThat(merged.row.getInt(2)).isEqualTo(200); // the sequence does not go backwards
     }
 
     @Test

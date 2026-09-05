@@ -1090,103 +1090,46 @@ TableDescriptor.builder()
 
 ## Sequence Group
 
-Aggregate functions such as `sum` give the same result whatever order the records arrive in, but
-`first_value`, `last_value` and `listagg` do not: they depend on which record is considered first or
-last. Out of order records therefore produce a result that follows the arrival order rather than the
-business order.
+Sequence groups give each aggregate field its own order. Order-dependent functions such as `first_value`, `last_value`
+and `listagg` follow the arrival order by default, so an out-of-order record changes the result; under a sequence group
+the stored sequence decides which record counts as first or last. Order-independent functions (`sum`, `product`,
+`max`, `min`, `bool_and`, `bool_or`, `rbm32`, `rbm64`) give the same result either way.
 
-A **sequence group** puts one or more columns under the order of a *sequence column*, giving the
-engine an explicit order to follow. It is declared with the
-`'fields.<sequence-column>.sequence-group'` property, whose value lists the columns it protects:
+The example tracks the earliest price a product was offered at, where the price stream may arrive out of order:
 
 ```sql title="Flink SQL"
-CREATE TABLE orders (
-    k     INT,
-    total BIGINT,
-    ts    INT,
+CREATE TABLE products (
+    k           INT,
+    first_price BIGINT,
+    ts          INT,
     PRIMARY KEY (k) NOT ENFORCED
 ) WITH (
-    'table.merge-engine'          = 'aggregation',
-    'fields.total.agg'            = 'sum',
-    'fields.ts.sequence-group'    = 'total'
+    'table.merge-engine'             = 'aggregation',
+    'fields.first_price.agg'         = 'first_value',
+    'fields.ts.sequence-group'       = 'first_price'
 );
 
-INSERT INTO orders VALUES (1, 30, 100);
--- the sequence moves forward, so the total accumulates and the sequence follows
-INSERT INTO orders VALUES (1, 20, 200);
-SELECT * FROM orders;
+-- a later repricing arrives first
+INSERT INTO products VALUES (1, 100, 200);
+-- the original launch price arrives late: its ts is older, so the record is stale and
+-- aggregates in its earlier position, making 80 the first value
+INSERT INTO products VALUES (1, 80, 50);
+SELECT * FROM products;
 -- Output:
-+---+-------+-----+
-| k | total | ts  |
-+---+-------+-----+
-| 1 | 50    | 200 |
-+---+-------+-----+
-
--- an older record still accumulates, but leaves the stored sequence at 200
-INSERT INTO orders VALUES (1, 10, 50);
-SELECT * FROM orders;
--- Output:
-+---+-------+-----+
-| k | total | ts  |
-+---+-------+-----+
-| 1 | 60    | 200 |
-+---+-------+-----+
++---+-------------+-----+
+| k | first_price | ts  |
++---+-------------+-----+
+| 1 | 80          | 200 |
++---+-------------+-----+
 ```
 
-Each group is arbitrated on its own, so within a single write one group may move forward while
-another does not.
+Without the sequence group `first_value` only sees the arrival order, so it would keep `100` and
+miss the actual launch price. Note the stored sequence stays at `200`: the stale record takes its
+earlier position without moving the sequence backwards.
 
-### Ordering key, not a version filter
-
-The meaning of a sequence group differs between this engine and the
-[Default Merge Engine](table-design/merge-engines/default.md):
-
-| Incoming record                    | Default merge engine     | Aggregation merge engine                          |
-| ---------------------------------- | ------------------------ | ------------------------------------------------- |
-| sequence not older than the stored | takes the incoming value | aggregates, and the sequence moves forward        |
-| sequence older than the stored     | keeps the stored value   | still aggregates, but the sequence stays put      |
-| no sequence at all (all NULL)      | keeps the stored value   | contributes nothing at all                        |
-
-Without aggregate functions a group acts as a version filter, dropping whatever is older. With them
-it acts as an ordering key instead: an older record is a fact that still belongs in the total, so it
-is aggregated as one that happened earlier. For order-independent functions (`sum`, `product`,
-`max`, `min`, `bool_and`, `bool_or`, `rbm32`, `rbm64`) the order makes no difference to the result;
-for the order-dependent ones the sequence decides which record counts as first or last.
-
-A record whose sequence columns are all NULL carries no order information at all and is skipped, so
-its values are not aggregated.
-
-### Composite sequence key
-
-Naming more than one sequence column declares a composite sequence key. The columns are compared in
-the declared order, and the first one that differs decides:
-
-```sql title="Flink SQL"
-CREATE TABLE T (
-    k     INT,
-    total BIGINT,
-    epoch INT,
-    ts    BIGINT,
-    PRIMARY KEY (k) NOT ENFORCED
-) WITH (
-    'table.merge-engine'              = 'aggregation',
-    'fields.total.agg'                = 'sum',
-    'fields.epoch,ts.sequence-group'  = 'total'
-);
-```
-
-### Restrictions
-
-A table is rejected at creation when:
-
-- a sequence column has an aggregate function of its own, since the group it orders decides when it
-  advances and aggregating it would let a stale record move the sequence backwards;
-- a sequence column doesn't exist in the schema, or its type is not one of `INT`, `BIGINT`,
-  `TIMESTAMP` and `TIMESTAMP_LTZ`;
-- a primary key column is put into a group or used as a sequence column, since it holds the same
-  value in both rows being merged;
-- a sequence column is put into another group, since it reports the order of its own group;
-- the same column is declared by more than one group.
+A record whose sequence columns are all NULL carries no order information and contributes nothing at all. See
+[Handling out-of-order updates with sequence groups](../table-types/pk-table.md#handling-out-of-order-updates-with-sequence-groups)
+for the declaration syntax, NULL behavior, and validation rules.
 
 ## Delete Behavior
 
