@@ -184,11 +184,14 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
 
     @Override
     public void channelInactive(ChannelHandlerContext ctx) throws Exception {
-        super.channelInactive(ctx);
-
-        // Unregister this channel from its RequestChannel. The RequestChannel will clean up both
-        // the association and any paused state.
-        requestChannel.unregisterChannel(ctx.channel());
+        try {
+            IOUtils.closeQuietly(authenticator);
+            // Unregister this channel from its RequestChannel. The RequestChannel will clean up
+            // both the association and any paused state.
+            requestChannel.unregisterChannel(ctx.channel());
+        } finally {
+            super.channelInactive(ctx);
+        }
     }
 
     @Override

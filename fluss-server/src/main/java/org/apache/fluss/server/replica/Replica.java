@@ -2439,12 +2439,13 @@ public final class Replica {
 
     private void validateInSyncReplicaSize(int requiredAcks) {
         int inSyncSize = isrState.isr().size();
-        if (inSyncSize < minInSyncReplicasSupplier.getAsInt() && requiredAcks == -1) {
+        int minInSyncReplicas = minInSyncReplicasSupplier.getAsInt();
+        if (inSyncSize < minInSyncReplicas && requiredAcks == -1) {
             throw new NotEnoughReplicasException(
                     String.format(
-                            "The size of the current ISR %s is insufficient to satisfy "
-                                    + "the required acks %s for table bucket %s.",
-                            isrState.isr(), requiredAcks, tableBucket));
+                            "The current ISR %s has %d replicas, below the configured minimum ISR "
+                                    + "%d required for acks=all on table bucket %s.",
+                            isrState.isr(), inSyncSize, minInSyncReplicas, tableBucket));
         }
     }
 

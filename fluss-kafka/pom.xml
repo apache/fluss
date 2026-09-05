@@ -46,6 +46,11 @@
         </dependency>
 
         <dependency>
+            <groupId>org.apache.fluss</groupId>
+            <artifactId>fluss-shaded-jackson</artifactId>
+        </dependency>
+
+        <dependency>
             <groupId>${project.groupId}</groupId>
             <artifactId>fluss-common</artifactId>
             <version>${project.version}</version>
@@ -65,8 +70,22 @@
 
         <!-- test dependency -->
         <dependency>
+            <groupId>org.apache.curator</groupId>
+            <artifactId>curator-test</artifactId>
+            <version>${curator.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
             <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-test-utils</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.fluss</groupId>
+            <artifactId>fluss-client</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
         </dependency>
 
         <dependency>
