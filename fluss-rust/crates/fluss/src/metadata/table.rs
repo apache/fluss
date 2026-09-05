@@ -542,6 +542,15 @@ impl SchemaBuilder {
                 "Duplicate column names found: {duplicates:?}"
             )));
         }
+        for column in columns {
+            column
+                .data_type()
+                .validate_row_field_names()
+                .map_err(|error| match error {
+                    IllegalArgument { message } => Error::invalid_table(message),
+                    other => other,
+                })?;
+        }
 
         let Some(pk) = primary_key else {
             return Ok(columns.to_vec());
@@ -1721,6 +1730,29 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("Multiple primary keys are not supported."),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn invalid_nested_row_field_names_are_rejected() {
+        let err = Schema::builder()
+            .column(
+                "payload",
+                DataTypes::array(DataTypes::map(
+                    DataTypes::string(),
+                    DataTypes::row(vec![
+                        DataTypes::field("value", DataTypes::int()),
+                        DataTypes::field("value", DataTypes::bigint()),
+                    ]),
+                )),
+            )
+            .build()
+            .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("Field names must be unique. Found duplicates:"),
             "unexpected error: {err}"
         );
     }
