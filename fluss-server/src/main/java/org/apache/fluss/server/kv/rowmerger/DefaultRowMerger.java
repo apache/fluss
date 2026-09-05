@@ -30,6 +30,8 @@ import org.apache.fluss.types.DataType;
 
 import javax.annotation.Nullable;
 
+import java.util.BitSet;
+
 /**
  * The default row merger of primary key table that always retains the latest row and supports
  * configuring target merge columns for partial update.
@@ -63,7 +65,7 @@ public class DefaultRowMerger implements RowMerger {
         // for compatibility, default to ALLOW if not specified
         this.deleteBehavior = deleteBehavior != null ? deleteBehavior : DeleteBehavior.ALLOW;
         // TODO: share cache in server level when PartialUpdater is thread-safe
-        this.partialUpdaterCache = new PartialUpdaterCache();
+        this.partialUpdaterCache = new PartialUpdaterCache(arbitrateSequenceGroups);
     }
 
     /**
@@ -101,14 +103,12 @@ public class DefaultRowMerger implements RowMerger {
                 || TargetColumns.specifiesAllSchemaFieldIndexes(latestSchema, targetColumns)) {
             return fullRowMerger(latestShemaId, latestSchema);
         } else {
-            TargetColumns.checkSequenceGroupsAreFullyTargeted(latestSchema, targetColumns);
-            // this also sanity checks the validity of the partial update
+            // the cache is configured with this merger's arbitration mode, so a blind overwrite
+            // reuses its updaters instead of allocating a fresh one per batch. The updater
+            // validates the target set when created, so a cache hit skips re-validating it.
             PartialUpdater partialUpdater =
-                    arbitrateSequenceGroups
-                            ? partialUpdaterCache.getOrCreatePartialUpdater(
-                                    kvFormat, latestShemaId, latestSchema, targetColumns)
-                            : new PartialUpdater(
-                                    kvFormat, latestShemaId, latestSchema, targetColumns, null);
+                    partialUpdaterCache.getOrCreatePartialUpdater(
+                            kvFormat, latestShemaId, latestSchema, targetColumns);
             return new PartialUpdateRowMerger(partialUpdater, deleteBehavior);
         }
     }
@@ -193,6 +193,7 @@ public class DefaultRowMerger implements RowMerger {
         private final RowEncoder rowEncoder;
         private final short targetSchemaId;
         private final DeleteBehavior deleteBehavior;
+        private final BitSet targetFields;
 
         SequenceGroupRowMerger(
                 KvFormat kvFormat,
@@ -209,6 +210,8 @@ public class DefaultRowMerger implements RowMerger {
                 fieldGetters[i] = InternalRow.createFieldGetter(fieldDataTypes[i], i);
             }
             this.rowEncoder = RowEncoder.create(kvFormat, fieldDataTypes);
+            this.targetFields = new BitSet(fieldDataTypes.length);
+            this.targetFields.set(0, fieldDataTypes.length);
         }
 
         @Nullable
@@ -218,6 +221,16 @@ public class DefaultRowMerger implements RowMerger {
             if (sequenceGroups.acceptsEveryArbitratedGroup()) {
                 // Every group advances, so the whole incoming row wins
                 return newValue;
+            }
+
+            // a fully rejected write is a no-op: return the stored row itself, so the processor
+            // sees no change. Only under the target schema, since returning it keeps that schema.
+            // A field outside the groups takes the incoming value unconditionally, so it prevents
+            // this shortcut.
+            if (oldValue != null
+                    && oldValue.schemaId == targetSchemaId
+                    && sequenceGroups.rejectsEveryTargetField(targetFields, false)) {
+                return oldValue;
             }
 
             rowEncoder.startNewRow();

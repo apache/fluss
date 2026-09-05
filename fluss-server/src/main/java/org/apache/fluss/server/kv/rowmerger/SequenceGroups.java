@@ -32,8 +32,6 @@ import java.util.Arrays;
 import java.util.BitSet;
 import java.util.List;
 
-import static org.apache.fluss.utils.Preconditions.checkArgument;
-
 /**
  * The sequence groups declared on a schema, resolved into field positions so that a merger can
  * arbitrate each group on its own.
@@ -105,9 +103,6 @@ public class SequenceGroups implements Serializable {
      */
     private final SequenceComparator[][] comparatorsOfGroup;
 
-    /** Stands for a group left out of the arbitration by {@link #restrictTo}. */
-    private static final int[] NO_FIELDS = {};
-
     /** The decision of every group for the record under arbitration, indexed by group id. */
     private final Decision[] groupDecisions;
 
@@ -154,10 +149,6 @@ public class SequenceGroups implements Serializable {
             for (int i = 0; i < sequenceColumns.size(); i++) {
                 String sequenceColumn = sequenceColumns.get(i);
                 int sequenceField = rowType.getFieldIndex(sequenceColumn);
-                checkArgument(
-                        sequenceField >= 0,
-                        "The sequence column '%s' doesn't exist in schema.",
-                        sequenceColumn);
                 sequenceFields[i] = sequenceField;
                 comparators[i] =
                         createComparator(
@@ -171,10 +162,6 @@ public class SequenceGroups implements Serializable {
 
             for (String protectedColumn : group.getProtectedColumns()) {
                 int fieldIndex = rowType.getFieldIndex(protectedColumn);
-                checkArgument(
-                        fieldIndex >= 0,
-                        "The protected column '%s' doesn't exist in schema.",
-                        protectedColumn);
                 groupOfField[fieldIndex] = groupId;
             }
         }
@@ -189,36 +176,43 @@ public class SequenceGroups implements Serializable {
 
     /**
      * Returns the groups arbitrating only the fields the target set covers, since a group whose
-     * sequence is never stored must not decide on values the row keeps.
+     * sequence is never stored must not decide on values the row keeps. The covered groups are
+     * compacted, so the arbitration never visits a group the write leaves out.
      *
      * @param targetFields the row field indexes the write targets
      */
     public SequenceGroups restrictTo(BitSet targetFields) {
+        // renumber the covered groups to a compact range, so the uncovered ones disappear instead
+        // of staying as empty entries the arbitration would still visit
+        int[] groupIdMap = new int[comparatorsOfGroup.length];
+        Arrays.fill(groupIdMap, NO_GROUP);
         int[] restricted = groupOfField.clone();
+        int coveredCount = 0;
         for (int i = 0; i < restricted.length; i++) {
-            if (!targetFields.get(i)) {
+            int groupId = restricted[i];
+            if (groupId != NO_GROUP && targetFields.get(i)) {
+                if (groupIdMap[groupId] == NO_GROUP) {
+                    // the groups keep their declaration order
+                    groupIdMap[groupId] = coveredCount++;
+                }
+                restricted[i] = groupIdMap[groupId];
+            } else {
                 restricted[i] = NO_GROUP;
             }
         }
 
-        int[][] restrictedFields = sequenceFieldsOfGroup.clone();
-        for (int groupId = 0; groupId < restrictedFields.length; groupId++) {
-            if (!coversGroup(restricted, groupId)) {
-                restrictedFields[groupId] = NO_FIELDS;
+        int[][] restrictedFields = new int[coveredCount][];
+        SequenceComparator[][] restrictedComparators = new SequenceComparator[coveredCount][];
+        int next = 0;
+        for (int groupId = 0; groupId < groupIdMap.length; groupId++) {
+            if (groupIdMap[groupId] != NO_GROUP) {
+                restrictedFields[next] = sequenceFieldsOfGroup[groupId];
+                restrictedComparators[next] = comparatorsOfGroup[groupId];
+                next++;
             }
         }
         return new SequenceGroups(
-                restricted, restrictedFields, comparatorsOfGroup, primaryKeyFields);
-    }
-
-    /** Returns whether any field still belongs to the given group. */
-    private static boolean coversGroup(int[] groupOfField, int groupId) {
-        for (int owner : groupOfField) {
-            if (owner == groupId) {
-                return true;
-            }
-        }
-        return false;
+                restricted, restrictedFields, restrictedComparators, primaryKeyFields);
     }
 
     /**

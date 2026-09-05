@@ -93,23 +93,21 @@ public final class TargetColumns {
             Set<String> groupFields = new LinkedHashSet<>(group.getSequenceColumns());
             groupFields.addAll(group.getProtectedColumns());
 
-            Set<String> missing = new LinkedHashSet<>();
             boolean anyTargeted = false;
+            boolean anyMissing = false;
             for (String field : groupFields) {
                 if (targetNames.contains(field)) {
                     anyTargeted = true;
                 } else {
-                    missing.add(field);
+                    anyMissing = true;
                 }
             }
-            if (anyTargeted && !missing.isEmpty()) {
+            if (anyTargeted && anyMissing) {
                 throw new InvalidTargetColumnException(
                         String.format(
                                 "The target write columns must cover the sequence group ordered by %s "
-                                        + "entirely or not at all, but %s %s missing.",
-                                group.getSequenceColumns(),
-                                missing,
-                                missing.size() == 1 ? "is" : "are"));
+                                        + "entirely or not at all.",
+                                group.getSequenceColumns()));
             }
         }
     }

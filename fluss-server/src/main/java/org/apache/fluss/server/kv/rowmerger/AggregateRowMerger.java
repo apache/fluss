@@ -95,17 +95,24 @@ public class AggregateRowMerger implements RowMerger {
         AggregationContext newContext = contextCache.getContext(newValue.schemaId);
         AggregationContext targetContext = contextCache.getContext(targetSchemaId);
         SequenceGroups sequenceGroups = targetContext.getSequenceGroups();
-        if (firstWrite && acceptsEveryField(sequenceGroups, null, newValue.row)) {
+        // arbitrate once for every path below, so the early-return checks and the field processor
+        // consume the same decisions instead of arbitrating the rows twice
+        if (sequenceGroups != null) {
+            sequenceGroups.arbitrate(firstWrite ? null : oldValue.row, newValue.row);
+        }
+        if (firstWrite && sequenceGroups == null) {
+            return newValue;
+        }
+        if (firstWrite && sequenceGroups.acceptsEveryArbitratedGroup()) {
             return newValue;
         }
 
         // a fully rejected write is a no-op: return the stored row itself, so the processor sees
         // no change. Only under the target schema, since returning it keeps that schema.
-        if (sequenceGroups != null
-                && !firstWrite
+        if (!firstWrite
+                && sequenceGroups != null
                 && oldValue.schemaId == targetSchemaId
-                && rejectsEveryTargetField(
-                        sequenceGroups, allFields(targetContext), oldValue.row, newValue.row)) {
+                && sequenceGroups.rejectsEveryTargetField(allFields(targetContext), true)) {
             return oldValue;
         }
 
@@ -129,30 +136,6 @@ public class AggregateRowMerger implements RowMerger {
         BinaryRow mergedRow = encoder.finishRow();
 
         return new BinaryValue(targetSchemaId, mergedRow);
-    }
-
-    /**
-     * Returns whether the first row is accepted as it is, i.e. there is no group to arbitrate or
-     * every group advances. The arbitration result is left in the reused buffer, ready for the
-     * aggregation path when the row is not accepted.
-     */
-    private static boolean acceptsEveryField(
-            @Nullable SequenceGroups sequenceGroups, @Nullable BinaryRow oldRow, BinaryRow newRow) {
-        if (sequenceGroups == null) {
-            return true;
-        }
-        sequenceGroups.arbitrate(oldRow, newRow);
-        return sequenceGroups.acceptsEveryArbitratedGroup();
-    }
-
-    /** Arbitrates and returns whether the write contributes nothing to any target field. */
-    private static boolean rejectsEveryTargetField(
-            SequenceGroups sequenceGroups,
-            BitSet targetFields,
-            BinaryRow oldRow,
-            BinaryRow newRow) {
-        sequenceGroups.arbitrate(oldRow, newRow);
-        return sequenceGroups.rejectsEveryTargetField(targetFields, true);
     }
 
     /** Returns a cached bit set covering every field of the given context's schema. */
@@ -186,14 +169,13 @@ public class AggregateRowMerger implements RowMerger {
             return this;
         }
 
-        TargetColumns.checkSequenceGroupsAreFullyTargeted(latestSchema, targetColumns);
-
         // Use cache to get or create PartialAggregateRowMerger
         // This avoids repeated object creation and BitSet construction
         CacheKey cacheKey = new CacheKey(latestSchemaId, targetColumns);
         return partialMergerCache.get(
                 cacheKey,
                 k -> {
+                    TargetColumns.checkSequenceGroupsAreFullyTargeted(latestSchema, targetColumns);
                     // TODO: Currently, this conversion is broken when DROP COLUMN is supported,
                     //  because `targetColumns` still references column indexes from an outdated
                     //  schema, which no longer align with the current (latest) schema.
@@ -309,6 +291,9 @@ public class AggregateRowMerger implements RowMerger {
         // the target fields as row field indexes, matching the schema this merger was built for
         private final BitSet targetFieldPositions;
 
+        // whether every field of the schema is arbitrated, so the first write may return directly
+        private final boolean arbitratesEveryField;
+
         PartialAggregateRowMerger(
                 BitSet targetColumnIdBitSet,
                 DeleteBehavior deleteBehavior,
@@ -332,6 +317,12 @@ public class AggregateRowMerger implements RowMerger {
             SequenceGroups declared = context.getSequenceGroups();
             this.sequenceGroups =
                     declared == null ? null : declared.restrictTo(targetFieldPositions);
+            // a partial write leaves fields unarbitrated, so an incoming row must never be
+            // accepted as a whole, however its covered groups decide
+            this.arbitratesEveryField =
+                    this.sequenceGroups == null
+                            || this.targetFieldPositions.length()
+                                    == schema.getRowType().getFieldCount();
 
             // Initialize cache for target position BitSets
             this.targetPosBitSetCache =
@@ -356,17 +347,24 @@ public class AggregateRowMerger implements RowMerger {
         @Override
         public BinaryValue merge(@Nullable BinaryValue oldValue, BinaryValue newValue) {
             boolean firstWrite = oldValue == null || oldValue.row == null;
-            if (firstWrite && acceptsEveryField(sequenceGroups, null, newValue.row)) {
+            // arbitrate once for every path below, so the early-return checks and the field
+            // processor consume the same decisions instead of arbitrating the rows twice
+            if (sequenceGroups != null) {
+                sequenceGroups.arbitrate(firstWrite ? null : oldValue.row, newValue.row);
+            }
+            if (firstWrite
+                    && (sequenceGroups == null
+                            || (arbitratesEveryField
+                                    && sequenceGroups.acceptsEveryArbitratedGroup()))) {
                 return newValue;
             }
 
             // the same no-op shortcut as the full aggregation path, over this write's target
             // fields; the groups here are already restricted to those fields
-            if (sequenceGroups != null
-                    && !firstWrite
+            if (!firstWrite
+                    && sequenceGroups != null
                     && oldValue.schemaId == targetSchemaId
-                    && rejectsEveryTargetField(
-                            sequenceGroups, targetFieldPositions, oldValue.row, newValue.row)) {
+                    && sequenceGroups.rejectsEveryTargetField(targetFieldPositions, true)) {
                 return oldValue;
             }
 

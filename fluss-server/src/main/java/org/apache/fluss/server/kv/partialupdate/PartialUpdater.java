@@ -23,6 +23,7 @@ import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.record.BinaryValue;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.RowEncoder;
+import org.apache.fluss.server.kv.TargetColumns;
 import org.apache.fluss.server.kv.rowmerger.SequenceGroups;
 import org.apache.fluss.types.DataType;
 
@@ -45,10 +46,6 @@ public class PartialUpdater {
     private final boolean updatePrimaryKeyOnly;
     private final DataType[] fieldDataTypes;
     private final @Nullable SequenceGroups sequenceGroups;
-
-    public PartialUpdater(KvFormat kvFormat, short schemaId, Schema schema, int[] targetColumns) {
-        this(kvFormat, schemaId, schema, targetColumns, SequenceGroups.create(schema));
-    }
 
     /**
      * @param sequenceGroups the sequence groups arbitrating the update, or null to replace the
@@ -73,6 +70,7 @@ public class PartialUpdater {
         }
         this.fieldDataTypes = schema.getRowType().getChildren().toArray(new DataType[0]);
         sanityCheck(schema, targetColumns);
+        TargetColumns.checkSequenceGroupsAreFullyTargeted(schema, targetColumns);
 
         // getter for the fields in row
         flussFieldGetters = new InternalRow.FieldGetter[fieldDataTypes.length];

@@ -164,6 +164,51 @@ class DefaultRowMergerTest {
     }
 
     @Test
+    void testAllRejectedFullRowWriteReturnsTheStoredValueAsItIs() {
+        // every non-key field belongs to the group, so a fully rejected write changes nothing
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("status", DataTypes.STRING())
+                        .column("ts", DataTypes.INT())
+                        .sequenceGroup(
+                                java.util.Collections.singletonList("ts"),
+                                java.util.Collections.singletonList("status"))
+                        .primaryKey("id")
+                        .build();
+        RowMerger merger =
+                new DefaultRowMerger(KvFormat.COMPACTED, DeleteBehavior.ALLOW)
+                        .configureTargetColumns(null, (short) 1, schema);
+
+        BinaryValue stored =
+                new BinaryValue(
+                        (short) 1,
+                        compactedRow(schema.getRowType(), new Object[] {1, "PAID", 100}));
+
+        // the incoming row is stale, so the write is a no-op and the stored value is returned as is
+        assertThat(
+                        merger.merge(
+                                stored,
+                                new BinaryValue(
+                                        (short) 1,
+                                        compactedRow(
+                                                schema.getRowType(),
+                                                new Object[] {1, "CREATED", 99}))))
+                .isSameAs(stored);
+
+        // a row without any sequence contributes nothing as well
+        assertThat(
+                        merger.merge(
+                                stored,
+                                new BinaryValue(
+                                        (short) 1,
+                                        compactedRow(
+                                                schema.getRowType(),
+                                                new Object[] {1, "CREATED", null}))))
+                .isSameAs(stored);
+    }
+
+    @Test
     void testSequenceGroupRowMergerReadsAShorterStoredRow() {
         RowMerger merger =
                 new DefaultRowMerger(KvFormat.COMPACTED, DeleteBehavior.ALLOW)

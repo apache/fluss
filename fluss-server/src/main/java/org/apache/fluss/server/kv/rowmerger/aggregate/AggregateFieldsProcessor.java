@@ -62,8 +62,8 @@ public final class AggregateFieldsProcessor {
      * @param oldContext context for the old row schema, or null when there is no stored row yet
      * @param newInputContext context for the new row schema (for reading newRow)
      * @param targetContext context for the target output schema
-     * @param sequenceGroups the sequence groups arbitrating the merge, or null when the schema
-     *     declares none
+     * @param sequenceGroups the sequence groups arbitrating the merge, already arbitrated for the
+     *     rows, or null when the schema declares none
      * @param encoder the row encoder to encode results (should match targetContext)
      */
     public static void aggregateAllFieldsWithTargetSchema(
@@ -74,11 +74,6 @@ public final class AggregateFieldsProcessor {
             AggregationContext targetContext,
             @Nullable SequenceGroups sequenceGroups,
             RowEncoder encoder) {
-        // the groups are resolved against the target schema, which is the one being encoded
-        if (sequenceGroups != null) {
-            sequenceGroups.arbitrate(oldRow, newRow);
-        }
-
         // Fast path: all three schemas are the same
         if (oldRow != null && targetContext == oldContext && targetContext == newInputContext) {
             aggregateAllFieldsWithSameSchema(
@@ -203,8 +198,8 @@ public final class AggregateFieldsProcessor {
      * @param newInputContext context for the new row schema (for reading newRow)
      * @param targetContext context for the target output schema
      * @param targetColumnIdBitSet BitSet marking target columns by column ID
-     * @param sequenceGroups the sequence groups arbitrating the merge, or null when the schema
-     *     declares none
+     * @param sequenceGroups the sequence groups arbitrating the merge, already arbitrated for the
+     *     rows, or null when the schema declares none
      * @param encoder the row encoder to encode results (should match targetContext)
      */
     public static void aggregateTargetFieldsWithTargetSchema(
@@ -216,10 +211,6 @@ public final class AggregateFieldsProcessor {
             BitSet targetColumnIdBitSet,
             @Nullable SequenceGroups sequenceGroups,
             RowEncoder encoder) {
-        if (sequenceGroups != null) {
-            sequenceGroups.arbitrate(oldRow, newRow);
-        }
-
         // Fast path: all three schemas are the same
         if (oldRow != null && targetContext == oldContext && targetContext == newInputContext) {
             aggregateTargetFieldsWithSameSchema(

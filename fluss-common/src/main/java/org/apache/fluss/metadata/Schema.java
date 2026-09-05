@@ -1066,7 +1066,8 @@ public final class Schema implements Serializable {
         }
 
         // a sequence column reports the order of its own group, so it cannot also be held back by
-        // another one
+        // another one; a client may not write an auto increment column, so a group containing one
+        // could never be updated.
         for (String sequenceColumn : allSequenceColumns) {
             if (allProtectedColumns.contains(sequenceColumn)) {
                 throw new IllegalArgumentException(
@@ -1075,16 +1076,11 @@ public final class Schema implements Serializable {
                                         + "so it must not be put into another one.",
                                 sequenceColumn));
             }
-        }
-
-        // a client may not write an auto increment column, so a group containing one could never
-        // be updated.
-        for (String groupField : allSequenceColumns) {
-            if (autoIncrementColumnNames.contains(groupField)) {
+            if (autoIncrementColumnNames.contains(sequenceColumn)) {
                 throw new IllegalArgumentException(
                         String.format(
                                 "The auto increment column '%s' must not order a sequence group.",
-                                groupField));
+                                sequenceColumn));
             }
         }
         for (String groupField : allProtectedColumns) {

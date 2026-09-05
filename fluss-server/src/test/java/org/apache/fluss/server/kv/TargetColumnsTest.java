@@ -109,7 +109,7 @@ class TargetColumnsTest {
                 .isInstanceOf(InvalidTargetColumnException.class)
                 .hasMessage(
                         "The target write columns must cover the sequence group ordered by [ts] "
-                                + "entirely or not at all, but [amount] is missing.");
+                                + "entirely or not at all.");
     }
 
     @Test
@@ -119,7 +119,7 @@ class TargetColumnsTest {
                 .isInstanceOf(InvalidTargetColumnException.class)
                 .hasMessage(
                         "The target write columns must cover the sequence group ordered by [ts] "
-                                + "entirely or not at all, but [ts] is missing.");
+                                + "entirely or not at all.");
     }
 
     @Test
@@ -128,7 +128,7 @@ class TargetColumnsTest {
                 .isInstanceOf(InvalidTargetColumnException.class)
                 .hasMessage(
                         "The target write columns must cover the sequence group ordered by [ts] "
-                                + "entirely or not at all, but [status, amount] are missing.");
+                                + "entirely or not at all.");
     }
 
     @Test
