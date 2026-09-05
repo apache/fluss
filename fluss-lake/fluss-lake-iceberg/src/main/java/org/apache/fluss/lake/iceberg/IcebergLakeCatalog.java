@@ -519,6 +519,9 @@ public class IcebergLakeCatalog implements LakeCatalog {
     boolean isIcebergPropertiesCompatible(
             Map<String, String> existingProperties, Map<String, String> expectedProperties) {
         for (Map.Entry<String, String> entry : expectedProperties.entrySet()) {
+            if (entry.getKey().startsWith(FLUSS_CONF_PREFIX)) {
+                continue;
+            }
             String actual = existingProperties.get(entry.getKey());
             if (actual == null || !actual.equals(entry.getValue())) {
                 return false;
