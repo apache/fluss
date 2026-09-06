@@ -30,7 +30,7 @@ import static org.apache.fluss.flink.procedure.AddServerTagByRackProcedure.valid
 import static org.apache.fluss.flink.procedure.RemoveServerTagProcedure.validateAndGetServerTag;
 
 /**
- * Procedure to remove server tag by rack.
+ * Procedure to remove server tags from TabletServers currently registered in the specified racks.
  *
  * <p>Usage:
  *

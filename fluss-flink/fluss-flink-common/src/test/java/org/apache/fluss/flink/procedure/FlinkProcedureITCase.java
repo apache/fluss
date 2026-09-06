@@ -671,7 +671,7 @@ public abstract class FlinkProcedureITCase {
         //                server-2 -> rack-2, server-3 -> rack-0
         ZooKeeperClient zkClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
 
-        // 1. addServerTagByRack with single rack (rack-0: server-0, server-3).
+        // 1. Add a server tag by a single rack (rack-0: server-0 and server-3).
         try (CloseableIterator<Row> resultIterator =
                 tEnv.executeSql(
                                 String.format(
@@ -687,7 +687,7 @@ public abstract class FlinkProcedureITCase {
                 .doesNotContainKey(1)
                 .doesNotContainKey(2);
 
-        // 2. removeServerTagByRack with single rack (rack-0).
+        // 2. Remove a server tag by a single rack.
         try (CloseableIterator<Row> resultIterator =
                 tEnv.executeSql(
                                 String.format(
@@ -698,7 +698,7 @@ public abstract class FlinkProcedureITCase {
         }
         assertThat(zkClient.getServerTags()).isNotPresent();
 
-        // 3. addServerTagByRack with multiple racks (rack-0, rack-1: server-0, server-1,
+        // 3. Add a server tag by multiple racks (rack-0, rack-1: server-0, server-1,
         // server-3).
         try (CloseableIterator<Row> resultIterator =
                 tEnv.executeSql(
@@ -725,7 +725,7 @@ public abstract class FlinkProcedureITCase {
         }
         assertThat(zkClient.getServerTags()).isNotPresent();
 
-        // 4. non-existing rack — no-op, returns success, zk has no tags.
+        // 4. A rack with no currently registered TabletServer is a no-op.
         try (CloseableIterator<Row> resultIterator =
                 tEnv.executeSql(
                                 String.format(
@@ -757,7 +757,18 @@ public abstract class FlinkProcedureITCase {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("racks cannot be null or empty");
 
-        // 6. case-insensitive serverTag (still succeeds, even with non-existing rack).
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                                String.format(
+                                                        "Call %s.sys.add_server_tag_by_rack(',', 'PERMANENT_OFFLINE')",
+                                                        CATALOG_NAME))
+                                        .await())
+                .rootCause()
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("racks cannot be empty");
+
+        // 6. The serverTag remains case-insensitive even when no rack matches.
         try (CloseableIterator<Row> resultIterator =
                 tEnv.executeSql(
                                 String.format(

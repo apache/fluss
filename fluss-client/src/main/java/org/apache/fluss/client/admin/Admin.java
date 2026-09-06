@@ -24,7 +24,6 @@ import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.client.metadata.RemoteLogManifestInfo;
 import org.apache.fluss.cluster.ServerNode;
-import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.cluster.rebalance.GoalType;
 import org.apache.fluss.cluster.rebalance.RebalanceProgress;
 import org.apache.fluss.cluster.rebalance.ServerTag;
@@ -76,16 +75,10 @@ import org.apache.fluss.security.acl.AclBindingFilter;
 import javax.annotation.Nullable;
 
 import java.util.Collection;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 import java.util.concurrent.CompletableFuture;
-import java.util.stream.Collectors;
-
-import static org.apache.fluss.utils.Preconditions.checkArgument;
-import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /**
  * The administrative client for Fluss, which supports managing and inspecting tables, servers,
@@ -686,102 +679,39 @@ public interface Admin extends AutoCloseable {
     CompletableFuture<Void> removeServerTag(List<Integer> tabletServers, ServerTag serverTag);
 
     /**
-     * Add server tag to all tabletServers belonging to any of the specified racks.
+     * Add a server tag to all currently registered tabletServers in the specified racks.
      *
-     * <p>If no tabletServer is found for any of the given racks, the operation completes
-     * successfully without making any changes.
+     * <p>Rack membership is resolved once to a snapshot of server IDs. TabletServers registered in
+     * those racks later do not inherit the tag. Callers must cordon the racks before invoking this
+     * method if new tabletServers must not enter them.
      *
-     * <p>If any tabletServer fails to add the tag, none of the tags will take effect.
+     * <p>If no registered tabletServer matches, authorization is still checked and the operation
+     * completes successfully without making changes.
      *
-     * <ul>
-     *   <li>{@link AuthorizationException} If the authenticated user doesn't have cluster
-     *       permissions.
-     *   <li>{@link ServerTagAlreadyExistException} If the server tag already exists for any one of
-     *       the matched tabletServers, and the server tag is different from the existing one.
-     * </ul>
-     *
-     * @param racks the list of rack identifiers; all tabletServers whose {@link ServerNode#rack()}
-     *     is contained in this list will be targeted. Must not be null or empty.
-     * @param serverTag the server tag to be added.
+     * @param racks the rack identifiers to match. Must not be null or empty and must not contain
+     *     null, empty, or whitespace-only elements.
+     * @param serverTag the server tag to add. Must not be null.
+     * @throws IllegalArgumentException if {@code racks} is empty or contains a null, empty, or
+     *     whitespace-only element.
      */
-    default CompletableFuture<Void> addServerTagByRack(List<String> racks, ServerTag serverTag) {
-        checkNotNull(racks, "racks must not be null");
-        checkArgument(!racks.isEmpty(), "racks must not be empty");
-        racks.forEach(
-                r ->
-                        checkArgument(
-                                r != null && !r.isEmpty(),
-                                "rack element must not be null or empty"));
-        Set<String> rackSet = new HashSet<>(racks);
-        return getServerNodes()
-                .thenCompose(
-                        nodes -> {
-                            List<Integer> serverIds =
-                                    nodes.stream()
-                                            .filter(
-                                                    n ->
-                                                            n.serverType()
-                                                                            == ServerType
-                                                                                    .TABLET_SERVER
-                                                                    && rackSet.contains(n.rack()))
-                                            .map(ServerNode::id)
-                                            .collect(Collectors.toList());
-                            if (serverIds.isEmpty()) {
-                                return CompletableFuture.completedFuture(null);
-                            }
-                            return addServerTag(serverIds, serverTag);
-                        });
-    }
+    CompletableFuture<Void> addServerTagByRack(List<String> racks, ServerTag serverTag);
 
     /**
-     * Remove server tag from all tabletServers belonging to any of the specified racks.
+     * Remove a server tag from all currently registered tabletServers in the specified racks.
      *
-     * <p>If no tabletServer is found for any of the given racks, the operation completes
-     * successfully without making any changes.
+     * <p>Only current rack membership is considered. Tags on offline tabletServers or tabletServers
+     * that moved to another rack must be removed by ID with {@link #removeServerTag}.
      *
-     * <p>If any tabletServer fails to remove the tag, none of the tags will be removed.
+     * <p>If no registered tabletServer matches, authorization is still checked and the operation
+     * completes successfully without making changes.
      *
-     * <p>No exception will be thrown if a matched server already has no server tag.
-     *
-     * <ul>
-     *   <li>{@link AuthorizationException} If the authenticated user doesn't have cluster
-     *       permissions.
-     *   <li>{@link ServerTagNotExistException} If the server tag does not exist for any one of the
-     *       matched tabletServers.
-     * </ul>
-     *
-     * @param racks the list of rack identifiers; all tabletServers whose {@link ServerNode#rack()}
-     *     is contained in this list will be targeted. Must not be null or empty.
-     * @param serverTag the server tag to be removed.
+     * @param racks the rack identifiers to match. Must not be null or empty and must not contain
+     *     null, empty, or whitespace-only elements.
+     * @param serverTag the server tag to remove. Must not be null.
+     * @throws IllegalArgumentException if {@code racks} is empty or contains a null, empty, or
+     *     whitespace-only element.
      */
-    default CompletableFuture<Void> removeServerTagByRack(List<String> racks, ServerTag serverTag) {
-        checkNotNull(racks, "racks must not be null");
-        checkArgument(!racks.isEmpty(), "racks must not be empty");
-        racks.forEach(
-                r ->
-                        checkArgument(
-                                r != null && !r.isEmpty(),
-                                "rack element must not be null or empty"));
-        Set<String> rackSet = new HashSet<>(racks);
-        return getServerNodes()
-                .thenCompose(
-                        nodes -> {
-                            List<Integer> serverIds =
-                                    nodes.stream()
-                                            .filter(
-                                                    n ->
-                                                            n.serverType()
-                                                                            == ServerType
-                                                                                    .TABLET_SERVER
-                                                                    && rackSet.contains(n.rack()))
-                                            .map(ServerNode::id)
-                                            .collect(Collectors.toList());
-                            if (serverIds.isEmpty()) {
-                                return CompletableFuture.completedFuture(null);
-                            }
-                            return removeServerTag(serverIds, serverTag);
-                        });
-    }
+    CompletableFuture<Void> removeServerTagByRack(List<String> racks, ServerTag serverTag);
 
     /**
      * Based on the provided {@code priorityGoals}, Fluss performs load balancing on the cluster's

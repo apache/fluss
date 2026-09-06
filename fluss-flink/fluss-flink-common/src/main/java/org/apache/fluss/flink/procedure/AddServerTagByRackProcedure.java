@@ -31,7 +31,7 @@ import java.util.stream.Collectors;
 import static org.apache.fluss.flink.procedure.RemoveServerTagProcedure.validateAndGetServerTag;
 
 /**
- * Procedure to add server tag by rack.
+ * Procedure to add server tags to TabletServers currently registered in the specified racks.
  *
  * <p>Usage:
  *
@@ -61,9 +61,16 @@ public class AddServerTagByRackProcedure extends ProcedureBase {
                     "racks cannot be null or empty. You can specify one rack as 'rack-0' or "
                             + "multiple racks as 'rack-0,rack-1' (split by ',')");
         }
-        return Arrays.stream(racks.split(","))
-                .map(String::trim)
-                .filter(s -> !s.isEmpty())
-                .collect(Collectors.toList());
+        List<String> rackList =
+                Arrays.stream(racks.split(","))
+                        .map(String::trim)
+                        .filter(s -> !s.isEmpty())
+                        .collect(Collectors.toList());
+        if (rackList.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "racks cannot be empty. You can specify one rack as 'rack-0' or "
+                            + "multiple racks as 'rack-0,rack-1' (split by ',')");
+        }
+        return rackList;
     }
 }
