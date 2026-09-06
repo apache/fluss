@@ -569,6 +569,7 @@ CALL [catalog_name.]sys.rebalance(
     - `'REPLICA_DISTRIBUTION'`: Generates replica movement tasks to ensure the number of replicas on each TabletServer is near balanced.
     - `'TABLE_LEADER_DISTRIBUTION'`: Ensures leaders of each table are near balanced across TabletServers.
     - `'LEADER_DISTRIBUTION'`: Generates leadership movement and leader replica movement tasks to ensure the number of leader replicas on each TabletServer is near balanced.
+    - `'PREFERRED_LEADER_ELECTION'`: Moves each bucket's leadership to the first replica in its persisted assignment without changing the replica set. It must be specified by itself and cannot be combined with other goals.
 
 Distribution goals target a per-server tolerance window, not equal counts. Table-level goals apply
 that window independently to each table, and rack awareness only constrains replica placement per

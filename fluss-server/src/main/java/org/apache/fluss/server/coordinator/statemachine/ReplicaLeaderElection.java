@@ -115,9 +115,15 @@ public abstract class ReplicaLeaderElection {
     /** The reassignment replica leader election. */
     public static class ReassignmentLeaderElection extends ReplicaLeaderElection {
         private final List<Integer> newReplicas;
+        private final boolean allowFallback;
 
         public ReassignmentLeaderElection(List<Integer> newReplicas) {
+            this(newReplicas, true);
+        }
+
+        public ReassignmentLeaderElection(List<Integer> newReplicas, boolean allowFallback) {
             this.newReplicas = newReplicas;
+            this.allowFallback = allowFallback;
         }
 
         public Optional<ElectionResult> leaderElection(
@@ -137,6 +143,9 @@ public abstract class ReplicaLeaderElection {
                             .collect(Collectors.toList());
 
             if (availableReplicas.isEmpty()) {
+                return Optional.empty();
+            }
+            if (!allowFallback && !availableReplicas.get(0).equals(newReplicas.get(0))) {
                 return Optional.empty();
             }
 

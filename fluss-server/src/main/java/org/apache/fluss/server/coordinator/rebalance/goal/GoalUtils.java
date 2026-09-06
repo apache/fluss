@@ -43,6 +43,8 @@ public class GoalUtils {
                 return new TableReplicaDistributionGoal();
             case TABLE_LEADER_DISTRIBUTION:
                 return new TableLeaderReplicaDistributionGoal();
+            case PREFERRED_LEADER_ELECTION:
+                return new PreferredLeaderElectionGoal();
             default:
                 throw new IllegalArgumentException("Unsupported goal type " + goalType);
         }
