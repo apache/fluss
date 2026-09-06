@@ -45,6 +45,8 @@ import java.util.stream.Collectors;
  * CALL sys.rebalance('REPLICA_DISTRIBUTION,LEADER_DISTRIBUTION');
  * -- Trigger rebalance with the recommended table-aware goal order
  * CALL sys.rebalance('RACK_AWARE,TABLE_REPLICA_DISTRIBUTION,REPLICA_DISTRIBUTION,TABLE_LEADER_DISTRIBUTION,LEADER_DISTRIBUTION');
+ * -- Restore leadership to the first replica in each assignment
+ * CALL sys.rebalance('PREFERRED_LEADER_ELECTION');
  * </pre>
  */
 public class RebalanceProcedure extends ProcedureBase {
