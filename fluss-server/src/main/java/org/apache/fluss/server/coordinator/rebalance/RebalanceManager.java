@@ -346,7 +346,11 @@ public class RebalanceManager {
         try {
             // Generate the latest cluster model.
             long startTime = System.currentTimeMillis();
-            ClusterModel clusterModel = buildClusterModel(eventProcessor.getCoordinatorContext());
+            boolean preferredLeaderElection =
+                    GoalOptimizer.isPreferredLeaderElection(goalsByPriority);
+            ClusterModel clusterModel =
+                    buildClusterModel(
+                            eventProcessor.getCoordinatorContext(), preferredLeaderElection);
             LOG.info(
                     "Build cluster model for rebalance id {} with {} ms.",
                     rebalanceId,
@@ -420,8 +424,14 @@ public class RebalanceManager {
     }
 
     private ClusterModel buildClusterModel(CoordinatorContext coordinatorContext) {
+        return buildClusterModel(coordinatorContext, false);
+    }
+
+    private ClusterModel buildClusterModel(
+            CoordinatorContext coordinatorContext, boolean preferredLeaderElection) {
         Map<Integer, ServerInfo> liveTabletServers = coordinatorContext.getLiveTabletServers();
         Map<Integer, ServerTag> serverTags = coordinatorContext.getServerTags();
+        Set<TableBucket> allBuckets = coordinatorContext.getAllBuckets();
 
         Map<Integer, ServerModel> serverModelMap = new HashMap<>();
         for (ServerInfo serverInfo : liveTabletServers.values()) {
@@ -434,11 +444,18 @@ public class RebalanceManager {
                 serverModelMap.put(id, new ServerModel(id, rack, false));
             }
         }
+        if (preferredLeaderElection) {
+            for (TableBucket tableBucket : allBuckets) {
+                for (Integer replica : coordinatorContext.getAssignment(tableBucket)) {
+                    serverModelMap.putIfAbsent(
+                            replica, new ServerModel(replica, RackModel.DEFAULT_RACK, true));
+                }
+            }
+        }
 
         ClusterModel clusterModel = initialClusterModel(serverModelMap);
 
         // Try to update the cluster model with the latest bucket states.
-        Set<TableBucket> allBuckets = coordinatorContext.getAllBuckets();
         for (TableBucket tableBucket : allBuckets) {
             List<Integer> assignment = coordinatorContext.getAssignment(tableBucket);
             Optional<LeaderAndIsr> bucketLeaderAndIsrOpt =
@@ -457,7 +474,17 @@ public class RebalanceManager {
             }
             for (int i = 0; i < assignment.size(); i++) {
                 int replica = assignment.get(i);
-                clusterModel.createReplica(replica, tableBucket, i, leader == replica);
+                if (preferredLeaderElection) {
+                    boolean isLeaderEligible =
+                            liveTabletServers.containsKey(replica)
+                                    && coordinatorContext.isReplicaOnline(replica, tableBucket)
+                                    && isr.isr().contains(replica)
+                                    && !serverModelMap.get(replica).isOfflineTagged();
+                    clusterModel.createReplica(
+                            replica, tableBucket, i, leader == replica, isLeaderEligible);
+                } else {
+                    clusterModel.createReplica(replica, tableBucket, i, leader == replica);
+                }
             }
         }
         return clusterModel;

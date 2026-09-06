@@ -29,10 +29,12 @@ import org.apache.fluss.exception.NoRebalanceInProgressException;
 import org.apache.fluss.exception.RebalanceFailureException;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.PartitionSpec;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.replica.ReplicaManager;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.server.zk.ZooKeeperClient;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -40,8 +42,10 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
 import java.util.Optional;
 
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
@@ -207,6 +211,128 @@ public class RebalanceITCase {
 
         // clean the server tag.
         admin.removeServerTag(Collections.singletonList(0), ServerTag.PERMANENT_OFFLINE).get();
+    }
+
+    @Test
+    void testPreferredLeaderElectionAfterRecovery() throws Exception {
+        String dbName = "db-preferred-leader";
+        admin.createDatabase(dbName, DatabaseDescriptor.EMPTY, false).get();
+        long tableId =
+                createTable(
+                        new TablePath(dbName, "preferred-leader-table"), DATA1_TABLE_DESCRIPTOR);
+        FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
+
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+        ZooKeeperClient zkClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
+        List<Integer> assignment =
+                new ArrayList<>(
+                        zkClient.getTableAssignment(tableId)
+                                .get()
+                                .getBucketAssignment(tableBucket.getBucket())
+                                .getReplicas());
+        int preferredLeader = assignment.get(0);
+        assertThat(FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tableBucket))
+                .isEqualTo(preferredLeader);
+
+        boolean preferredLeaderStopped = false;
+        boolean preferredLeaderTagged = false;
+        try {
+            FLUSS_CLUSTER_EXTENSION.stopTabletServer(preferredLeader);
+            preferredLeaderStopped = true;
+            FLUSS_CLUSTER_EXTENSION.waitUntilReplicaShrinkFromIsr(tableBucket, preferredLeader);
+            retry(
+                    Duration.ofMinutes(1),
+                    () ->
+                            assertThat(FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tableBucket))
+                                    .isNotEqualTo(preferredLeader));
+            int failoverLeader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tableBucket);
+
+            String unavailableRebalanceId =
+                    admin.rebalance(Collections.singletonList(GoalType.PREFERRED_LEADER_ELECTION))
+                            .get();
+            waitUntilRebalanceCompletes(unavailableRebalanceId);
+            assertThat(FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tableBucket))
+                    .isEqualTo(failoverLeader);
+            assertThat(
+                            zkClient.getTableAssignment(tableId)
+                                    .get()
+                                    .getBucketAssignment(tableBucket.getBucket())
+                                    .getReplicas())
+                    .containsExactlyElementsOf(assignment);
+
+            FLUSS_CLUSTER_EXTENSION.startTabletServer(preferredLeader);
+            preferredLeaderStopped = false;
+            FLUSS_CLUSTER_EXTENSION.waitUntilReplicaExpandToIsr(tableBucket, preferredLeader);
+
+            admin.addServerTag(
+                            Collections.singletonList(preferredLeader), ServerTag.TEMPORARY_OFFLINE)
+                    .get();
+            preferredLeaderTagged = true;
+            String taggedRebalanceId =
+                    admin.rebalance(Collections.singletonList(GoalType.PREFERRED_LEADER_ELECTION))
+                            .get();
+            waitUntilRebalanceCompletes(taggedRebalanceId);
+            assertThat(FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tableBucket))
+                    .isEqualTo(failoverLeader);
+
+            admin.removeServerTag(
+                            Collections.singletonList(preferredLeader), ServerTag.TEMPORARY_OFFLINE)
+                    .get();
+            preferredLeaderTagged = false;
+
+            String rebalanceId =
+                    admin.rebalance(Collections.singletonList(GoalType.PREFERRED_LEADER_ELECTION))
+                            .get();
+            waitUntilRebalanceCompletes(rebalanceId);
+            assertThat(FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tableBucket))
+                    .isEqualTo(preferredLeader);
+            assertThat(
+                            zkClient.getTableAssignment(tableId)
+                                    .get()
+                                    .getBucketAssignment(tableBucket.getBucket())
+                                    .getReplicas())
+                    .containsExactlyElementsOf(assignment);
+
+            int leaderEpoch = zkClient.getLeaderAndIsr(tableBucket).get().leaderEpoch();
+            String idempotentRebalanceId =
+                    admin.rebalance(Collections.singletonList(GoalType.PREFERRED_LEADER_ELECTION))
+                            .get();
+            waitUntilRebalanceCompletes(idempotentRebalanceId);
+            assertThat(zkClient.getLeaderAndIsr(tableBucket).get().leaderEpoch())
+                    .isEqualTo(leaderEpoch);
+
+            assertThatThrownBy(
+                            () ->
+                                    admin.rebalance(
+                                                    Arrays.asList(
+                                                            GoalType.PREFERRED_LEADER_ELECTION,
+                                                            GoalType.LEADER_DISTRIBUTION))
+                                            .get())
+                    .rootCause()
+                    .isInstanceOf(RebalanceFailureException.class)
+                    .hasMessageContaining("must be used as a standalone rebalance goal");
+        } finally {
+            if (preferredLeaderTagged) {
+                admin.removeServerTag(
+                                Collections.singletonList(preferredLeader),
+                                ServerTag.TEMPORARY_OFFLINE)
+                        .get();
+            }
+            if (preferredLeaderStopped) {
+                FLUSS_CLUSTER_EXTENSION.startTabletServer(preferredLeader);
+            }
+        }
+    }
+
+    private void waitUntilRebalanceCompletes(String rebalanceId) {
+        retry(
+                Duration.ofMinutes(2),
+                () -> {
+                    Optional<RebalanceProgress> progress =
+                            admin.listRebalanceProgress(rebalanceId).get();
+                    assertThat(progress).isPresent();
+                    assertThat(progress.get().status()).isEqualTo(RebalanceStatus.COMPLETED);
+                });
     }
 
     @Test

@@ -661,6 +661,9 @@ public interface Admin extends AutoCloseable {
      * <p>More details, Fluss collects the cluster's load information and optimizes to perform load
      * balancing according to the user-defined {@code priorityGoals}.
      *
+     * <p>{@link GoalType#PREFERRED_LEADER_ELECTION} must be requested as a standalone goal. It
+     * changes only bucket leadership and leaves replica assignments unchanged.
+     *
      * <p>Currently, Fluss only supports one active rebalance task in the cluster. If an uncompleted
      * rebalance task exists, Fluss will return the uncompleted rebalance task's progress.
      *
