@@ -32,11 +32,13 @@ import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.UnsafeUtils.BYTE_ARRAY_BASE_OFFSET;
@@ -262,10 +264,39 @@ public class KvPreWriteBuffer {
             pendingFlushBytes -= entryBytes(entry.getKey(), entry.getValue());
             kvEntryMap.remove(entry.getKey(), entry);
         }
+        // Newer buffered versions of the same key may still reference the flushed entries
+        // through their previousEntry chain; cut such chains at the flushed boundary so the
+        // flushed entries become unreachable instead of being retained while no longer
+        // counted by pendingFlushBytes.
+        Set<Key> flushedKeys = new HashSet<>();
+        for (KvEntry entry : preparedFlush.entries) {
+            if (flushedKeys.add(entry.getKey())) {
+                detachFromFlushedChain(kvEntryMap.get(entry.getKey()));
+            }
+        }
         if (allKvEntries.isEmpty()) {
             maxLogSequenceNumber = -1;
         }
         return preparedFlush.rowCountDiff;
+    }
+
+    /**
+     * Cuts the previous-entry chain of the newest still-buffered version of a key at its first
+     * reference to a FLUSHED entry, if any. References to ACTIVE/PREPARED entries are left intact
+     * since truncation rollback relies on them; a FLUSHED previous version is already invisible
+     * to that rollback (see {@link #previousEntryInBuffer}) and covered by the kv storage, so
+     * cutting is unobservable.
+     */
+    private static void detachFromFlushedChain(@Nullable KvEntry newest) {
+        KvEntry cur = newest;
+        while (cur != null
+                && cur.previousEntry != null
+                && cur.previousEntry.state != EntryState.FLUSHED) {
+            cur = cur.previousEntry;
+        }
+        if (cur != null) {
+            cur.previousEntry = null;
+        }
     }
 
     /** Aborts a prepared async flush and makes its entries active again. */
@@ -348,8 +379,9 @@ public class KvPreWriteBuffer {
         private final Value value;
         private final long logSequenceNumber;
 
-        // the previous mapped value in the buffer before this key-value put
-        @Nullable private final KvEntry previousEntry;
+        // the previous mapped value in the buffer before this key-value put; null once the
+        // referenced entry has been flushed (see detachFromFlushedChain)
+        @Nullable private KvEntry previousEntry;
 
         private EntryState state = EntryState.ACTIVE;
 
@@ -393,6 +425,12 @@ public class KvPreWriteBuffer {
 
         long getLogSequenceNumber() {
             return logSequenceNumber;
+        }
+
+        @VisibleForTesting
+        @Nullable
+        KvEntry getPreviousEntry() {
+            return previousEntry;
         }
 
         @Override

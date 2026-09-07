@@ -454,6 +454,69 @@ class KvPreWriteBufferTest {
         assertThat(buffer.pendingFlushBytes()).isEqualTo(0);
     }
 
+    @Test
+    void testCompleteFlushDetachesFlushedEntriesFromPreviousChain() {
+        KvPreWriteBuffer buffer = new KvPreWriteBuffer(TestingMetricGroups.TABLET_SERVER_METRICS);
+        KvPreWriteBuffer.Key key = toKey("k");
+
+        buffer.insert(key, "v1".getBytes(), 1);
+        buffer.insert(key, "v2".getBytes(), 2);
+        buffer.insert(key, "v3".getBytes(), 3);
+        KvPreWriteBuffer.KvEntry v3 = buffer.getKvEntryMap().get(key);
+        buffer.insert(key, "v4".getBytes(), 4);
+        KvPreWriteBuffer.KvEntry v4 = buffer.getKvEntryMap().get(key);
+
+        // flush covers v1 and v2; v3 and v4 stay buffered
+        flushBuffer(buffer, 3);
+
+        // the buffered chain is cut at the flushed boundary: v3 no longer references
+        // the flushed v2, while the reference to the still-buffered v3 is kept for rollback
+        assertThat(v3.getPreviousEntry()).isNull();
+        assertThat(v4.getPreviousEntry()).isSameAs(v3);
+
+        // read semantics are unchanged and only v3/v4 stay in the byte accounting
+        assertThat(getValue(buffer, "k")).isEqualTo("v4");
+        assertThat(buffer.pendingFlushBytes()).isEqualTo(6);
+
+        // across further flush cycles the chain never grows back: after flushing v3~v5,
+        // the remaining v6 references no flushed version any more
+        buffer.insert(key, "v5".getBytes(), 5);
+        buffer.insert(key, "v6".getBytes(), 6);
+        KvPreWriteBuffer.KvEntry v6 = buffer.getKvEntryMap().get(key);
+        flushBuffer(buffer, 6);
+        assertThat(v6.getPreviousEntry()).isNull();
+        assertThat(getValue(buffer, "k")).isEqualTo("v6");
+    }
+
+    @Test
+    void testTruncateRollbackSemanticsAfterFlushDetachment() {
+        KvPreWriteBuffer buffer = new KvPreWriteBuffer(TestingMetricGroups.TABLET_SERVER_METRICS);
+        KvPreWriteBuffer.Key key = toKey("k");
+
+        // v1@1, v2@2, v3@3; flush covers v1 and v2, v3 stays buffered
+        buffer.insert(key, "v1".getBytes(), 1);
+        buffer.insert(key, "v2".getBytes(), 2);
+        buffer.insert(key, "v3".getBytes(), 3);
+        flushBuffer(buffer, 3);
+
+        // truncating v3 rolls back to the newest version below the truncation point; all
+        // older versions are flushed, so the rollback target is the kv storage and the key
+        // disappears from the buffer - the same behavior as before the chain detachment
+        buffer.truncateTo(1, TruncateReason.ERROR);
+        assertThat(getValue(buffer, "k")).isNull();
+        assertThat(buffer.getKvEntryMap()).doesNotContainKey(key);
+        assertThat(buffer.getAllKvEntries()).isEmpty();
+
+        // rollback to a still-buffered previous version must keep working: after flushing v4,
+        // truncating v6 rolls the map back to the buffered v5
+        buffer.insert(key, "v4".getBytes(), 4);
+        buffer.insert(key, "v5".getBytes(), 5);
+        flushBuffer(buffer, 5);
+        buffer.insert(key, "v6".getBytes(), 6);
+        buffer.truncateTo(6, TruncateReason.ERROR);
+        assertThat(getValue(buffer, "k")).isEqualTo("v5");
+    }
+
     private static String getValue(KvPreWriteBuffer preWriteBuffer, String keyStr) {
         KvPreWriteBuffer.Key key = toKey(keyStr);
         KvPreWriteBuffer.Value value = preWriteBuffer.get(key);
