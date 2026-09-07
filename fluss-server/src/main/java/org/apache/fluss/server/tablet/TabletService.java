@@ -66,6 +66,8 @@ import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsResponse;
 import org.apache.fluss.rpc.messages.PbScanReqForBucket;
 import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.messages.PrefixLookupResponse;
+import org.apache.fluss.rpc.messages.ProduceLogColumnsRequest;
+import org.apache.fluss.rpc.messages.ProduceLogColumnsResponse;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
 import org.apache.fluss.rpc.messages.PutKvRequest;
@@ -86,6 +88,7 @@ import org.apache.fluss.server.DynamicConfigManager;
 import org.apache.fluss.server.RpcServiceBase;
 import org.apache.fluss.server.authorizer.Authorizer;
 import org.apache.fluss.server.coordinator.MetadataManager;
+import org.apache.fluss.server.entity.ColumnGroupWriteData;
 import org.apache.fluss.server.entity.FetchReqInfo;
 import org.apache.fluss.server.entity.LookupDataForBucket;
 import org.apache.fluss.server.entity.NotifyKvSnapshotOffsetData;
@@ -137,6 +140,7 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getNotifyLakeT
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getNotifyLeaderAndIsrRequestData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getNotifyRemoteLogOffsetsData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getNotifySnapshotOffsetData;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getProduceLogColumnsData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getProduceLogData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getStopReplicaData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getTableFilterInfoMap;
@@ -151,6 +155,7 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeListOffset
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeLookupResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeNotifyLeaderAndIsrResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makePrefixLookupResponse;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeProduceLogColumnsResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeProduceLogResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makePutKvResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeStopReplicaResponse;
@@ -223,6 +228,21 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                 produceLogData,
                 new UserContext(currentSession().getPrincipal()),
                 bucketResponseMap -> response.complete(makeProduceLogResponse(bucketResponseMap)));
+        return response;
+    }
+
+    @Override
+    public CompletableFuture<ProduceLogColumnsResponse> produceLogColumns(
+            ProduceLogColumnsRequest request) {
+        authorizeTable(WRITE, request.getTableId());
+        CompletableFuture<ProduceLogColumnsResponse> response = new CompletableFuture<>();
+        Map<TableBucket, ColumnGroupWriteData> writeData = getProduceLogColumnsData(request);
+        replicaManager.appendColumnsToLog(
+                request.getTimeoutMs(),
+                request.getAcks(),
+                request.getColumnGroup(),
+                writeData,
+                bucketResults -> response.complete(makeProduceLogColumnsResponse(bucketResults)));
         return response;
     }
 
@@ -480,7 +500,8 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                 new ListOffsetsParam(
                         request.getFollowerServerId(),
                         request.hasOffsetType() ? request.getOffsetType() : null,
-                        request.hasStartTimestamp() ? request.getStartTimestamp() : null),
+                        request.hasStartTimestamp() ? request.getStartTimestamp() : null,
+                        request.hasColumnGroup() ? request.getColumnGroup() : null),
                 tableBuckets,
                 (responseList) -> response.complete(makeListOffsetsResponse(responseList)));
         return response;

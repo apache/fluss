@@ -54,11 +54,13 @@ import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.remote.RemoteLogFetchInfo;
 import org.apache.fluss.remote.RemoteLogSegment;
+import org.apache.fluss.rpc.entity.ColumnGroupFetchResult;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.entity.LimitScanResultForBucket;
 import org.apache.fluss.rpc.entity.ListOffsetsResultForBucket;
 import org.apache.fluss.rpc.entity.LookupResultForBucket;
 import org.apache.fluss.rpc.entity.PrefixLookupResultForBucket;
+import org.apache.fluss.rpc.entity.ProduceLogColumnsResultForBucket;
 import org.apache.fluss.rpc.entity.ProduceLogResultForBucket;
 import org.apache.fluss.rpc.entity.PutKvResultForBucket;
 import org.apache.fluss.rpc.entity.TableStatsResultForBucket;
@@ -108,6 +110,7 @@ import org.apache.fluss.rpc.messages.PbAdjustIsrRespForTable;
 import org.apache.fluss.rpc.messages.PbAlterConfig;
 import org.apache.fluss.rpc.messages.PbBucketMetadata;
 import org.apache.fluss.rpc.messages.PbBucketOffset;
+import org.apache.fluss.rpc.messages.PbColumnGroupRecords;
 import org.apache.fluss.rpc.messages.PbCreateAclRespInfo;
 import org.apache.fluss.rpc.messages.PbDatabaseSummary;
 import org.apache.fluss.rpc.messages.PbDescribeConfig;
@@ -138,6 +141,8 @@ import org.apache.fluss.rpc.messages.PbPartitionSpec;
 import org.apache.fluss.rpc.messages.PbPhysicalTablePath;
 import org.apache.fluss.rpc.messages.PbPrefixLookupReqForBucket;
 import org.apache.fluss.rpc.messages.PbPrefixLookupRespForBucket;
+import org.apache.fluss.rpc.messages.PbProduceLogColumnsReqForBucket;
+import org.apache.fluss.rpc.messages.PbProduceLogColumnsRespForBucket;
 import org.apache.fluss.rpc.messages.PbProduceLogReqForBucket;
 import org.apache.fluss.rpc.messages.PbProduceLogRespForBucket;
 import org.apache.fluss.rpc.messages.PbProducerTableOffsets;
@@ -162,6 +167,8 @@ import org.apache.fluss.rpc.messages.PbValue;
 import org.apache.fluss.rpc.messages.PbValueList;
 import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.messages.PrefixLookupResponse;
+import org.apache.fluss.rpc.messages.ProduceLogColumnsRequest;
+import org.apache.fluss.rpc.messages.ProduceLogColumnsResponse;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
 import org.apache.fluss.rpc.messages.PutKvRequest;
@@ -177,6 +184,7 @@ import org.apache.fluss.security.acl.AclBinding;
 import org.apache.fluss.server.authorizer.AclCreateResult;
 import org.apache.fluss.server.authorizer.AclDeleteResult;
 import org.apache.fluss.server.entity.AdjustIsrResultForBucket;
+import org.apache.fluss.server.entity.ColumnGroupWriteData;
 import org.apache.fluss.server.entity.CommitLakeTableSnapshotsData;
 import org.apache.fluss.server.entity.CommitRemoteLogManifestData;
 import org.apache.fluss.server.entity.FetchReqInfo;
@@ -923,6 +931,48 @@ public class ServerRpcMessageUtils {
         return produceEntryData;
     }
 
+    /** Decodes a produce-log-columns request into per-bucket column-group rows (FIP-45). */
+    public static Map<TableBucket, ColumnGroupWriteData> getProduceLogColumnsData(
+            ProduceLogColumnsRequest request) {
+        long tableId = request.getTableId();
+        Map<TableBucket, ColumnGroupWriteData> data = new HashMap<>();
+        for (PbProduceLogColumnsReqForBucket bucketReq : request.getBucketsReqsList()) {
+            ByteBuffer recordBuffer = toByteBuffer(bucketReq.getRecordsSlice());
+            MemoryLogRecords logRecords = MemoryLogRecords.pointToByteBuffer(recordBuffer);
+            TableBucket tb =
+                    new TableBucket(
+                            tableId,
+                            bucketReq.hasPartitionId() ? bucketReq.getPartitionId() : null,
+                            bucketReq.getBucketId());
+            data.put(tb, new ColumnGroupWriteData(bucketReq.getFirstSourceOffset(), logRecords));
+        }
+        return data;
+    }
+
+    public static ProduceLogColumnsResponse makeProduceLogColumnsResponse(
+            Collection<ProduceLogColumnsResultForBucket> results) {
+        ProduceLogColumnsResponse response = new ProduceLogColumnsResponse();
+        for (ProduceLogColumnsResultForBucket result : results) {
+            PbProduceLogColumnsRespForBucket bucketResp =
+                    response.addBucketsResp().setBucketId(result.getBucketId());
+            TableBucket tableBucket = result.getTableBucket();
+            if (tableBucket.getPartitionId() != null) {
+                bucketResp.setPartitionId(tableBucket.getPartitionId());
+            }
+            if (result.failed()) {
+                bucketResp.setError(result.getErrorCode(), result.getErrorMessage());
+                if (result.getExpectedSourceOffset() >= 0) {
+                    bucketResp.setExpectedSourceOffset(result.getExpectedSourceOffset());
+                }
+            } else {
+                bucketResp
+                        .setLogEndOffset(result.getLogEndOffset())
+                        .setHighWatermark(result.getHighWatermark());
+            }
+        }
+        return response;
+    }
+
     public static ProduceLogResponse makeProduceLogResponse(
             Collection<ProduceLogResultForBucket> appendLogResultForBucketList) {
         ProduceLogResponse produceResponse = new ProduceLogResponse();
@@ -1007,6 +1057,28 @@ public class ServerRpcMessageUtils {
         return fetchDataMap;
     }
 
+    private static void setRecords(PbColumnGroupRecords pbGroup, LogRecords records) {
+        if (records instanceof FileLogRecords) {
+            FileChannelChunk chunk = ((FileLogRecords) records).toChunk();
+            pbGroup.setRecords(chunk.getFileChannel(), chunk.getPosition(), chunk.getSize());
+        } else if (records instanceof BytesViewLogRecords) {
+            pbGroup.setRecordsBytesView(((BytesViewLogRecords) records).getBytesView());
+        } else if (records instanceof MemoryLogRecords) {
+            if (records == MemoryLogRecords.EMPTY) {
+                pbGroup.setRecords(new byte[0]);
+            } else {
+                MemoryLogRecords logRecords = (MemoryLogRecords) records;
+                pbGroup.setRecords(
+                        logRecords.getMemorySegment(),
+                        logRecords.getPosition(),
+                        logRecords.sizeInBytes());
+            }
+        } else {
+            throw new UnsupportedOperationException(
+                    "Not supported log records type: " + records.getClass().getName());
+        }
+    }
+
     public static FetchLogResponse makeFetchLogResponse(
             Map<TableBucket, FetchLogResultForBucket> fetchLogResult,
             Map<TableBucket, FetchLogResultForBucket> fetchLogErrors) {
@@ -1089,6 +1161,15 @@ public class ServerRpcMessageUtils {
                         throw new UnsupportedOperationException(
                                 "Not supported log records type: " + records.getClass().getName());
                     }
+                }
+                // FIP-45: column-group records ride alongside the base records, zero-copy too.
+                for (ColumnGroupFetchResult groupResult : bucketResult.columnGroups().values()) {
+                    PbColumnGroupRecords pbGroup =
+                            fetchLogRespForBucket
+                                    .addColumnGroup()
+                                    .setGroupName(groupResult.getGroupName())
+                                    .setHighWatermark(groupResult.getHighWatermark());
+                    setRecords(pbGroup, groupResult.getRecords());
                 }
             }
             if (fetchLogRespMap.containsKey(tb.getTableId())) {

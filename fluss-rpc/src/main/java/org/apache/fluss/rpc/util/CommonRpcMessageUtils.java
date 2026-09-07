@@ -25,10 +25,12 @@ import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.remote.RemoteLogFetchInfo;
 import org.apache.fluss.remote.RemoteLogSegment;
+import org.apache.fluss.rpc.entity.ColumnGroupFetchResult;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.messages.LookupRequest;
 import org.apache.fluss.rpc.messages.PbAclFilter;
 import org.apache.fluss.rpc.messages.PbAclInfo;
+import org.apache.fluss.rpc.messages.PbColumnGroupRecords;
 import org.apache.fluss.rpc.messages.PbFetchLogRespForBucket;
 import org.apache.fluss.rpc.messages.PbKeyValue;
 import org.apache.fluss.rpc.messages.PbPartitionSpec;
@@ -51,7 +53,9 @@ import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -238,6 +242,24 @@ public class CommonRpcMessageUtils {
                     fetchLogResultForBucket =
                             new FetchLogResultForBucket(
                                     tb, records, respForBucket.getHighWatermark());
+                }
+                if (respForBucket.getColumnGroupsCount() > 0) {
+                    Map<String, ColumnGroupFetchResult> columnGroups = new HashMap<>();
+                    for (PbColumnGroupRecords pbGroup : respForBucket.getColumnGroupsList()) {
+                        LogRecords groupRecords =
+                                pbGroup.hasRecords()
+                                        ? MemoryLogRecords.pointToByteBuffer(
+                                                toByteBuffer(pbGroup.getRecordsSlice()))
+                                        : MemoryLogRecords.EMPTY;
+                        columnGroups.put(
+                                pbGroup.getGroupName(),
+                                new ColumnGroupFetchResult(
+                                        pbGroup.getGroupName(),
+                                        pbGroup.getHighWatermark(),
+                                        groupRecords));
+                    }
+                    fetchLogResultForBucket =
+                            fetchLogResultForBucket.withColumnGroups(columnGroups);
                 }
             }
         }

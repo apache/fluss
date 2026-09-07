@@ -19,6 +19,7 @@ package org.apache.fluss.metadata;
 
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.annotation.PublicStable;
+import org.apache.fluss.exception.InvalidColumnGroupConfigException;
 import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataField;
 import org.apache.fluss.types.DataType;
@@ -37,12 +38,15 @@ import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -224,6 +228,81 @@ public final class Schema implements Serializable {
         return highestFieldId;
     }
 
+    /**
+     * Returns a map of column group names to their column indices. Only includes columns that have
+     * a column group assigned.
+     */
+    public Map<String, List<Integer>> getColumnGroups() {
+        Map<String, List<Integer>> groups = new HashMap<>();
+        for (int i = 0; i < columns.size(); i++) {
+            Optional<String> group = columns.get(i).getColumnGroup();
+            if (group.isPresent()) {
+                groups.computeIfAbsent(group.get(), k -> new ArrayList<>()).add(i);
+            }
+        }
+        return groups;
+    }
+
+    /** Returns the set of column group names defined in this schema. */
+    public Set<String> getColumnGroupNames() {
+        return getColumnGroups().keySet();
+    }
+
+    /** Returns indices of columns that are NOT in any column group (the default group). */
+    public int[] getDefaultGroupColumnIndices() {
+        return IntStream.range(0, columns.size())
+                .filter(i -> !columns.get(i).getColumnGroup().isPresent())
+                .toArray();
+    }
+
+    /** Whether this schema declares at least one non-default column group. */
+    public boolean hasColumnGroups() {
+        for (Column column : columns) {
+            if (column.getColumnGroup().isPresent()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * The physical row type of the base log: only the columns of the default group, in schema
+     * order. For a schema without column groups this equals {@link #getRowType()}.
+     */
+    public RowType getBaseRowType() {
+        return rowType.project(getDefaultGroupColumnIndices());
+    }
+
+    /**
+     * The physical row type of the column-group log for {@code groupName}: the group's columns in
+     * schema order.
+     *
+     * @throws IllegalArgumentException if the group is not declared on this schema
+     */
+    public RowType getColumnGroupRowType(String groupName) {
+        return rowType.project(getColumnGroupColumnIndices(groupName));
+    }
+
+    /**
+     * Indices (in schema order) of the columns belonging to {@code groupName}.
+     *
+     * @throws IllegalArgumentException if the group is not declared on this schema
+     */
+    public int[] getColumnGroupColumnIndices(String groupName) {
+        List<Integer> indices = getColumnGroups().get(groupName);
+        if (indices == null) {
+            throw new IllegalArgumentException(
+                    String.format("Column group '%s' does not exist in schema.", groupName));
+        }
+        return indices.stream().mapToInt(Integer::intValue).toArray();
+    }
+
+    /** The column group of the column at {@code columnIndex}, or null for the default group. */
+    @Nullable
+    public String getColumnGroupOf(int columnIndex) {
+        return columns.get(columnIndex).getColumnGroup().orElse(null);
+    }
+
     @Override
     public String toString() {
         return "Schema{"
@@ -259,6 +338,55 @@ public final class Schema implements Serializable {
     }
 
     // --------------------------------------------------------------------------------------------
+
+    /**
+     * Max length of a column group name. Unlike database/table names (see {@link TablePath}), a
+     * column group name never becomes part of a filesystem path, so this is a plain sanity bound
+     * rather than a path-length budget. Group names only live in the schema and in the {@code
+     * column_group} RPC field.
+     */
+    private static final int MAX_COLUMN_GROUP_NAME_LENGTH = 64;
+
+    /**
+     * Validates a column group name, throwing {@link InvalidColumnGroupConfigException} when it is
+     * invalid. Column group names obey the same identifier rules as Fluss database/table names: a
+     * non-empty string of ASCII alphanumerics, {@code '_'} and {@code '-'}, not starting with the
+     * reserved {@code "__"} prefix, and no longer than {@link #MAX_COLUMN_GROUP_NAME_LENGTH}
+     * characters.
+     */
+    private static void validateColumnGroupName(String groupName) {
+        checkNotNull(groupName, "Column group name must not be null.");
+        String error = detectInvalidColumnGroupName(groupName);
+        if (error != null) {
+            throw new InvalidColumnGroupConfigException(
+                    "Column group name '" + groupName + "' is invalid: " + error);
+        }
+    }
+
+    /**
+     * Returns a human-readable reason why {@code groupName} is not a valid column group name, or
+     * {@code null} if it is valid. Shared with callers (e.g. the Flink DDL parser) that need to
+     * surface the same constraint under their own exception type. {@code groupName} must be
+     * non-null.
+     */
+    public static @Nullable String detectInvalidColumnGroupName(String groupName) {
+        if (groupName.isEmpty()) {
+            return "the empty string is not allowed";
+        }
+        if (groupName.length() > MAX_COLUMN_GROUP_NAME_LENGTH) {
+            return "the length is longer than the max allowed length "
+                    + MAX_COLUMN_GROUP_NAME_LENGTH;
+        }
+        if (groupName.startsWith(TablePath.INTERNAL_NAME_PREFIX)) {
+            return "'"
+                    + TablePath.INTERNAL_NAME_PREFIX
+                    + "' is not allowed as prefix, since it is reserved for internal names in Fluss";
+        }
+        if (TablePath.containsInvalidPattern(groupName)) {
+            return "it contains one or more characters other than ASCII alphanumerics, '_' and '-'";
+        }
+        return null;
+    }
 
     /** Builder for configuring and creating instances of {@link Schema}. */
     public static Schema.Builder newBuilder() {
@@ -365,7 +493,8 @@ public final class Schema implements Serializable {
                                     column.dataType,
                                     column.comment,
                                     newColumnId,
-                                    column.aggFunction));
+                                    column.aggFunction,
+                                    column.columnGroup));
                 }
             }
 
@@ -475,6 +604,23 @@ public final class Schema implements Serializable {
             return this;
         }
 
+        /**
+         * Declares a column that is appended to this schema and assigned to a named column group.
+         *
+         * <p>Equivalent to {@link #column(String, DataType)} immediately followed by {@link
+         * #columnGroup(String)}.
+         *
+         * @param columnName column name
+         * @param dataType column data type
+         * @param columnGroup the column group this column belongs to
+         * @return this builder for fluent API
+         */
+        public Builder column(String columnName, DataType dataType, String columnGroup) {
+            checkNotNull(columnGroup, "Column group name must not be null.");
+            column(columnName, dataType);
+            return columnGroup(columnGroup);
+        }
+
         /** Apply comment to the previous column. */
         public Builder withComment(@Nullable String comment) {
             if (!columns.isEmpty()) {
@@ -484,6 +630,53 @@ public final class Schema implements Serializable {
                 throw new IllegalArgumentException(
                         "Method 'withComment(...)' must be called after a column definition, "
                                 + "but there is no preceding column defined.");
+            }
+            return this;
+        }
+
+        /** Assign the previous column to a column group. */
+        public Builder columnGroup(String groupName) {
+            validateColumnGroupName(groupName);
+            if (!columns.isEmpty()) {
+                columns.set(
+                        columns.size() - 1,
+                        columns.get(columns.size() - 1).withColumnGroup(groupName));
+            } else {
+                throw new IllegalArgumentException(
+                        "Method 'columnGroup(...)' must be called after a column definition, "
+                                + "but there is no preceding column defined.");
+            }
+            return this;
+        }
+
+        /**
+         * Scopes a block of column declarations so each column added inside the block is assigned
+         * to the given column group. Columns added inside the block that explicitly specify a
+         * different group (e.g. via {@link #column(String, DataType, String)}) keep their explicit
+         * group; columns added before the block are not affected.
+         *
+         * <p>Example:
+         *
+         * <pre>{@code
+         * .columnGroup("enriched_risk", g -> g
+         *         .column("risk_score",          DataTypes.DOUBLE())
+         *         .column("risk_classification", DataTypes.STRING()))
+         * }</pre>
+         *
+         * @param groupName the column group name
+         * @param block a consumer that adds the group's columns to this builder
+         * @return this builder for fluent API
+         */
+        public Builder columnGroup(String groupName, Consumer<Builder> block) {
+            validateColumnGroupName(groupName);
+            checkNotNull(block, "Column group block must not be null.");
+            int startIndex = columns.size();
+            block.accept(this);
+            for (int i = startIndex; i < columns.size(); i++) {
+                Column current = columns.get(i);
+                if (!current.getColumnGroup().isPresent()) {
+                    columns.set(i, current.withColumnGroup(groupName));
+                }
             }
             return this;
         }
@@ -589,18 +782,19 @@ public final class Schema implements Serializable {
         private final DataType dataType;
         private final @Nullable String comment;
         private final @Nullable AggFunction aggFunction;
+        private final @Nullable String columnGroup;
 
         public Column(String columnName, DataType dataType) {
-            this(columnName, dataType, null, UNKNOWN_COLUMN_ID, null);
+            this(columnName, dataType, null, UNKNOWN_COLUMN_ID, null, null);
         }
 
         public Column(String columnName, DataType dataType, @Nullable String comment) {
-            this(columnName, dataType, comment, UNKNOWN_COLUMN_ID, null);
+            this(columnName, dataType, comment, UNKNOWN_COLUMN_ID, null, null);
         }
 
         public Column(
                 String columnName, DataType dataType, @Nullable String comment, int columnId) {
-            this(columnName, dataType, comment, columnId, null);
+            this(columnName, dataType, comment, columnId, null, null);
         }
 
         public Column(
@@ -609,11 +803,22 @@ public final class Schema implements Serializable {
                 @Nullable String comment,
                 int columnId,
                 @Nullable AggFunction aggFunction) {
+            this(columnName, dataType, comment, columnId, aggFunction, null);
+        }
+
+        public Column(
+                String columnName,
+                DataType dataType,
+                @Nullable String comment,
+                int columnId,
+                @Nullable AggFunction aggFunction,
+                @Nullable String columnGroup) {
             this.columnName = columnName;
             this.dataType = dataType;
             this.comment = comment;
             this.columnId = columnId;
             this.aggFunction = aggFunction;
+            this.columnGroup = columnGroup;
         }
 
         public String getName() {
@@ -641,12 +846,21 @@ public final class Schema implements Serializable {
             return Optional.ofNullable(aggFunction);
         }
 
+        /** Returns the column group name, if any. */
+        public Optional<String> getColumnGroup() {
+            return Optional.ofNullable(columnGroup);
+        }
+
         public Column withComment(String comment) {
-            return new Column(columnName, dataType, comment, columnId, aggFunction);
+            return new Column(columnName, dataType, comment, columnId, aggFunction, columnGroup);
         }
 
         public Column withAggFunction(@Nullable AggFunction aggFunction) {
-            return new Column(columnName, dataType, comment, columnId, aggFunction);
+            return new Column(columnName, dataType, comment, columnId, aggFunction, columnGroup);
+        }
+
+        public Column withColumnGroup(@Nullable String columnGroup) {
+            return new Column(columnName, dataType, comment, columnId, aggFunction, columnGroup);
         }
 
         @Override
@@ -660,6 +874,7 @@ public final class Schema implements Serializable {
                                 sb.append(EncodingUtils.escapeSingleQuotes(c));
                                 sb.append("'");
                             });
+            getColumnGroup().ifPresent(g -> sb.append(" COLUMN GROUP '").append(g).append("'"));
             return sb.toString();
         }
 
@@ -676,12 +891,13 @@ public final class Schema implements Serializable {
                     && Objects.equals(dataType, that.dataType)
                     && Objects.equals(comment, that.comment)
                     && Objects.equals(columnId, that.columnId)
-                    && Objects.equals(aggFunction, that.aggFunction);
+                    && Objects.equals(aggFunction, that.aggFunction)
+                    && Objects.equals(columnGroup, that.columnGroup);
         }
 
         @Override
         public int hashCode() {
-            return Objects.hash(columnName, dataType, comment, columnId, aggFunction);
+            return Objects.hash(columnName, dataType, comment, columnId, aggFunction, columnGroup);
         }
     }
 

@@ -228,6 +228,45 @@ message ProduceLogResponse {
   repeated PbProduceLogRespForBucket buckets_resp = 1;
 }
 
+// FIP-45: produce log columns (column-group / enrichment) request and response.
+// Writes the columns of one column group for a contiguous range of existing base-log offsets.
+// `records` is a MemoryLogRecords (ARROW format) carrying only the group's columns in schema
+// order; the server stamps `first_source_offset` as the base offset of the first batch and
+// requires it to equal the column group's current log end offset (enrichment watermark).
+message ProduceLogColumnsRequest {
+  required int32 acks = 1;
+  required int64 table_id = 2;
+  required int32 timeout_ms = 3;
+  required string column_group = 4;
+  repeated PbProduceLogColumnsReqForBucket buckets_req = 5;
+}
+
+message ProduceLogColumnsResponse {
+  repeated PbProduceLogColumnsRespForBucket buckets_resp = 1;
+}
+
+message PbProduceLogColumnsReqForBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+  // the base-log offset enriched by the first row of `records`; rows are contiguous from here.
+  required int64 first_source_offset = 3;
+  required bytes records = 4;
+}
+
+message PbProduceLogColumnsRespForBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+  optional int32 error_code = 3;
+  optional string error_message = 4;
+  // the column group's log end offset (enrichment watermark) after the append.
+  optional int64 log_end_offset = 5;
+  // the column group's high watermark (committed enrichment watermark) after the append.
+  optional int64 high_watermark = 6;
+  // set on INVALID_COLUMN_GROUP_OFFSET: the offset the server expected, so the client can
+  // re-slice a batch that straddles the group's log end offset after a replay.
+  optional int64 expected_source_offset = 7;
+}
+
 // fetch log request and response
 message FetchLogRequest {
   required int32 follower_server_id = 1;  // value -1 indicate the request from client.
@@ -399,6 +438,10 @@ message ListOffsetsRequest {
   optional int64 partition_id = 4;
   repeated int32 bucket_id = 5 [packed = true]; // it is recommended to use packed for repeated numerics to get more efficient encoding
   optional int64 startTimestamp = 6;
+  // FIP-45: when set, offsets are answered for the named column group instead of the base log:
+  // LATEST returns the group's high watermark (committed enrichment watermark) and
+  // LEADER_END_OFFSET_SNAPSHOT returns the group's log end offset (enrichment watermark).
+  optional string column_group = 7;
 }
 message ListOffsetsResponse {
   repeated PbListOffsetsRespForBucket buckets_resp = 1;
@@ -917,6 +960,15 @@ message PbFetchLogReqForBucket {
   // TODO leader epoch
   required int64 fetch_offset = 3;
   required int32 max_fetch_bytes = 4;
+  // Follower-only (FIP-45): the follower's log end offset per column group, so the leader can
+  // ship the column-group records the follower is missing. Absent for client fetches.
+  repeated PbColumnGroupFetch column_group_fetches = 5;
+}
+
+// FIP-45: per column-group fetch cursor advertised by a follower.
+message PbColumnGroupFetch {
+  required string group_name = 1;
+  required int64 fetch_offset = 2;
 }
 
 message PbFetchLogRespForTable {
@@ -936,6 +988,20 @@ message PbFetchLogRespForBucket {
   // non-empty records field when only trailing batches were filtered. The client should start
   // its next fetch from the later of this offset and the end of the records it received.
   optional int64 filtered_end_offset = 9;
+  // FIP-45: column-group records covering the same offset range as `records`, one entry per
+  // column group touched by the projection (or every group when there is no projection). The
+  // batches are standard log record batches whose base offsets are base-log offsets; the client
+  // stitches them onto the base rows by offset. Absent for tables without column groups and for
+  // projections that touch only base columns.
+  repeated PbColumnGroupRecords column_groups = 10;
+}
+
+// FIP-45: records of one column group shipped alongside the base records of a fetch.
+message PbColumnGroupRecords {
+  required string group_name = 1;
+  // The committed enrichment watermark (column-group high watermark) of the group.
+  required int64 high_watermark = 2;
+  optional bytes records = 3;
 }
 
 message PbPutKvReqForBucket {

@@ -27,6 +27,9 @@ import org.apache.fluss.rpc.protocol.ApiError;
 
 import javax.annotation.Nullable;
 
+import java.util.Collections;
+import java.util.Map;
+
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** Result of {@link FetchLogRequest} for each table bucket. */
@@ -36,6 +39,8 @@ public class FetchLogResultForBucket extends ResultForBucket {
     private final @Nullable LogRecords records;
     private final long highWatermark;
     private final long filteredEndOffset;
+    /** FIP-45: column-group records shipped alongside {@link #records}, keyed by group name. */
+    private final Map<String, ColumnGroupFetchResult> columnGroups;
 
     public FetchLogResultForBucket(
             TableBucket tableBucket, LogRecords records, long highWatermark) {
@@ -94,11 +99,48 @@ public class FetchLogResultForBucket extends ResultForBucket {
             long highWatermark,
             long filteredEndOffset,
             ApiError error) {
+        this(
+                tableBucket,
+                remoteLogFetchInfo,
+                records,
+                highWatermark,
+                filteredEndOffset,
+                error,
+                Collections.emptyMap());
+    }
+
+    private FetchLogResultForBucket(
+            TableBucket tableBucket,
+            @Nullable RemoteLogFetchInfo remoteLogFetchInfo,
+            @Nullable LogRecords records,
+            long highWatermark,
+            long filteredEndOffset,
+            ApiError error,
+            Map<String, ColumnGroupFetchResult> columnGroups) {
         super(tableBucket, error);
         this.remoteLogFetchInfo = remoteLogFetchInfo;
         this.records = records;
         this.highWatermark = highWatermark;
         this.filteredEndOffset = filteredEndOffset;
+        this.columnGroups = columnGroups;
+    }
+
+    /** Returns a copy of this result carrying the given column-group records (FIP-45). */
+    public FetchLogResultForBucket withColumnGroups(
+            Map<String, ColumnGroupFetchResult> columnGroups) {
+        return new FetchLogResultForBucket(
+                tableBucket,
+                remoteLogFetchInfo,
+                records,
+                highWatermark,
+                filteredEndOffset,
+                getError(),
+                columnGroups);
+    }
+
+    /** Column-group records keyed by group name; empty when no column group was touched. */
+    public Map<String, ColumnGroupFetchResult> columnGroups() {
+        return columnGroups;
     }
 
     /**

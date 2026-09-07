@@ -17,14 +17,18 @@
 
 package org.apache.fluss.client.table.writer;
 
+import org.apache.fluss.client.write.ColumnGroupWriter;
 import org.apache.fluss.client.write.WriteRecord;
 import org.apache.fluss.client.write.WriterClient;
+import org.apache.fluss.exception.UnknownColumnGroupException;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.InternalRow.FieldGetter;
+import org.apache.fluss.row.ProjectedRow;
 import org.apache.fluss.row.compacted.CompactedRow;
 import org.apache.fluss.row.encode.CompactedRowEncoder;
 import org.apache.fluss.row.encode.IndexedRowEncoder;
@@ -48,6 +52,9 @@ class AppendWriterImpl extends AbstractTableWriter implements AppendWriter {
     private final CompactedRowEncoder compactedRowEncoder;
     private final FieldGetter[] fieldGetters;
     private final TableInfo tableInfo;
+    // FIP-45: the base log stores only the default-group columns; null when there are no groups
+    @Nullable private final int[] baseColumnIndices;
+    @Nullable private volatile ColumnGroupWriter columnGroupWriter;
 
     AppendWriterImpl(TablePath tablePath, TableInfo tableInfo, WriterClient writerClient) {
         super(tablePath, tableInfo, writerClient);
@@ -70,6 +77,18 @@ class AppendWriterImpl extends AbstractTableWriter implements AppendWriter {
         this.compactedRowEncoder = new CompactedRowEncoder(fieldDataTypes);
         this.fieldGetters = InternalRow.createFieldGetters(tableInfo.getRowType());
         this.tableInfo = tableInfo;
+        if (tableInfo.getSchema().hasColumnGroups()) {
+            if (logFormat != LogFormat.ARROW) {
+                throw new IllegalArgumentException(
+                        "Column groups require ARROW log format, but table '"
+                                + tablePath
+                                + "' uses "
+                                + logFormat);
+            }
+            this.baseColumnIndices = tableInfo.getSchema().getDefaultGroupColumnIndices();
+        } else {
+            this.baseColumnIndices = null;
+        }
     }
 
     /**
@@ -94,10 +113,34 @@ class AppendWriterImpl extends AbstractTableWriter implements AppendWriter {
                     WriteRecord.forCompactedAppend(
                             tableInfo, physicalPath, compactedRow, bucketKey);
         } else {
-            // ARROW format supports general internal row
-            record = WriteRecord.forArrowAppend(tableInfo, physicalPath, row, bucketKey);
+            // ARROW format supports general internal row. For a column-group table only the
+            // default-group columns are written to the base log (FIP-45); the enrichment columns
+            // of the row are ignored here and filled later through appendColumns.
+            InternalRow physicalRow =
+                    baseColumnIndices == null
+                            ? row
+                            : ProjectedRow.from(baseColumnIndices).replaceRow(row);
+            record = WriteRecord.forArrowAppend(tableInfo, physicalPath, physicalRow, bucketKey);
         }
         return send(record).thenApply(ignored -> APPEND_SUCCESS);
+    }
+
+    @Override
+    public CompletableFuture<AppendColumnsResult> appendColumns(
+            String columnGroup,
+            TableBucket bucket,
+            long firstSourceOffset,
+            List<InternalRow> rows) {
+        if (baseColumnIndices == null) {
+            throw new UnknownColumnGroupException(
+                    "Table " + tablePath + " does not declare any column group.");
+        }
+        ColumnGroupWriter writer = columnGroupWriter;
+        if (writer == null) {
+            writer = writerClient.getOrCreateColumnGroupWriter(tablePath, tableInfo);
+            columnGroupWriter = writer;
+        }
+        return writer.appendColumns(columnGroup, bucket, firstSourceOffset, rows);
     }
 
     private CompactedRow encodeCompactedRow(InternalRow row) {

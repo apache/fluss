@@ -486,7 +486,9 @@ public class LogFetcher implements Closeable {
                                                 // the data is pruned
                                                 isCheckCrcs,
                                                 fetchOffset,
-                                                hasRecords ? parsedByteBuf : null));
+                                                hasRecords ? parsedByteBuf : null,
+                                                trc.newColumnGroupStitcher(
+                                                        fetchResultForBucket, isCheckCrcs)));
                             }
                         }
                     }
@@ -741,6 +743,9 @@ public class LogFetcher implements Closeable {
         @Nullable final Projection projection;
         @Nullable final org.apache.fluss.rpc.messages.PbPredicate cachedPbPredicate;
         final int filterSchemaId;
+        // FIP-45: how the projection maps onto the base log and the column groups
+        @Nullable final ColumnGroupReadPlan columnGroupPlan;
+        final Map<String, LogRecordReadContext> groupReadContexts;
 
         TableReadContext(
                 TableInfo tableInfo,
@@ -751,24 +756,39 @@ public class LogFetcher implements Closeable {
                 ChunkedAllocationManager.ChunkedFactory chunkedFactory) {
             this.tablePath = tableInfo.getTablePath();
             this.isPartitioned = tableInfo.isPartitioned();
+            this.columnGroupPlan = ColumnGroupReadPlan.of(tableInfo.getSchema(), projection);
             // Share the LogFetcher-owned chunked factory so all tables reuse one chunk
             // pool and LogFetcher.close() releases the chunks after contexts are closed.
-            this.readContext =
-                    LogRecordReadContext.createReadContext(
-                            tableInfo,
-                            false,
-                            schemaResolution,
-                            projection,
-                            schemaGetter,
-                            chunkedFactory);
-            this.remoteReadContext =
-                    LogRecordReadContext.createReadContext(
-                            tableInfo,
-                            true,
-                            schemaResolution,
-                            projection,
-                            schemaGetter,
-                            chunkedFactory);
+            if (columnGroupPlan != null) {
+                // the base log holds only the default-group columns; group columns are stitched
+                this.readContext =
+                        columnGroupPlan.createBaseContext(
+                                tableInfo, false, schemaResolution, schemaGetter, chunkedFactory);
+                this.remoteReadContext =
+                        columnGroupPlan.createBaseContext(
+                                tableInfo, true, schemaResolution, schemaGetter, chunkedFactory);
+                this.groupReadContexts =
+                        columnGroupPlan.createGroupContexts(
+                                tableInfo, schemaGetter, chunkedFactory);
+            } else {
+                this.readContext =
+                        LogRecordReadContext.createReadContext(
+                                tableInfo,
+                                false,
+                                schemaResolution,
+                                projection,
+                                schemaGetter,
+                                chunkedFactory);
+                this.remoteReadContext =
+                        LogRecordReadContext.createReadContext(
+                                tableInfo,
+                                true,
+                                schemaResolution,
+                                projection,
+                                schemaGetter,
+                                chunkedFactory);
+                this.groupReadContexts = Collections.emptyMap();
+            }
             this.projection = projection;
             this.cachedPbPredicate =
                     recordBatchFilter != null
@@ -778,9 +798,23 @@ public class LogFetcher implements Closeable {
             this.filterSchemaId = tableInfo.getSchemaId();
         }
 
+        /** A stitcher for one fetch result, or null when no column group is projected. */
+        @Nullable
+        ColumnGroupStitcher newColumnGroupStitcher(
+                FetchLogResultForBucket fetchResult, boolean checkCrcs) {
+            if (columnGroupPlan == null || columnGroupPlan.touchedGroups().isEmpty()) {
+                return null;
+            }
+            return new ColumnGroupStitcher(
+                    columnGroupPlan, groupReadContexts, fetchResult.columnGroups(), checkCrcs);
+        }
+
         void close() {
             readContext.close();
             remoteReadContext.close();
+            for (LogRecordReadContext groupReadContext : groupReadContexts.values()) {
+                groupReadContext.close();
+            }
         }
     }
 }

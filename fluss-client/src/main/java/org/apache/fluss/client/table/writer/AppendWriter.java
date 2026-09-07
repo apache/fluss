@@ -18,8 +18,10 @@
 package org.apache.fluss.client.table.writer;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.row.InternalRow;
 
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -37,4 +39,24 @@ public interface AppendWriter extends TableWriter {
      * @return A {@link CompletableFuture} that always returns append result when complete normally.
      */
     CompletableFuture<AppendResult> append(InternalRow record);
+
+    /**
+     * Appends the columns of one column group for rows that already exist in the log (FIP-45 log
+     * enrichment via append columns).
+     *
+     * <p>{@code rows} carry only the group's columns, in schema order, and fill the contiguous
+     * base-log offsets {@code [firstSourceOffset, firstSourceOffset + rows.size())} of {@code
+     * bucket}. The first offset must equal the group's current log end offset (its enrichment
+     * watermark) on the bucket; a batch entirely below it is acknowledged without effect, so
+     * replaying after a restart is safe, while a gap or a batch running past the base high
+     * watermark fails with {@link org.apache.fluss.exception.InvalidColumnGroupOffsetException}.
+     *
+     * @param columnGroup the column group to fill
+     * @param bucket the bucket whose rows are enriched
+     * @param firstSourceOffset the base-log offset filled by the first row
+     * @param rows the group rows, one per consecutive offset
+     * @return the column group's watermarks on the bucket after the append
+     */
+    CompletableFuture<AppendColumnsResult> appendColumns(
+            String columnGroup, TableBucket bucket, long firstSourceOffset, List<InternalRow> rows);
 }

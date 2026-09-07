@@ -27,6 +27,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metrics.Counter;
 import org.apache.fluss.metrics.Histogram;
 import org.apache.fluss.record.FileLogProjection;
+import org.apache.fluss.record.FileLogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.utils.FileUtils;
@@ -349,6 +350,29 @@ public final class LocalLog {
         }
         deleteSegmentFiles(Collections.singletonList(segmentToDelete), reason);
         return newSegment;
+    }
+
+    /**
+     * The offset metadata of the end of the batch containing {@code offset}: the message offset
+     * right after that batch and the file position right after its bytes. Used to clamp a read at
+     * an offset that may sit inside a batch (FIP-45 committed enrichment watermark), since batches
+     * are never split on the wire. Returns the log end offset metadata when {@code offset} is at or
+     * past the end of the log.
+     */
+    LogOffsetMetadata convertToBatchEndOffsetMetadata(long offset) throws IOException {
+        Optional<LogSegment> segmentOpt = segments.floorSegment(offset);
+        while (segmentOpt.isPresent()) {
+            LogSegment segment = segmentOpt.get();
+            FileLogRecords.LogOffsetPosition position = segment.translateOffset(offset);
+            if (position != null) {
+                return new LogOffsetMetadata(
+                        position.getOffset() + 1,
+                        segment.getBaseOffset(),
+                        position.getPosition() + position.getSize());
+            }
+            segmentOpt = segments.higherSegment(segment.getBaseOffset());
+        }
+        return nextOffsetMetadata;
     }
 
     /**

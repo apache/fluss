@@ -30,6 +30,7 @@ import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.IllegalConfigurationException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 import org.apache.fluss.utils.CopyOnWriteMap;
@@ -93,6 +94,9 @@ public class WriterClient {
     private final IdempotenceManager idempotenceManager;
     private final WriterMetricGroup writerMetricGroup;
     private final DynamicPartitionCreator dynamicPartitionCreator;
+    // FIP-45: column-group writers per table, created on first appendColumns
+    private final Map<TablePath, ColumnGroupWriter> columnGroupWriters = new CopyOnWriteMap<>();
+    private short acks = -1;
 
     public WriterClient(
             Configuration conf,
@@ -120,6 +124,7 @@ public class WriterClient {
             this.idempotenceManager = idempotenceManagerLocal;
 
             short acks = configureAcks(idempotenceManager.idempotenceEnabled());
+            this.acks = acks;
             int retries = configureRetries(idempotenceManager.idempotenceEnabled());
             this.accumulator =
                     new RecordAccumulator(
@@ -167,6 +172,14 @@ public class WriterClient {
      * call to complete, however no guarantee is made about the completion of records sent after the
      * flush call begins.
      */
+    /** The column-group writer of {@code tablePath} (FIP-45), created on first use. */
+    public ColumnGroupWriter getOrCreateColumnGroupWriter(
+            TablePath tablePath, TableInfo tableInfo) {
+        throwIfWriterClosed();
+        return columnGroupWriters.computeIfAbsent(
+                tablePath, tp -> new ColumnGroupWriter(tp, tableInfo, metadataUpdater, conf, acks));
+    }
+
     public void flush() {
         LOG.trace("Flushing accumulated records in writer.");
         long start = System.currentTimeMillis();

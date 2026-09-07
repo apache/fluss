@@ -81,6 +81,8 @@ import org.apache.fluss.rpc.messages.PbStopReplicaRespForBucket;
 import org.apache.fluss.rpc.messages.PbTableBucket;
 import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.messages.PrefixLookupResponse;
+import org.apache.fluss.rpc.messages.ProduceLogColumnsRequest;
+import org.apache.fluss.rpc.messages.ProduceLogColumnsResponse;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
 import org.apache.fluss.rpc.messages.PutKvRequest;
@@ -173,6 +175,12 @@ public class TestTabletServerGateway implements TabletServerGateway {
         CompletableFuture<ProduceLogResponse> response = new CompletableFuture<>();
         requests.add(Tuple2.of(request, response));
         return response;
+    }
+
+    @Override
+    public CompletableFuture<ProduceLogColumnsResponse> produceLogColumns(
+            ProduceLogColumnsRequest request) {
+        return null;
     }
 
     @Override

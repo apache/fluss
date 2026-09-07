@@ -50,6 +50,28 @@ class DefaultCompletedFetch extends CompletedFetch {
             boolean isCheckCrc,
             Long fetchOffset,
             @Nullable ByteBuf parsedByteBuf) {
+        this(
+                tableBucket,
+                tablePath,
+                fetchLogResultForBucket,
+                readContext,
+                logScannerStatus,
+                isCheckCrc,
+                fetchOffset,
+                parsedByteBuf,
+                null);
+    }
+
+    public DefaultCompletedFetch(
+            TableBucket tableBucket,
+            TablePath tablePath,
+            FetchLogResultForBucket fetchLogResultForBucket,
+            LogRecordReadContext readContext,
+            LogScannerStatus logScannerStatus,
+            boolean isCheckCrc,
+            Long fetchOffset,
+            @Nullable ByteBuf parsedByteBuf,
+            @Nullable ColumnGroupStitcher columnGroupStitcher) {
         super(
                 tableBucket,
                 tablePath,
@@ -61,7 +83,8 @@ class DefaultCompletedFetch extends CompletedFetch {
                 logScannerStatus,
                 isCheckCrc,
                 fetchOffset,
-                fetchLogResultForBucket.getFilteredEndOffset());
+                fetchLogResultForBucket.getFilteredEndOffset(),
+                columnGroupStitcher);
         this.parsedByteBuf = parsedByteBuf;
     }
 

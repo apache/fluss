@@ -20,6 +20,7 @@ package org.apache.fluss.rpc.protocol;
 import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.AuthenticationException;
 import org.apache.fluss.exception.AuthorizationException;
+import org.apache.fluss.exception.ColumnGroupSourceOffsetTruncatedException;
 import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.exception.CorruptMessageException;
 import org.apache.fluss.exception.CorruptRecordException;
@@ -35,6 +36,8 @@ import org.apache.fluss.exception.HistoricalPartitionThrottledException;
 import org.apache.fluss.exception.IneligibleReplicaException;
 import org.apache.fluss.exception.InsufficientKvLeaderReplicaCapacityException;
 import org.apache.fluss.exception.InvalidAlterTableException;
+import org.apache.fluss.exception.InvalidColumnGroupConfigException;
+import org.apache.fluss.exception.InvalidColumnGroupOffsetException;
 import org.apache.fluss.exception.InvalidColumnProjectionException;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
@@ -87,6 +90,7 @@ import org.apache.fluss.exception.TimeoutException;
 import org.apache.fluss.exception.TooManyBucketsException;
 import org.apache.fluss.exception.TooManyPartitionsException;
 import org.apache.fluss.exception.TooManyScannersException;
+import org.apache.fluss.exception.UnknownColumnGroupException;
 import org.apache.fluss.exception.UnknownScannerIdException;
 import org.apache.fluss.exception.UnknownServerException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
@@ -285,7 +289,25 @@ public enum Errors {
     HISTORICAL_PARTITION_THROTTLED(
             73,
             "Historical partition request is throttled because too many historical requests are in flight.",
-            HistoricalPartitionThrottledException::new);
+            HistoricalPartitionThrottledException::new),
+    INVALID_COLUMN_GROUP_OFFSET(
+            74,
+            "The appendColumns first source offset does not match the column group's log end "
+                    + "offset, or the batch runs past the base log high watermark.",
+            InvalidColumnGroupOffsetException::new),
+    COLUMN_GROUP_SOURCE_OFFSET_TRUNCATED(
+            75,
+            "The appendColumns source offset is below the base log start offset; the base "
+                    + "records have aged out under retention.",
+            ColumnGroupSourceOffsetTruncatedException::new),
+    UNKNOWN_COLUMN_GROUP(
+            76,
+            "The referenced column group is not declared on the table.",
+            UnknownColumnGroupException::new),
+    INVALID_COLUMN_GROUP_CONFIG(
+            77,
+            "The column-group declaration is structurally invalid.",
+            InvalidColumnGroupConfigException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 

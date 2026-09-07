@@ -46,6 +46,7 @@ public class ColumnJsonSerde
     static final String AGG_FUNCTION = "agg_function";
     static final String AGG_FUNCTION_TYPE = "type";
     static final String AGG_FUNCTION_PARAMS = "parameters";
+    static final String COLUMN_GROUP = "column_group";
 
     @Override
     public void serialize(Schema.Column column, JsonGenerator generator) throws IOException {
@@ -72,6 +73,9 @@ public class ColumnJsonSerde
             generator.writeEndObject();
         }
         generator.writeNumberField(ID, column.getColumnId());
+        if (column.getColumnGroup().isPresent()) {
+            generator.writeStringField(COLUMN_GROUP, column.getColumnGroup().get());
+        }
 
         generator.writeEndObject();
     }
@@ -105,11 +109,14 @@ public class ColumnJsonSerde
             }
         }
 
+        String columnGroup = node.hasNonNull(COLUMN_GROUP) ? node.get(COLUMN_GROUP).asText() : null;
+
         return new Schema.Column(
                 columnName,
                 dataType,
                 node.hasNonNull(COMMENT) ? node.get(COMMENT).asText() : null,
                 node.has(ID) ? node.get(ID).asInt() : UNKNOWN_COLUMN_ID,
-                aggFunction);
+                aggFunction,
+                columnGroup);
     }
 }

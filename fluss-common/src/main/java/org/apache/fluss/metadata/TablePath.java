@@ -61,7 +61,9 @@ public class TablePath implements Serializable {
     // are not
     // allowed to start with this prefix to prevent conflicts with system-generated identifiers.
     // This convention aligns with and maintains compatibility with Apache Kafka's naming standards.
-    private static final String INTERNAL_NAME_PREFIX = "__";
+    // Package-private so other identifier validators in this package (e.g. column group names in
+    // Schema) can share the same reserved-prefix convention.
+    static final String INTERNAL_NAME_PREFIX = "__";
 
     public TablePath(String databaseName, String tableName) {
         this.databaseName = databaseName;
@@ -196,8 +198,13 @@ public class TablePath implements Serializable {
         return null;
     }
 
-    /** Valid characters for Fluss table names are the ASCII alphanumerics, '_' and '-'. */
-    private static boolean containsInvalidPattern(String identifier) {
+    /**
+     * Valid characters for Fluss table names are the ASCII alphanumerics, '_' and '-'.
+     *
+     * <p>Package-private so sibling identifier validators in this package (e.g. column group names
+     * in {@link Schema}) can apply the same character whitelist.
+     */
+    static boolean containsInvalidPattern(String identifier) {
         for (int i = 0; i < identifier.length(); ++i) {
             char c = identifier.charAt(i);
 

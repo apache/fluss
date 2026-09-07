@@ -38,6 +38,8 @@ import org.apache.fluss.utils.CloseableIterator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
+
 import java.io.Closeable;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -79,6 +81,8 @@ public abstract class CompletedFetch {
     private long nextFetchOffset;
     private boolean isConsumed = false;
     private boolean initialized = false;
+    // FIP-45: stitches column-group rows onto base rows; null when no group is projected
+    @Nullable private final ColumnGroupStitcher columnGroupStitcher;
 
     public CompletedFetch(
             TableBucket tableBucket,
@@ -92,6 +96,35 @@ public abstract class CompletedFetch {
             boolean isCheckCrcs,
             long fetchOffset,
             long filteredEndOffset) {
+        this(
+                tableBucket,
+                tablePath,
+                error,
+                sizeInBytes,
+                highWatermark,
+                batches,
+                readContext,
+                logScannerStatus,
+                isCheckCrcs,
+                fetchOffset,
+                filteredEndOffset,
+                null);
+    }
+
+    public CompletedFetch(
+            TableBucket tableBucket,
+            TablePath tablePath,
+            ApiError error,
+            int sizeInBytes,
+            long highWatermark,
+            Iterator<LogRecordBatch> batches,
+            LogRecordReadContext readContext,
+            LogScannerStatus logScannerStatus,
+            boolean isCheckCrcs,
+            long fetchOffset,
+            long filteredEndOffset,
+            @Nullable ColumnGroupStitcher columnGroupStitcher) {
+        this.columnGroupStitcher = columnGroupStitcher;
         this.tableBucket = tableBucket;
         this.tablePath = tablePath;
         this.error = error;
@@ -122,10 +155,17 @@ public abstract class CompletedFetch {
         InternalRow.FieldGetter[] selectedFieldGetters =
                 readContext.getSelectedFieldGetters(schemaId);
 
-        GenericRow newRow = new GenericRow(selectedFieldGetters.length);
-        InternalRow internalRow = record.getRow();
-        for (int i = 0; i < selectedFieldGetters.length; i++) {
-            newRow.setField(i, selectedFieldGetters[i].getFieldOrNull(internalRow));
+        final InternalRow newRow;
+        if (columnGroupStitcher != null) {
+            // FIP-45: splice the column-group values onto the base row by offset
+            newRow = columnGroupStitcher.stitch(record, selectedFieldGetters);
+        } else {
+            GenericRow row = new GenericRow(selectedFieldGetters.length);
+            InternalRow internalRow = record.getRow();
+            for (int i = 0; i < selectedFieldGetters.length; i++) {
+                row.setField(i, selectedFieldGetters[i].getFieldOrNull(internalRow));
+            }
+            newRow = row;
         }
 
         return new ScanRecord(
@@ -190,6 +230,9 @@ public abstract class CompletedFetch {
     void drain() {
         if (!isConsumed) {
             maybeCloseRecordStream();
+            if (columnGroupStitcher != null) {
+                columnGroupStitcher.close();
+            }
             cachedRecordException = null;
             isConsumed = true;
 
@@ -295,6 +338,10 @@ public abstract class CompletedFetch {
         if (isConsumed) {
             return Collections.emptyList();
         }
+        if (columnGroupStitcher != null) {
+            throw new UnsupportedOperationException(
+                    "Arrow batch polling is not supported for projections touching column groups.");
+        }
 
         List<ArrowBatchData> arrowBatches = new ArrayList<>();
         int recordsFetched = 0;
@@ -362,6 +409,14 @@ public abstract class CompletedFetch {
                 LogRecord record = records.next();
                 // skip any records out of range.
                 if (record.logOffset() >= nextFetchOffset) {
+                    if (columnGroupStitcher != null
+                            && !columnGroupStitcher.prepare(record.logOffset())) {
+                        // FIP-45: the fetch carried fewer column-group rows than base rows;
+                        // stop here and fetch again from this offset.
+                        nextFetchOffset = record.logOffset();
+                        drain();
+                        return null;
+                    }
                     return record;
                 }
             }

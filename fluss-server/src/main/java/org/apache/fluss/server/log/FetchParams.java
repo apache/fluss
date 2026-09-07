@@ -27,6 +27,8 @@ import org.apache.fluss.rpc.protocol.FetchLogReadPreference;
 
 import javax.annotation.Nullable;
 
+import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
@@ -68,6 +70,8 @@ public final class FetchParams {
     @Nullable private final Map<Long, FilterInfo> tableFilterInfoMap;
     // the lazily initialized projection util to read and project file logs
     @Nullable private FileLogProjection fileLogProjection;
+    // FIP-45: the column groups touched by the current fetch, empty for base-only fetches
+    private List<String> currentColumnGroups = Collections.emptyList();
     private final int minFetchBytes;
     private final long maxWaitMs;
     private final FetchLogReadPreference readPreference;
@@ -168,6 +172,16 @@ public final class FetchParams {
         } else {
             return null;
         }
+    }
+
+    /** Sets the column groups touched by the current fetch (FIP-45). */
+    public void setCurrentColumnGroups(List<String> columnGroups) {
+        this.currentColumnGroups = columnGroups;
+    }
+
+    /** The column groups touched by the current fetch; empty when none. */
+    public List<String> currentColumnGroups() {
+        return currentColumnGroups;
     }
 
     /** Returns the filter info for the given table, or null if no filter is registered. */

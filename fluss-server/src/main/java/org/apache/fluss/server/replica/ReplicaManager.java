@@ -25,6 +25,7 @@ import org.apache.fluss.config.cluster.ServerReconfigurable;
 import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.exception.FencedLeaderEpochException;
 import org.apache.fluss.exception.HistoricalPartitionThrottledException;
+import org.apache.fluss.exception.InvalidColumnGroupOffsetException;
 import org.apache.fluss.exception.InvalidColumnProjectionException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidPartitionException;
@@ -61,6 +62,7 @@ import org.apache.fluss.rpc.entity.LimitScanResultForBucket;
 import org.apache.fluss.rpc.entity.ListOffsetsResultForBucket;
 import org.apache.fluss.rpc.entity.LookupResultForBucket;
 import org.apache.fluss.rpc.entity.PrefixLookupResultForBucket;
+import org.apache.fluss.rpc.entity.ProduceLogColumnsResultForBucket;
 import org.apache.fluss.rpc.entity.ProduceLogResultForBucket;
 import org.apache.fluss.rpc.entity.PutKvResultForBucket;
 import org.apache.fluss.rpc.entity.TableStatsResultForBucket;
@@ -74,6 +76,7 @@ import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
+import org.apache.fluss.server.entity.ColumnGroupWriteData;
 import org.apache.fluss.server.entity.FetchReqInfo;
 import org.apache.fluss.server.entity.LakeBucketOffset;
 import org.apache.fluss.server.entity.LookupDataForBucket;
@@ -91,6 +94,7 @@ import org.apache.fluss.server.kv.KvSnapshotResource;
 import org.apache.fluss.server.kv.scan.ScannerManager;
 import org.apache.fluss.server.kv.snapshot.CompletedKvSnapshotCommitter;
 import org.apache.fluss.server.kv.snapshot.DefaultSnapshotContext;
+import org.apache.fluss.server.log.ColumnGroupFetchPlan;
 import org.apache.fluss.server.log.FetchDataInfo;
 import org.apache.fluss.server.log.FetchParams;
 import org.apache.fluss.server.log.ListOffsetsParam;
@@ -686,6 +690,49 @@ public class ReplicaManager implements ServerReconfigurable {
         // maybe do delay write operation.
         maybeAddDelayedWrite(
                 timeoutMs, requiredAcks, entriesPerBucket.size(), appendResult, responseCallback);
+    }
+
+    /**
+     * Appends the rows of one column group to the leader replicas of the given buckets (FIP-45).
+     *
+     * <p>TODO (WP2/WP7): acks are not honoured yet; the response is sent once the leader has
+     * appended locally. With {@code acks=all} the response should wait until the group's high
+     * watermark covers the appended rows, like {@link #appendRecordsToLog} does for base rows.
+     */
+    public void appendColumnsToLog(
+            int timeoutMs,
+            int requiredAcks,
+            String columnGroup,
+            Map<TableBucket, ColumnGroupWriteData> entriesPerBucket,
+            Consumer<List<ProduceLogColumnsResultForBucket>> responseCallback) {
+        if (isRequiredAcksInvalid(requiredAcks)) {
+            throw new InvalidRequiredAcksException("Invalid required acks: " + requiredAcks);
+        }
+        localDiskManager.ensureWritable();
+        List<ProduceLogColumnsResultForBucket> results = new ArrayList<>();
+        for (Map.Entry<TableBucket, ColumnGroupWriteData> entry : entriesPerBucket.entrySet()) {
+            TableBucket tb = entry.getKey();
+            ColumnGroupWriteData writeData = entry.getValue();
+            try {
+                Replica replica = getReplicaOrException(tb);
+                results.add(
+                        replica.appendColumnsAsLeader(
+                                columnGroup,
+                                writeData.getRecords(),
+                                writeData.getFirstSourceOffset()));
+            } catch (InvalidColumnGroupOffsetException e) {
+                results.add(
+                        new ProduceLogColumnsResultForBucket(
+                                tb, ApiError.fromThrowable(e), e.getExpectedSourceOffset()));
+            } catch (Exception e) {
+                if (isUnexpectedException(e)) {
+                    LOG.error(
+                            "Error appending column group '{}' on replica {}", columnGroup, tb, e);
+                }
+                results.add(new ProduceLogColumnsResultForBucket(tb, ApiError.fromThrowable(e)));
+            }
+        }
+        responseCallback.accept(results);
     }
 
     /**
@@ -1752,14 +1799,18 @@ public class ReplicaManager implements ServerReconfigurable {
                                     replica.getTablePath(), replica.getLogFormat()));
                 }
 
+                // FIP-45: map the projection onto the base physical log and the column groups.
+                ColumnGroupFetchPlan columnGroupPlan =
+                        replica.planColumnGroupFetch(fetchReqInfo.getProjectFields());
                 fetchParams.setCurrentFetch(
                         tb.getTableId(),
                         fetchOffset,
                         adjustedMaxBytes,
-                        replica.getSchemaGetter(),
+                        columnGroupPlan.schemaGetter(replica.getSchemaGetter()),
                         replica.getArrowCompressionInfo(),
-                        fetchReqInfo.getProjectFields(),
+                        columnGroupPlan.baseProjection(fetchReqInfo.getProjectFields()),
                         projectionsCache);
+                fetchParams.setCurrentColumnGroups(columnGroupPlan.touchedGroups());
 
                 // If the client prefers remote reads and the offset is covered, return remote fetch
                 // info.
@@ -1798,6 +1849,9 @@ public class ReplicaManager implements ServerReconfigurable {
                     fetchLogResult =
                             new FetchLogResultForBucket(
                                     tb, fetchedData.getRecords(), readInfo.getHighWatermark());
+                }
+                if (!readInfo.getColumnGroups().isEmpty()) {
+                    fetchLogResult = fetchLogResult.withColumnGroups(readInfo.getColumnGroups());
                 }
                 logReadResult.put(
                         tb,

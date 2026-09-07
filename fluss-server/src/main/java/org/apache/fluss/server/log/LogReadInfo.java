@@ -18,6 +18,10 @@
 package org.apache.fluss.server.log;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.rpc.entity.ColumnGroupFetchResult;
+
+import java.util.Collections;
+import java.util.Map;
 
 /** Structure used for lower level reads. */
 @Internal
@@ -26,11 +30,26 @@ public class LogReadInfo {
     private final FetchDataInfo fetchedData;
     private final long highWatermark;
     private final long logEndOffset;
+    private final Map<String, ColumnGroupFetchResult> columnGroups;
 
     public LogReadInfo(FetchDataInfo fetchedData, long highWatermark, long logEndOffset) {
+        this(fetchedData, highWatermark, logEndOffset, Collections.emptyMap());
+    }
+
+    public LogReadInfo(
+            FetchDataInfo fetchedData,
+            long highWatermark,
+            long logEndOffset,
+            Map<String, ColumnGroupFetchResult> columnGroups) {
         this.fetchedData = fetchedData;
         this.highWatermark = highWatermark;
         this.logEndOffset = logEndOffset;
+        this.columnGroups = columnGroups;
+    }
+
+    /** Column-group records covering the fetched base range (FIP-45), keyed by group name. */
+    public Map<String, ColumnGroupFetchResult> getColumnGroups() {
+        return columnGroups;
     }
 
     public FetchDataInfo getFetchedData() {

@@ -118,10 +118,36 @@ public class LogRecordReadContext
             @Nullable Projection projection,
             SchemaGetter schemaGetter,
             AllocationManager.Factory allocationManagerFactory) {
+        return createReadContext(
+                tableInfo.getTableId(),
+                tableInfo.getTableConfig().getLogFormat(),
+                tableInfo.getSchemaId(),
+                tableInfo.getRowType(),
+                readFromRemote,
+                schemaResolution,
+                projection,
+                schemaGetter,
+                allocationManagerFactory);
+    }
+
+    /**
+     * Creates a {@link LogRecordReadContext} for a log whose physical row type is {@code rowType}.
+     * Used for the base log and the column-group logs of a column-group table (FIP-45), whose
+     * physical rows are subsets of the table row; {@code schemaGetter} must answer the matching
+     * physical schemas (see {@link org.apache.fluss.metadata.ColumnGroupSchemaGetter}).
+     */
+    public static LogRecordReadContext createReadContext(
+            long tableId,
+            LogFormat logFormat,
+            int schemaId,
+            RowType rowType,
+            boolean readFromRemote,
+            SchemaResolution schemaResolution,
+            @Nullable Projection projection,
+            SchemaGetter schemaGetter,
+            AllocationManager.Factory allocationManagerFactory) {
         checkNotNull(schemaResolution, "schemaResolution");
         boolean readAsTargetSchema = schemaResolution == SchemaResolution.TARGET;
-        RowType rowType = tableInfo.getRowType();
-        LogFormat logFormat = tableInfo.getTableConfig().getLogFormat();
         // only for arrow log format, the projection can be push downed to the server side
         boolean projectionPushDowned =
                 logFormat == LogFormat.ARROW && !readFromRemote && projection != null;
@@ -131,7 +157,6 @@ public class LogRecordReadContext
         // the reader dynamically adapts to each batch's schema.
         ReadTarget target = null;
         if (readAsTargetSchema || projection != null) {
-            int schemaId = tableInfo.getSchemaId();
             if (projection == null) {
                 // set a default dummy projection to simplify code
                 projection = Projection.of(IntStream.range(0, rowType.getFieldCount()).toArray());
@@ -150,15 +175,11 @@ public class LogRecordReadContext
 
         if (logFormat == LogFormat.ARROW) {
             return createArrowReadContext(
-                    tableInfo.getTableId(),
-                    target,
-                    projectionPushDowned,
-                    schemaGetter,
-                    allocationManagerFactory);
+                    tableId, target, projectionPushDowned, schemaGetter, allocationManagerFactory);
         } else if (logFormat == LogFormat.INDEXED) {
-            return createIndexedReadContext(tableInfo.getTableId(), target, schemaGetter);
+            return createIndexedReadContext(tableId, target, schemaGetter);
         } else if (logFormat == LogFormat.COMPACTED) {
-            return createCompactedRowReadContext(tableInfo.getTableId(), target, schemaGetter);
+            return createCompactedRowReadContext(tableId, target, schemaGetter);
         } else {
             throw new IllegalArgumentException("Unsupported log format: " + logFormat);
         }

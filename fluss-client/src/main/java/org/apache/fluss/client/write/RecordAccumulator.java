@@ -668,15 +668,20 @@ public final class RecordAccumulator {
                         clock.milliseconds());
 
             case ARROW_LOG:
+                // FIP-45: the base log of a column-group table physically holds only the
+                // default-group columns; statistics are keyed by table columns and are skipped.
+                boolean hasColumnGroups = tableInfo.getSchema().hasColumnGroups();
                 ArrowWriter arrowWriter =
                         arrowWriterPool.getOrCreateWriter(
                                 tableInfo.getTableId(),
                                 schemaId,
                                 outputView.getPreAllocatedSize(),
-                                tableInfo.getRowType(),
+                                hasColumnGroups
+                                        ? tableInfo.getSchema().getBaseRowType()
+                                        : tableInfo.getRowType(),
                                 tableInfo.getTableConfig().getArrowCompressionInfo());
                 LogRecordBatchStatisticsCollector statisticsCollector = null;
-                if (tableInfo.isStatisticsEnabled()) {
+                if (tableInfo.isStatisticsEnabled() && !hasColumnGroups) {
                     statisticsCollector =
                             new LogRecordBatchStatisticsCollector(
                                     tableInfo.getRowType(), tableInfo.getStatsIndexMapping());

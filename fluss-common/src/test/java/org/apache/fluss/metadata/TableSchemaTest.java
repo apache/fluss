@@ -426,4 +426,113 @@ class TableSchemaTest {
         assertThat(schemaStringAgg.getAggFunction("items").get().getParameter("delimiter"))
                 .isEqualTo(", ");
     }
+
+    @Test
+    void testColumnGroupBuilderForms() {
+        // Three forms of declaring the same two-group device_logs schema must produce equal
+        // schemas: retroactive .columnGroup(name), inline .column(name, type, group), and the
+        // .columnGroup(name, block) lambda form.
+        Schema retroactive =
+                Schema.newBuilder()
+                        .column("device_id", DataTypes.STRING())
+                        .column("ip", DataTypes.STRING())
+                        .column("payload", DataTypes.STRING())
+                        .column("geo_region", DataTypes.STRING())
+                        .columnGroup("enriched_geo")
+                        .column("risk_score", DataTypes.DOUBLE())
+                        .columnGroup("enriched_risk")
+                        .column("risk_classification", DataTypes.STRING())
+                        .columnGroup("enriched_risk")
+                        .build();
+
+        Schema inline =
+                Schema.newBuilder()
+                        .column("device_id", DataTypes.STRING())
+                        .column("ip", DataTypes.STRING())
+                        .column("payload", DataTypes.STRING())
+                        .column("geo_region", DataTypes.STRING(), "enriched_geo")
+                        .column("risk_score", DataTypes.DOUBLE(), "enriched_risk")
+                        .column("risk_classification", DataTypes.STRING(), "enriched_risk")
+                        .build();
+
+        Schema block =
+                Schema.newBuilder()
+                        .column("device_id", DataTypes.STRING())
+                        .column("ip", DataTypes.STRING())
+                        .column("payload", DataTypes.STRING())
+                        .columnGroup(
+                                "enriched_geo", g -> g.column("geo_region", DataTypes.STRING()))
+                        .columnGroup(
+                                "enriched_risk",
+                                g ->
+                                        g.column("risk_score", DataTypes.DOUBLE())
+                                                .column("risk_classification", DataTypes.STRING()))
+                        .build();
+
+        assertThat(inline).isEqualTo(retroactive);
+        assertThat(block).isEqualTo(retroactive);
+        assertThat(retroactive.getColumnGroupNames())
+                .containsExactlyInAnyOrder("enriched_geo", "enriched_risk");
+        assertThat(retroactive.getColumnGroups().get("enriched_geo")).containsExactly(3);
+        assertThat(retroactive.getColumnGroups().get("enriched_risk")).containsExactly(4, 5);
+        assertThat(retroactive.getDefaultGroupColumnIndices()).containsExactly(0, 1, 2);
+    }
+
+    @Test
+    void testColumnGroupBlockPreservesExplicitGroup() {
+        // An explicit .column(name, type, "other") inside a block keeps its explicit group.
+        Schema schema =
+                Schema.newBuilder()
+                        .column("device_id", DataTypes.STRING())
+                        .columnGroup(
+                                "enriched_geo",
+                                g ->
+                                        g.column("geo_region", DataTypes.STRING())
+                                                .column(
+                                                        "risk_score",
+                                                        DataTypes.DOUBLE(),
+                                                        "enriched_risk"))
+                        .build();
+
+        assertThat(schema.getColumns().get(1).getColumnGroup()).hasValue("enriched_geo");
+        assertThat(schema.getColumns().get(2).getColumnGroup()).hasValue("enriched_risk");
+    }
+
+    @Test
+    void testColumnGroupBlockDoesNotAffectColumnsAddedBefore() {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("device_id", DataTypes.STRING())
+                        .column("ip", DataTypes.STRING())
+                        .columnGroup(
+                                "enriched_geo", g -> g.column("geo_region", DataTypes.STRING()))
+                        .build();
+
+        assertThat(schema.getColumns().get(0).getColumnGroup()).isEmpty();
+        assertThat(schema.getColumns().get(1).getColumnGroup()).isEmpty();
+        assertThat(schema.getColumns().get(2).getColumnGroup()).hasValue("enriched_geo");
+    }
+
+    @Test
+    void testColumnGroupInlineAndBlockNullChecks() {
+        assertThatThrownBy(
+                        () ->
+                                Schema.newBuilder()
+                                        .column("f0", DataTypes.STRING(), (String) null)
+                                        .build())
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("Column group name must not be null.");
+
+        assertThatThrownBy(
+                        () ->
+                                Schema.newBuilder()
+                                        .columnGroup(null, g -> g.column("f0", DataTypes.STRING()))
+                                        .build())
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("Column group name must not be null.");
+
+        assertThatThrownBy(() -> Schema.newBuilder().columnGroup("g", null).build())
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("Column group block must not be null.");
+    }
 }

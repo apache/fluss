@@ -34,8 +34,10 @@ import org.apache.fluss.exception.NonPrimaryKeyTableException;
 import org.apache.fluss.exception.NotEnoughReplicasException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.exception.TooManyScannersException;
+import org.apache.fluss.exception.UnknownColumnGroupException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.ChangelogImage;
+import org.apache.fluss.metadata.ColumnGroupSchemaGetter;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
@@ -49,10 +51,14 @@ import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.record.DefaultValueRecordBatch;
+import org.apache.fluss.record.FileLogProjection;
 import org.apache.fluss.record.KvRecordBatch;
+import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.rpc.entity.ColumnGroupFetchResult;
+import org.apache.fluss.rpc.entity.ProduceLogColumnsResultForBucket;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.rpc.util.PredicateMessageUtils;
@@ -80,6 +86,9 @@ import org.apache.fluss.server.kv.snapshot.KvTabletSnapshotTarget;
 import org.apache.fluss.server.kv.snapshot.PeriodicSnapshotManager;
 import org.apache.fluss.server.kv.snapshot.RocksIncrementalSnapshot;
 import org.apache.fluss.server.kv.snapshot.SnapshotContext;
+import org.apache.fluss.server.log.ColumnGroupAppendInfo;
+import org.apache.fluss.server.log.ColumnGroupFetchPlan;
+import org.apache.fluss.server.log.ColumnGroupLog;
 import org.apache.fluss.server.log.FetchDataInfo;
 import org.apache.fluss.server.log.FetchIsolation;
 import org.apache.fluss.server.log.FetchParams;
@@ -511,6 +520,9 @@ public final class Replica {
                             }
 
                             bucketEpoch = requestBucketEpoch;
+
+                            // FIP-45: column-group high watermarks follow the same rule.
+                            maybeIncrementColumnGroupHWs();
 
                             // We may need to increment high watermark since ISR could be down to 1.
                             return maybeIncrementLeaderHW(logTablet, currentTimeMs);
@@ -1833,6 +1845,9 @@ public final class Replica {
         return inReadLock(
                 leaderIsrUpdateLock,
                 () -> {
+                    if (listOffsetsParam.getColumnGroup() != null) {
+                        return getColumnGroupOffset(listOffsetsParam);
+                    }
                     int offsetType = listOffsetsParam.getOffsetType();
                     if (offsetType == ListOffsetsParam.TIMESTAMP_OFFSET_TYPE) {
                         return getOffsetByTimestamp(remoteLogManager, listOffsetsParam);
@@ -1930,16 +1945,37 @@ public final class Replica {
 
         FilterContext filterContext = createFilterContext(fetchParams);
 
+        // FIP-45: a fetch touching column groups is clamped at min(HW, CEW_g) over the groups.
+        List<String> touchedGroups = fetchParams.currentColumnGroups();
+        long upperBound = Long.MAX_VALUE;
+        if (!touchedGroups.isEmpty() && !fetchParams.isFromFollower()) {
+            for (String group : touchedGroups) {
+                upperBound = Math.min(upperBound, logTablet.getColumnGroupHighWatermark(group));
+            }
+        }
+
         FetchDataInfo fetchDataInfo;
         try {
-            fetchDataInfo =
-                    logTablet.read(
-                            readOffset,
-                            fetchParams.maxFetchBytes(),
-                            fetchParams.isolation(),
-                            fetchParams.minOneMessage(),
-                            fetchParams.projection(),
-                            filterContext);
+            if (upperBound == Long.MAX_VALUE) {
+                fetchDataInfo =
+                        logTablet.read(
+                                readOffset,
+                                fetchParams.maxFetchBytes(),
+                                fetchParams.isolation(),
+                                fetchParams.minOneMessage(),
+                                fetchParams.projection(),
+                                filterContext);
+            } else {
+                fetchDataInfo =
+                        logTablet.read(
+                                readOffset,
+                                fetchParams.maxFetchBytes(),
+                                fetchParams.isolation(),
+                                fetchParams.minOneMessage(),
+                                fetchParams.projection(),
+                                filterContext,
+                                upperBound);
+            }
         } finally {
             // Close readContext eagerly — it is only used for statistics extraction during
             // batch filtering and is NOT referenced by the returned FetchDataInfo records.
@@ -1947,7 +1983,209 @@ public final class Replica {
                 IOUtils.closeQuietly(filterContext.getReadContext());
             }
         }
-        return new LogReadInfo(fetchDataInfo, initialHighWatermark, initialLogEndOffset);
+
+        if (touchedGroups.isEmpty() || fetchParams.isFromFollower()) {
+            return new LogReadInfo(fetchDataInfo, initialHighWatermark, initialLogEndOffset);
+        }
+
+        // Ship the column-group records covering the base range that was just read. The base
+        // bytes are untouched file slices; the client stitches group rows onto them by offset.
+        Map<String, ColumnGroupFetchResult> groupResults = new HashMap<>();
+        // the base read may include a batch running past the bound; group rows never do
+        long lastBaseOffset =
+                Math.min(lastOffsetOf(fetchDataInfo, fetchParams.projection()), upperBound - 1);
+        for (String group : touchedGroups) {
+            LogRecords groupRecords =
+                    lastBaseOffset < readOffset
+                            ? MemoryLogRecords.EMPTY
+                            : logTablet.readColumnGroup(
+                                    group, readOffset, lastBaseOffset, fetchParams.maxFetchBytes());
+            groupResults.put(
+                    group,
+                    new ColumnGroupFetchResult(
+                            group, logTablet.getColumnGroupHighWatermark(group), groupRecords));
+        }
+        return new LogReadInfo(
+                fetchDataInfo, initialHighWatermark, initialLogEndOffset, groupResults);
+    }
+
+    /** The last base offset contained in a read result, or -1 when it holds no records. */
+    private static long lastOffsetOf(
+            FetchDataInfo fetchDataInfo, @Nullable FileLogProjection projection) {
+        LogRecords records = fetchDataInfo.getRecords();
+        if (records.sizeInBytes() == 0) {
+            return -1L;
+        }
+        if (projection != null) {
+            // the projection walked the batch headers already
+            return projection.lastProjectedOffset();
+        }
+        long last = -1L;
+        for (LogRecordBatch batch : records.batches()) {
+            last = batch.lastLogOffset();
+        }
+        return last;
+    }
+
+    // ------------------------------------------------------------------------------------------
+    //  FIP-45: column groups
+    // ------------------------------------------------------------------------------------------
+
+    /**
+     * Follower log end offsets per column group, keyed by follower id then group name. Populated by
+     * follower fetches carrying column-group cursors.
+     */
+    private final Map<Integer, Map<String, Long>> followerColumnGroupEndOffsets =
+            new ConcurrentHashMap<>();
+
+    @Nullable private volatile ColumnGroupSchemaGetter baseSchemaGetter;
+
+    /** Schema getter answering the base physical schema of this column-group table. */
+    private ColumnGroupSchemaGetter baseSchemaGetter() {
+        ColumnGroupSchemaGetter getter = baseSchemaGetter;
+        if (getter == null) {
+            getter = ColumnGroupSchemaGetter.base(schemaGetter);
+            baseSchemaGetter = getter;
+        }
+        return getter;
+    }
+
+    /** Plans how a fetch projection maps onto the base log and the column groups. */
+    public ColumnGroupFetchPlan planColumnGroupFetch(@Nullable int[] projectedFields) {
+        Schema schema = schemaGetter.getLatestSchemaInfo().getSchema();
+        if (!schema.hasColumnGroups()) {
+            return ColumnGroupFetchPlan.plan(schema, projectedFields, schemaGetter);
+        }
+        return ColumnGroupFetchPlan.plan(schema, projectedFields, baseSchemaGetter());
+    }
+
+    /** Appends the rows of one column group at existing base offsets (leader only). */
+    public ProduceLogColumnsResultForBucket appendColumnsAsLeader(
+            String groupName, MemoryLogRecords records, long firstSourceOffset) throws Exception {
+        return inReadLock(
+                leaderIsrUpdateLock,
+                () -> {
+                    if (!isLeader()) {
+                        throw new NotLeaderOrFollowerException(
+                                String.format(
+                                        "Leader not local for bucket %s on tabletServer %d",
+                                        tableBucket, localTabletServerId));
+                    }
+                    Schema schema = schemaGetter.getLatestSchemaInfo().getSchema();
+                    if (!schema.getColumnGroups().containsKey(groupName)) {
+                        throw new UnknownColumnGroupException(
+                                String.format(
+                                        "Column group '%s' is not declared on table %s.",
+                                        groupName, physicalPath.getTablePath()));
+                    }
+                    ColumnGroupAppendInfo appendInfo;
+                    try {
+                        appendInfo =
+                                logTablet.appendColumnsAsLeader(
+                                        groupName, records, firstSourceOffset);
+                    } catch (IOException e) {
+                        LOG.error(
+                                "Error while appending column group '{}' to {}",
+                                groupName,
+                                tableBucket,
+                                e);
+                        fatalErrorHandler.onFatalError(e);
+                        throw new LogStorageException(
+                                "Error while appending column group records to " + tableBucket, e);
+                    }
+                    maybeIncrementColumnGroupHW(groupName);
+                    LOG.trace(
+                            "Appended {} of column group '{}' to {}",
+                            appendInfo,
+                            groupName,
+                            tableBucket);
+                    return new ProduceLogColumnsResultForBucket(
+                            tableBucket,
+                            logTablet.getColumnGroupLogEndOffset(groupName),
+                            logTablet.getColumnGroupHighWatermark(groupName));
+                });
+    }
+
+    private void maybeIncrementColumnGroupHWs() {
+        for (String group : logTablet.getColumnGroupLogs().keySet()) {
+            maybeIncrementColumnGroupHW(group);
+        }
+    }
+
+    /**
+     * Advances the high watermark of a column group to the smallest log end offset of the group
+     * among the leader and the in-sync followers, mirroring {@link #maybeIncrementLeaderHW}.
+     *
+     * <p>TODO (WP2): followers do not replicate column groups yet, so a follower with no reported
+     * cursor is not counted. Once follower fetches carry {@code PbColumnGroupFetch} cursors and
+     * followers append the shipped group records, an in-sync follower without a cursor must hold
+     * the watermark back exactly like the base high watermark.
+     */
+    private boolean maybeIncrementColumnGroupHW(String groupName) {
+        if (isUnderMinIsr()) {
+            return false;
+        }
+        ColumnGroupLog columnGroupLog = logTablet.getColumnGroupLog(groupName);
+        if (columnGroupLog == null) {
+            return false;
+        }
+        long newHighWatermark = columnGroupLog.logEndOffset();
+        for (FollowerReplica follower : followerReplicasMap.values()) {
+            int followerId = follower.getFollowerId();
+            if (!isrState.maximalIsr().contains(followerId)) {
+                continue;
+            }
+            Map<String, Long> cursors = followerColumnGroupEndOffsets.get(followerId);
+            Long followerEndOffset = cursors == null ? null : cursors.get(groupName);
+            if (followerEndOffset != null && followerEndOffset < newHighWatermark) {
+                newHighWatermark = followerEndOffset;
+            }
+        }
+        boolean incremented = columnGroupLog.maybeIncrementHighWatermark(newHighWatermark);
+        if (incremented) {
+            LOG.debug(
+                    "Column group '{}' high watermark of bucket {} advanced to {}",
+                    groupName,
+                    tableBucket,
+                    columnGroupLog.highWatermark());
+        }
+        return incremented;
+    }
+
+    /** Records a follower's column-group log end offsets reported in a fetch (WP2 hook). */
+    public void updateFollowerColumnGroupEndOffsets(int followerId, Map<String, Long> endOffsets) {
+        followerColumnGroupEndOffsets.put(followerId, endOffsets);
+        for (String group : endOffsets.keySet()) {
+            maybeIncrementColumnGroupHW(group);
+        }
+    }
+
+    /** Answers list-offsets for a column group (FIP-45). */
+    private long getColumnGroupOffset(ListOffsetsParam listOffsetsParam) {
+        String group = listOffsetsParam.getColumnGroup();
+        Schema schema = schemaGetter.getLatestSchemaInfo().getSchema();
+        if (!schema.getColumnGroups().containsKey(group)) {
+            throw new UnknownColumnGroupException(
+                    String.format(
+                            "Column group '%s' is not declared on table %s.",
+                            group, physicalPath.getTablePath()));
+        }
+        int offsetType = listOffsetsParam.getOffsetType();
+        if (offsetType == ListOffsetsParam.LATEST_OFFSET_TYPE) {
+            return listOffsetsParam.getFollowerServerId() < 0
+                    ? logTablet.getColumnGroupHighWatermark(group)
+                    : logTablet.getColumnGroupLogEndOffset(group);
+        } else if (offsetType == ListOffsetsParam.LEADER_END_OFFSET_SNAPSHOT_TYPE) {
+            return logTablet.getColumnGroupLogEndOffset(group);
+        } else if (offsetType == ListOffsetsParam.EARLIEST_OFFSET_TYPE) {
+            ColumnGroupLog columnGroupLog = logTablet.getColumnGroupLog(group);
+            return columnGroupLog == null
+                    ? logTablet.logStartOffset()
+                    : Math.max(columnGroupLog.logStartOffset(), logTablet.logStartOffset());
+        } else {
+            throw new IllegalArgumentException(
+                    "Unsupported list offset type " + offsetType + " for column group " + group);
+        }
     }
 
     /**

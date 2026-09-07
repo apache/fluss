@@ -48,12 +48,29 @@ public class ListOffsetsParam {
     private final int followerServerId;
     private final Integer offsetType;
     private @Nullable final Long startTimestamp;
+    // FIP-45: answer offsets for this column group instead of the base log when set
+    private @Nullable final String columnGroup;
 
     public ListOffsetsParam(
             int followerServerId, Integer offsetType, @Nullable Long startTimestamp) {
+        this(followerServerId, offsetType, startTimestamp, null);
+    }
+
+    public ListOffsetsParam(
+            int followerServerId,
+            Integer offsetType,
+            @Nullable Long startTimestamp,
+            @Nullable String columnGroup) {
         this.followerServerId = followerServerId;
         this.offsetType = offsetType;
         this.startTimestamp = startTimestamp;
+        this.columnGroup = columnGroup;
+    }
+
+    /** The column group the offsets are asked for, or null for the base log. */
+    @Nullable
+    public String getColumnGroup() {
+        return columnGroup;
     }
 
     public int getFollowerServerId() {

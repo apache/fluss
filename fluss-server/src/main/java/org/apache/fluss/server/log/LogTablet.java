@@ -21,9 +21,11 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.TableConfig;
+import org.apache.fluss.exception.ColumnGroupSourceOffsetTruncatedException;
 import org.apache.fluss.exception.CorruptRecordException;
 import org.apache.fluss.exception.DuplicateSequenceException;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.InvalidColumnGroupOffsetException;
 import org.apache.fluss.exception.InvalidTimestampException;
 import org.apache.fluss.exception.LogOffsetOutOfRangeException;
 import org.apache.fluss.exception.LogStorageException;
@@ -64,6 +66,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -143,6 +147,12 @@ public final class LogTablet {
     // Metric reads are allowed to observe transient intermediate states.
     private volatile long estimatedPendingStartTimeMs = -1L;
 
+    // FIP-45: the shadow logs of the column groups of this bucket, keyed by group name.
+    @GuardedBy("lock")
+    private final Map<String, ColumnGroupLog> columnGroupLogs = new ConcurrentHashMap<>();
+
+    private final Configuration logConf;
+
     private LogTablet(
             File dataDir,
             PhysicalTablePath physicalPath,
@@ -157,6 +167,7 @@ public final class LogTablet {
         this.dataDir = dataDir;
         this.physicalPath = physicalPath;
         this.localLog = localLog;
+        this.logConf = conf;
         this.maxSegmentFileSize = (int) conf.get(ConfigOptions.LOG_SEGMENT_FILE_SIZE).getBytes();
         this.logFlushIntervalMessages = conf.get(ConfigOptions.LOG_FLUSH_INTERVAL_MESSAGES);
         int writerExpirationCheckIntervalMs =
@@ -410,17 +421,221 @@ public final class LogTablet {
                         tableBucket,
                         logFormat);
 
-        return new LogTablet(
-                dataDir,
-                tablePath,
-                log,
-                conf,
-                rollExpiredActiveSegmentEnabled,
-                scheduler,
-                writerStateManager,
-                tableConfig,
-                isChangelog,
-                clock);
+        LogTablet logTablet =
+                new LogTablet(
+                        dataDir,
+                        tablePath,
+                        log,
+                        conf,
+                        rollExpiredActiveSegmentEnabled,
+                        scheduler,
+                        writerStateManager,
+                        tableConfig,
+                        isChangelog,
+                        clock);
+        logTablet.loadColumnGroupLogs(tabletDir, isCleanShutdown);
+        return logTablet;
+    }
+
+    // ------------------------------------------------------------------------------------------
+    //  FIP-45: column-group shadow logs
+    // ------------------------------------------------------------------------------------------
+
+    private void loadColumnGroupLogs(File tabletDir, boolean isCleanShutdown) throws IOException {
+        Set<String> groups = ColumnGroupLog.discoverGroups(tabletDir);
+        for (String group : groups) {
+            ColumnGroupLog columnGroupLog =
+                    ColumnGroupLog.load(
+                            tabletDir, group, logConf, getTableBucket(), isCleanShutdown);
+            columnGroupLogs.put(group, columnGroupLog);
+            LOG.info("Loaded {} for bucket {}", columnGroupLog, getTableBucket());
+        }
+    }
+
+    /** The column-group logs of this bucket, keyed by group name. */
+    public Map<String, ColumnGroupLog> getColumnGroupLogs() {
+        return Collections.unmodifiableMap(columnGroupLogs);
+    }
+
+    /** The column-group log of {@code groupName}, or null if it has no data yet. */
+    @Nullable
+    public ColumnGroupLog getColumnGroupLog(String groupName) {
+        return columnGroupLogs.get(groupName);
+    }
+
+    /** Gets or creates the column-group log of {@code groupName}. */
+    public ColumnGroupLog getOrCreateColumnGroupLog(String groupName) throws IOException {
+        ColumnGroupLog existing = columnGroupLogs.get(groupName);
+        if (existing != null) {
+            return existing;
+        }
+        synchronized (lock) {
+            existing = columnGroupLogs.get(groupName);
+            if (existing != null) {
+                return existing;
+            }
+            ColumnGroupLog created =
+                    ColumnGroupLog.load(
+                            localLog.getLogTabletDir(), groupName, logConf, getTableBucket(), true);
+            columnGroupLogs.put(groupName, created);
+            return created;
+        }
+    }
+
+    /**
+     * The log end offset (enrichment watermark) of {@code groupName}; offsets below the base log
+     * start are trivially complete, so an absent group answers the base log start offset.
+     */
+    public long getColumnGroupLogEndOffset(String groupName) {
+        ColumnGroupLog columnGroupLog = columnGroupLogs.get(groupName);
+        long logStart = logStartOffset();
+        return columnGroupLog == null
+                ? logStart
+                : Math.max(columnGroupLog.logEndOffset(), logStart);
+    }
+
+    /** The high watermark (committed enrichment watermark) of {@code groupName}. */
+    public long getColumnGroupHighWatermark(String groupName) {
+        ColumnGroupLog columnGroupLog = columnGroupLogs.get(groupName);
+        long logStart = logStartOffset();
+        return columnGroupLog == null
+                ? logStart
+                : Math.max(columnGroupLog.highWatermark(), logStart);
+    }
+
+    /**
+     * Appends the rows of column group {@code groupName} for the contiguous base offsets starting
+     * at {@code firstSourceOffset}.
+     *
+     * <ul>
+     *   <li>{@code firstSourceOffset} must equal the group's log end offset; a batch entirely below
+     *       it is acknowledged as a duplicate (client replay), a batch straddling it or leaving a
+     *       gap is rejected with the expected offset.
+     *   <li>the last row must be below the base high watermark: enrichment never runs ahead of
+     *       replicated base rows.
+     *   <li>offsets that base retention already removed are trivially complete: the group log is
+     *       advanced to the base log start offset before validation.
+     * </ul>
+     */
+    public ColumnGroupAppendInfo appendColumnsAsLeader(
+            String groupName, MemoryLogRecords records, long firstSourceOffset) throws IOException {
+        synchronized (lock) {
+            localLog.checkIfMemoryMappedBufferClosed();
+            ColumnGroupLog columnGroupLog = getOrCreateColumnGroupLog(groupName);
+            long baseLogStart = logStartOffset();
+            long baseHighWatermark = getHighWatermark();
+            if (columnGroupLog.logEndOffset() < baseLogStart) {
+                columnGroupLog.advanceStartOffsetTo(baseLogStart);
+            }
+            long expected = columnGroupLog.logEndOffset();
+
+            int rowCount = 0;
+            for (LogRecordBatch batch : records.batches()) {
+                rowCount += batch.getRecordCount();
+            }
+            if (rowCount == 0) {
+                return new ColumnGroupAppendInfo(
+                        firstSourceOffset, firstSourceOffset - 1, 0, false);
+            }
+            long lastSourceOffset = firstSourceOffset + rowCount - 1;
+
+            if (lastSourceOffset < expected) {
+                LOG.debug(
+                        "Skipping already filled column group '{}' rows [{}, {}] for bucket {}",
+                        groupName,
+                        firstSourceOffset,
+                        lastSourceOffset,
+                        getTableBucket());
+                return ColumnGroupAppendInfo.duplicated(firstSourceOffset, lastSourceOffset);
+            }
+            if (firstSourceOffset < baseLogStart) {
+                throw new ColumnGroupSourceOffsetTruncatedException(
+                        String.format(
+                                "Column group '%s' source offset %d of bucket %s is below the base "
+                                        + "log start offset %d; the base rows have been deleted.",
+                                groupName, firstSourceOffset, getTableBucket(), baseLogStart));
+            }
+            if (firstSourceOffset != expected) {
+                throw new InvalidColumnGroupOffsetException(
+                        String.format(
+                                "Column group '%s' of bucket %s expects rows to start at offset %d "
+                                        + "(its log end offset), but the batch starts at %d.",
+                                groupName, getTableBucket(), expected, firstSourceOffset),
+                        expected);
+            }
+            if (lastSourceOffset >= baseHighWatermark) {
+                throw new InvalidColumnGroupOffsetException(
+                        String.format(
+                                "Column group '%s' rows [%d, %d] of bucket %s run past the base "
+                                        + "log high watermark %d; enrichment cannot run ahead of "
+                                        + "replicated base rows.",
+                                groupName,
+                                firstSourceOffset,
+                                lastSourceOffset,
+                                getTableBucket(),
+                                baseHighWatermark),
+                        expected);
+            }
+            return columnGroupLog.append(records, firstSourceOffset, clock.milliseconds());
+        }
+    }
+
+    /**
+     * Reads the records of column group {@code groupName} covering base offsets {@code
+     * [startOffset, endOffsetInclusive]}, as zero-copy file slices.
+     */
+    public LogRecords readColumnGroup(
+            String groupName, long startOffset, long endOffsetInclusive, int maxBytes)
+            throws IOException {
+        ColumnGroupLog columnGroupLog = columnGroupLogs.get(groupName);
+        if (columnGroupLog == null) {
+            return MemoryLogRecords.EMPTY;
+        }
+        return columnGroupLog.read(startOffset, endOffsetInclusive, maxBytes);
+    }
+
+    /**
+     * Reads messages from the local log like {@link #read(long, int, FetchIsolation, boolean,
+     * FileLogProjection, FilterContext)} but never past {@code upperBoundOffset} (exclusive). Used
+     * to clamp fetches touching column groups at the committed enrichment watermark (FIP-45).
+     */
+    public FetchDataInfo read(
+            long readOffset,
+            int maxLength,
+            FetchIsolation fetchIsolation,
+            boolean minOneMessage,
+            @Nullable FileLogProjection projection,
+            @Nullable FilterContext filterContext,
+            long upperBoundOffset)
+            throws IOException {
+        LogOffsetMetadata maxOffsetMetadata;
+        if (fetchIsolation == FetchIsolation.LOG_END) {
+            maxOffsetMetadata = localLog.getLocalLogEndOffsetMetadata();
+        } else {
+            maxOffsetMetadata = fetchHighWatermarkMetadata();
+        }
+        if (upperBoundOffset <= readOffset) {
+            // nothing below the bound is left to read: answer an empty fetch at the read offset
+            // (the client will poll again once the column group's high watermark advances)
+            long bounded = Math.min(readOffset, maxOffsetMetadata.getMessageOffset());
+            return localLog.read(
+                    bounded,
+                    maxLength,
+                    minOneMessage,
+                    convertToOffsetMetadataOrThrow(bounded),
+                    projection,
+                    filterContext);
+        }
+        if (upperBoundOffset < maxOffsetMetadata.getMessageOffset()) {
+            // batches are never split: include the whole batch containing the last visible
+            // offset; column-group rows are only shipped up to the bound, so the client stops
+            // exactly there and re-fetches from it
+            synchronized (lock) {
+                maxOffsetMetadata = localLog.convertToBatchEndOffsetMetadata(upperBoundOffset - 1);
+            }
+        }
+        return localLog.read(
+                readOffset, maxLength, minOneMessage, maxOffsetMetadata, projection, filterContext);
     }
 
     @VisibleForTesting
@@ -1130,6 +1345,10 @@ public final class LogTablet {
                         truncateFullyAndStartAt(targetOffset);
                     } else {
                         List<LogSegment> deletedSegments = localLog.truncateTo(targetOffset);
+                        // group logs never run past the base log: follow its actual end offset
+                        for (ColumnGroupLog columnGroupLog : columnGroupLogs.values()) {
+                            columnGroupLog.truncateTo(localLog.getLocalLogEndOffset());
+                        }
 
                         deleteWriterSnapshots(deletedSegments, writerStateManager);
                         rebuildWriterState(targetOffset, writerStateManager);
@@ -1157,6 +1376,9 @@ public final class LogTablet {
         synchronized (lock) {
             try {
                 localLog.truncateFullyAndStartAt(newOffset);
+                for (ColumnGroupLog columnGroupLog : columnGroupLogs.values()) {
+                    columnGroupLog.truncateFullyAndStartAt(newOffset);
+                }
                 writerStateManager.truncateFullyAndStartAt(newOffset);
                 rebuildWriterState(newOffset, writerStateManager);
                 updateHighWatermark(localLog.getLocalLogEndOffset());
@@ -1209,6 +1431,9 @@ public final class LogTablet {
                 writerStateManager.takeSnapshot();
             } catch (IOException e) {
                 LOG.error("Error while taking writer snapshot for bucket {}.", getTableBucket(), e);
+            }
+            for (ColumnGroupLog columnGroupLog : columnGroupLogs.values()) {
+                columnGroupLog.close();
             }
             localLog.close();
         }

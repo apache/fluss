@@ -56,6 +56,7 @@ import java.util.BitSet;
 import java.util.List;
 
 import static org.apache.fluss.record.DefaultLogRecordBatch.APPEND_ONLY_FLAG_MASK;
+import static org.apache.fluss.record.LogRecordBatchFormat.BASE_OFFSET_OFFSET;
 import static org.apache.fluss.record.LogRecordBatchFormat.LENGTH_OFFSET;
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V0;
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V1;
@@ -66,6 +67,7 @@ import static org.apache.fluss.record.LogRecordBatchFormat.V0_RECORD_BATCH_HEADE
 import static org.apache.fluss.record.LogRecordBatchFormat.V1_RECORD_BATCH_HEADER_SIZE;
 import static org.apache.fluss.record.LogRecordBatchFormat.V2_RECORD_BATCH_HEADER_SIZE;
 import static org.apache.fluss.record.LogRecordBatchFormat.attributeOffset;
+import static org.apache.fluss.record.LogRecordBatchFormat.lastOffsetDeltaOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.recordBatchHeaderSize;
 import static org.apache.fluss.record.LogRecordBatchFormat.recordsCountOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.schemaIdOffset;
@@ -114,6 +116,17 @@ public class FileLogProjection {
         this.logHeaderBuffer.order(ByteOrder.LITTLE_ENDIAN);
         // arrow force use little endian to encode int32 values
         this.arrowHeaderBuffer.order(ByteOrder.LITTLE_ENDIAN);
+    }
+
+    /** The last offset of the last batch included by the most recent {@link #project} call. */
+    private long lastProjectedOffset = -1L;
+
+    /**
+     * The last offset of the last non-empty batch included by the most recent {@link #project}
+     * call, or -1 if none. Used to size the column-group companion read (FIP-45).
+     */
+    public long lastProjectedOffset() {
+        return lastProjectedOffset;
     }
 
     public void setCurrentProjection(
@@ -185,6 +198,7 @@ public class FileLogProjection {
 
         MultiBytesView.Builder builder = MultiBytesView.builder();
         int position = start;
+        lastProjectedOffset = -1L;
 
         ProjectionInfo currentProjection = null;
         short prevSchemaId = -1;
@@ -234,6 +248,9 @@ public class FileLogProjection {
                 // the projected batch exceeds the remaining budget, stop here
                 return new BytesViewLogRecords(builder.build());
             }
+            lastProjectedOffset =
+                    logHeaderBuffer.getLong(BASE_OFFSET_OFFSET)
+                            + logHeaderBuffer.getInt(lastOffsetDeltaOffset(magic));
 
             maxBytes -= newBatchSizeInBytes;
             position += batchSizeInBytes;
