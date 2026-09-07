@@ -1427,8 +1427,8 @@ public class ReplicaManager implements ServerReconfigurable {
         }
     }
 
-    @VisibleForTesting
-    NotifyLeaderAndIsrResultForBucket makeLeader(Replica replica, NotifyLeaderAndIsrData data) {
+    private NotifyLeaderAndIsrResultForBucket makeLeader(
+            Replica replica, NotifyLeaderAndIsrData data) {
         TableBucket tb = data.getTableBucket();
         try {
             // register replica to remote log manager first.
