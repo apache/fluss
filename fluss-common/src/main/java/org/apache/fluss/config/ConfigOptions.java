@@ -405,7 +405,7 @@ public class ConfigOptions {
     public static final ConfigOption<Integer> SERVER_IO_POOL_SIZE =
             key("server.io-pool.size")
                     .intType()
-                    .defaultValue(10)
+                    .defaultValue(2)
                     .withDescription(
                             "The size of the IO thread pool to run blocking operations for both coordinator and tablet servers. "
                                     + "This includes discard unnecessary snapshot files, transfer kv snapshot files, "
