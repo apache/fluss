@@ -829,6 +829,8 @@ message GetServerInfoResponse {
   optional int64 data_disk_total_bytes = 7;
   optional int64 data_disk_used_bytes = 8;
   required int64 collected_at_ms = 9;
+  // Optional to keep compatibility with older servers.
+  optional int64 startup_time_ms = 10;
 }
 
 

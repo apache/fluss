@@ -254,6 +254,7 @@ public class TabletServer extends ServerBase {
                             endpoints.get(0).getHost(),
                             String.valueOf(serverId),
                             ServerType.TABLET_SERVER,
+                            startupTimeMs(),
                             localDiskManager.dataDirs(),
                             scheduler);
             this.logManager =

@@ -1411,6 +1411,8 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         expectedNodes.add(FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode());
         expectedNodes.addAll(FLUSS_CLUSTER_EXTENSION.getTabletServerNodes());
         assertThat(serverNodes).containsExactlyInAnyOrderElementsOf(expectedNodes);
+        assertThat(serverNodes)
+                .allSatisfy(serverNode -> assertThat(serverNode.startupTimeMs()).isPositive());
     }
 
     @Test

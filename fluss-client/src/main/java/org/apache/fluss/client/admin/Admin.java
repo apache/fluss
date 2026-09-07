@@ -92,9 +92,9 @@ public interface Admin extends AutoCloseable {
     /**
      * Gets the current server node information and a machine resource snapshot asynchronously.
      *
-     * <p>The returned {@link ServerNode} contains {@link ServerNode#resourceInfo()} for each
-     * currently available node. The resource snapshot includes CPU, memory and data disk
-     * information and is collected when this method is called.
+     * <p>The returned {@link ServerNode} contains {@link ServerNode#resourceInfo()} and {@link
+     * ServerNode#startupTimeMs()} for each currently available node. The resource snapshot includes
+     * CPU, memory and data disk information and is collected when this method is called.
      */
     CompletableFuture<List<ServerNode>> getServerNodes();
 

@@ -79,6 +79,8 @@ public abstract class ServerBase implements AutoCloseableAsync, FatalErrorHandle
     protected FileSystem remoteFileSystem;
     protected PluginManager pluginManager;
 
+    private long startupTimeMs;
+
     private final AtomicBoolean fatalErrorShutdownTriggered = new AtomicBoolean();
 
     private Thread shutDownHook;
@@ -133,6 +135,7 @@ public abstract class ServerBase implements AutoCloseableAsync, FatalErrorHandle
 
     public void start() throws Exception {
         SignalHandler.register(LOG);
+        startupTimeMs = System.currentTimeMillis();
         try {
             addShutDownHook();
 
@@ -224,6 +227,11 @@ public abstract class ServerBase implements AutoCloseableAsync, FatalErrorHandle
     }
 
     protected abstract void startServices() throws Exception;
+
+    /** Returns the time when this server process started, in epoch milliseconds. */
+    protected final long startupTimeMs() {
+        return startupTimeMs;
+    }
 
     protected abstract CompletableFuture<Result> closeAsync(Result result);
 

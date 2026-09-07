@@ -45,6 +45,7 @@ public final class ServerNodeMetrics implements AutoCloseable {
     private final TabletServerResourceProbe resourceProbe;
     private final String serverId;
     private final ServerType serverType;
+    private final long startupTimeMs;
     private final DiskUsageCollector diskUsageCollector;
     private final AtomicReference<Snapshot> latestSnapshot;
     private final ScheduledFuture<?> samplingTask;
@@ -60,9 +61,33 @@ public final class ServerNodeMetrics implements AutoCloseable {
             ServerType serverType,
             @Nullable List<File> dataDirs,
             Scheduler scheduler) {
+        this(
+                conf,
+                registry,
+                clusterId,
+                hostname,
+                serverId,
+                serverType,
+                System.currentTimeMillis(),
+                dataDirs,
+                scheduler);
+    }
+
+    /** Creates and starts a periodic node metrics collector with the server startup time. */
+    public ServerNodeMetrics(
+            Configuration conf,
+            MetricRegistry registry,
+            String clusterId,
+            String hostname,
+            String serverId,
+            ServerType serverType,
+            long startupTimeMs,
+            @Nullable List<File> dataDirs,
+            Scheduler scheduler) {
         this.resourceProbe = new TabletServerResourceProbe(conf);
         this.serverId = serverId;
         this.serverType = serverType;
+        this.startupTimeMs = startupTimeMs;
         this.diskUsageCollector = dataDirs == null ? null : new DiskUsageCollector(dataDirs);
         this.latestSnapshot = new AtomicReference<>(collectSnapshot());
         this.metricGroup =
@@ -87,7 +112,8 @@ public final class ServerNodeMetrics implements AutoCloseable {
                 .setMemoryTotalBytes(snapshot.getMemoryTotalBytes())
                 .setCpuUsageRatio(snapshot.getCpuUsageRatio())
                 .setMemoryUsedBytes(snapshot.getMemoryUsedBytes())
-                .setCollectedAtMs(snapshot.getCollectedAtMs());
+                .setCollectedAtMs(snapshot.getCollectedAtMs())
+                .setStartupTimeMs(startupTimeMs);
         if (snapshot.hasDataDisk()) {
             response.setDataDiskTotalBytes(snapshot.getDataDiskTotalBytes());
             response.setDataDiskUsedBytes(snapshot.getDataDiskUsedBytes());

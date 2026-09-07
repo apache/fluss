@@ -184,7 +184,7 @@ public class FlussAdmin implements Admin {
 
     @Override
     public CompletableFuture<List<ServerNode>> getServerNodes() {
-        return getServerNodesWithoutResourceInfo().thenCompose(this::attachResourceInfo);
+        return getServerNodesWithoutResourceInfo().thenCompose(this::attachNodeInfo);
     }
 
     private CompletableFuture<List<ServerNode>> getServerNodesWithoutResourceInfo() {
@@ -211,12 +211,10 @@ public class FlussAdmin implements Admin {
         return future;
     }
 
-    private CompletableFuture<List<ServerNode>> attachResourceInfo(List<ServerNode> serverNodes) {
+    private CompletableFuture<List<ServerNode>> attachNodeInfo(List<ServerNode> serverNodes) {
         List<CompletableFuture<ServerNode>> futures = new ArrayList<>(serverNodes.size());
         for (ServerNode serverNode : serverNodes) {
-            futures.add(
-                    getNodeResourceInfo(serverNode)
-                            .thenApply(resourceInfo -> serverNode.withResourceInfo(resourceInfo)));
+            futures.add(getNodeInfo(serverNode));
         }
         return CompletableFuture.allOf(futures.toArray(new CompletableFuture<?>[0]))
                 .thenApply(
@@ -229,7 +227,7 @@ public class FlussAdmin implements Admin {
                         });
     }
 
-    private CompletableFuture<NodeResourceInfo> getNodeResourceInfo(ServerNode serverNode) {
+    private CompletableFuture<ServerNode> getNodeInfo(ServerNode serverNode) {
         CompletableFuture<GetServerInfoResponse> responseFuture;
         if (serverNode.serverType() == ServerType.COORDINATOR) {
             responseFuture =
@@ -240,7 +238,7 @@ public class FlussAdmin implements Admin {
             TabletServerGateway tabletGateway =
                     metadataUpdater.newTabletServerClientForNode(serverNode.id());
             if (tabletGateway == null) {
-                CompletableFuture<NodeResourceInfo> unavailable = new CompletableFuture<>();
+                CompletableFuture<ServerNode> unavailable = new CompletableFuture<>();
                 unavailable.completeExceptionally(
                         new FlussRuntimeException(
                                 "Tablet server is no longer available: " + serverNode));
@@ -248,7 +246,14 @@ public class FlussAdmin implements Admin {
             }
             responseFuture = tabletGateway.getServerInfo(new GetServerInfoRequest());
         }
-        return responseFuture.thenApply(FlussAdmin::toNodeResourceInfo);
+        return responseFuture.thenApply(
+                response ->
+                        serverNode
+                                .withResourceInfo(toNodeResourceInfo(response))
+                                .withStartupTimeMs(
+                                        response.hasStartupTimeMs()
+                                                ? response.getStartupTimeMs()
+                                                : null));
     }
 
     private static NodeResourceInfo toNodeResourceInfo(GetServerInfoResponse response) {

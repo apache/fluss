@@ -247,6 +247,7 @@ public class CoordinatorServer extends ServerBase {
                             endpoints.get(0).getHost(),
                             serverId,
                             ServerType.COORDINATOR,
+                            startupTimeMs(),
                             null,
                             scheduler);
 
