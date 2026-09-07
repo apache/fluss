@@ -151,7 +151,9 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -1417,10 +1419,18 @@ public class ReplicaManager implements ServerReconfigurable {
             }
         }
 
-        CompletableFuture.allOf(
-                        makeLeaderFutures.toArray(
-                                new CompletableFuture<?>[makeLeaderFutures.size()]))
-                .join();
+        try {
+            CompletableFuture.allOf(
+                            makeLeaderFutures.toArray(
+                                    new CompletableFuture<?>[makeLeaderFutures.size()]))
+                    .get();
+        } catch (InterruptedException e) {
+            makeLeaderFutures.forEach(future -> future.cancel(false));
+            Thread.currentThread().interrupt();
+            throw new CompletionException(e);
+        } catch (ExecutionException e) {
+            throw new CompletionException(e.getCause());
+        }
         for (CompletableFuture<NotifyLeaderAndIsrResultForBucket> future : makeLeaderFutures) {
             NotifyLeaderAndIsrResultForBucket leaderResult = future.join();
             result.put(leaderResult.getTableBucket(), leaderResult);

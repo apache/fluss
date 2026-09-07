@@ -160,7 +160,7 @@ public class ReplicaTestBase {
     protected TestCoordinatorGateway testCoordinatorGateway;
     private FlussScheduler scheduler;
     private ExecutorService ioExecutor;
-    private ExecutorService replicaTransitionExecutor;
+    protected ExecutorService replicaTransitionExecutor;
 
     // remote log related
     protected TestingRemoteLogStorage remoteLogStorage;

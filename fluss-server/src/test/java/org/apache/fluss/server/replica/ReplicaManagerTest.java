@@ -119,6 +119,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_2;
@@ -1799,51 +1800,19 @@ class ReplicaManagerTest extends ReplicaTestBase {
     void testMakeLeadersWithPartialFailure() throws Exception {
         TableBucket firstBucket = new TableBucket(DATA1_TABLE_ID, 1);
         TableBucket secondBucket = new TableBucket(DATA1_TABLE_ID, 2);
-        List<Integer> replicas = Arrays.asList(1, 2, 3);
+        List<NotifyLeaderAndIsrData> leaderData =
+                Arrays.asList(
+                        newLeaderData(firstBucket, INITIAL_BUCKET_EPOCH),
+                        newLeaderData(secondBucket, INITIAL_BUCKET_EPOCH));
         makeLogTableAsLeader(firstBucket.getBucket());
         replicaManager
                 .getReplicaOrException(firstBucket)
-                .makeLeader(
-                        new NotifyLeaderAndIsrData(
-                                PhysicalTablePath.of(DATA1_TABLE_PATH),
-                                firstBucket,
-                                replicas,
-                                new LeaderAndIsr(
-                                        TABLET_SERVER_ID,
-                                        INITIAL_LEADER_EPOCH,
-                                        replicas,
-                                        Collections.emptyList(),
-                                        INITIAL_COORDINATOR_EPOCH,
-                                        INITIAL_BUCKET_EPOCH + 1)));
+                .makeLeader(newLeaderData(firstBucket, INITIAL_BUCKET_EPOCH + 1));
 
         CompletableFuture<List<NotifyLeaderAndIsrResultForBucket>> future =
                 new CompletableFuture<>();
         replicaManager.becomeLeaderOrFollower(
-                INITIAL_COORDINATOR_EPOCH,
-                Arrays.asList(
-                        new NotifyLeaderAndIsrData(
-                                PhysicalTablePath.of(DATA1_TABLE_PATH),
-                                firstBucket,
-                                replicas,
-                                new LeaderAndIsr(
-                                        TABLET_SERVER_ID,
-                                        INITIAL_LEADER_EPOCH,
-                                        replicas,
-                                        Collections.emptyList(),
-                                        INITIAL_COORDINATOR_EPOCH,
-                                        INITIAL_BUCKET_EPOCH)),
-                        new NotifyLeaderAndIsrData(
-                                PhysicalTablePath.of(DATA1_TABLE_PATH),
-                                secondBucket,
-                                replicas,
-                                new LeaderAndIsr(
-                                        TABLET_SERVER_ID,
-                                        INITIAL_LEADER_EPOCH,
-                                        replicas,
-                                        Collections.emptyList(),
-                                        INITIAL_COORDINATOR_EPOCH,
-                                        INITIAL_BUCKET_EPOCH))),
-                future::complete);
+                INITIAL_COORDINATOR_EPOCH, leaderData, future::complete);
 
         assertThat(future.get())
                 .containsExactlyInAnyOrder(
@@ -1868,6 +1837,51 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 true,
                 INITIAL_LEADER_EPOCH,
                 INITIAL_BUCKET_EPOCH);
+    }
+
+    @Test
+    void testInterruptLeaderTransitionWaitWithQueuedTasks() throws Exception {
+        ThreadPoolExecutor transitionExecutor = (ThreadPoolExecutor) replicaTransitionExecutor;
+        transitionExecutor.setCorePoolSize(1);
+        transitionExecutor.setMaximumPoolSize(1);
+        CountDownLatch workerStarted = new CountDownLatch(1);
+        ExecutorService stateChangeExecutor = Executors.newSingleThreadExecutor();
+        List<Runnable> queuedTasks = new ArrayList<>();
+        try {
+            transitionExecutor.submit(
+                    () -> {
+                        workerStarted.countDown();
+                        Thread.sleep(Long.MAX_VALUE);
+                        return null;
+                    });
+            assertThat(workerStarted.await(10, TimeUnit.SECONDS)).isTrue();
+            stateChangeExecutor.submit(
+                    () ->
+                            replicaManager.becomeLeaderOrFollower(
+                                    INITIAL_COORDINATOR_EPOCH,
+                                    Arrays.asList(
+                                            newLeaderData(
+                                                    new TableBucket(DATA1_TABLE_ID, 1),
+                                                    INITIAL_BUCKET_EPOCH),
+                                            newLeaderData(
+                                                    new TableBucket(DATA1_TABLE_ID, 2),
+                                                    INITIAL_BUCKET_EPOCH)),
+                                    ignored -> {}));
+            waitUntil(
+                    () -> transitionExecutor.getQueue().size() == 2,
+                    Duration.ofSeconds(10),
+                    "Leader transitions were not queued");
+
+            queuedTasks.addAll(transitionExecutor.shutdownNow());
+            stateChangeExecutor.shutdownNow();
+            assertThat(stateChangeExecutor.awaitTermination(10, TimeUnit.SECONDS)).isTrue();
+        } finally {
+            queuedTasks.addAll(transitionExecutor.shutdownNow());
+            queuedTasks.forEach(Runnable::run);
+            stateChangeExecutor.shutdownNow();
+            stateChangeExecutor.awaitTermination(10, TimeUnit.SECONDS);
+        }
+        assertThat(replicaManager.leaderCount()).isZero();
     }
 
     @Test
@@ -2526,6 +2540,21 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                 replicaManager.getReplicaOrException(
                                         new TableBucket(DATA1_TABLE_ID, Integer.MAX_VALUE)))
                 .isInstanceOf(UnknownTableOrBucketException.class);
+    }
+
+    private NotifyLeaderAndIsrData newLeaderData(TableBucket tableBucket, int bucketEpoch) {
+        List<Integer> replicas = Arrays.asList(1, 2, 3);
+        return new NotifyLeaderAndIsrData(
+                PhysicalTablePath.of(DATA1_TABLE_PATH),
+                tableBucket,
+                replicas,
+                new LeaderAndIsr(
+                        TABLET_SERVER_ID,
+                        INITIAL_LEADER_EPOCH,
+                        replicas,
+                        Collections.emptyList(),
+                        INITIAL_COORDINATOR_EPOCH,
+                        bucketEpoch));
     }
 
     private void assertReplicaEpochEquals(
