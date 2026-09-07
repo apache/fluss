@@ -1750,21 +1750,20 @@ class ReplicaManagerTest extends ReplicaTestBase {
         // make tb as leader.
         CompletableFuture<List<NotifyLeaderAndIsrResultForBucket>> future =
                 new CompletableFuture<>();
-        replicaManager.becomeLeaderOrFollower(
-                INITIAL_COORDINATOR_EPOCH,
-                Collections.singletonList(
-                        new NotifyLeaderAndIsrData(
-                                PhysicalTablePath.of(DATA1_TABLE_PATH),
-                                tb,
+        NotifyLeaderAndIsrData data =
+                new NotifyLeaderAndIsrData(
+                        PhysicalTablePath.of(DATA1_TABLE_PATH),
+                        tb,
+                        Arrays.asList(1, 2, 3),
+                        new LeaderAndIsr(
+                                TABLET_SERVER_ID,
+                                1,
                                 Arrays.asList(1, 2, 3),
-                                new LeaderAndIsr(
-                                        TABLET_SERVER_ID,
-                                        1,
-                                        Arrays.asList(1, 2, 3),
-                                        Collections.emptyList(),
-                                        INITIAL_COORDINATOR_EPOCH,
-                                        INITIAL_BUCKET_EPOCH))),
-                future::complete);
+                                Collections.emptyList(),
+                                INITIAL_COORDINATOR_EPOCH,
+                                INITIAL_BUCKET_EPOCH));
+        replicaManager.becomeLeaderOrFollower(
+                INITIAL_COORDINATOR_EPOCH, Arrays.asList(data, data), future::complete);
         assertThat(future.get()).containsOnly(new NotifyLeaderAndIsrResultForBucket(tb));
         assertReplicaEpochEquals(
                 replicaManager.getReplicaOrException(tb), true, 1, INITIAL_BUCKET_EPOCH);

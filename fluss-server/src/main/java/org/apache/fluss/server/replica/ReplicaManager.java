@@ -145,6 +145,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -572,12 +573,18 @@ public class ReplicaManager implements ServerReconfigurable {
         inLock(
                 replicaStateChangeLock,
                 () -> {
+                    Map<TableBucket, NotifyLeaderAndIsrData> dataByTableBucket =
+                            new LinkedHashMap<>();
+                    for (NotifyLeaderAndIsrData data : notifyLeaderAndIsrDataList) {
+                        dataByTableBucket.put(data.getTableBucket(), data);
+                    }
+
                     // check or apply coordinator epoch.
                     validateAndApplyCoordinatorEpoch(requestCoordinatorEpoch, "notifyLeaderAndIsr");
 
                     List<NotifyLeaderAndIsrData> replicasToBeLeader = new ArrayList<>();
                     List<NotifyLeaderAndIsrData> replicasToBeFollower = new ArrayList<>();
-                    for (NotifyLeaderAndIsrData data : notifyLeaderAndIsrDataList) {
+                    for (NotifyLeaderAndIsrData data : dataByTableBucket.values()) {
                         LOG.info(
                                 "Try to become leaderAndFollower for {} with isr {}, replicas: {}",
                                 data.getTableBucket(),
