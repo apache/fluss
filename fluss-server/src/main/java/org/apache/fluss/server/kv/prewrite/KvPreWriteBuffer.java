@@ -283,9 +283,9 @@ public class KvPreWriteBuffer {
     /**
      * Cuts the previous-entry chain of the newest still-buffered version of a key at its first
      * reference to a FLUSHED entry, if any. References to ACTIVE/PREPARED entries are left intact
-     * since truncation rollback relies on them; a FLUSHED previous version is already invisible
-     * to that rollback (see {@link #previousEntryInBuffer}) and covered by the kv storage, so
-     * cutting is unobservable.
+     * since truncation rollback relies on them; a FLUSHED previous version is already invisible to
+     * that rollback (see {@link #previousEntryInBuffer}) and covered by the kv storage, so cutting
+     * is unobservable.
      */
     private static void detachFromFlushedChain(@Nullable KvEntry newest) {
         KvEntry cur = newest;
